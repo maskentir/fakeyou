@@ -1,0 +1,67 @@
+[project]
+name = "fakeyou"
+version = "0.1.0"
+description = "Library-first foundation for a Google Meet digital twin"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "cloakbrowser==0.5.11",
+    "graphiti-core==0.30.2",
+    "langchain==1.4.2",
+    "langchain-mcp-adapters>=0.2,<0.3",
+    "langchain-openai>=1,<2",
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-sqlite>=3,<4",
+    "mcp>=1.26,<2",
+    "pipecat-ai[silero,webrtc]==1.12.0",
+    "pydantic-settings>=2.10,<3",
+]
+
+[project.optional-dependencies]
+audio = ["pipecat-ai[local]==1.12.0; sys_platform == 'linux'"]
+
+[dependency-groups]
+dev = [
+    "deepeval==4.2.6",
+    "mypy>=1.18,<2",
+    "pytest>=8,<10",
+    "pytest-asyncio>=1,<2",
+    "ruff>=0.14,<1",
+]
+production = [
+    "langgraph-checkpoint-postgres>=3,<4",
+    "psycopg[binary,pool]>=3.2,<4",
+]
+
+[project.scripts]
+fakeyou = "fakeyou.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not browser and not live"]
+markers = [
+    "browser: launches a real CloakBrowser and local Playwright MCP process",
+    "live: uses external model APIs or a running graph database",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/fakeyou"]
+
+[[tool.mypy.overrides]]
+module = ["cloakbrowser", "cloakbrowser.*"]
+ignore_missing_imports = true

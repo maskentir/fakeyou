@@ -1,0 +1,31 @@
+name: Foundation checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    env:
+      DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+      LANGSMITH_TRACING: "false"
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.11.7"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync mypy
+      - run: uv run --no-sync pytest
+      - run: uv run --no-sync deepeval test run evals/test_meeting_agent.py
+      - run: uv build
+      - run: docker compose --profile production config --quiet

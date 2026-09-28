@@ -1,0 +1,58 @@
+name: fakeyou
+
+services:
+  meeting-worker:
+    profiles: ["audio"]
+    build:
+      context: .
+      dockerfile: docker/audio/Dockerfile
+      target: runtime
+    image: fakeyou-meeting-worker:local
+    init: true
+    shm_size: 1gb
+    env_file: .env
+    environment:
+      FAKEYOU_HEADLESS: "false"
+      # PULSE defaults follow src/fakeyou/audio.py as source of truth; override via env.
+      PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
+      PULSE_SINK: ${PULSE_SINK:-agent_output}
+    volumes:
+      - ./.runtime/audio:/workspace/.runtime
+    stop_grace_period: 45s
+
+  neo4j:
+    image: neo4j:5.26.31-community
+    environment:
+      NEO4J_AUTH: neo4j/${FAKEYOU_NEO4J_PASSWORD:?Set FAKEYOU_NEO4J_PASSWORD in .env before starting neo4j}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  postgres:
+    image: postgres:17.11-alpine
+    profiles: ["production"]
+    environment:
+      POSTGRES_DB: fakeyou
+      POSTGRES_USER: fakeyou
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fakeyou-local-only}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fakeyou -d fakeyou"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  neo4j_data:
+  postgres_data:

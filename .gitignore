@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.deepeval/
+.deepeval*
+.coverage
+htmlcov/
+dist/
+node_modules/
+.runtime/
+.DS_Store
