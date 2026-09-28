@@ -29,3 +29,5 @@ jobs:
       - run: uv run --no-sync deepeval test run evals/test_meeting_agent.py
       - run: uv build
       - run: docker compose --profile production config --quiet
+        env:
+          FAKEYOU_NEO4J_PASSWORD: ci-config-check-only
