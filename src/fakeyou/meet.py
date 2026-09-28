@@ -1,0 +1,398 @@
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from functools import partial
+from typing import Literal
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
+
+from playwright.async_api import Locator, Page
+
+JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed"]
+CallState = Literal["in_call", "removed", "ended", "lobby", "unknown"]
+LeaveStatus = Literal["left", "failed"]
+
+EXPLICIT_DENIAL_MARKERS = (
+    "denied your request",
+    "request to join was denied",
+    "you were denied",
+    "weren't allowed to join",
+    "weren’t allowed to join",
+    "not allowed to join",
+    "not admitted",
+    "ask to join again",
+)
+
+WAITING_ROOM_MARKERS = (
+    "asking to be let in",
+    "join the call when someone lets you",
+    "please wait until a meeting host brings you into the call",
+    "waiting for the host to let you in",
+    "you're in the waiting room",
+)
+
+_LOCATION_PROBE = "(() => location.href)()"
+
+_CAPTCHA_PROBE = """(() => {
+  try {
+    const frames = document.querySelectorAll('iframe[src*="recaptcha"]');
+    for (const frame of frames) {
+      const rect = frame.getBoundingClientRect();
+      const style = frame.ownerDocument.defaultView.getComputedStyle(frame);
+      if (style.visibility === "hidden" || style.display === "none") continue;
+      if (rect.width < 120 || rect.height < 40) continue;
+      return true;
+    }
+  } catch {}
+  return false;
+})()"""
+
+_TYPE_DELAY_MS = 90
+_CLICK_ATTEMPTS = 3
+_CLICK_TIMEOUT_MS = 5000
+_CLICK_WAIT_MS = 2000
+_CLICK_RETRY_DELAY_SECONDS = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class MeetSignals:
+    name_field: str = "Your name"
+    ask_to_join: str = "Ask to join"
+    join_now: str = "Join now"
+    leave_call: str = "Leave call"
+    denied: str = "can't join this"
+    removed: str = "been removed"
+    ended: str = "has ended"
+    continue_without_media: str = "Continue without microphone and camera"
+
+
+DEFAULT_MEET_SIGNALS = MeetSignals()
+
+
+@dataclass(frozen=True, slots=True)
+class GuestJoinRequest:
+    link: str
+    twin_name: str
+    lobby_timeout_seconds: float = 300.0
+    poll_interval_seconds: float = 2.0
+    button_timeout_seconds: float = 10.0
+    captcha_grace_seconds: float = 120.0
+
+
+@dataclass(frozen=True, slots=True)
+class JoinResult:
+    status: JoinStatus
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class CallObservation:
+    state: CallState
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class LeaveResult:
+    status: LeaveStatus
+    detail: str
+
+
+def with_pinned_meet_locale(link: str, locale: str = "en-US") -> str:
+    language = (locale.split("-")[0] or locale).strip()
+    if not language:
+        return link
+    try:
+        parts = urlsplit(link)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return link
+    if any(key == "hl" for key, _ in query):
+        return link
+    query.append(("hl", language))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _is_explicit_denial(content: str) -> bool:
+    lowered = content.lower()
+    return any(marker in lowered for marker in EXPLICIT_DENIAL_MARKERS)
+
+
+def _is_waiting(content: str) -> bool:
+    lowered = content.lower()
+    return any(marker in lowered for marker in WAITING_ROOM_MARKERS)
+
+
+def _admitted_marker(signals: MeetSignals) -> str:
+    return f'aria-label="{signals.leave_call}"'
+
+
+def _is_in_call(content: str, signals: MeetSignals) -> bool:
+    return _admitted_marker(signals) in content and not _is_waiting(content)
+
+
+async def _page_host(page: Page) -> str | None:
+    try:
+        current = await page.evaluate(_LOCATION_PROBE)
+    except Exception:
+        return None
+    return urlparse(str(current)).hostname
+
+
+async def _has_live_captcha(page: Page) -> bool:
+    try:
+        return await page.evaluate(_CAPTCHA_PROBE) is True
+    except Exception:
+        return False
+
+
+async def _open_meeting_page(page: Page, link: str) -> str | None:
+    target = with_pinned_meet_locale(link)
+    try:
+        response = await page.goto(target, wait_until="domcontentloaded", timeout=60000)
+    except Exception:
+        response = None
+        failed = True
+    else:
+        failed = response is not None and not response.ok
+    if not failed:
+        return None
+    current_host = await _page_host(page)
+    if current_host is not None and current_host == urlparse(link).hostname:
+        return None
+    return (
+        f"navigation to the meeting link failed: {target}; "
+        f"current host: {current_host or 'unknown'}"
+    )
+
+
+async def _click_when_ready(
+    locate: Callable[[], Locator],
+    label: str,
+    sleep: Callable[[float], Awaitable[None]],
+    attempts: int = _CLICK_ATTEMPTS,
+) -> str | None:
+    last_error = "locator never became visible"
+    for _ in range(attempts):
+        try:
+            target = locate().first
+            await target.wait_for(state="visible", timeout=_CLICK_WAIT_MS)
+        except Exception:
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        try:
+            await target.click(timeout=_CLICK_TIMEOUT_MS)
+        except Exception as error:
+            last_error = str(error)
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        return None
+    return f"clicking {label!r} failed after {attempts} attempts: {last_error}"
+
+
+async def _dismiss_media_dialog(
+    page: Page,
+    signals: MeetSignals,
+    sleep: Callable[[float], Awaitable[None]],
+) -> str | None:
+    locator = page.locator(f'text="{signals.continue_without_media}"')
+    try:
+        if await locator.count() == 0:
+            return None
+    except Exception as error:
+        return f"finding {signals.continue_without_media!r} failed: {error}"
+    return await _click_when_ready(
+        partial(page.locator, f'text="{signals.continue_without_media}"'),
+        signals.continue_without_media,
+        sleep,
+    )
+
+
+async def _enter_twin_name(
+    page: Page,
+    twin_name: str,
+    signals: MeetSignals,
+    sleep: Callable[[float], Awaitable[None]],
+) -> str | None:
+    field = page.get_by_placeholder(signals.name_field)
+    try:
+        found = await field.count()
+    except Exception as error:
+        return f"finding the name field failed: {error}"
+    if found == 0:
+        return f"name field {signals.name_field!r} not found on the lobby page"
+    failure = await _click_when_ready(
+        partial(page.get_by_placeholder, signals.name_field),
+        "name field",
+        sleep,
+    )
+    if failure is not None:
+        return failure
+    try:
+        await page.keyboard.type(twin_name, delay=_TYPE_DELAY_MS)
+    except Exception as error:
+        return f"typing the twin name failed: {error}"
+    return None
+
+
+async def _click_join(
+    page: Page,
+    signals: MeetSignals,
+    timeout_seconds: float,
+    sleep: Callable[[float], Awaitable[None]],
+    monotonic: Callable[[], float],
+) -> str | None:
+    deadline = monotonic() + timeout_seconds
+    while True:
+        for label in (signals.ask_to_join, signals.join_now):
+            locator = page.locator(f'text="{label}"')
+            try:
+                found = await locator.count()
+            except Exception:
+                continue
+            if found == 0:
+                continue
+            failure = await _click_when_ready(
+                partial(page.locator, f'text="{label}"'),
+                label,
+                sleep,
+            )
+            if failure is not None:
+                return failure
+            return None
+        if monotonic() >= deadline:
+            return "join button did not become available on the lobby page"
+        await sleep(1.0)
+
+
+async def request_guest_join(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals = DEFAULT_MEET_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    abort: Callable[[], bool] | None = None,
+) -> JoinResult:
+    failure = await _open_meeting_page(page, request.link)
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure)
+    failure = await _dismiss_media_dialog(page, signals, sleep)
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure)
+    failure = await _enter_twin_name(page, request.twin_name, signals, sleep)
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure)
+    failure = await _click_join(page, signals, request.button_timeout_seconds, sleep, monotonic)
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure)
+    deadline = monotonic() + request.lobby_timeout_seconds
+    captcha_since: float | None = None
+    while True:
+        if abort is not None and abort():
+            return JoinResult(status="aborted", detail="stop requested while waiting for admission")
+        try:
+            content = await page.content()
+        except Exception as error:
+            return JoinResult(status="failed", detail=f"reading lobby page content failed: {error}")
+        if _is_explicit_denial(content):
+            return JoinResult(status="denied", detail="guest request to join was denied")
+        if signals.denied in content:
+            if await _has_live_captcha(page):
+                now = monotonic()
+                if captcha_since is None:
+                    captcha_since = now
+                if now - captcha_since < request.captcha_grace_seconds:
+                    await sleep(request.poll_interval_seconds)
+                    continue
+                return JoinResult(
+                    status="blocked",
+                    detail="captcha challenge went unsolved; platform blocked the guest",
+                )
+            return JoinResult(status="blocked", detail="platform blocked the guest")
+        if _is_in_call(content, signals):
+            return JoinResult(status="admitted", detail="guest admitted to the call")
+        if monotonic() >= deadline:
+            if _is_waiting(content):
+                detail = (
+                    f"still waiting for admission after {request.lobby_timeout_seconds} seconds"
+                )
+            else:
+                detail = f"no admission within {request.lobby_timeout_seconds} seconds"
+            return JoinResult(status="timeout", detail=detail)
+        await sleep(request.poll_interval_seconds)
+
+
+async def observe_call_state(
+    page: Page,
+    signals: MeetSignals = DEFAULT_MEET_SIGNALS,
+) -> CallObservation:
+    content = await page.content()
+    if signals.removed in content:
+        return CallObservation(state="removed", detail="guest was removed from the call")
+    if signals.ended in content:
+        return CallObservation(state="ended", detail="the call has ended")
+    if _is_waiting(content):
+        return CallObservation(state="lobby", detail="waiting for admission")
+    if _is_in_call(content, signals):
+        return CallObservation(state="in_call", detail="call controls are visible")
+    if signals.ask_to_join in content or signals.join_now in content:
+        return CallObservation(state="lobby", detail="lobby controls are visible")
+    return CallObservation(state="unknown", detail="no recognized call marker on the page")
+
+
+async def enable_meeting_microphone(
+    page: Page, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+) -> bool:
+    enabled = 'button[aria-label^="Turn off microphone" i],button[aria-label^="Mute microphone" i]'
+    disabled = (
+        'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
+    )
+    try:
+        if await page.locator(enabled).first.is_visible():
+            return True
+    except Exception as error:
+        raise RuntimeError(f"checking microphone state failed: {error}") from error
+    failure = await _click_when_ready(partial(page.locator, disabled), "microphone button", sleep)
+    if failure is not None:
+        raise RuntimeError(failure)
+    try:
+        await page.locator(enabled).first.wait_for(state="visible", timeout=10000)
+    except Exception as error:
+        raise RuntimeError(f"waiting for enabled microphone failed: {error}") from error
+    return True
+
+
+async def leave_meeting(
+    page: Page,
+    signals: MeetSignals = DEFAULT_MEET_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+    timeout_seconds: float = 30.0,
+) -> LeaveResult:
+    locator = page.locator(f'button[aria-label="{signals.leave_call}"]')
+    try:
+        found = await locator.count()
+    except Exception as error:
+        return LeaveResult(status="failed", detail=f"finding the leave button failed: {error}")
+    if found == 0:
+        observation = await observe_call_state(page, signals)
+        if observation.state in ("removed", "ended", "lobby"):
+            return LeaveResult(
+                status="left", detail=f"already out of the call: {observation.state}"
+            )
+        return LeaveResult(status="failed", detail="leave button not found on the page")
+    failure = await _click_when_ready(
+        partial(page.locator, f'button[aria-label="{signals.leave_call}"]'),
+        "leave button",
+        sleep,
+    )
+    if failure is not None:
+        return LeaveResult(status="failed", detail=failure)
+    admitted_marker = _admitted_marker(signals)
+    deadline = monotonic() + timeout_seconds
+    while True:
+        content = await page.content()
+        if admitted_marker not in content:
+            return LeaveResult(status="left", detail="guest left the call")
+        if monotonic() >= deadline:
+            return LeaveResult(status="failed", detail="leave button still visible after leaving")
+        await sleep(1.0)
