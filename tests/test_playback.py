@@ -98,11 +98,11 @@ async def test_speak_plays_in_order_and_mutes_around_playback() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0.05)
 
-    await engine.speak("satu")
-    await engine.speak("dua")
+    await engine.speak("one")
+    await engine.speak("two")
     await engine.close()
 
-    assert synth.texts == ["satu", "dua"]
+    assert synth.texts == ["one", "two"]
     assert player.played == [synth.audio, synth.audio]
     assert muter.calls == [False, True]
     assert [event.name for event in events] == [
@@ -125,7 +125,7 @@ async def test_is_speaking_covers_playback_until_tail_elapses() -> None:
 
     try:
         assert engine.is_speaking is False
-        speaking = asyncio.create_task(engine.speak("halo"))
+        speaking = asyncio.create_task(engine.speak("hello"))
         await asyncio.wait_for(player.started.wait(), timeout=2)
         assert engine.is_speaking is True
         player.release.set()
@@ -146,16 +146,16 @@ async def test_stop_kills_in_flight_playback_and_keeps_engine_usable() -> None:
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
     try:
-        speaking = asyncio.create_task(engine.speak("panjang"))
+        speaking = asyncio.create_task(engine.speak("long"))
         await asyncio.wait_for(player.started.wait(), timeout=2)
-        queued = asyncio.create_task(engine.speak("berikutnya"))
+        queued = asyncio.create_task(engine.speak("next"))
         await asyncio.sleep(0)
         await engine.stop()
         await asyncio.wait_for(asyncio.gather(speaking, queued), timeout=2)
         assert player.cancelled == [synth.audio]
         assert engine.is_speaking is False
         player.release.set()
-        await engine.speak("lagi")
+        await engine.speak("again")
         assert player.played == [synth.audio, synth.audio]
     finally:
         player.release.set()
@@ -182,7 +182,7 @@ async def test_stop_during_synthesis_drops_before_playback() -> None:
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
     try:
-        speaking = asyncio.create_task(engine.speak("telat"))
+        speaking = asyncio.create_task(engine.speak("late"))
         await asyncio.sleep(0)
         await engine.stop()
         release.set()
@@ -204,16 +204,16 @@ async def test_synthesis_failure_reports_event_and_keeps_queue_alive() -> None:
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
     try:
-        await engine.speak("gagal")
+        await engine.speak("fail")
         synth.error = None
-        await engine.speak("pulih")
+        await engine.speak("recover")
         assert player.played == [synth.audio]
     finally:
         await engine.close()
 
     failed = [event for event in events if event.name == "speak_failed"]
     assert len(failed) == 1
-    assert failed[0].text == "gagal"
+    assert failed[0].text == "fail"
     assert "TimeoutError" in failed[0].detail
 
 
@@ -224,7 +224,7 @@ async def test_playback_failure_reports_event_and_drains_queue() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
-    await engine.speak("rusak")
+    await engine.speak("broken")
     await engine.close()
 
     assert [event.name for event in events] == ["speak_started", "speak_failed"]
@@ -239,7 +239,7 @@ async def test_mute_failure_reports_event_and_playback_continues() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=30)
 
-    await engine.speak("dengar")
+    await engine.speak("listen")
     assert player.played == [synth.audio]
     await engine.close()
 
@@ -255,9 +255,9 @@ async def test_cancelled_speak_drops_from_queue() -> None:
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
     try:
-        first = asyncio.create_task(engine.speak("satu"))
+        first = asyncio.create_task(engine.speak("one"))
         await asyncio.wait_for(player.started.wait(), timeout=2)
-        second = asyncio.create_task(engine.speak("dua"))
+        second = asyncio.create_task(engine.speak("two"))
         await asyncio.sleep(0)
         second.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -277,12 +277,12 @@ async def test_close_is_idempotent_and_blocks_late_speaks() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
-    await engine.speak("satu")
+    await engine.speak("one")
     await engine.close()
     await engine.close()
-    await engine.speak("dua")
+    await engine.speak("two")
 
-    assert synth.texts == ["satu"]
+    assert synth.texts == ["one"]
     assert synth.closed
 
 
@@ -496,7 +496,7 @@ async def test_stop_during_synthesis_drops_without_playing() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
-    speaking = asyncio.create_task(engine.speak("terlambat"))
+    speaking = asyncio.create_task(engine.speak("delayed"))
     await synth.started.wait()
     await engine.stop()
     await asyncio.wait_for(speaking, timeout=5)
@@ -515,14 +515,14 @@ async def test_slow_synthesis_times_out_and_engine_stays_usable() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0, synth_timeout_seconds=0.05)
 
-    await engine.speak("macet")
+    await engine.speak("stuck")
     assert synth.cancelled
-    assert synth.texts == ["macet", "macet"]
+    assert synth.texts == ["stuck", "stuck"]
     assert [event.name for event in events] == ["speak_failed"]
     assert events[0].detail == "synthesis timed out after retry"
 
     synth.release.set()
-    await engine.speak("lancar")
+    await engine.speak("smooth")
     await engine.close()
 
     assert player.played == [synth.audio]
@@ -541,11 +541,11 @@ async def test_speak_retries_transient_timeout_once() -> None:
         synth.release.set()
 
     releaser = asyncio.create_task(release_after_first_timeout())
-    await engine.speak("lambat")
+    await engine.speak("sluggish")
     await releaser
     await engine.close()
 
-    assert synth.texts == ["lambat", "lambat"]
+    assert synth.texts == ["sluggish", "sluggish"]
     assert player.played == [synth.audio]
     assert [event.name for event in events] == ["speak_started", "speak_finished"]
 
@@ -570,7 +570,7 @@ async def test_speak_retries_typed_timeout_once() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
     try:
-        await engine.speak("ulang")
+        await engine.speak("retry")
     finally:
         await engine.close()
 
@@ -591,7 +591,7 @@ async def test_speak_retry_is_journaled() -> None:
     journal = ProviderJournal("meeting-1", emit=lines.append)
     engine = _engine(synth, player, muter, [], tail_seconds=0, journal=journal)
     try:
-        await engine.speak("ulang")
+        await engine.speak("retry")
     finally:
         await engine.close()
 
@@ -616,7 +616,7 @@ async def test_cancelling_speak_cancels_active_playback() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
     try:
-        speaking = asyncio.create_task(engine.speak("batal"))
+        speaking = asyncio.create_task(engine.speak("cancel"))
         await player.started.wait()
         speaking.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -635,7 +635,7 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
     events: list[PlaybackEvent] = []
     engine = _engine(synth, player, muter, events, tail_seconds=0)
 
-    speaking = asyncio.create_task(engine.speak("batal"))
+    speaking = asyncio.create_task(engine.speak("cancel"))
     await synth.started.wait()
     speaking.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -666,9 +666,9 @@ async def test_typed_synth_fault_records_and_engine_recovers() -> None:
     )
 
     try:
-        await engine.speak("gagal")
+        await engine.speak("fail")
         synth.error = None
-        await engine.speak("pulih")
+        await engine.speak("recover")
         assert player.played == [synth.audio]
     finally:
         await engine.close()
@@ -697,9 +697,9 @@ async def test_play_failure_records_and_worker_survives() -> None:
     )
 
     try:
-        await engine.speak("rusak")
+        await engine.speak("broken")
         player.error = None
-        await engine.speak("pulih")
+        await engine.speak("recover")
         assert player.played == [synth.audio, synth.audio]
     finally:
         await engine.close()
@@ -766,7 +766,7 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
         stream_audio=streamer,
     )
     try:
-        await engine.speak("ulang")
+        await engine.speak("retry")
     finally:
         await engine.close()
 
@@ -799,7 +799,7 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
         stream_audio=streamer,
     )
     try:
-        await engine.speak("gede")
+        await engine.speak("large")
     finally:
         await engine.close()
 
@@ -825,11 +825,11 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
     )
 
     try:
-        await engine.speak("halo")
+        await engine.speak("hello")
     finally:
         await engine.close()
 
-    assert synth.texts == ["halo"]
+    assert synth.texts == ["hello"]
     assert streamer.chunks == synth.chunks
     assert player.played == []
     assert [event.name for event in events] == ["speak_started", "speak_finished"]
@@ -856,9 +856,9 @@ async def test_streaming_play_failure_reports_and_engine_recovers() -> None:
     )
 
     try:
-        await engine.speak("rusak")
+        await engine.speak("broken")
         streamer.error = None
-        await engine.speak("pulih")
+        await engine.speak("recover")
     finally:
         await engine.close()
 

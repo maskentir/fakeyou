@@ -133,29 +133,29 @@ async def test_model_timeout_is_observable_without_exposing_provider_error():
 
 
 def test_cap_spoken_reply_keeps_short_replies() -> None:
-    assert cap_spoken_reply("Satu kalimat.") == "Satu kalimat."
-    assert cap_spoken_reply("Satu. Dua.") == "Satu. Dua."
-    assert cap_spoken_reply("Tanpa titik akhir") == "Tanpa titik akhir"
+    assert cap_spoken_reply("One sentence.") == "One sentence."
+    assert cap_spoken_reply("One. Two.") == "One. Two."
+    assert cap_spoken_reply("No final period") == "No final period"
     assert cap_spoken_reply("  ") == "  "
 
 
 def test_cap_spoken_reply_cuts_after_two_sentences() -> None:
-    assert cap_spoken_reply("Satu. Dua. Tiga. Empat. Lima.") == "Satu. Dua."
-    assert cap_spoken_reply("Benarkah? Ya! Oke deh.") == "Benarkah? Ya!"
+    assert cap_spoken_reply("One. Two. Three. Four. Five.") == "One. Two."
+    assert cap_spoken_reply("Really? Yes! Okay then.") == "Really? Yes!"
 
 
 def test_cap_spoken_reply_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
-        cap_spoken_reply("Satu.", 0)
+        cap_spoken_reply("One.", 0)
 
 
 async def test_loop_speaks_capped_reply_head() -> None:
     responder, audio = Responder(), Audio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "Satu. Dua. Tiga. Empat."))
+    await loop.handle_transcript(event("one", "One. Two. Three. Four."))
     await loop.wait_idle()
-    assert audio.spoken == ["Satu. Dua."]
+    assert audio.spoken == ["One. Two."]
     await loop.close()
 
 
@@ -256,11 +256,11 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
     responder, audio, clock = Responder(), Audio(), Clock()
     loop = ConversationLoop(responder, wake_phrases=["hey fakeyou"], clock=clock)
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "status proyek kami"))
+    await loop.handle_transcript(event("one", "our project status"))
     await loop.wait_idle()
     assert responder.calls == []
     assert audio.spoken == []
-    assert [item.text for item in loop.events] == ["status proyek kami"]
+    assert [item.text for item in loop.events] == ["our project status"]
     await loop.close()
 
 
@@ -270,17 +270,17 @@ async def test_wake_phrase_activates_window_case_insensitively():
         responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
     )
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "HEY Fakeyou, ada update?"))
+    await loop.handle_transcript(event("one", "HEY Fakeyou, any update?"))
     await loop.wait_idle()
     clock.now += 10
-    await loop.handle_transcript(event("two", "lanjutkan"))
+    await loop.handle_transcript(event("two", "continue"))
     await loop.wait_idle()
     clock.now += 31
-    await loop.handle_transcript(event("three", "masih dengar?"))
+    await loop.handle_transcript(event("three", "still listening?"))
     await loop.wait_idle()
     assert [[item.text for item in call] for call in responder.calls] == [
-        ["HEY Fakeyou, ada update?"],
-        ["lanjutkan"],
+        ["HEY Fakeyou, any update?"],
+        ["continue"],
     ]
     assert len(audio.spoken) == 2
     await loop.close()
@@ -292,13 +292,13 @@ async def test_wake_phrase_inside_window_extends_activation():
         responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
     )
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "hey fakeyou halo"))
+    await loop.handle_transcript(event("one", "hey fakeyou hello"))
     await loop.wait_idle()
     clock.now += 25
-    await loop.handle_transcript(event("two", "hey fakeyou lagi"))
+    await loop.handle_transcript(event("two", "hey fakeyou again"))
     await loop.wait_idle()
     clock.now += 25
-    await loop.handle_transcript(event("three", "masih aktif?"))
+    await loop.handle_transcript(event("three", "still active?"))
     await loop.wait_idle()
     assert len(responder.calls) == 3
     await loop.close()
@@ -315,14 +315,14 @@ async def test_barge_in_stops_playback_only_while_speaking():
     responder, audio = Responder(), Audio()
     loop = ConversationLoop(responder, barge_in=True)
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "halo"))
+    await loop.handle_transcript(event("one", "hello"))
     await loop.wait_idle()
     assert audio.stops == 0
     audio.speaking = True
-    await loop.handle_transcript(event("two", "tunggu dulu"))
+    await loop.handle_transcript(event("two", "hold on"))
     await loop.wait_idle()
     assert audio.stops == 1
-    assert audio.spoken[-1] == "tunggu dulu"
+    assert audio.spoken[-1] == "hold on"
     await loop.close()
 
 
@@ -331,7 +331,7 @@ async def test_barge_in_disabled_never_stops_playback():
     loop = ConversationLoop(responder)
     loop.bind(audio)
     audio.speaking = True
-    await loop.handle_transcript(event("one", "halo"))
+    await loop.handle_transcript(event("one", "hello"))
     await loop.wait_idle()
     assert audio.stops == 0
     await loop.close()
@@ -420,10 +420,13 @@ async def test_loop_journals_turn_without_modifying_injected_responder():
 @pytest.mark.parametrize(
     ("reply", "expected"),
     [
-        ("Dr. Andi hadir. Kami siap. Mulai sekarang.", "Dr. Andi hadir. Kami siap."),
-        ("Nilainya 3.14. Proyek siap. Berikutnya mulai.", "Nilainya 3.14. Proyek siap."),
-        ("Dia berkata, “Siap.” Kita mulai. Tunggu.", "Dia berkata, “Siap.” Kita mulai."),
-        ("Satu.Dua.Tiga.", "Satu. Dua."),
+        ("Dr. Andi is here. We are ready. Let us start now.", "Dr. Andi is here. We are ready."),
+        (
+            "The value is 3.14. The project is ready. Next we start.",
+            "The value is 3.14. The project is ready.",
+        ),
+        ("He said, “Ready.” We start. Wait.", "He said, “Ready.” We start."),
+        ("One.Two.Three.", "One. Two."),
     ],
 )
 def test_voice_cap_uses_language_aware_sentence_boundaries(reply, expected):
@@ -449,7 +452,7 @@ def _recall_then_reply() -> _ToolCallingModel:
                     }
                 ],
             ),
-            AIMessage(content="Demonya Jumat."),
+            AIMessage(content="The demo is on Friday."),
         ]
     )
 
@@ -463,7 +466,10 @@ async def test_responder_reports_tool_results_to_journal_and_callback():
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
-        return "Demo Jumat (source: owner note)\nBudi PIC (source: Google Meet m1 transcript)"
+        return (
+            "From owner note on 2026-09-30 06:40 UTC: The demo is on Friday\n"
+            "From Google Meet m1 transcript on 2026-09-23 03:10 UTC: Budi is the PIC"
+        )
 
     lines: list[str] = []
     results: list[tuple] = []
@@ -477,11 +483,16 @@ async def test_responder_reports_tool_results_to_journal_and_callback():
         on_tool_result=lambda *result: results.append(result),
     )
 
-    assert await responder.respond([event("one", "Demo kapan?")], lambda: None) == "Demonya Jumat."
+    assert (
+        await responder.respond([event("one", "When is the demo?")], lambda: None)
+        == "The demo is on Friday."
+    )
 
     [(tool_name, output, duration_ms)] = results
     assert tool_name == "recall_meeting_context"
-    assert output.splitlines()[0] == "Demo Jumat (source: owner note)"
+    assert (
+        output.splitlines()[0] == "From owner note on 2026-09-30 06:40 UTC: The demo is on Friday"
+    )
     assert duration_ms >= 0
     [finished] = [json.loads(line) for line in lines if '"tool_finished"' in line]
     assert finished["tool"] == "recall_meeting_context"
@@ -508,7 +519,7 @@ async def test_responder_journals_tool_failures():
     responder = LangGraphResponder(agent, "thread", journal=ProviderJournal("m", emit=lines.append))
 
     with pytest.raises(ProviderFault):
-        await responder.respond([event("one", "Demo kapan?")], lambda: None)
+        await responder.respond([event("one", "When is the demo?")], lambda: None)
 
     [failed] = [json.loads(line) for line in lines if '"tool_failed"' in line]
     assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")
@@ -527,10 +538,10 @@ async def test_interim_speech_interrupts_playback_after_enough_words():
     )
     loop.bind(audio)
 
-    await loop.handle_interim("oke")
-    await loop.handle_interim("oke tunggu")
+    await loop.handle_interim("okay")
+    await loop.handle_interim("okay wait")
     assert audio.stops == 0
-    await loop.handle_interim("oke tunggu dulu")
+    await loop.handle_interim("okay wait please")
 
     assert audio.stops == 1
     [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
@@ -542,12 +553,12 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback():
     audio.speaking = True
     quiet = ConversationLoop(Responder())
     quiet.bind(audio)
-    await quiet.handle_interim("tolong berhenti dulu sebentar")
+    await quiet.handle_interim("please stop for now")
 
     idle_audio = Audio()
     idle = ConversationLoop(Responder(), barge_in=True)
     idle.bind(idle_audio)
-    await idle.handle_interim("tolong berhenti dulu sebentar")
+    await idle.handle_interim("please stop for now")
 
     assert audio.stops == 0
     assert idle_audio.stops == 0
@@ -560,12 +571,12 @@ async def test_interim_barge_in_respects_wake_phrases():
     loop = ConversationLoop(Responder(), barge_in=True, wake_phrases=["rani twin"], clock=clock)
     loop.bind(audio)
 
-    await loop.handle_interim("orang lain sedang bicara panjang")
+    await loop.handle_interim("someone else is talking now")
     assert audio.stops == 0
-    await loop.handle_transcript(event("t1", "rani twin tolong jelaskan"))
+    await loop.handle_transcript(event("t1", "rani twin please explain"))
     audio.stops = 0
     audio.speaking = True
-    await loop.handle_interim("tunggu sebentar dulu ya")
+    await loop.handle_interim("wait just a moment")
 
     assert audio.stops == 1
     await loop.close()
@@ -584,8 +595,45 @@ async def test_final_barge_in_is_journaled_with_its_trigger():
     )
     loop.bind(audio)
 
-    await loop.handle_transcript(event("t1", "cukup"))
+    await loop.handle_transcript(event("t1", "enough"))
 
     [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
     assert row["trigger"] == "final"
+    await loop.close()
+
+
+async def test_one_interruption_is_journaled_and_stopped_once():
+
+    from fakeyou.journal import ProviderJournal
+
+    lines: list[str] = []
+    audio = Audio()
+    audio.speaking = True
+    loop = ConversationLoop(
+        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
+    )
+    loop.bind(audio)
+
+    await loop.handle_interim("wait a second")
+    await loop.handle_interim("wait a second please")
+
+    assert audio.stops == 1
+    assert len([line for line in lines if '"barge_in"' in line]) == 1
+
+
+async def test_interim_barge_in_rearms_for_the_next_reply():
+    audio = Audio()
+    audio.speaking = True
+    loop = ConversationLoop(Responder(), barge_in=True)
+    loop.bind(audio)
+
+    await loop.handle_interim("wait a second")
+    await loop.handle_transcript(event("t1", "what is next"))
+    await loop.wait_idle()
+    audio.speaking = True
+    audio.stops = 0
+    await loop.handle_interim("hold on one moment")
+
+    assert audio.spoken == ["what is next"]
+    assert audio.stops == 1
     await loop.close()

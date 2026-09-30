@@ -291,6 +291,10 @@ class MeetingAudioSession:
         if self._failure is not None:
             raise self._failure
 
+    def mark_admitted(self) -> None:
+        if self._failure is None:
+            self.activity.mark_ready()
+
     async def wait_failed(self) -> None:
         await self._failed.wait()
         self.raise_if_failed()

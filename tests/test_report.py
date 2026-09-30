@@ -19,7 +19,9 @@ def row(seconds: float, event: str, **fields) -> dict:
 def answered_turn(offset: float, transcript_id: str, reply: str, *, recall: bool = False) -> list:
     rows = [
         row(offset, "speech_stopped", source="capture"),
-        row(offset + 0.4, "transcript_final", transcript_id=transcript_id, text="Kapan demo?"),
+        row(
+            offset + 0.4, "transcript_final", transcript_id=transcript_id, text="When is the demo?"
+        ),
         row(offset + 0.4, "agent_started", request_id=f"{transcript_id}:1"),
     ]
     if recall:
@@ -36,8 +38,8 @@ def answered_turn(offset: float, transcript_id: str, reply: str, *, recall: bool
 
 
 def test_report_breaks_down_latency_per_turn() -> None:
-    rows = answered_turn(0, "t1", "Demonya Jumat.") + answered_turn(
-        10, "t2", "Ada yang lain?", recall=True
+    rows = answered_turn(0, "t1", "The demo is on Friday.") + answered_turn(
+        10, "t2", "Anything else?", recall=True
     )
 
     report = build_session_report(rows)
@@ -61,14 +63,16 @@ def test_report_breaks_down_latency_per_turn() -> None:
 
 def test_report_marks_interrupted_and_cancelled_turns() -> None:
     rows = [
-        row(0, "transcript_final", transcript_id="t1", text="Jelasin"),
+        row(0, "transcript_final", transcript_id="t1", text="Explain it"),
         row(0, "agent_started", request_id="t1:1"),
         row(1, "agent_finished", request_id="t1:1", latency_ms=1000),
-        row(1, "speak_started", source="playback", text="Panjang sekali."),
+        row(1, "speak_started", source="playback", text="A very long reply."),
         row(3, "speech_started", source="capture"),
         row(4, "speech_stopped", source="capture"),
-        row(4.5, "transcript_final", transcript_id="t2", text="Oke cukup"),
-        row(4.5, "speak_dropped", source="playback", text="Panjang sekali.", detail="interrupted"),
+        row(4.5, "transcript_final", transcript_id="t2", text="Okay enough"),
+        row(
+            4.5, "speak_dropped", source="playback", text="A very long reply.", detail="interrupted"
+        ),
         row(4.5, "agent_started", request_id="t2:2"),
         row(4.6, "agent_cancelled", request_id="t2:2", latency_ms=100),
     ]
@@ -115,9 +119,52 @@ def test_report_summarizes_ingestion_faults_tools_and_result() -> None:
     assert report["result"] == {"phase": "ended", "terminal_reason": "owner_stop", "exit_code": 0}
 
 
+def test_report_measures_startup_from_admission() -> None:
+    rows = [
+        row(0, "audio_ready", source="runtime", duration_ms=2400),
+        row(0.1, "join_requested", source="runtime"),
+        row(
+            30.1,
+            "join_result",
+            source="runtime",
+            status="admitted",
+            duration_ms=30000,
+            audio_ready=True,
+        ),
+        row(32.5, "microphone_enabled", source="runtime"),
+        row(32.6, "conversation_bound", source="runtime"),
+        row(40, "microphone_enabled", source="runtime"),
+    ]
+
+    assert build_session_report(rows)["startup"] == {
+        "audio_startup_s": 2.4,
+        "join_status": "admitted",
+        "lobby_wait_s": 30.0,
+        "audio_ready_at_admission": True,
+        "admission_to_microphone_s": 2.4,
+        "admission_to_listening_s": 2.5,
+    }
+
+
+def test_report_of_a_denied_join_has_no_admission_timings() -> None:
+    rows = [
+        row(0, "audio_ready", source="runtime", duration_ms=2000),
+        row(
+            5, "join_result", source="runtime", status="denied", duration_ms=5000, audio_ready=True
+        ),
+    ]
+
+    startup = build_session_report(rows)["startup"]
+
+    assert (startup["join_status"], startup["lobby_wait_s"]) == ("denied", 5.0)
+    assert startup["audio_ready_at_admission"] is None
+    assert startup["admission_to_microphone_s"] is None
+
+
 def test_report_of_empty_journal_is_explicit() -> None:
     report = build_session_report([])
 
+    assert report["startup"]["join_status"] is None
     assert report["turns"] == []
     assert report["latency"]["final_to_reply_s"] == {
         "count": 0,
@@ -141,16 +188,16 @@ def test_read_journal_merges_rotated_files_oldest_first(tmp_path: Path) -> None:
 
 def test_report_measures_interruption_latency_from_speech_start() -> None:
     rows = [
-        row(0, "transcript_final", transcript_id="t1", text="Jelasin"),
+        row(0, "transcript_final", transcript_id="t1", text="Explain it"),
         row(0, "agent_finished", request_id="t1:1", latency_ms=500),
-        row(0.5, "speak_started", source="playback", text="Panjang."),
+        row(0.5, "speak_started", source="playback", text="Long reply."),
         row(2.0, "speech_started", source="capture"),
         row(2.9, "barge_in", trigger="interim", words=3),
-        row(3.0, "speak_dropped", source="playback", text="Panjang.", detail="interrupted"),
-        row(10, "speak_started", source="playback", text="Lagi."),
+        row(3.0, "speak_dropped", source="playback", text="Long reply.", detail="interrupted"),
+        row(10, "speak_started", source="playback", text="Another reply."),
         row(11, "speech_started", source="capture"),
         row(12.5, "barge_in", trigger="final", words=2),
-        row(12.5, "speak_dropped", source="playback", text="Lagi.", detail="interrupted"),
+        row(12.5, "speak_dropped", source="playback", text="Another reply.", detail="interrupted"),
     ]
 
     interruptions = build_session_report(rows)["interruptions"]
@@ -162,8 +209,8 @@ def test_report_measures_interruption_latency_from_speech_start() -> None:
 def test_report_ignores_speech_that_started_before_the_interrupted_playback() -> None:
     rows = [
         row(0, "speech_started", source="capture"),
-        row(1, "speak_started", source="playback", text="Balasan."),
-        row(2, "speak_dropped", source="playback", text="Balasan.", detail="interrupted"),
+        row(1, "speak_started", source="playback", text="A reply."),
+        row(2, "speak_dropped", source="playback", text="A reply.", detail="interrupted"),
     ]
 
     assert build_session_report(rows)["interruptions"]["speech_to_stop_s"]["count"] == 0

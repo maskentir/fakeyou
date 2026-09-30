@@ -16,8 +16,9 @@ MEETING_GUIDANCE = (
 )
 ENDING_RULE = (
     "Ending rule: stop right after the answer. Never end with a question or an offer such as "
-    "'Ada yang lain?', 'Ada yang mau ditanyakan?', 'Mau aku catat?', or 'Perlu aku bantu?'. "
-    "Ask a question only when you cannot answer without the missing information."
+    "'Anything else?', 'Do you have other questions?', 'Should I note that?', or 'Can I help "
+    "with anything else?', in any language. Ask a question only when you cannot answer without "
+    "the missing information."
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (

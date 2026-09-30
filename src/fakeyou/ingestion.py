@@ -48,7 +48,8 @@ def extraction_instructions(twin_name: str, vocabulary: Sequence[str]) -> str:
         f"'{TWIN_SPEAKER} said that ...' or '{UNIDENTIFIED_PARTICIPANT} decided that ...'. "
         "Never restate what a speaker said as a plain fact without the speaker. "
         "Do not extract a fact about someone asking, questioning, requesting, or offering; "
-        "only the answer, statement, decision, or commitment is a fact."
+        "only the answer, statement, decision, or commitment is a fact. "
+        "Write each fact in the language the speakers used."
     )
     if vocabulary:
         instructions += (

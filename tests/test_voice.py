@@ -68,7 +68,7 @@ async def test_synthesizer_sends_unary_pcm_request() -> None:
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=_fake_client(speech))
 
     try:
-        audio = await synthesizer.synthesize("Halo.")
+        audio = await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
@@ -77,7 +77,7 @@ async def test_synthesizer_sends_unary_pcm_request() -> None:
     call = speech.calls[0]
     assert call["model"] == TTS_MODEL
     assert call["voice"] == TTS_VOICE
-    assert call["input"] == "Halo."
+    assert call["input"] == "Hello."
     assert call["instructions"] == TTS_VOICE_INSTRUCTIONS
     assert call["response_format"] == "pcm"
     assert isinstance(call["speed"], Omit)
@@ -150,7 +150,7 @@ async def test_synthesizer_timeout_raises_typed_provider_fault() -> None:
 
     try:
         with pytest.raises(ProviderFault) as caught:
-            await synthesizer.synthesize("Halo.")
+            await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
@@ -167,7 +167,7 @@ async def test_synthesizer_payment_status_raises_typed_provider_fault() -> None:
 
     try:
         with pytest.raises(ProviderFault) as caught:
-            await synthesizer.synthesize("Halo.")
+            await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
@@ -187,7 +187,7 @@ async def test_synthesizer_journals_started_and_finished() -> None:
     synthesizer = OpenAISpeechSynthesizer(api_key="k", client=_fake_client(speech), journal=journal)
 
     try:
-        audio = await synthesizer.synthesize("Halo.")
+        audio = await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
@@ -195,10 +195,10 @@ async def test_synthesizer_journals_started_and_finished() -> None:
     started = json.loads(lines[0])
     finished = json.loads(lines[1])
     assert started["event"] == "synth_started"
-    assert started["chars"] == len("Halo.")
+    assert started["chars"] == len("Hello.")
     assert finished["event"] == "synth_finished"
     assert finished["duration_ms"] >= 0
-    assert finished["chars"] == len("Halo.")
+    assert finished["chars"] == len("Hello.")
     assert finished["bytes_out"] == len(audio)
 
 
@@ -214,7 +214,7 @@ async def test_synthesizer_journals_failed_with_kind() -> None:
 
     try:
         with pytest.raises(ProviderFault):
-            await synthesizer.synthesize("Halo.")
+            await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
@@ -276,7 +276,7 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal() -> Non
     )
 
     try:
-        chunks = [chunk async for chunk in synthesizer.stream("Halo.")]
+        chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
     finally:
         await synthesizer.aclose()
 
@@ -307,7 +307,7 @@ async def test_synthesizer_stream_failure_raises_typed_fault() -> None:
 
     try:
         with pytest.raises(ProviderFault) as caught:
-            [chunk async for chunk in synthesizer.stream("Halo.")]
+            [chunk async for chunk in synthesizer.stream("Hello.")]
     finally:
         await synthesizer.aclose()
 

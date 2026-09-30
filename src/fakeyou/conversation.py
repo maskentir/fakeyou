@@ -259,6 +259,7 @@ class ConversationLoop:
         self._task: asyncio.Task[None] | None = None
         self._failure: ConversationError | None = None
         self._closed = False
+        self._interrupted = False
 
     @property
     def is_busy(self) -> bool:
@@ -326,7 +327,8 @@ class ConversationLoop:
         ):
             return
         words = len(text.split())
-        if words >= BARGE_IN_MIN_WORDS:
+        if words >= BARGE_IN_MIN_WORDS and not self._interrupted:
+            self._interrupted = True
             self._record("barge_in", trigger="interim", words=words)
             await session.stop_playback()
 
@@ -433,6 +435,7 @@ class ConversationLoop:
                     )
                 self._move("queued", event_id)
                 self.raise_if_failed()
+                self._interrupted = False
                 await session.speak(spoken)
                 if generation == self._generation:
                     self._move("listening", event_id)

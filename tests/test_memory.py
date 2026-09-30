@@ -128,7 +128,7 @@ async def test_recall_caps_results() -> None:
 
     result = await recall.ainvoke({"query": "agenda"})
 
-    assert result.splitlines() == [f"fact-{index} (source: unknown)" for index in range(5)]
+    assert result.splitlines() == [f"From an unknown source: fact-{index}" for index in range(5)]
     assert memory.searched[0]["num_results"] == memory_module.RECALL_SEARCH_LIMIT
 
 
@@ -138,7 +138,7 @@ async def test_recall_drops_identical_facts_before_applying_the_limit() -> None:
 
     result = await recall.ainvoke({"query": "agenda"})
 
-    facts = [line.removesuffix(" (source: unknown)") for line in result.splitlines()]
+    facts = [line.removeprefix("From an unknown source: ") for line in result.splitlines()]
     assert facts == list("ABCDE")
 
 
@@ -187,10 +187,10 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
     result = await recall.ainvoke({"query": "demo"})
 
     assert result.splitlines() == [
-        "Demo moves to Thursday (source: Google Meet m1 participant transcript; "
-        "Google Meet m2 twin speech; 2026-09-23 10:00 UTC)",
-        "Budget is final (source: Google Meet m2 twin speech; 2026-09-30 17:30 UTC)",
-        "Venue is Hall A (source: unknown)",
+        "From Google Meet m1 participant transcript; Google Meet m2 twin speech "
+        "on 2026-09-23 10:00 UTC: Demo moves to Thursday",
+        "From Google Meet m2 twin speech on 2026-09-30 17:30 UTC: Budget is final",
+        "From an unknown source: Venue is Hall A",
     ]
     assert lookups == [(memory.driver, ["e1", "e2", "missing"])]
 
@@ -330,12 +330,12 @@ async def test_remember_owner_note_stores_text_episode_in_group() -> None:
             return SimpleNamespace(episode=SimpleNamespace(uuid="note-1"), edges=[])
 
     result = await remember_owner_note(
-        NoteMemory(), group_id="team_alpha", text="  Demo Orchid pindah ke Jumat.  "
+        NoteMemory(), group_id="team_alpha", text="  The Orchid demo moves to Friday.  "
     )
 
     assert result.episode.uuid == "note-1"
     [note] = added
-    assert note["episode_body"] == "Demo Orchid pindah ke Jumat."
+    assert note["episode_body"] == "The Orchid demo moves to Friday."
     assert note["source"] == EpisodeType.text
     assert note["source_description"] == memory_module.OWNER_NOTE_SOURCE
     assert note["group_id"] == "team_alpha"

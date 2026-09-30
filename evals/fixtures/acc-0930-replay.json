@@ -4,7 +4,7 @@
     {
       "meeting_id": "acc-0930-s1",
       "memory": [
-        "Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang. (source: owner note; 2026-09-30 10:12 UTC)"
+        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang."
       ],
       "turns": [
         {"say": "Rani Twin kapan beta launch or chill", "must_mention": ["14 oktober"]},
@@ -18,10 +18,10 @@
     {
       "meeting_id": "acc-0930-s2",
       "memory": [
-        "Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang. (source: owner note; 2026-09-30 10:12 UTC)",
-        "Unidentified participant decided that kickoff vendor Orchid diputuskan hari Selasa jam 10 pagi. (source: Google Meet acc-0930-s1 transcript; 2026-09-30 10:18 UTC)",
-        "Unidentified participant said that PIC kickoff vendor Orchid adalah Budi. (source: Google Meet acc-0930-s1 transcript; 2026-09-30 10:18 UTC)",
-        "Digital twin said that PIC kickoff vendor Orchid adalah Budi. (source: Google Meet acc-0930-s1 transcript; 2026-09-30 10:18 UTC)"
+        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant decided that kickoff vendor Orchid diputuskan hari Selasa jam 10 pagi.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant said that PIC kickoff vendor Orchid adalah Budi.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Digital twin said that PIC kickoff vendor Orchid adalah Budi."
       ],
       "turns": [
         {"say": "yang sebelumnya, kickoff vendor or kilt diputuskan kapan dan siapa PIC-nya?", "expects_recall": true, "must_mention": ["selasa", "budi"], "must_mention_any": ["meeting", "rapat", "dibahas"]},

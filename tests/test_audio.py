@@ -874,3 +874,26 @@ async def test_capture_observer_journals_speech_boundaries() -> None:
         ("speech_stopped", "capture"),
     ]
     assert all(row["at"] for row in rows)
+
+
+async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() -> None:
+    clock = [100.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    activity.mark_ready()
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    session = MeetingAudioSession(
+        object(), object(), runner_task, _Playback(), activity=activity, now=lambda: clock[0]
+    )
+    clock[0] = 400.0
+    session.mark_admitted()
+    admitted = activity.snapshot()
+    gate.set()
+    with pytest.raises(MeetingAudioError):
+        await asyncio.wait_for(session.wait_failed(), timeout=2)
+    clock[0] = 500.0
+    session.mark_admitted()
+    failed = activity.snapshot()
+
+    assert (admitted.available, admitted.ready_at) == (True, 400.0)
+    assert (failed.available, failed.ready_at) == (False, 400.0)

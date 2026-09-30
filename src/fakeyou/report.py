@@ -19,6 +19,13 @@ _STAGE_BOUNDS = {
     "reply_to_first_pcm_s": ("reply_at", "first_pcm_at"),
     "speech_stopped_to_first_pcm_s": ("speech_stopped_at", "first_pcm_at"),
 }
+STARTUP_MILESTONES = (
+    "audio_ready",
+    "join_requested",
+    "join_result",
+    "microphone_enabled",
+    "conversation_bound",
+)
 
 
 def read_journal(path: Path) -> list[dict[str, Any]]:
@@ -65,9 +72,12 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     episodes: list[dict[str, Any]] = []
     faults = Counter[tuple[str, str]]()
     result: dict[str, Any] | None = None
+    milestones: dict[str, dict[str, Any]] = {}
     for row in rows:
         event = row.get("event")
         at = datetime.fromisoformat(row["at"]) if "at" in row else None
+        if event in STARTUP_MILESTONES and row.get("source") == "runtime":
+            milestones.setdefault(str(event), {**row, "at": at})
         if event == "speech_stopped":
             speech_stopped_at = at
         elif event == "speech_started":
@@ -134,6 +144,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
     turn_reports = [_turn_report(turn) for turn in turns.values()]
     return {
+        "startup": _startup_report(milestones),
         "turns": turn_reports,
         "latency": {
             stage: summarize([turn[stage] for turn in turn_reports if turn[stage] is not None])
@@ -159,6 +170,27 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for (source, kind), count in faults.items()
         ],
         "result": result,
+    }
+
+
+def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    join = milestones.get("join_result", {})
+    admitted_at = join.get("at") if join.get("status") == "admitted" else None
+
+    def since_admission(event: str) -> float | None:
+        at = milestones.get(event, {}).get("at")
+        return round((at - admitted_at).total_seconds(), 3) if at and admitted_at else None
+
+    def seconds(row: dict[str, Any]) -> float | None:
+        return round(float(row["duration_ms"]) / 1000, 3) if "duration_ms" in row else None
+
+    return {
+        "audio_startup_s": seconds(milestones.get("audio_ready", {})),
+        "join_status": join.get("status"),
+        "lobby_wait_s": seconds(join),
+        "audio_ready_at_admission": join.get("audio_ready") if admitted_at else None,
+        "admission_to_microphone_s": since_admission("microphone_enabled"),
+        "admission_to_listening_s": since_admission("conversation_bound"),
     }
 
 

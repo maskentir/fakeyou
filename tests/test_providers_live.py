@@ -3,6 +3,7 @@ import json
 import socket
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -32,6 +33,10 @@ from fakeyou.persona import PersonaProfile
 from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
 from fakeyou.settings import Settings, require_secret
 from fakeyou.voice import OpenAISpeechSynthesizer
+
+LIVE_INGESTION_MEETING = (
+    Path(__file__).resolve().parent / "fixtures" / "live-ingestion-meeting.json"
+)
 
 
 def _secret_or_skip(settings_value, name: str) -> str:
@@ -253,20 +258,16 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
         vocabulary=(project, "Budi"),
     )
     record_path = meeting_record_path(tmp_path, meeting_id)
+    meeting = json.loads(LIVE_INGESTION_MEETING.read_text(encoding="utf-8"))
     record = MeetingRecord(record_path)
-    record.add_twin_speech(f"Gimana kalau demo customer {project} digeser ke hari Kamis?")
-    for index, text in enumerate(
-        (
-            f"Oke, setuju, demo customer {project} kita pindah ke hari Kamis.",
-            f"Nanti Budi kabari tim sales soal demo {project}.",
-        )
-    ):
+    record.add_twin_speech(meeting["twin_speech"].format(project=project))
+    for index, template in enumerate(meeting["participant_transcripts"]):
         record.add_transcript(
             TranscriptEvent(
                 id=f"{run}-{index}",
                 timestamp=datetime.now(UTC).isoformat(),
                 source="meeting_audio",
-                text=text,
+                text=template.format(project=project),
                 finalized=True,
             )
         )
@@ -296,7 +297,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
             note = await remember_owner_note(
                 memory,
                 group_id=profile.memory_group,
-                text=f"Update dari Rani: demo customer {project} dipindah ke hari Jumat.",
+                text=meeting["owner_note"].format(project=project),
             )
             corrected = await _recall(memory, profile.memory_group, f"{project} customer demo day")
             removed = await forget_meeting(

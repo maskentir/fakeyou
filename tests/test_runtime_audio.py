@@ -129,7 +129,7 @@ class Conversation:
             raise ConversationError("conversation failed")
 
 
-async def test_audio_starts_after_admission_and_stops_before_leave(session):
+async def test_audio_is_ready_before_join_and_stops_before_leave(session):
     @asynccontextmanager
     async def open_audio():
         session.events.append("audio_started")
@@ -145,9 +145,9 @@ async def test_audio_starts_after_admission_and_stops_before_leave(session):
 
     assert result.terminal_reason == "admitted_then_stopped"
     assert session.events == [
+        "audio_started",
         "admitted",
         "camera",
-        "audio_started",
         "microphone",
         "speak:Hello",
         "audio_stopped",
@@ -156,24 +156,30 @@ async def test_audio_starts_after_admission_and_stops_before_leave(session):
     ]
 
 
-async def test_denied_guest_never_starts_audio(session, monkeypatch):
+async def test_denied_guest_stops_the_audio_opened_for_the_lobby(session, monkeypatch):
     async def denied(*args):
+        session.events.append("denied")
         return JoinResult("denied", "denied")
 
     monkeypatch.setattr(runtime, "request_guest_join", denied)
 
     @asynccontextmanager
     async def open_audio():
-        pytest.fail("denied guest must not start audio")
-        yield
+        session.events.append("audio_started")
+        audio = Audio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
 
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, **session.kwargs
     )
     assert result.terminal_reason == "denied_by_host"
+    assert session.events == ["audio_started", "denied", "audio_stopped", "browser_closed"]
 
 
-async def test_owner_stop_cancels_audio_startup_and_leaves(session):
+async def test_owner_stop_during_audio_startup_never_joins(session):
     @asynccontextmanager
     async def open_audio():
         try:
@@ -186,14 +192,8 @@ async def test_owner_stop_cancels_audio_startup_and_leaves(session):
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, **session.kwargs
     )
-    assert result.terminal_reason == "admitted_then_stopped"
-    assert session.events == [
-        "admitted",
-        "camera",
-        "audio_start_cancelled",
-        "leave",
-        "browser_closed",
-    ]
+    assert result.terminal_reason == "owner_stop"
+    assert session.events == ["audio_start_cancelled", "browser_closed"]
 
 
 @pytest.mark.parametrize("failure_at", ["startup", "monitor", "microphone"])
@@ -223,10 +223,14 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, **session.kwargs
     )
+    if failure_at == "startup":
+        assert result.terminal_reason == "infra_failure"
+        assert "admitted" not in session.events
+        assert session.events[-1] == "browser_closed"
+        return
     assert result.terminal_reason == "audio_failure"
     assert session.events[-2:] == ["leave", "browser_closed"]
-    if failure_at != "startup":
-        assert session.events.index("audio_stopped") < session.events.index("leave")
+    assert session.events.index("audio_stopped") < session.events.index("leave")
 
 
 async def test_camera_failure_is_recorded_without_failing_session(session, monkeypatch):
@@ -256,11 +260,18 @@ async def test_camera_failure_is_recorded_without_failing_session(session, monke
 
 async def test_session_duration_counts_from_admission(session, monkeypatch):
     clock = Clock()
+    admitted_at = []
 
     async def observe(*args):
         return CallObservation("in_call", "in call")
 
+    async def join(*args):
+        await clock.sleep(30.0)
+        admitted_at.append(clock.now)
+        return JoinResult("admitted", "admitted")
+
     monkeypatch.setattr(runtime, "observe_call_state", observe)
+    monkeypatch.setattr(runtime, "request_guest_join", join)
 
     @asynccontextmanager
     async def open_audio():
@@ -288,7 +299,8 @@ async def test_session_duration_counts_from_admission(session, monkeypatch):
         **session.kwargs,
     )
     assert result.terminal_reason == "duration_limit"
-    assert sum(clock.sleeps) == 100.0
+    assert clock.sleeps[:2] == [50.0, 30.0]
+    assert clock.now - admitted_at[0] == 100.0
 
 
 async def test_conversation_binds_after_audio_and_closes_before_leave(session):
@@ -309,9 +321,9 @@ async def test_conversation_binds_after_audio_and_closes_before_leave(session):
     assert result.terminal_reason == "admitted_then_stopped"
     assert conversation.bound is not None
     assert session.events == [
+        "audio_started",
         "admitted",
         "camera",
-        "audio_started",
         "microphone",
         "conversation_bound",
         "conversation_closed",
@@ -339,9 +351,9 @@ async def test_conversation_failure_keeps_listening_until_owner_stop(session):
     assert result.terminal_reason == "admitted_then_stopped"
     assert "left" in result.detail
     assert session.events == [
+        "audio_started",
         "admitted",
         "camera",
-        "audio_started",
         "microphone",
         "conversation_bound",
         "conversation_closed",
@@ -403,7 +415,7 @@ async def test_conversation_requires_audio(session):
         )
 
 
-async def test_conversation_closes_without_audio_start_after_denial(session, monkeypatch):
+async def test_conversation_never_binds_and_closes_after_denial(session, monkeypatch):
     async def denied(*args):
         return JoinResult("denied", "denied")
 
@@ -411,8 +423,11 @@ async def test_conversation_closes_without_audio_start_after_denial(session, mon
 
     @asynccontextmanager
     async def open_audio():
-        pytest.fail("denied guest must not start audio")
-        yield
+        audio = Audio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
 
     conversation = Conversation(session.events)
     result = await runtime.run_meeting_session(
@@ -420,7 +435,8 @@ async def test_conversation_closes_without_audio_start_after_denial(session, mon
     )
 
     assert result.terminal_reason == "denied_by_host"
-    assert session.events == ["conversation_closed", "browser_closed"]
+    assert conversation.bound is None
+    assert session.events == ["conversation_closed", "audio_stopped", "browser_closed"]
 
 
 async def test_conversation_closes_if_checkpoint_setup_fails(session):
@@ -510,17 +526,24 @@ async def test_finish_merges_fault_suffix_on_audio_failure(session):
 
     reporter = _faulty_reporter()
 
+    class CaptureStoppedAudio(Audio):
+        def raise_if_failed(self):
+            raise MeetingAudioError("capture stopped")
+
     @asynccontextmanager
     async def open_audio():
-        raise MeetingAudioError("startup failed")
-        yield
+        audio = CaptureStoppedAudio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
 
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, faults=reporter, **session.kwargs
     )
 
     assert result.terminal_reason == "audio_failure"
-    assert result.detail == "startup failed [stt_degraded: timeoutx2]"
+    assert result.detail == "capture stopped [stt_degraded: timeoutx2]"
     assert result.faults == reporter.report()
     assert isinstance(reporter, FaultReporter)
 
@@ -570,17 +593,24 @@ async def test_broken_reporter_never_changes_exit_path(session):
         def report(self):
             raise RuntimeError("reporter exploded")
 
+    class CaptureStoppedAudio(Audio):
+        def raise_if_failed(self):
+            raise MeetingAudioError("capture stopped")
+
     @asynccontextmanager
     async def open_audio():
-        raise MeetingAudioError("startup failed")
-        yield
+        audio = CaptureStoppedAudio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
 
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, faults=_BrokenReporter(), **session.kwargs
     )
 
     assert result.terminal_reason == "audio_failure"
-    assert result.detail == "startup failed"
+    assert result.detail == "capture stopped"
     assert result.faults is None
 
 
@@ -724,10 +754,17 @@ async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
 async def test_audio_failure_remains_primary_when_leave_also_fails(
     session, monkeypatch, leave_raises
 ):
+    class CaptureStoppedAudio(Audio):
+        def raise_if_failed(self):
+            raise MeetingAudioError("capture stopped")
+
     @asynccontextmanager
     async def open_audio():
-        raise MeetingAudioError("capture stopped")
-        yield
+        audio = CaptureStoppedAudio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
 
     async def broken_leave(*args):
         if leave_raises:
@@ -740,3 +777,45 @@ async def test_audio_failure_remains_primary_when_leave_also_fails(
     )
     assert result.terminal_reason == "audio_failure"
     assert result.detail == "capture stopped"
+
+
+async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_admission(session):
+    import json
+
+    from fakeyou.journal import ProviderJournal
+
+    lines: list[str] = []
+
+    class AdmissionAwareAudio(Audio):
+        def mark_admitted(self):
+            self.events.append("capture_clock_restarted")
+
+    @asynccontextmanager
+    async def open_audio():
+        audio = AdmissionAwareAudio(session.events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
+
+    conversation = Conversation(session.events)
+    await runtime.run_meeting_session(
+        session.config,
+        open_audio=open_audio,
+        conversation=conversation,
+        journal=ProviderJournal("meeting", emit=lines.append),
+        **session.kwargs,
+    )
+
+    milestones = [
+        json.loads(line)["event"] for line in lines if json.loads(line).get("source") == "runtime"
+    ]
+    assert milestones == [
+        "audio_ready",
+        "join_requested",
+        "join_result",
+        "microphone_enabled",
+        "conversation_bound",
+    ]
+    assert session.events.index("admitted") < session.events.index("capture_clock_restarted")
+    assert session.events.index("capture_clock_restarted") < session.events.index("microphone")

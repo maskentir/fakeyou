@@ -663,7 +663,7 @@ async def test_join_audio_transcript_reaches_conversation(
     class FakeAgent:
         async def ainvoke(self, request, config=None):
             agent_calls.append(config)
-            return {"messages": [AIMessage(content="Balasan.")]}
+            return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
     captured = {}
@@ -675,7 +675,7 @@ async def test_join_audio_transcript_reaches_conversation(
             loop.bind(SimpleNamespace(speak=lambda text: asyncio.sleep(0)))
             frame = SimpleNamespace(
                 id="t1",
-                text="Halo.",
+                text="Hello.",
                 finalized=True,
                 user_id="",
                 timestamp="2026-09-28T00:00:00+00:00",
@@ -690,7 +690,7 @@ async def test_join_audio_transcript_reaches_conversation(
     monkeypatch.setattr(sys.modules[__name__], "_capture_run", capture_run)
     await _join_with_audio(tmp_path, monkeypatch, conversation_enabled=True)
 
-    assert [event.text for event in captured["conversation"].events] == ["Halo."]
+    assert [event.text for event in captured["conversation"].events] == ["Hello."]
     assert agent_calls[0]["configurable"]["thread_id"] == conversation_thread_id(
         "settings-owner", "settings-twin", "meeting-9"
     )
@@ -699,13 +699,13 @@ async def test_join_audio_transcript_reaches_conversation(
     ]
     [final] = [row for row in rows if row["event"] == "transcript_final"]
     assert (final["text"], final["participant"], final["meeting_id"]) == (
-        "Halo.",
+        "Hello.",
         "unknown",
         "meeting-9",
     )
     assert final["at"]
     entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
-    assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Halo.")]
+    assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Hello.")]
 
 
 @pytest.mark.asyncio
@@ -714,7 +714,7 @@ async def test_join_conversation_transitions_carry_timestamps(
 ) -> None:
     class FakeAgent:
         async def ainvoke(self, request, config=None):
-            return {"messages": [AIMessage(content="Balasan.")]}
+            return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
@@ -724,7 +724,7 @@ async def test_join_conversation_transitions_carry_timestamps(
             loop.bind(SimpleNamespace(speak=lambda text: asyncio.sleep(0)))
             frame = SimpleNamespace(
                 id="t1",
-                text="Halo.",
+                text="Hello.",
                 finalized=True,
                 user_id="",
                 timestamp="2026-09-28T00:00:00+00:00",
@@ -832,7 +832,7 @@ async def test_join_wake_phrase_gates_agent_replies(
     class FakeAgent:
         async def ainvoke(self, request, config=None):
             agent_calls.append(request)
-            return {"messages": [AIMessage(content="Balasan.")]}
+            return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
@@ -840,7 +840,7 @@ async def test_join_wake_phrase_gates_agent_replies(
         async def run(config, **kwargs):
             loop = kwargs["conversation"]
             loop.bind(SimpleNamespace(speak=lambda text: asyncio.sleep(0)))
-            for ident, text in (("t1", "status proyek"), ("t2", "hey fakeyou halo")):
+            for ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
                 frame = SimpleNamespace(
                     id=ident,
                     text=text,
@@ -870,7 +870,7 @@ async def test_join_barge_in_stops_speaking_session(
 
     class FakeAgent:
         async def ainvoke(self, request, config=None):
-            return {"messages": [AIMessage(content="Balasan.")]}
+            return {"messages": [AIMessage(content="Reply.")]}
 
     async def stop_playback():
         stops.append(True)
@@ -889,7 +889,7 @@ async def test_join_barge_in_stops_speaking_session(
             )
             frame = SimpleNamespace(
                 id="t1",
-                text="tunggu",
+                text="wait",
                 finalized=True,
                 user_id="",
                 timestamp="2026-09-28T00:00:00+00:00",
@@ -913,9 +913,9 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     def capture_run(monkeypatch):
         async def run(config, **kwargs):
             handler = kwargs["open_audio"].keywords["on_playback_event"]
-            handler(PlaybackEvent("speak_started", "halo", ""))
-            handler(PlaybackEvent("speak_dropped", "terpotong", "interrupted"))
-            handler(PlaybackEvent("speak_finished", "halo", ""))
+            handler(PlaybackEvent("speak_started", "hello", ""))
+            handler(PlaybackEvent("speak_dropped", "cut off", "interrupted"))
+            handler(PlaybackEvent("speak_finished", "hello", ""))
             return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
 
         monkeypatch.setattr(cli, "run_meeting_session", run)
@@ -933,9 +933,9 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         if row.get("source") == "playback"
     ]
     assert playback == [
-        ("speak_started", "halo", None),
-        ("speak_dropped", "terpotong", "interrupted"),
-        ("speak_finished", "halo", None),
+        ("speak_started", "hello", None),
+        ("speak_dropped", "cut off", "interrupted"),
+        ("speak_finished", "hello", None),
     ]
     assert all(
         row["meeting_id"] == "meeting-9" and row["at"]
@@ -943,7 +943,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         if row.get("source") == "playback"
     )
     entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
-    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "halo")]
+    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "hello")]
 
 
 @pytest.mark.asyncio
@@ -1157,7 +1157,7 @@ async def _join_persona_conversation(
     *,
     model: FakeMessagesListChatModel,
     graphiti: FakeGraphiti | None = None,
-    transcripts: tuple[str, ...] = ("Kapan launch Orchid?",),
+    transcripts: tuple[str, ...] = ("When does Orchid launch?",),
     settle=None,
     persona_overrides: dict | None = None,
     **overrides,
@@ -1329,20 +1329,20 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     created, audio, _outcome = await _join_persona_conversation(
-        tmp_path, monkeypatch, model=ToolCallingModel(responses=[AIMessage(content="Halo.")])
+        tmp_path, monkeypatch, model=ToolCallingModel(responses=[AIMessage(content="Hello.")])
     )
 
     assert created["persona"] == build_persona(PersonaProfile.model_validate(PERSONA_DATA))
     assert created["tools"] == []
     assert created["middleware"] == []
-    assert audio.spoken == ["Halo."]
+    assert audio.spoken == ["Hello."]
 
 
 async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = FakeGraphiti(facts=("Orchid beta launch is planned for 14 October 2026",))
-    model = recall_then_reply("Launch Orchid dijadwalkan 14 Oktober.")
+    model = recall_then_reply("Orchid launches on 14 October.")
 
     created, audio, outcome = await _join_persona_conversation(
         tmp_path, monkeypatch, model=model, graphiti=graphiti, memory=True
@@ -1362,10 +1362,10 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     assert profile.memory_group != fake_settings(tmp_path).memory_group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     assert [m.content for m in tool_results] == [
-        f"{fact} (source: unknown)" for fact in graphiti.facts
+        f"From an unknown source: {fact}" for fact in graphiti.facts
     ]
     assert graphiti.added == []
-    assert audio.spoken == ["Launch Orchid dijadwalkan 14 Oktober."]
+    assert audio.spoken == ["Orchid launches on 14 October."]
     assert outcome["phase"] == "listening"
     assert graphiti.events == ["verify", "close"]
 
@@ -1374,7 +1374,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     graphiti = FakeGraphiti(search_error=RuntimeError("neo4j went away"))
-    model = recall_then_reply("Aku belum tahu, nanti aku cek ke Rani.")
+    model = recall_then_reply("I don't know yet, I'll check with Rani.")
 
     _created, audio, outcome = await _join_persona_conversation(
         tmp_path, monkeypatch, model=model, graphiti=graphiti, memory=True
@@ -1382,7 +1382,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
 
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
-    assert audio.spoken == ["Aku belum tahu, nanti aku cek ke Rani."]
+    assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"
     outcome["conversation"].raise_if_failed()
     faults = [
@@ -1398,7 +1398,7 @@ async def test_join_stop_during_recall_cancels_without_late_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = FakeGraphiti(search_gate=asyncio.Event())
-    model = recall_then_reply("Jawaban terlambat.")
+    model = recall_then_reply("A late answer.")
 
     _created, audio, outcome = await _join_persona_conversation(
         tmp_path,
@@ -1419,12 +1419,12 @@ async def test_join_persona_reply_keeps_two_sentence_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = ToolCallingModel(
-        responses=[AIMessage(content="Kalimat satu. Kalimat dua. Kalimat tiga.")]
+        responses=[AIMessage(content="Sentence one. Sentence two. Sentence three.")]
     )
 
     _created, audio, _outcome = await _join_persona_conversation(tmp_path, monkeypatch, model=model)
 
-    assert audio.spoken == ["Kalimat satu. Kalimat dua."]
+    assert audio.spoken == ["Sentence one. Sentence two."]
 
 
 @pytest.mark.parametrize(
@@ -1507,7 +1507,7 @@ async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = FakeGraphiti()
-    model = ToolCallingModel(responses=[AIMessage(content="Demo digeser ke Kamis ya.")])
+    model = ToolCallingModel(responses=[AIMessage(content="The demo moves to Thursday.")])
 
     created, audio, _outcome = await _join_persona_conversation(
         tmp_path,
@@ -1515,15 +1515,16 @@ async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
         model=model,
         graphiti=graphiti,
         memory=True,
-        transcripts=("Demo Orchid jadi kapan?",),
+        transcripts=("When is the Orchid demo now?",),
         persona_overrides={"ingest_transcripts": True},
     )
 
     profile = PersonaProfile.model_validate({**PERSONA_DATA, "ingest_transcripts": True})
-    assert audio.spoken == ["Demo digeser ke Kamis ya."]
+    assert audio.spoken == ["The demo moves to Thursday."]
     [episode] = graphiti.added
     assert episode["episode_body"] == (
-        "Unidentified participant: Demo Orchid jadi kapan?\nDigital twin: Demo digeser ke Kamis ya."
+        "Unidentified participant: When is the Orchid demo now?\n"
+        "Digital twin: The demo moves to Thursday."
     )
     assert episode["name"] == "meeting-9:w00000"
     assert episode["group_id"] == profile.memory_group
@@ -1540,7 +1541,7 @@ async def test_join_ingest_only_persona_opens_memory_without_recall_tool(
     created, _audio, _outcome = await _join_persona_conversation(
         tmp_path,
         monkeypatch,
-        model=ToolCallingModel(responses=[AIMessage(content="Oke.")]),
+        model=ToolCallingModel(responses=[AIMessage(content="Okay.")]),
         graphiti=graphiti,
         memory=True,
         persona_overrides={"ingest_transcripts": True, "allowed_tools": []},
@@ -1560,7 +1561,7 @@ async def test_join_without_ingest_permission_never_writes_memory(
     await _join_persona_conversation(
         tmp_path,
         monkeypatch,
-        model=ToolCallingModel(responses=[AIMessage(content="Oke.")]),
+        model=ToolCallingModel(responses=[AIMessage(content="Okay.")]),
         graphiti=graphiti,
         memory=True,
     )
@@ -1588,7 +1589,7 @@ async def test_memory_add_stores_owner_note_in_persona_group(
     opened = fake_persona_memory(monkeypatch, graphiti)
 
     await cli.add_owner_note(
-        "Demo Orchid pindah ke Jumat.",
+        "The Orchid demo moves to Friday.",
         persona_path=write_persona(tmp_path),
         owner_id=None,
         twin_id=None,
@@ -1609,7 +1610,7 @@ async def test_memory_add_stores_owner_note_in_persona_group(
     "text,identity,match",
     [
         ("  ", {}, "blank"),
-        ("Catatan.", {"owner_id": "other-owner"}, "owner_id and twin_id"),
+        ("A note.", {"owner_id": "other-owner"}, "owner_id and twin_id"),
     ],
 )
 async def test_memory_add_validates_before_opening_memory(
@@ -1683,7 +1684,7 @@ async def _forget_meeting_with_local_files(
         )
         for thread in (thread_id, other_thread):
             await agent.ainvoke(
-                {"messages": [{"role": "user", "content": "halo"}]},
+                {"messages": [{"role": "user", "content": "hello"}]},
                 {"configurable": {"thread_id": thread}},
             )
     fake_persona_memory(monkeypatch, FakeGraphiti())
@@ -1803,7 +1804,7 @@ async def test_memory_forget_validates_before_opening_memory(
     "argv,target,expected",
     [
         (
-            ["memory-add", "Catatan.", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
+            ["memory-add", "A note.", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
             "add_owner_note",
             {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
         ),
@@ -1859,7 +1860,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     graphiti = FakeGraphiti(search_gate=asyncio.Event())
-    model = recall_then_reply("Aku belum tahu, nanti aku cek ke Rani.")
+    model = recall_then_reply("I don't know yet, I'll check with Rani.")
     monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
 
     _created, audio, outcome = await _join_persona_conversation(
@@ -1869,7 +1870,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
     assert graphiti.search_cancelled.is_set()
-    assert audio.spoken == ["Aku belum tahu, nanti aku cek ke Rani."]
+    assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"
     assert '"source":"memory","kind":"timeout"' in capsys.readouterr().out
 
@@ -2035,11 +2036,11 @@ def write_record(settings: SimpleNamespace, meeting_id: str) -> None:
             id="t1",
             timestamp="2026-09-30T10:00:00+00:00",
             source="meeting_audio",
-            text="Kickoff vendor Orchid hari Selasa.",
+            text="The Orchid vendor kickoff is on Tuesday.",
             finalized=True,
         )
     )
-    record.add_twin_speech("Siap, Selasa ya.")
+    record.add_twin_speech("Got it, Tuesday.")
     record.close()
 
 
@@ -2260,8 +2261,8 @@ async def test_join_routes_interim_transcripts_to_barge_in(
                 )
             )
             interim = kwargs["open_audio"].keywords["on_interim"]
-            await interim(SimpleNamespace(text="tunggu"))
-            await interim(SimpleNamespace(text="tunggu dulu sebentar"))
+            await interim(SimpleNamespace(text="wait"))
+            await interim(SimpleNamespace(text="wait a moment"))
             return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
 
         monkeypatch.setattr(cli, "run_meeting_session", run)

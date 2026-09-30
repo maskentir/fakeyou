@@ -32,6 +32,11 @@ class AudioMaintenance(Protocol):
     ) -> str: ...
 
 
+@runtime_checkable
+class AdmissionAware(Protocol):
+    def mark_admitted(self) -> None: ...
+
+
 class ConversationError(RuntimeError):
     pass
 

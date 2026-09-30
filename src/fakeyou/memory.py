@@ -153,11 +153,11 @@ async def describe_facts(memory: Graphiti, edges: list[EntityEdge]) -> str:
     for edge in edges:
         sources = [episodes[uuid] for uuid in edge.episodes if uuid in episodes]
         if not sources:
-            lines.append(f"{edge.fact} (source: unknown)")
+            lines.append(f"From an unknown source: {edge.fact}")
             continue
         labels = "; ".join(sorted({source.source_description for source in sources}))
         first_seen = min(source.valid_at for source in sources).astimezone(UTC)
-        lines.append(f"{edge.fact} (source: {labels}; {first_seen:%Y-%m-%d %H:%M} UTC)")
+        lines.append(f"From {labels} on {first_seen:%Y-%m-%d %H:%M} UTC: {edge.fact}")
     return "\n".join(lines)
 
 

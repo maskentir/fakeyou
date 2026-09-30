@@ -132,13 +132,16 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
                 "meeting_id": "m1",
                 "memory": [],
                 "turns": [
-                    {"say": "Kapan beta launch?", "must_mention": ["14 oktober"]},
-                    {"say": "Harga?", "must_not_mention": ["juta"], "expects_recall": True},
+                    {"say": "When is the beta launch?", "must_mention": ["14 october"]},
+                    {"say": "Price?", "must_not_mention": ["million"], "expects_recall": True},
                 ],
             }
         ],
     }
-    replies = [AIMessage(content="Beta launch 14 Oktober 2026."), AIMessage(content="Lima juta?")]
+    replies = [
+        AIMessage(content="The beta launch is on 14 October 2026."),
+        AIMessage(content="Five million?"),
+    ]
 
     score = await replay(lambda: ScriptedModel(responses=replies), fixture, runs=1)
 

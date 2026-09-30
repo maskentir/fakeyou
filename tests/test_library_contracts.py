@@ -64,10 +64,10 @@ async def test_meta_stt_drops_diarization_speaker_labels() -> None:
     stt.emit_stt_usage_metrics = no_metrics  # type: ignore[method-assign]
     stt._trace_transcription = no_metrics  # type: ignore[method-assign]
     await stt._handle_message({"type": "speaker", "label": "A"})
-    await stt._handle_message({"type": "speechComplete", "turnId": 0, "transcript": "Halo."})
+    await stt._handle_message({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
 
     [frame] = frames
-    assert frame.text == "Halo."
+    assert frame.text == "Hello."
     assert "speaker" not in frame.result
     assert "label" not in frame.result
 

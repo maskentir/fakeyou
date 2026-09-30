@@ -79,31 +79,31 @@ async def run(memory: FakeGraphiti, entries: list, **overrides):
 
 def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
     entries = [
-        twin(0, "Gimana kalau demo digeser ke Kamis?"),
-        said(2, "Oke,\n setuju."),
+        twin(0, "How about moving the demo to Thursday?"),
+        said(2, "Okay,\n agreed."),
         ToolResultEntry(at=START, tool="recall_meeting_context", output="x", duration_ms=1),
-        said(3, "Budget aman.", participant="Speaker A"),
+        said(3, "The budget is fine.", participant="Speaker A"),
     ]
 
     [window] = meeting_windows(entries)
 
     assert [(utterance.speaker, utterance.text) for utterance in window] == [
-        (TWIN_SPEAKER, "Gimana kalau demo digeser ke Kamis?"),
-        (UNIDENTIFIED_PARTICIPANT, "Oke, setuju."),
-        ("Speaker A", "Budget aman."),
+        (TWIN_SPEAKER, "How about moving the demo to Thursday?"),
+        (UNIDENTIFIED_PARTICIPANT, "Okay, agreed."),
+        ("Speaker A", "The budget is fine."),
     ]
 
 
 def test_windows_split_by_utterance_count_and_age() -> None:
-    by_count = meeting_windows([said(index, f"Kalimat {index}.") for index in range(45)])
-    by_age = meeting_windows([said(0, "Awal."), said(59, "Masih."), said(61, "Jendela baru.")])
+    by_count = meeting_windows([said(index, f"Sentence {index}.") for index in range(45)])
+    by_age = meeting_windows([said(0, "Start."), said(59, "Still going."), said(61, "New window.")])
 
     assert [len(window) for window in by_count] == [20, 20, 5]
     assert [len(window) for window in by_age] == [2, 1]
 
 
 def test_windows_are_deterministic() -> None:
-    entries = [said(index * 7, f"Kalimat {index}.") for index in range(30)]
+    entries = [said(index * 7, f"Sentence {index}.") for index in range(30)]
 
     assert meeting_windows(entries) == meeting_windows(list(entries))
 
@@ -118,6 +118,7 @@ def test_extraction_instructions_require_attribution_and_vocabulary() -> None:
     assert "someone asking" in instructions
     assert "Orchid, Budi" in instructions
     assert "sounds similar" in instructions
+    assert "language the speakers used" in instructions
 
 
 def test_extraction_instructions_without_vocabulary_do_not_list_terms() -> None:
@@ -126,7 +127,11 @@ def test_extraction_instructions_without_vocabulary_do_not_list_terms() -> None:
 
 async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga() -> None:
     memory = FakeGraphiti()
-    entries = [twin(0, "Demo digeser ke Kamis?"), said(1, "Oke setuju."), said(70, "Budi PIC.")]
+    entries = [
+        twin(0, "Move the demo to Thursday?"),
+        said(1, "Okay, agreed."),
+        said(70, "Budi is the PIC."),
+    ]
 
     result, rows = await run(memory, entries)
 
@@ -136,7 +141,7 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
     ]
     first = memory.added[0]
     assert first["episode_body"] == (
-        f"{TWIN_SPEAKER}: Demo digeser ke Kamis?\n{UNIDENTIFIED_PARTICIPANT}: Oke setuju."
+        f"{TWIN_SPEAKER}: Move the demo to Thursday?\n{UNIDENTIFIED_PARTICIPANT}: Okay, agreed."
     )
     assert first["source"] == EpisodeType.message
     assert first["source_description"] == "Google Meet meeting-1 transcript"
@@ -163,7 +168,7 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
 
 
 async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() -> None:
-    entries = [said(index * 61, f"Kalimat {index}.") for index in range(3)]
+    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
     memory = FakeGraphiti(existing=[SimpleNamespace(uuid="old-0", name="meeting-1:w00000")])
 
     result, _rows = await run(memory, entries)
@@ -184,7 +189,7 @@ async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() ->
 
 
 async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> None:
-    entries = [said(index * 61, f"Kalimat {index}.") for index in range(3)]
+    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
     memory = FakeGraphiti()
     memory.errors[1] = RuntimeError("secret graph detail")
 
@@ -208,7 +213,7 @@ async def test_ingest_times_out_a_hung_window() -> None:
     memory = FakeGraphiti()
     memory.gate = asyncio.Event()
 
-    result, rows = await run(memory, [said(0, "Macet.")], episode_timeout_seconds=0.01)
+    result, rows = await run(memory, [said(0, "Stuck.")], episode_timeout_seconds=0.01)
 
     assert (result.ingested, result.completed) == (0, False)
     assert [row["kind"] for row in rows if row["event"] == "fault"] == ["timeout"]
@@ -219,7 +224,7 @@ async def test_ingest_stops_between_windows_when_requested() -> None:
     stop.set()
     memory = FakeGraphiti()
 
-    result, _rows = await run(memory, [said(0, "Satu.")], stop=stop)
+    result, _rows = await run(memory, [said(0, "One.")], stop=stop)
 
     assert (result.ingested, result.completed) == (0, False)
     assert memory.added == []
@@ -229,7 +234,7 @@ async def test_ingest_refuses_a_saga_written_by_an_older_ingestion_format() -> N
     memory = FakeGraphiti(existing=[SimpleNamespace(uuid="legacy", name="meeting-1:00003")])
 
     with pytest.raises(ValueError, match="memory-forget"):
-        await run(memory, [said(0, "Halo.")])
+        await run(memory, [said(0, "Hello.")])
 
 
 async def test_ingest_of_an_empty_record_is_complete() -> None:
