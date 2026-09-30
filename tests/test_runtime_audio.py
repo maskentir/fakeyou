@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.runtime as runtime
 from fakeyou.audio import MeetingAudioError
+from fakeyou.journal import ProviderJournal
 from fakeyou.meet import CallObservation, JoinResult, LeaveResult
 from fakeyou.session import ConversationError, SessionConfig
 
@@ -240,7 +241,7 @@ async def test_camera_failure_is_recorded_without_failing_session(session, monke
         raise RuntimeError("no toggle")
 
     monkeypatch.setattr(runtime, "disable_meeting_camera", camera)
-    reporter = FaultReporter(meeting_id="meeting")
+    reporter = FaultReporter(journal=ProviderJournal("meeting"))
 
     @asynccontextmanager
     async def open_audio():
@@ -489,7 +490,7 @@ def _faulty_reporter():
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting")
+    reporter = FaultReporter(journal=ProviderJournal("meeting"))
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     return reporter
@@ -581,7 +582,7 @@ async def test_empty_faults_leave_detail_byte_identical(session):
     result = await runtime.run_meeting_session(
         session.config,
         open_audio=open_audio,
-        faults=FaultReporter(meeting_id="meeting"),
+        faults=FaultReporter(journal=ProviderJournal("meeting")),
         **session.kwargs,
     )
 
@@ -589,8 +590,10 @@ async def test_empty_faults_leave_detail_byte_identical(session):
 
 
 async def test_broken_reporter_never_changes_exit_path(session):
-    class _BrokenReporter:
-        def report(self):
+    from fakeyou.faults import FaultReporter
+
+    class _BrokenReporter(FaultReporter):
+        def summaries(self):
             raise RuntimeError("reporter exploded")
 
     class CaptureStoppedAudio(Audio):
@@ -606,7 +609,10 @@ async def test_broken_reporter_never_changes_exit_path(session):
             await audio.stop()
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, faults=_BrokenReporter(), **session.kwargs
+        session.config,
+        open_audio=open_audio,
+        faults=_BrokenReporter(journal=ProviderJournal("meeting")),
+        **session.kwargs,
     )
 
     assert result.terminal_reason == "audio_failure"

@@ -4,6 +4,7 @@ import stat
 
 import pytest
 
+from fakeyou.journal import ProviderJournal
 from fakeyou.playback import (
     PlaybackEngine,
     PlaybackError,
@@ -651,7 +652,7 @@ async def test_typed_synth_fault_records_and_engine_recovers() -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
     synth = _Synth(error=ProviderFault("tts", "timeout", detail="slow", retryable=True))
     player = _Player()
     muter = _Muter()
@@ -682,7 +683,7 @@ async def test_typed_synth_fault_records_and_engine_recovers() -> None:
 async def test_play_failure_records_and_worker_survives() -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
     synth = _Synth()
     player = _Player(error=PlaybackError("paplay exited with 1"))
     muter = _Muter()
@@ -838,7 +839,7 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
 async def test_streaming_play_failure_reports_and_engine_recovers() -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
     synth = _StreamSynth()
     player = _Player()
     streamer = _StreamPlayer(error=PlaybackError("paplay stream failed"))

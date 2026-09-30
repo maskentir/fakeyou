@@ -166,12 +166,15 @@ class _TranscriptObserver(FrameProcessor):
         activity: CaptureActivity,
         reporter: FaultReporter | None,
         on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
+        *,
+        journal: ProviderJournal | None = None,
     ) -> None:
         super().__init__()
         self._callback = callback
         self._activity = activity
         self._reporter = reporter
         self._on_interim = on_interim
+        self._journal = journal
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -198,7 +201,9 @@ class _TranscriptObserver(FrameProcessor):
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    record_consumer_fault(self._reporter, None, "transcript_consumer", error)
+                    record_consumer_fault(
+                        self._reporter, "transcript_consumer", error, journal=self._journal
+                    )
         await self.push_frame(frame, direction)
 
 
@@ -526,7 +531,9 @@ async def open_meeting_audio(
                         ),
                         _CaptureObserver(activity, journal),
                         stt,
-                        _TranscriptObserver(on_transcript, activity, fault_reporter, on_interim),
+                        _TranscriptObserver(
+                            on_transcript, activity, fault_reporter, on_interim, journal=journal
+                        ),
                     ]
                 ),
                 params=PipelineParams(audio_in_sample_rate=CAPTURE_SAMPLE_RATE),
@@ -621,6 +628,6 @@ async def open_meeting_audio(
             if native_transport and transport is not None:
                 _terminate_native_audio(transport)
         for cleanup_error in cleanup_errors:
-            record_consumer_fault(fault_reporter, None, "audio_cleanup", cleanup_error)
+            record_consumer_fault(fault_reporter, "audio_cleanup", cleanup_error, journal=journal)
         if cleanup_errors and original_error is None:
             raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]

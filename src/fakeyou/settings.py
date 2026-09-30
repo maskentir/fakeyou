@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from fakeyou.session import PositiveSeconds, SessionId, TwinName
+from fakeyou.session import DEFAULT_CHECKPOINT_PATH, PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 TTSProvider = Literal["openai", "minimax"]
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     tts_provider: TTSProvider = "openai"
     tts_api_key: SecretStr | None = None
     tts_voice: str | None = None
-    checkpoint_path: Path = Path(".runtime/checkpoints.sqlite")
+    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
     headless: bool = False
     cloakbrowser_license_key: str | None = Field(default=None, repr=False)
     openai_api_key: SecretStr | None = None

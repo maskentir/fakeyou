@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
@@ -56,10 +55,7 @@ async def _session_resources(faults: FaultReporter | None) -> AsyncIterator[Asyn
 
 
 def _fault_report(faults: FaultReporter | None) -> dict[str, Any] | None:
-    try:
-        return faults.report() if faults is not None else None
-    except Exception:
-        return None
+    return faults.report() if faults is not None else None
 
 
 def _fault_suffix(faults: FaultReporter | None) -> str:
@@ -299,16 +295,8 @@ class _MeetingWorker:
                     continue
                 poll_seconds = self.monotonic() - poll_started
                 if poll_seconds >= 1.0:
-                    print(
-                        json.dumps(
-                            {
-                                "event": "monitor_poll",
-                                "meeting_id": self.config.meeting_id,
-                                "seconds": poll_seconds,
-                            }
-                        ),
-                        flush=True,
-                    )
+                    if self.journal is not None:
+                        self.journal.record("monitor_poll", seconds=poll_seconds)
                 if checked.observation_failed:
                     observation_errors += 1
                     if observation_errors >= 2:
@@ -440,6 +428,9 @@ async def run_meeting_session(
         raise ValueError("initial speech requires meeting audio")
     if conversation is not None and open_audio is None:
         raise ValueError("conversation requires meeting audio")
+    journal = journal or (
+        faults.journal if faults is not None else ProviderJournal(config.meeting_id)
+    )
     stop_event = stop if stop is not None else asyncio.Event()
     try:
         if saver_factory is None:

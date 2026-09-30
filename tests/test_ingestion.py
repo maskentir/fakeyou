@@ -70,8 +70,8 @@ async def run(memory: FakeGraphiti, entries: list, **overrides):
         "twin_name": "Rani Twin",
         "vocabulary": ("Orchid", "Budi"),
         "journal": ProviderJournal("meeting-1", emit=lines.append),
-        "faults": FaultReporter(meeting_id="meeting-1", log=lines.append),
     }
+    values["faults"] = FaultReporter(journal=values["journal"])
     values.update(overrides)
     result = await ingest_meeting(memory, entries, **values)
     return result, [json.loads(line) for line in lines]

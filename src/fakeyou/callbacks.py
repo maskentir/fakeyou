@@ -1,6 +1,6 @@
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
+
+from fakeyou.journal import ProviderJournal
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,12 +11,8 @@ class ConsumerFault:
     detail: str | None = None
 
 
-def _default_log(line: str) -> None:
-    print(line, flush=True)
-
-
 def record_consumer_fault(
-    reporter: object, log: Callable[[str], None] | None, detail: str, error: BaseException
+    reporter: object, detail: str, error: BaseException, *, journal: ProviderJournal | None = None
 ) -> None:
     fault = ConsumerFault(detail=f"{detail}: {type(error).__name__}")
     record = getattr(reporter, "record", None)
@@ -25,9 +21,5 @@ def record_consumer_fault(
             record(fault)
         except Exception:
             pass
-    try:
-        (log or _default_log)(
-            json.dumps({"event": "callback_fault", "detail": detail, "error": type(error).__name__})
-        )
-    except Exception:
-        pass
+    journal = journal or getattr(reporter, "journal", None) or ProviderJournal("")
+    journal.record("callback_fault", detail=detail, error=type(error).__name__)

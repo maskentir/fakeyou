@@ -95,9 +95,6 @@ class CaptureActivity:
         else:
             self._interim_count += 1
 
-    def observe_frame(self, finalized: bool) -> None:
-        self.observe_transcript(finalized)
-
     def observe_presence(self, count: int | None) -> None:
         stamp = self._now()
         if count is None:
@@ -199,7 +196,6 @@ class DeafMonitor:
         deaf_window_seconds: float = 120.0,
         deaf_grace_seconds: float = 120.0,
         restate_interval_seconds: float = 60.0,
-        log: Callable[[str], None] | None = None,
         journal: ProviderJournal | None = None,
     ) -> None:
         self._activity = activity

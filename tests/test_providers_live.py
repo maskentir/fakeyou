@@ -300,8 +300,8 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                 "twin_name": profile.display_name,
                 "vocabulary": profile.vocabulary,
                 "journal": ProviderJournal(meeting_id, emit=lines.append),
-                "faults": FaultReporter(meeting_id=meeting_id, log=lines.append),
             }
+            options["faults"] = FaultReporter(journal=options["journal"])
             first = await ingest_meeting(memory, read_meeting_record(record_path), **options)
             ingested = True
             again = await ingest_meeting(memory, read_meeting_record(record_path), **options)

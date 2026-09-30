@@ -9,6 +9,7 @@ from graphiti_core.search.search_filters import ComparisonOperator
 from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory as memory_module
+from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
@@ -257,7 +258,7 @@ def test_recall_error_middleware_returns_unknown_and_records_fault() -> None:
     from fakeyou.faults import FaultReporter
 
     lines: list[str] = []
-    faults = FaultReporter(meeting_id="m", log=lines.append)
+    faults = FaultReporter(journal=ProviderJournal("m", emit=lines.append))
     middleware = recall_error_middleware(faults)
     request = SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"})
 

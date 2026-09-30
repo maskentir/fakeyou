@@ -2,8 +2,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -19,7 +18,6 @@ _EVENT_REGISTRY: set[str] = {
     "synth_finished",
     "synth_failed",
     "stt_reconnect",
-    "agent_invoke",
 }
 _SENSITIVE = {
     "authorization",
@@ -48,7 +46,9 @@ def _safe_value(key: str, value: Any) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, dict):
-        return {str(k): _safe_value(str(k), v) for k, v in value.items()}
+        return {
+            str(k): _safe_value(str(k), v) for k, v in value.items() if str(k).lower() != "text"
+        }
     if isinstance(value, (list, tuple)):
         return [_safe_value(key, item) for item in value]
     return f"<{type(value).__name__}>"
@@ -88,15 +88,16 @@ class ProviderJournal:
             except BaseException:
                 self._file_handler = None
 
-    def record(self, event: str, **fields: Any) -> None:
+    def record(self, event: str, **fields: Any) -> str | None:
         try:
             _EVENT_REGISTRY.add(event)
+            at = self._now().isoformat()
             row: dict[str, Any] = {
                 "event": event,
                 "meeting_id": self._meeting_id,
-                "at": self._now().isoformat(),
+                "at": at,
             }
-            row.update({str(key): _safe_value(str(key), value) for key, value in fields.items()})
+            row.update(_safe_value("", fields))
             line = _encode_bounded(row, self._max_bytes)
             with self._lock:
                 if self._file_handler is not None:
@@ -121,8 +122,9 @@ class ProviderJournal:
                         print(line, end="", flush=True)
                 except BaseException:
                     pass
+            return at
         except BaseException:
-            return
+            return None
 
     def close(self) -> None:
         with self._lock:
@@ -161,17 +163,6 @@ class ProviderJournal:
     def _elapsed(self, request_id: str) -> float | None:
         started = self._started.get(request_id)
         return None if started is None else round((time.monotonic() - started) * 1000, 3)
-
-    @contextmanager
-    def request(self, *, source: str, operation: str, **fields: Any) -> Iterator[str]:
-        request_id = self.request_started(source=source, operation=operation, **fields)
-        try:
-            yield request_id
-        except BaseException as error:
-            self.request_failed(request_id, error=type(error).__name__)
-            raise
-        else:
-            self.request_finished(request_id)
 
 
 def _encode_bounded(row: dict[str, Any], max_bytes: int) -> str:

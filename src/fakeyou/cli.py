@@ -46,6 +46,7 @@ from fakeyou.conversation import (
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import IngestResult, ingest_meeting
 from fakeyou.journal import JOURNAL_BACKUP_COUNT, ProviderJournal
+from fakeyou.lifecycle import meeting_thread_id
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
@@ -369,7 +370,7 @@ async def ingest_recorded_meeting(
                 meeting_id=meeting_id,
                 twin_name=twin_name or profile.display_name,
                 journal=journal,
-                faults=FaultReporter(meeting_id=meeting_id),
+                faults=FaultReporter(journal=journal),
             )
     finally:
         journal.close()
@@ -445,6 +446,7 @@ async def forget_meeting_files(
             await saver.adelete_thread(
                 conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id)
             )
+            await saver.adelete_thread(meeting_thread_id(profile.twin_id, meeting_id))
     return {
         "record_removed": record_removed,
         "journal_files_removed": len(removed_journals),
@@ -589,6 +591,7 @@ async def join_meeting(
         else settings.session_duration_seconds,
         headless=resolved_headless,
         license_key=settings.cloakbrowser_license_key,
+        checkpoint_path=settings.checkpoint_path,
     )
     profile: PersonaProfile | None = None
     if persona_path is not None:
@@ -601,10 +604,10 @@ async def join_meeting(
             )
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
-    faults = FaultReporter(meeting_id=resolved_meeting_id)
     journal = ProviderJournal(
         resolved_meeting_id, path=settings.journal_dir / f"{resolved_meeting_id}.jsonl"
     )
+    faults = FaultReporter(journal=journal)
     record = MeetingRecord(
         meeting_record_path(settings.meeting_record_dir, resolved_meeting_id), faults=faults
     )
@@ -636,7 +639,12 @@ async def join_meeting(
             )
 
         def log_playback(event: PlaybackEvent) -> None:
-            journal.record(event.name, source="playback", text=event.text, detail=event.detail)
+            journal.record(
+                event.name,
+                source="playback",
+                ends_with_question=event.text.rstrip().endswith("?"),
+                detail=event.detail,
+            )
             if event.name == "speak_finished":
                 record.add_twin_speech(event.text)
 
@@ -662,7 +670,6 @@ async def join_meeting(
                 "transcript_final",
                 source=event.source,
                 transcript_id=event.id,
-                text=event.text,
                 participant=event.participant,
                 spoken_at=event.timestamp,
                 finalized=event.finalized,
@@ -736,6 +743,7 @@ async def join_meeting(
                 )
             except Exception as error:
                 faults.record(classify_exception("memory_ingest", error))
+        journal.record("cli_exit", terminal_reason=result.terminal_reason, exit_code=exit_code)
     print(
         json.dumps(
             {
@@ -747,18 +755,6 @@ async def join_meeting(
             },
             indent=2,
         )
-    )
-    print(
-        json.dumps(
-            {
-                "event": "cli_exit",
-                "meeting_id": resolved_meeting_id,
-                "terminal_reason": result.terminal_reason,
-                "exit_code": exit_code,
-            }
-        ),
-        file=sys.stderr,
-        flush=True,
     )
     if exit_code != 0:
         raise SystemExit(exit_code)

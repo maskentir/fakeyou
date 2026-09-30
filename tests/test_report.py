@@ -32,7 +32,12 @@ def answered_turn(offset: float, transcript_id: str, reply: str, *, recall: bool
         row(offset + 1.6, "agent_finished", request_id=f"{transcript_id}:1", latency_ms=1200),
         row(offset + 1.6, "speak_started", source="playback", text=reply),
         row(offset + 4.6, "synth_finished", duration_ms=3000, first_chunk_latency_ms=900),
-        row(offset + 7.0, "speak_finished", source="playback", text=reply),
+        row(
+            offset + 7.0,
+            "speak_finished",
+            source="playback",
+            ends_with_question=reply.rstrip().endswith("?"),
+        ),
     ]
     return rows
 
@@ -214,3 +219,16 @@ def test_report_ignores_speech_that_started_before_the_interrupted_playback() ->
     ]
 
     assert build_session_report(rows)["interruptions"]["speech_to_stop_s"]["count"] == 0
+
+
+def test_report_should_count_trailing_questions_without_retaining_reply_text():
+    report = build_session_report(
+        [
+            row(1, "speak_finished", ends_with_question=True),
+            row(2, "speak_finished", ends_with_question=False),
+            row(3, "speak_finished"),
+            row(4, "speak_dropped", ends_with_question=True),
+        ]
+    )
+
+    assert report["replies"] == {"spoken": 3, "interrupted": 1, "trailing_questions": 1}

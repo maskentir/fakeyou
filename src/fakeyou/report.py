@@ -119,7 +119,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             replying.setdefault("first_pcm_at", _first_pcm_at(row, at))
         elif event == "speak_finished":
             replies["spoken"] += 1
-            replies["trailing_questions"] += str(row.get("text") or "").rstrip().endswith("?")
+            replies["trailing_questions"] += row.get("ends_with_question") is True
             if replying is not None:
                 replying["outcome"] = "spoken"
             replying = None

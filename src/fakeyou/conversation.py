@@ -163,7 +163,6 @@ class LangGraphResponder:
             )
             for event in events
         ]
-        started = time.monotonic()
         try:
             result = await self.agent.ainvoke(
                 {"messages": messages},
@@ -175,29 +174,12 @@ class LangGraphResponder:
             )
         except Exception as error:
             fault = classify_exception("agent", error)
-            if self.journal is not None:
-                self.journal.record(
-                    "agent_invoke",
-                    events=len(events),
-                    chars_out=0,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    outcome="failed",
-                    kind=fault.kind,
-                )
             raise fault from error
         output = result.get("messages", [])
         if not output or not isinstance(output[-1], AIMessage) or output[-1].tool_calls:
             reply = ""
         else:
             reply = output[-1].text.strip()
-        if self.journal is not None:
-            self.journal.record(
-                "agent_invoke",
-                events=len(events),
-                chars_out=len(reply),
-                duration_ms=(time.monotonic() - started) * 1000,
-                outcome="answered" if reply else "empty",
-            )
         return reply
 
 

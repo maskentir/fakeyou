@@ -1,9 +1,7 @@
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, cast
 
+from fakeyou.journal import ProviderJournal
 from fakeyou.provider_faults import ProviderFault, trim_detail
 
 _MAX_FAULT_RECORDS = 128
@@ -29,10 +27,6 @@ class _FaultRecord:
     first_at: str
 
 
-def _default_log(line: str) -> None:
-    print(line, flush=True)
-
-
 def is_recordable_fault(fault: object) -> bool:
     return (
         isinstance(fault, ProviderFault)
@@ -42,16 +36,8 @@ def is_recordable_fault(fault: object) -> bool:
 
 
 class FaultReporter:
-    def __init__(
-        self,
-        *,
-        meeting_id: str = "",
-        now: Callable[[], datetime] | None = None,
-        log: Callable[[str], None] | None = None,
-    ) -> None:
-        self._meeting_id = meeting_id
-        self._now = now or (lambda: datetime.now(UTC))
-        self._log = log or _default_log
+    def __init__(self, *, journal: ProviderJournal) -> None:
+        self.journal = journal
         self._records: dict[tuple[str, str, int | None], _FaultRecord] = {}
         self._total = 0
 
@@ -89,32 +75,15 @@ class FaultReporter:
                 count=1,
                 status=status,
                 detail=trim_detail(raw_detail if isinstance(raw_detail, str) else None),
-                first_at=self._safe_now(),
+                first_at="",
             )
             self._records[key] = record
-            self._safe_log(
-                {
-                    "event": "fault",
-                    "meeting_id": self._meeting_id,
-                    "source": source,
-                    "kind": kind,
-                    "status": status,
-                    "detail": record.detail,
-                    "at": record.first_at,
-                }
+            record.first_at = (
+                self.journal.record(
+                    "fault", source=source, kind=kind, status=status, detail=record.detail
+                )
+                or ""
             )
-        except BaseException:
-            return
-
-    def _safe_now(self) -> str:
-        try:
-            return self._now().isoformat()
-        except BaseException:
-            return datetime.now(UTC).isoformat()
-
-    def _safe_log(self, row: dict[str, object]) -> None:
-        try:
-            self._log(json.dumps(row, separators=(",", ":")))
         except BaseException:
             return
 

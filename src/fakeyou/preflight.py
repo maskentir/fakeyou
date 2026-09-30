@@ -92,8 +92,7 @@ async def probe_host(
     port: int = 443,
     ssl_context: ssl.SSLContext | None = None,
 ) -> ProbeResult:
-    scheme = "https" if port == 443 else "https"
-    endpoint = f"{scheme}://{host}:{port}"
+    endpoint = f"https://{host}:{port}"
     result = await probe_endpoint(
         endpoint, timeout_seconds=timeout_seconds, ssl_context=ssl_context
     )

@@ -49,14 +49,13 @@ def test_known_events_are_registered() -> None:
         "synth_finished",
         "synth_failed",
         "stt_reconnect",
-        "agent_invoke",
     } <= registered
 
 
 def test_record_never_raises_on_bad_fields() -> None:
     journal = ProviderJournal("meeting-1", emit=lambda line: None)
 
-    journal.record("agent_invoke", duration_ms=float("nan"))
+    journal.record("synth_finished", duration_ms=float("nan"))
     journal.record("", **{})
 
 
@@ -88,3 +87,16 @@ def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
     text = path.read_text()
     assert "sk-secret" not in text
     assert "private" not in text
+
+
+def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
+    path = tmp_path / "events.jsonl"
+    journal = ProviderJournal("meeting-1", path=path, stdout=False)
+    for name in ("transcript_final", "speak_started", "speak_finished", "speak_dropped"):
+        journal.record(name, text="private reply?", metadata={"text": "private transcript"})
+    journal.close()
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 4
+    assert all("text" not in row and "text" not in row["metadata"] for row in rows)
+    assert "private" not in path.read_text()

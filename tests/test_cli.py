@@ -288,8 +288,14 @@ async def test_join_exit_code_matches_terminal_reason(
         assert caught.value.code == exit_code
 
     captured = capsys.readouterr()
-    assert f'"exit_code": {exit_code}' in captured.err
-    assert '"event": "cli_exit"' in captured.err
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "journals" / "meeting-1.jsonl").read_text().splitlines()
+    ]
+    [exit_row] = [row for row in rows if row["event"] == "cli_exit"]
+    assert exit_row["exit_code"] == exit_code
+    assert exit_row["at"]
+    assert exit_row["meeting_id"] == "meeting-1"
     assert f'"terminal_reason": "{terminal_reason}"' in captured.out
 
 
@@ -353,6 +359,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
 
     async def fake_run(config, **kwargs):
         captured.update(kwargs)
+        captured["config"] = config
         return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
 
     monkeypatch.setattr(cli, "run_meeting_session", fake_run)
@@ -369,6 +376,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
         settings=fake_settings(tmp_path),
     )
 
+    assert captured["config"].checkpoint_path == tmp_path / "checkpoints.sqlite"
     assert isinstance(captured["faults"], FaultReporter)
     assert isinstance(captured["journal"], ProviderJournal)
     assert "preflight_hosts" not in captured
@@ -708,11 +716,8 @@ async def test_join_audio_transcript_reaches_conversation(
         json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
     ]
     [final] = [row for row in rows if row["event"] == "transcript_final"]
-    assert (final["text"], final["participant"], final["meeting_id"]) == (
-        "Hello.",
-        "unknown",
-        "meeting-9",
-    )
+    assert "text" not in final
+    assert (final["participant"], final["meeting_id"]) == ("unknown", "meeting-9")
     assert final["at"]
     entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
     assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Hello.")]
@@ -925,7 +930,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
             handler = kwargs["open_audio"].keywords["on_playback_event"]
             handler(PlaybackEvent("speak_started", "hello", ""))
             handler(PlaybackEvent("speak_dropped", "cut off", "interrupted"))
-            handler(PlaybackEvent("speak_finished", "hello", ""))
+            handler(PlaybackEvent("speak_finished", "hello?  ", ""))
             return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
 
         monkeypatch.setattr(cli, "run_meeting_session", run)
@@ -938,14 +943,14 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
     ]
     playback = [
-        (row["event"], row["text"], row["detail"])
+        (row["event"], row["ends_with_question"], row["detail"])
         for row in rows
         if row.get("source") == "playback"
     ]
     assert playback == [
-        ("speak_started", "hello", None),
-        ("speak_dropped", "cut off", "interrupted"),
-        ("speak_finished", "hello", None),
+        ("speak_started", False, None),
+        ("speak_dropped", False, "interrupted"),
+        ("speak_finished", True, None),
     ]
     assert all(
         row["meeting_id"] == "meeting-9" and row["at"]
@@ -953,7 +958,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         if row.get("source") == "playback"
     )
     entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
-    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "hello")]
+    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "hello?  ")]
 
 
 @pytest.mark.asyncio
@@ -1492,7 +1497,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
     assert '"terminal_reason": "infra_failure"' in captured.out
     assert "memory unavailable: memory" in captured.out
     assert f'"kind":"{kind}"' in captured.out
-    assert '"exit_code": 3' in captured.err
+    assert '"exit_code":3' in captured.out
 
 
 def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1697,6 +1702,12 @@ async def _forget_meeting_with_local_files(
                 {"messages": [{"role": "user", "content": "hello"}]},
                 {"configurable": {"thread_id": thread}},
             )
+    from fakeyou.lifecycle import MeetingLifecycle
+
+    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+        for meeting in ("meeting-9", "meeting-10"):
+            lifecycle = MeetingLifecycle(profile.owner_id, profile.twin_id, meeting, saver)
+            await lifecycle.initialize()
     fake_persona_memory(monkeypatch, FakeGraphiti())
 
     async def forget(memory, **kwargs):
@@ -2384,3 +2395,18 @@ async def test_join_routes_interim_transcripts_to_barge_in(
     await _join_with_audio(tmp_path, monkeypatch, conversation_enabled=True, barge_in=True)
 
     assert stops == [True]
+
+
+async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings(
+    tmp_path, monkeypatch
+):
+    from fakeyou.lifecycle import meeting_thread_id
+
+    settings, thread_id = await _forget_meeting_with_local_files(
+        tmp_path, monkeypatch, keep_record=False
+    )
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+
+    assert not await _thread_exists(settings, thread_id)
+    assert not await _thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-9"))
+    assert await _thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-10"))

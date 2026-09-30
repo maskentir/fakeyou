@@ -367,30 +367,6 @@ async def test_responder_error_still_fails_loop():
     await loop.close()
 
 
-async def test_agent_turn_journals_invoke_with_outcome():
-    import json
-
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
-
-    class Agent:
-        async def ainvoke(self, request, config):
-            return {"messages": [AIMessage(content="spoken")]}
-
-    responder = LangGraphResponder(Agent(), "thread", journal=journal)
-    assert await responder.respond([event("one", "hi")], lambda: None) == "spoken"
-
-    assert len(lines) == 1
-    row = json.loads(lines[0])
-    assert row["event"] == "agent_invoke"
-    assert row["events"] == 1
-    assert row["chars_out"] == len("spoken")
-    assert row["duration_ms"] >= 0
-    assert row["outcome"] == "answered"
-
-
 async def test_loop_journals_turn_without_modifying_injected_responder():
     import json
     from dataclasses import dataclass

@@ -22,6 +22,7 @@ from fakeyou.audio import (
     open_meeting_audio,
 )
 from fakeyou.deaf import CaptureActivity
+from fakeyou.journal import ProviderJournal
 
 
 class _Transport:
@@ -178,7 +179,7 @@ async def test_callback_failure_degrades_without_killing_session() -> None:
     from fakeyou.faults import FaultReporter
 
     activity = CaptureActivity()
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         raise ValueError("secret-callback-data")
@@ -607,7 +608,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -635,7 +636,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
 async def test_nonpermanent_error_records_without_killing() -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -664,7 +665,7 @@ async def test_uncategorized_error_falls_back_to_exception_classification() -> N
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -690,7 +691,7 @@ async def test_uncategorized_error_falls_back_to_exception_classification() -> N
 async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -716,7 +717,7 @@ async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
 async def test_supported_stt_reconnect_queues_request() -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
 
     class _Reconnectable(FrameProcessor):
         async def reconnect_when_idle(self) -> None:
@@ -822,7 +823,7 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.journal import ProviderJournal
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
     journal = ProviderJournal("meeting-1", emit=lambda _: None, stdout=False)
     engine = default_playback_engine(tts_api_key="k", fault_reporter=reporter, journal=journal)
     try:
@@ -908,3 +909,35 @@ async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() 
 
     assert (admitted.available, admitted.ready_at) == (True, 400.0)
     assert (failed.available, failed.ready_at) == (False, 400.0)
+
+
+async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path):
+    from fakeyou.report import read_journal
+
+    path = tmp_path / "events.jsonl"
+    journal = ProviderJournal("meeting-7", path=path, stdout=False)
+    failed = asyncio.Event()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        failed.set()
+        raise ValueError("private callback data")
+
+    async with open_meeting_audio(
+        muse_api_key="muse-secret",
+        tts_api_key="openai-secret",
+        on_transcript=on_transcript,
+        transport=_Transport(),
+        stt=_STT(),
+        playback=_Playback(),
+        journal=journal,
+    ) as session:
+        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        await asyncio.wait_for(failed.wait(), timeout=2)
+        session.raise_if_failed()
+    journal.close()
+
+    callbacks = [row for row in read_journal(path) if row["event"] == "callback_fault"]
+    assert len(callbacks) == 1
+    assert callbacks[0]["meeting_id"] == "meeting-7"
+    assert callbacks[0]["at"]
+    assert "private callback data" not in path.read_text()

@@ -112,7 +112,7 @@ def test_capture_failure_grace_resets_after_recovery(activity):
 
 def test_fault_reports_repeat_only_every_sixty_seconds(activity):
     capture, _ = activity
-    reporter = FaultReporter(log=lambda _: None)
+    reporter = FaultReporter(journal=ProviderJournal("", stdout=False))
     monitor = DeafMonitor(activity=capture, reporter=reporter, deaf_grace_seconds=600)
     assert monitor.note_tick(1000, "stt_fault") == "repair"
     assert monitor.note_tick(1059, "stt_fault") is None
@@ -187,7 +187,7 @@ def test_capture_silent_records_once_restates_and_never_terminals(activity):
     capture, clock = activity
     lines: list[str] = []
     journal = ProviderJournal("meeting-1", emit=lines.append, stdout=False)
-    reporter = FaultReporter(log=lambda _: None)
+    reporter = FaultReporter(journal=ProviderJournal("", stdout=False))
     monitor = DeafMonitor(activity=capture, reporter=reporter, journal=journal)
     assert monitor.note_tick(1000, "capture_silent") == "capture_silent"
     assert reporter.total() == 0
@@ -203,7 +203,7 @@ def test_capture_silent_records_once_restates_and_never_terminals(activity):
 
 def test_missing_capture_heartbeat_is_reported_as_fault(activity):
     capture, clock = activity
-    reporter = FaultReporter(log=lambda _: None)
+    reporter = FaultReporter(journal=ProviderJournal("", stdout=False))
     monitor = DeafMonitor(activity=capture, reporter=reporter, deaf_grace_seconds=120)
     capture.observe_presence(2)
     clock[0] += 31

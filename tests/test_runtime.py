@@ -345,7 +345,7 @@ async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
     polls = [
         json.loads(line)
         for line in capsys.readouterr().out.splitlines()
-        if '"event": "monitor_poll"' in line
+        if json.loads(line).get("event") == "monitor_poll"
     ]
     assert len(polls) == 1
     assert polls[0]["meeting_id"] == "meeting-1"
@@ -656,3 +656,34 @@ def test_session_rejects_invalid_identity(field, value) -> None:
 def test_session_rejects_invalid_timing(field, value) -> None:
     with pytest.raises(ValueError):
         _config(**{field: value})
+
+
+async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path):
+    from fakeyou.journal import ProviderJournal
+    from fakeyou.report import read_journal
+
+    clock = _FakeClock()
+
+    def advance_on_monitor_poll(reads):
+        if reads == 2:
+            clock.now += 2.5
+
+    browser = _FakePageSession(_page([IN_CALL, IN_CALL, ENDED], on_content=advance_on_monitor_poll))
+    saver = _FakeSaverSession()
+    path = tmp_path / "events.jsonl"
+    journal = ProviderJournal("journal-meeting", path=path, stdout=False)
+    await run_meeting_session(
+        _config(),
+        open_page=browser.open,
+        saver_factory=saver.factory,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        journal=journal,
+    )
+    journal.close()
+
+    polls = [row for row in read_journal(path) if row["event"] == "monitor_poll"]
+    assert len(polls) == 1
+    assert polls[0]["meeting_id"] == "journal-meeting"
+    assert polls[0]["seconds"] == 2.5
+    assert polls[0]["at"]
