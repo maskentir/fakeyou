@@ -139,6 +139,39 @@ Bukti:
 
 Temuan: `gpt-4.1-mini` mematuhi instruksi yang berada di akhir system prompt dan mengabaikan instruksi yang sama di tengah (penutup 6/6 → 0/6, asal fakta 0/6 → 5/6). Aturan perilaku yang harus dipatuhi ditempatkan di akhir; aturan di tengah hanya konteks. Menggeser aturan ejaan vocabulary ke akhir tidak membantu (0/6), karena model mengulang istilah penanya.
 
+## Status fase 4 (30 September 2026)
+
+### Diarisasi Muse diukur dan tidak dipakai di jalur percakapan
+
+Probe tiga giliran dua suara TTS (A, B, A), dialirkan real-time, keyword aktif:
+
+| Mode | Transkrip final setelah akhir ucapan | Giliran hilang | Label |
+| --- | --- | --- | --- |
+| `ENDPOINTING` (saat ini) | median 0,39 s, maks 0,89 s (n=6) | 0 dari 6 | — |
+| `DIARIZATION`, jeda akhir 3 s | median 0,81 s, maks 2,77 s | ucapan ketiga hilang di 2 dari 2 run | A, B |
+| `DIARIZATION`, jeda akhir 8 s | median 2,29 s, maks 3,07 s | ucapan ketiga hilang di 1 dari 3 run | A, B, A (penutur kembali dikenali) |
+
+Label diarisasi akurat, tetapi menambah sekitar dua detik ke setiap jawaban (budget VAD stop → PCM pertama saat ini sekitar tiga detik) dan kadang kehilangan giliran. Jalur percakapan tetap `ENDPOINTING`. Identitas speaker jangka panjang tetap audio per participant dari halaman Meet; label diarisasi tidak dipasang sebagai setelan agar tidak ada mode yang dapat menjatuhkan giliran.
+
+### Barge-in dari transkrip interim
+
+- `ConversationLoop.handle_interim`: saat twin berbicara dan barge-in aktif, transkrip interim dengan minimal `BARGE_IN_MIN_WORDS = 3` kata langsung menghentikan playback. Nilai tiga mengikuti contoh `MinWordsUserTurnStartStrategy` Pipecat dan menahan backchannel satu atau dua kata; interupsi pendek tetap ditangkap barge-in transkrip final. Wake phrase dihormati.
+- Logika hitung kata ditulis langsung di loop karena strategi Pipecat bergantung pada frame `BotStartedSpeakingFrame` di pipeline, sedangkan playback berjalan lewat `paplay` di luar pipeline.
+- Journal `barge_in` mencatat pemicu (`interim` atau `final`) dan jumlah kata; `fakeyou report` menghitung `interruptions.speech_to_stop_s` dari VAD `speech_started` setelah playback dimulai sampai `speak_dropped`. Nilai tiga kata dievaluasi dari laporan ini pada acceptance berikutnya.
+
+### Panjang thread
+
+`gpt-4.1-mini` dengan prompt persona dan riwayat sintetis:
+
+| Pesan di thread | Token input | Token dari cache | Latency median / maks |
+| --- | --- | --- | --- |
+| 0 | 680 | 0 | 1,27 s / 1,43 s |
+| 100 | 2.306 | 2.176 | 1,08 s / 1,13 s |
+| 400 | 7.186 | 7.040 | 1,14 s / 1,62 s |
+| 1000 | 16.946 | 16.768 | 1,49 s / 1,82 s |
+
+Prompt caching provider menangkap sekitar 99% token karena system prompt stabil dan thread append-only. `SummarizationMiddleware` tidak dipasang; latency per giliran di `fakeyou report` menjadi sinyal untuk meninjau ulang bila meeting jauh lebih panjang.
+
 ## Urutan
 
 | Fase | Isi | Mencegah |

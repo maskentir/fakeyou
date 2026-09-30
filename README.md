@@ -150,7 +150,9 @@ Setiap `join` menulis dua berkas:
 uv run fakeyou report --meeting MEETING_ID --journal-dir .runtime/audio/journals
 ```
 
-Laporan berisi latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, pemakaian tool, ingestion, fault, dan hasil sesi.
+Laporan berisi latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi.
+
+Dengan `--barge-in`, transkrip interim minimal tiga kata menghentikan twin yang sedang berbicara tanpa menunggu transkrip final; transkrip final yang lebih pendek tetap memotong playback.
 
 ## Verifikasi
 
