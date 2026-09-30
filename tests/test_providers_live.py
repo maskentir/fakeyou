@@ -11,7 +11,13 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.memory import Neo4jMemoryConfig, create_graphiti_memory
+from fakeyou.memory import (
+    RECALL_EMPTY_RESULT,
+    Neo4jMemoryConfig,
+    create_graphiti_memory,
+    create_memory_tools,
+)
+from fakeyou.persona import PersonaProfile
 from fakeyou.settings import Settings, require_secret
 from fakeyou.voice import OpenAISpeechSynthesizer
 
@@ -86,28 +92,30 @@ async def test_native_openai_tts_synthesizes_pcm_audio() -> None:
     assert len(audio) % 2 == 0
 
 
-@pytest.mark.live
-async def test_graphiti_fact_survives_client_reopen() -> None:
+def _neo4j_config_or_skip() -> Neo4jMemoryConfig:
     settings = Settings()
     api_key = _secret_or_skip(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
     parsed = urlparse(settings.neo4j_uri)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 7687
     try:
-        with socket.create_connection((host, port), timeout=2):
+        with socket.create_connection((parsed.hostname or "localhost", parsed.port or 7687), 2):
             pass
     except OSError:
         pytest.skip("Neo4j is not listening at the configured URI")
-
-    group_id = f"live_provider_{uuid4().hex}"
-    marker = f"orchid-{uuid4().hex[:12]}"
-    fact = f"Synthetic attendee {marker} prefers jasmine tea."
-    config = Neo4jMemoryConfig(
+    return Neo4jMemoryConfig(
         uri=settings.neo4j_uri,
         user=settings.neo4j_user,
         password=_secret_or_skip(settings.neo4j_password, "FAKEYOU_NEO4J_PASSWORD"),
         api_key=api_key,
     )
+
+
+@pytest.mark.live
+async def test_graphiti_fact_survives_client_reopen() -> None:
+    config = _neo4j_config_or_skip()
+
+    group_id = f"live_provider_{uuid4().hex}"
+    marker = f"orchid-{uuid4().hex[:12]}"
+    fact = f"Synthetic attendee {marker} prefers jasmine tea."
     episode_uuid: str | None = None
     memory = None
     try:
@@ -140,3 +148,67 @@ async def test_graphiti_fact_survives_client_reopen() -> None:
                         await memory.remove_episode(episode_uuid)
             finally:
                 await memory.close()
+
+
+@pytest.mark.live
+async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
+    config = _neo4j_config_or_skip()
+    run = uuid4().hex[:10]
+    attendee = f"kestrel-{run}"
+    drinks = {"jasmine tea": f"owner_a_{run}", "espresso coffee": f"owner_b_{run}"}
+    profiles = {
+        drink: PersonaProfile(
+            owner_id=owner_id,
+            twin_id=f"twin_{run}",
+            display_name="Synthetic Twin",
+            role="Synthetic live isolation check",
+            allowed_tools=frozenset({"recall_meeting_context"}),
+        )
+        for drink, owner_id in drinks.items()
+    }
+    episode_uuids: list[str] = []
+    extracted: dict[str, list[str]] = {}
+    recalled: dict[str, str] = {}
+    memory = None
+    try:
+        async with asyncio.timeout(300):
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+            await memory.build_indices_and_constraints()
+            for drink, profile in profiles.items():
+                result = await memory.add_episode(
+                    name=f"persona-isolation-{run}",
+                    episode_body=f"Synthetic attendee {attendee} prefers {drink}.",
+                    source=EpisodeType.text,
+                    source_description="synthetic live persona isolation check",
+                    reference_time=datetime.now(UTC),
+                    group_id=profile.memory_group,
+                )
+                episode_uuids.append(result.episode.uuid)
+                extracted[drink] = [edge.fact for edge in result.edges]
+            await memory.close()
+            memory = None
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+            for drink, profile in profiles.items():
+                tools = create_memory_tools(memory, group_id=profile.memory_group)
+                recall = next(tool for tool in tools if tool.name == "recall_meeting_context")
+                recalled[drink] = await recall.ainvoke({"query": f"What does {attendee} prefer?"})
+    except Exception as error:
+        _fail_provider(error, "Graphiti persona isolation")
+    finally:
+        if episode_uuids and memory is None:
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+        if memory is not None:
+            try:
+                async with asyncio.timeout(60):
+                    for episode_uuid in episode_uuids:
+                        await memory.remove_episode(episode_uuid)
+            finally:
+                await memory.close()
+
+    assert all(extracted.values()), f"Graphiti extraction produced no fact edge: {extracted}"
+    assert recalled["jasmine tea"] != RECALL_EMPTY_RESULT
+    assert recalled["espresso coffee"] != RECALL_EMPTY_RESULT
+    assert "jasmine" in recalled["jasmine tea"] and "espresso" not in recalled["jasmine tea"]
+    assert (
+        "espresso" in recalled["espresso coffee"] and "jasmine" not in recalled["espresso coffee"]
+    )
