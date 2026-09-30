@@ -14,5 +14,6 @@
     "Rani owns the Orchid launch checklist",
     "Budget and contract decisions need Rani's written approval"
   ],
-  "allowed_tools": ["recall_meeting_context"]
+  "allowed_tools": ["recall_meeting_context"],
+  "ingest_transcripts": true
 }

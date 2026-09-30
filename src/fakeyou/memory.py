@@ -3,16 +3,21 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from graphiti_core.edges import EntityEdge
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
+from graphiti_core.errors import NodeNotFoundError
+from graphiti_core.graphiti import AddEpisodeResults
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
-from graphiti_core.nodes import EpisodeType
+from graphiti_core.nodes import EpisodeType, EpisodicNode, SagaNode
+from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
 
@@ -20,8 +25,19 @@ from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
 
 RECALL_RESULT_LIMIT = 5
+RECALL_TIMEOUT_SECONDS = 15.0
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
+OWNER_NOTE_SOURCE = "owner note"
+FORGET_BATCH_SIZE = 100
+CURRENT_FACTS_FILTER = SearchFilters(
+    invalid_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
+    expired_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
+)
+
+
+def meeting_saga(meeting_id: str) -> str:
+    return f"meeting:{meeting_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,10 +114,80 @@ def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
-        results = await memory.search(query, group_ids=[group_id], num_results=RECALL_RESULT_LIMIT)
-        facts = [result.fact for result in results[:RECALL_RESULT_LIMIT]]
-        if not facts:
-            return RECALL_EMPTY_RESULT
-        return "\n".join(facts)
+        async with asyncio.timeout(RECALL_TIMEOUT_SECONDS):
+            results = await memory.search(
+                query,
+                group_ids=[group_id],
+                num_results=RECALL_RESULT_LIMIT,
+                search_filter=CURRENT_FACTS_FILTER,
+            )
+            if not results:
+                return RECALL_EMPTY_RESULT
+            return await describe_facts(memory, results[:RECALL_RESULT_LIMIT])
 
     return [remember_meeting_fact, recall_meeting_context]
+
+
+async def describe_facts(memory: Graphiti, edges: list[EntityEdge]) -> str:
+    episode_uuids = sorted({uuid for edge in edges for uuid in edge.episodes})
+    episodes = (
+        {
+            episode.uuid: episode
+            for episode in await EpisodicNode.get_by_uuids(memory.driver, episode_uuids)
+        }
+        if episode_uuids
+        else {}
+    )
+    lines = []
+    for edge in edges:
+        sources = [episodes[uuid] for uuid in edge.episodes if uuid in episodes]
+        if not sources:
+            lines.append(f"{edge.fact} (source: unknown)")
+            continue
+        labels = "; ".join(sorted({source.source_description for source in sources}))
+        first_seen = min(source.valid_at for source in sources).astimezone(UTC)
+        lines.append(f"{edge.fact} (source: {labels}; {first_seen:%Y-%m-%d %H:%M} UTC)")
+    return "\n".join(lines)
+
+
+async def remember_owner_note(memory: Graphiti, *, group_id: str, text: str) -> AddEpisodeResults:
+    if not text.strip():
+        raise ValueError("owner note must not be blank")
+    return await memory.add_episode(
+        name=f"owner-note:{uuid4()}",
+        episode_body=text.strip(),
+        source=EpisodeType.text,
+        source_description=OWNER_NOTE_SOURCE,
+        reference_time=datetime.now(UTC),
+        group_id=group_id,
+    )
+
+
+async def forget_meeting(memory: Graphiti, *, group_id: str, meeting_id: str) -> int:
+    saga = meeting_saga(meeting_id)
+    removed: set[str] = set()
+    while episodes := await memory.retrieve_episodes(
+        datetime.now(UTC) + timedelta(days=1),
+        last_n=FORGET_BATCH_SIZE,
+        group_ids=[group_id],
+        saga=saga,
+    ):
+        for episode in episodes:
+            if episode.uuid in removed:
+                raise RuntimeError(f"episode {episode.uuid} survived removal")
+            await memory.remove_episode(episode.uuid)
+            removed.add(episode.uuid)
+    for node in await SagaNode.get_by_group_ids(memory.driver, [group_id]):
+        if node.name == saga:
+            await node.delete(memory.driver)
+    return len(removed)
+
+
+async def forget_episode(memory: Graphiti, *, group_id: str, episode_uuid: str) -> None:
+    try:
+        episode = await EpisodicNode.get_by_uuid(memory.driver, episode_uuid)
+    except NodeNotFoundError:
+        episode = None
+    if episode is None or episode.group_id != group_id:
+        raise ValueError("episode is not in this persona's memory")
+    await memory.remove_episode(episode_uuid)

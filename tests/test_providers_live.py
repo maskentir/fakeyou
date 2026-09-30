@@ -1,4 +1,5 @@
 import asyncio
+import json
 import socket
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -11,11 +12,18 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
 from fakeyou.agent import create_meeting_agent
+from fakeyou.conversation import TranscriptEvent
+from fakeyou.faults import FaultReporter
+from fakeyou.ingestion import MeetingIngestion
+from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
     RECALL_EMPTY_RESULT,
     Neo4jMemoryConfig,
     create_graphiti_memory,
     create_memory_tools,
+    forget_episode,
+    forget_meeting,
+    remember_owner_note,
 )
 from fakeyou.persona import PersonaProfile
 from fakeyou.settings import Settings, require_secret
@@ -155,43 +163,44 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
     config = _neo4j_config_or_skip()
     run = uuid4().hex[:10]
     attendee = f"kestrel-{run}"
-    drinks = {"jasmine tea": f"owner_a_{run}", "espresso coffee": f"owner_b_{run}"}
+    employers = {"Heronfield Analytics": f"owner_a_{run}", "Larkmoor Logistics": f"owner_b_{run}"}
     profiles = {
-        drink: PersonaProfile(
+        employer: PersonaProfile(
             owner_id=owner_id,
             twin_id=f"twin_{run}",
             display_name="Synthetic Twin",
             role="Synthetic live isolation check",
             allowed_tools=frozenset({"recall_meeting_context"}),
         )
-        for drink, owner_id in drinks.items()
+        for employer, owner_id in employers.items()
     }
     episode_uuids: list[str] = []
     extracted: dict[str, list[str]] = {}
     recalled: dict[str, str] = {}
+    leftovers: list[int] = []
     memory = None
     try:
         async with asyncio.timeout(300):
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             await memory.build_indices_and_constraints()
-            for drink, profile in profiles.items():
+            for employer, profile in profiles.items():
                 result = await memory.add_episode(
                     name=f"persona-isolation-{run}",
-                    episode_body=f"Synthetic attendee {attendee} prefers {drink}.",
+                    episode_body=f"Synthetic attendee {attendee} works at {employer}.",
                     source=EpisodeType.text,
                     source_description="synthetic live persona isolation check",
                     reference_time=datetime.now(UTC),
                     group_id=profile.memory_group,
                 )
                 episode_uuids.append(result.episode.uuid)
-                extracted[drink] = [edge.fact for edge in result.edges]
+                extracted[employer] = [edge.fact for edge in result.edges]
             await memory.close()
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
-            for drink, profile in profiles.items():
-                tools = create_memory_tools(memory, group_id=profile.memory_group)
-                recall = next(tool for tool in tools if tool.name == "recall_meeting_context")
-                recalled[drink] = await recall.ainvoke({"query": f"What does {attendee} prefer?"})
+            for employer, profile in profiles.items():
+                recalled[employer] = await _recall(
+                    memory, profile.memory_group, f"Where does {attendee} work?"
+                )
     except Exception as error:
         _fail_provider(error, "Graphiti persona isolation")
     finally:
@@ -202,13 +211,132 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
                 async with asyncio.timeout(60):
                     for episode_uuid in episode_uuids:
                         await memory.remove_episode(episode_uuid)
+                    for profile in profiles.values():
+                        leftovers.append(await _group_node_count(memory, profile.memory_group))
             finally:
                 await memory.close()
 
     assert all(extracted.values()), f"Graphiti extraction produced no fact edge: {extracted}"
-    assert recalled["jasmine tea"] != RECALL_EMPTY_RESULT
-    assert recalled["espresso coffee"] != RECALL_EMPTY_RESULT
-    assert "jasmine" in recalled["jasmine tea"] and "espresso" not in recalled["jasmine tea"]
-    assert (
-        "espresso" in recalled["espresso coffee"] and "jasmine" not in recalled["espresso coffee"]
+    first, second = employers
+    assert first in recalled[first] and second.split()[0] not in recalled[first]
+    assert second in recalled[second] and first.split()[0] not in recalled[second]
+    assert leftovers == [0, 0]
+
+
+async def _group_node_count(memory, group_id: str) -> int:
+    result = await memory.driver.execute_query(
+        "MATCH (n {group_id: $group_id}) RETURN count(n) AS count", group_id=group_id
     )
+    return result.records[0]["count"]
+
+
+async def _recall(memory, group_id: str, query: str) -> str:
+    tools = create_memory_tools(memory, group_id=group_id)
+    recall = next(tool for tool in tools if tool.name == "recall_meeting_context")
+    return await recall.ainvoke({"query": query})
+
+
+@pytest.mark.live
+async def test_meeting_ingestion_recall_correction_and_forget_roundtrip() -> None:
+    config = _neo4j_config_or_skip()
+    run = uuid4().hex[:10]
+    project = f"Orchid{run}"
+    meeting_id = f"live-ingest-{run}"
+    profile = PersonaProfile(
+        owner_id=f"owner_{run}",
+        twin_id=f"twin_{run}",
+        display_name="Rani Twin",
+        role="Synthetic live ingestion check",
+        allowed_tools=frozenset({"recall_meeting_context"}),
+        ingest_transcripts=True,
+    )
+    lines: list[str] = []
+    memory = None
+    note_uuid: str | None = None
+    ingested = False
+    try:
+        async with asyncio.timeout(420):
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+            await memory.build_indices_and_constraints()
+            ingestion = MeetingIngestion(
+                memory,
+                group_id=profile.memory_group,
+                meeting_id=meeting_id,
+                twin_name=profile.display_name,
+                faults=FaultReporter(meeting_id=meeting_id, log=lines.append),
+                journal=ProviderJournal(meeting_id, emit=lines.append),
+                drain_timeout_seconds=240,
+            )
+            ingestion.add_twin_speech(
+                f"Gimana kalau demo customer {project} digeser ke hari Kamis?"
+            )
+            started = datetime.now(UTC)
+            for index, text in enumerate(
+                (
+                    f"Oke, setuju, demo customer {project} kita pindah ke hari Kamis.",
+                    f"Nanti aku kabari tim sales soal demo {project}.",
+                )
+            ):
+                ingestion.add_transcript(
+                    TranscriptEvent(
+                        id=f"{run}-{index}",
+                        timestamp=started.isoformat(),
+                        source="meeting_audio",
+                        text=text,
+                        finalized=True,
+                    )
+                )
+            await ingestion.close()
+            ingested = True
+            await memory.close()
+            memory = None
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+            recalled = await _recall(memory, profile.memory_group, f"{project} customer demo day")
+            note = await remember_owner_note(
+                memory,
+                group_id=profile.memory_group,
+                text=f"Update dari Rani: demo customer {project} dipindah ke hari Jumat.",
+            )
+            note_uuid = note.episode.uuid
+            corrected = await _recall(memory, profile.memory_group, f"{project} customer demo day")
+            removed = await forget_meeting(
+                memory, group_id=profile.memory_group, meeting_id=meeting_id
+            )
+            await forget_episode(memory, group_id=profile.memory_group, episode_uuid=note_uuid)
+            note_uuid = None
+            leftover = await _group_node_count(memory, profile.memory_group)
+    except Exception as error:
+        _fail_provider(error, "Graphiti meeting ingestion")
+    finally:
+        if memory is None and (ingested or note_uuid is not None):
+            memory = await asyncio.to_thread(create_graphiti_memory, config)
+        if memory is not None:
+            try:
+                async with asyncio.timeout(120):
+                    if note_uuid is not None:
+                        await memory.remove_episode(note_uuid)
+                    if ingested:
+                        await forget_meeting(
+                            memory, group_id=profile.memory_group, meeting_id=meeting_id
+                        )
+            finally:
+                await memory.close()
+
+    episodes = [json.loads(line) for line in lines if '"memory_episode"' in line]
+    print(
+        "\ningestion episodes:",
+        [
+            (row["speaker_kind"], row["outcome"], row["facts"], round(row["duration_ms"]))
+            for row in episodes
+        ],
+    )
+    print("recalled:", recalled)
+    print("corrected:", corrected)
+    assert [row["speaker_kind"] for row in episodes] == ["twin", "participant"]
+    assert not [line for line in lines if '"event":"fault"' in line]
+    assert any(row["facts"] for row in episodes), f"Graphiti extracted no facts: {episodes}"
+    assert recalled != RECALL_EMPTY_RESULT
+    assert f"Google Meet {meeting_id}" in recalled
+    assert "owner note" in corrected
+    assert removed == len(episodes)
+    assert leftover == 0

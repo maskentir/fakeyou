@@ -17,12 +17,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_WS_URL
+from pydantic import TypeAdapter
 
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.audio import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME, open_meeting_audio
@@ -35,13 +37,17 @@ from fakeyou.conversation import (
     transcript_event,
 )
 from fakeyou.faults import FaultReporter
+from fakeyou.ingestion import MeetingIngestion
 from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
     ensure_indexes,
+    forget_episode,
+    forget_meeting,
     open_graphiti_memory,
     recall_error_middleware,
+    remember_owner_note,
     verify_memory_connection,
 )
 from fakeyou.persona import PersonaProfile, build_persona, load_persona
@@ -49,6 +55,7 @@ from fakeyou.playback import PlaybackEvent
 from fakeyou.preflight import provider_probe_hosts
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
+from fakeyou.session import SessionId
 from fakeyou.settings import Settings, require_secret
 
 
@@ -123,6 +130,86 @@ async def initialize_memory(settings: Settings) -> None:
     async with open_graphiti_memory(memory_config(settings)) as memory:
         await ensure_indexes(memory)
         print("Graphiti indexes initialized.")
+
+
+@asynccontextmanager
+async def open_persona_memory(settings: Settings) -> AsyncIterator[Graphiti]:
+    async with open_graphiti_memory(memory_config(settings)) as memory:
+        try:
+            async with asyncio.timeout(MEMORY_CONNECT_TIMEOUT_SECONDS):
+                await verify_memory_connection(memory)
+        except Exception as error:
+            raise classify_exception("memory", error) from error
+        yield memory
+
+
+async def load_operator_persona(
+    persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
+) -> PersonaProfile:
+    try:
+        return await load_persona(
+            persona_path,
+            owner_id=owner_id or settings.owner_id,
+            twin_id=twin_id or settings.twin_id,
+        )
+    except OSError as error:
+        raise CliError(f"--persona cannot be read: {error.strerror}") from None
+
+
+async def add_owner_note(
+    text: str,
+    *,
+    persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
+    settings: Settings,
+) -> None:
+    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    if not text.strip():
+        raise CliError("note text must not be blank")
+    async with open_persona_memory(settings) as memory:
+        result = await remember_owner_note(memory, group_id=profile.memory_group, text=text)
+    print(
+        json.dumps(
+            {
+                "episode_uuid": result.episode.uuid,
+                "facts": [edge.fact for edge in result.edges],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if not result.edges:
+        print(
+            "fakeyou: warning: no facts were extracted, so recall cannot find this note; "
+            "rephrase it with the named people, projects, or dates it relates to",
+            file=sys.stderr,
+        )
+
+
+async def forget_memory(
+    *,
+    persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
+    meeting_id: str | None,
+    episode_uuid: str | None,
+    settings: Settings,
+) -> None:
+    if (meeting_id is None) == (episode_uuid is None):
+        raise CliError("memory-forget requires exactly one of --meeting or --episode")
+    if meeting_id is not None:
+        TypeAdapter(SessionId).validate_python(meeting_id)
+    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    async with open_persona_memory(settings) as memory:
+        if meeting_id is not None:
+            removed = await forget_meeting(
+                memory, group_id=profile.memory_group, meeting_id=meeting_id
+            )
+        elif episode_uuid is not None:
+            await forget_episode(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
+            removed = 1
+    print(json.dumps({"removed_episodes": removed}))
 
 
 async def chat(
@@ -257,12 +344,13 @@ async def join_meeting(
     )
     profile: PersonaProfile | None = None
     if persona_path is not None:
-        try:
-            profile = await load_persona(persona_path, config)
-        except OSError as error:
-            raise CliError(f"--persona cannot be read: {error.strerror}") from None
-        if memory and "recall_meeting_context" not in profile.allowed_tools:
-            raise CliError("--memory requires recall_meeting_context in persona allowed_tools")
+        profile = await load_operator_persona(
+            persona_path, config.owner_id, config.twin_id, settings
+        )
+        if memory and not (profile.allowed_tools or profile.ingest_transcripts):
+            raise CliError(
+                "--memory requires recall_meeting_context or ingest_transcripts in the persona"
+            )
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
     faults = FaultReporter(meeting_id=resolved_meeting_id)
@@ -271,9 +359,29 @@ async def join_meeting(
     )
 
     conversation: ConversationLoop | None = None
+    graphiti: Graphiti | None = None
+    ingestion: MeetingIngestion | None = None
     result: SessionResult | None = None
     async with AsyncExitStack() as resources:
         resources.callback(journal.close)
+        if memory and profile is not None:
+            try:
+                graphiti = await resources.enter_async_context(open_persona_memory(settings))
+            except ProviderFault as fault:
+                faults.record(fault)
+                result = SessionResult(
+                    "ended", "infra_failure", f"memory unavailable: {fault}", faults.report()
+                )
+        if graphiti is not None and profile is not None and profile.ingest_transcripts:
+            ingestion = MeetingIngestion(
+                graphiti,
+                group_id=profile.memory_group,
+                meeting_id=config.meeting_id,
+                twin_name=config.twin_name,
+                faults=faults,
+                journal=journal,
+            )
+            resources.push_async_callback(ingestion.close)
 
         def log_transition(
             from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
@@ -304,27 +412,23 @@ async def join_meeting(
                 ),
                 flush=True,
             )
+            if ingestion is not None and event.name == "speak_finished":
+                ingestion.add_twin_speech(event.text)
 
-        if conversation_enabled:
-            try:
-                conversation = await resources.enter_async_context(
-                    open_conversation(
-                        settings,
-                        config,
-                        memory=memory,
-                        profile=profile,
-                        on_transition=log_transition,
-                        wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
-                        barge_in=barge_in,
-                        faults=faults,
-                        journal=journal,
-                    )
+        if conversation_enabled and result is None:
+            conversation = await resources.enter_async_context(
+                open_conversation(
+                    settings,
+                    config,
+                    graphiti=graphiti,
+                    profile=profile,
+                    on_transition=log_transition,
+                    wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
+                    barge_in=barge_in,
+                    faults=faults,
+                    journal=journal,
                 )
-            except ProviderFault as fault:
-                faults.record(fault)
-                result = SessionResult(
-                    "ended", "infra_failure", f"memory unavailable: {fault}", faults.report()
-                )
+            )
 
         async def transcript(frame: TranscriptionFrame) -> None:
             event = transcript_event(frame)
@@ -345,6 +449,8 @@ async def join_meeting(
                 ),
                 flush=True,
             )
+            if ingestion is not None:
+                ingestion.add_transcript(event)
             if conversation is not None:
                 await conversation.handle_transcript(event)
 
@@ -417,7 +523,7 @@ async def open_conversation(
     settings: Settings,
     config: SessionConfig,
     *,
-    memory: bool,
+    graphiti: Graphiti | None = None,
     profile: PersonaProfile | None = None,
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None],
     wake_phrases: Sequence[str] = (),
@@ -434,15 +540,7 @@ async def open_conversation(
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
-        if memory and profile is not None and profile.allowed_tools:
-            graphiti = await resources.enter_async_context(
-                open_graphiti_memory(memory_config(settings))
-            )
-            try:
-                async with asyncio.timeout(MEMORY_CONNECT_TIMEOUT_SECONDS):
-                    await verify_memory_connection(graphiti)
-            except Exception as error:
-                raise classify_exception("memory", error) from error
+        if graphiti is not None and profile is not None and profile.allowed_tools:
             tools.extend(
                 tool
                 for tool in create_memory_tools(graphiti, group_id=profile.memory_group)
@@ -478,6 +576,20 @@ def main() -> None:
     commands.add_parser("check", help="Inspect installed packages and credential presence")
     commands.add_parser("browser-tools", help="Launch CloakBrowser and list its native MCP tools")
     commands.add_parser("memory-init", help="Create the official Graphiti database indexes")
+    memory_add_parser = commands.add_parser(
+        "memory-add", help="Store an owner note in the persona's memory"
+    )
+    memory_add_parser.add_argument("text")
+    memory_forget_parser = commands.add_parser(
+        "memory-forget", help="Delete one meeting or one episode from the persona's memory"
+    )
+    forget_target = memory_forget_parser.add_mutually_exclusive_group(required=True)
+    forget_target.add_argument("--meeting", dest="meeting_id", default=None)
+    forget_target.add_argument("--episode", dest="episode_uuid", default=None)
+    for operator_parser in (memory_add_parser, memory_forget_parser):
+        operator_parser.add_argument("--persona", type=Path, required=True)
+        operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
+        operator_parser.add_argument("--twin-id", default=None)
     join_parser = commands.add_parser("join", help="Join a Google Meet link as a guest twin")
     join_parser.add_argument("link")
     join_parser.add_argument("--twin-name", default=None)
@@ -540,6 +652,27 @@ def main() -> None:
             asyncio.run(show_browser_tools(settings))
         elif arguments.command == "memory-init":
             asyncio.run(initialize_memory(settings))
+        elif arguments.command == "memory-add":
+            asyncio.run(
+                add_owner_note(
+                    arguments.text,
+                    persona_path=arguments.persona,
+                    owner_id=arguments.owner_id,
+                    twin_id=arguments.twin_id,
+                    settings=settings,
+                )
+            )
+        elif arguments.command == "memory-forget":
+            asyncio.run(
+                forget_memory(
+                    persona_path=arguments.persona,
+                    owner_id=arguments.owner_id,
+                    twin_id=arguments.twin_id,
+                    meeting_id=arguments.meeting_id,
+                    episode_uuid=arguments.episode_uuid,
+                    settings=settings,
+                )
+            )
         elif arguments.command == "join":
             asyncio.run(
                 join_meeting(
@@ -575,6 +708,9 @@ def main() -> None:
     except ValueError as error:
         print(f"fakeyou: error: {error}", file=sys.stderr)
         raise SystemExit(1) from None
+    except ProviderFault as fault:
+        print(f"fakeyou: error: memory unavailable: {fault}", file=sys.stderr)
+        raise SystemExit(_FAILURE_EXIT_CODES["infra_failure"]) from None
 
 
 if __name__ == "__main__":

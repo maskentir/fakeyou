@@ -1006,6 +1006,7 @@ class FakeGraphiti:
         self.search_gate = search_gate
         self.events: list[str] = []
         self.searched: list[dict] = []
+        self.added: list[dict] = []
         self.search_started = asyncio.Event()
         self.search_cancelled = asyncio.Event()
 
@@ -1027,7 +1028,11 @@ class FakeGraphiti:
                 raise
         if self.search_error is not None:
             raise self.search_error
-        return [SimpleNamespace(fact=fact) for fact in self.facts]
+        return [SimpleNamespace(fact=fact, episodes=[]) for fact in self.facts]
+
+    async def add_episode(self, **kwargs) -> SimpleNamespace:
+        self.added.append(kwargs)
+        return SimpleNamespace(episode=SimpleNamespace(uuid=f"episode-{len(self.added)}"), edges=[])
 
     async def close(self) -> None:
         self.events.append("close")
@@ -1066,6 +1071,7 @@ def recall_then_reply(reply: str) -> ToolCallingModel:
 class RecordingAudio:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self.on_playback_event = None
 
     @property
     def is_speaking(self) -> bool:
@@ -1073,6 +1079,8 @@ class RecordingAudio:
 
     async def speak(self, text: str) -> None:
         self.spoken.append(text)
+        if self.on_playback_event is not None:
+            self.on_playback_event(PlaybackEvent("speak_finished", text))
 
     async def stop_playback(self) -> None:
         return None
@@ -1086,6 +1094,7 @@ async def _join_persona_conversation(
     graphiti: FakeGraphiti | None = None,
     transcripts: tuple[str, ...] = ("Kapan launch Orchid?",),
     settle=None,
+    persona_overrides: dict | None = None,
     **overrides,
 ) -> tuple[dict, RecordingAudio, dict]:
     settings = fake_settings(tmp_path)
@@ -1121,6 +1130,7 @@ async def _join_persona_conversation(
         loop = kwargs["conversation"]
         outcome["config"] = config
         outcome["conversation"] = loop
+        audio.on_playback_event = kwargs["open_audio"].keywords["on_playback_event"]
         loop.bind(audio)
         for index, text in enumerate(transcripts):
             frame = SimpleNamespace(
@@ -1140,7 +1150,10 @@ async def _join_persona_conversation(
 
     monkeypatch.setattr(cli, "run_meeting_session", run)
     arguments = persona_join_arguments(
-        tmp_path, settings, persona_path=write_persona(tmp_path), **overrides
+        tmp_path,
+        settings,
+        persona_path=write_persona(tmp_path, **(persona_overrides or {})),
+        **overrides,
     )
     await cli.join_meeting(MEET_LINK, **arguments)
     return created, audio, outcome
@@ -1278,11 +1291,15 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
             "query": "Orchid launch",
             "group_ids": [profile.memory_group],
             "num_results": memory_module.RECALL_RESULT_LIMIT,
+            "search_filter": memory_module.CURRENT_FACTS_FILTER,
         }
     ]
     assert profile.memory_group != fake_settings(tmp_path).memory_group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
-    assert [m.content for m in tool_results] == list(graphiti.facts)
+    assert [m.content for m in tool_results] == [
+        f"{fact} (source: unknown)" for fact in graphiti.facts
+    ]
+    assert graphiti.added == []
     assert audio.spoken == ["Launch Orchid dijadwalkan 14 Oktober."]
     assert outcome["phase"] == "listening"
     assert graphiti.events == ["verify", "close"]
@@ -1395,7 +1412,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
 
     assert caught.value.code == 3
     assert graphiti.events == ["verify", "close"]
-    assert saver_events == ["open", "close"]
+    assert saver_events == []
     captured = capsys.readouterr()
     assert '"terminal_reason": "infra_failure"' in captured.out
     assert "memory unavailable: memory" in captured.out
@@ -1419,3 +1436,285 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert captured["persona_path"] == Path("p.json")
     assert captured["memory"] is True
+
+
+async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti()
+    model = ToolCallingModel(responses=[AIMessage(content="Demo digeser ke Kamis ya.")])
+
+    created, audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        graphiti=graphiti,
+        memory=True,
+        transcripts=("Demo Orchid jadi kapan?",),
+        persona_overrides={"ingest_transcripts": True},
+    )
+
+    profile = PersonaProfile.model_validate({**PERSONA_DATA, "ingest_transcripts": True})
+    assert audio.spoken == ["Demo digeser ke Kamis ya."]
+    assert [episode["episode_body"] for episode in graphiti.added] == [
+        "Unidentified participant: Demo Orchid jadi kapan?",
+        "Digital twin: Demo digeser ke Kamis ya.",
+    ]
+    assert {episode["group_id"] for episode in graphiti.added} == {profile.memory_group}
+    assert {episode["saga"] for episode in graphiti.added} == {"meeting:meeting-9"}
+    assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
+    assert graphiti.events == ["verify", "close"]
+
+
+async def test_join_ingest_only_persona_opens_memory_without_recall_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti()
+
+    created, _audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingModel(responses=[AIMessage(content="Oke.")]),
+        graphiti=graphiti,
+        memory=True,
+        persona_overrides={"ingest_transcripts": True, "allowed_tools": []},
+    )
+
+    assert created["tools"] == []
+    assert created["middleware"] == []
+    assert len(graphiti.added) == 2
+    assert "recall" not in created["persona"].casefold()
+
+
+async def test_join_without_ingest_permission_never_writes_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti()
+
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingModel(responses=[AIMessage(content="Oke.")]),
+        graphiti=graphiti,
+        memory=True,
+    )
+
+    assert graphiti.added == []
+
+
+def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list[str]:
+    opened: list[str] = []
+
+    @asynccontextmanager
+    async def open_memory(_settings):
+        opened.append("open")
+        yield memory
+        opened.append("close")
+
+    monkeypatch.setattr(cli, "open_persona_memory", open_memory)
+    return opened
+
+
+async def test_memory_add_stores_owner_note_in_persona_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = FakeGraphiti()
+    opened = fake_persona_memory(monkeypatch, graphiti)
+
+    await cli.add_owner_note(
+        "Demo Orchid pindah ke Jumat.",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        settings=fake_settings(tmp_path),
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    [note] = graphiti.added
+    assert note["group_id"] == profile.memory_group
+    assert note["source_description"] == memory_module.OWNER_NOTE_SOURCE
+    assert opened == ["open", "close"]
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"episode_uuid": "episode-1", "facts": []}
+    assert "no facts were extracted" in captured.err
+
+
+@pytest.mark.parametrize(
+    "text,identity,match",
+    [
+        ("  ", {}, "blank"),
+        ("Catatan.", {"owner_id": "other-owner"}, "owner_id and twin_id"),
+    ],
+)
+async def test_memory_add_validates_before_opening_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, identity: dict, match: str
+) -> None:
+    opened = fake_persona_memory(monkeypatch, FakeGraphiti())
+
+    with pytest.raises(ValueError, match=match):
+        await cli.add_owner_note(
+            text,
+            persona_path=write_persona(tmp_path),
+            owner_id=identity.get("owner_id"),
+            twin_id=None,
+            settings=fake_settings(tmp_path),
+        )
+    assert opened == []
+
+
+async def test_memory_forget_meeting_uses_persona_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = FakeGraphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    calls: list[dict] = []
+
+    async def forget(memory, **kwargs):
+        calls.append({"memory": memory, **kwargs})
+        return 3
+
+    monkeypatch.setattr(cli, "forget_meeting", forget)
+
+    await cli.forget_memory(
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        meeting_id="meeting-9",
+        episode_uuid=None,
+        settings=fake_settings(tmp_path),
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    assert calls == [
+        {"memory": graphiti, "group_id": profile.memory_group, "meeting_id": "meeting-9"}
+    ]
+    assert json.loads(capsys.readouterr().out) == {"removed_episodes": 3}
+
+
+async def test_memory_forget_episode_uses_persona_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    calls: list[dict] = []
+
+    async def forget(memory, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "forget_episode", forget)
+
+    await cli.forget_memory(
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        meeting_id=None,
+        episode_uuid="episode-7",
+        settings=fake_settings(tmp_path),
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    assert calls == [{"group_id": profile.memory_group, "episode_uuid": "episode-7"}]
+
+
+@pytest.mark.parametrize(
+    "meeting_id,episode_uuid,match",
+    [
+        (None, None, "exactly one"),
+        ("meeting-9", "episode-7", "exactly one"),
+        ("bad meeting", None, "String should match pattern"),
+    ],
+)
+async def test_memory_forget_validates_before_opening_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    meeting_id: str | None,
+    episode_uuid: str | None,
+    match: str,
+) -> None:
+    opened = fake_persona_memory(monkeypatch, FakeGraphiti())
+
+    with pytest.raises(ValueError, match=match):
+        await cli.forget_memory(
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            meeting_id=meeting_id,
+            episode_uuid=episode_uuid,
+            settings=fake_settings(tmp_path),
+        )
+    assert opened == []
+
+
+@pytest.mark.parametrize(
+    "argv,target,expected",
+    [
+        (
+            ["memory-add", "Catatan.", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
+            "add_owner_note",
+            {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
+        ),
+        (
+            ["memory-forget", "--meeting", "m1", "--persona", "p.json"],
+            "forget_memory",
+            {"persona_path": Path("p.json"), "meeting_id": "m1", "episode_uuid": None},
+        ),
+    ],
+)
+def test_memory_operator_commands_parse_arguments(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+) -> None:
+    captured: dict = {}
+
+    async def fake_command(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, target, fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    cli.main()
+
+    assert {key: captured[key] for key in expected} == expected
+
+
+def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fakeyou", "memory-forget", "--meeting", "m1", "--episode", "e1", "--persona", "p"],
+    )
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+    assert caught.value.code == 2
+
+
+def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsys) -> None:
+    from fakeyou.provider_faults import ProviderFault
+
+    async def unavailable(*_args, **_kwargs):
+        raise ProviderFault("memory", "unavailable")
+
+    monkeypatch.setattr(cli, "add_owner_note", unavailable)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--persona", "p.json"])
+    with pytest.raises(SystemExit) as caught:
+        cli.main()
+
+    assert caught.value.code == 3
+    assert "memory unavailable" in capsys.readouterr().err
+
+
+async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = FakeGraphiti(search_gate=asyncio.Event())
+    model = recall_then_reply("Aku belum tahu, nanti aku cek ke Rani.")
+    monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
+
+    _created, audio, outcome = await _join_persona_conversation(
+        tmp_path, monkeypatch, model=model, graphiti=graphiti, memory=True
+    )
+
+    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
+    assert graphiti.search_cancelled.is_set()
+    assert audio.spoken == ["Aku belum tahu, nanti aku cek ke Rani."]
+    assert outcome["phase"] == "listening"
+    assert '"source":"memory","kind":"timeout"' in capsys.readouterr().out
