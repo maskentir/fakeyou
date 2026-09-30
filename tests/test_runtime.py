@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 
@@ -328,6 +329,38 @@ async def test_run_meeting_session_enforces_duration_limit() -> None:
     assert result.terminal_reason == "duration_limit"
 
 
+async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
+    clock = _FakeClock()
+
+    def advance_on_monitor_poll(reads):
+        if reads == 2:
+            clock.now += 2.5
+
+    page = _page([IN_CALL, IN_CALL, ENDED], on_content=advance_on_monitor_poll)
+    browser = _FakePageSession(page)
+
+    result = await _run(_config(), browser, _FakeSaverSession(), clock)
+
+    assert result.terminal_reason == "meeting_ended"
+    polls = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"event": "monitor_poll"' in line
+    ]
+    assert len(polls) == 1
+    assert polls[0]["meeting_id"] == "meeting-1"
+    assert polls[0]["seconds"] == 2.5
+
+
+async def test_run_meeting_session_skips_monitor_poll_log_when_fast(capsys) -> None:
+    browser = _FakePageSession(_page([IN_CALL, IN_CALL, ENDED]))
+
+    result = await _run(_config(), browser, _FakeSaverSession(), _FakeClock())
+
+    assert result.terminal_reason == "meeting_ended"
+    assert "monitor_poll" not in capsys.readouterr().out
+
+
 async def test_run_meeting_session_recovers_from_transient_lobby() -> None:
     browser = _FakePageSession(_page([IN_CALL, LOBBY, IN_CALL, REMOVED]))
 
@@ -377,6 +410,15 @@ async def test_run_meeting_session_maps_observation_crash_to_browser_failure() -
 
     assert result.phase == "ended"
     assert result.terminal_reason == "browser_failure"
+
+
+async def test_run_meeting_session_tolerates_single_observation_blip() -> None:
+    browser = _FakePageSession(_page([IN_CALL, RuntimeError("boom"), IN_CALL, ENDED]))
+
+    result = await _run(_config(), browser, _FakeSaverSession(), _FakeClock())
+
+    assert result.phase == "ended"
+    assert result.terminal_reason == "meeting_ended"
 
 
 async def test_run_meeting_session_returns_ended_result_without_reopening_browser() -> None:
@@ -605,6 +647,9 @@ def test_session_rejects_invalid_identity(field, value) -> None:
         "session_duration_seconds",
         "monitor_interval_seconds",
         "leave_timeout_seconds",
+        "deaf_window_seconds",
+        "deaf_grace_seconds",
+        "preflight_budget_seconds",
     ],
 )
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
