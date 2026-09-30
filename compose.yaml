@@ -10,6 +10,11 @@ services:
     image: fakeyou-meeting-worker:local
     init: true
     shm_size: 1gb
+    # Bypass the Docker Desktop embedded DNS forwarder; it stopped resolving
+    # mid-call during live runs (EAI_NONAME killed STT reconnects and wedged TTS).
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     env_file: .env
     environment:
       FAKEYOU_HEADLESS: "false"
