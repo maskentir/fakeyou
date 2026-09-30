@@ -2,7 +2,7 @@
 
 Fondasi AI Digital Twin untuk menjadi peserta meeting online, dimulai dari Google Meet: mendengar, melihat, mengingat konteks dan persona, berbicara, serta berinteraksi lewat UI.
 
-Fondasi SDK dan worker guest Google Meet sudah tersedia. Join, admission, monitor, dan leave sudah diuji live; sambungan audio dua arah dan perilaku partisipasi menjadi tahap berikutnya.
+Fondasi SDK, worker guest Google Meet, dan audio dua arah sudah tersedia. Loop percakapan opt-in sudah diuji lokal; acceptance conversation live, persona, dan perilaku partisipasi menjadi tahap berikutnya.
 
 Lihat [status fondasi dan pekerjaan berikutnya](docs/project-status.md) serta [hasil refactor](docs/refactor-2026-09-28.md) untuk bukti kemampuan, batas modul, dan urutan pembangunan.
 
@@ -14,7 +14,7 @@ Lihat [status fondasi dan pekerjaan berikutnya](docs/project-status.md) serta [h
 | State percakapan | LangGraph 1.2.12 | Checkpoint SQLite; dependency PostgreSQL tersedia |
 | Tangan dan mata | CloakBrowser 0.5.11 + Playwright MCP 0.0.82 | Satu sesi untuk navigasi, DOM, screenshot, input |
 | Telinga | Pipecat 1.12.0 `MetaSTTService` | Muse Voice Transcribe resmi, default Bahasa Indonesia |
-| Mulut | Pipecat `OpenAITTSService` | TTS terpisah dari Muse; model/voice dapat diganti |
+| Mulut | `OpenAISpeechSynthesizer` + `PlaybackEngine` | Sintesis unary PCM + `paplay` serial; model/voice dapat diganti |
 | Memori | Graphiti 0.30.2 + Neo4j | Client dan tools dibatasi `group_id` |
 | Evaluasi | DeepEval 4.2.6 + pytest | Tool trajectory deterministik tanpa judge berbayar |
 | Tooling | uv, npm, Ruff, mypy | Dependency terkunci dan pemeriksaan otomatis |
@@ -84,9 +84,11 @@ PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk pe
 
 ## Suara dan partisipasi
 
-`voice.py` menyediakan layanan Pipecat asli melalui `create_muse_stt` dan `create_openai_tts`. Baca [komposisi suara](docs/voice.md). Tidak ada custom WebSocket Muse atau VAD.
+`voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
-Tahap berikutnya menyambungkan audio remote Meet ke PCM Pipecat dan TTS ke virtual microphone pada worker Linux/PulseAudio sesuai keputusan runtime, lalu memetakan voice messages ke LangGraph dan menambahkan speaker/video/participant events, turn-taking, interupsi, chat, serta raise hand. Avatar/video keluar dipilih setelah transport media stabil.
+Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`; `--memory` memerlukan `--converse`. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md), [hasil refactor](docs/conversation-refactor-2026-09-28.md), serta [next task persona dan memori](docs/superpowers/plans/2026-09-28-persona-memory-access.md).
+
+Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya memverifikasi jawaban model di meeting live, membangun persona dan memori pemilik, lalu menambahkan speaker/video/participant events, turn-taking, chat, serta raise hand.
 
 ## Verifikasi
 

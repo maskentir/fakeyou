@@ -1,6 +1,6 @@
 # Meeting audio runtime
 
-Status: implementation in progress. Specification: [meeting runtime plan](meeting-runtime-plan.md), Stage 2.
+Status: done and verified live (`audio-bua-1`). Specification: [meeting runtime plan](meeting-runtime-plan.md), Stage 2.
 
 ## Goal
 
@@ -10,12 +10,15 @@ Run one Google Meet guest per Linux container, transcribe participant audio thro
 
 - Reuse the official CloakBrowser image, native PulseAudio devices, and Pipecat `LocalAudioTransport`, `PipelineWorker`, and `WorkerRunner`.
 - Browser output goes to `meeting_audio`; Muse captures `meeting_audio.monitor` at 16 kHz mono PCM16.
-- OpenAI TTS stays at its native 24 kHz rate. Its output goes to `agent_output`; `agent_mic` remaps that monitor for Chromium.
-- Source of truth for sink/source names and sample rates is `src/fakeyou/audio.py`; `compose.yaml`, `docker/audio/Dockerfile`, and `docker/audio/default.pa` keep literal copies in sync.
+- OpenAI synthesis stays at its native 24 kHz rate. A serial `PlaybackEngine` streams PCM directly into `paplay` on `agent_output`; `agent_mic` remaps that monitor for Chromium. The engine mutes only the output sink between utterances, leaving the microphone source unmuted so Meet does not show an OS-mute dialog. Synthesizers without streaming support use buffered playback.
+- Source of truth for sink/source names and sample rates is `src/fakeyou/audio.py`; `compose.yaml`, `docker/audio/Dockerfile`, `docker/audio/default.pa`, and `docker/audio/daemon.conf` keep literal copies in sync, and the entrypoint asserts the expected sinks, rates, and defaults at startup.
 - No loopback connects agent output to Muse input. Each meeting owns its PulseAudio server and browser profile lock.
 - The worker starts audio after admission, enables the microphone, then queues an optional explicit sentence. Audio failures terminate the session with their own reason and release resources.
 - Browser PulseAudio environment overrides apply to the child process only. No physical host audio devices are mounted.
 - API keys enter at runtime through the existing `.env`; build context excludes credentials and local recordings.
+- Synthesis carries a per-request timeout (the SDK default would override the HTTP client) and the engine additionally bounds each synthesis call, so one dead request fails the utterance instead of wedging later speech. Stopping playback cancels an in-flight synthesis the same way it kills active audio.
+- Synthesis uses native OpenAI HTTP streaming and casual-Indonesian delivery instructions. A timeout retries once before any PCM is emitted; a partial stream is never replayed. See [voice reliability](voice-reliability-plan.md) and its [refactor report](voice-reliability-refactor-2026-09-30.md).
+- The worker bypasses the Docker Desktop embedded DNS forwarder with public resolvers; it stopped resolving mid-call during live runs.
 - Keep code readable without comments or docstrings. Use thin adapters around native APIs.
 
 ## Tasks and verification

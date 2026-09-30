@@ -11,17 +11,25 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from pipecat.frames.frames import InputAudioRawFrame, OutputAudioRawFrame, TTSSpeakFrame
+from pipecat.frames.frames import InputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from playwright.async_api import Page
 
 from fakeyou.audio import (
     AGENT_MIC_SOURCE_NAME,
+    AGENT_SINK_NAME,
     MEETING_MONITOR_SOURCE_NAME,
     MEETING_SINK_NAME,
+    PLAYBACK_SAMPLE_RATE,
     open_meeting_audio,
 )
 from fakeyou.browser import open_direct_page
+from fakeyou.playback import (
+    PlaybackEngine,
+    create_pactl_muter,
+    create_paplay_runner,
+    create_paplay_stream_runner,
+)
 from fakeyou.settings import Settings, require_secret
 
 PAGE = "<!doctype html><html><body><h1>Audio fixture</h1></body></html>"
@@ -46,20 +54,43 @@ class _SignalSTT(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class _ToneTTS(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, TTSSpeakFrame):
-            for offset in range(0, 72_000, 480):
-                samples = (
-                    round(10000 * math.sin(2 * math.pi * 440 * (offset + index) / 24_000))
-                    for index in range(480)
-                )
-                await self.push_frame(
-                    OutputAudioRawFrame(struct.pack("<480h", *samples), 24_000, 1), direction
-                )
-                await asyncio.sleep(0.02)
-        await self.push_frame(frame, direction)
+class _ToneSynth:
+    def _audio(self) -> bytes:
+        samples = (
+            round(10000 * math.sin(2 * math.pi * 440 * index / PLAYBACK_SAMPLE_RATE))
+            for index in range(72_000)
+        )
+        return struct.pack("<72000h", *samples)
+
+    async def synthesize(self, text: str) -> bytes:
+        if not text.strip():
+            raise ValueError("cannot synthesize blank text")
+        return self._audio()
+
+    async def stream(self, text: str) -> AsyncIterator[bytes]:
+        if not text.strip():
+            raise ValueError("cannot synthesize blank text")
+        audio = self._audio()
+        for offset in range(0, len(audio), 4096):
+            await asyncio.sleep(0)
+            yield audio[offset : offset + 4096]
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _container_playback(*, streaming: bool) -> PlaybackEngine:
+    return PlaybackEngine(
+        _ToneSynth(),
+        play_audio=create_paplay_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
+        stream_audio=(
+            create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE)
+            if streaming
+            else None
+        ),
+        streaming=streaming,
+        set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
+    )
 
 
 @asynccontextmanager
@@ -130,11 +161,14 @@ def _normalise(text: str) -> str:
 
 
 @pytest.mark.browser
+@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 @pytest.mark.skipif(
     sys.platform != "linux" or os.getenv("PULSE_SOURCE") != MEETING_MONITOR_SOURCE_NAME,
     reason="requires the Linux audio worker and isolated PulseAudio source",
 )
-async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser() -> None:
+async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser(
+    streaming: bool,
+) -> None:
     stt = _SignalSTT()
 
     async def on_transcript(_frame) -> None:
@@ -146,7 +180,7 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
             openai_api_key="unused",
             on_transcript=on_transcript,
             stt=stt,
-            tts=_ToneTTS(),
+            playback=_container_playback(streaming=streaming),
         ) as session:
             await page.evaluate("window.audioProbe.start()")
             await asyncio.wait_for(stt.signal.wait(), timeout=10)

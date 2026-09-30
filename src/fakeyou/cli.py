@@ -6,34 +6,63 @@ import re
 import signal
 import sys
 import uuid
-from collections.abc import Iterator
-from contextlib import AsyncExitStack, ExitStack, contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
+from datetime import UTC, datetime
 from functools import partial
 from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
+from pipecat.services.meta.stt import META_STT_WS_URL
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.audio import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME, open_meeting_audio
 from fakeyou.browser import open_browser_tools
+from fakeyou.conversation import (
+    ConversationLoop,
+    ConversationPhase,
+    LangGraphResponder,
+    conversation_thread_id,
+    transcript_event,
+)
+from fakeyou.faults import FaultReporter
+from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
     ensure_indexes,
     open_graphiti_memory,
 )
+from fakeyou.playback import PlaybackEvent
+from fakeyou.preflight import provider_probe_hosts
 from fakeyou.runtime import SessionConfig, run_meeting_session
 from fakeyou.settings import Settings, require_secret
 
 
 class CliError(ValueError):
     pass
+
+
+_PREFLIGHT_HOSTS = provider_probe_hosts(
+    tts_base_url="https://api.openai.com",
+    stt_ws_url=META_STT_WS_URL,
+    agent_base_url="https://api.openai.com",
+)
+
+
+_FAILURE_EXIT_CODES = {
+    "infra_failure": 3,
+    "browser_failure": 1,
+    "audio_failure": 1,
+    "conversation_failure": 1,
+}
 
 
 def check_setup(settings: Settings) -> None:
@@ -152,6 +181,10 @@ async def join_meeting(
     audio_enabled: bool = False,
     initial_speech: str | None = None,
     headless: bool | None = None,
+    memory: bool = False,
+    conversation_enabled: bool = False,
+    wake_phrase: str | None = None,
+    barge_in: bool = False,
 ) -> None:
     parsed_link = urlparse(link)
     if (
@@ -166,6 +199,14 @@ async def join_meeting(
         raise CliError("--duration must be positive")
     if initial_speech is not None and (not audio_enabled or not initial_speech.strip()):
         raise CliError("--speak requires --audio and nonempty text")
+    if conversation_enabled and not audio_enabled:
+        raise CliError("--converse requires --audio")
+    if memory and not conversation_enabled:
+        raise CliError("--memory requires --converse")
+    if wake_phrase and not conversation_enabled:
+        raise CliError("--wake-phrase requires --converse")
+    if barge_in and not conversation_enabled:
+        raise CliError("--barge-in requires --converse")
     audio_factory = None
     if audio_enabled:
         if (
@@ -183,31 +224,6 @@ async def join_meeting(
     resolved_meeting_id = meeting_id or uuid.uuid4().hex[:12]
     resolved_twin_id = twin_id or settings.twin_id
     resolved_headless = settings.headless if headless is None else headless
-
-    async def transcript(frame: TranscriptionFrame) -> None:
-        print(
-            json.dumps(
-                {
-                    "event": "transcript_final",
-                    "owner_id": config.owner_id,
-                    "twin_id": config.twin_id,
-                    "meeting_id": config.meeting_id,
-                    "text": frame.text,
-                    "speaker_id": frame.user_id,
-                    "timestamp": frame.timestamp,
-                }
-            ),
-            flush=True,
-        )
-
-    if audio_enabled:
-        audio_factory = partial(
-            open_meeting_audio,
-            muse_api_key=muse_key,
-            openai_api_key=tts_key,
-            on_transcript=transcript,
-        )
-
     config = SessionConfig(
         owner_id=owner_id or settings.owner_id,
         twin_id=resolved_twin_id,
@@ -226,10 +242,112 @@ async def join_meeting(
         headless=resolved_headless,
         license_key=settings.cloakbrowser_license_key,
     )
-    with stop_signal_handlers(stop):
-        result = await run_meeting_session(
-            config, stop=stop, open_audio=audio_factory, initial_speech=initial_speech
+    faults = FaultReporter(meeting_id=resolved_meeting_id)
+    journal = ProviderJournal(
+        resolved_meeting_id, path=settings.journal_dir / f"{resolved_meeting_id}.jsonl"
+    )
+
+    conversation: ConversationLoop | None = None
+    async with AsyncExitStack() as resources:
+        resources.callback(journal.close)
+
+        def log_transition(
+            from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
+        ) -> None:
+            print(
+                json.dumps(
+                    {
+                        "event": "conversation_transition",
+                        "meeting_id": config.meeting_id,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "from": from_phase,
+                        "to": to_phase,
+                        "detail": detail,
+                    }
+                ),
+                flush=True,
+            )
+
+        def log_playback(event: PlaybackEvent) -> None:
+            print(
+                json.dumps(
+                    {
+                        "event": event.name,
+                        "meeting_id": config.meeting_id,
+                        "text": event.text,
+                        "detail": event.detail,
+                    }
+                ),
+                flush=True,
+            )
+
+        if conversation_enabled:
+            conversation = await resources.enter_async_context(
+                open_conversation(
+                    settings,
+                    config,
+                    memory=memory,
+                    on_transition=log_transition,
+                    wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
+                    barge_in=barge_in,
+                    faults=faults,
+                    journal=journal,
+                )
+            )
+
+        async def transcript(frame: TranscriptionFrame) -> None:
+            event = transcript_event(frame)
+            print(
+                json.dumps(
+                    {
+                        "event": "transcript_final",
+                        "owner_id": config.owner_id,
+                        "twin_id": config.twin_id,
+                        "meeting_id": config.meeting_id,
+                        "transcript_id": event.id,
+                        "text": event.text,
+                        "participant": event.participant,
+                        "timestamp": event.timestamp,
+                        "source": event.source,
+                        "finalized": event.finalized,
+                    }
+                ),
+                flush=True,
+            )
+            if conversation is not None:
+                await conversation.handle_transcript(event)
+
+        if audio_enabled:
+            audio_factory = partial(
+                open_meeting_audio,
+                muse_api_key=muse_key,
+                openai_api_key=tts_key,
+                on_transcript=transcript,
+                on_playback_event=log_playback,
+                fault_reporter=faults,
+                journal=journal,
+                deaf_window_seconds=config.deaf_window_seconds,
+                deaf_grace_seconds=config.deaf_grace_seconds,
+            )
+        preflight_kwargs: dict[str, Any] = (
+            {
+                "preflight_hosts": _PREFLIGHT_HOSTS,
+                "preflight_budget_seconds": config.preflight_budget_seconds,
+            }
+            if audio_enabled
+            else {}
         )
+        with stop_signal_handlers(stop):
+            result = await run_meeting_session(
+                config,
+                stop=stop,
+                open_audio=audio_factory,
+                initial_speech=initial_speech,
+                conversation=conversation,
+                faults=faults,
+                journal=journal,
+                **preflight_kwargs,
+            )
     print(
         json.dumps(
             {
@@ -237,12 +355,71 @@ async def join_meeting(
                 "phase": result.phase,
                 "terminal_reason": result.terminal_reason,
                 "detail": result.detail,
+                "faults": getattr(result, "faults", None),
             },
             indent=2,
         )
     )
-    if result.terminal_reason == "audio_failure":
-        raise SystemExit(1)
+    if result.terminal_reason is None:
+        exit_code = 1
+    else:
+        exit_code = _FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
+    print(
+        json.dumps(
+            {
+                "event": "cli_exit",
+                "meeting_id": resolved_meeting_id,
+                "terminal_reason": result.terminal_reason,
+                "exit_code": exit_code,
+            }
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+    if exit_code != 0:
+        raise SystemExit(exit_code)
+
+
+@asynccontextmanager
+async def open_conversation(
+    settings: Settings,
+    config: SessionConfig,
+    *,
+    memory: bool,
+    on_transition: Callable[[ConversationPhase, ConversationPhase, str], None],
+    wake_phrases: Sequence[str] = (),
+    barge_in: bool = False,
+    faults: FaultReporter | None = None,
+    journal: ProviderJournal | None = None,
+) -> AsyncIterator[ConversationLoop]:
+    api_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+    model = init_chat_model(settings.chat_model, api_key=api_key, timeout=60, max_retries=2)
+    settings.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncExitStack() as resources:
+        checkpointer = await resources.enter_async_context(
+            AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path))
+        )
+        tools: list[BaseTool] = []
+        if memory:
+            graphiti = await resources.enter_async_context(
+                open_graphiti_memory(memory_config(settings))
+            )
+            tools.extend(create_memory_tools(graphiti, group_id=settings.memory_group))
+        agent = create_meeting_agent(model, tools=tools, checkpointer=checkpointer)
+        conversation = ConversationLoop(
+            LangGraphResponder(
+                agent,
+                conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id),
+                journal=journal,
+            ),
+            on_transition=on_transition,
+            wake_phrases=wake_phrases,
+            barge_in=barge_in,
+            faults=faults,
+            journal=journal,
+        )
+        resources.push_async_callback(conversation.close)
+        yield conversation
 
 
 def main() -> None:
@@ -268,6 +445,24 @@ def main() -> None:
         "--speak",
         default=None,
         help="Speak this test sentence once after admission; requires --audio",
+    )
+    join_parser.add_argument(
+        "--converse",
+        action="store_true",
+        help="Enable agent replies to final transcripts; requires --audio",
+    )
+    join_parser.add_argument(
+        "--memory", action="store_true", help="Enable Graphiti memory tools; requires --converse"
+    )
+    join_parser.add_argument(
+        "--wake-phrase",
+        default=None,
+        help="Comma-separated phrases that address the twin; requires --converse",
+    )
+    join_parser.add_argument(
+        "--barge-in",
+        action="store_true",
+        help="Let new speech interrupt playback; requires --converse",
     )
     chat_parser = commands.add_parser(
         "chat", help="Run one agent turn with a persistent checkpoint"
@@ -302,6 +497,10 @@ def main() -> None:
                     audio_enabled=arguments.audio,
                     initial_speech=arguments.speak,
                     headless=arguments.headless,
+                    memory=arguments.memory,
+                    conversation_enabled=arguments.converse,
+                    wake_phrase=arguments.wake_phrase,
+                    barge_in=arguments.barge_in,
                 )
             )
         else:

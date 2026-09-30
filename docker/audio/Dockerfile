@@ -18,6 +18,7 @@ RUN uv sync --frozen --no-dev --extra audio \
     && mkdir -p /workspace/.runtime \
     && chown -R twin:twin /workspace/.runtime
 COPY docker/audio/default.pa /etc/fakeyou/default.pa
+COPY docker/audio/daemon.conf /etc/pulse/daemon.conf
 COPY docker/audio/asound.conf /etc/asound.conf
 COPY --chmod=755 docker/audio/entrypoint.sh /usr/local/bin/fakeyou-entrypoint
 

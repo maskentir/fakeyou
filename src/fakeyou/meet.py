@@ -361,6 +361,26 @@ async def enable_meeting_microphone(
     return True
 
 
+async def disable_meeting_camera(
+    page: Page, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+) -> bool:
+    on = 'button[aria-label^="Turn off camera" i]'
+    off = 'button[aria-label^="Turn on camera" i]'
+    try:
+        if await page.locator(off).first.is_visible():
+            return True
+    except Exception as error:
+        raise RuntimeError(f"checking camera state failed: {error}") from error
+    failure = await _click_when_ready(partial(page.locator, on), "camera button", sleep)
+    if failure is not None:
+        raise RuntimeError(failure)
+    try:
+        await page.locator(off).first.wait_for(state="visible", timeout=10000)
+    except Exception as error:
+        raise RuntimeError(f"waiting for disabled camera failed: {error}") from error
+    return True
+
+
 async def leave_meeting(
     page: Page,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,

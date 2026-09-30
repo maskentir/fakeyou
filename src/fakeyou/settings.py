@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     twin_name: TwinName = "Fakeyou Twin"
     lobby_timeout_seconds: PositiveSeconds = 300.0
     session_duration_seconds: PositiveSeconds = 7200.0
+    journal_dir: Path = Path(".runtime/journals")
 
 
 def require_secret(value: SecretStr | None, name: str) -> str:

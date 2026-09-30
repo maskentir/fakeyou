@@ -8,6 +8,7 @@ import pytest
 import fakeyou.browser as browser_module
 from fakeyou.browser import (
     BROWSER_LAUNCH_ARGS,
+    apply_browser_audio_policy,
     open_browser_tools,
     open_direct_page,
     patch_preferences_for_3p_cookies,
@@ -80,8 +81,64 @@ async def test_missing_mcp_server_fails_before_browser_launch(tmp_path: Path) ->
 def test_browser_launch_args_include_automation_hardening() -> None:
     assert "--disable-blink-features=AutomationControlled" in BROWSER_LAUNCH_ARGS
     assert "--use-fake-ui-for-media-stream" in BROWSER_LAUNCH_ARGS
+    assert "--use-fake-device-for-media-stream" not in BROWSER_LAUNCH_ARGS
     assert "--autoplay-policy=no-user-gesture-required" in BROWSER_LAUNCH_ARGS
     assert "--lang=en-US" in BROWSER_LAUNCH_ARGS
+
+
+@pytest.fixture
+def cloak_ignore_args():
+    from cloakbrowser import config as cloakbrowser_config
+
+    saved = list(cloakbrowser_config.IGNORE_DEFAULT_ARGS)
+    try:
+        yield cloakbrowser_config.IGNORE_DEFAULT_ARGS
+    finally:
+        cloakbrowser_config.IGNORE_DEFAULT_ARGS[:] = saved
+
+
+def _set_worker_pulse_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PULSE_SOURCE", "meeting_audio.monitor")
+    monkeypatch.setenv("PULSE_SINK", "agent_output")
+
+
+def test_browser_audio_policy_unmutes_worker(
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+) -> None:
+    _set_worker_pulse_env(monkeypatch)
+
+    assert apply_browser_audio_policy() is True
+    assert "--mute-audio" in cloak_ignore_args
+
+
+def test_browser_audio_policy_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+) -> None:
+    _set_worker_pulse_env(monkeypatch)
+
+    assert apply_browser_audio_policy() is True
+    assert apply_browser_audio_policy() is True
+    assert cloak_ignore_args.count("--mute-audio") == 1
+
+
+def test_browser_audio_policy_skips_without_worker_env(
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+) -> None:
+    monkeypatch.delenv("PULSE_SOURCE", raising=False)
+    monkeypatch.delenv("PULSE_SINK", raising=False)
+
+    assert apply_browser_audio_policy() is False
+    assert "--mute-audio" not in cloak_ignore_args
+
+
+def test_browser_audio_policy_skips_on_partial_worker_env(
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+) -> None:
+    monkeypatch.setenv("PULSE_SOURCE", "meeting_audio.monitor")
+    monkeypatch.setenv("PULSE_SINK", "something_else")
+
+    assert apply_browser_audio_policy() is False
+    assert "--mute-audio" not in cloak_ignore_args
 
 
 def test_stable_fingerprint_seed_is_deterministic_and_bounded() -> None:

@@ -10,7 +10,10 @@ from langgraph.graph.state import CompiledStateGraph
 DEFAULT_PERSONA = (
     "You are a precise digital twin for a meeting participant. "
     "Track the meeting context, distinguish known facts from assumptions, "
-    "and ask for clarification when an action is ambiguous."
+    "and ask for clarification when an action is ambiguous. "
+    "Keep spoken replies to one or two short sentences. "
+    "Reply in casual spoken Indonesian like a helpful coworker, "
+    "using sentences that sound natural when read aloud."
 )
 
 

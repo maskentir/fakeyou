@@ -27,6 +27,10 @@ BROWSER_LAUNCH_ARGS = (
     "--accept-lang=en-US,en",
 )
 
+_WORKER_PULSE_SOURCE = "meeting_audio.monitor"
+_WORKER_PULSE_SINK = "agent_output"
+_MUTE_AUDIO_ARG = "--mute-audio"
+
 THIRD_PARTY_COOKIE_ALLOW_PATTERNS = (
     "https://[*.]meet.google.com",
     "https://[*.]google.com",
@@ -48,6 +52,18 @@ _DEVTOOLS_PORT_POLL_SECONDS = 0.25
 
 def profile_is_fresh(profile_dir: str) -> bool:
     return not (Path(profile_dir) / "Default" / "Cookies").is_file()
+
+
+def apply_browser_audio_policy() -> bool:
+    if os.environ.get("PULSE_SOURCE") != _WORKER_PULSE_SOURCE:
+        return False
+    if os.environ.get("PULSE_SINK") != _WORKER_PULSE_SINK:
+        return False
+    from cloakbrowser import config as cloakbrowser_config
+
+    if _MUTE_AUDIO_ARG not in cloakbrowser_config.IGNORE_DEFAULT_ARGS:
+        cloakbrowser_config.IGNORE_DEFAULT_ARGS.append(_MUTE_AUDIO_ARG)
+    return True
 
 
 async def warmup_profile(context: BrowserContext, urls: tuple[str, ...] = WARMUP_URLS) -> int:
@@ -159,6 +175,7 @@ async def _prepared_browser_context(
         launch_args = list(BROWSER_LAUNCH_ARGS)
         if fingerprint_seed is not None:
             launch_args.append(f"--fingerprint={fingerprint_seed}")
+        apply_browser_audio_policy()
         launch = asyncio.create_task(
             launch_persistent_context_async(
                 profile,

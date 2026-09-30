@@ -3,7 +3,15 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from fakeyou.agent import create_meeting_agent
+from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
+
+
+def test_default_persona_instructs_brief_spoken_replies() -> None:
+    assert "two short sentences" in DEFAULT_PERSONA
+
+
+def test_default_persona_instructs_casual_spoken_indonesian() -> None:
+    assert "casual spoken Indonesian" in DEFAULT_PERSONA
 
 
 def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
