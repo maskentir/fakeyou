@@ -59,11 +59,13 @@ stop() {
 trap stop TERM INT
 /entrypoint.sh "$@" &
 child=$!
-if wait "$child"; then
+while :; do
   status=0
-else
-  status=$?
-fi
+  wait "$child" || status=$?
+  if [ "$status" -eq 0 ] || ! kill -0 "$child" 2>/dev/null; then
+    break
+  fi
+done
 child=0
 trap - TERM INT
 exit "$status"

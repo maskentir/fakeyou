@@ -54,6 +54,19 @@ touch "$STUB_LOG/child_started"
 exec /bin/sleep 30
 """
 
+_GRACEFUL_CHILD = """#!/bin/sh
+finish() {
+  /bin/sleep 1
+  touch "$STUB_LOG/child_finished"
+  exit 0
+}
+trap finish TERM
+touch "$STUB_LOG/child_started"
+while :; do
+  /bin/sleep 0.1
+done
+"""
+
 
 def _stage(
     tmp_path: Path, child: str, *, pactl_mode: str, stub_sleep: bool
@@ -128,28 +141,43 @@ def test_wrong_topology_exits_infra_failure_and_cleans_up(tmp_path: Path) -> Non
         assert _kills(case) == 1
 
 
-def test_signal_forwards_to_child_and_exits_128_plus_signo(tmp_path: Path) -> None:
-    for sig, expected in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+def _start_and_signal(script: Path, env: dict[str, str], case: Path, sig: int) -> int:
+    marker = case / "log/child_started"
+    proc = subprocess.Popen([str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert marker.exists()
+        assert proc.poll() is None
+        proc.send_signal(sig)
+        return proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_signal_waits_for_graceful_child_shutdown(tmp_path: Path) -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        case = tmp_path / str(int(sig))
+        script, env = _stage(case, _GRACEFUL_CHILD, pactl_mode="ready", stub_sleep=False)
+
+        status = _start_and_signal(script, env, case, sig)
+
+        assert (case / "log/child_finished").exists()
+        assert status == 0
+        assert _kills(case) == 1
+
+
+def test_signal_propagates_status_of_child_killed_by_forwarded_term(tmp_path: Path) -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
         case = tmp_path / str(int(sig))
         script, env = _stage(case, _SIGNAL_CHILD, pactl_mode="ready", stub_sleep=False)
-        marker = case / "log/child_started"
-        proc = subprocess.Popen(
-            [str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        try:
-            deadline = time.monotonic() + 10
-            while not marker.exists() and time.monotonic() < deadline:
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.05)
-            assert marker.exists()
-            assert proc.poll() is None
-            proc.send_signal(sig)
-            assert proc.wait(timeout=10) == expected
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait(timeout=10)
+
+        assert _start_and_signal(script, env, case, sig) == 143
         assert _kills(case) == 1
 
 
