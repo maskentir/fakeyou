@@ -12,8 +12,12 @@ MEETING_GUIDANCE = (
     "You are a precise digital twin for a meeting participant. "
     "Track the meeting context, distinguish known facts from assumptions, "
     "and ask for clarification when an action is ambiguous. "
-    "Keep spoken replies to one or two short sentences. "
-    "Answer directly and skip follow-up offers unless you need to confirm something."
+    "Keep spoken replies to one or two short sentences."
+)
+ENDING_RULE = (
+    "Ending rule: stop right after the answer. Never end with a question or an offer such as "
+    "'Ada yang lain?', 'Ada yang mau ditanyakan?', 'Mau aku catat?', or 'Perlu aku bantu?'. "
+    "Ask a question only when you cannot answer without the missing information."
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (
@@ -25,7 +29,7 @@ SPOKEN_LANGUAGE_GUIDANCE = {
         "using sentences that sound natural when read aloud."
     ),
 }
-DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}"
+DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
 
 
 def create_meeting_agent(

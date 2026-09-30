@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fakeyou.session import PositiveSeconds, SessionId, TwinName
 
+ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -15,7 +17,11 @@ class Settings(BaseSettings):
     chat_model: str = "openai:gpt-4.1-mini"
     chat_base_url: str | None = None
     chat_api_key: SecretStr | None = None
-    chat_reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    chat_reasoning_effort: ReasoningEffort | None = None
+    fallback_chat_model: str | None = None
+    fallback_chat_base_url: str | None = None
+    fallback_chat_api_key: SecretStr | None = None
+    fallback_chat_reasoning_effort: ReasoningEffort | None = None
     memory_llm_model: str = "gpt-5.5"
     memory_small_model: str = "gpt-4.1-nano"
     memory_embedding_model: str = "text-embedding-3-small"

@@ -18,14 +18,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from graphiti_core import Graphiti
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_WS_URL
-from pydantic import TypeAdapter
+from pydantic import SecretStr, TypeAdapter
 
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.audio import (
@@ -74,7 +74,7 @@ class CliError(ValueError):
 
 
 OPENAI_API_URL = "https://api.openai.com"
-CHAT_TIMEOUT_SECONDS = 60
+CHAT_TIMEOUT_SECONDS = 20
 CHAT_MAX_RETRIES = 2
 
 
@@ -92,18 +92,48 @@ def preflight_hosts(settings: Settings) -> tuple[str, ...]:
     )
 
 
-def create_chat_model(settings: Settings) -> BaseChatModel:
-    api_key = require_secret(
-        settings.chat_api_key or settings.openai_api_key,
-        "FAKEYOU_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
+def _init_chat_model(
+    model_name: str,
+    *,
+    api_key: SecretStr | None,
+    key_names: str,
+    base_url: str | None,
+    reasoning_effort: str | None,
+    max_retries: int,
+) -> BaseChatModel:
+    options: dict[str, Any] = {"timeout": CHAT_TIMEOUT_SECONDS, "max_retries": max_retries}
+    if base_url:
+        options["base_url"] = base_url
+    if reasoning_effort:
+        options["reasoning_effort"] = reasoning_effort
+    model: BaseChatModel = init_chat_model(
+        model_name, api_key=require_secret(api_key, key_names), **options
     )
-    options: dict[str, Any] = {"timeout": CHAT_TIMEOUT_SECONDS, "max_retries": CHAT_MAX_RETRIES}
-    if settings.chat_base_url:
-        options["base_url"] = settings.chat_base_url
-    if settings.chat_reasoning_effort:
-        options["reasoning_effort"] = settings.chat_reasoning_effort
-    model: BaseChatModel = init_chat_model(settings.chat_model, api_key=api_key, **options)
     return model
+
+
+def create_chat_model(settings: Settings) -> BaseChatModel:
+    return _init_chat_model(
+        settings.chat_model,
+        api_key=settings.chat_api_key or settings.openai_api_key,
+        key_names="FAKEYOU_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
+        base_url=settings.chat_base_url,
+        reasoning_effort=settings.chat_reasoning_effort,
+        max_retries=0 if settings.fallback_chat_model else CHAT_MAX_RETRIES,
+    )
+
+
+def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
+    if not settings.fallback_chat_model:
+        return None
+    return _init_chat_model(
+        settings.fallback_chat_model,
+        api_key=settings.fallback_chat_api_key or settings.openai_api_key,
+        key_names="FAKEYOU_FALLBACK_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
+        base_url=settings.fallback_chat_base_url,
+        reasoning_effort=settings.fallback_chat_reasoning_effort,
+        max_retries=CHAT_MAX_RETRIES,
+    )
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -144,6 +174,13 @@ def check_setup(settings: Settings) -> None:
                         "base_url": settings.chat_base_url,
                         "reasoning_effort": settings.chat_reasoning_effort,
                     },
+                    "fallback": {
+                        "model": settings.fallback_chat_model,
+                        "base_url": settings.fallback_chat_base_url,
+                        "reasoning_effort": settings.fallback_chat_reasoning_effort,
+                    }
+                    if settings.fallback_chat_model
+                    else None,
                     "memory": {
                         "llm": settings.memory_llm_model,
                         "small": settings.memory_small_model,
@@ -686,6 +723,9 @@ async def open_conversation(
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
+        fallback = create_fallback_chat_model(settings)
+        if fallback is not None:
+            middleware.append(ModelFallbackMiddleware(fallback))
         if graphiti is not None and profile is not None and profile.allowed_tools:
             tools.extend(
                 tool

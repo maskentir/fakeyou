@@ -1,18 +1,21 @@
 import asyncio
 import json
 import socket
+import time
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
 from graphiti_core.nodes import EpisodeType
+from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
+from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.cli import memory_config
+from fakeyou.cli import create_chat_model, create_fallback_chat_model, memory_config
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import ingest_meeting
@@ -329,3 +332,55 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
     assert "owner note" in corrected
     assert removed == 1
     assert leftover == 0
+
+
+@pytest.mark.live
+async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down() -> None:
+    settings = Settings()
+    meta_key = _secret_or_skip(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
+    broken = settings.model_copy(
+        update={
+            "chat_model": "openai:gpt-4.1-mini",
+            "chat_base_url": "http://127.0.0.1:9/v1",
+            "chat_api_key": SecretStr("unused"),
+            "fallback_chat_model": "openai:muse-spark-1.2",
+            "fallback_chat_base_url": "https://api.meta.ai/v1",
+            "fallback_chat_api_key": SecretStr(meta_key),
+            "fallback_chat_reasoning_effort": "minimal",
+        }
+    )
+
+    @tool(description="Return the synthetic agenda marker for a meeting test.")
+    def read_agenda_marker() -> str:
+        return "agenda-marker-904"
+
+    agent = create_meeting_agent(
+        create_chat_model(broken),
+        tools=[read_agenda_marker],
+        middleware=[ModelFallbackMiddleware(create_fallback_chat_model(broken))],
+    )
+    started = time.monotonic()
+    try:
+        async with asyncio.timeout(60):
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Call read_agenda_marker and repeat its exact value.",
+                        }
+                    ]
+                },
+                config={"recursion_limit": 8},
+            )
+    except Exception as error:
+        _fail_provider(error, "model fallback")
+    elapsed = time.monotonic() - started
+
+    print(f"\nfallback answered in {elapsed:.2f}s: {result['messages'][-1].text}")
+    assert any(
+        isinstance(message, ToolMessage) and message.content == "agenda-marker-904"
+        for message in result["messages"]
+    )
+    assert "agenda-marker-904" in result["messages"][-1].text
+    assert elapsed < 20

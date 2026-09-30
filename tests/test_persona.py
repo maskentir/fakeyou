@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from fakeyou.agent import DEFAULT_PERSONA
+from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.conversation import conversation_thread_id
 from fakeyou.memory import create_memory_tools
 from fakeyou.persona import PersonaProfile, build_persona, load_persona, speech_keywords
@@ -267,3 +267,19 @@ async def test_recall_tool_arguments_cannot_select_another_group() -> None:
 
     assert set(recall.args) == {"query"}
     assert memory.searched[0]["group_ids"] == [group]
+
+
+@pytest.mark.parametrize("overrides", [{}, {"allowed_tools": []}, {"vocabulary": ["Orchid"]}])
+def test_build_persona_ends_with_the_ending_rule(overrides: dict[str, object]) -> None:
+    prompt = build_persona(profile(**overrides))
+
+    assert prompt.endswith(ENDING_RULE)
+    assert prompt.count(ENDING_RULE) == 1
+
+
+def test_build_persona_asks_for_provenance_right_before_the_ending_rule() -> None:
+    sections = build_persona(profile()).split("\n\n")
+
+    assert "Di meeting sebelumnya" in sections[-2]
+    assert sections[-1] == ENDING_RULE
+    assert "Di meeting sebelumnya" not in build_persona(profile(allowed_tools=[]))

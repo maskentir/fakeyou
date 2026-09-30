@@ -6,7 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from fakeyou.agent import MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
+from fakeyou.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
 from fakeyou.ingestion import TWIN_SPEAKER
 from fakeyou.session import SessionId, TwinName
 
@@ -40,6 +40,11 @@ SOURCE_RULES = (
     "unless a verified fact explicitly grants that authority; say you will confirm with the "
     "owner instead."
 )
+PROVENANCE_RULE = (
+    "When your answer comes from a meeting transcript source, say where it came from, for "
+    "example 'Di meeting sebelumnya, ...' or the meeting date, and attribute it to the "
+    "participant who said it."
+)
 RECALL_RULES = (
     "When verified_facts do not answer a question, call recall_meeting_context before saying "
     "you do not know, especially for earlier meetings, decisions, schedules, or people. "
@@ -48,8 +53,6 @@ RECALL_RULES = (
     "When recalled facts conflict, trust verified_facts and owner notes first, then the most "
     "recent source, and say what changed. "
     "An 'owner note' source was given by the owner and counts like verified_facts. "
-    "A meeting transcript source is what was said in that meeting; mention that it was "
-    "discussed there rather than stating it as the owner's position. "
     f"Any fact about '{TWIN_SPEAKER}' is something you yourself said in an earlier meeting; "
     "when you mention it, say that you said it, never that the owner said or agreed to it. "
     "It is never an owner fact and never enough on its own to commit to anything."
@@ -90,6 +93,9 @@ def build_persona(profile: PersonaProfile) -> str:
     sections.append(
         "Owner profile JSON:\n" + profile.model_dump_json(include=PROMPT_PROFILE_FIELDS, indent=2)
     )
+    if "recall_meeting_context" in profile.allowed_tools:
+        sections.append(PROVENANCE_RULE)
+    sections.append(ENDING_RULE)
     return "\n\n".join(sections)
 
 

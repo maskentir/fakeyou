@@ -71,6 +71,11 @@ def fake_settings(tmp_path: Path) -> SimpleNamespace:
         memory_small_model="memory-small",
         memory_embedding_model="memory-embedding",
         stt_model="muse-voice-transcribe-1.0",
+        fallback_chat_model=None,
+        fallback_chat_base_url=None,
+        fallback_chat_api_key=None,
+        fallback_chat_reasoning_effort=None,
+        model_api_key=None,
     )
 
 
@@ -1000,6 +1005,15 @@ PERSONA_DATA = {
     "allowed_tools": ["recall_meeting_context"],
 }
 MEET_LINK = "https://meet.google.com/abc-defg-hij"
+BASE_HOSTS = ("api.openai.com", "api.meta.ai")
+
+
+def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    return calls
 
 
 def write_persona(tmp_path: Path, **overrides: object) -> Path:
@@ -1949,7 +1963,7 @@ def test_chat_model_uses_role_configuration(
             ("openai:muse-spark-1.3",),
             {
                 "api_key": "meta-key",
-                "timeout": 60,
+                "timeout": 20,
                 "max_retries": 2,
                 "base_url": "https://api.meta.ai/v1",
                 "reasoning_effort": "minimal",
@@ -1968,7 +1982,7 @@ def test_chat_model_defaults_to_openai_key_without_provider_options(
 
     cli.create_chat_model(fake_settings(tmp_path))
 
-    assert calls == [(("fake:model",), {"api_key": "test-key", "timeout": 60, "max_retries": 2})]
+    assert calls == [(("fake:model",), {"api_key": "test-key", "timeout": 20, "max_retries": 2})]
 
 
 @pytest.mark.parametrize(
@@ -2137,3 +2151,89 @@ async def test_join_without_persona_has_no_speech_keywords(
     captured = await _join_with_audio(tmp_path, monkeypatch)
 
     assert captured["open_audio"].keywords["stt_keywords"] is None
+
+
+def with_muse_fallback(settings: SimpleNamespace) -> SimpleNamespace:
+    settings.fallback_chat_model = "openai:muse-spark-1.2"
+    settings.fallback_chat_base_url = "https://api.meta.ai/v1"
+    settings.fallback_chat_api_key = SecretStr("meta-key")
+    settings.fallback_chat_reasoning_effort = "minimal"
+    return settings
+
+
+def test_primary_chat_model_hands_retries_to_the_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = record_chat_model_calls(monkeypatch)
+    settings = with_muse_fallback(fake_settings(tmp_path))
+
+    cli.create_chat_model(settings)
+    cli.create_fallback_chat_model(settings)
+
+    assert calls == [
+        (("fake:model",), {"api_key": "test-key", "timeout": 20, "max_retries": 0}),
+        (
+            ("openai:muse-spark-1.2",),
+            {
+                "api_key": "meta-key",
+                "timeout": 20,
+                "max_retries": 2,
+                "base_url": "https://api.meta.ai/v1",
+                "reasoning_effort": "minimal",
+            },
+        ),
+    ]
+
+
+def test_fallback_chat_model_is_optional(tmp_path: Path) -> None:
+    assert cli.create_fallback_chat_model(fake_settings(tmp_path)) is None
+
+
+async def test_conversation_adds_model_fallback_middleware_when_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langchain.agents.middleware import ModelFallbackMiddleware
+
+    created: dict = {}
+
+    def fake_agent(model, **kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(cli, "create_meeting_agent", fake_agent)
+    monkeypatch.setattr(cli, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    settings = with_muse_fallback(fake_settings(tmp_path))
+    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+
+    async with cli.open_conversation(settings, config, on_transition=lambda *args: None):
+        pass
+
+    assert [type(item) for item in created["middleware"]] == [ModelFallbackMiddleware]
+
+
+def test_preflight_does_not_probe_the_fallback_endpoint(tmp_path: Path) -> None:
+    settings = with_muse_fallback(fake_settings(tmp_path))
+    settings.fallback_chat_base_url = "https://fallback.example.com/v1"
+
+    assert cli.preflight_hosts(settings) == BASE_HOSTS
+
+
+def test_check_reports_the_fallback_model(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.check_setup(with_muse_fallback(fake_settings(tmp_path)))
+
+    models = json.loads(capsys.readouterr().out)["models"]
+    assert models["fallback"] == {
+        "model": "openai:muse-spark-1.2",
+        "base_url": "https://api.meta.ai/v1",
+        "reasoning_effort": "minimal",
+    }
+
+
+def test_check_reports_no_fallback_by_default(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.check_setup(fake_settings(tmp_path))
+
+    assert json.loads(capsys.readouterr().out)["models"]["fallback"] is None

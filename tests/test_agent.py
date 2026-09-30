@@ -3,7 +3,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
+from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
 
 
 def test_default_persona_instructs_brief_spoken_replies() -> None:
@@ -56,3 +56,8 @@ def test_agent_reopens_sqlite_checkpoint_for_same_thread(tmp_path) -> None:
 
     contents = [message.content for message in result["messages"]]
     assert contents == ["keep this", "remembered", "continue", "reopened"]
+
+
+def test_default_persona_ends_with_the_ending_rule() -> None:
+    assert DEFAULT_PERSONA.endswith(ENDING_RULE)
+    assert "Never end with a question or an offer" in ENDING_RULE
