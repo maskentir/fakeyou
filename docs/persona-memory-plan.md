@@ -1,6 +1,6 @@
 # Persona pemilik dan retrieval memori
 
-Status: Task 1–3 selesai dan teruji pada 30 September 2026 di branch `feat/persona-memory`. Task 4 (acceptance Meet terkontrol) masih terbuka karena memerlukan host dan meeting uji. Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`. Tahap berikutnya ada di [rencana ingestion memori](memory-ingestion-plan.md).
+Status: Task 1–3 selesai dan teruji pada 30 September 2026 di branch `feat/persona-memory`. Task 4 dijalankan live pada hari yang sama; hasil dan sisa pekerjaan ada di [acceptance 30 September](acceptance-2026-09-30.md). Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`. Tahap berikutnya ada di [rencana ingestion memori](memory-ingestion-plan.md).
 
 ## Hasil yang dituju
 
@@ -38,7 +38,7 @@ Fondasi guest, audio dua arah, dan conversation loop sudah tersedia. Live conver
 - Teks isi (`role`, `speaking_style`, item `goals`/`verified_facts`) di-strip, wajib nonblank, maksimal 500 karakter. `goals` dan `verified_facts` berupa tuple maksimal 20 item. `language` hanya `id` atau `en`. `allowed_tools` adalah `frozenset[Literal["recall_meeting_context"]]`.
 - Default: `language="id"`, `speaking_style="concise"`, goals/facts kosong, permission kosong.
 - `memory_group = "twin_" + uuid5(NAMESPACE_URL, json.dumps([owner_id, twin_id]))`. Ini property biasa, bukan field, sehingga tidak ikut serialisasi atau prompt. Encoding JSON list mencegah tabrakan seperti `("owner_a", "twin")` vs `("owner", "a_twin")`.
-- `load_persona` membaca file lewat `asyncio.to_thread`, memvalidasi dengan `model_validate_json`, lalu menolak owner/twin yang tidak sama dengan `SessionConfig`. File yang tidak terbaca menjadi `CliError`.
+- `load_persona` membaca file lewat `asyncio.to_thread`, memvalidasi dengan `model_validate_json`, lalu menolak owner/twin yang tidak sama dengan identitas sesi. File yang tidak terbaca menjadi `CliError`. Tahap ingestion mengubah signature menjadi `load_persona(path, *, owner_id, twin_id)` agar command operator tanpa `SessionConfig` dapat memakainya.
 
 ### Prompt
 
@@ -97,13 +97,13 @@ Urutan di `join_meeting`:
 
 ## Task 4 — Acceptance Meet terkontrol
 
-Belum dijalankan. Worker sudah siap: image dibangun ulang dengan kode persona, `examples/` ter-mount, dan Neo4j terjangkau dari container lewat `bolt://neo4j:7687` (diverifikasi dengan `verify_connectivity`).
+Dijalankan 30 September 2026 pada sesi `acc-0930-s1` dan `acc-0930-s2`; lihat [acceptance 30 September](acceptance-2026-09-30.md).
 
-- [ ] Gunakan meeting uji yang sedang dihost dan identitas sesi baru. Twin menjawab satu fakta profil dan satu fakta Graphiti, lalu mengakui ketika informasi belum tersedia. Fakta Graphiti perlu dimasukkan ke `profile.memory_group` terlebih dahulu (misalnya lewat script sintetis seperti tes live), karena `join` tidak memiliki tool tulis.
-- [ ] Ajukan dua pertanyaan yang saling terkait; pastikan checkpoint dipakai dengan benar. Uji interupsi dan stop selama model/recall bekerja, tanpa jawaban terlambat setelah stop.
-- [ ] Catat final transcript → model selesai → first PCM → audio yang benar-benar terdengar oleh participant. `speak_started` hanya dispatch playback lokal; first PCM dari provider juga belum membuktikan waktu suara di telinga participant.
-- [ ] Ukur stop request → audio berhenti dan catat titik pemicu. Barge-in saat ini menunggu transkrip final, belum memakai onset speech native Pipecat.
-- [ ] Simpan run ID, journal, hasil terminal, dan konfirmasi pendengaran terpisah.
+- [x] Twin menjawab fakta profil (beta launch 14 Oktober 2026) dan fakta Graphiti dari owner note `memory-add` (demo Jumat 3 Oktober jam 2 siang), lalu mengakui harga lisensi belum diketahui.
+- [x] Pertanyaan terkait ("…harus lewat dia juga") dijawab dengan konteks thread. "Oke cukup" memotong playback; stop saat agent bekerja membatalkan agent 45 ms kemudian tanpa `speak_started` setelahnya.
+- [x] VAD stop → PCM pertama 2,16–4,50 detik (rincian per tahap di dokumen acceptance). Host mengonfirmasi suara terdengar; waktu dari PCM pertama sampai terdengar tidak diukur.
+- [x] Stop request dipicu 14 ms setelah transkrip final pemicu; barge-in berhenti pada transkrip final, 0,62 detik setelah VAD stop. Barge-in berbasis interim/VAD tetap untuk tahap multipihak.
+- [x] Run ID, journal (`.runtime/audio/journals/acc-0930-s*.jsonl`), hasil terminal, dan konfirmasi pendengaran tercatat di dokumen acceptance.
 
 ## Bukti pengujian 30 September 2026
 

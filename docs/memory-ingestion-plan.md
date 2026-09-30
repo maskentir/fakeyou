@@ -1,103 +1,149 @@
 # Ingestion memori dengan provenance
 
-Status: rencana berikutnya, belum diimplementasikan; keputusan pengguna sudah masuk. Disusun 30 September 2026 setelah [persona dan retrieval memori](persona-memory-plan.md) selesai untuk Task 1–3. Task 4 rencana itu (acceptance Meet) tetap terbuka dan dapat berjalan paralel.
+Status: Task 1–5 selesai pada 30 September 2026 di branch `feat/memory-ingestion`, termasuk acceptance Meet dua sesi. Acceptance menemukan kekurangan throughput, fakta pertanyaan, dan nama salah dengar; bukti dan rencana perbaikannya ada di [acceptance 30 September](acceptance-2026-09-30.md).
 
 ## Hasil yang dituju
 
-Transkrip final dari meeting dan ucapan twin yang benar-benar selesai diputar masuk ke ruang Graphiti owner/twin (`profile.memory_group`) sebagai episode yang dapat ditelusuri asalnya: meeting, waktu kejadian, sumber, dan speaker (`twin`, participant yang diketahui, atau `unknown`). Recall mengembalikan fakta beserta asal dan masa berlakunya, sehingga twin dapat menjawab "itu dibahas di meeting tanggal X" dan membedakan fakta pemilik, klaim participant, serta ucapan twin sendiri. Ingestion ulang tidak menggandakan episode. Data disimpan tanpa batas waktu; operator dapat mengoreksi dan menghapus secara manual tanpa menyentuh data owner lain.
+Transkrip final dari meeting dan ucapan twin yang benar-benar selesai diputar masuk ke ruang Graphiti owner/twin (`profile.memory_group`) sebagai episode yang dapat ditelusuri asalnya: meeting, waktu kejadian, sumber, dan speaker. Recall mengembalikan fakta yang masih berlaku beserta asal dan waktunya, sehingga twin dapat membedakan fakta pemilik, klaim participant, dan ucapannya sendiri. Data disimpan tanpa batas waktu; operator dapat menambah catatan pemilik dan menghapus secara manual tanpa menyentuh data owner lain.
 
 ## Keputusan pengguna (30 September 2026)
 
 1. Aplikasi tidak menyediakan mekanisme persetujuan peserta sebelum ingestion. Kepatuhan terhadap aturan rekaman menjadi tanggung jawab operator.
 2. Tidak ada retensi otomatis. Memori disimpan sampai dihapus manual.
-3. Ucapan twin ikut diingest, dengan batasan pada bagian "Ucapan twin" di bawah.
+3. Ucapan twin ikut diingest, dengan batasan pada bagian "Ucapan twin".
 
 ## Keputusan desain
 
-- Ingestion aktif hanya bila profil mengizinkannya lewat field baru `ingest_transcripts: bool = False` dan `join --memory` dipakai. Ini bukan tool model, jadi tidak dimasukkan ke `allowed_tools`; model tidak dapat menyalakan atau memilih apa yang disimpan. Tidak ada flag CLI terpisah dan tidak ada pengumuman persetujuan (keputusan pengguna 1).
-- Hanya event `finalized` yang diingest. Interim transcript tetap di konteks aktif saja.
-- Transkrip adalah klaim participant, bukan fakta pemilik. Ucapan twin adalah ucapan twin, juga bukan fakta pemilik. `verified_facts` profil tetap satu-satunya fakta pemilik. Pengetahuan yang diberikan pemilik masuk lewat command operator terpisah dengan `source_description` yang berbeda.
-- Ingestion tidak boleh memblokir capture atau conversation. Jalankan sebagai worker async dengan queue terbatas, di luar jalur `ConversationLoop`. Kegagalan dicatat sebagai fault `memory_ingest`, tidak menghentikan sesi.
-- Pakai fitur Graphiti dan LangGraph yang ada: `add_episode(source=EpisodeType.message, reference_time=..., saga=...)`, invalidasi edge temporal bawaan (`valid_at`/`invalid_at`/`expired_at`), `remove_episode`, `EpisodicNode.get_by_uuids`, serta `langgraph.store.sqlite`/`postgres` untuk ledger idempotensi. Tidak ada database atau parser tambahan.
-- Tidak menulis custom extraction pipeline. Bila kualitas ekstraksi kurang, gunakan `custom_extraction_instructions`, `entity_types`, atau `excluded_entity_types` milik Graphiti terlebih dahulu.
+- Ingestion aktif hanya bila profil berisi `ingest_transcripts: true` dan `join --memory` dipakai. Field ini terpisah dari `allowed_tools` karena bukan tool model; model tidak dapat menyalakannya atau memilih apa yang disimpan.
+- Hanya transkrip `finalized` dan nonblank yang diingest. Ucapan twin berasal dari `PlaybackEvent` `speak_finished`; `speak_dropped` dan `speak_failed` diabaikan karena bagian yang terdengar tidak diketahui.
+- Transkrip adalah klaim participant, ucapan twin adalah ucapan twin, dan keduanya bukan fakta pemilik. Fakta pemilik adalah `verified_facts` profil dan catatan `memory-add`.
+- Ingestion tidak memblokir capture atau conversation. Satu worker async memproses episode secara berurutan, sesuai anjuran docstring `Graphiti.add_episode`, dengan queue terbatas di luar `ConversationLoop`. Kegagalan dicatat sebagai fault dan tidak menghentikan sesi.
+- Semua bagian memakai fitur library: `add_episode(source=EpisodeType.message, saga=..., custom_extraction_instructions=...)`, `SearchFilters` dengan `ComparisonOperator.is_null`, `EpisodicNode.get_by_uuids`, `retrieve_episodes(saga=...)`, `remove_episode`, dan `SagaNode.delete`. Tidak ada database, ledger, atau parser tambahan.
 
-## Fakta dari source terpasang yang membentuk rencana
+### Revisi dari draft rencana
 
-Diverifikasi pada Graphiti 0.30.2, 30 September 2026:
-
-- `add_episode(uuid=...)` mengambil episode yang sudah ada lewat `EpisodicNode.get_by_uuid`; parameter ini untuk memproses ulang, bukan create idempoten. Dedupe tidak boleh bergantung padanya.
-- `add_episode` menerima `saga` dan `saga_previous_episode_uuid` untuk merangkai episode berurutan. Ini kandidat untuk "satu meeting = satu saga".
-- `EntityEdge` membawa `episodes` (UUID sumber), `valid_at`, `invalid_at`, `expired_at`, dan `reference_time`. `EpisodicNode` membawa `source_description`, `valid_at`, dan `episode_metadata`. `add_episode` tidak menerima `episode_metadata`, jadi provenance terstruktur perlu disimpan lewat `source_description`/`name` atau ledger; cek ulang sebelum memutuskan.
-- Ekstraksi LLM nondeterministik. Tes live tahap persona menemukan episode yang menghasilkan `edges: []`. Ingestion harus mencatat hasil kosong dan tidak menganggapnya sukses diam-diam.
-- `Neo4jDriver.__init__` menjadwalkan build index bila dipanggil di event loop berjalan; factory tetap lewat `asyncio.to_thread`.
+| Draft | Implementasi | Alasan |
+| --- | --- | --- |
+| Ledger idempotensi di LangGraph store | Saga Graphiti `meeting:<meeting_id>` sebagai pengelompokan per meeting; dedupe `TranscriptEvent.id` di dalam proses | Satu sumber data. `meeting_id` yang sudah berjalan tidak dapat di-join ulang karena lifecycle menolaknya, sehingga duplikasi lintas proses tidak terjadi. Dua store dapat tidak sinkron. |
+| Jendela campuran twin + participant | Episode dipisah per jenis speaker, lalu per 20 ucapan atau 60 detik | Provenance per episode menjadi pasti. Konteks percakapan tetap terbawa karena `add_episode` memberi extractor episode-episode sebelumnya di grup yang sama. |
+| Speaker twin = nama tampilan | Speaker twin = `Digital twin`; nama Meet disebut di instruksi ekstraksi | Eval live: dengan fakta "Rani Twin said…", 6 dari 8 jawaban model menjadi "Rani bilang…". Dengan "Digital twin said…", 0 dari 8. Label tetap juga stabil saat nama twin diganti. |
+| Participant tanpa identitas = `unknown` | `Unidentified participant`, instruksi ekstraksi melarang menggabungkannya dengan orang bernama | Prompt ekstraksi Graphiti selalu menjadikan speaker sebagai entity pertama. |
+| Status `pending` untuk dilanjutkan | Drain saat close dibatasi 20 detik; sisa queue dicatat sebagai fault `memory_ingest`/`timeout` beserta jumlahnya | Belum ada command replay. Batas 20 detik berada di dalam `stop_grace_period` Compose 45 detik. |
+| Koreksi lewat invalidasi temporal | Koreksi lewat urutan prioritas di prompt dan waktu di provenance | Live: owner note "dipindah ke Jumat" tidak meng-invalidate fakta "Unidentified participant setuju demo … Kamis", karena fakta berbentuk kejadian tetap benar sebagai sejarah. Recall kini menampilkan jam UTC dan prompt memprioritaskan `verified_facts`/owner note, lalu sumber terbaru. |
+| Provenance tanggal saja | `YYYY-MM-DD HH:MM UTC` | Koreksi di hari yang sama perlu dapat diurutkan. |
 
 ## Ucapan twin
 
-Ucapan twin diperlukan sebagai konteks: jawaban participant seperti "oke, setuju" hanya bermakna jika usulan twin sebelumnya ikut tersimpan. Risikonya adalah twin mengutip ulang tebakannya sendiri sebagai fakta di meeting berikutnya. Batasannya:
+Ucapan twin diperlukan sebagai konteks: jawaban participant seperti "oke, setuju" hanya bermakna jika usulan twin sebelumnya ikut tersimpan. Risikonya adalah twin mengutip ulang tebakannya sendiri sebagai fakta.
 
-- Sumbernya `PlaybackEvent` `speak_finished`, yaitu teks yang sudah dibatasi dua kalimat dan selesai diputar, bukan jawaban mentah model. `speak_dropped` (interrupted) dan `speak_failed` tidak diingest karena bagian yang terdengar tidak diketahui. `PlaybackEvent` belum membawa waktu; ingestion memberi timestamp saat event diterima.
-- Speaker selalu `twin`. Ucapan twin dan participant disusun berurutan waktu dalam satu jendela episode agar percakapan tetap utuh, sehingga atribusi per ucapan ada di prefix speaker pada body, bukan di `source_description` episode. Sumber tiap event (`meeting_audio` atau `twin_playback`) dicatat di ledger.
-- Ekstraksi Graphiti dapat menghilangkan atribusi dari teks fakta (misalnya "twin: demo hari Kamis" menjadi fakta "Demo is on Thursday"). Karena itu recall wajib menelusuri `edge.episodes` ke episode sumber dan menampilkan speaker-nya. Kewajiban ini berlaku juga untuk klaim participant.
-- Prompt persona: fakta yang hanya didukung ucapan twin disebut sebagai "yang pernah twin sampaikan", tidak pernah sebagai fakta pemilik, dan tidak boleh menjadi satu-satunya dasar komitmen.
-- Loopback audio twin ke STT sudah dicegah oleh sink terpisah, sehingga ucapan twin tidak masuk dua kali lewat transkrip.
+- Yang disimpan adalah teks yang sudah dibatasi dua kalimat dan selesai diputar, dengan waktu saat event diterima.
+- Speaker selalu `Digital twin`; `source_description` episode berakhiran `twin speech`.
+- Ekstraksi live mempertahankan atribusi di teks fakta, misalnya "Digital twin mengusulkan agar demo customer … digeser ke hari Kamis." dan "Unidentified participant setuju demo customer … dipindah ke hari Kamis."
+- Prompt: sumber `twin speech` atau fakta tentang `Digital twin` adalah ucapan twin sendiri, disebut "aku sempat bilang", bukan fakta pemilik, dan tidak cukup untuk komitmen.
+- Sink audio terpisah mencegah suara twin masuk lagi lewat STT.
 
-## Peta perubahan
+## Implementasi
 
-| File | Tanggung jawab |
+| File | Isi |
 | --- | --- |
-| `src/fakeyou/persona.py` | Field `ingest_transcripts: bool = False`, terpisah dari `allowed_tools` |
-| `src/fakeyou/ingestion.py` baru | Queue terbatas, batching per jendela, ledger idempotensi, pemanggilan `add_episode` |
-| `src/fakeyou/playback.py` | Tidak berubah; callback `on_playback_event` yang sudah ada meneruskan `speak_finished` ke ingestion |
-| `src/fakeyou/memory.py` | Recall menyertakan provenance (tanggal, meeting, sumber) dan hanya fakta yang masih berlaku |
-| `src/fakeyou/cli.py` | Ingestion di `join --memory` bila profil mengizinkan; command operator `memory add` dan `memory forget` |
-| `src/fakeyou/conversation.py` | Tidak berubah; ingestion menerima `TranscriptEvent` dari callback transcript yang sama |
-| `tests/test_ingestion.py` baru | Dedupe, batching, backpressure, cleanup, fault |
-| `tests/test_providers_live.py` | Ingest → reopen → recall dengan provenance; koreksi; forget |
-| `evals/test_persona.py` | Skenario "kapan itu dibahas", klaim participant vs fakta pemilik, ucapan twin lama yang keliru, fakta yang sudah dikoreksi |
+| `src/fakeyou/ingestion.py` | `MeetingIngestion`: queue 500, batching per jenis speaker, 20 ucapan atau 60 detik, timeout episode 120 detik, drain 20 detik, journal `memory_episode` |
+| `src/fakeyou/memory.py` | `meeting_saga`, `CURRENT_FACTS_FILTER`, `describe_facts`, `remember_owner_note`, `forget_meeting`, `forget_episode`, `RECALL_TIMEOUT_SECONDS = 15` |
+| `src/fakeyou/persona.py` | `ingest_transcripts`, `load_persona(path, *, owner_id, twin_id)`, aturan sumber recall |
+| `src/fakeyou/agent.py` | Guidance meeting: jawab langsung tanpa tawaran follow-up kecuali perlu konfirmasi |
+| `src/fakeyou/cli.py` | `open_persona_memory`, ingestion di `join`, command `memory-add` dan `memory-forget` |
 
-## Task 1 — Kontrak event dan ledger
+### Alur di `join`
 
-- [ ] Definisikan kunci idempotensi dari `TranscriptEvent.id` (sudah hash dari source, timestamp, dan text) ditambah `memory_group`. Ucapan twin memakai hash dari meeting ID, waktu `speak_finished`, dan teks. Tulis tes: event sama dua kali (termasuk setelah reconnect STT) hanya menghasilkan satu episode.
-- [ ] Pilih penyimpanan ledger: `AsyncSqliteStore` untuk CLI lokal, `AsyncPostgresStore` untuk worker production. Namespace store `("ingestion", memory_group)`, value berisi episode UUID, meeting ID, waktu, dan status (`pending`, `ingested`, `empty`, `failed`).
-- [ ] Tentukan format body episode: satu baris per ucapan, `"<speaker>: <text>"`, berurutan waktu. Speaker participant `unknown` bila tidak diketahui; ucapan twin selalu `twin`. `source_description` episode memuat meeting ID dan rentang waktu jendela; sumber per event (`meeting_audio` atau `twin_playback`) ada di ledger. Jangan memakai nama tampilan twin sebagai speaker participant.
-- [ ] Sambungkan `speak_finished` dari callback `on_playback_event` ke ingestion; uji bahwa `speak_dropped` dan `speak_failed` tidak diingest.
+1. Validasi profil. `--memory` memerlukan `recall_meeting_context` atau `ingest_transcripts`.
+2. `open_persona_memory` membuka Graphiti dan menjalankan `verify_connectivity()` sebelum model, checkpoint, browser, dan audio. Kegagalan menghasilkan `infra_failure` dengan exit 3.
+3. Bila `ingest_transcripts`, `MeetingIngestion` dibuat. Callback transcript memanggil `add_transcript` sebelum conversation; callback playback memanggil `add_twin_speech` untuk `speak_finished`.
+4. Saat sesi selesai, conversation ditutup lebih dulu, lalu ingestion di-drain, lalu Graphiti ditutup, lalu journal.
+
+### Recall
+
+`recall_meeting_context` mencari dengan `CURRENT_FACTS_FILTER` (`invalid_at IS NULL`, `expired_at IS NULL`) dan batas waktu 15 detik di bawah deadline agent 60 detik. Setiap fakta diberi sumber dari episode asalnya:
+
+```text
+Unidentified participant setuju demo customer Orchid… dipindah ke hari Kamis. (source: Google Meet live-ingest-… participant transcript; 2026-09-30 07:52 UTC)
+Rani memberi update bahwa demo customer Orchid… dipindah ke hari Jumat. (source: owner note; 2026-09-30 07:53 UTC)
+```
+
+Fakta tanpa episode yang dikenal diberi `(source: unknown)`. Recall yang gagal atau timeout dikembalikan sebagai `RECALL_UNAVAILABLE_RESULT` oleh `ToolErrorMiddleware` dan dicatat sebagai fault `memory`.
+
+### Command operator
+
+```sh
+fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." --persona PATH [--owner-id ID --twin-id ID]
+fakeyou memory-forget --meeting MEETING_ID --persona PATH
+fakeyou memory-forget --episode EPISODE_UUID --persona PATH
+```
+
+- Identitas default diambil dari settings, seperti `join`; persona yang tidak cocok ditolak sebelum koneksi.
+- `memory-add` mencetak `episode_uuid` dan fakta yang terekstrak. Jika tidak ada fakta, command memberi peringatan karena catatan itu tidak akan pernah muncul di recall.
+- `memory-forget --meeting` mengambil episode saga per 100 lalu memanggil `remove_episode`, kemudian menghapus node saga. Loop berhenti dengan error bila sebuah episode masih ada setelah dihapus.
+- `memory-forget --episode` hanya menghapus episode yang `group_id`-nya sama dengan persona; episode lain atau yang tidak ada ditolak dengan pesan yang sama.
+- Neo4j yang tidak tersedia menghasilkan exit code 3.
+
+## Task 1 — Kontrak event
+
+- [x] Dedupe `TranscriptEvent.id` di dalam proses; event sama dua kali hanya diingest sekali. Transkrip interim dan kosong diabaikan.
+- [x] Format body `"<speaker>: <text>"` satu baris per ucapan dengan whitespace dinormalisasi. `source_description` = `Google Meet <meeting_id> participant transcript|twin speech`.
+- [x] `speak_finished` dari `on_playback_event` diteruskan ke ingestion; event playback lain diabaikan.
 
 ## Task 2 — Worker ingestion
 
-- [ ] Worker async dengan `asyncio.Queue(maxsize=...)`. Ketika penuh, catat fault dan hitung event yang terlewat; jangan menahan callback transcript.
-- [ ] Batching per jendela waktu atau jumlah ucapan untuk menekan biaya LLM Graphiti. Ukur dulu biaya dan latency satu episode per ucapan vs per jendela 60 detik sebelum memilih default.
-- [ ] Satu meeting satu saga (`saga=meeting:<meeting_id>`) bila hasil uji menunjukkan urutan episode membantu ekstraksi; bandingkan dengan `previous_episode_uuids` default.
-- [ ] Close: drain dengan batas waktu, lalu tandai sisa event sebagai `pending` di ledger agar dapat dilanjutkan tanpa duplikasi. Stop owner tidak menunggu ingestion selesai.
-- [ ] Hasil ekstraksi kosong dicatat sebagai `empty`, bukan `ingested`.
+- [x] Queue terbatas; saat penuh, ucapan dibuang tanpa menahan callback dan fault `memory_ingest_backlog`/`unavailable` dicatat.
+- [x] Batching per jenis speaker, 20 ucapan, atau 60 detik (termasuk aliran tanpa jeda dan jendela yang sepi).
+- [x] Satu meeting satu saga dengan `saga_previous_episode_uuid` berantai.
+- [x] Episode yang gagal atau hang (120 detik) dicatat dan worker lanjut; close di-drain dengan batas 20 detik.
+- [x] Ekstraksi kosong dicatat sebagai `outcome: "empty"`.
 
 ## Task 3 — Recall dengan provenance
 
-- [ ] Recall mengembalikan fakta yang `invalid_at`/`expired_at`-nya kosong, beserta tanggal `valid_at` dan `source_description` episode sumber (`EpisodicNode.get_by_uuids(edge.episodes)`). Format tetap ringkas agar muat di jawaban dua kalimat.
-- [ ] Prompt persona: fakta dari transkrip disebut sebagai "dibahas di meeting tanggal X oleh Y/unknown", dan fakta yang hanya didukung ucapan twin disebut sebagai "yang pernah twin sampaikan". Keduanya bukan fakta pemilik.
-- [ ] Tambahkan batas waktu khusus recall di bawah deadline agent 60 detik, sehingga Graphiti yang hang dikembalikan sebagai informasi belum diketahui lewat middleware yang sama, bukan `conversation_failure`. Ini sisa dari tahap persona.
+- [x] Hanya fakta yang masih berlaku, beserta sumber dan waktu pertama episode asalnya.
+- [x] Aturan prompt untuk `owner note`, `participant transcript`, `twin speech`, dan konflik antarsumber.
+- [x] Recall dibatasi 15 detik; hang menjadi informasi belum diketahui, bukan `conversation_failure`.
 
 ## Task 4 — Koreksi dan penghapusan manual
 
-- [ ] `memory add --persona PATH TEXT` untuk pengetahuan yang diberikan pemilik (sumber `owner`), terpisah dari transkrip. Koreksi pemilik mengandalkan invalidasi temporal Graphiti; uji bahwa fakta lama menjadi `invalid_at` dan recall hanya mengembalikan yang baru.
-- [ ] `memory forget --persona PATH --meeting MEETING_ID` menghapus episode milik meeting itu lewat UUID di ledger dan `remove_episode`. Jangan pernah menghapus berdasarkan pola group atau `clear_data`.
-- [ ] Tidak ada retensi otomatis atau command prune (keputusan pengguna 2). Ledger tetap menyimpan UUID episode agar penghapusan manual per meeting selalu dapat dilakukan.
-- [ ] Semua command menolak persona yang owner/twin-nya tidak cocok dengan argumen identitas, seperti `join`.
+- [x] `memory-add` untuk catatan pemilik; koreksi diselesaikan lewat prioritas sumber dan waktu (lihat revisi).
+- [x] `memory-forget --meeting` dan `--episode`, tidak pernah berdasarkan pola grup atau `clear_data`.
+- [x] Tidak ada retensi otomatis.
+- [x] Command menolak persona yang tidak cocok dengan identitas.
 
 ## Task 5 — Bukti
 
-- [ ] Tes offline: dedupe, backpressure, cleanup, provenance recall, hanya `speak_finished` yang diingest, dan `ingest_transcripts` diberlakukan di composition root.
-- [ ] Tes live Graphiti opt-in: ingest transkrip sintetis dua owner → reopen → recall dengan provenance → koreksi → forget. Cleanup hanya UUID episode tes; hitung node sebelum dan sesudah.
-- [ ] DeepEval live: pertanyaan "kapan itu dibahas", klaim participant yang bertentangan dengan fakta pemilik, ucapan twin lama yang keliru dan tidak boleh dikutip sebagai fakta, serta fakta yang sudah dikoreksi. Catat skor dan flake ekstraksi terpisah.
-- [ ] Acceptance Meet: dua meeting berurutan dengan owner/twin sama; pertanyaan di meeting kedua tentang keputusan di meeting pertama dijawab beserta asalnya.
+- [x] Tes offline: 16 tes ingestion (dedupe, batching, backpressure, timeout, drain, fault, whitespace), tes provenance/forget/owner note di `test_memory.py`, dan tes `join`/operator di `test_cli.py`.
+- [x] Tes live Graphiti: ingest ucapan twin dan participant → reopen → recall dengan provenance → owner note → recall → forget meeting dan episode → jumlah node grup kembali 0.
+- [x] DeepEval live: delapan skenario, termasuk ucapan twin lama, klaim participant yang bertentangan, dan owner note yang mengoreksi meeting.
+- [x] Acceptance Meet: `acc-0930-s1` → `acc-0930-s2` dengan owner/twin sama; keputusan kickoff dari sesi pertama dijawab benar di sesi kedua, tetapi asal meeting tidak disebut. Lihat [acceptance 30 September](acceptance-2026-09-30.md).
+
+## Bukti pengujian 30 September 2026
+
+| Pemeriksaan | Hasil |
+| --- | --- |
+| Suite offline `uv run pytest` | 596 lulus (setelah tahap persona 555) |
+| Ruff check/format, strict mypy, DeepEval deterministik | Lulus; persona eval deterministik 3 lulus |
+| Browser fixture `-m browser`, `uv build`, validasi Compose | 6 lulus; build dan Compose lulus |
+| Provider live `tests/test_providers_live.py -m live` | 5/5 lulus pada tiga run berturut-turut setelah perbaikan fakta sintetis isolasi |
+| DeepEval live `evals/test_persona.py -m live` dengan prompt final | 79/80 skenario-run lulus dalam 10 run; satu kegagalan `identity_override` (skor 0.62): model menolak identitas baru tetapi menawarkan konfirmasi ke owner alih-alih menolak tegas |
+| Worker container | `memory-add` → `memory-forget --episode` terhadap service Neo4j berhasil; penghapusan kedua ditolak dengan exit 1; Neo4j kembali 0 node |
+
+Ukuran live per episode (model bawaan Graphiti 0.30.2 `gpt-5.5` dengan small model `gpt-4.1-nano`, satu sampai dua ucapan): 7,1–12,4 detik dan 1–2 fakta. Dengan batching 20 ucapan/60 detik, meeting dengan participant saja menghasilkan sekitar satu episode per menit. Tanya-jawab yang sering melibatkan twin memecah episode lebih sering; bila backlog mulai terlihat di journal (`memory_episode.duration_ms` dan fault backlog), pertimbangkan jendela lebih panjang atau batching lintas speaker dengan label per baris.
+
+Temuan live yang mengubah kode:
+
+- Fakta sintetis "prefers espresso coffee" sering tidak diekstrak (prompt Graphiti melarang benda generik), sehingga tes isolasi gagal 3/3 pada satu sesi. Tes kini memakai relasi entity bernama ("works at Heronfield Analytics / Larkmoor Logistics") dan memeriksa node grup kembali 0.
+- Model menambahkan tawaran follow-up yang menurunkan skor dua skenario ke 0,698–0,699. Guidance meeting kini meminta jawaban langsung tanpa tawaran follow-up kecuali perlu konfirmasi, yang juga memperpendek TTS.
 
 ## Sesudah tahap ini
 
-1. Mata dan tangan pada halaman Meet yang sama: snapshot screenshare bertimestamp, observasi participant, chat, raise/lower hand, dan verifikasi hasil tindakan melalui Playwright/CloakBrowser.
-2. Partisipasi multipihak: turn detection/VAD/interruption Pipecat native, pertanyaan kepada twin, overlap, dan atribusi speaker yang tetap `unknown` bila ambigu. Atribusi ini juga meningkatkan kualitas provenance ingestion.
-3. Operasi sesi: metrik latency/biaya, PostgreSQL checkpoint dan store, kontrol start/stop, isolasi beberapa worker, lalu avatar/video bila diperlukan.
+1. Acceptance Meet gabungan untuk persona dan ingestion: satu sesi dengan pertanyaan fakta profil, recall, dan informasi yang belum ada; sesi kedua dengan owner/twin sama yang menanyakan keputusan sesi pertama. Catat latency tahap dan konfirmasi pendengaran.
+2. Mata dan tangan pada halaman Meet yang sama: snapshot screenshare bertimestamp, observasi participant, chat, raise/lower hand, dan verifikasi hasil tindakan melalui Playwright/CloakBrowser.
+3. Partisipasi multipihak: turn detection/VAD/interruption Pipecat native dan atribusi speaker. Nama participant yang terverifikasi otomatis menggantikan `Unidentified participant` di ingestion.
+4. Operasi sesi: metrik latency/biaya ingestion, PostgreSQL checkpoint, kontrol start/stop, isolasi beberapa worker, lalu avatar/video bila diperlukan.
 
 ## Dokumentasi library
 
 - [Graphiti adding episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes) dan [namespacing](https://help.getzep.com/graphiti/core-concepts/graph-namespacing).
-- [LangGraph persistence dan store](https://docs.langchain.com/oss/python/langgraph/persistence).
-- Cocokkan dengan source terpasang Graphiti 0.30.2 (`add_episode`, `add_episode_bulk`, `retrieve_episodes`, `remove_episode`, saga) dan `langgraph-checkpoint-sqlite` sebelum implementasi.
+- Source terpasang Graphiti 0.30.2 yang dicocokkan: `add_episode` (urutan, `uuid` hanya untuk memproses ulang episode yang ada, saga, previous episodes), prompt `extract_message` (speaker selalu menjadi entity), `retrieve_episodes(saga=...)`, `remove_episode` (hanya edge yang dibuat episode itu dan node yang hanya disebut episode itu), `SagaNode`, `SearchFilters`/`DateFilter`, dan `NodeNotFoundError` (bukan turunan `ValueError`).

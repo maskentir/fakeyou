@@ -47,7 +47,7 @@ docker compose --profile audio run --rm --no-deps meeting-worker \
   --audio --converse --twin-name "Fakeyou AI"
 ```
 
-`--audio` alone retains transcription and optional `--speak` testing. `--converse` enables replies to final transcripts. `--memory` requires `--converse` and exposes existing Graphiti recall/write tools; it does not automatically ingest the transcript. That memory group is still explicitly configured for local use, not automatically scoped to an owner profile.
+`--audio` alone retains transcription and optional `--speak` testing. `--converse` enables replies to final transcripts. `--memory` requires `--converse` and `--persona`; recall and transcript ingestion are scoped to the persona's owner/twin namespace. See [persona and memory](persona-memory-plan.md) and [memory ingestion](memory-ingestion-plan.md).
 
 No chat/raise-hand/vision tool is attached to this meeting agent yet. MCP's separate browser command does not become a tool on the worker's Meet page automatically.
 

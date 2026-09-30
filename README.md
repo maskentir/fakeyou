@@ -72,7 +72,7 @@ uv run --env-file .env fakeyou memory-init
 uv run --env-file .env fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --thread memory-demo --memory
 ```
 
-`FAKEYOU_MEMORY_GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`; ingestion transcript final dengan ID sumber, waktu kejadian, deduplikasi, dan koreksi belum tersedia.
+`FAKEYOU_MEMORY_GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`. Ingestion transkrip meeting, catatan pemilik, dan penghapusan manual dijelaskan di bagian persona.
 
 Neo4j memakai named volume dan port loopback. Password contoh hanya untuk lokal. Mengubah `.env` tidak mereset password volume yang sudah terisi. `docker compose stop` mematikan layanan tanpa menghapus data.
 
@@ -92,20 +92,33 @@ Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` 
 
 ```sh
 docker compose up -d --wait neo4j
-docker compose run --rm meeting-worker join https://meet.google.com/xxx-yyyy-zzz \
+docker compose run --rm meeting-worker fakeyou join https://meet.google.com/xxx-yyyy-zzz \
   --owner-id demo_owner --twin-id demo_twin \
   --audio --converse --persona examples/persona.example.json --memory
 ```
 
 Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service Compose `bolt://neo4j:7687`; override dengan `FAKEYOU_WORKER_NEO4J_URI` bila perlu. Simpan profil pribadi di `.runtime/audio/persona.json` (diabaikan Git) lalu pakai `--persona .runtime/persona.json` di dalam worker.
 
-`--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
+`--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context` atau `ingest_transcripts`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
 
-Profil adalah konfigurasi operator dengan schema ketat: `owner_id`, `twin_id`, `display_name`, `role`, `language` (`id` atau `en`), `speaking_style`, `goals`, `verified_facts`, dan `allowed_tools`. Field asing, teks kosong, lebih dari 20 item, teks di atas 500 karakter, atau tool selain `recall_meeting_context` ditolak. [Contoh sintetis](examples/persona.example.json) dapat langsung dicoba; jangan menyimpan profil pribadi di repository.
+Profil adalah konfigurasi operator dengan schema ketat: `owner_id`, `twin_id`, `display_name`, `role`, `language` (`id` atau `en`), `speaking_style`, `goals`, `verified_facts`, `allowed_tools`, dan `ingest_transcripts`. Field asing, teks kosong, lebih dari 20 item, teks di atas 500 karakter, atau tool selain `recall_meeting_context` ditolak. [Contoh sintetis](examples/persona.example.json) dapat langsung dicoba; jangan menyimpan profil pribadi di repository.
 
-Ruang memori adalah `twin_` + UUID5 dari `[owner_id, twin_id]`: stabil lintas meeting dan tidak berubah saat nama diganti. Checkpoint percakapan tetap per owner/twin/meeting. Agent meeting hanya mendapat tool recall; penulisan memori belum tersedia di `join`. Koneksi Neo4j diverifikasi sebelum browser dibuka; kegagalannya berakhir sebagai `infra_failure` dengan exit code 3. Recall yang gagal saat meeting dikembalikan ke model sebagai informasi yang belum diketahui, dicatat sebagai fault `memory`, dan tidak menghentikan capture. Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md).
+Ruang memori adalah `twin_` + UUID5 dari `[owner_id, twin_id]`: stabil lintas meeting dan tidak berubah saat nama diganti. Checkpoint percakapan tetap per owner/twin/meeting. Koneksi Neo4j diverifikasi sebelum model dan browser dibuka; kegagalannya berakhir sebagai `infra_failure` dengan exit code 3. Recall hanya mengembalikan fakta yang masih berlaku, masing-masing dengan sumber dan waktu UTC. Recall yang gagal atau melewati 15 detik dikembalikan ke model sebagai informasi yang belum diketahui, dicatat sebagai fault `memory`, dan tidak menghentikan capture.
 
-Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya memverifikasi jawaban model di meeting live, membangun persona dan memori pemilik, lalu menambahkan speaker/video/participant events, turn-taking, chat, serta raise hand.
+Dengan `ingest_transcripts: true`, transkrip final participant dan ucapan twin yang selesai diputar disimpan ke ruang memori yang sama sebagai episode Graphiti, dikelompokkan per meeting dalam saga `meeting:<meeting_id>`. Model tidak memiliki tool tulis; ingestion diatur oleh profil. Tidak ada persetujuan peserta di aplikasi dan tidak ada retensi otomatis; kepatuhan aturan rekaman menjadi tanggung jawab operator. Catatan pemilik dan penghapusan manual:
+
+```sh
+docker compose run --rm meeting-worker fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_UUID \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+```
+
+Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md) dan [ingestion memori](docs/memory-ingestion-plan.md).
+
+Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 
 ## Verifikasi
 
@@ -141,4 +154,6 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/li
 - [Rencana fondasi](docs/implementation-plan.md)
 - [Rencana runtime sesi dan guest Meet](docs/meeting-runtime-plan.md)
 - [Persona pemilik dan retrieval memori](docs/persona-memory-plan.md)
-- [Rencana berikutnya: ingestion memori dengan provenance](docs/memory-ingestion-plan.md)
+- [Ingestion memori dengan provenance](docs/memory-ingestion-plan.md)
+- [Acceptance Meet 30 September dan rencana perbaikan](docs/acceptance-2026-09-30.md)
+- [Rencana jangka panjang memori, suara, dan bukti kualitas](docs/long-term-plan.md)
