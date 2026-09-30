@@ -24,6 +24,7 @@ from fakeyou.audio import (
     open_meeting_audio,
 )
 from fakeyou.browser import open_direct_page
+from fakeyou.cli import tts_api_key
 from fakeyou.playback import (
     PlaybackEngine,
     create_pactl_muter,
@@ -177,7 +178,7 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
     async with _audio_page() as page:
         async with open_meeting_audio(
             muse_api_key="unused",
-            openai_api_key="unused",
+            tts_api_key="unused",
             on_transcript=on_transcript,
             stt=stt,
             playback=_container_playback(streaming=streaming),
@@ -212,7 +213,7 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
     sys.platform != "linux" or os.getenv("PULSE_SOURCE") != MEETING_MONITOR_SOURCE_NAME,
     reason="requires the Linux audio worker and isolated PulseAudio source",
 )
-async def test_browser_audio_reaches_muse_and_openai_speech_reaches_browser() -> None:
+async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> None:
     audio_name = os.getenv("FAKEYOU_MUSE_TEST_AUDIO")
     expected = os.getenv("FAKEYOU_MUSE_EXPECTED_TEXT")
     if not audio_name or not expected:
@@ -220,7 +221,7 @@ async def test_browser_audio_reaches_muse_and_openai_speech_reaches_browser() ->
     settings = Settings()
     try:
         muse_key = require_secret(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
-        openai_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+        speech_key = tts_api_key(settings)
     except ValueError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)
@@ -239,7 +240,9 @@ async def test_browser_audio_reaches_muse_and_openai_speech_reaches_browser() ->
     async with _audio_page() as page:
         async with open_meeting_audio(
             muse_api_key=muse_key,
-            openai_api_key=openai_key,
+            tts_api_key=speech_key,
+            tts_provider=settings.tts_provider,
+            tts_voice=settings.tts_voice,
             on_transcript=on_transcript,
         ) as session:
             await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)

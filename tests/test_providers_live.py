@@ -10,13 +10,17 @@ from uuid import uuid4
 import pytest
 from graphiti_core.nodes import EpisodeType
 from langchain.agents.middleware import ModelFallbackMiddleware
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.cli import create_chat_model, create_fallback_chat_model, memory_config
+from fakeyou.cli import (
+    create_chat_model,
+    create_fallback_chat_model,
+    memory_config,
+    tts_api_key,
+)
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import ingest_meeting
@@ -32,7 +36,7 @@ from fakeyou.memory import (
 from fakeyou.persona import PersonaProfile
 from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
 from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import OpenAISpeechSynthesizer
+from fakeyou.voice import create_speech_synthesizer
 
 LIVE_INGESTION_MEETING = (
     Path(__file__).resolve().parent / "fixtures" / "live-ingestion-meeting.json"
@@ -53,16 +57,18 @@ def _fail_provider(error: Exception, provider: str) -> None:
 
 
 @pytest.mark.live
-async def test_native_agent_returns_openai_response_and_executes_tool() -> None:
+async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
     settings = Settings()
-    api_key = _secret_or_skip(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+    try:
+        model = create_chat_model(settings)
+    except ValueError as error:
+        pytest.skip(str(error))
 
     @tool(description="Return the synthetic agenda marker for a meeting test.")
     def read_agenda_marker() -> str:
         return "agenda-marker-731"
 
     try:
-        model = init_chat_model(settings.chat_model, api_key=api_key, timeout=30, max_retries=0)
         agent = create_meeting_agent(model, tools=[read_agenda_marker])
         async with asyncio.timeout(90):
             result = await agent.ainvoke(
@@ -80,7 +86,7 @@ async def test_native_agent_returns_openai_response_and_executes_tool() -> None:
                 config={"recursion_limit": 8},
             )
     except Exception as error:
-        _fail_provider(error, "OpenAI agent")
+        _fail_provider(error, f"{settings.chat_model} agent")
 
     messages = result["messages"]
     assert any(
@@ -92,21 +98,30 @@ async def test_native_agent_returns_openai_response_and_executes_tool() -> None:
 
 
 @pytest.mark.live
-async def test_native_openai_tts_synthesizes_pcm_audio() -> None:
+async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
     settings = Settings()
-    api_key = _secret_or_skip(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
-    synthesizer = OpenAISpeechSynthesizer(api_key=api_key)
+    try:
+        api_key = tts_api_key(settings)
+    except ValueError as error:
+        pytest.skip(str(error))
+    synthesizer = create_speech_synthesizer(
+        settings.tts_provider, api_key=api_key, voice=settings.tts_voice
+    )
     try:
         try:
             async with asyncio.timeout(60):
                 audio = await synthesizer.synthesize("Hello from the test meeting.")
+                streamed = b"".join(
+                    [chunk async for chunk in synthesizer.stream("Hello from the test meeting.")]
+                )
         except Exception as error:
-            _fail_provider(error, "OpenAI TTS")
+            _fail_provider(error, f"{settings.tts_provider} TTS")
     finally:
         await synthesizer.aclose()
 
-    assert len(audio) > 0
-    assert len(audio) % 2 == 0
+    for pcm in (audio, streamed):
+        assert len(pcm) > 0
+        assert len(pcm) % 2 == 0
 
 
 def _neo4j_config_or_skip() -> Neo4jMemoryConfig:

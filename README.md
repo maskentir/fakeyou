@@ -76,6 +76,18 @@ uv run --env-file .env fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --
 
 Neo4j memakai named volume dan port loopback. Password contoh hanya untuk lokal. Mengubah `.env` tidak mereset password volume yang sudah terisi. `docker compose stop` mematikan layanan tanpa menghapus data.
 
+Model Graphiti dipilih per peran. Default memakai OpenAI (`FAKEYOU_MEMORY_LLM_MODEL`, `FAKEYOU_MEMORY_SMALL_MODEL`, `FAKEYOU_MEMORY_EMBEDDING_MODEL`). Ekstraksi dapat memakai endpoint kompatibel OpenAI lewat `FAKEYOU_MEMORY_LLM_BASE_URL` dan `FAKEYOU_MEMORY_LLM_API_KEY` (`OpenAIGenericClient` dengan `json_schema`), misalnya Muse Spark 1.2. Embedding dapat berjalan lokal dengan model open-source lewat service `embeddings` (Text Embeddings Inference, `ibm-granite/granite-embedding-97m-multilingual-r2` dengan revisi dipin):
+
+```sh
+docker compose --profile embeddings up -d --wait embeddings
+uv run --env-file .env fakeyou memory-reembed --persona examples/persona.example.json \
+  --owner-id demo_owner --twin-id demo_twin
+docker compose run --rm meeting-worker fakeyou memory-reembed \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+```
+
+Setel `FAKEYOU_MEMORY_EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY_EMBEDDING_API_KEY=local`, dan `FAKEYOU_MEMORY_EMBEDDING_DIM=384`. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
+
 ```sh
 docker compose --profile production up -d --wait postgres
 ```
@@ -139,7 +151,7 @@ Model dipilih per peran lewat `Settings`, bukan dari default library. `fakeyou c
 
 Setiap panggilan model jawaban dibatasi 20 detik agar dua panggilan plus recall muat dalam deadline percakapan 60 detik. Bila cadangan diatur, model utama tidak di-retry; `ModelFallbackMiddleware` LangChain langsung memindahkan panggilan ke model cadangan (terukur 7,5 detik untuk jawaban dengan tool call saat provider utama mati, memakai Muse Spark 1.2 `reasoning_effort=minimal`). Host cadangan tidak ikut preflight agar cadangan yang mati tidak memblokir meeting.
 
-Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misalnya Muse Spark di `https://api.meta.ai/v1` dengan `FAKEYOU_CHAT_MODEL=openai:muse-spark-1.3`. Host preflight mengikuti endpoint itu. Perbandingan latency dan perilaku antarmodel ada di [rencana jangka panjang](docs/long-term-plan.md#4a-model-per-peran-lewat-langchain); mengganti model lisan harus lolos eval yang sama.
+Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misalnya Muse Spark di `https://api.meta.ai/v1` dengan `FAKEYOU_CHAT_MODEL=openai:muse-spark-1.3`. Provider lain yang punya integrasi LangChain terpasang dipakai lewat prefix model, misalnya `FAKEYOU_CHAT_MODEL=anthropic:claude-haiku-4-5-20251001` dengan `FAKEYOU_CHAT_API_KEY` berisi key Anthropic; preflight ikut memeriksa `api.anthropic.com`. Field request khusus provider dikirim lewat `FAKEYOU_CHAT_EXTRA_BODY` (JSON), misalnya `{"reasoning_split": true}` untuk MiniMax agar penalaran tidak ikut diucapkan. TTS dipilih dengan `FAKEYOU_TTS_PROVIDER` (`openai` atau `minimax`), `FAKEYOU_TTS_API_KEY`, dan `FAKEYOU_TTS_VOICE`; MiniMax memakai `speech-2.8-turbo` dengan voice default `Indonesian_CalmWoman`. Host preflight mengikuti endpoint itu. Perbandingan latency dan perilaku antarmodel ada di [rencana jangka panjang](docs/long-term-plan.md#4a-model-per-peran-lewat-langchain); mengganti model lisan harus lolos eval yang sama.
 
 Setiap `join` menulis dua berkas:
 

@@ -8,14 +8,18 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
 from fakeyou.voice import (
+    MINIMAX_TTS_MODEL,
+    MINIMAX_TTS_VOICE,
     TTS_HTTP_TIMEOUT,
     TTS_MODEL,
     TTS_REQUEST_TIMEOUT_SECONDS,
     TTS_VOICE,
     TTS_VOICE_INSTRUCTIONS,
+    MiniMaxSpeechSynthesizer,
     MuseMode,
     OpenAISpeechSynthesizer,
     create_muse_stt,
+    create_speech_synthesizer,
     create_tts_http_client,
 )
 
@@ -317,3 +321,143 @@ async def test_synthesizer_stream_failure_raises_typed_fault() -> None:
     failed = json.loads(lines[1])
     assert failed["event"] == "synth_failed"
     assert failed["request_id"] == json.loads(lines[0])["request_id"]
+
+
+def _minimax_client(handler) -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+
+
+def _sse(*events: dict) -> bytes:
+    import json
+
+    return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+async def test_minimax_synthesizer_sends_indonesian_pcm_request() -> None:
+    import json
+
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(
+            200, json={"data": {"audio": "0001ff7f", "status": 2}, "base_resp": {"status_code": 0}}
+        )
+
+    synthesizer = MiniMaxSpeechSynthesizer(api_key="minimax-key", client=_minimax_client(handler))
+
+    audio = await synthesizer.synthesize("Hello.")
+
+    assert audio == bytes.fromhex("0001ff7f")
+    [request] = requests
+    assert request.headers["authorization"] == "Bearer minimax-key"
+    assert json.loads(request.content) == {
+        "model": MINIMAX_TTS_MODEL,
+        "text": "Hello.",
+        "stream": False,
+        "language_boost": "Indonesian",
+        "voice_setting": {"voice_id": MINIMAX_TTS_VOICE},
+        "audio_setting": {"sample_rate": 24000, "format": "pcm", "channel": 1},
+    }
+
+
+async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event() -> None:
+    import json
+
+    from fakeyou.journal import ProviderJournal
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            content=_sse(
+                {"data": {"audio": "0001", "status": 1}, "base_resp": {"status_code": 0}},
+                {"data": {"audio": "0203", "status": 1}, "base_resp": {"status_code": 0}},
+                {
+                    "data": {"audio": "00010203", "status": 2},
+                    "extra_info": {"audio_length": 1},
+                    "base_resp": {"status_code": 0},
+                },
+            ),
+        )
+
+    lines: list[str] = []
+    synthesizer = MiniMaxSpeechSynthesizer(
+        api_key="k",
+        client=_minimax_client(handler),
+        journal=ProviderJournal("meeting-1", emit=lines.append),
+    )
+
+    chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+
+    assert chunks == [b"\x00\x01", b"\x02\x03"]
+    assert bodies[0]["stream"] is True
+    assert bodies[0]["stream_options"] == {"exclude_aggregated_audio": True}
+    finished = json.loads(lines[-1])
+    assert (finished["event"], finished["bytes_out"], finished["streaming"]) == (
+        "synth_finished",
+        4,
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "kind"),
+    [(1002, "rate_limited"), (1004, "unauthorized"), (1008, "payment_required"), (9999, "unknown")],
+)
+async def test_minimax_error_status_raises_typed_provider_fault(status_code, kind) -> None:
+    from fakeyou.provider_faults import ProviderFault
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, content=_sse({"base_resp": {"status_code": status_code, "status_msg": "error"}})
+        )
+
+    synthesizer = MiniMaxSpeechSynthesizer(api_key="k", client=_minimax_client(handler))
+
+    with pytest.raises(ProviderFault) as caught:
+        [chunk async for chunk in synthesizer.stream("Hello.")]
+
+    assert (caught.value.source, caught.value.kind, caught.value.status) == (
+        "tts",
+        kind,
+        status_code,
+    )
+
+
+async def test_minimax_http_error_raises_typed_provider_fault() -> None:
+    from fakeyou.provider_faults import ProviderFault
+
+    synthesizer = MiniMaxSpeechSynthesizer(
+        api_key="k", client=_minimax_client(lambda request: httpx2.Response(503))
+    )
+
+    with pytest.raises(ProviderFault) as caught:
+        await synthesizer.synthesize("Hello.")
+
+    assert (caught.value.kind, caught.value.retryable) == ("unavailable", True)
+
+
+async def test_minimax_synthesizer_closes_only_its_own_client() -> None:
+    owned = MiniMaxSpeechSynthesizer(api_key="k")
+    shared = _minimax_client(lambda request: httpx2.Response(200))
+    borrowed = MiniMaxSpeechSynthesizer(api_key="k", client=shared)
+
+    await owned.aclose()
+    await borrowed.aclose()
+
+    assert owned._client.is_closed
+    assert not shared.is_closed
+    await shared.aclose()
+
+
+def test_create_speech_synthesizer_picks_provider_defaults() -> None:
+    minimax = create_speech_synthesizer("minimax", api_key="k")
+    openai = create_speech_synthesizer("openai", api_key="k", voice="nova")
+
+    assert isinstance(minimax, MiniMaxSpeechSynthesizer)
+    assert (minimax._model, minimax._voice) == (MINIMAX_TTS_MODEL, MINIMAX_TTS_VOICE)
+    assert isinstance(openai, OpenAISpeechSynthesizer)
+    assert (openai._model, openai._voice) == (TTS_MODEL, "nova")

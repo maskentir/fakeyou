@@ -74,6 +74,21 @@ Semua model memanggil recall untuk pertanyaan demo. Muse lebih patuh gaya dan le
 - Setiap peran menyatakan model, provider/`base_url`, dan parameter provider seperti `reasoning_effort`. Host preflight diturunkan dari konfigurasi itu.
 - Mengganti model wajib melewati eval replay dan anggaran latency yang sama.
 
+#### Konfigurasi sementara tanpa OpenAI (30 September 2026)
+
+Kredit API OpenAI habis. Semua peran dipindah lewat `.env`; default kode tetap OpenAI.
+
+| Peran | Sementara | Bukti |
+| --- | --- | --- |
+| Jawaban lisan | `MiniMax-M3` di `https://api.minimax.io/v1`, `FAKEYOU_CHAT_EXTRA_BODY={"reasoning_split": true}` agar penalaran tidak masuk ke teks yang diucapkan | Eval replay 24 giliran: p50 1,14 s, p95 4,39 s (anggaran 4 s), `recall_called` 0,833 (wajib 0,9), pertanyaan penutup 12,5%. Belum lulus; `MiniMax-M2.7-highspeed` dan `M2.5-highspeed` lebih lambat (p95 6,4 s dan 8,0 s) dan `must_mention_any` 0,75 |
+| TTS | MiniMax `speech-2.8-turbo`, voice `Indonesian_CalmWoman`, PCM 24 kHz | Chunk pertama 0,67–1,55 s. Audio diputar ke Muse STT kembali menjadi kalimat yang sama kecuali "vendor" → "fender" (tanpa keyword) |
+| Embedding Graphiti | `ibm-granite/granite-embedding-97m-multilingual-r2` (Apache-2.0, 384 dimensi) lewat Text Embeddings Inference lokal (service `embeddings`, revisi dipin) | 28 fakta nyata dan 10 pertanyaan dari transkrip STT (termasuk salah dengar "or kilt", "old shield") dan versi Inggrisnya: hit@1 9/10, hit@3 10/10, MRR 0,95, 8 ms per query di CPU. Satu-satunya meleset berada di peringkat 2 di bawah fakta pertanyaan lama yang menyalin teks query |
+| Ekstraksi Graphiti | `muse-spark-1.2` lewat `OpenAIGenericClient` (`json_schema`) | Replay `acc2-0930-s1` ke namespace probe: 2/2 jendela, 9 fakta, semua menyebut speaker, isi berbahasa Indonesia, tanpa fakta pertanyaan, tanpa fakta tidak berlaku; sekitar 70 s per jendela (gpt-5.5: 17–22 s). `muse-spark-1.3` default memakan 23,5 s per panggilan sehingga jendela melewati batas 120 s |
+
+MiniMax tidak dipakai untuk Graphiti: key Coding Plan selalu `rate limit exceeded` untuk embeddings, dan penalaran MiniMax muncul sebagai `<think>` di konten JSON karena client Graphiti tidak mengirim `reasoning_split`. Meta Model API tidak menyediakan model embedding.
+
+Mengganti model embedding membuat vektor lama tidak sebanding. `fakeyou memory-reembed` menghitung ulang embedding entity dan fakta satu persona dengan model yang dikonfigurasi tanpa menghapus episode maupun owner note; grup `acc2` dan `demo` sudah dimigrasi.
+
 ### 5. Laporan sesi standar (pola F)
 
 - Semua event runtime, termasuk playback dan hasil tool, masuk journal dengan `at`, sehingga tidak ada event tanpa waktu di stdout.

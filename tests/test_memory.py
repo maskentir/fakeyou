@@ -87,6 +87,41 @@ def test_graphiti_memory_uses_explicit_models() -> None:
     assert memory.llm_client.config.model == "memory-model"
     assert memory.llm_client.config.small_model == "memory-small"
     assert memory.embedder.config.embedding_model == "memory-embedding"
+    assert memory.embedder.config.embedding_dim == 1024
+
+
+def test_graphiti_memory_embeds_through_a_separate_endpoint() -> None:
+    from dataclasses import replace
+
+    memory = memory_module.create_graphiti_memory(
+        replace(
+            _config(),
+            embedding_base_url="http://embeddings:11434/v1",
+            embedding_api_key="local",
+            embedding_dim=768,
+        )
+    )
+
+    assert str(memory.embedder.client.base_url) == "http://embeddings:11434/v1/"
+    assert memory.embedder.client.api_key == "local"
+    assert memory.embedder.config.embedding_dim == 768
+    assert memory.llm_client.client.api_key == "k"
+
+
+def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> None:
+    from dataclasses import replace
+
+    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+
+    memory = memory_module.create_graphiti_memory(
+        replace(_config(), llm_base_url="https://api.meta.ai/v1", llm_api_key="meta-key")
+    )
+
+    assert isinstance(memory.llm_client, OpenAIGenericClient)
+    assert memory.llm_client.structured_output_mode == "json_schema"
+    assert str(memory.llm_client.client.base_url) == "https://api.meta.ai/v1/"
+    assert memory.llm_client.client.api_key == "meta-key"
+    assert memory.embedder.client.api_key == "k"
 
 
 async def test_open_graphiti_memory_is_lightweight(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,3 +389,60 @@ async def test_recall_times_out_below_the_agent_deadline(monkeypatch: pytest.Mon
     with pytest.raises(TimeoutError):
         await recall.ainvoke({"query": "agenda"})
     assert memory_module.RECALL_TIMEOUT_SECONDS < 60
+
+
+async def test_reembed_group_pages_through_entities_and_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved: list[tuple[str, list[float]]] = []
+
+    class Item(SimpleNamespace):
+        async def save(self, driver):
+            saved.append((self.uuid, getattr(self, "name_embedding", None) or self.fact_embedding))
+
+    nodes = [Item(uuid=f"n{i}", name=f"entity {i}", name_embedding=None) for i in (3, 2, 1)]
+    edges = [Item(uuid=f"e{i}", fact=f"fact {i}", fact_embedding=None) for i in (2, 1)]
+    pages: list[tuple[str, str | None]] = []
+
+    def pager(kind, items, empty_error=None):
+        async def get_by_group_ids(driver, group_ids, limit=None, uuid_cursor=None):
+            pages.append((kind, uuid_cursor))
+            assert group_ids == ["twin_group"]
+            remaining = [item for item in items if uuid_cursor is None or item.uuid < uuid_cursor]
+            if not remaining and empty_error is not None:
+                raise empty_error(group_ids)
+            return remaining[:2]
+
+        return get_by_group_ids
+
+    monkeypatch.setattr(memory_module, "REEMBED_BATCH_SIZE", 2)
+    monkeypatch.setattr(memory_module.EntityNode, "get_by_group_ids", pager("node", nodes))
+    monkeypatch.setattr(
+        memory_module.EntityEdge,
+        "get_by_group_ids",
+        pager("edge", edges, memory_module.GroupsEdgesNotFoundError),
+    )
+
+    class Embedder:
+        async def create_batch(self, texts):
+            return [[float(len(text)), 1.0] for text in texts]
+
+    memory = SimpleNamespace(driver="driver", embedder=Embedder())
+
+    result = await memory_module.reembed_group(memory, group_id="twin_group")
+
+    assert (result.entities, result.facts) == (3, 2)
+    assert pages == [
+        ("node", None),
+        ("node", "n2"),
+        ("node", "n1"),
+        ("edge", None),
+        ("edge", "e1"),
+    ]
+    assert saved == [
+        ("n3", [8.0, 1.0]),
+        ("n2", [8.0, 1.0]),
+        ("n1", [8.0, 1.0]),
+        ("e2", [6.0, 1.0]),
+        ("e1", [6.0, 1.0]),
+    ]

@@ -54,6 +54,7 @@ from fakeyou.memory import (
     forget_meeting,
     open_graphiti_memory,
     recall_error_middleware,
+    reembed_group,
     remember_owner_note,
     verify_memory_connection,
 )
@@ -66,7 +67,7 @@ from fakeyou.report import build_session_report, read_journal
 from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.session import SessionId
 from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import TTS_MODEL, TTS_VOICE
+from fakeyou.voice import MINIMAX_TTS_URL, TTS_DEFAULTS
 
 
 class CliError(ValueError):
@@ -74,6 +75,7 @@ class CliError(ValueError):
 
 
 OPENAI_API_URL = "https://api.openai.com"
+PROVIDER_API_URLS = {"openai": OPENAI_API_URL, "anthropic": "https://api.anthropic.com"}
 CHAT_TIMEOUT_SECONDS = 20
 CHAT_MAX_RETRIES = 2
 
@@ -81,12 +83,26 @@ CHAT_MAX_RETRIES = 2
 def chat_endpoint(settings: Settings) -> str:
     if settings.chat_base_url:
         return settings.chat_base_url
-    return OPENAI_API_URL if settings.chat_model.startswith("openai:") else ""
+    provider, _, _ = settings.chat_model.partition(":")
+    return PROVIDER_API_URLS.get(provider, "")
+
+
+def tts_endpoint(settings: Settings) -> str:
+    return MINIMAX_TTS_URL if settings.tts_provider == "minimax" else OPENAI_API_URL
+
+
+def tts_api_key(settings: Settings) -> str:
+    if settings.tts_provider == "minimax":
+        return require_secret(settings.tts_api_key, "FAKEYOU_TTS_API_KEY")
+    return require_secret(
+        settings.tts_api_key or settings.openai_api_key,
+        "FAKEYOU_TTS_API_KEY or FAKEYOU_OPENAI_API_KEY",
+    )
 
 
 def preflight_hosts(settings: Settings) -> tuple[str, ...]:
     return provider_probe_hosts(
-        tts_base_url=OPENAI_API_URL,
+        tts_base_url=tts_endpoint(settings),
         stt_ws_url=META_STT_WS_URL,
         agent_base_url=chat_endpoint(settings),
     )
@@ -99,6 +115,7 @@ def _init_chat_model(
     key_names: str,
     base_url: str | None,
     reasoning_effort: str | None,
+    extra_body: dict[str, Any] | None,
     max_retries: int,
 ) -> BaseChatModel:
     options: dict[str, Any] = {"timeout": CHAT_TIMEOUT_SECONDS, "max_retries": max_retries}
@@ -106,6 +123,8 @@ def _init_chat_model(
         options["base_url"] = base_url
     if reasoning_effort:
         options["reasoning_effort"] = reasoning_effort
+    if extra_body:
+        options["extra_body"] = extra_body
     model: BaseChatModel = init_chat_model(
         model_name, api_key=require_secret(api_key, key_names), **options
     )
@@ -119,6 +138,7 @@ def create_chat_model(settings: Settings) -> BaseChatModel:
         key_names="FAKEYOU_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
         base_url=settings.chat_base_url,
         reasoning_effort=settings.chat_reasoning_effort,
+        extra_body=settings.chat_extra_body,
         max_retries=0 if settings.fallback_chat_model else CHAT_MAX_RETRIES,
     )
 
@@ -132,6 +152,7 @@ def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
         key_names="FAKEYOU_FALLBACK_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
         base_url=settings.fallback_chat_base_url,
         reasoning_effort=settings.fallback_chat_reasoning_effort,
+        extra_body=settings.fallback_chat_extra_body,
         max_retries=CHAT_MAX_RETRIES,
     )
 
@@ -173,25 +194,34 @@ def check_setup(settings: Settings) -> None:
                         "model": settings.chat_model,
                         "base_url": settings.chat_base_url,
                         "reasoning_effort": settings.chat_reasoning_effort,
+                        "extra_body": settings.chat_extra_body,
                     },
                     "fallback": {
                         "model": settings.fallback_chat_model,
                         "base_url": settings.fallback_chat_base_url,
                         "reasoning_effort": settings.fallback_chat_reasoning_effort,
+                        "extra_body": settings.fallback_chat_extra_body,
                     }
                     if settings.fallback_chat_model
                     else None,
                     "memory": {
                         "llm": settings.memory_llm_model,
+                        "llm_base_url": settings.memory_llm_base_url,
                         "small": settings.memory_small_model,
                         "embedding": settings.memory_embedding_model,
+                        "embedding_base_url": settings.memory_embedding_base_url,
+                        "embedding_dim": settings.memory_embedding_dim,
                     },
                     "stt": {
                         "model": settings.stt_model,
                         "mode": "ENDPOINTING",
                         "sample_rate": CAPTURE_SAMPLE_RATE,
                     },
-                    "tts": {"model": TTS_MODEL, "voice": TTS_VOICE},
+                    "tts": {
+                        "provider": settings.tts_provider,
+                        "model": TTS_DEFAULTS[settings.tts_provider][0],
+                        "voice": settings.tts_voice or TTS_DEFAULTS[settings.tts_provider][1],
+                    },
                 },
                 "live_services_verified": False,
             },
@@ -217,6 +247,15 @@ def memory_config(settings: Settings) -> Neo4jMemoryConfig:
         llm_model=settings.memory_llm_model,
         small_model=settings.memory_small_model,
         embedding_model=settings.memory_embedding_model,
+        embedding_base_url=settings.memory_embedding_base_url or None,
+        embedding_api_key=settings.memory_embedding_api_key.get_secret_value()
+        if settings.memory_embedding_api_key
+        else None,
+        embedding_dim=settings.memory_embedding_dim,
+        llm_base_url=settings.memory_llm_base_url,
+        llm_api_key=settings.memory_llm_api_key.get_secret_value()
+        if settings.memory_llm_api_key
+        else None,
     )
 
 
@@ -370,6 +409,23 @@ async def forget_memory(
     print(json.dumps(summary))
 
 
+async def reembed_memory(
+    *, persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
+) -> None:
+    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    async with open_persona_memory(settings) as memory:
+        result = await reembed_group(memory, group_id=profile.memory_group)
+    print(
+        json.dumps(
+            {
+                "embedding_model": settings.memory_embedding_model,
+                "embedding_dim": settings.memory_embedding_dim,
+                **asdict(result),
+            }
+        )
+    )
+
+
 async def forget_meeting_files(
     settings: Settings, profile: PersonaProfile, meeting_id: str
 ) -> dict[str, Any]:
@@ -511,7 +567,7 @@ async def join_meeting(
                 "--audio requires the Linux audio worker; use docker compose run meeting-worker"
             )
         muse_key = require_secret(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
-        tts_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+        tts_key = tts_api_key(settings)
     stop = asyncio.Event()
     resolved_meeting_id = meeting_id or uuid.uuid4().hex[:12]
     resolved_twin_id = twin_id or settings.twin_id
@@ -623,7 +679,9 @@ async def join_meeting(
             audio_factory = partial(
                 open_meeting_audio,
                 muse_api_key=muse_key,
-                openai_api_key=tts_key,
+                tts_api_key=tts_key,
+                tts_provider=settings.tts_provider,
+                tts_voice=settings.tts_voice,
                 on_transcript=transcript,
                 on_interim=interim,
                 on_playback_event=log_playback,
@@ -788,12 +846,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_ingest_parser.add_argument("--meeting", dest="meeting_id", required=True)
     memory_ingest_parser.add_argument("--twin-name", default=None)
+    memory_reembed_parser = commands.add_parser(
+        "memory-reembed",
+        help="Recompute the persona's entity and fact embeddings with the configured model",
+    )
     report_parser = commands.add_parser(
         "report", help="Summarize latency, replies, tools, ingestion, and faults of one meeting"
     )
     report_parser.add_argument("--meeting", dest="meeting_id", required=True)
     report_parser.add_argument("--journal-dir", type=Path, default=None)
-    for operator_parser in (memory_add_parser, memory_forget_parser, memory_ingest_parser):
+    for operator_parser in (
+        memory_add_parser,
+        memory_forget_parser,
+        memory_ingest_parser,
+        memory_reembed_parser,
+    ):
         operator_parser.add_argument("--persona", type=Path, required=True)
         operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
         operator_parser.add_argument("--twin-id", default=None)
@@ -885,6 +952,15 @@ def main() -> None:
                     episode_uuid=arguments.episode_uuid,
                     settings=settings,
                     keep_record=arguments.keep_record,
+                )
+            )
+        elif arguments.command == "memory-reembed":
+            asyncio.run(
+                reembed_memory(
+                    persona_path=arguments.persona,
+                    owner_id=arguments.owner_id,
+                    twin_id=arguments.twin_id,
+                    settings=settings,
                 )
             )
         elif arguments.command == "memory-ingest":

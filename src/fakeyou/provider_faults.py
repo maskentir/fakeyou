@@ -101,6 +101,23 @@ def classify_http(source: str, status: int, detail: str | None = None) -> Provid
     return ProviderFault(source, "unknown", status=status, detail=detail)
 
 
+_MINIMAX_STATUS_KINDS: dict[int, tuple[ProviderFaultKind, bool]] = {
+    1001: ("timeout", True),
+    1002: ("rate_limited", True),
+    1004: ("unauthorized", False),
+    1008: ("payment_required", False),
+    1024: ("unavailable", True),
+    1039: ("rate_limited", True),
+    2013: ("bad_request", False),
+    2049: ("unauthorized", False),
+}
+
+
+def classify_minimax_status(source: str, code: int, detail: str | None = None) -> ProviderFault:
+    kind, retryable = _MINIMAX_STATUS_KINDS.get(code, ("unknown", False))
+    return ProviderFault(source, kind, status=code, detail=detail, retryable=retryable)
+
+
 def _category_fault(source: str, error: BaseException) -> ProviderFault | None:
     category = getattr(error, "category", None) or getattr(error, "error_category", None)
     name = getattr(category, "name", None) or getattr(category, "value", None)

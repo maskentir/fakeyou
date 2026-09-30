@@ -10,13 +10,20 @@ from uuid import uuid4
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
-from graphiti_core.edges import EntityEdge
+from graphiti_core.edges import EntityEdge, create_entity_edge_embeddings
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
-from graphiti_core.errors import NodeNotFoundError
+from graphiti_core.errors import GroupsEdgesNotFoundError, NodeNotFoundError
 from graphiti_core.graphiti import AddEpisodeResults
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
-from graphiti_core.nodes import EpisodeType, EpisodicNode, SagaNode
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+from graphiti_core.nodes import (
+    EntityNode,
+    EpisodeType,
+    EpisodicNode,
+    SagaNode,
+    create_entity_node_embeddings,
+)
 from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
@@ -31,6 +38,7 @@ RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
 OWNER_NOTE_SOURCE = "owner note"
 FORGET_BATCH_SIZE = 100
+REEMBED_BATCH_SIZE = 100
 CURRENT_FACTS_FILTER = SearchFilters(
     invalid_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
     expired_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]],
@@ -51,15 +59,32 @@ class Neo4jMemoryConfig:
     small_model: str
     embedding_model: str
     database: str = "neo4j"
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = field(default=None, repr=False)
+    embedding_dim: int = 1024
+    llm_base_url: str | None = None
+    llm_api_key: str | None = field(default=None, repr=False)
 
 
 def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
     llm_config = LLMConfig(
-        api_key=config.api_key, model=config.llm_model, small_model=config.small_model
+        api_key=config.llm_api_key or config.api_key,
+        model=config.llm_model,
+        small_model=config.small_model,
+        base_url=config.llm_base_url,
     )
-    llm_client = OpenAIClient(config=llm_config)
+    llm_client = (
+        OpenAIGenericClient(config=llm_config)
+        if config.llm_base_url
+        else OpenAIClient(config=llm_config)
+    )
     embedder = OpenAIEmbedder(
-        config=OpenAIEmbedderConfig(api_key=config.api_key, embedding_model=config.embedding_model)
+        config=OpenAIEmbedderConfig(
+            api_key=config.embedding_api_key or config.api_key,
+            base_url=config.embedding_base_url,
+            embedding_model=config.embedding_model,
+            embedding_dim=config.embedding_dim,
+        )
     )
     cross_encoder = OpenAIRerankerClient(config=llm_config)
     driver = Neo4jDriver(
@@ -200,6 +225,45 @@ async def forget_meeting(memory: Graphiti, *, group_id: str, meeting_id: str) ->
         if node.name == saga:
             await node.delete(memory.driver)
     return len(removed)
+
+
+@dataclass(frozen=True, slots=True)
+class ReembedResult:
+    entities: int
+    facts: int
+
+
+async def reembed_group(memory: Graphiti, *, group_id: str) -> ReembedResult:
+    entities = facts = 0
+    cursor: str | None = None
+    while nodes := await EntityNode.get_by_group_ids(
+        memory.driver, [group_id], limit=REEMBED_BATCH_SIZE, uuid_cursor=cursor
+    ):
+        await create_entity_node_embeddings(memory.embedder, nodes)
+        for node in nodes:
+            await node.save(memory.driver)
+        entities += len(nodes)
+        cursor = nodes[-1].uuid
+    cursor = None
+    while edges := await _entity_edge_page(memory, group_id, cursor):
+        await create_entity_edge_embeddings(memory.embedder, edges)
+        for edge in edges:
+            await edge.save(memory.driver)
+        facts += len(edges)
+        cursor = edges[-1].uuid
+    return ReembedResult(entities, facts)
+
+
+async def _entity_edge_page(
+    memory: Graphiti, group_id: str, cursor: str | None
+) -> list[EntityEdge]:
+    try:
+        edges: list[EntityEdge] = await EntityEdge.get_by_group_ids(
+            memory.driver, [group_id], limit=REEMBED_BATCH_SIZE, uuid_cursor=cursor
+        )
+    except GroupsEdgesNotFoundError:
+        return []
+    return edges
 
 
 async def forget_episode(memory: Graphiti, *, group_id: str, episode_uuid: str) -> None:

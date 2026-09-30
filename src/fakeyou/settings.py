@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from fakeyou.session import PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+TTSProvider = Literal["openai", "minimax"]
 
 
 class Settings(BaseSettings):
@@ -18,14 +19,24 @@ class Settings(BaseSettings):
     chat_base_url: str | None = None
     chat_api_key: SecretStr | None = None
     chat_reasoning_effort: ReasoningEffort | None = None
+    chat_extra_body: dict[str, Any] | None = None
     fallback_chat_model: str | None = None
     fallback_chat_base_url: str | None = None
     fallback_chat_api_key: SecretStr | None = None
     fallback_chat_reasoning_effort: ReasoningEffort | None = None
+    fallback_chat_extra_body: dict[str, Any] | None = None
     memory_llm_model: str = "gpt-5.5"
     memory_small_model: str = "gpt-4.1-nano"
+    memory_llm_base_url: str | None = None
+    memory_llm_api_key: SecretStr | None = None
     memory_embedding_model: str = "text-embedding-3-small"
+    memory_embedding_base_url: str | None = None
+    memory_embedding_api_key: SecretStr | None = None
+    memory_embedding_dim: int = Field(default=1024, gt=0)
     stt_model: str = "muse-voice-transcribe-1.0"
+    tts_provider: TTSProvider = "openai"
+    tts_api_key: SecretStr | None = None
+    tts_voice: str | None = None
     checkpoint_path: Path = Path(".runtime/checkpoints.sqlite")
     headless: bool = False
     cloakbrowser_license_key: str | None = Field(default=None, repr=False)

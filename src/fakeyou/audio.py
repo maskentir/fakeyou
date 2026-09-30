@@ -49,7 +49,8 @@ from fakeyou.playback import (
     create_paplay_stream_runner,
 )
 from fakeyou.provider_faults import ERROR_CATEGORY_KINDS, ProviderFault, classify_exception
-from fakeyou.voice import OpenAISpeechSynthesizer, create_muse_stt
+from fakeyou.settings import TTSProvider
+from fakeyou.voice import create_muse_stt, create_speech_synthesizer
 
 MEETING_SINK_NAME = "meeting_audio"
 MEETING_MONITOR_SOURCE_NAME = "meeting_audio.monitor"
@@ -445,13 +446,17 @@ class MeetingAudioSession:
 
 def default_playback_engine(
     *,
-    openai_api_key: str,
+    tts_api_key: str,
+    tts_provider: TTSProvider = "openai",
+    tts_voice: str | None = None,
     on_event: Callable[[PlaybackEvent], None] | None = None,
     fault_reporter: FaultReporter | None = None,
     journal: ProviderJournal | None = None,
 ) -> PlaybackEngine:
     return PlaybackEngine(
-        OpenAISpeechSynthesizer(api_key=openai_api_key, journal=journal),
+        create_speech_synthesizer(
+            tts_provider, api_key=tts_api_key, voice=tts_voice, journal=journal
+        ),
         play_audio=create_paplay_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         streaming=True,
@@ -466,7 +471,7 @@ def default_playback_engine(
 async def open_meeting_audio(
     *,
     muse_api_key: str,
-    openai_api_key: str,
+    tts_api_key: str,
     on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
     transport: Any | None = None,
     stt: FrameProcessor | None = None,
@@ -480,6 +485,8 @@ async def open_meeting_audio(
     deaf_grace_seconds: float = 120.0,
     stt_model: str = META_STT_MODEL,
     stt_keywords: Sequence[str] | None = None,
+    tts_provider: TTSProvider = "openai",
+    tts_voice: str | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -488,7 +495,9 @@ async def open_meeting_audio(
         playback
         if playback is not None
         else default_playback_engine(
-            openai_api_key=openai_api_key,
+            tts_api_key=tts_api_key,
+            tts_provider=tts_provider,
+            tts_voice=tts_voice,
             on_event=on_playback_event,
             fault_reporter=fault_reporter,
             journal=journal,

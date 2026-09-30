@@ -22,6 +22,7 @@ services:
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
       PULSE_SINK: ${PULSE_SINK:-agent_output}
       FAKEYOU_NEO4J_URI: ${FAKEYOU_WORKER_NEO4J_URI:-bolt://neo4j:7687}
+      FAKEYOU_MEMORY_EMBEDDING_BASE_URL: ${FAKEYOU_WORKER_EMBEDDING_BASE_URL:-${FAKEYOU_MEMORY_EMBEDDING_BASE_URL:-}}
     volumes:
       - ./.runtime/audio:/workspace/.runtime
       - ./examples:/workspace/examples:ro
@@ -41,6 +42,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 30s
+
+  embeddings:
+    image: ${FAKEYOU_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9}
+    profiles: ["embeddings"]
+    command:
+      - --model-id
+      - ${FAKEYOU_EMBEDDINGS_MODEL_ID:-ibm-granite/granite-embedding-97m-multilingual-r2}
+      - --revision
+      - ${FAKEYOU_EMBEDDINGS_REVISION:-835ad14087e140460703cf0fae09f97d469d65c2}
+      - --max-batch-tokens
+      - "2048"
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - tei_models:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
       start_period: 30s
 
   postgres:
@@ -63,3 +85,4 @@ services:
 volumes:
   neo4j_data:
   postgres_data:
+  tei_models:

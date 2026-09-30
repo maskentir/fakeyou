@@ -89,3 +89,32 @@ def test_init_chat_model_forwards_openai_compatible_provider_options() -> None:
 
     assert model.openai_api_base == "https://api.meta.ai/v1"
     assert model.reasoning_effort == "minimal"
+
+
+def test_init_chat_model_sends_extra_body_fields_in_the_request() -> None:
+    model = init_chat_model(
+        "openai:MiniMax-M2.7-highspeed",
+        api_key="key",
+        base_url="https://api.minimax.io/v1",
+        extra_body={"reasoning_split": True},
+    )
+
+    payload = model._get_request_payload([("user", "hello")])
+
+    assert payload["extra_body"] == {"reasoning_split": True}
+
+
+def test_init_chat_model_builds_claude_with_the_reply_timeout_and_retries() -> None:
+    from langchain_anthropic import ChatAnthropic
+
+    model = init_chat_model(
+        "anthropic:claude-haiku-4-5-20251001", api_key="key", timeout=20, max_retries=0
+    )
+
+    assert isinstance(model, ChatAnthropic)
+    assert (model.model, model.default_request_timeout, model.max_retries) == (
+        "claude-haiku-4-5-20251001",
+        20,
+        0,
+    )
+    assert model.anthropic_api_key.get_secret_value() == "key"

@@ -67,14 +67,24 @@ def fake_settings(tmp_path: Path) -> SimpleNamespace:
         chat_base_url=None,
         chat_api_key=None,
         chat_reasoning_effort=None,
+        chat_extra_body=None,
         memory_llm_model="memory-model",
         memory_small_model="memory-small",
         memory_embedding_model="memory-embedding",
+        memory_llm_base_url=None,
+        memory_llm_api_key=None,
+        memory_embedding_base_url=None,
+        memory_embedding_api_key=None,
+        memory_embedding_dim=1024,
         stt_model="muse-voice-transcribe-1.0",
+        tts_provider="openai",
+        tts_api_key=None,
+        tts_voice=None,
         fallback_chat_model=None,
         fallback_chat_base_url=None,
         fallback_chat_api_key=None,
         fallback_chat_reasoning_effort=None,
+        fallback_chat_extra_body=None,
         model_api_key=None,
     )
 
@@ -1973,6 +1983,36 @@ def test_chat_model_uses_role_configuration(
     ]
 
 
+def test_chat_model_passes_provider_request_fields_as_extra_body(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = record_chat_model_calls(monkeypatch)
+    settings = fake_settings(tmp_path)
+    settings.chat_model = "openai:MiniMax-M2.7-highspeed"
+    settings.chat_base_url = "https://api.minimax.io/v1"
+    settings.chat_api_key = SecretStr("minimax-key")
+    settings.chat_extra_body = {"reasoning_split": True}
+    settings.fallback_chat_model = "openai:MiniMax-M2.5-highspeed"
+    settings.fallback_chat_api_key = SecretStr("minimax-key")
+    settings.fallback_chat_extra_body = {"reasoning_split": True}
+
+    cli.create_chat_model(settings)
+    cli.create_fallback_chat_model(settings)
+
+    assert [kwargs.get("extra_body") for _args, kwargs in calls] == [
+        {"reasoning_split": True},
+        {"reasoning_split": True},
+    ]
+
+
+def test_settings_read_extra_body_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fakeyou.settings import Settings
+
+    monkeypatch.setenv("FAKEYOU_CHAT_EXTRA_BODY", '{"reasoning_split": true}')
+
+    assert Settings(_env_file=None).chat_extra_body == {"reasoning_split": True}
+
+
 def test_chat_model_defaults_to_openai_key_without_provider_options(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1996,7 +2036,12 @@ def test_chat_model_defaults_to_openai_key_without_provider_options(
             "https://llm.example.com/v1",
             ("api.openai.com", "api.meta.ai", "llm.example.com"),
         ),
-        ("anthropic:claude", None, ("api.openai.com", "api.meta.ai")),
+        (
+            "anthropic:claude-haiku-4-5",
+            None,
+            ("api.openai.com", "api.meta.ai", "api.anthropic.com"),
+        ),
+        ("ollama:llama", None, ("api.openai.com", "api.meta.ai")),
     ],
 )
 def test_preflight_hosts_follow_the_configured_chat_endpoint(
@@ -2009,6 +2054,64 @@ def test_preflight_hosts_follow_the_configured_chat_endpoint(
     assert cli.preflight_hosts(settings) == expected
 
 
+def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(tmp_path: Path) -> None:
+    settings = fake_settings(tmp_path)
+    settings.tts_provider = "minimax"
+    settings.chat_model = "openai:MiniMax-M3"
+    settings.chat_base_url = "https://api.minimax.io/v1"
+
+    with pytest.raises(ValueError, match="FAKEYOU_TTS_API_KEY"):
+        cli.tts_api_key(settings)
+    settings.tts_api_key = SecretStr("minimax-key")
+
+    assert cli.tts_api_key(settings) == "minimax-key"
+    assert cli.preflight_hosts(settings) == ("api.minimax.io", "api.meta.ai")
+
+
+def test_openai_speech_falls_back_to_the_openai_key(tmp_path: Path) -> None:
+    assert cli.tts_api_key(fake_settings(tmp_path)) == "test-key"
+
+
+def test_check_reports_the_speech_provider_defaults(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = fake_settings(tmp_path)
+    settings.tts_provider = "minimax"
+
+    cli.check_setup(settings)
+
+    assert json.loads(capsys.readouterr().out)["models"]["tts"] == {
+        "provider": "minimax",
+        "model": "speech-2.8-turbo",
+        "voice": "Indonesian_CalmWoman",
+    }
+
+
+def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(tmp_path: Path) -> None:
+    settings = fake_settings(tmp_path)
+    settings.memory_embedding_base_url = ""
+
+    assert cli.memory_config(settings).embedding_base_url is None
+
+
+def test_memory_config_routes_embeddings_and_extraction_separately(tmp_path: Path) -> None:
+    settings = fake_settings(tmp_path)
+    settings.memory_embedding_base_url = "http://embeddings/v1"
+    settings.memory_embedding_api_key = SecretStr("local")
+    settings.memory_embedding_dim = 768
+    settings.memory_llm_base_url = "https://api.meta.ai/v1"
+    settings.memory_llm_api_key = SecretStr("meta-key")
+
+    config = cli.memory_config(settings)
+
+    assert (config.embedding_base_url, config.embedding_api_key, config.embedding_dim) == (
+        "http://embeddings/v1",
+        "local",
+        768,
+    )
+    assert (config.llm_base_url, config.llm_api_key) == ("https://api.meta.ai/v1", "meta-key")
+
+
 def test_check_reports_models_per_role(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     settings = fake_settings(tmp_path)
     settings.model_api_key = SecretStr("muse-key")
@@ -2016,11 +2119,19 @@ def test_check_reports_models_per_role(tmp_path: Path, capsys: pytest.CaptureFix
     cli.check_setup(settings)
 
     models = json.loads(capsys.readouterr().out)["models"]
-    assert models["reply"] == {"model": "fake:model", "base_url": None, "reasoning_effort": None}
+    assert models["reply"] == {
+        "model": "fake:model",
+        "base_url": None,
+        "reasoning_effort": None,
+        "extra_body": None,
+    }
     assert models["memory"] == {
         "llm": "memory-model",
+        "llm_base_url": None,
         "small": "memory-small",
         "embedding": "memory-embedding",
+        "embedding_base_url": None,
+        "embedding_dim": 1024,
     }
     assert models["stt"]["model"] == "muse-voice-transcribe-1.0"
     assert models["tts"]["model"]
@@ -2229,6 +2340,7 @@ def test_check_reports_the_fallback_model(
         "model": "openai:muse-spark-1.2",
         "base_url": "https://api.meta.ai/v1",
         "reasoning_effort": "minimal",
+        "extra_body": None,
     }
 
 

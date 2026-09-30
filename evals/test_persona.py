@@ -7,13 +7,13 @@ from deepeval import assert_test
 from deepeval.metrics import GEval, ToolCorrectnessMetric
 from deepeval.models import DeepEvalBaseLLM, OpenAIModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall, ToolCallParams
-from langchain.chat_models import init_chat_model
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.agent import create_meeting_agent
+from fakeyou.cli import create_chat_model
 from fakeyou.memory import create_memory_tools
 from fakeyou.persona import PersonaProfile, build_persona
 from fakeyou.settings import Settings, require_secret
@@ -203,6 +203,7 @@ def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
     try:
         api_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+        model = create_chat_model(settings)
     except ValueError as error:
         pytest.skip(str(error))
     live = LIVE_SCENARIOS[scenario]
@@ -213,7 +214,6 @@ def test_live_persona_quality(scenario: str) -> None:
     def recall_meeting_context(query: str) -> str:
         return recalled_context
 
-    model = init_chat_model(settings.chat_model, api_key=api_key, timeout=60, max_retries=1)
     agent = create_meeting_agent(
         model,
         tools=[recall_meeting_context],
