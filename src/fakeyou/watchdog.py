@@ -25,6 +25,16 @@ WatchdogEventKind = Literal[
 
 _DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
 _PEOPLE_COUNT = re.compile(r"People\s*[-–:]\s*(\d+)\s+participants?", re.IGNORECASE)
+_DIALOG_XPATH = '(//*[@role="dialog" or @role="alertdialog"] | //dialog[@open])'
+
+
+def _dialog_button_xpath(index: int, label: str) -> str:
+    return (
+        f'xpath={_DIALOG_XPATH}[{index + 1}]//*[(self::button or @role="button") and '
+        f'(@aria-label="{label}" or normalize-space(.)="{label}")]'
+    )
+
+
 _HARMLESS_NOTICES = frozenset(
     {
         ("this meeting is being recorded got it", "Got it"),
@@ -178,9 +188,9 @@ class UIWatchdog:
                         and " ".join(current.split()) == modal.text
                         and single_button
                     ):
-                        await target.get_by_role("button", name=action, exact=True).click(
-                            timeout=2000
-                        )
+                        await self._page.locator(
+                            _dialog_button_xpath(modal.index, action)
+                        ).first.click(timeout=2000)
                         dismissed = True
                 except Exception as error:
                     events.append(

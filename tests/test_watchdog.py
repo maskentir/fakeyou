@@ -1,5 +1,5 @@
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
 import pytest
 from playwright.async_api import Page
@@ -27,9 +27,12 @@ def show_dialog(page, text, *, visible=True, button_count=1):
     dialog.is_visible = AsyncMock(return_value=visible)
     dialog.evaluate = AsyncMock(return_value=text)
     dialog.get_by_role.return_value.count = AsyncMock(return_value=button_count)
-    dialog.get_by_role.return_value.click = AsyncMock()
+    button = MagicMock()
+    button.first.click = AsyncMock()
+    dialog.button = button.first
     page.locator.return_value.count = AsyncMock(return_value=1)
     page.locator.return_value.nth.return_value = dialog
+    page.locator.side_effect = lambda selector: button if selector.startswith("xpath=") else DEFAULT
     return dialog
 
 
@@ -72,7 +75,7 @@ async def test_should_deduplicate_unknown_dialog_and_expire_once_without_clickin
     now[0] = 190.0
     assert (await watchdog.check()).events[0].kind == "manual_action_expired"
     assert (await watchdog.check()).events == ()
-    dialog.get_by_role.return_value.click.assert_not_awaited()
+    dialog.button.click.assert_not_awaited()
 
 
 async def test_should_clear_recovered_dialog_and_alert_when_it_returns(page, observe):
@@ -120,12 +123,12 @@ async def test_should_only_dismiss_explicit_harmless_notice(
     result = await watchdog.check()
     assert result.events[-1].kind == expected
     if expected == "manual_action_required":
-        dialog.get_by_role.return_value.click.assert_not_awaited()
+        dialog.button.click.assert_not_awaited()
 
 
 async def test_should_escalate_when_allowlisted_dismissal_fails(page, observe):
     dialog = show_dialog(page, "This meeting is being recorded Got it")
-    dialog.get_by_role.return_value.click.side_effect = RuntimeError("detached")
+    dialog.button.click.side_effect = RuntimeError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
@@ -142,12 +145,16 @@ async def test_should_dismiss_camera_not_found_dialog(page, observe, button_coun
     await watchdog.check()
     result = await watchdog.check()
     assert result.events[-1].kind == "modal_dismissed"
-    dialog.get_by_role.assert_called_once_with("button", name="Close", exact=True)
+    [selector] = [
+        call.args[0] for call in page.locator.call_args_list if call.args[0].startswith("xpath=")
+    ]
+    assert '@aria-label="Close"' in selector
+    dialog.button.click.assert_awaited_once()
 
 
 async def test_should_escalate_when_camera_dismissal_fails(page, observe):
     dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG)
-    dialog.get_by_role.return_value.click.side_effect = RuntimeError("detached")
+    dialog.button.click.side_effect = RuntimeError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
