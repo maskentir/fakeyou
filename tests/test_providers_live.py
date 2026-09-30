@@ -15,10 +15,9 @@ from fakeyou.agent import create_meeting_agent
 from fakeyou.cli import memory_config
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import MeetingIngestion
+from fakeyou.ingestion import ingest_meeting
 from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
-    RECALL_EMPTY_RESULT,
     Neo4jMemoryConfig,
     create_graphiti_memory,
     create_memory_tools,
@@ -27,6 +26,7 @@ from fakeyou.memory import (
     remember_owner_note,
 )
 from fakeyou.persona import PersonaProfile
+from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
 from fakeyou.settings import Settings, require_secret
 from fakeyou.voice import OpenAISpeechSynthesizer
 
@@ -235,7 +235,7 @@ async def _recall(memory, group_id: str, query: str) -> str:
 
 
 @pytest.mark.live
-async def test_meeting_ingestion_recall_correction_and_forget_roundtrip() -> None:
+async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_path) -> None:
     config = _neo4j_config_or_skip()
     run = uuid4().hex[:10]
     project = f"Orchid{run}"
@@ -247,45 +247,45 @@ async def test_meeting_ingestion_recall_correction_and_forget_roundtrip() -> Non
         role="Synthetic live ingestion check",
         allowed_tools=frozenset({"recall_meeting_context"}),
         ingest_transcripts=True,
+        vocabulary=(project, "Budi"),
     )
+    record_path = meeting_record_path(tmp_path, meeting_id)
+    record = MeetingRecord(record_path)
+    record.add_twin_speech(f"Gimana kalau demo customer {project} digeser ke hari Kamis?")
+    for index, text in enumerate(
+        (
+            f"Oke, setuju, demo customer {project} kita pindah ke hari Kamis.",
+            f"Nanti Budi kabari tim sales soal demo {project}.",
+        )
+    ):
+        record.add_transcript(
+            TranscriptEvent(
+                id=f"{run}-{index}",
+                timestamp=datetime.now(UTC).isoformat(),
+                source="meeting_audio",
+                text=text,
+                finalized=True,
+            )
+        )
+    record.close()
     lines: list[str] = []
     memory = None
-    note_uuid: str | None = None
     ingested = False
     try:
         async with asyncio.timeout(420):
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             await memory.build_indices_and_constraints()
-            ingestion = MeetingIngestion(
-                memory,
-                group_id=profile.memory_group,
-                meeting_id=meeting_id,
-                twin_name=profile.display_name,
-                faults=FaultReporter(meeting_id=meeting_id, log=lines.append),
-                journal=ProviderJournal(meeting_id, emit=lines.append),
-                drain_timeout_seconds=240,
-            )
-            ingestion.add_twin_speech(
-                f"Gimana kalau demo customer {project} digeser ke hari Kamis?"
-            )
-            started = datetime.now(UTC)
-            for index, text in enumerate(
-                (
-                    f"Oke, setuju, demo customer {project} kita pindah ke hari Kamis.",
-                    f"Nanti aku kabari tim sales soal demo {project}.",
-                )
-            ):
-                ingestion.add_transcript(
-                    TranscriptEvent(
-                        id=f"{run}-{index}",
-                        timestamp=started.isoformat(),
-                        source="meeting_audio",
-                        text=text,
-                        finalized=True,
-                    )
-                )
-            await ingestion.close()
+            options = {
+                "group_id": profile.memory_group,
+                "meeting_id": meeting_id,
+                "twin_name": profile.display_name,
+                "vocabulary": profile.vocabulary,
+                "journal": ProviderJournal(meeting_id, emit=lines.append),
+                "faults": FaultReporter(meeting_id=meeting_id, log=lines.append),
+            }
+            first = await ingest_meeting(memory, read_meeting_record(record_path), **options)
             ingested = True
+            again = await ingest_meeting(memory, read_meeting_record(record_path), **options)
             await memory.close()
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -295,46 +295,37 @@ async def test_meeting_ingestion_recall_correction_and_forget_roundtrip() -> Non
                 group_id=profile.memory_group,
                 text=f"Update dari Rani: demo customer {project} dipindah ke hari Jumat.",
             )
-            note_uuid = note.episode.uuid
             corrected = await _recall(memory, profile.memory_group, f"{project} customer demo day")
             removed = await forget_meeting(
                 memory, group_id=profile.memory_group, meeting_id=meeting_id
             )
-            await forget_episode(memory, group_id=profile.memory_group, episode_uuid=note_uuid)
-            note_uuid = None
+            await forget_episode(
+                memory, group_id=profile.memory_group, episode_uuid=note.episode.uuid
+            )
             leftover = await _group_node_count(memory, profile.memory_group)
     except Exception as error:
-        _fail_provider(error, "Graphiti meeting ingestion")
+        _fail_provider(error, "Graphiti recorded meeting ingestion")
     finally:
-        if memory is None and (ingested or note_uuid is not None):
+        if memory is None and ingested:
             memory = await asyncio.to_thread(create_graphiti_memory, config)
         if memory is not None:
             try:
                 async with asyncio.timeout(120):
-                    if note_uuid is not None:
-                        await memory.remove_episode(note_uuid)
-                    if ingested:
-                        await forget_meeting(
-                            memory, group_id=profile.memory_group, meeting_id=meeting_id
-                        )
+                    await forget_meeting(
+                        memory, group_id=profile.memory_group, meeting_id=meeting_id
+                    )
             finally:
                 await memory.close()
 
     episodes = [json.loads(line) for line in lines if '"memory_episode"' in line]
-    print(
-        "\ningestion episodes:",
-        [
-            (row["speaker_kind"], row["outcome"], row["facts"], round(row["duration_ms"]))
-            for row in episodes
-        ],
-    )
-    print("recalled:", recalled)
-    print("corrected:", corrected)
-    assert [row["speaker_kind"] for row in episodes] == ["twin", "participant"]
+    summary = [(row["utterances"], row["facts"], round(row["duration_ms"])) for row in episodes]
+    print(f"\nepisodes (utterances, facts, ms): {summary}\nrecalled:\n{recalled}")
+    print(f"corrected:\n{corrected}")
+    assert (first.windows, first.ingested, first.completed) == (1, 1, True)
+    assert (again.resumed_from, again.ingested, again.completed) == (1, 0, True)
     assert not [line for line in lines if '"event":"fault"' in line]
-    assert any(row["facts"] for row in episodes), f"Graphiti extracted no facts: {episodes}"
-    assert recalled != RECALL_EMPTY_RESULT
-    assert f"Google Meet {meeting_id}" in recalled
+    assert first.facts > 0, f"Graphiti extracted no facts: {episodes}"
+    assert f"Google Meet {meeting_id} transcript" in recalled
     assert "owner note" in corrected
-    assert removed == len(episodes)
+    assert removed == 1
     assert leftover == 0

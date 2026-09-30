@@ -3,12 +3,13 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from importlib.metadata import version
 from importlib.util import find_spec
@@ -43,8 +44,8 @@ from fakeyou.conversation import (
     transcript_event,
 )
 from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import MeetingIngestion
-from fakeyou.journal import ProviderJournal
+from fakeyou.ingestion import IngestResult, ingest_meeting
+from fakeyou.journal import JOURNAL_BACKUP_COUNT, ProviderJournal
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
@@ -56,11 +57,11 @@ from fakeyou.memory import (
     remember_owner_note,
     verify_memory_connection,
 )
-from fakeyou.persona import PersonaProfile, build_persona, load_persona
+from fakeyou.persona import PersonaProfile, build_persona, load_persona, speech_keywords
 from fakeyou.playback import PlaybackEvent
 from fakeyou.preflight import provider_probe_hosts
 from fakeyou.provider_faults import ProviderFault, classify_exception
-from fakeyou.record import MeetingRecord, meeting_record_path
+from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
 from fakeyou.report import build_session_report, read_journal
 from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.session import SessionId
@@ -243,6 +244,64 @@ async def add_owner_note(
         )
 
 
+async def ingest_until_stopped(
+    memory: Graphiti,
+    record_path: Path,
+    *,
+    profile: PersonaProfile,
+    meeting_id: str,
+    twin_name: str,
+    journal: ProviderJournal,
+    faults: FaultReporter,
+) -> IngestResult:
+    stop = asyncio.Event()
+    with stop_signal_handlers(stop):
+        return await ingest_meeting(
+            memory,
+            read_meeting_record(record_path),
+            group_id=profile.memory_group,
+            meeting_id=meeting_id,
+            twin_name=twin_name,
+            vocabulary=profile.vocabulary,
+            journal=journal,
+            faults=faults,
+            stop=stop,
+        )
+
+
+async def ingest_recorded_meeting(
+    *,
+    meeting_id: str,
+    persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
+    twin_name: str | None,
+    settings: Settings,
+) -> None:
+    TypeAdapter(SessionId).validate_python(meeting_id)
+    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    record_path = meeting_record_path(settings.meeting_record_dir, meeting_id)
+    if not record_path.exists():
+        raise CliError(f"no meeting record for {meeting_id} at {record_path}")
+    journal = ProviderJournal(meeting_id, path=settings.journal_dir / f"{meeting_id}.jsonl")
+    try:
+        async with open_persona_memory(settings) as memory:
+            result = await ingest_until_stopped(
+                memory,
+                record_path,
+                profile=profile,
+                meeting_id=meeting_id,
+                twin_name=twin_name or profile.display_name,
+                journal=journal,
+                faults=FaultReporter(meeting_id=meeting_id),
+            )
+    finally:
+        journal.close()
+    print(json.dumps({"meeting_id": meeting_id, **asdict(result)}))
+    if not result.completed:
+        raise SystemExit(1)
+
+
 async def forget_memory(
     *,
     persona_path: Path,
@@ -251,9 +310,12 @@ async def forget_memory(
     meeting_id: str | None,
     episode_uuid: str | None,
     settings: Settings,
+    keep_record: bool = False,
 ) -> None:
     if (meeting_id is None) == (episode_uuid is None):
         raise CliError("memory-forget requires exactly one of --meeting or --episode")
+    if keep_record and meeting_id is None:
+        raise CliError("--keep-record only applies to --meeting")
     if meeting_id is not None:
         TypeAdapter(SessionId).validate_python(meeting_id)
     profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
@@ -265,7 +327,36 @@ async def forget_memory(
         elif episode_uuid is not None:
             await forget_episode(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
             removed = 1
-    print(json.dumps({"removed_episodes": removed}))
+    summary: dict[str, Any] = {"removed_episodes": removed}
+    if meeting_id is not None and not keep_record:
+        summary |= await forget_meeting_files(settings, profile, meeting_id)
+    print(json.dumps(summary))
+
+
+async def forget_meeting_files(
+    settings: Settings, profile: PersonaProfile, meeting_id: str
+) -> dict[str, Any]:
+    record_dir = meeting_record_path(settings.meeting_record_dir, meeting_id).parent
+    record_removed = record_dir.exists()
+    shutil.rmtree(record_dir, ignore_errors=True)
+    journal_path = settings.journal_dir / f"{meeting_id}.jsonl"
+    journal_files = [journal_path] + [
+        Path(f"{journal_path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)
+    ]
+    removed_journals = [path for path in journal_files if path.exists()]
+    for path in removed_journals:
+        path.unlink()
+    thread_removed = settings.checkpoint_path.exists()
+    if thread_removed:
+        async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+            await saver.adelete_thread(
+                conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id)
+            )
+    return {
+        "record_removed": record_removed,
+        "journal_files_removed": len(removed_journals),
+        "conversation_thread_removed": thread_removed,
+    }
 
 
 def show_session_report(meeting_id: str, journal_dir: Path | None, settings: Settings) -> None:
@@ -427,7 +518,6 @@ async def join_meeting(
 
     conversation: ConversationLoop | None = None
     graphiti: Graphiti | None = None
-    ingestion: MeetingIngestion | None = None
     result: SessionResult | None = None
     async with AsyncExitStack() as resources:
         resources.callback(journal.close)
@@ -440,16 +530,6 @@ async def join_meeting(
                 result = SessionResult(
                     "ended", "infra_failure", f"memory unavailable: {fault}", faults.report()
                 )
-        if graphiti is not None and profile is not None and profile.ingest_transcripts:
-            ingestion = MeetingIngestion(
-                graphiti,
-                group_id=profile.memory_group,
-                meeting_id=config.meeting_id,
-                twin_name=config.twin_name,
-                faults=faults,
-                journal=journal,
-            )
-            resources.push_async_callback(ingestion.close)
 
         def log_transition(
             from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
@@ -466,8 +546,6 @@ async def join_meeting(
             journal.record(event.name, source="playback", text=event.text, detail=event.detail)
             if event.name == "speak_finished":
                 record.add_twin_speech(event.text)
-                if ingestion is not None:
-                    ingestion.add_twin_speech(event.text)
 
         if conversation_enabled and result is None:
             conversation = await resources.enter_async_context(
@@ -497,8 +575,6 @@ async def join_meeting(
                 finalized=event.finalized,
             )
             record.add_transcript(event)
-            if ingestion is not None:
-                ingestion.add_transcript(event)
             if conversation is not None:
                 await conversation.handle_transcript(event)
 
@@ -514,6 +590,7 @@ async def join_meeting(
                 deaf_window_seconds=config.deaf_window_seconds,
                 deaf_grace_seconds=config.deaf_grace_seconds,
                 stt_model=settings.stt_model,
+                stt_keywords=speech_keywords(profile, config.twin_name) if profile else None,
             )
         preflight_kwargs: dict[str, Any] = (
             {
@@ -546,6 +623,19 @@ async def join_meeting(
             terminal_reason=result.terminal_reason,
             exit_code=exit_code,
         )
+        if graphiti is not None and profile is not None and profile.ingest_transcripts:
+            try:
+                await ingest_until_stopped(
+                    graphiti,
+                    meeting_record_path(settings.meeting_record_dir, resolved_meeting_id),
+                    profile=profile,
+                    meeting_id=resolved_meeting_id,
+                    twin_name=config.twin_name,
+                    journal=journal,
+                    faults=faults,
+                )
+            except Exception as error:
+                faults.record(classify_exception("memory_ingest", error))
     print(
         json.dumps(
             {
@@ -643,12 +733,22 @@ def build_parser() -> argparse.ArgumentParser:
     forget_target = memory_forget_parser.add_mutually_exclusive_group(required=True)
     forget_target.add_argument("--meeting", dest="meeting_id", default=None)
     forget_target.add_argument("--episode", dest="episode_uuid", default=None)
+    memory_forget_parser.add_argument(
+        "--keep-record",
+        action="store_true",
+        help="Keep the meeting record, journal, and thread so the meeting can be ingested again",
+    )
+    memory_ingest_parser = commands.add_parser(
+        "memory-ingest", help="Ingest a recorded meeting into the persona's memory, resuming"
+    )
+    memory_ingest_parser.add_argument("--meeting", dest="meeting_id", required=True)
+    memory_ingest_parser.add_argument("--twin-name", default=None)
     report_parser = commands.add_parser(
         "report", help="Summarize latency, replies, tools, ingestion, and faults of one meeting"
     )
     report_parser.add_argument("--meeting", dest="meeting_id", required=True)
     report_parser.add_argument("--journal-dir", type=Path, default=None)
-    for operator_parser in (memory_add_parser, memory_forget_parser):
+    for operator_parser in (memory_add_parser, memory_forget_parser, memory_ingest_parser):
         operator_parser.add_argument("--persona", type=Path, required=True)
         operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
         operator_parser.add_argument("--twin-id", default=None)
@@ -738,6 +838,18 @@ def main() -> None:
                     twin_id=arguments.twin_id,
                     meeting_id=arguments.meeting_id,
                     episode_uuid=arguments.episode_uuid,
+                    settings=settings,
+                    keep_record=arguments.keep_record,
+                )
+            )
+        elif arguments.command == "memory-ingest":
+            asyncio.run(
+                ingest_recorded_meeting(
+                    meeting_id=arguments.meeting_id,
+                    persona_path=arguments.persona,
+                    owner_id=arguments.owner_id,
+                    twin_id=arguments.twin_id,
+                    twin_name=arguments.twin_name,
                     settings=settings,
                 )
             )

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from fakeyou.agent import DEFAULT_PERSONA
 from fakeyou.conversation import conversation_thread_id
 from fakeyou.memory import create_memory_tools
-from fakeyou.persona import PersonaProfile, build_persona, load_persona
+from fakeyou.persona import PersonaProfile, build_persona, load_persona, speech_keywords
 
 EXAMPLE_PROFILE = Path(__file__).resolve().parent.parent / "examples" / "persona.example.json"
 GROUP_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}"
@@ -101,6 +101,9 @@ async def test_load_persona_rejects_identity_mismatch(
         {"owner_id": "bad owner"},
         {"twin_id": "bad:twin"},
         {"ingest_transcripts": "sometimes"},
+        {"vocabulary": ["Orchid", "  "]},
+        {"vocabulary": ["x" * 65]},
+        {"vocabulary": [f"term{index}" for index in range(31)]},
     ],
 )
 def test_profile_rejects_invalid_fields(overrides: dict[str, object]) -> None:
@@ -132,6 +135,7 @@ def test_profile_defaults_are_conservative() -> None:
     assert minimal.verified_facts == ()
     assert minimal.allowed_tools == frozenset()
     assert minimal.ingest_transcripts is False
+    assert minimal.vocabulary == ()
 
 
 def test_profile_is_immutable() -> None:
@@ -217,9 +221,22 @@ def test_build_persona_mentions_recall_only_when_allowed() -> None:
 def test_build_persona_explains_recalled_source_labels() -> None:
     prompt = build_persona(profile())
 
-    for label in ("owner note", "participant transcript", "twin speech", "Digital twin"):
+    for label in ("owner note", "transcript", "Digital twin"):
         assert label in prompt
+    assert "twin speech" not in prompt
     assert "most recent source" in prompt
+
+
+def test_build_persona_lists_vocabulary_in_the_profile_json() -> None:
+    prompt = build_persona(profile(vocabulary=["Orchid", "Budi"]))
+
+    assert '"vocabulary": [\n    "Orchid",\n    "Budi"\n  ]' in prompt
+
+
+def test_speech_keywords_start_with_the_twin_name_without_duplicates() -> None:
+    loaded = profile(vocabulary=["Orchid", "Rani Twin", "Budi"])
+
+    assert speech_keywords(loaded, "Rani Twin") == ("Rani Twin", "Orchid", "Budi")
 
 
 def test_default_persona_keeps_indonesian_guidance() -> None:

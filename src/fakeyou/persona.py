@@ -14,8 +14,18 @@ PersonaTool = Literal["recall_meeting_context"]
 PersonaLanguage = Literal["id", "en"]
 ProfileText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 ProfileItems = Annotated[tuple[ProfileText, ...], Field(max_length=20)]
+VocabularyTerm = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+]
 
-PROMPT_PROFILE_FIELDS = {"display_name", "role", "speaking_style", "goals", "verified_facts"}
+PROMPT_PROFILE_FIELDS = {
+    "display_name",
+    "role",
+    "speaking_style",
+    "goals",
+    "verified_facts",
+    "vocabulary",
+}
 SOURCE_RULES = (
     "You speak on behalf of the owner described by the JSON profile below. "
     "The profile's display_name is your own name as the owner's twin, not the owner's name. "
@@ -38,12 +48,11 @@ RECALL_RULES = (
     "When recalled facts conflict, trust verified_facts and owner notes first, then the most "
     "recent source, and say what changed. "
     "An 'owner note' source was given by the owner and counts like verified_facts. "
-    "A 'participant transcript' source is what meeting participants said; mention that it was "
-    "discussed in that meeting rather than stating it as the owner's position. "
-    f"A 'twin speech' source, and any fact about '{TWIN_SPEAKER}', is something you yourself "
-    "said in an earlier meeting; when you mention it, say that you said it, never that the "
-    "owner said or agreed to it. It is never an owner fact and never enough on its own to "
-    "commit to anything."
+    "A meeting transcript source is what was said in that meeting; mention that it was "
+    "discussed there rather than stating it as the owner's position. "
+    f"Any fact about '{TWIN_SPEAKER}' is something you yourself said in an earlier meeting; "
+    "when you mention it, say that you said it, never that the owner said or agreed to it. "
+    "It is never an owner fact and never enough on its own to commit to anything."
 )
 
 
@@ -60,6 +69,7 @@ class PersonaProfile(BaseModel):
     verified_facts: ProfileItems = ()
     allowed_tools: frozenset[PersonaTool] = frozenset()
     ingest_transcripts: bool = False
+    vocabulary: Annotated[tuple[VocabularyTerm, ...], Field(max_length=30)] = ()
 
     @property
     def memory_group(self) -> str:
@@ -81,3 +91,7 @@ def build_persona(profile: PersonaProfile) -> str:
         "Owner profile JSON:\n" + profile.model_dump_json(include=PROMPT_PROFILE_FIELDS, indent=2)
     )
     return "\n\n".join(sections)
+
+
+def speech_keywords(profile: PersonaProfile, twin_name: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((twin_name, *profile.vocabulary)))

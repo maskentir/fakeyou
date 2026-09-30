@@ -25,6 +25,7 @@ from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
 
 RECALL_RESULT_LIMIT = 5
+RECALL_SEARCH_LIMIT = RECALL_RESULT_LIMIT * 2
 RECALL_TIMEOUT_SECONDS = 15.0
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
@@ -125,12 +126,15 @@ def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:
             results = await memory.search(
                 query,
                 group_ids=[group_id],
-                num_results=RECALL_RESULT_LIMIT,
+                num_results=RECALL_SEARCH_LIMIT,
                 search_filter=CURRENT_FACTS_FILTER,
             )
-            if not results:
+            first_by_fact: dict[str, EntityEdge] = {}
+            for edge in results:
+                first_by_fact.setdefault(edge.fact, edge)
+            if not first_by_fact:
                 return RECALL_EMPTY_RESULT
-            return await describe_facts(memory, results[:RECALL_RESULT_LIMIT])
+            return await describe_facts(memory, list(first_by_fact.values())[:RECALL_RESULT_LIMIT])
 
     return [remember_meeting_fact, recall_meeting_context]
 
@@ -170,14 +174,22 @@ async def remember_owner_note(memory: Graphiti, *, group_id: str, text: str) -> 
     )
 
 
+async def meeting_episodes(
+    memory: Graphiti, *, group_id: str, meeting_id: str, last_n: int
+) -> list[EpisodicNode]:
+    return await memory.retrieve_episodes(
+        datetime.now(UTC) + timedelta(days=1),
+        last_n=last_n,
+        group_ids=[group_id],
+        saga=meeting_saga(meeting_id),
+    )
+
+
 async def forget_meeting(memory: Graphiti, *, group_id: str, meeting_id: str) -> int:
     saga = meeting_saga(meeting_id)
     removed: set[str] = set()
-    while episodes := await memory.retrieve_episodes(
-        datetime.now(UTC) + timedelta(days=1),
-        last_n=FORGET_BATCH_SIZE,
-        group_ids=[group_id],
-        saga=saga,
+    while episodes := await meeting_episodes(
+        memory, group_id=group_id, meeting_id=meeting_id, last_n=FORGET_BATCH_SIZE
     ):
         for episode in episodes:
             if episode.uuid in removed:

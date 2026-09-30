@@ -53,7 +53,7 @@ async def test_memory_tools_keep_group_id_scoped() -> None:
     assert memory.searched[0] == {
         "query": "agenda",
         "group_ids": ["team_alpha"],
-        "num_results": memory_module.RECALL_RESULT_LIMIT,
+        "num_results": memory_module.RECALL_SEARCH_LIMIT,
         "search_filter": memory_module.CURRENT_FACTS_FILTER,
     }
 
@@ -129,7 +129,17 @@ async def test_recall_caps_results() -> None:
     result = await recall.ainvoke({"query": "agenda"})
 
     assert result.splitlines() == [f"fact-{index} (source: unknown)" for index in range(5)]
-    assert memory.searched[0]["num_results"] == memory_module.RECALL_RESULT_LIMIT
+    assert memory.searched[0]["num_results"] == memory_module.RECALL_SEARCH_LIMIT
+
+
+async def test_recall_drops_identical_facts_before_applying_the_limit() -> None:
+    memory = FakeSearchMemory(["A", "A", "B", "C", "C", "D", "E", "F"])
+    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+
+    result = await recall.ainvoke({"query": "agenda"})
+
+    facts = [line.removesuffix(" (source: unknown)") for line in result.splitlines()]
+    assert facts == list("ABCDE")
 
 
 def test_current_facts_filter_excludes_invalidated_and_expired_edges() -> None:

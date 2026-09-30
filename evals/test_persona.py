@@ -22,22 +22,22 @@ EXAMPLE_PROFILE = PersonaProfile.model_validate_json(
     (Path(__file__).resolve().parent.parent / "examples" / "persona.example.json").read_bytes()
 )
 RECALLED_CONTEXT = (
-    "The team agreed to move the Orchid customer demo to Thursday 2 October 2026 "
-    "(source: Google Meet sync-0923 participant transcript; 2026-09-23 03:10 UTC)"
+    "Unidentified participant decided that the Orchid customer demo moves to Thursday "
+    "2 October 2026 (source: Google Meet sync-0923 transcript; 2026-09-23 03:10 UTC)"
 )
 TWIN_SPEECH_CONTEXT = (
-    "Digital twin said the Orchid marketing budget could probably rise to 300 juta "
-    "(source: Google Meet sync-0923 twin speech; 2026-09-23 03:12 UTC)"
+    "Digital twin said that the Orchid marketing budget could probably rise to 300 juta "
+    "(source: Google Meet sync-0923 transcript; 2026-09-23 03:12 UTC)"
 )
 CORRECTED_CONTEXT = (
     "Unidentified participant agreed to move the Orchid customer demo to Thursday "
-    "(source: Google Meet sync-0930 participant transcript; 2026-09-30 02:05 UTC)\n"
+    "(source: Google Meet sync-0930 transcript; 2026-09-30 02:05 UTC)\n"
     "Rani gave an update that the Orchid customer demo moved to Friday "
     "(source: owner note; 2026-09-30 06:40 UTC)"
 )
 PARTICIPANT_CLAIM_CONTEXT = (
     "Unidentified participant said the Orchid beta launch slipped to November "
-    "(source: Google Meet sync-0923 participant transcript; 2026-09-23 03:10 UTC)"
+    "(source: Google Meet sync-0923 transcript; 2026-09-23 03:10 UTC)"
 )
 JUDGE_MODEL = "gpt-4.1-mini"
 
@@ -234,6 +234,13 @@ LIVE_SCENARIOS = {
         "the current plan and must not present Thursday as current; it may mention that the "
         "earlier meeting agreed on Thursday before Rani's update.",
     ),
+    "misheard_project_name": (
+        "Demo customer old shield jadinya hari apa?",
+        RECALLED_CONTEXT,
+        "Speech recognition misheard the project name Orchid as 'old shield'. The reply must "
+        "call the project Orchid, must not repeat 'old shield', and gives Thursday 2 October "
+        "2026 (Kamis) for the demo.",
+    ),
     "participant_claim_does_not_override_owner_fact": (
         "Beta launch Orchid mundur ke November kan?",
         PARTICIPANT_CLAIM_CONTEXT,
@@ -242,11 +249,29 @@ LIVE_SCENARIOS = {
         "than to Rani, and it may offer to confirm with Rani.",
     ),
 }
-RECALL_REQUIRED_SCENARIOS = frozenset({"relevant_recall", "owner_note_overrides_meeting_claim"})
+RECALL_REQUIRED_SCENARIOS = frozenset(
+    {"relevant_recall", "owner_note_overrides_meeting_claim", "misheard_project_name"}
+)
+
+
+KNOWN_MODEL_LIMITATIONS = {
+    "misheard_project_name": (
+        "gpt-4.1-mini repeats a participant's misheard name (0/18 probes across prompt variants "
+        "on 30 September 2026); the fix lives in STT keywords and memory extraction"
+    ),
+}
 
 
 @pytest.mark.live
-@pytest.mark.parametrize("scenario", sorted(LIVE_SCENARIOS))
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param(name, marks=pytest.mark.xfail(reason=KNOWN_MODEL_LIMITATIONS[name]))
+        if name in KNOWN_MODEL_LIMITATIONS
+        else name
+        for name in sorted(LIVE_SCENARIOS)
+    ],
+)
 def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
     try:

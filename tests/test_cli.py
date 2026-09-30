@@ -1077,7 +1077,13 @@ class FakeGraphiti:
 
     async def add_episode(self, **kwargs) -> SimpleNamespace:
         self.added.append(kwargs)
-        return SimpleNamespace(episode=SimpleNamespace(uuid=f"episode-{len(self.added)}"), edges=[])
+        return SimpleNamespace(
+            episode=SimpleNamespace(uuid=f"episode-{len(self.added)}", name=kwargs["name"]),
+            edges=[],
+        )
+
+    async def retrieve_episodes(self, reference_time, **kwargs) -> list[SimpleNamespace]:
+        return []
 
     async def close(self) -> None:
         self.events.append("close")
@@ -1335,7 +1341,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         {
             "query": "Orchid launch",
             "group_ids": [profile.memory_group],
-            "num_results": memory_module.RECALL_RESULT_LIMIT,
+            "num_results": memory_module.RECALL_SEARCH_LIMIT,
             "search_filter": memory_module.CURRENT_FACTS_FILTER,
         }
     ]
@@ -1501,12 +1507,13 @@ async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
 
     profile = PersonaProfile.model_validate({**PERSONA_DATA, "ingest_transcripts": True})
     assert audio.spoken == ["Demo digeser ke Kamis ya."]
-    assert [episode["episode_body"] for episode in graphiti.added] == [
-        "Unidentified participant: Demo Orchid jadi kapan?",
-        "Digital twin: Demo digeser ke Kamis ya.",
-    ]
-    assert {episode["group_id"] for episode in graphiti.added} == {profile.memory_group}
-    assert {episode["saga"] for episode in graphiti.added} == {"meeting:meeting-9"}
+    [episode] = graphiti.added
+    assert episode["episode_body"] == (
+        "Unidentified participant: Demo Orchid jadi kapan?\nDigital twin: Demo digeser ke Kamis ya."
+    )
+    assert episode["name"] == "meeting-9:w00000"
+    assert episode["group_id"] == profile.memory_group
+    assert episode["saga"] == "meeting:meeting-9"
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
     assert graphiti.events == ["verify", "close"]
 
@@ -1527,7 +1534,7 @@ async def test_join_ingest_only_persona_opens_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert created["middleware"] == []
-    assert len(graphiti.added) == 2
+    assert len(graphiti.added) == 1
     assert "recall" not in created["persona"].casefold()
 
 
@@ -1633,7 +1640,95 @@ async def test_memory_forget_meeting_uses_persona_group(
     assert calls == [
         {"memory": graphiti, "group_id": profile.memory_group, "meeting_id": "meeting-9"}
     ]
-    assert json.loads(capsys.readouterr().out) == {"removed_episodes": 3}
+    assert json.loads(capsys.readouterr().out) == {
+        "removed_episodes": 3,
+        "record_removed": False,
+        "journal_files_removed": 0,
+        "conversation_thread_removed": False,
+    }
+
+
+async def _forget_meeting_with_local_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, keep_record: bool
+) -> tuple[SimpleNamespace, str]:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    settings = fake_settings(tmp_path)
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    record_path = meeting_record_path(settings.meeting_record_dir, "meeting-9")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text("{}\n")
+    settings.journal_dir.mkdir()
+    for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
+        (settings.journal_dir / name).write_text("{}\n")
+    thread_id = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-9")
+    other_thread = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
+    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+        agent = create_meeting_agent(
+            FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
+        )
+        for thread in (thread_id, other_thread):
+            await agent.ainvoke(
+                {"messages": [{"role": "user", "content": "halo"}]},
+                {"configurable": {"thread_id": thread}},
+            )
+    fake_persona_memory(monkeypatch, FakeGraphiti())
+
+    async def forget(memory, **kwargs):
+        return 2
+
+    monkeypatch.setattr(cli, "forget_meeting", forget)
+    await cli.forget_memory(
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        meeting_id="meeting-9",
+        episode_uuid=None,
+        settings=settings,
+        keep_record=keep_record,
+    )
+    return settings, thread_id
+
+
+async def _thread_exists(settings: SimpleNamespace, thread_id: str) -> bool:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+        return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
+
+
+async def test_memory_forget_meeting_removes_record_journal_and_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings, thread_id = await _forget_meeting_with_local_files(
+        tmp_path, monkeypatch, keep_record=False
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "removed_episodes": 2,
+        "record_removed": True,
+        "journal_files_removed": 2,
+        "conversation_thread_removed": True,
+    }
+    assert not (settings.meeting_record_dir / "meeting-9").exists()
+    assert sorted(path.name for path in settings.journal_dir.iterdir()) == ["meeting-10.jsonl"]
+    assert not await _thread_exists(settings, thread_id)
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    other = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
+    assert await _thread_exists(settings, other)
+
+
+async def test_memory_forget_meeting_keep_record_only_removes_episodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings, thread_id = await _forget_meeting_with_local_files(
+        tmp_path, monkeypatch, keep_record=True
+    )
+
+    assert json.loads(capsys.readouterr().out) == {"removed_episodes": 2}
+    assert meeting_record_path(settings.meeting_record_dir, "meeting-9").exists()
+    assert (settings.journal_dir / "meeting-9.jsonl").exists()
+    assert await _thread_exists(settings, thread_id)
 
 
 async def test_memory_forget_episode_uses_persona_group(
@@ -1914,3 +2009,131 @@ def test_check_reports_models_per_role(tmp_path: Path, capsys: pytest.CaptureFix
     }
     assert models["stt"]["model"] == "muse-voice-transcribe-1.0"
     assert models["tts"]["model"]
+
+
+def write_record(settings: SimpleNamespace, meeting_id: str) -> None:
+    from fakeyou.conversation import TranscriptEvent
+    from fakeyou.record import MeetingRecord
+
+    record = MeetingRecord(meeting_record_path(settings.meeting_record_dir, meeting_id))
+    record.add_transcript(
+        TranscriptEvent(
+            id="t1",
+            timestamp="2026-09-30T10:00:00+00:00",
+            source="meeting_audio",
+            text="Kickoff vendor Orchid hari Selasa.",
+            finalized=True,
+        )
+    )
+    record.add_twin_speech("Siap, Selasa ya.")
+    record.close()
+
+
+async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = fake_settings(tmp_path)
+    write_record(settings, "meeting-9")
+    graphiti = FakeGraphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+
+    await cli.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path, vocabulary=["Orchid"]),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    [episode] = graphiti.added
+    assert episode["group_id"] == profile.memory_group
+    assert "Orchid" in episode["custom_extraction_instructions"]
+    assert "'Rani Twin'" in episode["custom_extraction_instructions"]
+    output = capsys.readouterr().out.splitlines()
+    summary = json.loads(output[-1])
+    assert (summary["meeting_id"], summary["ingested"], summary["completed"]) == (
+        "meeting-9",
+        1,
+        True,
+    )
+    journal = (settings.journal_dir / "meeting-9.jsonl").read_text()
+    assert '"event":"memory_ingest_finished"' in journal
+
+
+async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = fake_settings(tmp_path)
+    write_record(settings, "meeting-9")
+    graphiti = FakeGraphiti()
+
+    async def failing_add(**kwargs):
+        raise RuntimeError("graph down")
+
+    graphiti.add_episode = failing_add
+    fake_persona_memory(monkeypatch, graphiti)
+
+    with pytest.raises(SystemExit) as caught:
+        await cli.ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            settings=settings,
+        )
+    assert caught.value.code == 1
+
+
+async def test_memory_ingest_command_requires_a_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = fake_persona_memory(monkeypatch, FakeGraphiti())
+
+    with pytest.raises(cli.CliError, match="no meeting record"):
+        await cli.ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            settings=fake_settings(tmp_path),
+        )
+    assert opened == []
+
+
+async def test_memory_forget_keep_record_requires_a_meeting(tmp_path: Path) -> None:
+    with pytest.raises(cli.CliError, match="--keep-record"):
+        await cli.forget_memory(
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            meeting_id=None,
+            episode_uuid="episode-7",
+            settings=fake_settings(tmp_path),
+            keep_record=True,
+        )
+
+
+async def test_join_passes_persona_vocabulary_as_speech_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "create_meeting_agent", lambda *_args, **_kwargs: object())
+    captured = await _join_with_audio(
+        tmp_path,
+        monkeypatch,
+        conversation_enabled=True,
+        persona_path=write_persona(tmp_path, vocabulary=["Orchid", "Budi"]),
+    )
+
+    assert captured["open_audio"].keywords["stt_keywords"] == ("Rani Twin", "Orchid", "Budi")
+
+
+async def test_join_without_persona_has_no_speech_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = await _join_with_audio(tmp_path, monkeypatch)
+
+    assert captured["open_audio"].keywords["stt_keywords"] is None

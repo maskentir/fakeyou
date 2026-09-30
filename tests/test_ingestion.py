@@ -3,315 +3,240 @@ import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from graphiti_core.nodes import EpisodeType
 
-from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import TWIN_SPEAKER, UNIDENTIFIED_PARTICIPANT, MeetingIngestion
+from fakeyou.ingestion import (
+    TWIN_SPEAKER,
+    UNIDENTIFIED_PARTICIPANT,
+    episode_name,
+    extraction_instructions,
+    ingest_meeting,
+    meeting_windows,
+)
 from fakeyou.journal import ProviderJournal
 from fakeyou.memory import meeting_saga
+from fakeyou.record import ToolResultEntry, TranscriptEntry, TwinSpeechEntry
 
-TWIN_NAME = "Rani Twin"
-SPOKEN_AT = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+
+
+def said(seconds: float, text: str, participant: str = "unknown") -> TranscriptEntry:
+    return TranscriptEntry(
+        at=START + timedelta(seconds=seconds),
+        id=f"t{seconds}",
+        spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
+        participant=participant,
+        source="meeting_audio",
+        text=text,
+    )
+
+
+def twin(seconds: float, text: str) -> TwinSpeechEntry:
+    return TwinSpeechEntry(at=START + timedelta(seconds=seconds), text=text)
 
 
 class FakeGraphiti:
-    def __init__(self, *, edges_per_episode: int = 1) -> None:
-        self.episodes: list[dict] = []
-        self.edges_per_episode = edges_per_episode
-        self.errors: list[BaseException] = []
+    def __init__(self, existing: list[SimpleNamespace] | None = None) -> None:
+        self.saga_episodes = list(existing or [])
+        self.added: list[dict] = []
+        self.errors: dict[int, BaseException] = {}
         self.gate: asyncio.Event | None = None
-        self.added = asyncio.Event()
+        self.retrieved: list[dict] = []
+        self.driver = SimpleNamespace(name="driver")
+
+    async def retrieve_episodes(self, reference_time, **kwargs):
+        self.retrieved.append(kwargs)
+        return self.saga_episodes[-kwargs["last_n"] :]
 
     async def add_episode(self, **kwargs):
         if self.gate is not None:
             await self.gate.wait()
-        if self.errors:
-            raise self.errors.pop(0)
-        self.episodes.append(kwargs)
-        self.added.set()
-        return SimpleNamespace(
-            episode=SimpleNamespace(uuid=f"episode-{len(self.episodes)}"),
-            edges=[SimpleNamespace(fact="fact")] * self.edges_per_episode,
-        )
+        attempt = len(self.added)
+        if attempt in self.errors:
+            raise self.errors.pop(attempt)
+        self.added.append(kwargs)
+        episode = SimpleNamespace(uuid=f"uuid-{kwargs['name']}", name=kwargs["name"])
+        self.saga_episodes.append(episode)
+        return SimpleNamespace(episode=episode, edges=[SimpleNamespace(fact="fact")])
 
 
-def transcript(index: int, text: str = "Demo Orchid geser ke Kamis.", **overrides):
-    fields = {
-        "id": f"event-{index}",
-        "timestamp": (SPOKEN_AT + timedelta(seconds=index)).isoformat(),
-        "source": "meeting_audio",
-        "text": text,
-        "finalized": True,
-    }
-    fields.update(overrides)
-    return TranscriptEvent(**fields)
-
-
-def make_ingestion(memory: FakeGraphiti, **overrides) -> tuple[MeetingIngestion, list[str]]:
+async def run(memory: FakeGraphiti, entries: list, **overrides):
     lines: list[str] = []
-    options = {
+    values = {
         "group_id": "twin_group",
         "meeting_id": "meeting-1",
-        "twin_name": TWIN_NAME,
-        "faults": FaultReporter(meeting_id="meeting-1", log=lines.append),
+        "twin_name": "Rani Twin",
+        "vocabulary": ("Orchid", "Budi"),
         "journal": ProviderJournal("meeting-1", emit=lines.append),
-        "now": lambda: SPOKEN_AT,
+        "faults": FaultReporter(meeting_id="meeting-1", log=lines.append),
     }
-    options.update(overrides)
-    return MeetingIngestion(memory, **options), lines
+    values.update(overrides)
+    result = await ingest_meeting(memory, entries, **values)
+    return result, [json.loads(line) for line in lines]
 
 
-def events(lines: list[str], name: str) -> list[dict]:
-    rows = [json.loads(line) for line in lines]
-    return [row for row in rows if row["event"] == name]
+def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
+    entries = [
+        twin(0, "Gimana kalau demo digeser ke Kamis?"),
+        said(2, "Oke,\n setuju."),
+        ToolResultEntry(at=START, tool="recall_meeting_context", output="x", duration_ms=1),
+        said(3, "Budget aman.", participant="Speaker A"),
+    ]
+
+    [window] = meeting_windows(entries)
+
+    assert [(utterance.speaker, utterance.text) for utterance in window] == [
+        (TWIN_SPEAKER, "Gimana kalau demo digeser ke Kamis?"),
+        (UNIDENTIFIED_PARTICIPANT, "Oke, setuju."),
+        ("Speaker A", "Budget aman."),
+    ]
 
 
-async def test_participant_transcripts_become_one_message_episode_in_meeting_saga() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
+def test_windows_split_by_utterance_count_and_age() -> None:
+    by_count = meeting_windows([said(index, f"Kalimat {index}.") for index in range(45)])
+    by_age = meeting_windows([said(0, "Awal."), said(59, "Masih."), said(61, "Jendela baru.")])
 
-    ingestion.add_transcript(transcript(0, "Demo Orchid geser ke Kamis."))
-    ingestion.add_transcript(transcript(1, "Oke, setuju."))
-    await ingestion.close()
+    assert [len(window) for window in by_count] == [20, 20, 5]
+    assert [len(window) for window in by_age] == [2, 1]
 
-    [episode] = memory.episodes
-    assert episode["episode_body"] == (
-        f"{UNIDENTIFIED_PARTICIPANT}: Demo Orchid geser ke Kamis.\n"
-        f"{UNIDENTIFIED_PARTICIPANT}: Oke, setuju."
-    )
-    assert episode["source"] == EpisodeType.message
-    assert episode["group_id"] == "twin_group"
-    assert episode["saga"] == meeting_saga("meeting-1")
-    assert episode["reference_time"] == SPOKEN_AT
-    assert episode["source_description"] == "Google Meet meeting-1 participant transcript"
-    instructions = episode["custom_extraction_instructions"]
-    for label in (TWIN_SPEAKER, TWIN_NAME, UNIDENTIFIED_PARTICIPANT):
-        assert f"'{label}'" in instructions
+
+def test_windows_are_deterministic() -> None:
+    entries = [said(index * 7, f"Kalimat {index}.") for index in range(30)]
+
+    assert meeting_windows(entries) == meeting_windows(list(entries))
+
+
+def test_extraction_instructions_require_attribution_and_vocabulary() -> None:
+    instructions = extraction_instructions("Rani Twin", ("Orchid", "Budi"))
+
+    for phrase in (f"'{TWIN_SPEAKER}'", "'Rani Twin'", f"'{UNIDENTIFIED_PARTICIPANT}'"):
+        assert phrase in instructions
     assert "never the owner" in instructions
+    assert "speaker as the subject" in instructions
+    assert "someone asking" in instructions
+    assert "Orchid, Budi" in instructions
+    assert "sounds similar" in instructions
 
 
-async def test_known_participant_keeps_their_name() -> None:
+def test_extraction_instructions_without_vocabulary_do_not_list_terms() -> None:
+    assert "Known names" not in extraction_instructions("Rani Twin", ())
+
+
+async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga() -> None:
     memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
+    entries = [twin(0, "Demo digeser ke Kamis?"), said(1, "Oke setuju."), said(70, "Budi PIC.")]
 
-    ingestion.add_transcript(transcript(0, "Budget aman.", participant="Budi"))
-    await ingestion.close()
+    result, rows = await run(memory, entries)
 
-    assert memory.episodes[0]["episode_body"] == "Budi: Budget aman."
-
-
-async def test_only_new_final_nonblank_transcripts_are_ingested() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
-
-    ingestion.add_transcript(transcript(0, "Pertama."))
-    ingestion.add_transcript(transcript(0, "Pertama."))
-    ingestion.add_transcript(transcript(1, "sementara", finalized=False))
-    ingestion.add_transcript(transcript(2, "   "))
-    await ingestion.close()
-
-    assert memory.episodes[0]["episode_body"] == f"{UNIDENTIFIED_PARTICIPANT}: Pertama."
-
-
-async def test_speaker_kind_change_starts_a_new_chained_episode() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
-
-    ingestion.add_twin_speech("Gimana kalau demo digeser ke Kamis?")
-    ingestion.add_transcript(transcript(1, "Oke, setuju."))
-    ingestion.add_twin_speech("Siap, aku catat.")
-    await ingestion.close()
-
-    assert [episode["episode_body"] for episode in memory.episodes] == [
-        f"{TWIN_SPEAKER}: Gimana kalau demo digeser ke Kamis?",
-        f"{UNIDENTIFIED_PARTICIPANT}: Oke, setuju.",
-        f"{TWIN_SPEAKER}: Siap, aku catat.",
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00000",
+        "meeting-1:w00001",
     ]
-    assert [episode["source_description"] for episode in memory.episodes] == [
-        "Google Meet meeting-1 twin speech",
-        "Google Meet meeting-1 participant transcript",
-        "Google Meet meeting-1 twin speech",
-    ]
-    assert [episode["saga_previous_episode_uuid"] for episode in memory.episodes] == [
+    first = memory.added[0]
+    assert first["episode_body"] == (
+        f"{TWIN_SPEAKER}: Demo digeser ke Kamis?\n{UNIDENTIFIED_PARTICIPANT}: Oke setuju."
+    )
+    assert first["source"] == EpisodeType.message
+    assert first["source_description"] == "Google Meet meeting-1 transcript"
+    assert first["reference_time"] == START
+    assert first["group_id"] == "twin_group"
+    assert first["saga"] == meeting_saga("meeting-1")
+    assert "Orchid, Budi" in first["custom_extraction_instructions"]
+    assert [episode["saga_previous_episode_uuid"] for episode in memory.added] == [
         None,
-        "episode-1",
-        "episode-2",
+        "uuid-meeting-1:w00000",
     ]
-
-
-async def test_utterance_whitespace_is_normalized_to_one_line() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
-
-    ingestion.add_transcript(transcript(0, "  Demo\nOrchid   Kamis  "))
-    ingestion.add_twin_speech("Oke.\n\nSiap.")
-    await ingestion.close()
-
-    assert [episode["episode_body"] for episode in memory.episodes] == [
-        f"{UNIDENTIFIED_PARTICIPANT}: Demo Orchid Kamis",
-        f"{TWIN_SPEAKER}: Oke. Siap.",
-    ]
-
-
-async def test_batch_flushes_at_utterance_limit() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory, max_utterances=2)
-
-    for index in range(5):
-        ingestion.add_transcript(transcript(index, f"Kalimat {index}."))
-    await ingestion.close()
-
-    assert [episode["episode_body"].count("\n") + 1 for episode in memory.episodes] == [2, 2, 1]
-
-
-async def test_quiet_window_flushes_without_close() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory, window_seconds=0.01)
-
-    ingestion.add_transcript(transcript(0))
-    async with asyncio.timeout(2):
-        await memory.added.wait()
-
-    assert len(memory.episodes) == 1
-    await ingestion.close()
-
-
-async def test_window_age_flushes_a_continuous_stream() -> None:
-    memory = FakeGraphiti()
-    ticks = iter(range(1000))
-    ingestion, _lines = make_ingestion(
-        memory, window_seconds=2, max_utterances=100, clock=lambda: next(ticks)
+    assert (result.windows, result.resumed_from, result.ingested, result.completed) == (
+        2,
+        0,
+        2,
+        True,
     )
-
-    for index in range(5):
-        ingestion.add_transcript(transcript(index, f"Kalimat {index}."))
-    await ingestion.close()
-
-    assert len(memory.episodes) >= 2
-    assert sum(episode["episode_body"].count("\n") + 1 for episode in memory.episodes) == 5
-
-
-async def test_failed_episode_is_reported_and_ingestion_continues() -> None:
-    memory = FakeGraphiti()
-    memory.errors.append(RuntimeError("secret neo4j detail"))
-    ingestion, lines = make_ingestion(memory, max_utterances=1)
-
-    ingestion.add_transcript(transcript(0, "Gagal."))
-    ingestion.add_transcript(transcript(1, "Berhasil."))
-    await ingestion.close()
-
-    assert [episode["episode_body"] for episode in memory.episodes] == [
-        f"{UNIDENTIFIED_PARTICIPANT}: Berhasil."
+    assert [row["outcome"] for row in rows if row["event"] == "memory_episode"] == [
+        "extracted",
+        "extracted",
     ]
-    faults = events(lines, "fault")
-    assert [(fault["source"], fault["kind"]) for fault in faults] == [("memory_ingest", "unknown")]
-    assert "secret neo4j detail" not in "\n".join(lines)
-    assert [row["outcome"] for row in events(lines, "memory_episode")] == ["failed", "extracted"]
+    [finished] = [row for row in rows if row["event"] == "memory_ingest_finished"]
+    assert (finished["windows"], finished["ingested"], finished["completed"]) == (2, 2, True)
 
 
-async def test_hung_episode_times_out_and_ingestion_continues() -> None:
-    memory = FakeGraphiti()
-    fault_lines: list[str] = []
-    reported = asyncio.Event()
+async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() -> None:
+    entries = [said(index * 61, f"Kalimat {index}.") for index in range(3)]
+    memory = FakeGraphiti(existing=[SimpleNamespace(uuid="old-0", name="meeting-1:w00000")])
 
-    def log_fault(line: str) -> None:
-        fault_lines.append(line)
-        reported.set()
+    result, _rows = await run(memory, entries)
+    again, _rows = await run(memory, entries)
 
-    ingestion, _lines = make_ingestion(
-        memory,
-        max_utterances=1,
-        episode_timeout_seconds=0.01,
-        faults=FaultReporter(meeting_id="meeting-1", log=log_fault),
-    )
-    memory.gate = asyncio.Event()
-
-    ingestion.add_transcript(transcript(0, "Macet."))
-    async with asyncio.timeout(2):
-        await reported.wait()
-    memory.gate.set()
-    ingestion.add_transcript(transcript(1, "Lanjut."))
-    await ingestion.close()
-
-    assert [episode["episode_body"] for episode in memory.episodes] == [
-        f"{UNIDENTIFIED_PARTICIPANT}: Lanjut."
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00001",
+        "meeting-1:w00002",
     ]
-    assert events(fault_lines, "fault")[0]["kind"] == "timeout"
+    assert memory.added[0]["saga_previous_episode_uuid"] == "old-0"
+    assert (result.resumed_from, result.ingested) == (1, 2)
+    assert (again.resumed_from, again.ingested, again.completed) == (3, 0, True)
+    assert memory.retrieved[0] == {
+        "last_n": 1,
+        "group_ids": ["twin_group"],
+        "saga": meeting_saga("meeting-1"),
+    }
 
 
-async def test_episode_without_extracted_facts_is_journaled_as_empty() -> None:
-    memory = FakeGraphiti(edges_per_episode=0)
-    ingestion, lines = make_ingestion(memory)
+async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> None:
+    entries = [said(index * 61, f"Kalimat {index}.") for index in range(3)]
+    memory = FakeGraphiti()
+    memory.errors[1] = RuntimeError("secret graph detail")
 
-    ingestion.add_transcript(transcript(0, "Halo semua."))
-    await ingestion.close()
+    result, rows = await run(memory, entries)
+    resumed, _rows = await run(memory, entries)
 
-    [row] = events(lines, "memory_episode")
-    assert row["outcome"] == "empty"
-    assert row["utterances"] == 1
-    assert row["facts"] == 0
+    assert (result.ingested, result.completed) == (1, False)
+    assert [(row["source"], row["kind"]) for row in rows if row["event"] == "fault"] == [
+        ("memory_ingest", "unknown")
+    ]
+    assert "secret graph detail" not in json.dumps(rows)
+    assert (resumed.resumed_from, resumed.ingested, resumed.completed) == (1, 2, True)
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00000",
+        "meeting-1:w00001",
+        "meeting-1:w00002",
+    ]
 
 
-async def test_full_queue_drops_utterances_without_blocking() -> None:
+async def test_ingest_times_out_a_hung_window() -> None:
     memory = FakeGraphiti()
     memory.gate = asyncio.Event()
-    ingestion, lines = make_ingestion(memory, queue_size=2, max_utterances=1)
 
-    for index in range(6):
-        ingestion.add_transcript(transcript(index, f"Kalimat {index}."))
-    memory.gate.set()
-    await ingestion.close()
+    result, rows = await run(memory, [said(0, "Macet.")], episode_timeout_seconds=0.01)
 
-    assert 1 <= len(memory.episodes) < 6
-    [fault] = events(lines, "fault")
-    assert (fault["source"], fault["kind"]) == ("memory_ingest_backlog", "unavailable")
+    assert (result.ingested, result.completed) == (0, False)
+    assert [row["kind"] for row in rows if row["event"] == "fault"] == ["timeout"]
 
 
-async def test_close_timeout_cancels_hung_ingestion_and_reports_backlog() -> None:
+async def test_ingest_stops_between_windows_when_requested() -> None:
+    stop = asyncio.Event()
+    stop.set()
     memory = FakeGraphiti()
-    memory.gate = asyncio.Event()
-    ingestion, lines = make_ingestion(memory, max_utterances=1, drain_timeout_seconds=0.05)
 
-    ingestion.add_transcript(transcript(0, "Macet."))
-    ingestion.add_transcript(transcript(1, "Tertahan."))
-    async with asyncio.timeout(2):
-        await ingestion.close()
+    result, _rows = await run(memory, [said(0, "Satu.")], stop=stop)
 
-    assert memory.episodes == []
-    faults = events(lines, "fault")
-    assert [(fault["source"], fault["kind"]) for fault in faults] == [("memory_ingest", "timeout")]
+    assert (result.ingested, result.completed) == (0, False)
+    assert memory.added == []
 
 
-async def test_utterances_after_close_are_ignored() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
+async def test_ingest_refuses_a_saga_written_by_an_older_ingestion_format() -> None:
+    memory = FakeGraphiti(existing=[SimpleNamespace(uuid="legacy", name="meeting-1:00003")])
 
-    await ingestion.close()
-    ingestion.add_transcript(transcript(0))
-    ingestion.add_twin_speech("Halo.")
-    await asyncio.sleep(0)
-
-    assert memory.episodes == []
+    with pytest.raises(ValueError, match="memory-forget"):
+        await run(memory, [said(0, "Halo.")])
 
 
-async def test_invalid_transcript_timestamp_falls_back_to_now() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
+async def test_ingest_of_an_empty_record_is_complete() -> None:
+    result, _rows = await run(FakeGraphiti(), [])
 
-    ingestion.add_transcript(transcript(0, timestamp="not-a-time"))
-    await ingestion.close()
-
-    assert memory.episodes[0]["reference_time"] == SPOKEN_AT
+    assert (result.windows, result.ingested, result.completed) == (0, 0, True)
 
 
-async def test_close_is_idempotent_and_leaves_no_task() -> None:
-    memory = FakeGraphiti()
-    ingestion, _lines = make_ingestion(memory)
-
-    ingestion.add_transcript(transcript(0))
-    await ingestion.close()
-    await ingestion.close()
-
-    assert len(memory.episodes) == 1
-    assert all(task.done() for task in asyncio.all_tasks() if task is not asyncio.current_task())
+def test_episode_names_sort_by_window_index() -> None:
+    assert episode_name("meeting-1", 7) == "meeting-1:w00007"

@@ -1,7 +1,14 @@
 import asyncio
 import sys
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Sequence,
+)
 from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
@@ -468,6 +475,7 @@ async def open_meeting_audio(
     deaf_window_seconds: float = 120.0,
     deaf_grace_seconds: float = 120.0,
     stt_model: str = META_STT_MODEL,
+    stt_keywords: Sequence[str] | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -491,6 +499,7 @@ async def open_meeting_audio(
                     api_key=muse_api_key,
                     sample_rate=CAPTURE_SAMPLE_RATE,
                     model=stt_model,
+                    keywords=stt_keywords,
                     service_class=ManagedMuseSTT,
                 )
             )
