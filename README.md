@@ -2,7 +2,7 @@
 
 Fondasi AI Digital Twin untuk menjadi peserta meeting online, dimulai dari Google Meet: mendengar, melihat, mengingat konteks dan persona, berbicara, serta berinteraksi lewat UI.
 
-Fondasi SDK, worker guest Google Meet, dan audio dua arah sudah tersedia. Loop percakapan opt-in sudah diuji lokal; acceptance conversation live, persona, dan perilaku partisipasi menjadi tahap berikutnya.
+Fondasi SDK, worker guest Google Meet, dan audio dua arah sudah tersedia. Loop percakapan opt-in, profil persona tervalidasi, dan recall Graphiti per owner/twin sudah diuji lokal dan dengan provider live; acceptance di Google Meet serta perilaku partisipasi menjadi tahap berikutnya.
 
 Lihat [status fondasi dan pekerjaan berikutnya](docs/project-status.md) serta [hasil refactor](docs/refactor-2026-09-28.md) untuk bukti kemampuan, batas modul, dan urutan pembangunan.
 
@@ -39,7 +39,7 @@ uv run --env-file .env fakeyou chat "Kita menyiapkan digital twin meeting." --th
 uv run --env-file .env fakeyou chat "Apa konteks percakapan kita?" --thread demo
 ```
 
-`--thread` mengidentifikasi percakapan checkpoint. Gunakan ID berbeda untuk konteks yang harus terpisah. Model awal `openai:gpt-4.1-mini` dapat diganti lewat `FAKEYOU_CHAT_MODEL`; provider lain memerlukan package LangChain terkait. Factory agent menerima persona khusus, tetapi profile manager belum tersedia.
+`--thread` mengidentifikasi percakapan checkpoint. Gunakan ID berbeda untuk konteks yang harus terpisah. Model awal `openai:gpt-4.1-mini` dapat diganti lewat `FAKEYOU_CHAT_MODEL`; provider lain memerlukan package LangChain terkait. `chat` memakai persona default; profil pemilik tersedia untuk `join` lewat `--persona`.
 
 ## Browser
 
@@ -72,7 +72,7 @@ uv run --env-file .env fakeyou memory-init
 uv run --env-file .env fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --thread memory-demo --memory
 ```
 
-`FAKEYOU_MEMORY_GROUP` membatasi ruang pengetahuan agent. Ini pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual; ingestion transcript final dengan ID sumber, waktu kejadian, deduplikasi, dan koreksi belum tersedia.
+`FAKEYOU_MEMORY_GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`; ingestion transcript final dengan ID sumber, waktu kejadian, deduplikasi, dan koreksi belum tersedia.
 
 Neo4j memakai named volume dan port loopback. Password contoh hanya untuk lokal. Mengubah `.env` tidak mereset password volume yang sudah terisi. `docker compose stop` mematikan layanan tanpa menghapus data.
 
@@ -86,7 +86,24 @@ PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk pe
 
 `voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
-Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`; `--memory` memerlukan `--converse`. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md), [hasil refactor](docs/conversation-refactor-2026-09-28.md), serta [next task persona dan memori](docs/superpowers/plans/2026-09-28-persona-memory-access.md).
+Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md) dan [hasil refactor](docs/conversation-refactor-2026-09-28.md).
+
+## Persona pemilik
+
+```sh
+docker compose up -d --wait neo4j
+docker compose run --rm meeting-worker join https://meet.google.com/xxx-yyyy-zzz \
+  --owner-id demo_owner --twin-id demo_twin \
+  --audio --converse --persona examples/persona.example.json --memory
+```
+
+Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service Compose `bolt://neo4j:7687`; override dengan `FAKEYOU_WORKER_NEO4J_URI` bila perlu. Simpan profil pribadi di `.runtime/audio/persona.json` (diabaikan Git) lalu pakai `--persona .runtime/persona.json` di dalam worker.
+
+`--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
+
+Profil adalah konfigurasi operator dengan schema ketat: `owner_id`, `twin_id`, `display_name`, `role`, `language` (`id` atau `en`), `speaking_style`, `goals`, `verified_facts`, dan `allowed_tools`. Field asing, teks kosong, lebih dari 20 item, teks di atas 500 karakter, atau tool selain `recall_meeting_context` ditolak. [Contoh sintetis](examples/persona.example.json) dapat langsung dicoba; jangan menyimpan profil pribadi di repository.
+
+Ruang memori adalah `twin_` + UUID5 dari `[owner_id, twin_id]`: stabil lintas meeting dan tidak berubah saat nama diganti. Checkpoint percakapan tetap per owner/twin/meeting. Agent meeting hanya mendapat tool recall; penulisan memori belum tersedia di `join`. Koneksi Neo4j diverifikasi sebelum browser dibuka; kegagalannya berakhir sebagai `infra_failure` dengan exit code 3. Recall yang gagal saat meeting dikembalikan ke model sebagai informasi yang belum diketahui, dicatat sebagai fault `memory`, dan tidak menghentikan capture. Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md).
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya memverifikasi jawaban model di meeting live, membangun persona dan memori pemilik, lalu menambahkan speaker/video/participant events, turn-taking, chat, serta raise hand.
 
@@ -98,12 +115,18 @@ uv run ruff format --check .
 uv run mypy
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py
+DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona.py
 uv run pytest tests/test_browser.py tests/test_meeting_browser.py -m browser
 uv build
 docker compose --profile production config --quiet
 ```
 
-Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke test opt-in memakai browser asli pada halaman lokal untuk DOM, klik, dan screenshot. DeepEval menggunakan respons terprogram untuk menguji tool dan argumen, bukan kualitas penalaran model live.
+Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke test opt-in memakai browser asli pada halaman lokal untuk DOM, klik, dan screenshot. DeepEval default menggunakan respons terprogram untuk menguji wiring prompt, tool, dan argumen, bukan kualitas penalaran model live. Penilaian kualitas persona dengan model dan judge OpenAI dijalankan terpisah:
+
+```sh
+uv run --env-file .env deepeval test run evals/test_persona.py -m live
+uv run --env-file .env pytest tests/test_providers_live.py -m live
+```
 
 CI menjalankan lint, format, type check, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 
@@ -117,3 +140,5 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/li
 - [Sumber dokumentasi library](docs/library-sources.md)
 - [Rencana fondasi](docs/implementation-plan.md)
 - [Rencana runtime sesi dan guest Meet](docs/meeting-runtime-plan.md)
+- [Persona pemilik dan retrieval memori](docs/persona-memory-plan.md)
+- [Rencana berikutnya: ingestion memori dengan provenance](docs/memory-ingestion-plan.md)

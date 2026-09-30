@@ -1,6 +1,6 @@
 # Status fondasi dan pekerjaan berikutnya
 
-Diperbarui: 28 September 2026. Status mencakup fondasi, guest runtime, verifikasi provider, dan refactor. Bukti historis live dipisahkan dari pengujian regresi terbaru.
+Diperbarui: 30 September 2026. Status mencakup fondasi, guest runtime, verifikasi provider, dan refactor. Bukti historis live dipisahkan dari pengujian regresi terbaru.
 
 ## Posisi proyek sekarang
 
@@ -21,9 +21,9 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Mulut: sintesis unary + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in | Acceptance conversation live: jawaban model terdengar utuh tanpa patah |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
 | Mata | Tool DOM dan screenshot tersedia | Observasi screenshare/kamera berkelanjutan dan pemahaman visual oleh model multimodal |
-| Memori pengetahuan: Graphiti + Neo4j | Tools scoped, schema, cleanup, serta ingestion dan retrieval fakta sintetis setelah client dibuka ulang teruji live | Ingestion transkrip otomatis dengan provenance dan deduplikasi |
-| Persona | Agent menerima string persona; ada prompt default | Profil pemilik, gaya bicara, tujuan, pengetahuan, serta batas kewenangan per twin |
-| Evaluasi: DeepEval + pytest | Tes perilaku lokal dan satu tool trajectory deterministik tersedia | Skenario meeting nyata, kualitas jawaban/persona, relevansi memori, interupsi, dan kegagalan media |
+| Memori pengetahuan: Graphiti + Neo4j | Tools scoped, schema, cleanup, retrieval setelah reopen, serta isolasi dua namespace owner/twin teruji live; `join --memory` hanya recall, Neo4j diverifikasi sebelum browser | Ingestion transkrip otomatis dengan provenance dan deduplikasi ([rencana](memory-ingestion-plan.md)) |
+| Persona | Profil JSON tervalidasi (`join --persona`), prompt yang memisahkan fakta pemilik/klaim participant/inferensi, permission tool di composition root, namespace `twin_<uuid5>` | Acceptance di Meet; kewenangan granular selain aturan "konfirmasi ke owner" |
+| Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, dan 5 skenario kualitas persona live (GEval) | Skenario meeting nyata, interupsi, kegagalan media, dan evaluasi memori hasil ingestion |
 | Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan | Kontrol jarak jauh, pemulihan crash, penjadwalan, serta antarmuka pengguna |
 
 Sumber implementasi: [agent](../src/fakeyou/agent.py), [browser](../src/fakeyou/browser.py), [voice](../src/fakeyou/voice.py), [memory](../src/fakeyou/memory.py), dan [CLI](../src/fakeyou/cli.py).
@@ -34,6 +34,7 @@ LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan sa
 
 Hasil pengujian terakhir yang tercatat:
 
+- Persona dan retrieval memori (30 September): 555 tes default dan 6 tes browser lulus; 4 tes provider live dan 5 skenario DeepEval persona live lulus, dengan satu flake ekstraksi Graphiti yang tercatat. Lihat [bukti persona](persona-memory-plan.md#bukti-pengujian-30-september-2026).
 - Refactor conversation: 244 tes default dan 6 tes browser lulus; [bukti dan batas verifikasi](conversation-refactor-2026-09-28.md).
 - Hasil regresi refactor terbaru tersedia di [laporan refactor](refactor-2026-09-28.md).
 - 5 tes browser asli lulus, termasuk join sampai leave pada fixture lokal dengan checkpoint SQLite asli.
@@ -94,13 +95,15 @@ Pipecat `LangchainProcessor` versi terpasang belum meneruskan seluruh kontrak pe
 
 ### 4. Persona dan memori pemilik
 
-Task berikutnya sudah disiapkan: [persona tervalidasi dan akses memori per pemilik/twin](superpowers/plans/2026-09-28-persona-memory-access.md). Scope awal mencakup profil, prompt, dan retrieval; ingestion otomatis dipisahkan agar provenance, koreksi, dan idempotensi dapat diuji sendiri.
+Profil, prompt, dan retrieval sudah diimplementasikan dan diuji; lihat [persona dan retrieval memori](persona-memory-plan.md). Ingestion otomatis dipisahkan ke [rencana ingestion dengan provenance](memory-ingestion-plan.md) agar provenance, koreksi, dan idempotensi dapat diuji sendiri.
 
 Sediakan profil pemilik: identitas, gaya bahasa, tujuan meeting, pengetahuan yang diberikan, dan kewenangan untuk berbicara atau membuat komitmen. Bedakan fakta pemilik, ucapan peserta, dan kesimpulan model.
 
 Sambungkan transkrip final ke Graphiti dengan ID sumber, waktu kejadian, provenance meeting/participant, deduplikasi, koreksi, serta namespace pemilik. Simpan transkrip sementara di konteks aktif, bukan sebagai fakta permanen. Buat pengelolaan sumber pengetahuan pemilik dan kebijakan retensi/penghapusan.
 
 **Selesai ketika:** twin mempertahankan persona, mengingat fakta relevan lintas sesi, dapat menunjukkan asal fakta, dan meminta klarifikasi saat informasi atau kewenangannya kurang. Data pemilik lain tidak ikut terambil.
+
+**Kemajuan:** profil tervalidasi, prompt persona, recall per namespace owner/twin, penolakan konfigurasi sebelum resource, startup failure `infra_failure`, dan recall gagal sebagai informasi belum diketahui sudah diuji offline dan live. Isolasi dua namespace terbukti di Graphiti live. Acceptance di Meet, ingestion transkrip, provenance, koreksi, dan retensi masih terbuka.
 
 ### 5. Mata, tangan, dan perilaku percakapan multipihak
 

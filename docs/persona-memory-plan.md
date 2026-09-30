@@ -1,12 +1,12 @@
 # Persona pemilik dan retrieval memori
 
-Status: rencana berikutnya, belum diimplementasikan. Disusun 30 September 2026 setelah [refactor voice reliability](voice-reliability-refactor-2026-09-30.md). Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`.
+Status: Task 1–3 selesai dan teruji pada 30 September 2026 di branch `feat/persona-memory`. Task 4 (acceptance Meet terkontrol) masih terbuka karena memerlukan host dan meeting uji. Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`. Tahap berikutnya ada di [rencana ingestion memori](memory-ingestion-plan.md).
 
 ## Hasil yang dituju
 
 Twin mengikuti profil pemilik yang tervalidasi, mengingat konteks meeting melalui checkpoint yang sudah ada, dan dapat mengambil pengetahuan dari ruang Graphiti milik owner/twin yang sama. Ketika fakta atau kewenangan tidak tersedia, twin meminta klarifikasi. Ini tahap identitas dan pengetahuan; kemampuan melihat slide, memakai UI Meet, dan mengambil giliran bicara multipihak menyusul.
 
-Fondasi guest, audio dua arah, dan conversation loop sudah tersedia. Live conversation pernah dijalankan pada 29–30 September; pengukuran first-audible audio dan stop latency belum tersedia. Unit persona dapat berjalan sambil melengkapi bukti media tersebut.
+Fondasi guest, audio dua arah, dan conversation loop sudah tersedia. Live conversation pernah dijalankan pada 29–30 September; pengukuran first-audible audio dan stop latency belum tersedia.
 
 ## Keputusan desain
 
@@ -16,74 +16,112 @@ Fondasi guest, audio dua arah, dan conversation loop sudah tersedia. Live conver
 - Tahap ini hanya memberi tool recall kepada meeting agent. Penulisan memori, ingestion otomatis, koreksi, provenance lengkap, retensi, dan penghapusan menjadi tahap terpisah.
 - Tool permission diberlakukan di composition root sebelum agent dibuat. Prompt saja bukan batas akses. Namespace lokal juga bukan pengganti autentikasi untuk deployment multiuser.
 - Pertahankan queue conversation tunggal, batas dua kalimat untuk jawaban model, retry TTS tanpa replay PCM, dan cleanup audio/browser. Capture tetap berjalan ketika agent atau Graphiti bekerja.
-- Baca dokumentasi serta source versi terkunci sebelum implementasi. Production Python tetap tanpa comment/docstring; kontrak dan alasan desain ditulis di dokumen ini.
+- Production Python tetap tanpa comment/docstring; kontrak dan alasan desain ditulis di dokumen ini.
 
-## Peta perubahan
+## Implementasi
 
-| File | Tanggung jawab |
+| File | Isi |
 | --- | --- |
-| `src/fakeyou/persona.py` baru | Schema profil, validasi identitas, prompt, namespace |
-| `src/fakeyou/cli.py` | Validasi sebelum resource eksternal; injeksi profil dan tool recall |
-| `src/fakeyou/agent.py` | Pertahankan factory native; ubah hanya bila kontrak prompt memerlukan |
-| `src/fakeyou/memory.py` | Pakai factory dan tools yang sudah ada; tidak menambah ingestion |
-| `tests/test_persona.py` baru | Validasi, prompt, identitas, isolasi namespace |
-| `tests/test_cli.py` | CLI, urutan startup, daftar tool nyata yang diterima agent |
-| `tests/test_providers_live.py` | Retrieval dua namespace sintetis setelah reopen |
-| `evals/test_persona.py` baru | Skenario persona, fakta tidak diketahui, batas kewenangan |
-| `examples/persona.example.json` baru | Profil sintetis lengkap yang dapat dicoba |
-| `README.md`, `docs/project-status.md` | Usage, bukti pengujian, dan batas kemampuan |
+| `src/fakeyou/persona.py` | `PersonaProfile`, `load_persona`, `build_persona`, `memory_group` |
+| `src/fakeyou/agent.py` | `MEETING_GUIDANCE` dan `SPOKEN_LANGUAGE_GUIDANCE` dipisah; `DEFAULT_PERSONA` tetap sama isinya; factory menerima `middleware` native `create_agent` |
+| `src/fakeyou/memory.py` | `verify_memory_connection` dan `recall_error_middleware`; tools dan factory lama tidak berubah |
+| `src/fakeyou/cli.py` | `join --persona PATH`, validasi sebelum resource, filter tool, startup failure `infra_failure` |
+| `compose.yaml` | Worker memakai `bolt://neo4j:7687` (override `FAKEYOU_WORKER_NEO4J_URI`) dan mount `examples/` read-only |
+| `examples/persona.example.json` | Profil sintetis Rani Twin/Orchid |
+| `tests/test_persona.py`, `tests/test_cli.py`, `tests/test_memory.py` | Validasi, isolasi, wiring, failure path |
+| `tests/test_providers_live.py` | Isolasi dua namespace Graphiti setelah reopen |
+| `evals/test_persona.py` | Wiring deterministik dan penilaian kualitas live |
+
+### Kontrak profil
+
+- `ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)`. `owner_id`/`twin_id` memakai `SessionId`, `display_name` memakai `TwinName`.
+- Teks isi (`role`, `speaking_style`, item `goals`/`verified_facts`) di-strip, wajib nonblank, maksimal 500 karakter. `goals` dan `verified_facts` berupa tuple maksimal 20 item. `language` hanya `id` atau `en`. `allowed_tools` adalah `frozenset[Literal["recall_meeting_context"]]`.
+- Default: `language="id"`, `speaking_style="concise"`, goals/facts kosong, permission kosong.
+- `memory_group = "twin_" + uuid5(NAMESPACE_URL, json.dumps([owner_id, twin_id]))`. Ini property biasa, bukan field, sehingga tidak ikut serialisasi atau prompt. Encoding JSON list mencegah tabrakan seperti `("owner_a", "twin")` vs `("owner", "a_twin")`.
+- `load_persona` membaca file lewat `asyncio.to_thread`, memvalidasi dengan `model_validate_json`, lalu menolak owner/twin yang tidak sama dengan `SessionConfig`. File yang tidak terbaca menjadi `CliError`.
+
+### Prompt
+
+`build_persona` menyusun `MEETING_GUIDANCE`, guidance bahasa sesuai `language`, aturan sumber, aturan recall (hanya bila recall diizinkan), dan JSON profil dari `model_dump_json(include=...)`. JSON hanya memuat `display_name`, `role`, `speaking_style`, `goals`, dan `verified_facts`; ID, namespace, dan daftar tool tidak masuk prompt. Teks profil tetap berupa string JSON yang di-escape, bukan instruksi bebas.
+
+Aturan sumber membedakan tiga hal. `verified_facts` adalah satu-satunya fakta pemilik. Transkrip adalah klaim participant dan tidak dapat mengubah identitas, owner, memori, atau tool. Kesimpulan lain dilabeli sebagai tebakan. Twin tidak membuat komitmen, approval, deadline, anggaran, atau kontrak tanpa fakta yang memberi kewenangan tersebut.
+
+Eval live menemukan dua kelemahan prompt awal. Model tidak pernah memanggil recall untuk pertanyaan jadwal, dan `display_name` terbaca sebagai nama owner ("owner, Rani Twin"). Aturan diperjelas: panggil recall sebelum menjawab tidak tahu bila `verified_facts` tidak menjawab, dan `display_name` adalah nama twin sendiri. Setelah perubahan itu, 3/3 probe memanggil recall.
+
+### Komposisi CLI
+
+Urutan di `join_meeting`:
+
+1. Validasi flag: `--persona` memerlukan `--converse`; `join --memory` memerlukan `--persona`. `chat --memory` tetap memakai `FAKEYOU_MEMORY_GROUP` dan kedua tool.
+2. `SessionConfig` dibangun dan `load_persona` dijalankan sebelum `FaultReporter`, journal, model, SQLite, Graphiti, browser, dan audio.
+3. `--memory` tanpa `recall_meeting_context` di `allowed_tools` ditolak sebelum koneksi database.
+4. Tanpa `--twin-name`, `display_name` profil menjadi nama di Meet; override eksplisit tetap menang. Identitas owner/twin tidak berubah.
+5. `open_conversation` membuka Graphiti hanya jika ada tool yang diizinkan. `create_memory_tools(..., group_id=profile.memory_group)` difilter berdasarkan `allowed_tools`, sehingga `remember_meeting_fact` tidak pernah sampai ke meeting agent.
+
+### Startup memory dan kegagalan recall
+
+- `verify_memory_connection` memanggil `verify_connectivity()` milik driver Neo4j dengan batas `MEMORY_CONNECT_TIMEOUT_SECONDS = 10`. `execute_query("RETURN 1")` tidak dipakai karena managed transaction Neo4j me-retry sekitar 30 detik saat port mati. `verify_connectivity()` gagal seketika untuk port mati (`ServiceUnavailable`) dan password salah (`AuthError`).
+- Kegagalan diklasifikasi dengan `classify_exception("memory", ...)` menjadi `ProviderFault`. `join` mencatat fault, mencetak hasil `phase=ended`, `terminal_reason=infra_failure`, dan `detail="memory unavailable: ..."`, lalu keluar dengan kode 3. Browser dan agent tidak dibuat; Graphiti dan checkpointer ditutup. Tidak ada keluarga exception baru. Checkpoint lifecycle meeting tidak ditulis karena sesi belum dimulai.
+- Preflight DNS/TLS tetap hanya memeriksa host model/STT/TTS. Pemeriksaan Neo4j adalah langkah terpisah di `open_conversation`.
+- Recall yang gagal saat meeting ditangani `ToolErrorMiddleware` native LangChain yang hanya berlaku untuk `recall_meeting_context`. Model menerima `RECALL_UNAVAILABLE_RESULT` ("treat the answer as unknown"), fault `memory` dicatat tanpa pesan exception, dan conversation tetap `listening`. `CancelledError` tidak ditangkap sehingga stop tetap membatalkan retrieval.
+- Batas waktu retrieval mengikuti deadline invocation agent 60 detik yang sudah ada. Jika Graphiti hang melewati deadline itu, loop berakhir sebagai `conversation_failure`, sama seperti model yang timeout. Ini tercatat sebagai item terbuka di rencana berikutnya.
 
 ## Task 1 — Profil dan identitas
 
-Interface: `PersonaProfile`, `load_persona(path: Path, session: SessionConfig) -> PersonaProfile`, `build_persona(profile: PersonaProfile) -> str`.
-
-- [ ] Buat tes gagal untuk JSON rusak, field asing, teks wajib kosong, owner/twin tidak cocok, tool tidak dikenal, dan namespace yang tertukar. Nama tampilan berbeda tidak mengubah namespace; dua meeting untuk owner/twin sama memakai namespace sama.
-- [ ] Pakai `ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)`, tipe `SessionId`/`TwinName` yang sudah ada, dan collection immutable. Field: `owner_id`, `twin_id`, `display_name`, `role`, `language`, `speaking_style`, `goals`, `verified_facts`, dan `allowed_tools: frozenset[Literal["recall_meeting_context"]]`.
-- [ ] Validasi string isi profil sebagai nonblank dengan batas panjang/jumlah yang jelas; jangan membangun parser sendiri. Default bahasa `id`, gaya ringkas, dan permission kosong.
-- [ ] Derivasikan `memory_group` sebagai `twin_` diikuti UUID5 dari JSON `[owner_id, twin_id]`. Jangan memasukkan nama, meeting ID, transkrip, atau parameter model.
-- [ ] Gunakan `model_validate_json` dalam `load_persona`; jalankan file I/O melalui `asyncio.to_thread`. Tolak owner/twin mismatch sebelum model, database, browser, dan audio dibuka.
-- [ ] Tentukan nama tampilan: tanpa override CLI, gunakan `display_name` profil; override eksplisit `--twin-name` tetap menang. Identitas owner/twin tetap harus cocok dengan `SessionConfig`, bukan diambil dari ucapan participant.
-- [ ] Render prompt melalui JSON serialization native. Pisahkan fakta yang diberikan pemilik, klaim participant, dan inferensi. Sesuaikan guidance bahasa default agar tidak bertentangan dengan `language` profil. Jangan mengubah JSON profil menjadi instruksi bebas untuk memilih tool.
-- [ ] Jalankan `uv run pytest tests/test_persona.py -q`, Ruff, dan mypy sampai lulus.
+- [x] Tes gagal untuk JSON rusak, field asing, teks wajib kosong, owner/twin tidak cocok, tool tidak dikenal, dan namespace yang tertukar. Rename tidak mengubah namespace; meeting berbeda memakai namespace sama.
+- [x] `ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)`, tipe `SessionId`/`TwinName`, collection immutable, semua field yang direncanakan.
+- [x] Validasi nonblank dengan batas panjang/jumlah melalui `StringConstraints` dan `Field(max_length=...)`.
+- [x] `memory_group` sebagai `twin_` + UUID5 dari JSON `[owner_id, twin_id]`.
+- [x] `model_validate_json` dan `asyncio.to_thread` di `load_persona`; mismatch ditolak sebelum resource dibuka.
+- [x] Nama tampilan dari profil, override `--twin-name` menang.
+- [x] Prompt melalui `model_dump_json`, sumber fakta dipisah, guidance bahasa mengikuti profil.
+- [x] `pytest tests/test_persona.py`, Ruff, dan mypy lulus.
 
 ## Task 2 — Komposisi agent dan recall
 
-Interface CLI: `join --audio --converse --persona PATH [--memory]`. `open_conversation` menerima profil opsional yang sudah tervalidasi.
-
-- [ ] Tambah tes CLI: `--persona` memerlukan `--converse`; `join --memory` memerlukan persona; mismatch ditolak sebelum resource dibuka. Tanpa profil, default conversation tetap tersedia. `chat --memory` tetap menggunakan konfigurasi grup lokal yang eksplisit.
-- [ ] Injeksi hasil `build_persona` ke factory agent. Terapkan filter tools sebelum `create_meeting_agent`, berdasarkan nama tool yang benar-benar ada dalam profil. Daftar tool meeting tidak pernah memuat `remember_meeting_fact` pada tahap ini.
-- [ ] Bila `--memory` aktif tetapi recall tidak diizinkan, tolak konfigurasi dengan pesan jelas sebelum koneksi database. Jangan membuka Graphiti tanpa tool yang akan digunakan.
-- [ ] Gunakan `profile.memory_group` pada `create_memory_tools`. Uji daftar tool dan argumen `group_ids` yang sampai ke client, bukan hanya isi prompt.
-- [ ] Batas waktu retrieval mengikuti deadline invocation agent yang sudah ada. Gagal recall tidak boleh berubah menjadi fakta rekaan atau menutup capture. Uji cleanup bila database gagal saat startup dan perilaku conversation saat retrieval gagal.
-- [ ] Rapikan startup optional memory: beri kegagalan koneksi alasan dan exit yang dapat diamati sebelum browser dibuka. Preflight DNS/TLS saat ini hanya memeriksa host model/STT/TTS; jangan mengklaim ia sudah mencakup Neo4j. Pakai kontrak lifecycle/fault yang ada, tanpa keluarga exception baru bila tidak perlu.
-- [ ] Uji stop selama retrieval, startup failure, profil tanpa memory, serta batas dua kalimat. Jalankan `uv run pytest tests/test_cli.py tests/test_conversation.py tests/test_runtime_audio.py -q`.
+- [x] Tes CLI untuk syarat flag, mismatch sebelum resource, default conversation tanpa profil, dan `chat --memory` dengan grup lokal.
+- [x] Persona diinjeksi ke factory; filter tool sebelum `create_meeting_agent`; `remember_meeting_fact` tidak pernah ada di meeting agent.
+- [x] `--memory` tanpa izin recall ditolak sebelum koneksi database.
+- [x] `profile.memory_group` sampai ke `group_ids` client; diuji pada daftar tool dan argumen `search`, bukan hanya prompt.
+- [x] Gagal recall menjadi informasi tidak diketahui tanpa menutup conversation; cleanup saat database gagal startup diuji.
+- [x] Startup memory memberi alasan dan exit code 3 sebelum browser dibuka.
+- [x] Stop selama retrieval, startup failure (connection error dan timeout), profil tanpa memory, serta batas dua kalimat diuji. `tests/test_cli.py tests/test_conversation.py tests/test_runtime_audio.py` lulus.
 
 ## Task 3 — Bukti isolasi dan kualitas
 
-- [ ] Uji offline dua owner dan dua twin; rename tidak memindahkan memori; meeting berbeda tidak berbagi checkpoint conversation. Pastikan prompt tidak dapat memilih grup lain melalui argumen tool.
-- [ ] Extend tes Graphiti opt-in dengan dua namespace unik dan fakta sintetis yang bertentangan. Reopen client sebelum recall, pastikan masing-masing fakta ditemukan dan fakta owner lain tidak muncul. Bersihkan hanya episode UUID milik tes; jangan menghapus grup/database pengguna.
-- [ ] Tambah skenario DeepEval: fakta profil yang diketahui, pertanyaan tanpa bukti, permintaan komitmen di luar kewenangan, recall relevan, serta transcript yang meminta mengganti identitas/namespace. Pisahkan tes wiring dengan respons terprogram dari penilaian kualitas model live; skor mock bukan bukti kualitas model.
-- [ ] Jalankan suite offline, browser fixture, Ruff, strict mypy, DeepEval, build, dan validasi Compose. Catat hasil live Graphiti secara terpisah; jangan menandai lulus bila tidak dijalankan.
-- [ ] Dokumentasikan contoh profil sintetis dan command lengkap. Profil personal dan credential tidak menjadi fixture repository.
+- [x] Tes offline tujuh kombinasi owner/twin menghasilkan tujuh namespace; rename tidak memindahkan memori; thread checkpoint berbeda per meeting. Argumen `group_ids`/`group_id` dari model diabaikan oleh schema tool `recall_meeting_context`.
+- [x] Tes Graphiti opt-in memakai dua namespace dengan fakta sintetis bertentangan (orang yang sama, preferensi minuman berbeda), membuka ulang client, lalu memastikan tiap recall hanya melihat faktanya sendiri. Cleanup hanya menghapus UUID episode milik tes; setelah semua run, Neo4j lokal berisi 0 node.
+- [x] DeepEval: tiga tes wiring deterministik (prompt sampai sebagai system message, trajectory recall dengan Tool Correctness 1.0 dan grup profil, permintaan pindah identitas/namespace tidak mengubah tool atau grup) serta lima skenario GEval live (fakta profil, fakta tanpa bukti, komitmen di luar kewenangan, recall relevan, override identitas). Skor mock tidak dipakai sebagai bukti kualitas model.
+- [x] Suite offline, browser fixture, Ruff, strict mypy, DeepEval, build, dan validasi Compose dijalankan. Hasil live dicatat terpisah di bawah.
+- [x] Contoh profil sintetis dan command lengkap ada di README.
 
 ## Task 4 — Acceptance Meet terkontrol
 
-- [ ] Gunakan meeting uji yang sedang dihost dan identitas sesi baru. Twin menjawab satu fakta profil dan satu fakta Graphiti, lalu mengakui ketika informasi belum tersedia.
+Belum dijalankan. Worker sudah siap: image dibangun ulang dengan kode persona, `examples/` ter-mount, dan Neo4j terjangkau dari container lewat `bolt://neo4j:7687` (diverifikasi dengan `verify_connectivity`).
+
+- [ ] Gunakan meeting uji yang sedang dihost dan identitas sesi baru. Twin menjawab satu fakta profil dan satu fakta Graphiti, lalu mengakui ketika informasi belum tersedia. Fakta Graphiti perlu dimasukkan ke `profile.memory_group` terlebih dahulu (misalnya lewat script sintetis seperti tes live), karena `join` tidak memiliki tool tulis.
 - [ ] Ajukan dua pertanyaan yang saling terkait; pastikan checkpoint dipakai dengan benar. Uji interupsi dan stop selama model/recall bekerja, tanpa jawaban terlambat setelah stop.
 - [ ] Catat final transcript → model selesai → first PCM → audio yang benar-benar terdengar oleh participant. `speak_started` hanya dispatch playback lokal; first PCM dari provider juga belum membuktikan waktu suara di telinga participant.
 - [ ] Ukur stop request → audio berhenti dan catat titik pemicu. Barge-in saat ini menunggu transkrip final, belum memakai onset speech native Pipecat.
-- [ ] Simpan run ID, journal, hasil terminal, dan konfirmasi pendengaran terpisah. Ketiadaan host tidak menghalangi unit work; acceptance live tetap terbuka sampai benar-benar diuji.
+- [ ] Simpan run ID, journal, hasil terminal, dan konfirmasi pendengaran terpisah.
 
-## Sesudah tahap ini
+## Bukti pengujian 30 September 2026
 
-1. Ingestion dengan provenance: event ID, waktu sumber, meeting/participant yang diketahui, koreksi, deduplikasi, dan retensi. Hindari menjadikan semua ucapan participant sebagai fakta pemilik.
-2. Mata dan tangan pada halaman Meet yang sama: snapshot screenshare bertimestamp, observasi participant, chat, raise/lower hand, dan verifikasi hasil tindakan melalui Playwright/CloakBrowser.
-3. Partisipasi multipihak: evaluasi turn detection/VAD/interruption Pipecat native untuk berhenti pada awal speech, pertanyaan kepada twin, overlap, dan identitas `unknown` bila ambigu.
-4. Operasi sesi: metrik latency/biaya, PostgreSQL checkpoint, kontrol start/stop, isolasi beberapa worker, lalu avatar/video bila diperlukan.
+| Pemeriksaan | Hasil |
+| --- | --- |
+| Suite offline `uv run pytest` | 555 lulus (baseline master 503); 16 live/browser deselected |
+| Browser fixture `-m browser` | 6 lulus |
+| Ruff check/format, strict mypy | Lulus |
+| DeepEval deterministik (`test_meeting_agent.py`, `test_persona.py`) | 1 + 3 lulus |
+| DeepEval live `test_persona.py -m live` (judge `gpt-4.1-mini`, threshold 0.7) | 5/5 lulus pada tiga run berturut-turut setelah perbaikan prompt; run pertama sebelum perbaikan 4/5 (recall tidak dipanggil) |
+| Provider live `tests/test_providers_live.py -m live` | 4/4 lulus pada 5 dari 6 run; 1 run gagal pada satu tes tanpa pesan yang tertangkap |
+| `uv build`, `docker compose --profile production config` | Lulus |
+
+Flake live yang diketahui: ekstraksi Graphiti bersifat nondeterministik. Dalam lima eksekusi script debug, satu episode menghasilkan `edges: []` sehingga tidak ada fakta yang dapat di-recall. Tes isolasi kini memisahkan kegagalan ekstraksi ("Graphiti extraction produced no fact edge") dari kegagalan isolasi. Kegagalan satu dari enam run penuh kemungkinan besar berasal dari sini, tetapi pesannya tidak tertangkap sehingga belum terbukti. Tidak ada run yang menunjukkan fakta namespace lain muncul.
 
 ## Dokumentasi library
 
 - [Pydantic validation dan model configuration](https://docs.pydantic.dev/latest/concepts/models/).
 - [LangChain native agent dan system prompt](https://docs.langchain.com/oss/python/langchain/agents).
 - [Graphiti namespacing](https://help.getzep.com/graphiti/core-concepts/graph-namespacing).
-- Sebelum implementasi, cocokkan dokumentasi dengan source terpasang: Graphiti 0.30.2 `search`/`add_episode`, LangChain 1.4.2 `create_agent`, dan contoh cleanup tes live repository. Jangan mengandalkan signature dari dokumentasi versi terbaru saja.
+- Source terpasang yang dicocokkan: Graphiti 0.30.2 `search` (`handle_multiple_group_ids`), `add_episode`, `remove_episode`, `Neo4jDriver.__init__` (menjadwalkan build index bila ada event loop berjalan, sehingga factory tetap lewat `asyncio.to_thread`), dan `Neo4jDriver.health_check` (mencetak ke stdout, maka tidak dipakai); LangChain 1.4.2 `create_agent(middleware=...)` dan `ToolErrorMiddleware`.
