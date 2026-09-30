@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
@@ -12,10 +13,15 @@ from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
 from graphiti_core.nodes import EpisodeType
+from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
+
+from fakeyou.faults import FaultReporter
+from fakeyou.provider_faults import classify_exception
 
 RECALL_RESULT_LIMIT = 5
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
+RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +62,21 @@ async def open_graphiti_memory(config: Neo4jMemoryConfig) -> AsyncIterator[Graph
 
 async def ensure_indexes(memory: Graphiti) -> None:
     await memory.build_indices_and_constraints()
+
+
+async def verify_memory_connection(memory: Graphiti) -> None:
+    if not isinstance(memory.driver, Neo4jDriver):
+        raise TypeError("meeting memory requires the Neo4j driver")
+    await memory.driver.client.verify_connectivity()
+
+
+def recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMiddleware[Any, Any]:
+    def report_unavailable(error: Exception, request: ToolCallRequest) -> str:
+        if faults is not None:
+            faults.record(classify_exception("memory", error))
+        return RECALL_UNAVAILABLE_RESULT
+
+    return ToolErrorMiddleware(report_unavailable, tools=["recall_meeting_context"])
 
 
 def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:

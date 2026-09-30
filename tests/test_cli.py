@@ -1,4 +1,5 @@
 import asyncio
+import json
 import signal
 import sys
 import threading
@@ -7,11 +8,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain.agents.middleware import ToolErrorMiddleware
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
 import fakeyou.cli as cli
 import fakeyou.memory as memory_module
+from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.audio import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
@@ -21,6 +26,7 @@ from fakeyou.audio import (
     PLAYBACK_SAMPLE_RATE,
 )
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.persona import PersonaProfile, build_persona
 from fakeyou.playback import PlaybackEvent
 
 
@@ -536,6 +542,12 @@ def test_compose_pulse_defaults_match_audio_constants() -> None:
     assert f"PULSE_SINK: ${{PULSE_SINK:-{AGENT_SINK_NAME}}}" in compose
 
 
+def test_compose_worker_reaches_neo4j_service_and_example_profiles() -> None:
+    compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text()
+    assert "FAKEYOU_NEO4J_URI: ${FAKEYOU_WORKER_NEO4J_URI:-bolt://neo4j:7687}" in compose
+    assert "./examples:/workspace/examples:ro" in compose
+
+
 def test_env_example_declares_pulse_overrides() -> None:
     example = (Path(__file__).resolve().parent.parent / ".env.example").read_text()
     assert f"PULSE_SOURCE={MEETING_MONITOR_SOURCE_NAME}" in example.splitlines()
@@ -610,9 +622,10 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
 ) -> None:
     created: dict = {}
 
-    def fake_agent(model, *, tools=(), checkpointer=None, persona=""):
+    def fake_agent(model, *, tools=(), checkpointer=None, **kwargs):
         created["tools"] = list(tools)
         created["checkpointer"] = checkpointer
+        created.update(kwargs)
         return SimpleNamespace(name="agent")
 
     monkeypatch.setattr(cli, "create_meeting_agent", fake_agent)
@@ -623,6 +636,8 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     assert loop.phase == "closed"
     assert created["tools"] == []
     assert created["checkpointer"] is not None
+    assert created["persona"] == DEFAULT_PERSONA
+    assert created["middleware"] == []
 
 
 @pytest.mark.asyncio
@@ -706,28 +721,6 @@ async def test_join_conversation_transitions_carry_timestamps(
     ]
     assert len(transitions) == 3
     assert all('"timestamp": "' in line for line in transitions)
-
-
-@pytest.mark.asyncio
-async def test_join_memory_wires_memory_tools_into_agent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    created: dict = {}
-
-    def fake_agent(model, *, tools=(), checkpointer=None, persona=""):
-        created["tools"] = list(tools)
-        return SimpleNamespace(name="agent")
-
-    @asynccontextmanager
-    async def fake_memory(config):
-        yield SimpleNamespace(name="memory")
-
-    monkeypatch.setattr(cli, "create_meeting_agent", fake_agent)
-    monkeypatch.setattr(cli, "open_graphiti_memory", fake_memory)
-    monkeypatch.setattr(cli, "create_memory_tools", lambda memory, group_id: ["recall"])
-    await _join_with_audio(tmp_path, monkeypatch, memory=True, conversation_enabled=True)
-
-    assert created["tools"] == ["recall"]
 
 
 async def test_audio_only_does_not_construct_responding_agent(tmp_path, monkeypatch):
@@ -951,3 +944,478 @@ async def test_join_without_audio_skips_preflight(
     )
 
     assert "preflight_hosts" not in captured
+
+
+PERSONA_DATA = {
+    "owner_id": "settings-owner",
+    "twin_id": "settings-twin",
+    "display_name": "Rani Twin",
+    "role": "Product lead for the synthetic Orchid project",
+    "verified_facts": ["The Orchid beta launch is planned for 14 October 2026"],
+    "allowed_tools": ["recall_meeting_context"],
+}
+MEET_LINK = "https://meet.google.com/abc-defg-hij"
+
+
+def write_persona(tmp_path: Path, **overrides: object) -> Path:
+    path = tmp_path / "persona.json"
+    path.write_text(json.dumps({**PERSONA_DATA, **overrides}), encoding="utf-8")
+    return path
+
+
+def persona_join_arguments(tmp_path: Path, settings: SimpleNamespace, **overrides) -> dict:
+    arguments = {
+        "twin_name": None,
+        "owner_id": None,
+        "twin_id": None,
+        "meeting_id": "meeting-9",
+        "lobby_timeout": None,
+        "duration": None,
+        "profile_dir": None,
+        "settings": settings,
+        "audio_enabled": True,
+        "conversation_enabled": True,
+    }
+    arguments.update(overrides)
+    return arguments
+
+
+def forbid_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args, **_kwargs):
+        pytest.fail("resources must not open before persona validation")
+
+    monkeypatch.setattr(cli, "init_chat_model", fail)
+    monkeypatch.setattr(cli, "run_meeting_session", fail)
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", fail)
+
+
+class FakeGraphiti:
+    def __init__(
+        self,
+        *,
+        facts: tuple[str, ...] = (),
+        connect_error: BaseException | None = None,
+        connect_gate: asyncio.Event | None = None,
+        search_error: BaseException | None = None,
+        search_gate: asyncio.Event | None = None,
+    ) -> None:
+        self.facts = facts
+        self.connect_error = connect_error
+        self.connect_gate = connect_gate
+        self.search_error = search_error
+        self.search_gate = search_gate
+        self.events: list[str] = []
+        self.searched: list[dict] = []
+        self.search_started = asyncio.Event()
+        self.search_cancelled = asyncio.Event()
+
+    async def verify_connection(self) -> None:
+        self.events.append("verify")
+        if self.connect_gate is not None:
+            await self.connect_gate.wait()
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    async def search(self, query: str, **kwargs) -> list[SimpleNamespace]:
+        self.searched.append({"query": query, **kwargs})
+        self.search_started.set()
+        if self.search_gate is not None:
+            try:
+                await self.search_gate.wait()
+            except asyncio.CancelledError:
+                self.search_cancelled.set()
+                raise
+        if self.search_error is not None:
+            raise self.search_error
+        return [SimpleNamespace(fact=fact) for fact in self.facts]
+
+    async def close(self) -> None:
+        self.events.append("close")
+
+
+class ToolCallingModel(FakeMessagesListChatModel):
+    seen: list = []
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.seen.append(list(messages))
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+def recall_then_reply(reply: str) -> ToolCallingModel:
+    return ToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "recall_meeting_context",
+                        "args": {"query": "Orchid launch"},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content=reply),
+        ]
+    )
+
+
+class RecordingAudio:
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    @property
+    def is_speaking(self) -> bool:
+        return False
+
+    async def speak(self, text: str) -> None:
+        self.spoken.append(text)
+
+    async def stop_playback(self) -> None:
+        return None
+
+
+async def _join_persona_conversation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model: FakeMessagesListChatModel,
+    graphiti: FakeGraphiti | None = None,
+    transcripts: tuple[str, ...] = ("Kapan launch Orchid?",),
+    settle=None,
+    **overrides,
+) -> tuple[dict, RecordingAudio, dict]:
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: model)
+
+    @asynccontextmanager
+    async def memory_saver(_value):
+        yield InMemorySaver()
+
+    monkeypatch.setattr(cli.AsyncSqliteSaver, "from_conn_string", memory_saver)
+    if graphiti is not None:
+        monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
+        monkeypatch.setattr(cli, "verify_memory_connection", FakeGraphiti.verify_connection)
+    else:
+        monkeypatch.setattr(
+            memory_module,
+            "create_graphiti_memory",
+            lambda _config: pytest.fail("graphiti must stay closed without --memory"),
+        )
+    created: dict = {}
+
+    def recording_agent(agent_model, **kwargs):
+        created.update(kwargs)
+        return create_meeting_agent(agent_model, **kwargs)
+
+    monkeypatch.setattr(cli, "create_meeting_agent", recording_agent)
+    audio = RecordingAudio()
+    outcome: dict = {}
+
+    async def run(config, **kwargs):
+        loop = kwargs["conversation"]
+        outcome["config"] = config
+        outcome["conversation"] = loop
+        loop.bind(audio)
+        for index, text in enumerate(transcripts):
+            frame = SimpleNamespace(
+                id=f"t{index}",
+                text=text,
+                finalized=True,
+                user_id="",
+                timestamp=f"2026-09-30T00:00:0{index}+00:00",
+            )
+            await kwargs["open_audio"].keywords["on_transcript"](frame)
+        if settle is None:
+            await loop.wait_idle()
+        else:
+            await settle()
+        outcome["phase"] = loop.phase
+        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+
+    monkeypatch.setattr(cli, "run_meeting_session", run)
+    arguments = persona_join_arguments(
+        tmp_path, settings, persona_path=write_persona(tmp_path), **overrides
+    )
+    await cli.join_meeting(MEET_LINK, **arguments)
+    return created, audio, outcome
+
+
+async def test_join_persona_requires_converse(tmp_path: Path) -> None:
+    with pytest.raises(cli.CliError, match="--persona requires --converse"):
+        await cli.join_meeting(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                fake_settings(tmp_path),
+                audio_enabled=False,
+                conversation_enabled=False,
+                persona_path=write_persona(tmp_path),
+            ),
+        )
+
+
+async def test_join_memory_requires_persona(tmp_path: Path, monkeypatch) -> None:
+    forbid_resources(monkeypatch)
+    with pytest.raises(cli.CliError, match="--memory requires --persona"):
+        await cli.join_meeting(
+            MEET_LINK, **persona_join_arguments(tmp_path, fake_settings(tmp_path), memory=True)
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"owner_id": "other-owner"}, {"twin_id": "other-twin"}, {"unknown": "field"}]
+)
+async def test_join_rejects_invalid_persona_before_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict
+) -> None:
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    forbid_resources(monkeypatch)
+
+    with pytest.raises(ValueError, match="owner_id and twin_id|Extra inputs"):
+        await cli.join_meeting(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                memory=True,
+                persona_path=write_persona(tmp_path, **overrides),
+            ),
+        )
+    assert not settings.journal_dir.exists()
+
+
+async def test_join_memory_rejects_persona_without_recall_permission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    forbid_resources(monkeypatch)
+
+    with pytest.raises(cli.CliError, match="recall_meeting_context"):
+        await cli.join_meeting(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                memory=True,
+                persona_path=write_persona(tmp_path, allowed_tools=[]),
+            ),
+        )
+
+
+async def test_join_rejects_unreadable_persona(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    forbid_resources(monkeypatch)
+
+    with pytest.raises(cli.CliError, match="--persona cannot be read"):
+        await cli.join_meeting(
+            MEET_LINK,
+            **persona_join_arguments(tmp_path, settings, persona_path=tmp_path / "missing.json"),
+        )
+
+
+@pytest.mark.parametrize("twin_name,expected", [(None, "Rani Twin"), ("Override", "Override")])
+async def test_join_persona_display_name_yields_to_explicit_twin_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, twin_name: str | None, expected: str
+) -> None:
+    monkeypatch.setattr(cli, "create_meeting_agent", lambda *_args, **_kwargs: object())
+    captured = await _join_with_audio(
+        tmp_path,
+        monkeypatch,
+        conversation_enabled=True,
+        twin_name=twin_name,
+        persona_path=write_persona(tmp_path),
+    )
+
+    assert captured["config"].twin_name == expected
+    assert (captured["config"].owner_id, captured["config"].twin_id) == (
+        "settings-owner",
+        "settings-twin",
+    )
+
+
+async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created, audio, _outcome = await _join_persona_conversation(
+        tmp_path, monkeypatch, model=ToolCallingModel(responses=[AIMessage(content="Halo.")])
+    )
+
+    assert created["persona"] == build_persona(PersonaProfile.model_validate(PERSONA_DATA))
+    assert created["tools"] == []
+    assert created["middleware"] == []
+    assert audio.spoken == ["Halo."]
+
+
+async def test_join_persona_memory_exposes_only_profile_scoped_recall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti(facts=("Orchid beta launch is planned for 14 October 2026",))
+    model = recall_then_reply("Launch Orchid dijadwalkan 14 Oktober.")
+
+    created, audio, outcome = await _join_persona_conversation(
+        tmp_path, monkeypatch, model=model, graphiti=graphiti, memory=True
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
+    assert [type(item) for item in created["middleware"]] == [ToolErrorMiddleware]
+    assert graphiti.searched == [
+        {
+            "query": "Orchid launch",
+            "group_ids": [profile.memory_group],
+            "num_results": memory_module.RECALL_RESULT_LIMIT,
+        }
+    ]
+    assert profile.memory_group != fake_settings(tmp_path).memory_group
+    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    assert [m.content for m in tool_results] == list(graphiti.facts)
+    assert audio.spoken == ["Launch Orchid dijadwalkan 14 Oktober."]
+    assert outcome["phase"] == "listening"
+    assert graphiti.events == ["verify", "close"]
+
+
+async def test_join_recall_failure_is_returned_as_unknown_without_failing_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = FakeGraphiti(search_error=RuntimeError("neo4j went away"))
+    model = recall_then_reply("Aku belum tahu, nanti aku cek ke Rani.")
+
+    _created, audio, outcome = await _join_persona_conversation(
+        tmp_path, monkeypatch, model=model, graphiti=graphiti, memory=True
+    )
+
+    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
+    assert audio.spoken == ["Aku belum tahu, nanti aku cek ke Rani."]
+    assert outcome["phase"] == "listening"
+    outcome["conversation"].raise_if_failed()
+    faults = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith('{"event":"fault"')
+    ]
+    assert [(fault["source"], fault["kind"]) for fault in faults] == [("memory", "unknown")]
+    assert "neo4j went away" not in json.dumps(faults)
+
+
+async def test_join_stop_during_recall_cancels_without_late_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = FakeGraphiti(search_gate=asyncio.Event())
+    model = recall_then_reply("Jawaban terlambat.")
+
+    _created, audio, outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        graphiti=graphiti,
+        memory=True,
+        settle=graphiti.search_started.wait,
+    )
+
+    assert graphiti.search_cancelled.is_set()
+    assert audio.spoken == []
+    assert outcome["conversation"].phase == "closed"
+    assert graphiti.events[-1] == "close"
+
+
+async def test_join_persona_reply_keeps_two_sentence_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ToolCallingModel(
+        responses=[AIMessage(content="Kalimat satu. Kalimat dua. Kalimat tiga.")]
+    )
+
+    _created, audio, _outcome = await _join_persona_conversation(tmp_path, monkeypatch, model=model)
+
+    assert audio.spoken == ["Kalimat satu. Kalimat dua."]
+
+
+@pytest.mark.parametrize(
+    "graphiti_options,kind",
+    [
+        ({"connect_error": ConnectionRefusedError("refused")}, "unknown"),
+        ({"connect_gate": asyncio.Event()}, "timeout"),
+    ],
+)
+async def test_join_memory_startup_failure_exits_before_browser(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    graphiti_options: dict,
+    kind: str,
+) -> None:
+    graphiti = FakeGraphiti(**graphiti_options)
+    saver_events: list[str] = []
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    monkeypatch.setattr(cli, "MEMORY_CONNECT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
+    monkeypatch.setattr(cli, "verify_memory_connection", FakeGraphiti.verify_connection)
+    monkeypatch.setattr(
+        cli, "run_meeting_session", lambda *_a, **_k: pytest.fail("browser must stay closed")
+    )
+    monkeypatch.setattr(
+        cli, "create_meeting_agent", lambda *_a, **_k: pytest.fail("agent must not be built")
+    )
+
+    @asynccontextmanager
+    async def tracked_saver(_value):
+        saver_events.append("open")
+        try:
+            yield InMemorySaver()
+        finally:
+            saver_events.append("close")
+
+    monkeypatch.setattr(cli.AsyncSqliteSaver, "from_conn_string", tracked_saver)
+
+    with pytest.raises(SystemExit) as caught:
+        await cli.join_meeting(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path, settings, memory=True, persona_path=write_persona(tmp_path)
+            ),
+        )
+
+    assert caught.value.code == 3
+    assert graphiti.events == ["verify", "close"]
+    assert saver_events == ["open", "close"]
+    captured = capsys.readouterr()
+    assert '"terminal_reason": "infra_failure"' in captured.out
+    assert "memory unavailable: memory" in captured.out
+    assert f'"kind":"{kind}"' in captured.out
+    assert '"exit_code": 3' in captured.err
+
+
+def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    async def fake_join(link, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "join_meeting", fake_join)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fakeyou", "join", MEET_LINK, "--audio", "--converse", "--persona", "p.json", "--memory"],
+    )
+    cli.main()
+
+    assert captured["persona_path"] == Path("p.json")
+    assert captured["memory"] is True

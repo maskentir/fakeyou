@@ -8,6 +8,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from importlib.metadata import version
@@ -16,13 +17,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_WS_URL
 
-from fakeyou.agent import create_meeting_agent
+from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.audio import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME, open_meeting_audio
 from fakeyou.browser import open_browser_tools
 from fakeyou.conversation import (
@@ -39,10 +41,14 @@ from fakeyou.memory import (
     create_memory_tools,
     ensure_indexes,
     open_graphiti_memory,
+    recall_error_middleware,
+    verify_memory_connection,
 )
+from fakeyou.persona import PersonaProfile, build_persona, load_persona
 from fakeyou.playback import PlaybackEvent
 from fakeyou.preflight import provider_probe_hosts
-from fakeyou.runtime import SessionConfig, run_meeting_session
+from fakeyou.provider_faults import ProviderFault, classify_exception
+from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.settings import Settings, require_secret
 
 
@@ -56,6 +62,8 @@ _PREFLIGHT_HOSTS = provider_probe_hosts(
     agent_base_url="https://api.openai.com",
 )
 
+
+MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
 
 _FAILURE_EXIT_CODES = {
     "infra_failure": 3,
@@ -185,6 +193,7 @@ async def join_meeting(
     conversation_enabled: bool = False,
     wake_phrase: str | None = None,
     barge_in: bool = False,
+    persona_path: Path | None = None,
 ) -> None:
     parsed_link = urlparse(link)
     if (
@@ -203,6 +212,10 @@ async def join_meeting(
         raise CliError("--converse requires --audio")
     if memory and not conversation_enabled:
         raise CliError("--memory requires --converse")
+    if persona_path is not None and not conversation_enabled:
+        raise CliError("--persona requires --converse")
+    if memory and persona_path is None:
+        raise CliError("--memory requires --persona")
     if wake_phrase and not conversation_enabled:
         raise CliError("--wake-phrase requires --converse")
     if barge_in and not conversation_enabled:
@@ -242,12 +255,23 @@ async def join_meeting(
         headless=resolved_headless,
         license_key=settings.cloakbrowser_license_key,
     )
+    profile: PersonaProfile | None = None
+    if persona_path is not None:
+        try:
+            profile = await load_persona(persona_path, config)
+        except OSError as error:
+            raise CliError(f"--persona cannot be read: {error.strerror}") from None
+        if memory and "recall_meeting_context" not in profile.allowed_tools:
+            raise CliError("--memory requires recall_meeting_context in persona allowed_tools")
+        if not twin_name:
+            config = replace(config, twin_name=profile.display_name)
     faults = FaultReporter(meeting_id=resolved_meeting_id)
     journal = ProviderJournal(
         resolved_meeting_id, path=settings.journal_dir / f"{resolved_meeting_id}.jsonl"
     )
 
     conversation: ConversationLoop | None = None
+    result: SessionResult | None = None
     async with AsyncExitStack() as resources:
         resources.callback(journal.close)
 
@@ -282,18 +306,25 @@ async def join_meeting(
             )
 
         if conversation_enabled:
-            conversation = await resources.enter_async_context(
-                open_conversation(
-                    settings,
-                    config,
-                    memory=memory,
-                    on_transition=log_transition,
-                    wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
-                    barge_in=barge_in,
-                    faults=faults,
-                    journal=journal,
+            try:
+                conversation = await resources.enter_async_context(
+                    open_conversation(
+                        settings,
+                        config,
+                        memory=memory,
+                        profile=profile,
+                        on_transition=log_transition,
+                        wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
+                        barge_in=barge_in,
+                        faults=faults,
+                        journal=journal,
+                    )
                 )
-            )
+            except ProviderFault as fault:
+                faults.record(fault)
+                result = SessionResult(
+                    "ended", "infra_failure", f"memory unavailable: {fault}", faults.report()
+                )
 
         async def transcript(frame: TranscriptionFrame) -> None:
             event = transcript_event(frame)
@@ -337,17 +368,18 @@ async def join_meeting(
             if audio_enabled
             else {}
         )
-        with stop_signal_handlers(stop):
-            result = await run_meeting_session(
-                config,
-                stop=stop,
-                open_audio=audio_factory,
-                initial_speech=initial_speech,
-                conversation=conversation,
-                faults=faults,
-                journal=journal,
-                **preflight_kwargs,
-            )
+        if result is None:
+            with stop_signal_handlers(stop):
+                result = await run_meeting_session(
+                    config,
+                    stop=stop,
+                    open_audio=audio_factory,
+                    initial_speech=initial_speech,
+                    conversation=conversation,
+                    faults=faults,
+                    journal=journal,
+                    **preflight_kwargs,
+                )
     print(
         json.dumps(
             {
@@ -386,6 +418,7 @@ async def open_conversation(
     config: SessionConfig,
     *,
     memory: bool,
+    profile: PersonaProfile | None = None,
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None],
     wake_phrases: Sequence[str] = (),
     barge_in: bool = False,
@@ -400,12 +433,29 @@ async def open_conversation(
             AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path))
         )
         tools: list[BaseTool] = []
-        if memory:
+        middleware: list[AgentMiddleware[Any, Any, Any]] = []
+        if memory and profile is not None and profile.allowed_tools:
             graphiti = await resources.enter_async_context(
                 open_graphiti_memory(memory_config(settings))
             )
-            tools.extend(create_memory_tools(graphiti, group_id=settings.memory_group))
-        agent = create_meeting_agent(model, tools=tools, checkpointer=checkpointer)
+            try:
+                async with asyncio.timeout(MEMORY_CONNECT_TIMEOUT_SECONDS):
+                    await verify_memory_connection(graphiti)
+            except Exception as error:
+                raise classify_exception("memory", error) from error
+            tools.extend(
+                tool
+                for tool in create_memory_tools(graphiti, group_id=profile.memory_group)
+                if tool.name in profile.allowed_tools
+            )
+            middleware.append(recall_error_middleware(faults))
+        agent = create_meeting_agent(
+            model,
+            tools=tools,
+            checkpointer=checkpointer,
+            persona=build_persona(profile) if profile is not None else DEFAULT_PERSONA,
+            middleware=middleware,
+        )
         conversation = ConversationLoop(
             LangGraphResponder(
                 agent,
@@ -452,7 +502,15 @@ def main() -> None:
         help="Enable agent replies to final transcripts; requires --audio",
     )
     join_parser.add_argument(
-        "--memory", action="store_true", help="Enable Graphiti memory tools; requires --converse"
+        "--persona",
+        type=Path,
+        default=None,
+        help="Owner persona JSON profile; requires --converse",
+    )
+    join_parser.add_argument(
+        "--memory",
+        action="store_true",
+        help="Enable persona-scoped Graphiti recall; requires --converse and --persona",
     )
     join_parser.add_argument(
         "--wake-phrase",
@@ -501,6 +559,7 @@ def main() -> None:
                     conversation_enabled=arguments.converse,
                     wake_phrase=arguments.wake_phrase,
                     barge_in=arguments.barge_in,
+                    persona_path=arguments.persona,
                 )
             )
         else:

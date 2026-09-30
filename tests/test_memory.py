@@ -1,6 +1,9 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
+from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory as memory_module
 from fakeyou.memory import (
@@ -8,6 +11,8 @@ from fakeyou.memory import (
     create_memory_tools,
     ensure_indexes,
     open_graphiti_memory,
+    recall_error_middleware,
+    verify_memory_connection,
 )
 
 
@@ -104,3 +109,34 @@ async def test_recall_empty_returns_sentinel() -> None:
 
     assert await recall.ainvoke({"query": "agenda"}) == memory_module.RECALL_EMPTY_RESULT
     assert memory_module.RECALL_EMPTY_RESULT.strip() != ""
+
+
+async def test_verify_memory_connection_fails_fast_without_transaction_retry() -> None:
+    driver = await asyncio.to_thread(Neo4jDriver, "bolt://127.0.0.1:9", "neo4j", "password")
+    try:
+        async with asyncio.timeout(5):
+            with pytest.raises(ServiceUnavailable):
+                await verify_memory_connection(SimpleNamespace(driver=driver))
+    finally:
+        await driver.close()
+
+
+async def test_verify_memory_connection_requires_neo4j_driver() -> None:
+    with pytest.raises(TypeError, match="Neo4j"):
+        await verify_memory_connection(SimpleNamespace(driver=object()))
+
+
+def test_recall_error_middleware_returns_unknown_and_records_fault() -> None:
+    from fakeyou.faults import FaultReporter
+
+    lines: list[str] = []
+    faults = FaultReporter(meeting_id="m", log=lines.append)
+    middleware = recall_error_middleware(faults)
+    request = SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"})
+
+    assert middleware.on_error is not None
+    content = middleware.on_error(RuntimeError("secret detail"), request)
+
+    assert content == memory_module.RECALL_UNAVAILABLE_RESULT
+    assert faults.total() == 1
+    assert "secret detail" not in lines[0]
