@@ -5,10 +5,11 @@ import pytest
 from fakeyou.settings import Settings
 
 
-def test_settings_fixture_cleans_environment_and_uses_the_real_schema(monkeypatch, request):
-    monkeypatch.setenv("FAKEYOU_CHAT_MODEL", "external:model")
-    monkeypatch.setenv("FAKEYOU_TTS_PROVIDER", "invalid-provider")
-    monkeypatch.setenv("FAKEYOU_SESSION_DURATION_SECONDS", "invalid-seconds")
+@pytest.mark.parametrize("prefix", ["FAKEYOU_", "fakeyou_", "FakeYou_"])
+def test_settings_fixture_cleans_environment_and_uses_the_real_schema(monkeypatch, request, prefix):
+    monkeypatch.setenv(f"{prefix}CHAT_MODEL", "external:model")
+    monkeypatch.setenv(f"{prefix}TTS_PROVIDER", "invalid-provider")
+    monkeypatch.setenv(f"{prefix}SESSION_DURATION_SECONDS", "invalid-seconds")
 
     settings = request.getfixturevalue("settings")
 
@@ -16,7 +17,9 @@ def test_settings_fixture_cleans_environment_and_uses_the_real_schema(monkeypatc
     assert settings.chat_model == "fake:model"
     assert settings.tts_provider == "openai"
     assert settings.session_duration_seconds == 7200.0
-    assert not any(name.startswith("FAKEYOU_") for name in os.environ)
+    assert not any(
+        name.lower().startswith(Settings.model_config["env_prefix"].lower()) for name in os.environ
+    )
     with pytest.raises(ValueError, match="no field"):
         settings.chat_modle = "typo:model"
 

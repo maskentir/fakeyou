@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from deepeval import assert_test
@@ -30,7 +31,7 @@ RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
 JUDGE_MODEL = "gpt-4.1-mini"
 
 
-def profile_recall_tools(memory: make_graphiti) -> list:
+def profile_recall_tools(memory: MagicMock) -> list:
     return [
         candidate
         for candidate in create_memory_tools(memory, group_id=EXAMPLE_PROFILE.memory_group)

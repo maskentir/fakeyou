@@ -18,8 +18,13 @@ from tests.fakes import FakeAudio, PCMStream, RecordingJournal, SessionRun, make
 
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    prefix = Settings.model_config.get("env_prefix", "")
+    case_sensitive = Settings.model_config.get("case_sensitive", False)
+    if not case_sensitive:
+        prefix = prefix.lower()
     for name in os.environ:
-        if name.startswith("FAKEYOU_"):
+        candidate = name if case_sensitive else name.lower()
+        if candidate.startswith(prefix):
             monkeypatch.delenv(name)
     environment_options: dict[str, Any] = {"_env_file": None}
     return Settings(
