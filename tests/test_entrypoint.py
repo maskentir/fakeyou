@@ -16,11 +16,29 @@ exit 0
 """
 
 _PACTL = """#!/bin/sh
-if [ "${PACTL_MODE:-ready}" = "ready" ]; then
-  exit 0
-else
+mode="${PACTL_MODE:-ready}"
+if [ "$mode" = "notready" ]; then
   exit 1
 fi
+if [ "$1" = "info" ]; then
+  echo "Default Sink: meeting_audio"
+  if [ "$mode" = "wrong-source" ]; then
+    echo "Default Source: alsa_input.usb"
+  else
+    echo "Default Source: agent_mic"
+  fi
+elif [ "$1" = "list" ]; then
+  printf '0\\tmeeting_audio\\tmodule-null-sink.c\\ts16le 1ch 16000Hz\\tIDLE\\n'
+  if [ "$mode" != "missing-sink" ]; then
+    if [ "$mode" = "wrong-rate" ]; then
+      spec="s16le 1ch 48000Hz"
+    else
+      spec="s16le 1ch 24000Hz"
+    fi
+    printf '1\\tagent_output\\tmodule-null-sink.c\\t%s\\tIDLE\\n' "$spec"
+  fi
+fi
+exit 0
 """
 
 _SLEEP = """#!/bin/sh
@@ -87,12 +105,27 @@ def test_child_exit_propagates_and_pulseaudio_killed(tmp_path: Path) -> None:
         assert _kills(case) == 1
 
 
-def test_not_ready_exits_1_without_kill(tmp_path: Path) -> None:
+def test_not_ready_exits_infra_failure_and_cleans_up(tmp_path: Path) -> None:
     script, env = _stage(tmp_path, _CHILD, pactl_mode="notready", stub_sleep=True)
     result = subprocess.run([str(script)], env=env, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 1
+    assert result.returncode == 3
     assert "pulseaudio did not become ready" in result.stderr
-    assert _kills(tmp_path) == 0
+    assert _kills(tmp_path) == 1
+
+
+def test_wrong_topology_exits_infra_failure_and_cleans_up(tmp_path: Path) -> None:
+    cases = (
+        ("missing-sink", "expected PulseAudio sink 'agent_output' is missing"),
+        ("wrong-rate", "PulseAudio sink 'agent_output' is not 24000Hz"),
+        ("wrong-source", "default source is not agent_mic"),
+    )
+    for mode, message in cases:
+        case = tmp_path / mode
+        script, env = _stage(case, _CHILD, pactl_mode=mode, stub_sleep=False)
+        result = subprocess.run([str(script)], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 3
+        assert message in result.stderr
+        assert _kills(case) == 1
 
 
 def test_signal_forwards_to_child_and_exits_128_plus_signo(tmp_path: Path) -> None:
@@ -118,3 +151,26 @@ def test_signal_forwards_to_child_and_exits_128_plus_signo(tmp_path: Path) -> No
                 proc.kill()
                 proc.wait(timeout=10)
         assert _kills(case) == 1
+
+
+def test_start_and_exit_breadcrumbs_cover_early_failure(tmp_path: Path) -> None:
+    script, env = _stage(tmp_path, _CHILD, pactl_mode="notready", stub_sleep=True)
+    result = subprocess.run([str(script)], env=env, capture_output=True, text=True, timeout=30)
+    assert "worker_start" in result.stderr
+    assert '"exit_code":3' in result.stderr
+    assert result.returncode == 3
+
+
+def test_worker_exit_is_logged_without_command_arguments(tmp_path: Path) -> None:
+    script, env = _stage(tmp_path, _CHILD, pactl_mode="ready", stub_sleep=False)
+    env["CHILD_EXIT"] = "7"
+    result = subprocess.run(
+        [str(script), "sensitive-test-argument"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert '"exit_code":7' in result.stderr
+    assert "sensitive-test-argument" not in result.stderr
+    assert result.returncode == 7
