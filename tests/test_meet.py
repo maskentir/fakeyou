@@ -3,6 +3,7 @@ import pytest
 from fakeyou.meet import (
     GuestJoinRequest,
     _click_when_ready,
+    disable_meeting_camera,
     enable_meeting_microphone,
     leave_meeting,
     observe_call_state,
@@ -39,6 +40,8 @@ MIC_ON_SELECTOR = (
 MIC_OFF_SELECTOR = (
     'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
 )
+CAM_ON_SELECTOR = 'button[aria-label^="Turn off camera" i]'
+CAM_OFF_SELECTOR = 'button[aria-label^="Turn on camera" i]'
 
 NO_CAPTCHA = False
 LIVE_CAPTCHA = True
@@ -632,6 +635,42 @@ async def test_enable_meeting_microphone_raises_context_when_confirm_wait_fails(
 
     with pytest.raises(RuntimeError, match="waiting for enabled microphone"):
         await enable_meeting_microphone(page, clock.sleep)
+
+
+async def test_disable_meeting_camera_skips_click_when_already_off() -> None:
+    page = _page([])
+    clock = _FakeClock()
+
+    assert await disable_meeting_camera(page, clock.sleep) is True
+    assert page.clicked == []
+
+
+async def test_disable_meeting_camera_retries_transient_click() -> None:
+    page = _page(
+        [],
+        visible={CAM_OFF_SELECTOR: False},
+        click_flaky={CAM_ON_SELECTOR: 1},
+    )
+    clock = _FakeClock()
+
+    assert await disable_meeting_camera(page, clock.sleep) is True
+    assert page.clicked.count(CAM_ON_SELECTOR) == 2
+
+
+async def test_disable_meeting_camera_raises_after_retries() -> None:
+    page = _page([], visible={CAM_OFF_SELECTOR: False}, click_failures={CAM_ON_SELECTOR})
+    clock = _FakeClock()
+
+    with pytest.raises(RuntimeError, match="attempts"):
+        await disable_meeting_camera(page, clock.sleep)
+
+
+async def test_disable_meeting_camera_raises_context_when_state_check_fails() -> None:
+    page = _page([], visible={CAM_OFF_SELECTOR: RuntimeError("state boom")})
+    clock = _FakeClock()
+
+    with pytest.raises(RuntimeError, match="checking camera state"):
+        await disable_meeting_camera(page, clock.sleep)
 
 
 def test_with_pinned_meet_locale_adds_bare_language_subtag() -> None:
