@@ -1,6 +1,6 @@
 # Ingestion memori dengan provenance
 
-Status: Task 1–5 selesai pada 30 September 2026 di branch `feat/memory-ingestion`, termasuk acceptance Meet dua sesi. Acceptance menemukan kekurangan throughput, fakta pertanyaan, dan nama salah dengar; bukti dan rencana perbaikannya ada di [acceptance 30 September](acceptance-2026-09-30.md).
+Status: Task 1–5 selesai pada 30 September 2026 di branch `feat/memory-ingestion`, termasuk acceptance Meet dua sesi. Desain ingestion di dalam proses meeting di dokumen ini digantikan oleh ingestion dari catatan meeting setelah meeting (fase 2 [rencana jangka panjang](long-term-plan.md#status-fase-2-30-september-2026)); bagian di bawah tetap sebagai catatan tahap pertama. Acceptance menemukan kekurangan throughput, fakta pertanyaan, dan nama salah dengar; bukti dan rencana perbaikannya ada di [acceptance 30 September](acceptance-2026-09-30.md).
 
 ## Hasil yang dituju
 

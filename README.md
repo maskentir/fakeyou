@@ -101,14 +101,20 @@ Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service 
 
 `--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context` atau `ingest_transcripts`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
 
-Profil adalah konfigurasi operator dengan schema ketat: `owner_id`, `twin_id`, `display_name`, `role`, `language` (`id` atau `en`), `speaking_style`, `goals`, `verified_facts`, `allowed_tools`, dan `ingest_transcripts`. Field asing, teks kosong, lebih dari 20 item, teks di atas 500 karakter, atau tool selain `recall_meeting_context` ditolak. [Contoh sintetis](examples/persona.example.json) dapat langsung dicoba; jangan menyimpan profil pribadi di repository.
+Profil adalah konfigurasi operator dengan schema ketat: `owner_id`, `twin_id`, `display_name`, `role`, `language` (`id` atau `en`), `speaking_style`, `goals`, `verified_facts`, `allowed_tools`, `ingest_transcripts`, dan `vocabulary`. Field asing, teks kosong, lebih dari 20 item, teks di atas 500 karakter, istilah vocabulary lebih dari 30 atau di atas 64 karakter, atau tool selain `recall_meeting_context` ditolak. `vocabulary` berisi nama dan istilah penting; bersama nama twin, daftar ini dikirim sebagai keyword STT Muse dan dipakai instruksi ekstraksi memori untuk menormalkan ejaan. [Contoh sintetis](examples/persona.example.json) dapat langsung dicoba; jangan menyimpan profil pribadi di repository.
 
 Ruang memori adalah `twin_` + UUID5 dari `[owner_id, twin_id]`: stabil lintas meeting dan tidak berubah saat nama diganti. Checkpoint percakapan tetap per owner/twin/meeting. Koneksi Neo4j diverifikasi sebelum model dan browser dibuka; kegagalannya berakhir sebagai `infra_failure` dengan exit code 3. Recall hanya mengembalikan fakta yang masih berlaku, masing-masing dengan sumber dan waktu UTC. Recall yang gagal atau melewati 15 detik dikembalikan ke model sebagai informasi yang belum diketahui, dicatat sebagai fault `memory`, dan tidak menghentikan capture.
 
-Dengan `ingest_transcripts: true`, transkrip final participant dan ucapan twin yang selesai diputar disimpan ke ruang memori yang sama sebagai episode Graphiti, dikelompokkan per meeting dalam saga `meeting:<meeting_id>`. Model tidak memiliki tool tulis; ingestion diatur oleh profil. Tidak ada persetujuan peserta di aplikasi dan tidak ada retensi otomatis; kepatuhan aturan rekaman menjadi tanggung jawab operator. Catatan pemilik dan penghapusan manual:
+Dengan `ingest_transcripts: true`, memori diturunkan dari catatan meeting setelah twin leave: transkrip final dan ucapan twin yang selesai diputar disusun menjadi jendela lintas speaker (20 ucapan atau 60 detik) dan disimpan sebagai episode Graphiti `<meeting_id>:w<index>` dalam saga `meeting:<meeting_id>`. Setiap fakta menyebut speaker-nya (`Digital twin`, `Unidentified participant`, atau nama yang diketahui), dan pertanyaan tidak disimpan sebagai fakta. Selama meeting, twin memakai thread percakapan; Graphiti dipakai untuk meeting sebelumnya dan catatan pemilik. Model tidak memiliki tool tulis. Tidak ada persetujuan peserta di aplikasi dan tidak ada retensi otomatis; kepatuhan aturan rekaman menjadi tanggung jawab operator.
+
+Ingestion dapat dilanjutkan: episode terakhir di saga menjadi penanda, sehingga menjalankan ulang tidak menggandakan episode. Stop saat ingestion menghentikannya di antara jendela; sisanya dilanjutkan dengan `memory-ingest`. Untuk memproses ulang meeting setelah instruksi ekstraksi berubah, hapus episodenya dengan `--keep-record` lalu ingest lagi. `memory-forget --meeting` tanpa `--keep-record` menghapus episode, catatan meeting, journal, dan thread percakapan meeting itu.
 
 ```sh
+docker compose run --rm meeting-worker fakeyou memory-ingest --meeting MEETING_ID \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." \
+  --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID --keep-record \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
@@ -116,7 +122,7 @@ docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_U
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md) dan [ingestion memori](docs/memory-ingestion-plan.md).
+Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md), [ingestion memori](docs/memory-ingestion-plan.md), dan [rencana jangka panjang](docs/long-term-plan.md).
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 

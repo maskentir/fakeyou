@@ -101,7 +101,22 @@ Selesai di branch `feat/memory-ingestion`:
 - Model per peran di `Settings` (`FAKEYOU_CHAT_*`, `FAKEYOU_MEMORY_*`, `FAKEYOU_STT_MODEL`), `create_chat_model`, host preflight dari endpoint chat, dan bagian `models` di `fakeyou check`. Tes `.env.example` menjaga nilai contoh tetap sama dengan default.
 - Tes kontrak library (`tests/test_library_contracts.py`, termasuk bukti Pipecat 1.12 membuang label diarisasi), tes command dokumentasi (`tests/test_documented_commands.py`), dan tes stop bersinyal pada image worker asli (`tests/test_worker_image.py`, marker `container`).
 
-Belum: `memory-forget --meeting` menghapus catatan meeting masuk fase 2 bersama `memory-ingest`.
+## Status fase 2 (30 September 2026)
+
+Selesai di branch `feat/memory-ingestion`:
+
+- Ingestion di dalam proses meeting dilepas. `ingest_meeting` (`src/fakeyou/ingestion.py`) membaca catatan meeting, menyusun jendela lintas speaker secara deterministik (20 ucapan atau 60 detik), dan menulis episode `<meeting_id>:w<index>`. Episode terakhir saga menjadi penanda lanjutan; jendela yang gagal atau timeout menghentikan proses agar urutan tetap utuh, dan stop bersinyal berhenti di antara jendela.
+- `join` menjalankan ingestion setelah `session_result`; `fakeyou memory-ingest --meeting ID` melanjutkan atau memproses ulang.
+- `memory-forget --meeting` menghapus episode, catatan meeting, journal (termasuk rotasi), dan thread percakapan (`AsyncSqliteSaver.adelete_thread`); `--keep-record` hanya menghapus episode agar meeting dapat diingest ulang.
+- `vocabulary` di profil: dikirim sebagai keyword Muse bersama nama twin, dan dipakai instruksi ekstraksi untuk ejaan.
+- Instruksi ekstraksi mewajibkan speaker sebagai subjek fakta dan melarang fakta dari pertanyaan atau tawaran. Recall menghapus teks fakta kembar sebelum membatasi lima hasil.
+
+Bukti:
+
+- Replay data nyata `acc-0930-s1` (15 entri catatan dari log live): ingestion lama 13 episode (±100 detik, 3 kosong, 4 fakta pertanyaan); ingestion baru 2 episode (24,7 detik, 0 kosong). Dengan instruksi final lewat CLI: 0 fakta pertanyaan, 9/9 fakta menyebut speaker, dan "kick off vendor or chill" menjadi "kickoff vendor Orchid". "Old Shield" tetap tidak dinormalkan karena bunyinya terlalu jauh. Proses ulang (`--keep-record` lalu `memory-ingest`) dan penghapusan penuh diverifikasi; namespace replay kembali 0 entity.
+- Tes live Graphiti: 3 ucapan lintas speaker menjadi 1 episode dalam 12,9 detik dengan 3 fakta; ingest kedua menambah 0 episode; owner note muncul pertama; node grup kembali 0 setelah forget.
+- Aturan prompt "gunakan ejaan vocabulary" diuji dan dicabut: 0/18 probe untuk "old shield" pada tiga varian (termasuk di akhir prompt), dan 3/6 dibanding 2/6 tanpa aturan untuk salah dengar yang mirip. `gpt-4.1-mini` mengulang istilah penanya; perbaikannya ada di keyword STT dan ekstraksi. Skenario eval `misheard_project_name` ditandai `xfail` dengan alasan itu.
+- Eval persona live dengan label sumber baru: 9 skenario lain stabil (4 run); satu kegagalan `known_profile_fact` 0,69 karena tawaran follow-up, target fase 3.
 
 ## Urutan
 
