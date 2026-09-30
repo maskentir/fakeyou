@@ -118,6 +118,27 @@ Bukti:
 - Aturan prompt "gunakan ejaan vocabulary" diuji dan dicabut: 0/18 probe untuk "old shield" pada tiga varian (termasuk di akhir prompt), dan 3/6 dibanding 2/6 tanpa aturan untuk salah dengar yang mirip. `gpt-4.1-mini` mengulang istilah penanya; perbaikannya ada di keyword STT dan ekstraksi. Skenario eval `misheard_project_name` ditandai `xfail` dengan alasan itu.
 - Eval persona live dengan label sumber baru: 9 skenario lain stabil (4 run); satu kegagalan `known_profile_fact` 0,69 karena tawaran follow-up, target fase 3.
 
+## Status fase 3 (30 September 2026)
+
+Selesai di branch `feat/memory-ingestion`:
+
+- Aturan penutup (`ENDING_RULE`) menjadi bagian terakhir prompt default dan persona. Aturan asal fakta (`PROVENANCE_RULE`) ditempatkan tepat sebelumnya bila recall diizinkan; kalimat yang sama di tengah prompt dicabut.
+- Eval replay `evals/test_replay.py` memutar transkrip STT nyata `acc-0930-s1`/`s2` (termasuk salah dengar) lewat `LangGraphResponder` produksi, tiga kali, dengan memori per sesi dari hasil replay ingestion. Pemeriksaan deterministik: jawaban ada, fakta wajib/terlarang, recall dipanggil, maksimal dua kalimat, pertanyaan penutup ≤ 20%, dan latency p95 ≤ 4 detik. Pass rate wajib 0,9. Logika penilaian diuji offline dan berjalan di CI.
+- Model cadangan `FAKEYOU_FALLBACK_CHAT_*` lewat `ModelFallbackMiddleware`. Timeout panggilan model jawaban turun dari 60 ke 20 detik; model utama tidak di-retry bila cadangan aktif; host cadangan tidak ikut preflight.
+
+Bukti:
+
+| Pengukuran | Sebelum | Sesudah |
+| --- | --- | --- |
+| Pertanyaan penutup, live Meet | 8/8 | — (diukur ulang pada acceptance berikutnya) |
+| Pertanyaan penutup, replay 24 giliran | — | 4/24 (16,7%) |
+| Penyebutan asal meeting (no. 9) | 0/3 replay, 0/6 probe | 5/6 probe; `must_mention_any` replay 0,75 → 0,917 |
+| Latency replay p50 / p95 | — | 1,02 s / 1,96 s |
+| Eval persona live | 7–8 lulus + satu kegagalan follow-up | 8 lulus + 1 `xfail`, dua run berturut-turut |
+| Fallback saat provider utama mati | — | 7,49 s, tool call berhasil (Muse Spark 1.2 `minimal`) |
+
+Temuan: `gpt-4.1-mini` mematuhi instruksi yang berada di akhir system prompt dan mengabaikan instruksi yang sama di tengah (penutup 6/6 → 0/6, asal fakta 0/6 → 5/6). Aturan perilaku yang harus dipatuhi ditempatkan di akhir; aturan di tengah hanya konteks. Menggeser aturan ejaan vocabulary ke akhir tidak membantu (0/6), karena model mengulang istilah penanya.
+
 ## Urutan
 
 | Fase | Isi | Mencegah |

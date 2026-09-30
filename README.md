@@ -133,8 +133,11 @@ Model dipilih per peran lewat `Settings`, bukan dari default library. `fakeyou c
 | Peran | Setelan | Default |
 | --- | --- | --- |
 | Jawaban lisan | `FAKEYOU_CHAT_MODEL`, `FAKEYOU_CHAT_BASE_URL`, `FAKEYOU_CHAT_API_KEY`, `FAKEYOU_CHAT_REASONING_EFFORT` | `openai:gpt-4.1-mini` dengan key OpenAI |
+| Cadangan jawaban lisan | `FAKEYOU_FALLBACK_CHAT_MODEL`, `FAKEYOU_FALLBACK_CHAT_BASE_URL`, `FAKEYOU_FALLBACK_CHAT_API_KEY`, `FAKEYOU_FALLBACK_CHAT_REASONING_EFFORT` | Tidak aktif |
 | Memori Graphiti | `FAKEYOU_MEMORY_LLM_MODEL`, `FAKEYOU_MEMORY_SMALL_MODEL`, `FAKEYOU_MEMORY_EMBEDDING_MODEL` | `gpt-5.5`, `gpt-4.1-nano`, `text-embedding-3-small` |
 | STT | `FAKEYOU_STT_MODEL` | `muse-voice-transcribe-1.0` |
+
+Setiap panggilan model jawaban dibatasi 20 detik agar dua panggilan plus recall muat dalam deadline percakapan 60 detik. Bila cadangan diatur, model utama tidak di-retry; `ModelFallbackMiddleware` LangChain langsung memindahkan panggilan ke model cadangan (terukur 7,5 detik untuk jawaban dengan tool call saat provider utama mati, memakai Muse Spark 1.2 `reasoning_effort=minimal`). Host cadangan tidak ikut preflight agar cadangan yang mati tidak memblokir meeting.
 
 Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misalnya Muse Spark di `https://api.meta.ai/v1` dengan `FAKEYOU_CHAT_MODEL=openai:muse-spark-1.3`. Host preflight mengikuti endpoint itu. Perbandingan latency dan perilaku antarmodel ada di [rencana jangka panjang](docs/long-term-plan.md#4a-model-per-peran-lewat-langchain); mengganti model lisan harus lolos eval yang sama.
 
@@ -158,6 +161,7 @@ uv run mypy
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona.py
+DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_replay.py
 uv run pytest tests/test_browser.py tests/test_meeting_browser.py -m browser
 uv run pytest tests/test_worker_image.py -m container
 uv build
@@ -168,8 +172,11 @@ Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke t
 
 ```sh
 uv run --env-file .env deepeval test run evals/test_persona.py -m live
+uv run --env-file .env pytest evals/test_replay.py -m live -s
 uv run --env-file .env pytest tests/test_providers_live.py -m live
 ```
+
+`evals/test_replay.py` memutar transkrip STT nyata dari sesi `acc-0930-s1`/`s2` ke model yang sedang dikonfigurasi dalam satu thread per sesi, tiga kali, lalu menghitung pass rate fakta wajib/terlarang, recall, batas dua kalimat, pertanyaan penutup, dan latency p95. Mengganti model jawaban lisan harus lolos replay ini.
 
 CI menjalankan lint, format, type check, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 
