@@ -9,22 +9,11 @@ from graphiti_core.nodes import EpisodeType
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
-from pipecat.frames.frames import (
-    EndFrame,
-    ErrorFrame,
-    TTSAudioRawFrame,
-    TTSSpeakFrame,
-    TTSStoppedFrame,
-)
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.memory import Neo4jMemoryConfig, create_graphiti_memory
 from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import create_openai_tts
+from fakeyou.voice import OpenAISpeechSynthesizer
 
 
 def _secret_or_skip(settings_value, name: str) -> str:
@@ -38,26 +27,6 @@ def _fail_provider(error: Exception, provider: str) -> None:
     status = getattr(error, "status_code", None)
     detail = f" ({status})" if isinstance(status, int) else ""
     pytest.fail(f"{provider} failed: {type(error).__name__}{detail}", pytrace=False)
-
-
-class _AudioCollector(FrameProcessor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.audio_bytes = 0
-        self.audio_frames = 0
-        self.stopped = asyncio.Event()
-        self.errors: list[str] = []
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, TTSAudioRawFrame):
-            self.audio_bytes += len(frame.audio)
-            self.audio_frames += 1
-        elif isinstance(frame, TTSStoppedFrame):
-            self.stopped.set()
-        elif isinstance(frame, ErrorFrame):
-            self.errors.append(frame.error)
-        await self.push_frame(frame, direction)
 
 
 @pytest.mark.live
@@ -100,47 +69,21 @@ async def test_native_agent_returns_openai_response_and_executes_tool() -> None:
 
 
 @pytest.mark.live
-async def test_native_openai_tts_streams_audio_frames() -> None:
+async def test_native_openai_tts_synthesizes_pcm_audio() -> None:
     settings = Settings()
     api_key = _secret_or_skip(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
-    collector = _AudioCollector()
-    tts = create_openai_tts(api_key=api_key)
-    worker = PipelineWorker(
-        Pipeline([tts, collector]),
-        params=PipelineParams(audio_out_sample_rate=24_000),
-        idle_timeout_secs=45,
-    )
-    started = asyncio.Event()
-    errors: list[str] = []
-
-    @worker.event_handler("on_pipeline_started")
-    async def on_pipeline_started(_, __) -> None:
-        started.set()
-
-    @worker.event_handler("on_pipeline_error")
-    async def on_pipeline_error(_, frame: ErrorFrame) -> None:
-        errors.append(frame.error)
-
-    runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
-    await runner.add_workers(worker)
-    runner_task = asyncio.create_task(runner.run())
+    synthesizer = OpenAISpeechSynthesizer(api_key=api_key)
     try:
-        async with asyncio.timeout(60):
-            await started.wait()
-            await worker.queue_frame(TTSSpeakFrame("Hello from the test meeting."))
-            await collector.stopped.wait()
-            await worker.queue_frame(EndFrame(reason="live TTS check complete"))
-            await runner_task
-    except Exception as error:
-        _fail_provider(error, "OpenAI TTS")
+        try:
+            async with asyncio.timeout(60):
+                audio = await synthesizer.synthesize("Hello from the test meeting.")
+        except Exception as error:
+            _fail_provider(error, "OpenAI TTS")
     finally:
-        if not runner_task.done():
-            await worker.cancel(reason="live TTS check cleanup")
-            await asyncio.wait_for(runner_task, timeout=15)
+        await synthesizer.aclose()
 
-    assert not errors and not collector.errors, "OpenAI TTS emitted a pipeline error"
-    assert collector.audio_frames > 0
-    assert collector.audio_bytes > 0
+    assert len(audio) > 0
+    assert len(audio) % 2 == 0
 
 
 @pytest.mark.live
