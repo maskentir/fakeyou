@@ -512,3 +512,80 @@ async def test_responder_journals_tool_failures():
 
     [failed] = [json.loads(line) for line in lines if '"tool_failed"' in line]
     assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")
+
+
+async def test_interim_speech_interrupts_playback_after_enough_words():
+    import json
+
+    from fakeyou.journal import ProviderJournal
+
+    lines: list[str] = []
+    audio = Audio()
+    audio.speaking = True
+    loop = ConversationLoop(
+        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
+    )
+    loop.bind(audio)
+
+    await loop.handle_interim("oke")
+    await loop.handle_interim("oke tunggu")
+    assert audio.stops == 0
+    await loop.handle_interim("oke tunggu dulu")
+
+    assert audio.stops == 1
+    [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
+    assert (row["trigger"], row["words"]) == ("interim", 3)
+
+
+async def test_interim_speech_is_ignored_without_barge_in_or_playback():
+    audio = Audio()
+    audio.speaking = True
+    quiet = ConversationLoop(Responder())
+    quiet.bind(audio)
+    await quiet.handle_interim("tolong berhenti dulu sebentar")
+
+    idle_audio = Audio()
+    idle = ConversationLoop(Responder(), barge_in=True)
+    idle.bind(idle_audio)
+    await idle.handle_interim("tolong berhenti dulu sebentar")
+
+    assert audio.stops == 0
+    assert idle_audio.stops == 0
+
+
+async def test_interim_barge_in_respects_wake_phrases():
+    clock = Clock()
+    audio = Audio()
+    audio.speaking = True
+    loop = ConversationLoop(Responder(), barge_in=True, wake_phrases=["rani twin"], clock=clock)
+    loop.bind(audio)
+
+    await loop.handle_interim("orang lain sedang bicara panjang")
+    assert audio.stops == 0
+    await loop.handle_transcript(event("t1", "rani twin tolong jelaskan"))
+    audio.stops = 0
+    audio.speaking = True
+    await loop.handle_interim("tunggu sebentar dulu ya")
+
+    assert audio.stops == 1
+    await loop.close()
+
+
+async def test_final_barge_in_is_journaled_with_its_trigger():
+    import json
+
+    from fakeyou.journal import ProviderJournal
+
+    lines: list[str] = []
+    audio = Audio()
+    audio.speaking = True
+    loop = ConversationLoop(
+        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
+    )
+    loop.bind(audio)
+
+    await loop.handle_transcript(event("t1", "cukup"))
+
+    [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
+    assert row["trigger"] == "final"
+    await loop.close()

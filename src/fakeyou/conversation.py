@@ -29,6 +29,7 @@ ConversationPhase = Literal[
 ]
 
 MAX_SPOKEN_SENTENCES = 2
+BARGE_IN_MIN_WORDS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +302,8 @@ class ConversationLoop:
         self._generation += 1
         if self._task is not None and not self._task.done():
             self._move("interrupted", event.id)
+        if self._session is not None and self._barge_in and self._session.is_speaking:
+            self._record("barge_in", trigger="final", words=len(event.text.split()))
         if self._session is not None and (
             self._barge_in
             and self._session.is_speaking
@@ -309,6 +312,23 @@ class ConversationLoop:
         ):
             await self._session.stop_playback()
         self._start_pending()
+
+    async def handle_interim(self, text: str) -> None:
+        session = self._session
+        if (
+            self._closed
+            or self._failure is not None
+            or not self._barge_in
+            or session is None
+            or not session.is_speaking
+            or self._wake_phrases
+            and self._clock() >= self._active_until
+        ):
+            return
+        words = len(text.split())
+        if words >= BARGE_IN_MIN_WORDS:
+            self._record("barge_in", trigger="interim", words=words)
+            await session.stop_playback()
 
     def _addressed(self, event: TranscriptEvent) -> bool:
         now = self._clock()

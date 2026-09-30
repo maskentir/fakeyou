@@ -137,3 +137,33 @@ def test_read_journal_merges_rotated_files_oldest_first(tmp_path: Path) -> None:
     )
 
     assert [entry["event"] for entry in read_journal(base)] == ["first", "second", "third"]
+
+
+def test_report_measures_interruption_latency_from_speech_start() -> None:
+    rows = [
+        row(0, "transcript_final", transcript_id="t1", text="Jelasin"),
+        row(0, "agent_finished", request_id="t1:1", latency_ms=500),
+        row(0.5, "speak_started", source="playback", text="Panjang."),
+        row(2.0, "speech_started", source="capture"),
+        row(2.9, "barge_in", trigger="interim", words=3),
+        row(3.0, "speak_dropped", source="playback", text="Panjang.", detail="interrupted"),
+        row(10, "speak_started", source="playback", text="Lagi."),
+        row(11, "speech_started", source="capture"),
+        row(12.5, "barge_in", trigger="final", words=2),
+        row(12.5, "speak_dropped", source="playback", text="Lagi.", detail="interrupted"),
+    ]
+
+    interruptions = build_session_report(rows)["interruptions"]
+
+    assert interruptions["triggers"] == {"interim": 1, "final": 1}
+    assert interruptions["speech_to_stop_s"] == {"count": 2, "p50": 1.25, "p95": 1.475, "max": 1.5}
+
+
+def test_report_ignores_speech_that_started_before_the_interrupted_playback() -> None:
+    rows = [
+        row(0, "speech_started", source="capture"),
+        row(1, "speak_started", source="playback", text="Balasan."),
+        row(2, "speak_dropped", source="playback", text="Balasan.", detail="interrupted"),
+    ]
+
+    assert build_session_report(rows)["interruptions"]["speech_to_stop_s"]["count"] == 0

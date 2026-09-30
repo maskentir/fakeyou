@@ -2237,3 +2237,37 @@ def test_check_reports_no_fallback_by_default(
     cli.check_setup(fake_settings(tmp_path))
 
     assert json.loads(capsys.readouterr().out)["models"]["fallback"] is None
+
+
+async def test_join_routes_interim_transcripts_to_barge_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stops: list[bool] = []
+
+    async def stop_playback():
+        stops.append(True)
+
+    monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: object())
+
+    def capture_run(monkeypatch):
+        async def run(config, **kwargs):
+            loop = kwargs["conversation"]
+            loop.bind(
+                SimpleNamespace(
+                    speak=lambda text: asyncio.sleep(0),
+                    is_speaking=True,
+                    stop_playback=stop_playback,
+                )
+            )
+            interim = kwargs["open_audio"].keywords["on_interim"]
+            await interim(SimpleNamespace(text="tunggu"))
+            await interim(SimpleNamespace(text="tunggu dulu sebentar"))
+            return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+
+        monkeypatch.setattr(cli, "run_meeting_session", run)
+        return {}
+
+    monkeypatch.setattr(sys.modules[__name__], "_capture_run", capture_run)
+    await _join_with_audio(tmp_path, monkeypatch, conversation_enabled=True, barge_in=True)
+
+    assert stops == [True]

@@ -615,12 +615,17 @@ async def join_meeting(
             if conversation is not None:
                 await conversation.handle_transcript(event)
 
+        async def interim(frame: TranscriptionFrame) -> None:
+            if conversation is not None:
+                await conversation.handle_interim(frame.text)
+
         if audio_enabled:
             audio_factory = partial(
                 open_meeting_audio,
                 muse_api_key=muse_key,
                 openai_api_key=tts_key,
                 on_transcript=transcript,
+                on_interim=interim,
                 on_playback_event=log_playback,
                 fault_reporter=faults,
                 journal=journal,

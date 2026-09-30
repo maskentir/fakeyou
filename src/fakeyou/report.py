@@ -54,6 +54,10 @@ def summarize(values: list[float]) -> dict[str, float | int | None]:
 def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     turns: dict[str, dict[str, Any]] = {}
     speech_stopped_at: datetime | None = None
+    speech_started_at: datetime | None = None
+    speak_started_at: datetime | None = None
+    interruption_seconds: list[float] = []
+    barge_in_triggers = Counter[str]()
     active: dict[str, Any] | None = None
     replying: dict[str, Any] | None = None
     replies = Counter[str]()
@@ -66,6 +70,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         at = datetime.fromisoformat(row["at"]) if "at" in row else None
         if event == "speech_stopped":
             speech_stopped_at = at
+        elif event == "speech_started":
+            speech_started_at = at
+        elif event == "barge_in":
+            barge_in_triggers[str(row.get("trigger"))] += 1
         elif event == "transcript_final":
             transcript_id = str(row.get("transcript_id"))
             turns[transcript_id] = {
@@ -93,8 +101,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             turn = _turn_for(turns, row)
             if turn is not None:
                 turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
-        elif event == "speak_started" and replying is not None:
-            replying.setdefault("speak_at", at)
+        elif event == "speak_started":
+            speak_started_at = at
+            if replying is not None:
+                replying.setdefault("speak_at", at)
         elif event == "synth_finished" and replying is not None and "speak_at" in replying:
             replying.setdefault("first_pcm_at", _first_pcm_at(row, at))
         elif event == "speak_finished":
@@ -105,6 +115,14 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             replying = None
         elif event == "speak_dropped":
             replies["interrupted"] += 1
+            if (
+                row.get("detail") == "interrupted"
+                and at is not None
+                and speech_started_at is not None
+                and speak_started_at is not None
+                and speech_started_at >= speak_started_at
+            ):
+                interruption_seconds.append((at - speech_started_at).total_seconds())
             if replying is not None:
                 replying["outcome"] = "interrupted"
             replying = None
@@ -123,6 +141,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "replies": {key: replies[key] for key in ("spoken", "interrupted", "trailing_questions")},
         "tools": {name: dict(counts) for name, counts in tools.items()},
+        "interruptions": {
+            "triggers": dict(barge_in_triggers),
+            "speech_to_stop_s": summarize(interruption_seconds),
+        },
         "ingestion": {
             "episodes": len(episodes),
             "facts": sum(int(episode.get("facts") or 0) for episode in episodes),
