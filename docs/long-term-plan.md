@@ -172,6 +172,10 @@ Label diarisasi akurat, tetapi menambah sekitar dua detik ke setiap jawaban (bud
 
 Prompt caching provider menangkap sekitar 99% token karena system prompt stabil dan thread append-only. `SummarizationMiddleware` tidak dipasang; latency per giliran di `fakeyou report` menjadi sinyal untuk meninjau ulang bila meeting jauh lebih panjang.
 
+## Status fase 5 (30 September 2026)
+
+Acceptance kedua (`acc2-0930-s1`, `acc2-0930-s2`) dan perbaikannya tercatat di [dokumen acceptance](acceptance-2026-09-30.md#acceptance-kedua-setelah-fase-14). Audio dan STT sekarang dibuka sebelum twin meminta masuk. Journal dan `fakeyou report` mengukur jeda startup. Barge-in tercatat sekali per interupsi. Fakta memori ditulis dalam bahasa meeting. Istilah internal prompt tidak diucapkan. Acceptance ketiga dibutuhkan untuk membuktikan urutan startup di Meet live.
+
 ## Urutan
 
 | Fase | Isi | Mencegah |

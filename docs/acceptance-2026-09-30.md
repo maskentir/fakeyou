@@ -1,6 +1,6 @@
 # Acceptance Meet 30 September 2026 dan rencana perbaikan
 
-Dokumen ini mencatat acceptance live untuk [persona dan retrieval memori](persona-memory-plan.md) (Task 4) dan [ingestion memori](memory-ingestion-plan.md) (Task 5), lalu riset perbaikan untuk kekurangan yang terlihat di log. Status: riset selesai; implementasi perbaikan belum dimulai.
+Dokumen ini mencatat acceptance live untuk [persona dan retrieval memori](persona-memory-plan.md) (Task 4) dan [ingestion memori](memory-ingestion-plan.md) (Task 5), lalu riset perbaikan untuk kekurangan yang terlihat di log. Status: fase 1–4 diimplementasikan, acceptance kedua selesai, dan perbaikan temuan acceptance kedua diimplementasikan; bukti live untuk urutan startup baru menunggu acceptance ketiga.
 
 ## Setup
 
@@ -138,3 +138,47 @@ Urutan ini digantikan oleh [rencana jangka panjang](long-term-plan.md), yang men
 7. Acceptance live ulang dengan skrip yang sama, dua meeting ID baru, dan dua pembicara bila memungkinkan; bandingkan jumlah episode, backlog saat stop, salah dengar nama, label speaker, dan tawaran follow-up. Uji capture 24 kHz pada run yang sama bila topologi audio diubah.
 
 Data uji tetap di namespace `demo_owner`/`demo_twin` (owner note dan saga `meeting:acc-0930-s1`, `meeting:acc-0930-s2`) sampai dihapus manual dengan `fakeyou memory-forget`.
+
+## Acceptance kedua setelah fase 1–4
+
+Sesi `acc2-0930-s1` dan `acc2-0930-s2` di `https://meet.google.com/qco-uoxa-qrs`, identitas baru `acc2_owner`/`acc2_twin` dengan profil contoh (termasuk `vocabulary`), skrip yang sama, image worker dengan semua perubahan fase 1–4. Semua angka berasal dari `fakeyou report` dan catatan meeting, tanpa script analisis tambahan.
+
+| Ukuran | Acceptance pertama | Acceptance kedua |
+| --- | --- | --- |
+| Jawaban ditutup pertanyaan | 8/8 | 1/7 (klarifikasi yang sah) |
+| "Orchid" ditranskrip benar | 0 dari 4 transkrip yang menyebut proyek ("or chill", "old shield", "or kilt") | 9 dari 9 |
+| Interupsi: VAD mulai bicara → playback berhenti | 1,04 s dan 2,07 s (transkrip final) | 0,79 s (interim, 4 kata) |
+| VAD stop → PCM pertama p50 / maks | 3,13 s / 4,50 s | 3,01 s / 4,92 s |
+| Ingestion sesi 1 | 13 episode, 3 kosong, 4 fakta pertanyaan | 2 episode, 0 kosong, 0 fakta pertanyaan; 17,4 s per episode setelah leave |
+| Atribusi fakta memori | tidak konsisten | semua fakta menyebut speaker |
+| Recall lintas meeting (no. 9) | benar | benar |
+| Asal meeting disebut (no. 9) | tidak | tidak |
+| Fault | 1 drain timeout | 0 |
+
+### Masalah baru: awal ucapan pertama hilang
+
+- Sesi 2: STT tersambung 13:32:26,8; VAD mendeteksi suara 0,7 detik kemudian dan transkrip dimulai dari "kickoff vendor Orchid…", sehingga "Rani Twin, di meeting sebelumnya" hilang. Acceptance pertama sesi 2 kehilangan bagian yang sama.
+- Sesi 1: STT siap 13:29:09, suara pertama 13:29:21 hanya 0,4 detik dan ditranskrip "kickoff". Pertanyaan no. 1 tidak ada di catatan meeting; twin meminta klarifikasi.
+- Penyebab yang terbukti di kode: `_MeetingWorker.run_admitted` baru menonaktifkan kamera, membuka pipeline audio, dan menyambungkan STT setelah admission. Ucapan participant selama jeda itu tidak pernah ditangkap.
+- Belum terbukti: apakah "kickoff" berasal dari ucapan pendek yang ditarik ke keyword. Journal juga tidak mencatat admission dan kesiapan audio, sehingga jeda admission → siap tidak dapat diukur dari laporan.
+
+### Catatan lain
+
+- Fakta ekstraksi kali ini berbahasa Inggris walaupun meeting berbahasa Indonesia; recall tetap berfungsi.
+- Satu interupsi menghasilkan dua event `barge_in` interim karena `is_speaking` masih benar sesaat setelah stop pertama.
+- Twin menyebut "sesuai fakta yang sudah terverifikasi", istilah dari prompt yang ikut terucap.
+
+### Perbaikan setelah acceptance kedua
+
+| Temuan | Perbaikan | Bukti |
+| --- | --- | --- |
+| Awal ucapan pertama hilang | Pipeline audio dan STT dibuka sebelum twin meminta masuk. Saat admission, jam grace capture di-reset (`mark_admitted`), lalu kamera dimatikan, mikrofon diaktifkan, dan conversation diikat. Transkrip yang tiba sebelum conversation diikat diantrekan lalu dijawab. Gagal membuka audio berakhir `infra_failure` tanpa mengetuk meeting; ditolak host atau stop di lobby menutup audio. | Tes urutan runtime (`audio_started` sebelum `admitted`, penolakan, stop saat startup audio, gagal startup, gagal setelah admission). Bukti live menunggu acceptance ketiga. |
+| Jeda admission → siap tidak terukur | Journal mencatat `audio_ready` (lama membuka audio), `join_requested`, `join_result` (status, lama di lobby, audio sudah siap), `microphone_enabled`, dan `conversation_bound`. `fakeyou report` punya bagian `startup`. | Tes laporan untuk admission dan penolakan. |
+| Dua event `barge_in` untuk satu interupsi | Interim menghentikan playback sekali per jawaban; penanda direset sebelum jawaban berikutnya diputar. | Tes conversation: satu stop per interupsi, aktif lagi untuk jawaban berikutnya. |
+| Fakta berbahasa Inggris | Instruksi ekstraksi menambahkan "Write each fact in the language the speakers used." | Re-ingest `acc2-0930-s1` dengan `--keep-record`: 7 dari 7 fakta baru berbahasa Indonesia dan tetap menyebut speaker. Satu fakta berbahasa Inggris berasal dari ingestion `acc2-0930-s2` sebelum perbaikan; dedupe Graphiti menautkan episode baru ke fakta itu. |
+| "Fakta yang sudah terverifikasi" terucap | Aturan bicara natural di akhir prompt, sebelum aturan penutup: istilah internal (verified facts, profil, pencarian memori, tool) tidak disebut. | Probe: 0 dari 22 jawaban menyebut istilah internal. |
+| Asal meeting tidak disebut (no. 9) | Output recall dimulai dengan sumber dan waktu: `From <sumber> on <waktu> UTC: <fakta>`. | Probe: 6 dari 6 jawaban recall menyebut asal. |
+
+Contoh frasa di prompt sekarang berbahasa Inggris, dan data uji berbahasa Indonesia pindah ke fixture JSON (`evals/fixtures/persona-scenarios.json`, `tests/fixtures/live-ingestion-meeting.json`). Setelah contoh aturan penutup diganti, probe mencatat 2 dari 16 jawaban diakhiri pertanyaan. Probe di tabel diukur sebelum kata "recall" di aturan bicara natural diganti "memory lookups", karena persona tanpa tool recall tidak boleh menyebut recall. Eval persona live, eval replay, dan tes ingestion live belum dijalankan ulang setelah perubahan terakhir karena kredit API OpenAI habis (`insufficient_quota`).
+
+Ditemukan saat verifikasi: watchdog menutup notice "This meeting is being recorded" dan dialog "Camera not found" lewat locator `get_by_role`, tetapi lapisan humanize CloakBrowser 0.5.11 menolak locator itu (`UnsupportedHumanizeSelectorError`). Notice rekaman tidak akan tertutup, dan sesi berakhir sebagai `browser_failure` setelah 180 detik menunggu tindakan manual. Klik sekarang memakai satu selector `xpath=` yang didukung humanize; tes browser dengan halaman fixture lulus.

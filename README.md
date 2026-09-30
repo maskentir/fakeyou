@@ -86,7 +86,7 @@ PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk pe
 
 `voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
-Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md) dan [hasil refactor](docs/conversation-refactor-2026-09-28.md).
+Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Dengan `--audio`, pipeline audio dan STT dibuka sebelum twin meminta masuk, sehingga twin sudah mendengar saat di-admit; mikrofon, ucapan awal, dan jawaban baru aktif setelah admission. Gagal membuka audio mengakhiri sesi sebagai `infra_failure` tanpa mengetuk meeting. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md) dan [hasil refactor](docs/conversation-refactor-2026-09-28.md).
 
 ## Persona pemilik
 
@@ -143,14 +143,14 @@ Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misaln
 
 Setiap `join` menulis dua berkas:
 
-- Journal `.runtime/journals/<meeting_id>.jsonl` (worker: `.runtime/audio/journals/`): metadata bertimestamp untuk VAD, transkrip, transisi, agent, tool, TTS, playback, ingestion, fault, dan hasil sesi. Isi sensitif seperti prompt dan body di-redact.
+- Journal `.runtime/journals/<meeting_id>.jsonl` (worker: `.runtime/audio/journals/`): metadata bertimestamp untuk startup (audio siap, join, mikrofon, conversation), VAD, transkrip, transisi, agent, tool, TTS, playback, ingestion, fault, dan hasil sesi. Isi sensitif seperti prompt dan body di-redact.
 - Catatan meeting `.runtime/meetings/<meeting_id>/record.jsonl`: transkrip final, ucapan twin yang selesai diputar, dan hasil tool secara lengkap. Catatan disimpan sampai dihapus manual.
 
 ```sh
 uv run fakeyou report --meeting MEETING_ID --journal-dir .runtime/audio/journals
 ```
 
-Laporan berisi latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi.
+Laporan berisi startup (lama membuka audio, lama di lobby, admission → mikrofon dan → conversation aktif, audio siap saat admission), latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi.
 
 Dengan `--barge-in`, transkrip interim minimal tiga kata menghentikan twin yang sedang berbicara tanpa menunggu transkrip final; transkrip final yang lebih pendek tetap memotong playback.
 
