@@ -73,7 +73,7 @@ Fakta tanpa episode yang dikenal diberi `(source: unknown)`. Recall yang gagal a
 ### Command operator
 
 ```sh
-fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." --persona PATH [--owner-id ID --twin-id ID]
+fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." --persona PATH --owner-id OWNER_ID --twin-id TWIN_ID
 fakeyou memory-forget --meeting MEETING_ID --persona PATH
 fakeyou memory-forget --episode EPISODE_UUID --persona PATH
 ```

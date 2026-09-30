@@ -91,6 +91,18 @@ Semua model memanggil recall untuk pertanyaan demo. Muse lebih patuh gaya dan le
 - Latency model per giliran perlu diukur terhadap panjang thread. Bila naik, gunakan `SummarizationMiddleware` LangChain (trigger berdasarkan ukuran konteks) atau model dengan konteks panjang; prompt caching provider membantu karena system prompt dan awal thread tetap.
 - Barge-in berbasis transkrip interim memakai `MinWordsUserTurnStartStrategy` Pipecat yang diberi status bicara dari `PlaybackEngine`. Playback tetap di luar pipeline karena TTS di dalam pipeline sebelumnya patah di live Meet ([voice](voice.md)).
 
+## Status fase 1 (30 September 2026)
+
+Selesai di branch `feat/memory-ingestion`:
+
+- Catatan meeting `MeetingRecord` (`src/fakeyou/record.py`): transkrip final, ucapan twin `speak_finished`, dan hasil tool, append-only per `meeting_id`, dibaca kembali dengan `TypeAdapter` bertipe diskriminan.
+- Journal lengkap: `speech_started`/`speech_stopped` dari VAD, `transcript_final`, `conversation_transition`, event playback, `tool_finished`/`tool_failed` (callback LangChain), dan `session_result`, semuanya dengan `at`.
+- `fakeyou report --meeting ID`. Divalidasi pada log `acc-0930-s1` yang dikonversi: angka per giliran sama dengan perhitungan manual di [acceptance](acceptance-2026-09-30.md).
+- Model per peran di `Settings` (`FAKEYOU_CHAT_*`, `FAKEYOU_MEMORY_*`, `FAKEYOU_STT_MODEL`), `create_chat_model`, host preflight dari endpoint chat, dan bagian `models` di `fakeyou check`. Tes `.env.example` menjaga nilai contoh tetap sama dengan default.
+- Tes kontrak library (`tests/test_library_contracts.py`, termasuk bukti Pipecat 1.12 membuang label diarisasi), tes command dokumentasi (`tests/test_documented_commands.py`), dan tes stop bersinyal pada image worker asli (`tests/test_worker_image.py`, marker `container`).
+
+Belum: `memory-forget --meeting` menghapus catatan meeting masuk fase 2 bersama `memory-ingest`.
+
 ## Urutan
 
 | Fase | Isi | Mencegah |

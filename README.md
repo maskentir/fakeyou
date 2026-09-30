@@ -120,6 +120,29 @@ Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memo
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 
+## Model dan laporan sesi
+
+Model dipilih per peran lewat `Settings`, bukan dari default library. `fakeyou check` mencetak semuanya di bagian `models`:
+
+| Peran | Setelan | Default |
+| --- | --- | --- |
+| Jawaban lisan | `FAKEYOU_CHAT_MODEL`, `FAKEYOU_CHAT_BASE_URL`, `FAKEYOU_CHAT_API_KEY`, `FAKEYOU_CHAT_REASONING_EFFORT` | `openai:gpt-4.1-mini` dengan key OpenAI |
+| Memori Graphiti | `FAKEYOU_MEMORY_LLM_MODEL`, `FAKEYOU_MEMORY_SMALL_MODEL`, `FAKEYOU_MEMORY_EMBEDDING_MODEL` | `gpt-5.5`, `gpt-4.1-nano`, `text-embedding-3-small` |
+| STT | `FAKEYOU_STT_MODEL` | `muse-voice-transcribe-1.0` |
+
+Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misalnya Muse Spark di `https://api.meta.ai/v1` dengan `FAKEYOU_CHAT_MODEL=openai:muse-spark-1.3`. Host preflight mengikuti endpoint itu. Perbandingan latency dan perilaku antarmodel ada di [rencana jangka panjang](docs/long-term-plan.md#4a-model-per-peran-lewat-langchain); mengganti model lisan harus lolos eval yang sama.
+
+Setiap `join` menulis dua berkas:
+
+- Journal `.runtime/journals/<meeting_id>.jsonl` (worker: `.runtime/audio/journals/`): metadata bertimestamp untuk VAD, transkrip, transisi, agent, tool, TTS, playback, ingestion, fault, dan hasil sesi. Isi sensitif seperti prompt dan body di-redact.
+- Catatan meeting `.runtime/meetings/<meeting_id>/record.jsonl`: transkrip final, ucapan twin yang selesai diputar, dan hasil tool secara lengkap. Catatan disimpan sampai dihapus manual.
+
+```sh
+uv run fakeyou report --meeting MEETING_ID --journal-dir .runtime/audio/journals
+```
+
+Laporan berisi latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, pemakaian tool, ingestion, fault, dan hasil sesi.
+
 ## Verifikasi
 
 ```sh
@@ -130,6 +153,7 @@ DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona.py
 uv run pytest tests/test_browser.py tests/test_meeting_browser.py -m browser
+uv run pytest tests/test_worker_image.py -m container
 uv build
 docker compose --profile production config --quiet
 ```

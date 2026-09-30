@@ -22,3 +22,13 @@ Dependency tambahan menggantikan komponen yang biasanya ditulis sendiri: Pipecat
 `memory-init` membuat Graphiti client sebelum memasuki event loop, kemudian memakai metode inisialisasi indeks resmi. `chat --memory` membuat client lewat `asyncio.to_thread` dan menunggu setup indeks sebelum memasang tools. Neo4jDriver 0.30.2 otomatis menjadwalkan inisialisasi ketika constructor dipanggil di dalam loop; memanggil inisialisasi lagi pada saat yang sama menyebabkan race schema yang ditangani upstream, tetapi menghasilkan log error yang membingungkan. Composition ini menghindari inisialisasi ganda tanpa mengakses private API.
 
 Tag database mengikuti [manifest Neo4j resmi](https://github.com/docker-library/official-images/blob/master/library/neo4j) dan [manifest PostgreSQL resmi](https://github.com/docker-library/official-images/blob/master/library/postgres): Neo4j 5.26.31 LTS dan PostgreSQL 17.11.
+
+## Checklist upgrade versi terkunci
+
+Perilaku library yang diandalkan dikunci oleh `tests/test_library_contracts.py`. Sebelum menaikkan versi Graphiti, Pipecat, LangChain, atau langchain-openai:
+
+1. Baca changelog dan source versi baru untuk API di tabel di atas; dokumentasi web bisa berbeda dari source (contoh: `add_episode_bulk` di Graphiti 0.30.2).
+2. Jalankan `uv run pytest tests/test_library_contracts.py`. Tes yang gagal menandai asumsi yang berubah, misalnya Pipecat mulai meneruskan label diarisasi atau `Neo4jDriver.clone` mulai memisahkan database per grup.
+3. Bandingkan default model library dengan setelan eksplisit di `Settings` (`FAKEYOU_MEMORY_*`, `FAKEYOU_STT_MODEL`). Proyek tidak boleh bergantung pada default library.
+4. Jalankan suite offline, tes live provider, eval persona live, dan tes image worker (`-m container`) sebelum merge.
+
