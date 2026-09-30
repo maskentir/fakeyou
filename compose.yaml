@@ -21,8 +21,10 @@ services:
       # PULSE defaults follow src/fakeyou/audio.py as source of truth; override via env.
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
       PULSE_SINK: ${PULSE_SINK:-agent_output}
+      FAKEYOU_NEO4J_URI: ${FAKEYOU_WORKER_NEO4J_URI:-bolt://neo4j:7687}
     volumes:
       - ./.runtime/audio:/workspace/.runtime
+      - ./examples:/workspace/examples:ro
     stop_grace_period: 45s
 
   neo4j:
