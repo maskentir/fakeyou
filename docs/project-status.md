@@ -6,7 +6,7 @@ Diperbarui: 28 September 2026. Status mencakup fondasi, guest runtime, verifikas
 
 Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint, browser tools, layanan suara, client memori, dan perangkat evaluasi. Muse sudah menerima audio sintetis melalui layanan live dan menghasilkan transkrip final yang sesuai.
 
-Worker sudah dapat masuk sebagai guest, menunggu admission, memantau sesi, dan leave. Digital twin belum mendengar atau berbicara di meeting: sambungan audio, percakapan, serta perilaku peserta menjadi pekerjaan berikutnya.
+Worker sudah dapat masuk sebagai guest, menunggu admission, mendengar lewat Muse, mengirim TTS, dan leave. Jalur audio dua arah sudah diuji live. Loop percakapan kini tersedia lewat `--audio --converse` dan sudah direfactor serta diuji lokal; percakapan model end-to-end di Meet masih perlu acceptance live.
 
 Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan visual, mengingat, berbicara, serta memakai UI atas nama pemilik dengan kewenangan yang jelas.
 
@@ -15,16 +15,16 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Bagian | Bukti saat ini | Yang belum selesai |
 | --- | --- | --- |
 | Setup proyek | Python 3.12, dependency terkunci, lint, typing, build, dan Compose sudah diperiksa | Deployment worker meeting dan CI yang benar-benar berjalan di GitHub |
-| Otak: LangChain + LangGraph | Agent native, persona/tools/checkpoint, tool loop deterministik, serta respons dan tool call OpenAI live | Percakapan dari transkrip meeting dan graph perilaku partisipasi |
+| Otak: LangChain + LangGraph | Agent native dan loop transkrip→agent→sintesis→playback, pemrosesan berurutan, checkpoint per owner/twin/meeting | Acceptance conversation live dan kebijakan kapan berbicara |
 | Memori percakapan | Isolasi `thread_id` dan pembukaan ulang checkpoint SQLite teruji | Pemulihan sesi meeting beserta resource browser/audio; checkpoint PostgreSQL belum dipakai CLI |
-| Telinga: Muse + Pipecat | Uji live WAV sintetis Bahasa Indonesia, mono PCM 16-bit 24 kHz, lulus | Capture audio Google Meet, percakapan multipihak, overlap, reconnect, dan pengukuran latency per tahap |
-| Mulut: TTS Pipecat | `OpenAITTSService` menghasilkan frame audio dalam uji live | Playback ke microphone browser dan stop saat disela |
+| Telinga: Muse + Pipecat | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live; capture 16 kHz mono | Identitas speaker, overlap, dedupe reconnect, dan pengukuran latency per tahap |
+| Mulut: sintesis unary + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in | Acceptance conversation live: jawaban model terdengar utuh tanpa patah |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
 | Mata | Tool DOM dan screenshot tersedia | Observasi screenshare/kamera berkelanjutan dan pemahaman visual oleh model multimodal |
 | Memori pengetahuan: Graphiti + Neo4j | Tools scoped, schema, cleanup, serta ingestion dan retrieval fakta sintetis setelah client dibuka ulang teruji live | Ingestion transkrip otomatis dengan provenance dan deduplikasi |
 | Persona | Agent menerima string persona; ada prompt default | Profil pemilik, gaya bicara, tujuan, pengetahuan, serta batas kewenangan per twin |
 | Evaluasi: DeepEval + pytest | Tes perilaku lokal dan satu tool trajectory deterministik tersedia | Skenario meeting nyata, kualitas jawaban/persona, relevansi memori, interupsi, dan kegagalan media |
-| Runtime aplikasi | CLI `join` foreground, checkpoint lifecycle, validasi sesi, stop/deadline, dan cleanup | Audio worker, kontrol jarak jauh, pemulihan crash, penjadwalan, serta antarmuka pengguna |
+| Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan | Kontrol jarak jauh, pemulihan crash, penjadwalan, serta antarmuka pengguna |
 
 Sumber implementasi: [agent](../src/fakeyou/agent.py), [browser](../src/fakeyou/browser.py), [voice](../src/fakeyou/voice.py), [memory](../src/fakeyou/memory.py), dan [CLI](../src/fakeyou/cli.py).
 
@@ -34,6 +34,7 @@ LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan sa
 
 Hasil pengujian terakhir yang tercatat:
 
+- Refactor conversation: 244 tes default dan 6 tes browser lulus; [bukti dan batas verifikasi](conversation-refactor-2026-09-28.md).
 - Hasil regresi refactor terbaru tersedia di [laporan refactor](refactor-2026-09-28.md).
 - 5 tes browser asli lulus, termasuk join sampai leave pada fixture lokal dengan checkpoint SQLite asli.
 - 3 tes provider live lulus: agent/tool call, TTS, dan Graphiti reopen/search. Lihat [laporan provider](provider-verification-2026-09-28.md).
@@ -55,7 +56,7 @@ Uji penalaran dan tool call OpenAI dengan prompt sintetis, TTS dengan kalimat si
 
 **Selesai ketika:** model memberi respons dan menjalankan tool yang sesuai, TTS menghasilkan audio yang dapat diputar, serta Graphiti mengembalikan fakta uji dari penyimpanan. Key yang terbaca saja belum memenuhi kriteria ini.
 
-**Kemajuan:** ketiga jalur lulus uji live sintetis. Audio TTS terbukti sebagai frame PCM; pendengaran oleh peserta Meet masih menjadi kriteria tahap 2.
+**Kemajuan:** ketiga jalur lulus uji live sintetis. Audio TTS terbukti sebagai PCM unary; pendengaran oleh peserta Meet masih menjadi kriteria tahap 2.
 
 ### 1. Runtime sesi dan guest Google Meet
 
@@ -77,6 +78,8 @@ Pisahkan suara peserta dari output twin agar twin tidak merespons suaranya sendi
 
 **Selesai ketika:** ucapan peserta di Meet menjadi transkrip final, dan peserta lain benar-benar mendengar satu kalimat TTS dari twin. Tidak ada putaran suara sendiri, kebocoran audio antarsesi, atau pengulangan playback setelah reconnect.
 
+**Kemajuan:** transkrip final Muse (3 segmen) dan sapaan TTS yang terdengar peserta terverifikasi live (`audio-bua-1`); tidak ada loopback agent→STT. Tahap 2 selesai.
+
 ### 3. Sambungkan percakapan ke LangGraph
 
 Hubungkan event transkrip final ke state meeting, konteks agent, dan retrieval memori bila diperlukan. Hubungkan respons agent ke TTS dan tool meeting. Jalur audio perlu tetap berjalan saat model atau Graphiti sedang bekerja.
@@ -87,7 +90,11 @@ Pipecat `LangchainProcessor` versi terpasang belum meneruskan seluruh kontrak pe
 
 **Selesai ketika:** peserta bertanya di Meet, twin memakai konteks thread yang benar, lalu jawaban terdengar di meeting yang sama. Replay atau reconnect tidak menggandakan aksi eksternal.
 
+**Kemajuan:** adapter tipis native LangGraph, antrean percakapan berurutan, buffer sebelum audio siap, penolakan jawaban usang, serta cleanup sudah diuji. Duplicate delivery dengan id sama ditangani selama sesi; replay lintas proses dan efek eksternal belum memiliki jaminan exactly-once. Acceptance live masih terbuka. Lihat [kontrak conversation](conversation-plan.md).
+
 ### 4. Persona dan memori pemilik
+
+Task berikutnya sudah disiapkan: [persona tervalidasi dan akses memori per pemilik/twin](superpowers/plans/2026-09-28-persona-memory-access.md). Scope awal mencakup profil, prompt, dan retrieval; ingestion otomatis dipisahkan agar provenance, koreksi, dan idempotensi dapat diuji sendiri.
 
 Sediakan profil pemilik: identitas, gaya bahasa, tujuan meeting, pengetahuan yang diberikan, dan kewenangan untuk berbicara atau membuat komitmen. Bedakan fakta pemilik, ucapan peserta, dan kesimpulan model.
 
