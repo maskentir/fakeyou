@@ -52,6 +52,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not browser and not live and not container"]
@@ -64,7 +65,8 @@ markers = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/fakeyou"]
+untyped_calls_exclude = ["deepeval.models.base_model.DeepEvalBaseLLM"]
+files = ["src/fakeyou", "tests/fakes.py", "tests/conftest.py"]
 
 [[tool.mypy.overrides]]
 module = ["cloakbrowser", "cloakbrowser.*"]

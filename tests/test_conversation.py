@@ -17,65 +17,16 @@ from fakeyou.conversation import (
     conversation_thread_id,
     transcript_event,
 )
+from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
 
 
 def event(id, text="hello", finalized=True):
     return TranscriptEvent(id, datetime.now(UTC).isoformat(), "meeting_audio", text, finalized)
 
 
-class Responder:
-    def __init__(self, gate=None):
-        self.calls = []
-        self.started = asyncio.Event()
-        self.cancelled = asyncio.Event()
-        self.gate = gate
-        self.active = 0
-        self.max_active = 0
-
-    async def respond(self, events, on_tool_start):
-        self.calls.append(events)
-        self.active += 1
-        self.max_active = max(self.max_active, self.active)
-        self.started.set()
-        try:
-            if self.gate is not None and len(self.calls) == 1:
-                await self.gate.wait()
-            return "/".join(item.text for item in events)
-        except asyncio.CancelledError:
-            self.cancelled.set()
-            raise
-        finally:
-            self.active -= 1
-
-
-class Audio:
-    def __init__(self):
-        self.spoken = []
-        self.stops = 0
-        self.speaking = False
-
-    @property
-    def is_speaking(self):
-        return self.speaking
-
-    async def speak(self, text):
-        self.spoken.append(text)
-
-    async def stop_playback(self):
-        self.stops += 1
-
-
-class Clock:
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-
 async def test_serializes_turns_and_preserves_every_new_utterance():
     gate = asyncio.Event()
-    responder, audio = Responder(gate), Audio()
+    responder, audio = FakeResponder(gate), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
     await loop.handle_transcript(event("one", "first"))
@@ -95,7 +46,7 @@ async def test_serializes_turns_and_preserves_every_new_utterance():
 
 
 async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_text():
-    responder, audio = Responder(), Audio()
+    responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder)
     await loop.handle_transcript(event("provisional", finalized=False))
     await loop.handle_transcript(event("empty", "  "))
@@ -112,7 +63,7 @@ async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_tex
 
 
 async def test_close_cancels_model_and_prevents_later_speech():
-    responder, audio = Responder(asyncio.Event()), Audio()
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
     await loop.handle_transcript(event("one"))
@@ -124,8 +75,8 @@ async def test_close_cancels_model_and_prevents_later_speech():
 
 
 async def test_model_timeout_is_observable_without_exposing_provider_error():
-    loop = ConversationLoop(Responder(asyncio.Event()), response_timeout_seconds=0.02)
-    loop.bind(Audio())
+    loop = ConversationLoop(FakeResponder(asyncio.Event()), response_timeout_seconds=0.02)
+    loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
     with pytest.raises(ConversationError, match="conversation failed"):
         await loop.wait_idle()
@@ -150,7 +101,7 @@ def test_cap_spoken_reply_rejects_non_positive_cap() -> None:
 
 
 async def test_loop_speaks_capped_reply_head() -> None:
-    responder, audio = Responder(), Audio()
+    responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
     await loop.handle_transcript(event("one", "One. Two. Three. Four."))
@@ -163,7 +114,7 @@ async def test_observer_failure_preserves_model_and_speech():
     def broken(*args):
         raise RuntimeError("private-provider-data")
 
-    responder, audio = Responder(), Audio()
+    responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, on_transition=broken)
     loop.bind(audio)
     await loop.handle_transcript(event("one"))
@@ -253,7 +204,7 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks():
 
 
 async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
-    responder, audio, clock = Responder(), Audio(), Clock()
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(responder, wake_phrases=["hey fakeyou"], clock=clock)
     loop.bind(audio)
     await loop.handle_transcript(event("one", "our project status"))
@@ -265,7 +216,7 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
 
 
 async def test_wake_phrase_activates_window_case_insensitively():
-    responder, audio, clock = Responder(), Audio(), Clock()
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
     )
@@ -287,7 +238,7 @@ async def test_wake_phrase_activates_window_case_insensitively():
 
 
 async def test_wake_phrase_inside_window_extends_activation():
-    responder, audio, clock = Responder(), Audio(), Clock()
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
     )
@@ -306,13 +257,13 @@ async def test_wake_phrase_inside_window_extends_activation():
 
 def test_activation_window_rejects_nonpositive_values():
     with pytest.raises(ValueError, match="activation window"):
-        ConversationLoop(Responder(), activation_seconds=0)
+        ConversationLoop(FakeResponder(), activation_seconds=0)
     with pytest.raises(ValueError, match="activation window"):
-        ConversationLoop(Responder(), activation_seconds=float("inf"))
+        ConversationLoop(FakeResponder(), activation_seconds=float("inf"))
 
 
 async def test_barge_in_stops_playback_only_while_speaking():
-    responder, audio = Responder(), Audio()
+    responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, barge_in=True)
     loop.bind(audio)
     await loop.handle_transcript(event("one", "hello"))
@@ -327,7 +278,7 @@ async def test_barge_in_stops_playback_only_while_speaking():
 
 
 async def test_barge_in_disabled_never_stops_playback():
-    responder, audio = Responder(), Audio()
+    responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
     audio.speaking = True
@@ -359,7 +310,7 @@ async def test_responder_error_still_fails_loop():
             raise RuntimeError("model exploded")
 
     loop = ConversationLoop(Broken())
-    loop.bind(Audio())
+    loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
     with pytest.raises(ConversationError, match="conversation failed"):
         await loop.wait_idle()
@@ -367,14 +318,13 @@ async def test_responder_error_still_fails_loop():
     await loop.close()
 
 
-async def test_loop_journals_turn_without_modifying_injected_responder():
+async def test_loop_journals_turn_without_modifying_injected_responder(
+    journal,
+):
     import json
     from dataclasses import dataclass
 
-    from fakeyou.journal import ProviderJournal
-
-    lines = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
+    lines = journal.lines
 
     @dataclass(frozen=True)
     class JournaledResponder:
@@ -385,7 +335,7 @@ async def test_loop_journals_turn_without_modifying_injected_responder():
 
     loop = ConversationLoop(JournaledResponder(), journal=journal)
 
-    loop.bind(Audio())
+    loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
     await loop.wait_idle()
     assert loop._responder.journal is None
@@ -409,36 +359,21 @@ def test_voice_cap_uses_language_aware_sentence_boundaries(reply, expected):
     assert cap_spoken_reply(reply) == expected
 
 
-class _ToolCallingModel(FakeMessagesListChatModel):
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-
-def _recall_then_reply() -> _ToolCallingModel:
-    return _ToolCallingModel(
+def _recall_then_reply() -> ToolCallingFakeModel:
+    return ToolCallingFakeModel(
         responses=[
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "recall_meeting_context",
-                        "args": {"query": "demo"},
-                        "id": "call-1",
-                        "type": "tool_call",
-                    }
-                ],
-            ),
+            recall_call({"query": "demo"}, id="call-1"),
             AIMessage(content="The demo is on Friday."),
         ]
     )
 
 
-async def test_responder_reports_tool_results_to_journal_and_callback():
+async def test_responder_reports_tool_results_to_journal_and_callback(
+    journal,
+):
     import json
 
     from langchain_core.tools import tool
-
-    from fakeyou.journal import ProviderJournal
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
@@ -447,7 +382,6 @@ async def test_responder_reports_tool_results_to_journal_and_callback():
             "From Google Meet m1 transcript on 2026-09-23 03:10 UTC: Budi is the PIC"
         )
 
-    lines: list[str] = []
     results: list[tuple] = []
     agent = create_meeting_agent(
         _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
@@ -455,7 +389,7 @@ async def test_responder_reports_tool_results_to_journal_and_callback():
     responder = LangGraphResponder(
         agent,
         "thread",
-        journal=ProviderJournal("m", emit=lines.append),
+        journal=journal,
         on_tool_result=lambda *result: results.append(result),
     )
 
@@ -470,29 +404,30 @@ async def test_responder_reports_tool_results_to_journal_and_callback():
         output.splitlines()[0] == "From owner note on 2026-09-30 06:40 UTC: The demo is on Friday"
     )
     assert duration_ms >= 0
-    [finished] = [json.loads(line) for line in lines if '"tool_finished"' in line]
+    [finished] = journal.events("tool_finished")
     assert finished["tool"] == "recall_meeting_context"
     assert finished["output_lines"] == 2
     assert "owner note" not in json.dumps(finished)
 
 
-async def test_responder_journals_tool_failures():
+async def test_responder_journals_tool_failures(
+    journal,
+):
     import json
 
     from langchain_core.tools import tool
 
-    from fakeyou.journal import ProviderJournal
     from fakeyou.provider_faults import ProviderFault
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
         raise RuntimeError("graph down")
 
-    lines: list[str] = []
+    lines = journal.lines
     agent = create_meeting_agent(
         _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
     )
-    responder = LangGraphResponder(agent, "thread", journal=ProviderJournal("m", emit=lines.append))
+    responder = LangGraphResponder(agent, "thread", journal=journal)
 
     with pytest.raises(ProviderFault):
         await responder.respond([event("one", "When is the demo?")], lambda: None)
@@ -501,17 +436,15 @@ async def test_responder_journals_tool_failures():
     assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")
 
 
-async def test_interim_speech_interrupts_playback_after_enough_words():
+async def test_interim_speech_interrupts_playback_after_enough_words(
+    journal,
+):
     import json
 
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    audio = Audio()
+    lines = journal.lines
+    audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(
-        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
-    )
+    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
     loop.bind(audio)
 
     await loop.handle_interim("okay")
@@ -525,14 +458,14 @@ async def test_interim_speech_interrupts_playback_after_enough_words():
 
 
 async def test_interim_speech_is_ignored_without_barge_in_or_playback():
-    audio = Audio()
+    audio = FakeReplyAudio()
     audio.speaking = True
-    quiet = ConversationLoop(Responder())
+    quiet = ConversationLoop(FakeResponder())
     quiet.bind(audio)
     await quiet.handle_interim("please stop for now")
 
-    idle_audio = Audio()
-    idle = ConversationLoop(Responder(), barge_in=True)
+    idle_audio = FakeReplyAudio()
+    idle = ConversationLoop(FakeResponder(), barge_in=True)
     idle.bind(idle_audio)
     await idle.handle_interim("please stop for now")
 
@@ -541,10 +474,10 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback():
 
 
 async def test_interim_barge_in_respects_wake_phrases():
-    clock = Clock()
-    audio = Audio()
+    clock = FakeClock()
+    audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(Responder(), barge_in=True, wake_phrases=["rani twin"], clock=clock)
+    loop = ConversationLoop(FakeResponder(), barge_in=True, wake_phrases=["rani twin"], clock=clock)
     loop.bind(audio)
 
     await loop.handle_interim("someone else is talking now")
@@ -558,17 +491,15 @@ async def test_interim_barge_in_respects_wake_phrases():
     await loop.close()
 
 
-async def test_final_barge_in_is_journaled_with_its_trigger():
+async def test_final_barge_in_is_journaled_with_its_trigger(
+    journal,
+):
     import json
 
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    audio = Audio()
+    lines = journal.lines
+    audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(
-        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
-    )
+    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
     loop.bind(audio)
 
     await loop.handle_transcript(event("t1", "enough"))
@@ -578,16 +509,14 @@ async def test_final_barge_in_is_journaled_with_its_trigger():
     await loop.close()
 
 
-async def test_one_interruption_is_journaled_and_stopped_once():
+async def test_one_interruption_is_journaled_and_stopped_once(
+    journal,
+):
 
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    audio = Audio()
+    lines = journal.lines
+    audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(
-        Responder(), barge_in=True, journal=ProviderJournal("m", emit=lines.append)
-    )
+    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
     loop.bind(audio)
 
     await loop.handle_interim("wait a second")
@@ -598,9 +527,9 @@ async def test_one_interruption_is_journaled_and_stopped_once():
 
 
 async def test_interim_barge_in_rearms_for_the_next_reply():
-    audio = Audio()
+    audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(Responder(), barge_in=True)
+    loop = ConversationLoop(FakeResponder(), barge_in=True)
     loop.bind(audio)
 
     await loop.handle_interim("wait a second")

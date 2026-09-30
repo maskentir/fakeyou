@@ -1,32 +1,12 @@
 from deepeval import assert_test
 from deepeval.metrics import ToolCorrectnessMetric
-from deepeval.models import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, ToolCall, ToolCallParams
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.agent import create_meeting_agent
-
-
-class FakeToolCallingModel(FakeMessagesListChatModel):
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-
-class OfflineJudge(DeepEvalBaseLLM):
-    def load_model(self):
-        return self
-
-    def generate(self, *args, **kwargs):
-        raise AssertionError("deterministic eval must not call a judge")
-
-    async def a_generate(self, *args, **kwargs):
-        raise AssertionError("deterministic eval must not call a judge")
-
-    def get_model_name(self):
-        return "offline-deterministic"
+from tests.fakes import OfflineJudge, ToolCallingFakeModel
 
 
 def test_meeting_agent_tool_trajectory_is_correct() -> None:
@@ -34,7 +14,7 @@ def test_meeting_agent_tool_trajectory_is_correct() -> None:
     def raise_hand(reason: str) -> str:
         return f"raised hand: {reason}"
 
-    model = FakeToolCallingModel(
+    model = ToolCallingFakeModel(
         responses=[
             AIMessage(
                 content="",

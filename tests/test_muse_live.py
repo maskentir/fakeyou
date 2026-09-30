@@ -20,6 +20,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.settings import Settings, require_secret
 from fakeyou.voice import create_muse_stt
+from tests.fakes import FakeSTT
 
 
 class _Collector(FrameProcessor):
@@ -65,21 +66,6 @@ def test_wav_validation_rejects_wrong_sample_rate(tmp_path: Path) -> None:
         audio.writeframes(b"\0\0" * 160)
     with pytest.raises(ValueError, match="24000"):
         _read_wav(path)
-
-
-class _FakeSTT(FrameProcessor):
-    def __init__(self, text: str, error: str | None = None) -> None:
-        super().__init__()
-        self.text = text
-        self.error = error
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            if self.error:
-                await self.push_frame(ErrorFrame(self.error), FrameDirection.UPSTREAM)
-            await self.push_frame(TranscriptionFrame(self.text, "", "", finalized=True), direction)
-        await self.push_frame(frame, direction)
 
 
 async def _run_pipeline(
@@ -146,14 +132,21 @@ async def _run_pipeline(
 
 
 async def test_native_pipeline_harness_reaches_final_and_shutdown() -> None:
-    finals = await _run_pipeline(_FakeSTT("hello world"), b"\0\0" * 240, 24_000, "hello world")
+    finals = await _run_pipeline(
+        FakeSTT(user_id="", finalized=(True,), text="hello world"),
+        b"\0\0" * 240,
+        24_000,
+        "hello world",
+    )
     assert finals == ["hello world"]
 
 
 async def test_native_pipeline_harness_rejects_upstream_errors() -> None:
     with pytest.raises(AssertionError, match="provider unavailable"):
         await _run_pipeline(
-            _FakeSTT("hello world", error="provider unavailable"),
+            FakeSTT(
+                user_id="", finalized=(True,), text="hello world", error="provider unavailable"
+            ),
             b"\0\0" * 240,
             24_000,
             "hello world",

@@ -11,8 +11,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from pipecat.frames.frames import InputAudioRawFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from playwright.async_api import Page
 
 from fakeyou.audio import (
@@ -32,27 +30,9 @@ from fakeyou.playback import (
     create_paplay_stream_runner,
 )
 from fakeyou.settings import Settings, require_secret
+from tests.fakes import FakeSTT
 
 PAGE = "<!doctype html><html><body><h1>Audio fixture</h1></body></html>"
-
-
-class _SignalSTT(FrameProcessor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.levels: list[float] = []
-        self.signal = asyncio.Event()
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            assert frame.sample_rate == 16_000
-            assert frame.num_channels == 1
-            samples = struct.unpack(f"<{len(frame.audio) // 2}h", frame.audio)
-            level = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
-            self.levels.append(level)
-            if level > 0.02:
-                self.signal.set()
-        await self.push_frame(frame, direction)
 
 
 class _ToneSynth:
@@ -170,7 +150,7 @@ def _normalise(text: str) -> str:
 async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser(
     streaming: bool,
 ) -> None:
-    stt = _SignalSTT()
+    stt = FakeSTT(finalized=(), signal=True)
 
     async def on_transcript(_frame) -> None:
         pass

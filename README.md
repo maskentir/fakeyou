@@ -174,7 +174,7 @@ uv run ruff format --check .
 uv run mypy
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py
-DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona.py
+DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona_eval.py
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_replay.py
 uv run pytest tests/test_browser.py tests/test_meeting_browser.py -m browser
 uv run pytest tests/test_worker_image.py -m container
@@ -185,7 +185,7 @@ docker compose --profile production config --quiet
 Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke test opt-in memakai browser asli pada halaman lokal untuk DOM, klik, dan screenshot. DeepEval default menggunakan respons terprogram untuk menguji wiring prompt, tool, dan argumen, bukan kualitas penalaran model live. Penilaian kualitas persona dengan model dan judge OpenAI dijalankan terpisah:
 
 ```sh
-uv run --env-file .env deepeval test run evals/test_persona.py -m live
+uv run --env-file .env deepeval test run evals/test_persona_eval.py -m live
 uv run --env-file .env pytest evals/test_replay.py -m live -s
 uv run --env-file .env pytest tests/test_providers_live.py -m live
 ```

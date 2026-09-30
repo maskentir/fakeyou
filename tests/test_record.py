@@ -6,7 +6,6 @@ import pytest
 
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
 from fakeyou.record import (
     MeetingRecord,
     ToolResultEntry,
@@ -98,17 +97,14 @@ def test_record_keeps_only_new_final_nonblank_transcripts(tmp_path: Path) -> Non
     assert len(entries) == 1
 
 
-def test_record_write_failure_is_reported_once_without_raising(tmp_path: Path) -> None:
-    lines: list[str] = []
-    record = open_record(
-        tmp_path, faults=FaultReporter(journal=ProviderJournal("meeting-1", emit=lines.append))
-    )
+def test_record_write_failure_is_reported_once_without_raising(journal, tmp_path: Path) -> None:
+    record = open_record(tmp_path, faults=FaultReporter(journal=journal))
     record.close()
 
     record.add_transcript(transcript(0))
     record.add_twin_speech("Okay.")
 
-    faults = [json.loads(line) for line in lines]
+    faults = journal.events()
     assert [(fault["source"], fault["kind"]) for fault in faults] == [("meeting_record", "unknown")]
 
 

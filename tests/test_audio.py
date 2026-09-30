@@ -4,9 +4,7 @@ import pytest
 from pipecat.frames.frames import (
     EndFrame,
     ErrorCategory,
-    ErrorFrame,
     InputAudioRawFrame,
-    StartFrame,
     TranscriptionFrame,
 )
 from pipecat.pipeline.worker import PipelineWorker
@@ -23,6 +21,7 @@ from fakeyou.audio import (
 )
 from fakeyou.deaf import CaptureActivity
 from fakeyou.journal import ProviderJournal
+from tests.fakes import FakeReconnectableSTT, FakeSTT
 
 
 class _Transport:
@@ -60,50 +59,6 @@ class _Input(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class _STT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame("heard", "guest", "", finalized=False), direction
-            )
-            await self.push_frame(
-                TranscriptionFrame("heard", "guest", "", finalized=True), direction
-            )
-        await self.push_frame(frame, direction)
-
-
-class _FailingSTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(ErrorFrame("secret-provider-key"), FrameDirection.UPSTREAM)
-        await self.push_frame(frame, direction)
-
-
-class _StartupFailSTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, StartFrame):
-            await self.push_frame(ErrorFrame("startup-secret"), FrameDirection.UPSTREAM)
-        await self.push_frame(frame, direction)
-
-
-class _ClassifiedErrorSTT(FrameProcessor):
-    def __init__(self, category: ErrorCategory) -> None:
-        super().__init__()
-        self._category = category
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                ErrorFrame("provider hiccup", category=self._category),
-                FrameDirection.UPSTREAM,
-            )
-        await self.push_frame(frame, direction)
-
-
 async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
     engine = _Playback()
     heard: list[str] = []
@@ -118,7 +73,7 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=engine,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -146,7 +101,7 @@ async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=transport,
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -166,7 +121,7 @@ async def test_unexpected_worker_exit_is_reported() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(EndFrame())
@@ -174,12 +129,14 @@ async def test_unexpected_worker_exit_is_reported() -> None:
             await asyncio.wait_for(session.wait_failed(), timeout=2)
 
 
-async def test_callback_failure_degrades_without_killing_session() -> None:
+async def test_callback_failure_degrades_without_killing_session(
+    journal,
+) -> None:
     from fakeyou.deaf import CaptureActivity
     from fakeyou.faults import FaultReporter
 
     activity = CaptureActivity()
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         raise ValueError("secret-callback-data")
@@ -189,7 +146,7 @@ async def test_callback_failure_degrades_without_killing_session() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
         fault_reporter=reporter,
         activity=activity,
@@ -218,7 +175,7 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
                 tts_api_key="openai-secret",
                 on_transcript=on_transcript,
                 transport=_Transport(),
-                stt=_StartupFailSTT(),
+                stt=FakeSTT(error="startup-secret", finalized=(), startup=True),
                 playback=_Playback(),
             ):
                 pass
@@ -251,7 +208,7 @@ async def test_native_transport_is_terminated_when_construction_fails(monkeypatc
             muse_api_key="muse-secret",
             tts_api_key="openai-secret",
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -274,7 +231,7 @@ async def test_native_transport_without_backend_still_reports_root_error(monkeyp
             muse_api_key="muse-secret",
             tts_api_key="openai-secret",
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -312,7 +269,7 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch) -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     )
     entering = asyncio.create_task(context.__aenter__())
@@ -348,7 +305,7 @@ async def test_error_handler_registered_before_add_workers(monkeypatch) -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ):
         pass
@@ -369,7 +326,7 @@ async def test_pipeline_error_chains_frame_detail() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -415,7 +372,7 @@ async def test_terminate_failure_does_not_mask_initialization_error(monkeypatch)
             muse_api_key="muse-secret",
             tts_api_key="openai-secret",
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -432,7 +389,7 @@ async def test_nonpermanent_stt_error_keeps_session_alive() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.UNKNOWN),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.UNKNOWN),
         playback=engine,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -451,7 +408,7 @@ async def test_permanent_stt_error_fails_session() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.AUTHENTICATION),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -470,7 +427,7 @@ async def test_injected_playback_engine_is_closed_on_shutdown() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=engine,
     ):
         assert engine.closed is False
@@ -486,7 +443,7 @@ async def test_default_playback_engine_closes_speech_client() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
     ) as session:
         owned = session._engine._synthesizer._http_client
         assert owned is not None
@@ -513,35 +470,10 @@ async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> No
         muse_api_key="muse-secret",
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ):
         pass
-
-
-class _InterimOnlySTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame("partial", "guest", "", finalized=False), direction
-            )
-        await self.push_frame(frame, direction)
-
-
-class _ExceptionalSTT(FrameProcessor):
-    def __init__(self, exception: Exception) -> None:
-        super().__init__()
-        self._exception = exception
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                ErrorFrame("provider blew up", exception=self._exception),
-                FrameDirection.UPSTREAM,
-            )
-        await self.push_frame(frame, direction)
 
 
 async def test_interim_frames_route_to_on_interim_and_tap() -> None:
@@ -565,7 +497,7 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
         on_transcript=on_transcript,
         on_interim=on_interim,
         transport=_Transport(),
-        stt=_InterimOnlySTT(),
+        stt=FakeSTT("partial", finalized=(False,)),
         playback=_Playback(),
         activity=activity,
     ) as session:
@@ -593,7 +525,7 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
         activity=activity,
     ) as session:
@@ -604,11 +536,13 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         assert activity.snapshot().available is False
 
 
-async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
+async def test_permanent_error_records_before_kill_with_typed_cause(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -618,7 +552,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.AUTHENTICATION),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
         playback=_Playback(),
         fault_reporter=reporter,
     ) as session:
@@ -633,10 +567,12 @@ async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
         assert cause.retryable is False
 
 
-async def test_nonpermanent_error_records_without_killing() -> None:
+async def test_nonpermanent_error_records_without_killing(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -646,7 +582,7 @@ async def test_nonpermanent_error_records_without_killing() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.CONNECTIVITY),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.CONNECTIVITY),
         playback=_Playback(),
         fault_reporter=reporter,
     ) as session:
@@ -659,13 +595,15 @@ async def test_nonpermanent_error_records_without_killing() -> None:
         assert "unavailable" in {entry["kind"] for entry in report["faults"]["kinds"]}
 
 
-async def test_uncategorized_error_falls_back_to_exception_classification() -> None:
+async def test_uncategorized_error_falls_back_to_exception_classification(
+    journal,
+) -> None:
     import httpx2
 
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -675,7 +613,9 @@ async def test_uncategorized_error_falls_back_to_exception_classification() -> N
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ExceptionalSTT(httpx2.ConnectError("socket gone")),
+        stt=FakeSTT(
+            error="provider blew up", finalized=(), exception=httpx2.ConnectError("socket gone")
+        ),
         playback=_Playback(),
         fault_reporter=reporter,
     ) as session:
@@ -688,10 +628,12 @@ async def test_uncategorized_error_falls_back_to_exception_classification() -> N
         assert cause.retryable is True
 
 
-async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
+async def test_unsupported_stt_reconnect_records_without_attempts(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -701,7 +643,7 @@ async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
         fault_reporter=reporter,
     ) as session:
@@ -714,18 +656,12 @@ async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
         assert "reconnect_unsupported" in kinds
 
 
-async def test_supported_stt_reconnect_queues_request() -> None:
+async def test_supported_stt_reconnect_queues_request(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
-
-    class _Reconnectable(FrameProcessor):
-        async def reconnect_when_idle(self) -> None:
-            pass
-
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
-            await super().process_frame(frame, direction)
-            await self.push_frame(frame, direction)
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
@@ -735,7 +671,7 @@ async def test_supported_stt_reconnect_queues_request() -> None:
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_Reconnectable(),
+        stt=FakeReconnectableSTT(),
         playback=_Playback(),
         fault_reporter=reporter,
     ) as session:
@@ -745,28 +681,19 @@ async def test_supported_stt_reconnect_queues_request() -> None:
         assert reporter.total() == 0
 
 
-async def test_stt_reconnect_lifecycle_is_journaled() -> None:
-    import json
+async def test_stt_reconnect_lifecycle_is_journaled(
+    journal,
+) -> None:
 
     from fakeyou.deaf import CaptureActivity
-    from fakeyou.journal import ProviderJournal
 
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
 
-    class _ReconnectableSTT:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def reconnect_when_idle(self) -> None:
-            self.calls += 1
-
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
-    stt = _ReconnectableSTT()
+    stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
         object(),
         object(),
@@ -789,7 +716,7 @@ async def test_stt_reconnect_lifecycle_is_journaled() -> None:
     assert verdict == "silent"
     assert stt.calls == 1
     assert session.reconnect_state() == "idle"
-    rows = [json.loads(line) for line in lines]
+    rows = journal.events()
     assert [(row["event"], row["outcome"]) for row in rows] == [
         ("stt_reconnect", "queued"),
         ("stt_reconnect", "ok"),
@@ -862,15 +789,13 @@ async def test_capture_observer_meters_frame_energy() -> None:
     assert snapshot.last_energetic_at is not None
 
 
-async def test_capture_observer_journals_speech_boundaries() -> None:
-    import json
+async def test_capture_observer_journals_speech_boundaries(
+    journal,
+) -> None:
 
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    observer = _CaptureObserver(CaptureActivity(), journal=ProviderJournal("m", emit=lines.append))
+    observer = _CaptureObserver(CaptureActivity(), journal=journal)
 
     async def sink(frame, direction):
         return None
@@ -880,7 +805,7 @@ async def test_capture_observer_journals_speech_boundaries() -> None:
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
 
-    rows = [json.loads(line) for line in lines]
+    rows = journal.events()
     assert [(row["event"], row["source"]) for row in rows] == [
         ("speech_started", "capture"),
         ("speech_stopped", "capture"),
@@ -927,7 +852,7 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         tts_api_key="openai-secret",
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
         journal=journal,
     ) as session:

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -18,6 +17,7 @@ from fakeyou.conversation import LangGraphResponder, TranscriptEvent, cap_spoken
 from fakeyou.memory import RECALL_EMPTY_RESULT
 from fakeyou.persona import PersonaProfile, build_persona
 from fakeyou.settings import Settings
+from tests.fakes import ToolCallingFakeModel
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "acc-0930-replay.json"
@@ -119,11 +119,6 @@ def load_fixture() -> dict[str, Any]:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
 
 
-class ScriptedModel(FakeMessagesListChatModel):
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-
 async def test_replay_scoring_counts_each_check_offline() -> None:
     fixture = {
         "persona": "examples/persona.example.json",
@@ -143,7 +138,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
         AIMessage(content="Five million?"),
     ]
 
-    score = await replay(lambda: ScriptedModel(responses=replies), fixture, runs=1)
+    score = await replay(lambda: ToolCallingFakeModel(responses=replies), fixture, runs=1)
 
     assert score.rate("must_mention") == 1.0
     assert score.rate("must_not_mention") == 0.0

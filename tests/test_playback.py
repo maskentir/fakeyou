@@ -4,7 +4,6 @@ import stat
 
 import pytest
 
-from fakeyou.journal import ProviderJournal
 from fakeyou.playback import (
     PlaybackEngine,
     PlaybackError,
@@ -580,16 +579,15 @@ async def test_speak_retries_typed_timeout_once() -> None:
     assert [event.name for event in events] == ["speak_started", "speak_finished"]
 
 
-async def test_speak_retry_is_journaled() -> None:
+async def test_speak_retry_is_journaled(
+    journal,
+) -> None:
     import json
-
-    from fakeyou.journal import ProviderJournal
 
     synth = _Synth(error=TimeoutError("slow"))
     player = _Player()
     muter = _Muter()
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
+    lines = journal.lines
     engine = _engine(synth, player, muter, [], tail_seconds=0, journal=journal)
     try:
         await engine.speak("retry")
@@ -648,11 +646,13 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
     assert events == []
 
 
-async def test_typed_synth_fault_records_and_engine_recovers() -> None:
+async def test_typed_synth_fault_records_and_engine_recovers(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
     synth = _Synth(error=ProviderFault("tts", "timeout", detail="slow", retryable=True))
     player = _Player()
     muter = _Muter()
@@ -680,10 +680,12 @@ async def test_typed_synth_fault_records_and_engine_recovers() -> None:
     assert report["faults"]["kinds"][0]["kind"] == "timeout"
 
 
-async def test_play_failure_records_and_worker_survives() -> None:
+async def test_play_failure_records_and_worker_survives(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
     synth = _Synth()
     player = _Player(error=PlaybackError("paplay exited with 1"))
     muter = _Muter()
@@ -836,10 +838,12 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
     assert [event.name for event in events] == ["speak_started", "speak_finished"]
 
 
-async def test_streaming_play_failure_reports_and_engine_recovers() -> None:
+async def test_streaming_play_failure_reports_and_engine_recovers(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
+    reporter = FaultReporter(journal=journal)
     synth = _StreamSynth()
     player = _Player()
     streamer = _StreamPlayer(error=PlaybackError("paplay stream failed"))

@@ -4,23 +4,7 @@ import pytest
 
 from fakeyou.audio import ManagedMuseSTT, run_stt_reconnect, stt_reconnect_supported
 from fakeyou.voice import create_muse_stt
-
-
-class _ReconnectableSTT:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    async def reconnect_when_idle(self) -> None:
-        self.calls += 1
-
-
-class _LegacyRawReconnectSTT:
-    async def _reconnect(self) -> None:
-        pass
-
-
-class _LegacySTT:
-    pass
+from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT
 
 
 def test_pipecat_1_12_0_meta_stt_exposes_reconnect_coroutine() -> None:
@@ -38,14 +22,14 @@ def test_managed_muse_stt_exposes_policy_controlled_reconnect() -> None:
 
 
 def test_reconnect_guard_accepts_only_policy_controlled_reconnect() -> None:
-    assert stt_reconnect_supported(_ReconnectableSTT()) is True
-    assert stt_reconnect_supported(_LegacyRawReconnectSTT()) is False
-    assert stt_reconnect_supported(_LegacySTT()) is False
+    assert stt_reconnect_supported(FakeReconnectableSTT()) is True
+    assert stt_reconnect_supported(LegacyRawReconnectSTT()) is False
+    assert stt_reconnect_supported(LegacySTT()) is False
     assert stt_reconnect_supported(None) is False
 
 
 async def test_frozen_reconnect_path_calls_fake_stt() -> None:
-    stt = _ReconnectableSTT()
+    stt = FakeReconnectableSTT()
 
     await run_stt_reconnect(stt)
 
@@ -54,4 +38,4 @@ async def test_frozen_reconnect_path_calls_fake_stt() -> None:
 
 async def test_frozen_reconnect_path_rejects_legacy_stt() -> None:
     with pytest.raises(AttributeError):
-        await run_stt_reconnect(_LegacySTT())
+        await run_stt_reconnect(LegacySTT())

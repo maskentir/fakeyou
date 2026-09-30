@@ -9,7 +9,6 @@ from graphiti_core.search.search_filters import ComparisonOperator
 from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory as memory_module
-from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
     Neo4jMemoryConfig,
     create_memory_tools,
@@ -22,29 +21,19 @@ from fakeyou.memory import (
     remember_owner_note,
     verify_memory_connection,
 )
-
-
-class FakeMemory:
-    def __init__(self) -> None:
-        self.added: list[dict[str, object]] = []
-        self.searched: list[dict[str, object]] = []
-
-    async def add_episode(self, **kwargs):
-        self.added.append(kwargs)
-
-    async def search(self, query, **kwargs):
-        self.searched.append({"query": query, **kwargs})
-        return []
+from tests.fakes import FakeSaga, make_graphiti
 
 
 @pytest.mark.parametrize("group_id", ["", "bad:group", "bad group", "x" * 129])
 def test_memory_tools_reject_invalid_group_ids(group_id: str) -> None:
     with pytest.raises(ValueError, match="group_id"):
-        create_memory_tools(FakeMemory(), group_id=group_id)
+        create_memory_tools(make_graphiti(), group_id=group_id)
 
 
-async def test_memory_tools_keep_group_id_scoped() -> None:
-    memory = FakeMemory()
+async def test_memory_tools_keep_group_id_scoped(
+    graphiti,
+) -> None:
+    memory = graphiti
     remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     await remember.ainvoke({"fact": "Alice owns the agenda"})
@@ -57,17 +46,6 @@ async def test_memory_tools_keep_group_id_scoped() -> None:
         "num_results": memory_module.RECALL_SEARCH_LIMIT,
         "search_filter": memory_module.CURRENT_FACTS_FILTER,
     }
-
-
-class FakeGraphiti:
-    def __init__(self) -> None:
-        self.events: list[str] = []
-
-    async def build_indices_and_constraints(self) -> None:
-        self.events.append("build")
-
-    async def close(self) -> None:
-        self.events.append("close")
 
 
 def _config() -> Neo4jMemoryConfig:
@@ -125,8 +103,10 @@ def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> Non
     assert memory.embedder.client.api_key == "k"
 
 
-async def test_open_graphiti_memory_is_lightweight(monkeypatch: pytest.MonkeyPatch) -> None:
-    memory = FakeGraphiti()
+async def test_open_graphiti_memory_is_lightweight(
+    graphiti, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = graphiti
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
 
     async with open_graphiti_memory(_config()) as opened:
@@ -135,31 +115,18 @@ async def test_open_graphiti_memory_is_lightweight(monkeypatch: pytest.MonkeyPat
     assert memory.events == ["close"]
 
 
-async def test_ensure_indexes_builds_on_demand() -> None:
-    memory = FakeGraphiti()
+async def test_ensure_indexes_builds_on_demand(
+    graphiti,
+) -> None:
+    memory = graphiti
 
     await ensure_indexes(memory)
 
     assert memory.events == ["build"]
 
 
-class FakeSearchMemory(FakeMemory):
-    def __init__(self, facts: list[str], episodes: dict[str, list[str]] | None = None) -> None:
-        super().__init__()
-        self.facts = facts
-        self.fact_episodes = episodes or {}
-        self.driver = SimpleNamespace(name="driver")
-
-    async def search(self, query, **kwargs):
-        self.searched.append({"query": query, **kwargs})
-        return [
-            SimpleNamespace(fact=fact, episodes=self.fact_episodes.get(fact, []))
-            for fact in self.facts
-        ]
-
-
 async def test_recall_caps_results() -> None:
-    memory = FakeSearchMemory([f"fact-{index}" for index in range(8)])
+    memory = make_graphiti(facts=[f"fact-{index}" for index in range(8)])
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     result = await recall.ainvoke({"query": "agenda"})
@@ -169,7 +136,7 @@ async def test_recall_caps_results() -> None:
 
 
 async def test_recall_drops_identical_facts_before_applying_the_limit() -> None:
-    memory = FakeSearchMemory(["A", "A", "B", "C", "C", "D", "E", "F"])
+    memory = make_graphiti(facts=["A", "A", "B", "C", "C", "D", "E", "F"])
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     result = await recall.ainvoke({"query": "agenda"})
@@ -210,9 +177,9 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
         return [episodes[uuid] for uuid in uuids if uuid in episodes]
 
     monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
-    memory = FakeSearchMemory(
-        ["Demo moves to Thursday", "Budget is final", "Venue is Hall A"],
-        {
+    memory = make_graphiti(
+        facts=["Demo moves to Thursday", "Budget is final", "Venue is Hall A"],
+        episodes={
             "Demo moves to Thursday": ["e2", "e1"],
             "Budget is final": ["e2"],
             "Venue is Hall A": ["missing"],
@@ -232,7 +199,7 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
 
 
 async def test_recall_empty_returns_sentinel() -> None:
-    memory = FakeSearchMemory([])
+    memory = make_graphiti(facts=[])
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     assert await recall.ainvoke({"query": "agenda"}) == memory_module.RECALL_EMPTY_RESULT
@@ -254,11 +221,13 @@ async def test_verify_memory_connection_requires_neo4j_driver() -> None:
         await verify_memory_connection(SimpleNamespace(driver=object()))
 
 
-def test_recall_error_middleware_returns_unknown_and_records_fault() -> None:
+def test_recall_error_middleware_returns_unknown_and_records_fault(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    lines: list[str] = []
-    faults = FaultReporter(journal=ProviderJournal("m", emit=lines.append))
+    lines = journal.lines
+    faults = FaultReporter(journal=journal)
     middleware = recall_error_middleware(faults)
     request = SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"})
 
@@ -270,38 +239,13 @@ def test_recall_error_middleware_returns_unknown_and_records_fault() -> None:
     assert "secret detail" not in lines[0]
 
 
-class FakeForgetMemory:
-    def __init__(self, episodes: dict[str, list[str]]) -> None:
-        self.saga_episodes = episodes
-        self.removed: list[str] = []
-        self.retrieved: list[dict] = []
-        self.driver = SimpleNamespace(name="driver")
-
-    async def retrieve_episodes(self, reference_time, **kwargs):
-        self.retrieved.append({"reference_time": reference_time, **kwargs})
-        remaining = [
-            uuid for uuid in self.saga_episodes.get(kwargs["saga"], []) if uuid not in self.removed
-        ]
-        return [SimpleNamespace(uuid=uuid) for uuid in remaining[: kwargs["last_n"]]]
-
-    async def remove_episode(self, episode_uuid: str) -> None:
-        self.removed.append(episode_uuid)
-
-
-class FakeSaga:
-    def __init__(self, name: str, deleted: list[str]) -> None:
-        self.name = name
-        self.deleted = deleted
-
-    async def delete(self, driver) -> None:
-        self.deleted.append(self.name)
-
-
 async def test_forget_meeting_removes_every_saga_episode_and_the_saga(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saga = meeting_saga("meeting-1")
-    memory = FakeForgetMemory({saga: [f"e{index}" for index in range(5)], "meeting:other": ["x"]})
+    memory = make_graphiti(
+        saga_episodes={saga: [f"e{index}" for index in range(5)], "meeting:other": ["x"]}
+    )
     deleted: list[str] = []
     saga_groups: list[list[str]] = []
 
@@ -326,7 +270,7 @@ async def test_forget_meeting_stops_when_an_episode_survives_removal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saga = meeting_saga("meeting-1")
-    memory = FakeForgetMemory({saga: ["stuck"]})
+    memory = make_graphiti(saga_episodes={saga: ["stuck"]})
 
     async def remove_without_effect(episode_uuid: str) -> None:
         return None
@@ -341,7 +285,7 @@ async def test_forget_meeting_stops_when_an_episode_survives_removal(
 async def test_forget_episode_only_removes_episodes_in_the_persona_group(
     monkeypatch: pytest.MonkeyPatch, group_id: str, allowed: bool
 ) -> None:
-    memory = FakeForgetMemory({})
+    memory = make_graphiti(saga_episodes={})
 
     async def get_by_uuid(driver, uuid):
         return SimpleNamespace(uuid=uuid, group_id=group_id)
@@ -360,13 +304,11 @@ async def test_forget_episode_only_removes_episodes_in_the_persona_group(
 async def test_remember_owner_note_stores_text_episode_in_group() -> None:
     added: list[dict] = []
 
-    class NoteMemory:
-        async def add_episode(self, **kwargs):
-            added.append(kwargs)
-            return SimpleNamespace(episode=SimpleNamespace(uuid="note-1"), edges=[])
+    memory = make_graphiti(episode_prefix="note-")
+    memory.added = added
 
     result = await remember_owner_note(
-        NoteMemory(), group_id="team_alpha", text="  The Orchid demo moves to Friday.  "
+        memory, group_id="team_alpha", text="  The Orchid demo moves to Friday.  "
     )
 
     assert result.episode.uuid == "note-1"
@@ -380,12 +322,11 @@ async def test_remember_owner_note_stores_text_episode_in_group() -> None:
 
 
 async def test_recall_times_out_below_the_agent_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    class HangingMemory(FakeMemory):
-        async def search(self, query, **kwargs):
-            await asyncio.Event().wait()
 
     monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
-    _remember, recall = create_memory_tools(HangingMemory(), group_id="team_alpha")
+    _remember, recall = create_memory_tools(
+        make_graphiti(search_gate=asyncio.Event()), group_id="team_alpha"
+    )
 
     with pytest.raises(TimeoutError):
         await recall.ainvoke({"query": "agenda"})

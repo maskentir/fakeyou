@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from graphiti_core.nodes import EpisodeType
@@ -18,6 +19,7 @@ from fakeyou.ingestion import (
 from fakeyou.journal import ProviderJournal
 from fakeyou.memory import meeting_saga
 from fakeyou.record import ToolResultEntry, TranscriptEntry, TwinSpeechEntry
+from tests.fakes import make_graphiti
 
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 
@@ -37,32 +39,7 @@ def twin(seconds: float, text: str) -> TwinSpeechEntry:
     return TwinSpeechEntry(at=START + timedelta(seconds=seconds), text=text)
 
 
-class FakeGraphiti:
-    def __init__(self, existing: list[SimpleNamespace] | None = None) -> None:
-        self.saga_episodes = list(existing or [])
-        self.added: list[dict] = []
-        self.errors: dict[int, BaseException] = {}
-        self.gate: asyncio.Event | None = None
-        self.retrieved: list[dict] = []
-        self.driver = SimpleNamespace(name="driver")
-
-    async def retrieve_episodes(self, reference_time, **kwargs):
-        self.retrieved.append(kwargs)
-        return self.saga_episodes[-kwargs["last_n"] :]
-
-    async def add_episode(self, **kwargs):
-        if self.gate is not None:
-            await self.gate.wait()
-        attempt = len(self.added)
-        if attempt in self.errors:
-            raise self.errors.pop(attempt)
-        self.added.append(kwargs)
-        episode = SimpleNamespace(uuid=f"uuid-{kwargs['name']}", name=kwargs["name"])
-        self.saga_episodes.append(episode)
-        return SimpleNamespace(episode=episode, edges=[SimpleNamespace(fact="fact")])
-
-
-async def run(memory: FakeGraphiti, entries: list, **overrides):
+async def run(memory: MagicMock, entries: list, **overrides):
     lines: list[str] = []
     values = {
         "group_id": "twin_group",
@@ -126,7 +103,7 @@ def test_extraction_instructions_without_vocabulary_do_not_list_terms() -> None:
 
 
 async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga() -> None:
-    memory = FakeGraphiti()
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
     entries = [
         twin(0, "Move the demo to Thursday?"),
         said(1, "Okay, agreed."),
@@ -169,7 +146,11 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
 
 async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() -> None:
     entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
-    memory = FakeGraphiti(existing=[SimpleNamespace(uuid="old-0", name="meeting-1:w00000")])
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[SimpleNamespace(fact="fact")],
+        existing=[SimpleNamespace(uuid="old-0", name="meeting-1:w00000")],
+    )
 
     result, _rows = await run(memory, entries)
     again, _rows = await run(memory, entries)
@@ -190,7 +171,7 @@ async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() ->
 
 async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> None:
     entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
-    memory = FakeGraphiti()
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
     memory.errors[1] = RuntimeError("secret graph detail")
 
     result, rows = await run(memory, entries)
@@ -210,7 +191,7 @@ async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> N
 
 
 async def test_ingest_times_out_a_hung_window() -> None:
-    memory = FakeGraphiti()
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
     memory.gate = asyncio.Event()
 
     result, rows = await run(memory, [said(0, "Stuck.")], episode_timeout_seconds=0.01)
@@ -222,7 +203,7 @@ async def test_ingest_times_out_a_hung_window() -> None:
 async def test_ingest_stops_between_windows_when_requested() -> None:
     stop = asyncio.Event()
     stop.set()
-    memory = FakeGraphiti()
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
 
     result, _rows = await run(memory, [said(0, "One.")], stop=stop)
 
@@ -231,14 +212,20 @@ async def test_ingest_stops_between_windows_when_requested() -> None:
 
 
 async def test_ingest_refuses_a_saga_written_by_an_older_ingestion_format() -> None:
-    memory = FakeGraphiti(existing=[SimpleNamespace(uuid="legacy", name="meeting-1:00003")])
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[SimpleNamespace(fact="fact")],
+        existing=[SimpleNamespace(uuid="legacy", name="meeting-1:00003")],
+    )
 
     with pytest.raises(ValueError, match="memory-forget"):
         await run(memory, [said(0, "Hello.")])
 
 
 async def test_ingest_of_an_empty_record_is_complete() -> None:
-    result, _rows = await run(FakeGraphiti(), [])
+    result, _rows = await run(
+        make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")]), []
+    )
 
     assert (result.windows, result.ingested, result.completed) == (0, 0, True)
 

@@ -10,160 +10,30 @@ from fakeyou.meet import (
     request_guest_join,
     with_pinned_meet_locale,
 )
-
-LINK = "https://meet.google.com/abc-defg-hij"
-
-LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
-JOIN_NOW_LOBBY = '<input placeholder="Your name"><button>Join now</button>'
-DIALOG_LOBBY = (
-    '<input placeholder="Your name">'
-    "<div>Do you want people to see and hear you in the meeting?</div>"
-    "<button>Continue without microphone and camera</button>"
+from tests.fakes import (
+    ASK_SELECTOR,
+    CAM_OFF_SELECTOR,
+    CAM_ON_SELECTOR,
+    DENIED,
+    DIALOG_SELECTOR,
+    ENDED,
+    EXPLICIT_DENIED,
+    IN_CALL,
+    JOIN_NOW_SELECTOR,
+    LEAVE_AND_WAITING,
+    LEAVE_SELECTOR,
+    LINK,
+    LIVE_CAPTCHA,
+    LOBBY,
+    MIC_OFF_SELECTOR,
+    MIC_ON_SELECTOR,
+    NAME_SELECTOR,
+    NO_CAPTCHA,
+    REMOVED,
+    WAITING,
+    FakeClock,
+    meet_page,
 )
-IN_CALL = '<button aria-label="Leave call"></button><button>Mute microphone</button>'
-DENIED = "<h1>You can't join this video call</h1>"
-EXPLICIT_DENIED = "<h1>Someone in the call denied your request to join</h1>"
-REMOVED = "<h1>You've been removed from the call</h1>"
-ENDED = "<h1>The call has ended</h1>"
-WAITING = LOBBY + "<div>Asking to be let in...</div>"
-LEAVE_AND_WAITING = IN_CALL + "<div>Asking to be let in...</div>"
-LOBBY_WITHOUT_BUTTON = '<input placeholder="Your name">'
-
-DIALOG_SELECTOR = 'text="Continue without microphone and camera"'
-NAME_SELECTOR = "placeholder:Your name"
-ASK_SELECTOR = 'text="Ask to join"'
-JOIN_NOW_SELECTOR = 'text="Join now"'
-LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
-MIC_ON_SELECTOR = (
-    'button[aria-label^="Turn off microphone" i],button[aria-label^="Mute microphone" i]'
-)
-MIC_OFF_SELECTOR = (
-    'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
-)
-CAM_ON_SELECTOR = 'button[aria-label^="Turn off camera" i]'
-CAM_OFF_SELECTOR = 'button[aria-label^="Turn on camera" i]'
-
-NO_CAPTCHA = False
-LIVE_CAPTCHA = True
-
-
-class _FakeKeyboard:
-    def __init__(self, page):
-        self._page = page
-
-    async def type(self, text, delay=0):
-        self._page.typed.append(text)
-        if text in self._page.type_failures:
-            raise RuntimeError(f"typing failed: {text}")
-
-
-class _FakeLocator:
-    def __init__(self, page, selector):
-        self._page = page
-        self.selector = selector
-
-    @property
-    def first(self):
-        return self
-
-    async def count(self):
-        scripted = self._page.counts.get(self.selector, [1])
-        if len(scripted) > 1:
-            return scripted.pop(0)
-        return scripted[0]
-
-    async def wait_for(self, **kwargs):
-        if self.selector in self._page.wait_failures:
-            raise RuntimeError(f"wait failed: {self.selector}")
-        self._page.waited.append(self.selector)
-
-    async def is_visible(self):
-        value = self._page.visible.get(self.selector, True)
-        if isinstance(value, Exception):
-            raise value
-        return value
-
-    async def click(self, **kwargs):
-        self._page.clicked.append(self.selector)
-        remaining = self._page.click_flaky.get(self.selector, 0)
-        if remaining > 0:
-            self._page.click_flaky[self.selector] = remaining - 1
-            raise RuntimeError(f"click failed: {self.selector}")
-        if self.selector in self._page.click_failures:
-            raise RuntimeError(f"click failed: {self.selector}")
-
-
-class _FakePage:
-    def __init__(
-        self,
-        contents=(),
-        evaluates=(),
-        counts=None,
-        click_failures=(),
-        click_flaky=None,
-        type_failures=(),
-        goto_failures=0,
-        visible=None,
-        wait_failures=(),
-    ):
-        self._contents = list(contents)
-        self._evaluates = list(evaluates)
-        self.counts = {key: list(value) for key, value in (counts or {}).items()}
-        self.click_failures = set(click_failures)
-        self.click_flaky = dict(click_flaky or {})
-        self.visible = dict(visible or {})
-        self.wait_failures = set(wait_failures)
-        self.type_failures = set(type_failures)
-        self._goto_failures = goto_failures
-        self.visited = []
-        self.clicked = []
-        self.typed = []
-        self.waited = []
-        self.evaluate_calls = []
-        self.keyboard = _FakeKeyboard(self)
-
-    async def goto(self, url, **kwargs):
-        self.visited.append(url)
-        if self._goto_failures > 0:
-            self._goto_failures -= 1
-            raise RuntimeError("navigation timeout")
-        return None
-
-    async def content(self):
-        if not self._contents:
-            raise AssertionError("page content read more times than scripted")
-        result = self._contents.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    async def evaluate(self, expression):
-        self.evaluate_calls.append(expression)
-        if not self._evaluates:
-            raise AssertionError("page evaluate called more times than scripted")
-        result = self._evaluates.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    def locator(self, selector):
-        return _FakeLocator(self, selector)
-
-    def get_by_placeholder(self, text):
-        return _FakeLocator(self, f"placeholder:{text}")
-
-
-class _FakeClock:
-    def __init__(self):
-        self.now = 1000.0
-        self.sleeps = []
-
-    def monotonic(self):
-        return self.now
-
-    async def sleep(self, seconds):
-        self.sleeps.append(seconds)
-        self.now += seconds
 
 
 def _request(**overrides):
@@ -172,19 +42,9 @@ def _request(**overrides):
     return GuestJoinRequest(**values)
 
 
-def _page(contents=(), **overrides):
-    counts = {
-        DIALOG_SELECTOR: [0],
-        NAME_SELECTOR: [1],
-        ASK_SELECTOR: [1],
-    }
-    counts.update(overrides.pop("counts", {}))
-    return _FakePage(contents, counts=counts, **overrides)
-
-
 async def test_request_guest_join_admits_happy_path() -> None:
-    page = _page([IN_CALL])
-    clock = _FakeClock()
+    page = meet_page([IN_CALL])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -197,8 +57,8 @@ async def test_request_guest_join_admits_happy_path() -> None:
 
 
 async def test_request_guest_join_accepts_join_now_button() -> None:
-    page = _page([IN_CALL], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [1]})
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [1]})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -209,8 +69,8 @@ async def test_request_guest_join_accepts_join_now_button() -> None:
 
 
 async def test_request_guest_join_reports_denial() -> None:
-    page = _page([EXPLICIT_DENIED])
-    clock = _FakeClock()
+    page = meet_page([EXPLICIT_DENIED])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -222,8 +82,8 @@ async def test_request_guest_join_reports_denial() -> None:
 
 
 async def test_request_guest_join_reports_platform_block() -> None:
-    page = _page([DENIED], evaluates=[NO_CAPTCHA])
-    clock = _FakeClock()
+    page = meet_page([DENIED], evaluates=[NO_CAPTCHA])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -234,8 +94,8 @@ async def test_request_guest_join_reports_platform_block() -> None:
 
 
 async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -> None:
-    page = _page([DENIED, DENIED, DENIED], evaluates=[LIVE_CAPTCHA, LIVE_CAPTCHA, LIVE_CAPTCHA])
-    clock = _FakeClock()
+    page = meet_page([DENIED, DENIED, DENIED], evaluates=[LIVE_CAPTCHA, LIVE_CAPTCHA, LIVE_CAPTCHA])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page,
@@ -250,8 +110,8 @@ async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -
 
 
 async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
-    page = _page([DENIED, IN_CALL], evaluates=[LIVE_CAPTCHA])
-    clock = _FakeClock()
+    page = meet_page([DENIED, IN_CALL], evaluates=[LIVE_CAPTCHA])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -261,8 +121,8 @@ async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
 
 
 async def test_request_guest_join_times_out_in_lobby() -> None:
-    page = _page([LOBBY, LOBBY, LOBBY, LOBBY])
-    clock = _FakeClock()
+    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page,
@@ -277,8 +137,8 @@ async def test_request_guest_join_times_out_in_lobby() -> None:
 
 
 async def test_request_guest_join_timeout_names_waiting_room() -> None:
-    page = _page([WAITING, WAITING, WAITING, WAITING])
-    clock = _FakeClock()
+    page = meet_page([WAITING, WAITING, WAITING, WAITING])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page,
@@ -292,8 +152,8 @@ async def test_request_guest_join_timeout_names_waiting_room() -> None:
 
 
 async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
-    page = _page([RuntimeError("lobby gone")])
-    clock = _FakeClock()
+    page = meet_page([RuntimeError("lobby gone")])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -304,8 +164,8 @@ async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
 
 
 async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
-    page = _page([LEAVE_AND_WAITING, EXPLICIT_DENIED])
-    clock = _FakeClock()
+    page = meet_page([LEAVE_AND_WAITING, EXPLICIT_DENIED])
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -315,8 +175,8 @@ async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
 
 
 async def test_request_guest_join_aborts_when_stop_requested() -> None:
-    page = _page()
-    clock = _FakeClock()
+    page = meet_page()
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic, abort=lambda: True
@@ -326,8 +186,8 @@ async def test_request_guest_join_aborts_when_stop_requested() -> None:
 
 
 async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -> None:
-    page = _page([IN_CALL], evaluates=[LINK], goto_failures=1)
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], evaluates=[LINK], goto_failures=1)
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -338,8 +198,8 @@ async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -
 
 
 async def test_request_guest_join_fails_when_page_is_not_on_meeting_host() -> None:
-    page = _page([], evaluates=["https://example.com/"], goto_failures=1)
-    clock = _FakeClock()
+    page = meet_page([], evaluates=["https://example.com/"], goto_failures=1)
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -350,8 +210,8 @@ async def test_request_guest_join_fails_when_page_is_not_on_meeting_host() -> No
 
 
 async def test_request_guest_join_fails_without_name_field() -> None:
-    page = _page([], counts={NAME_SELECTOR: [0]})
-    clock = _FakeClock()
+    page = meet_page([], counts={NAME_SELECTOR: [0]})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -362,8 +222,8 @@ async def test_request_guest_join_fails_without_name_field() -> None:
 
 
 async def test_request_guest_join_fails_without_join_button() -> None:
-    page = _page([], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [0]})
-    clock = _FakeClock()
+    page = meet_page([], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [0]})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page,
@@ -377,8 +237,8 @@ async def test_request_guest_join_fails_without_join_button() -> None:
 
 
 async def test_request_guest_join_waits_for_join_button_to_enable() -> None:
-    page = _page([IN_CALL], counts={ASK_SELECTOR: [0, 1], JOIN_NOW_SELECTOR: [0]})
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], counts={ASK_SELECTOR: [0, 1], JOIN_NOW_SELECTOR: [0]})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -390,8 +250,8 @@ async def test_request_guest_join_waits_for_join_button_to_enable() -> None:
 
 
 async def test_request_guest_join_dismisses_media_dialog_first() -> None:
-    page = _page([IN_CALL], counts={DIALOG_SELECTOR: [1]})
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], counts={DIALOG_SELECTOR: [1]})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -402,8 +262,8 @@ async def test_request_guest_join_dismisses_media_dialog_first() -> None:
 
 
 async def test_request_guest_join_fails_when_typing_returns_error() -> None:
-    page = _page([], type_failures={"Twin"})
-    clock = _FakeClock()
+    page = meet_page([], type_failures={"Twin"})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -414,8 +274,8 @@ async def test_request_guest_join_fails_when_typing_returns_error() -> None:
 
 
 async def test_request_guest_join_fails_when_click_returns_error() -> None:
-    page = _page([], click_failures={ASK_SELECTOR})
-    clock = _FakeClock()
+    page = meet_page([], click_failures={ASK_SELECTOR})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -426,8 +286,8 @@ async def test_request_guest_join_fails_when_click_returns_error() -> None:
 
 
 async def test_request_guest_join_retries_transient_name_click() -> None:
-    page = _page([IN_CALL], click_flaky={NAME_SELECTOR: 2})
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], click_flaky={NAME_SELECTOR: 2})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -439,8 +299,8 @@ async def test_request_guest_join_retries_transient_name_click() -> None:
 
 
 async def test_request_guest_join_gives_up_name_click_after_retries() -> None:
-    page = _page([], click_failures={NAME_SELECTOR})
-    clock = _FakeClock()
+    page = meet_page([], click_failures={NAME_SELECTOR})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -451,8 +311,8 @@ async def test_request_guest_join_gives_up_name_click_after_retries() -> None:
 
 
 async def test_request_guest_join_retries_transient_join_click() -> None:
-    page = _page([IN_CALL], click_flaky={ASK_SELECTOR: 1})
-    clock = _FakeClock()
+    page = meet_page([IN_CALL], click_flaky={ASK_SELECTOR: 1})
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -463,12 +323,12 @@ async def test_request_guest_join_retries_transient_join_click() -> None:
 
 
 async def test_request_guest_join_retries_transient_dialog_click() -> None:
-    page = _page(
+    page = meet_page(
         [IN_CALL],
         counts={DIALOG_SELECTOR: [1]},
         click_flaky={DIALOG_SELECTOR: 1},
     )
-    clock = _FakeClock()
+    clock = FakeClock()
 
     result = await request_guest_join(
         page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
@@ -479,8 +339,8 @@ async def test_request_guest_join_retries_transient_dialog_click() -> None:
 
 
 async def test_click_when_ready_resolves_locator_once_per_attempt() -> None:
-    page = _page([])
-    clock = _FakeClock()
+    page = meet_page([])
+    clock = FakeClock()
     calls = []
 
     def locate():
@@ -494,8 +354,8 @@ async def test_click_when_ready_resolves_locator_once_per_attempt() -> None:
 
 
 async def test_click_when_ready_resolves_fresh_locator_each_attempt() -> None:
-    page = _page([], click_flaky={ASK_SELECTOR: 1})
-    clock = _FakeClock()
+    page = meet_page([], click_flaky={ASK_SELECTOR: 1})
+    clock = FakeClock()
     seen = []
 
     def locate():
@@ -524,7 +384,7 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
         async def click(self, **kwargs):
             calls["click"] = kwargs
 
-    failure = await _click_when_ready(_TimeoutLocator, "join button", _FakeClock().sleep)
+    failure = await _click_when_ready(_TimeoutLocator, "join button", FakeClock().sleep)
 
     assert failure is None
     assert calls["wait_for"] == {"state": "visible", "timeout": 2000}
@@ -545,7 +405,7 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
     ],
 )
 async def test_observe_call_state_classifies_page(content: str, expected: str) -> None:
-    page = _page([content])
+    page = meet_page([content])
 
     observation = await observe_call_state(page)
 
@@ -553,8 +413,8 @@ async def test_observe_call_state_classifies_page(content: str, expected: str) -
 
 
 async def test_leave_meeting_clicks_and_verifies() -> None:
-    page = _page([IN_CALL, ENDED])
-    clock = _FakeClock()
+    page = meet_page([IN_CALL, ENDED])
+    clock = FakeClock()
 
     result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
 
@@ -563,8 +423,8 @@ async def test_leave_meeting_clicks_and_verifies() -> None:
 
 
 async def test_leave_meeting_when_already_out_is_left() -> None:
-    page = _page([ENDED], counts={LEAVE_SELECTOR: [0]})
-    clock = _FakeClock()
+    page = meet_page([ENDED], counts={LEAVE_SELECTOR: [0]})
+    clock = FakeClock()
 
     result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
 
@@ -573,8 +433,8 @@ async def test_leave_meeting_when_already_out_is_left() -> None:
 
 
 async def test_leave_meeting_fails_when_leave_button_persists() -> None:
-    page = _page([IN_CALL, IN_CALL, IN_CALL, IN_CALL])
-    clock = _FakeClock()
+    page = meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL])
+    clock = FakeClock()
 
     result = await leave_meeting(
         page, sleep=clock.sleep, monotonic=clock.monotonic, timeout_seconds=3.0
@@ -584,93 +444,13 @@ async def test_leave_meeting_fails_when_leave_button_persists() -> None:
 
 
 async def test_leave_meeting_fails_without_leave_button_on_unknown_page() -> None:
-    page = _page(["blank page without markers"], counts={LEAVE_SELECTOR: [0]})
-    clock = _FakeClock()
+    page = meet_page(["blank page without markers"], counts={LEAVE_SELECTOR: [0]})
+    clock = FakeClock()
 
     result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
 
     assert result.status == "failed"
     assert "leave button not found" in result.detail
-
-
-async def test_enable_meeting_microphone_skips_click_when_already_on() -> None:
-    page = _page([])
-    clock = _FakeClock()
-
-    assert await enable_meeting_microphone(page, clock.sleep) is True
-    assert page.clicked == []
-
-
-async def test_enable_meeting_microphone_retries_transient_click() -> None:
-    page = _page(
-        [],
-        visible={MIC_ON_SELECTOR: False},
-        click_flaky={MIC_OFF_SELECTOR: 1},
-    )
-    clock = _FakeClock()
-
-    assert await enable_meeting_microphone(page, clock.sleep) is True
-    assert page.clicked.count(MIC_OFF_SELECTOR) == 2
-
-
-async def test_enable_meeting_microphone_raises_after_retries() -> None:
-    page = _page([], visible={MIC_ON_SELECTOR: False}, click_failures={MIC_OFF_SELECTOR})
-    clock = _FakeClock()
-
-    with pytest.raises(RuntimeError, match="attempts"):
-        await enable_meeting_microphone(page, clock.sleep)
-
-
-async def test_enable_meeting_microphone_raises_context_when_state_check_fails() -> None:
-    page = _page([], visible={MIC_ON_SELECTOR: RuntimeError("state boom")})
-    clock = _FakeClock()
-
-    with pytest.raises(RuntimeError, match="checking microphone state"):
-        await enable_meeting_microphone(page, clock.sleep)
-
-
-async def test_enable_meeting_microphone_raises_context_when_confirm_wait_fails() -> None:
-    page = _page([], visible={MIC_ON_SELECTOR: False}, wait_failures={MIC_ON_SELECTOR})
-    clock = _FakeClock()
-
-    with pytest.raises(RuntimeError, match="waiting for enabled microphone"):
-        await enable_meeting_microphone(page, clock.sleep)
-
-
-async def test_disable_meeting_camera_skips_click_when_already_off() -> None:
-    page = _page([])
-    clock = _FakeClock()
-
-    assert await disable_meeting_camera(page, clock.sleep) is True
-    assert page.clicked == []
-
-
-async def test_disable_meeting_camera_retries_transient_click() -> None:
-    page = _page(
-        [],
-        visible={CAM_OFF_SELECTOR: False},
-        click_flaky={CAM_ON_SELECTOR: 1},
-    )
-    clock = _FakeClock()
-
-    assert await disable_meeting_camera(page, clock.sleep) is True
-    assert page.clicked.count(CAM_ON_SELECTOR) == 2
-
-
-async def test_disable_meeting_camera_raises_after_retries() -> None:
-    page = _page([], visible={CAM_OFF_SELECTOR: False}, click_failures={CAM_ON_SELECTOR})
-    clock = _FakeClock()
-
-    with pytest.raises(RuntimeError, match="attempts"):
-        await disable_meeting_camera(page, clock.sleep)
-
-
-async def test_disable_meeting_camera_raises_context_when_state_check_fails() -> None:
-    page = _page([], visible={CAM_OFF_SELECTOR: RuntimeError("state boom")})
-    clock = _FakeClock()
-
-    with pytest.raises(RuntimeError, match="checking camera state"):
-        await disable_meeting_camera(page, clock.sleep)
 
 
 def test_with_pinned_meet_locale_adds_bare_language_subtag() -> None:
@@ -686,3 +466,44 @@ def test_with_pinned_meet_locale_preserves_existing_hl() -> None:
 def test_with_pinned_meet_locale_keeps_unusable_links() -> None:
     assert with_pinned_meet_locale("http://[::1") == "http://[::1"
     assert with_pinned_meet_locale(LINK, "") == LINK
+
+
+@pytest.mark.parametrize(
+    "toggle,current,opposite,device",
+    [
+        (enable_meeting_microphone, MIC_ON_SELECTOR, MIC_OFF_SELECTOR, "microphone"),
+        (disable_meeting_camera, CAM_OFF_SELECTOR, CAM_ON_SELECTOR, "camera"),
+    ],
+)
+@pytest.mark.parametrize(
+    "scenario",
+    ["already_set", "transient_click", "failed_click", "failed_state", "failed_confirmation"],
+)
+async def test_media_toggle_preserves_state_and_reports_failure(
+    toggle, current, opposite, device, scenario
+):
+    values = {}
+    if scenario != "already_set":
+        values["visible"] = {current: False}
+    if scenario == "transient_click":
+        values["click_flaky"] = {opposite: 1}
+    elif scenario == "failed_click":
+        values["click_failures"] = {opposite}
+    elif scenario == "failed_state":
+        values["visible"] = {current: RuntimeError("state boom")}
+    elif scenario == "failed_confirmation":
+        values["wait_failures"] = {current}
+    page = meet_page([], **values)
+    clock = FakeClock()
+    if scenario.startswith("failed"):
+        target = "enabled microphone" if device == "microphone" else "disabled camera"
+        match = {
+            "failed_click": "attempts",
+            "failed_state": f"checking {device} state",
+            "failed_confirmation": f"waiting for {target}",
+        }[scenario]
+        with pytest.raises(RuntimeError, match=match):
+            await toggle(page, clock.sleep)
+    else:
+        assert await toggle(page, clock.sleep) is True
+        assert page.clicked == ([opposite, opposite] if scenario == "transient_click" else [])

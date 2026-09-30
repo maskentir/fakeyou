@@ -1,9 +1,8 @@
-from types import SimpleNamespace
+import json
 from typing import cast
 
 import httpx2
 import pytest
-from openai import Omit
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
@@ -53,51 +52,41 @@ async def test_tts_http_client_bounds_slow_streams() -> None:
     assert client.is_closed
 
 
-class _FakeSpeech:
-    def __init__(self, audio: bytes = b"\x00\x01" * 100) -> None:
-        self.audio = audio
-        self.calls: list[dict] = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return SimpleNamespace(read=lambda: self.audio)
-
-
-def _fake_client(speech: _FakeSpeech):
-    return SimpleNamespace(audio=SimpleNamespace(speech=speech))
-
-
-async def test_synthesizer_sends_unary_pcm_request() -> None:
-    speech = _FakeSpeech()
-    synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=_fake_client(speech))
+async def test_synthesizer_sends_unary_pcm_request(openai_client) -> None:
+    requests = []
+    client = openai_client(requests=requests)
+    synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
 
     try:
         audio = await synthesizer.synthesize("Hello.")
     finally:
         await synthesizer.aclose()
 
-    assert audio == speech.audio
-    assert len(speech.calls) == 1
-    call = speech.calls[0]
+    assert audio == b"\x00\x01" * 100
+    [request] = requests
+    assert request.url == "https://api.openai.com/v1/audio/speech"
+    assert request.headers["authorization"] == "Bearer test-openai-key"
+    call = json.loads(request.content)
     assert call["model"] == TTS_MODEL
     assert call["voice"] == TTS_VOICE
     assert call["input"] == "Hello."
     assert call["instructions"] == TTS_VOICE_INSTRUCTIONS
     assert call["response_format"] == "pcm"
-    assert isinstance(call["speed"], Omit)
-    assert call["timeout"] == TTS_REQUEST_TIMEOUT_SECONDS
+    assert "speed" not in call
+    assert request.extensions["timeout"]["read"] == TTS_REQUEST_TIMEOUT_SECONDS
 
 
-async def test_synthesizer_rejects_blank_text_before_request() -> None:
-    speech = _FakeSpeech()
-    synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=_fake_client(speech))
+async def test_synthesizer_rejects_blank_text_before_request(openai_client) -> None:
+    requests = []
+    client = openai_client(requests=requests)
+    synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
 
     try:
         with pytest.raises(ValueError, match="blank text"):
             await synthesizer.synthesize("   ")
     finally:
         await synthesizer.aclose()
-    assert speech.calls == []
+    assert requests == []
 
 
 def test_synthesizer_rejects_unknown_voice_before_connecting() -> None:
@@ -121,36 +110,12 @@ def test_synthesizer_disables_sdk_retries() -> None:
     assert synthesizer._client.max_retries == 0
 
 
-def _timeout_client():
-    import openai
-
-    speech = _FakeSpeech()
-
-    async def create(**kwargs):
-        raise openai.APITimeoutError(httpx2.Request("POST", "https://api.openai.com/x"))
-
-    speech.create = create
-    return _fake_client(speech)
-
-
-def _status_client(status: int):
-    import openai
-
-    speech = _FakeSpeech()
-
-    async def create(**kwargs):
-        request = httpx2.Request("POST", "https://api.openai.com/x")
-        response = httpx2.Response(status, request=request)
-        raise openai.APIStatusError(f"status {status}", response=response, body=None)
-
-    speech.create = create
-    return _fake_client(speech)
-
-
-async def test_synthesizer_timeout_raises_typed_provider_fault() -> None:
+async def test_synthesizer_timeout_raises_typed_provider_fault(openai_client) -> None:
     from fakeyou.provider_faults import ProviderFault
 
-    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=_timeout_client())
+    synthesizer = OpenAISpeechSynthesizer(
+        api_key="k", client=openai_client(error=httpx2.ReadTimeout("stalled"))
+    )
 
     try:
         with pytest.raises(ProviderFault) as caught:
@@ -164,10 +129,10 @@ async def test_synthesizer_timeout_raises_typed_provider_fault() -> None:
     assert caught.value.__cause__ is not None
 
 
-async def test_synthesizer_payment_status_raises_typed_provider_fault() -> None:
+async def test_synthesizer_payment_status_raises_typed_provider_fault(openai_client) -> None:
     from fakeyou.provider_faults import ProviderFault
 
-    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=_status_client(402))
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=openai_client(status=402))
 
     try:
         with pytest.raises(ProviderFault) as caught:
@@ -180,15 +145,12 @@ async def test_synthesizer_payment_status_raises_typed_provider_fault() -> None:
     assert caught.value.status == 402
 
 
-async def test_synthesizer_journals_started_and_finished() -> None:
-    import json
+async def test_synthesizer_journals_started_and_finished(journal, openai_client) -> None:
 
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
-    speech = _FakeSpeech()
-    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=_fake_client(speech), journal=journal)
+    lines = journal.lines
+    requests = []
+    client = openai_client(requests=requests)
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
 
     try:
         audio = await synthesizer.synthesize("Hello.")
@@ -196,8 +158,8 @@ async def test_synthesizer_journals_started_and_finished() -> None:
         await synthesizer.aclose()
 
     assert len(lines) == 2
-    started = json.loads(lines[0])
-    finished = json.loads(lines[1])
+    [started] = journal.events("synth_started")
+    [finished] = journal.events("synth_finished")
     assert started["event"] == "synth_started"
     assert started["chars"] == len("Hello.")
     assert finished["event"] == "synth_finished"
@@ -206,15 +168,14 @@ async def test_synthesizer_journals_started_and_finished() -> None:
     assert finished["bytes_out"] == len(audio)
 
 
-async def test_synthesizer_journals_failed_with_kind() -> None:
-    import json
+async def test_synthesizer_journals_failed_with_kind(journal, openai_client) -> None:
 
-    from fakeyou.journal import ProviderJournal
     from fakeyou.provider_faults import ProviderFault
 
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
-    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=_timeout_client(), journal=journal)
+    lines = journal.lines
+    synthesizer = OpenAISpeechSynthesizer(
+        api_key="k", client=openai_client(error=httpx2.ReadTimeout("stalled")), journal=journal
+    )
 
     try:
         with pytest.raises(ProviderFault):
@@ -223,61 +184,19 @@ async def test_synthesizer_journals_failed_with_kind() -> None:
         await synthesizer.aclose()
 
     assert len(lines) == 2
-    failed = json.loads(lines[1])
+    [failed] = journal.events("synth_failed")
     assert failed["event"] == "synth_failed"
     assert failed["kind"] == "timeout"
     assert failed["duration_ms"] >= 0
 
 
-class _FakeStreamResponse:
-    def __init__(self, chunks, error: Exception | None = None) -> None:
-        self._chunks = list(chunks)
-        self._error = error
+async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
+    journal, openai_client
+) -> None:
 
-    async def iter_bytes(self):
-        for chunk in self._chunks:
-            yield chunk
-        if self._error is not None:
-            raise self._error
-
-
-class _FakeStreamContext:
-    def __init__(self, response: _FakeStreamResponse) -> None:
-        self._response = response
-
-    async def __aenter__(self) -> _FakeStreamResponse:
-        return self._response
-
-    async def __aexit__(self, *exc_info) -> bool:
-        return False
-
-
-class _FakeStreamSpeech:
-    def __init__(self, response: _FakeStreamResponse) -> None:
-        self.calls: list[dict] = []
-        self.with_streaming_response = SimpleNamespace(create=self._create)
-        self._response = response
-
-    def _create(self, **kwargs):
-        self.calls.append(kwargs)
-        return _FakeStreamContext(self._response)
-
-
-def _stream_client(response: _FakeStreamResponse):
-    return SimpleNamespace(audio=SimpleNamespace(speech=_FakeStreamSpeech(response)))
-
-
-async def test_synthesizer_stream_yields_chunks_with_correlated_journal() -> None:
-    import json
-
-    from fakeyou.journal import ProviderJournal
-
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
-    response = _FakeStreamResponse([b"\x00" * 64, b"\x01" * 64])
-    synthesizer = OpenAISpeechSynthesizer(
-        api_key="k", client=_stream_client(response), journal=journal
-    )
+    lines = journal.lines
+    client = openai_client(chunks=[b"\x00" * 64, b"\x01" * 64])
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
 
     try:
         chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
@@ -286,8 +205,8 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal() -> Non
 
     assert chunks == [b"\x00" * 64, b"\x01" * 64]
     assert len(lines) == 2
-    started = json.loads(lines[0])
-    finished = json.loads(lines[1])
+    [started] = journal.events("synth_started")
+    [finished] = journal.events("synth_finished")
     assert started["event"] == "synth_started"
     assert started["streaming"] is True
     assert finished["event"] == "synth_finished"
@@ -296,18 +215,13 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal() -> Non
     assert finished["streaming"] is True
 
 
-async def test_synthesizer_stream_failure_raises_typed_fault() -> None:
-    import json
+async def test_synthesizer_stream_failure_raises_typed_fault(journal, openai_client) -> None:
 
-    from fakeyou.journal import ProviderJournal
     from fakeyou.provider_faults import ProviderFault
 
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
-    response = _FakeStreamResponse([b"\x00" * 64], error=TimeoutError("stalled"))
-    synthesizer = OpenAISpeechSynthesizer(
-        api_key="k", client=_stream_client(response), journal=journal
-    )
+    lines = journal.lines
+    client = openai_client(chunks=[b"\x00" * 64], stream_error=httpx2.ReadTimeout("stalled"))
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
 
     try:
         with pytest.raises(ProviderFault) as caught:
@@ -318,9 +232,9 @@ async def test_synthesizer_stream_failure_raises_typed_fault() -> None:
     assert caught.value.source == "tts"
     assert caught.value.kind == "timeout"
     assert len(lines) == 2
-    failed = json.loads(lines[1])
+    [failed] = journal.events("synth_failed")
     assert failed["event"] == "synth_failed"
-    assert failed["request_id"] == json.loads(lines[0])["request_id"]
+    assert failed["request_id"] == journal.events()[0]["request_id"]
 
 
 def _minimax_client(handler) -> httpx2.AsyncClient:
@@ -361,10 +275,10 @@ async def test_minimax_synthesizer_sends_indonesian_pcm_request() -> None:
     }
 
 
-async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event() -> None:
+async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event(
+    journal,
+) -> None:
     import json
-
-    from fakeyou.journal import ProviderJournal
 
     bodies: list[dict] = []
 
@@ -383,11 +297,10 @@ async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event
             ),
         )
 
-    lines: list[str] = []
     synthesizer = MiniMaxSpeechSynthesizer(
         api_key="k",
         client=_minimax_client(handler),
-        journal=ProviderJournal("meeting-1", emit=lines.append),
+        journal=journal,
     )
 
     chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
@@ -395,7 +308,7 @@ async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event
     assert chunks == [b"\x00\x01", b"\x02\x03"]
     assert bodies[0]["stream"] is True
     assert bodies[0]["stream_options"] == {"exclude_aggregated_audio": True}
-    finished = json.loads(lines[-1])
+    [finished] = journal.events("synth_finished")
     assert (finished["event"], finished["bytes_out"], finished["streaming"]) == (
         "synth_finished",
         4,
