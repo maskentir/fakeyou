@@ -12,6 +12,8 @@ from typing import Any
 
 from fakeyou.provider_faults import trim_detail
 
+JOURNAL_BACKUP_COUNT = 2
+
 _EVENT_REGISTRY: set[str] = {
     "synth_started",
     "synth_finished",
@@ -78,7 +80,7 @@ class ProviderJournal:
                 handler = RotatingFileHandler(
                     self._path,
                     maxBytes=max(1, self._max_bytes),
-                    backupCount=2,
+                    backupCount=JOURNAL_BACKUP_COUNT,
                     encoding="utf-8",
                 )
                 handler.setFormatter(logging.Formatter("%(message)s"))

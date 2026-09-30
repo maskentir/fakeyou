@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +13,13 @@ class Settings(BaseSettings):
     )
 
     chat_model: str = "openai:gpt-4.1-mini"
+    chat_base_url: str | None = None
+    chat_api_key: SecretStr | None = None
+    chat_reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    memory_llm_model: str = "gpt-5.5"
+    memory_small_model: str = "gpt-4.1-nano"
+    memory_embedding_model: str = "text-embedding-3-small"
+    stt_model: str = "muse-voice-transcribe-1.0"
     checkpoint_path: Path = Path(".runtime/checkpoints.sqlite")
     headless: bool = False
     cloakbrowser_license_key: str | None = Field(default=None, repr=False)
@@ -27,6 +35,7 @@ class Settings(BaseSettings):
     lobby_timeout_seconds: PositiveSeconds = 300.0
     session_duration_seconds: PositiveSeconds = 7200.0
     journal_dir: Path = Path(".runtime/journals")
+    meeting_record_dir: Path = Path(".runtime/meetings")
 
 
 def require_secret(value: SecretStr | None, name: str) -> str:

@@ -28,6 +28,7 @@ from fakeyou.audio import (
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.persona import PersonaProfile, build_persona
 from fakeyou.playback import PlaybackEvent
+from fakeyou.record import meeting_record_path, read_meeting_record
 
 
 class FakeMemory:
@@ -62,6 +63,14 @@ def fake_settings(tmp_path: Path) -> SimpleNamespace:
         lobby_timeout_seconds=300.0,
         session_duration_seconds=7200.0,
         journal_dir=tmp_path / "journals",
+        meeting_record_dir=tmp_path / "meetings",
+        chat_base_url=None,
+        chat_api_key=None,
+        chat_reasoning_effort=None,
+        memory_llm_model="memory-model",
+        memory_small_model="memory-small",
+        memory_embedding_model="memory-embedding",
+        stt_model="muse-voice-transcribe-1.0",
     )
 
 
@@ -680,7 +689,18 @@ async def test_join_audio_transcript_reaches_conversation(
     assert agent_calls[0]["configurable"]["thread_id"] == conversation_thread_id(
         "settings-owner", "settings-twin", "meeting-9"
     )
-    assert '"event": "transcript_final"' in capsys.readouterr().out
+    rows = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
+    ]
+    [final] = [row for row in rows if row["event"] == "transcript_final"]
+    assert (final["text"], final["participant"], final["meeting_id"]) == (
+        "Halo.",
+        "unknown",
+        "meeting-9",
+    )
+    assert final["at"]
+    entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
+    assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Halo.")]
 
 
 @pytest.mark.asyncio
@@ -717,10 +737,10 @@ async def test_join_conversation_transitions_carry_timestamps(
     transitions = [
         line
         for line in capsys.readouterr().out.splitlines()
-        if '"event": "conversation_transition"' in line
+        if '"event":"conversation_transition"' in line
     ]
     assert len(transitions) == 3
-    assert all('"timestamp": "' in line for line in transitions)
+    assert all(json.loads(line)["at"] for line in transitions)
 
 
 async def test_audio_only_does_not_construct_responding_agent(tmp_path, monkeypatch):
@@ -882,18 +902,43 @@ async def test_join_barge_in_stops_speaking_session(
 
 
 @pytest.mark.asyncio
-async def test_join_playback_events_print_json(
+async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    captured = await _join_with_audio(tmp_path, monkeypatch)
+    def capture_run(monkeypatch):
+        async def run(config, **kwargs):
+            handler = kwargs["open_audio"].keywords["on_playback_event"]
+            handler(PlaybackEvent("speak_started", "halo", ""))
+            handler(PlaybackEvent("speak_dropped", "terpotong", "interrupted"))
+            handler(PlaybackEvent("speak_finished", "halo", ""))
+            return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
 
-    handler = captured["open_audio"].keywords["on_playback_event"]
-    handler(PlaybackEvent("speak_finished", "halo", ""))
+        monkeypatch.setattr(cli, "run_meeting_session", run)
+        return {}
 
-    out = capsys.readouterr().out
-    assert '"event": "speak_finished"' in out
-    assert '"meeting_id": "meeting-9"' in out
-    assert '"text": "halo"' in out
+    monkeypatch.setattr(sys.modules[__name__], "_capture_run", capture_run)
+    await _join_with_audio(tmp_path, monkeypatch)
+
+    rows = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
+    ]
+    playback = [
+        (row["event"], row["text"], row["detail"])
+        for row in rows
+        if row.get("source") == "playback"
+    ]
+    assert playback == [
+        ("speak_started", "halo", None),
+        ("speak_dropped", "terpotong", "interrupted"),
+        ("speak_finished", "halo", None),
+    ]
+    assert all(
+        row["meeting_id"] == "meeting-9" and row["at"]
+        for row in rows
+        if row.get("source") == "playback"
+    )
+    entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
+    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "halo")]
 
 
 @pytest.mark.asyncio
@@ -1718,3 +1763,154 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     assert audio.spoken == ["Aku belum tahu, nanti aku cek ke Rani."]
     assert outcome["phase"] == "listening"
     assert '"source":"memory","kind":"timeout"' in capsys.readouterr().out
+
+
+async def test_join_journals_session_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_run(config, **kwargs):
+        return SimpleNamespace(phase="ended", terminal_reason="infra_failure", detail="dns")
+
+    monkeypatch.setattr(cli, "run_meeting_session", fake_run)
+
+    with pytest.raises(SystemExit):
+        await cli.join_meeting(
+            MEET_LINK,
+            twin_name=None,
+            owner_id=None,
+            twin_id=None,
+            meeting_id="meeting-1",
+            lobby_timeout=None,
+            duration=None,
+            profile_dir=None,
+            settings=fake_settings(tmp_path),
+        )
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "journals" / "meeting-1.jsonl").read_text().splitlines()
+    ]
+    [result] = [row for row in rows if row["event"] == "session_result"]
+    assert (result["terminal_reason"], result["exit_code"]) == ("infra_failure", 3)
+
+
+def test_report_command_prints_summary_from_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_dir = tmp_path / "journals"
+    journal_dir.mkdir()
+    (journal_dir / "meeting-1.jsonl").write_text(
+        json.dumps(
+            {
+                "event": "session_result",
+                "meeting_id": "meeting-1",
+                "at": "2026-09-30T10:00:00+00:00",
+                "phase": "ended",
+                "terminal_reason": "owner_stop",
+                "exit_code": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fakeyou", "report", "--meeting", "meeting-1", "--journal-dir", str(journal_dir)],
+    )
+
+    cli.main()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["meeting_id"] == "meeting-1"
+    assert report["result"]["terminal_reason"] == "owner_stop"
+
+
+@pytest.mark.parametrize("meeting_id,match", [("missing", "no journal"), ("bad id", "pattern")])
+def test_report_command_rejects_unknown_or_invalid_meeting(
+    tmp_path: Path, meeting_id: str, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        cli.show_session_report(meeting_id, tmp_path, fake_settings(tmp_path))
+
+
+def test_chat_model_uses_role_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    settings = fake_settings(tmp_path)
+    settings.chat_model = "openai:muse-spark-1.3"
+    settings.chat_base_url = "https://api.meta.ai/v1"
+    settings.chat_api_key = SecretStr("meta-key")
+    settings.chat_reasoning_effort = "minimal"
+
+    cli.create_chat_model(settings)
+
+    assert calls == [
+        (
+            ("openai:muse-spark-1.3",),
+            {
+                "api_key": "meta-key",
+                "timeout": 60,
+                "max_retries": 2,
+                "base_url": "https://api.meta.ai/v1",
+                "reasoning_effort": "minimal",
+            },
+        )
+    ]
+
+
+def test_chat_model_defaults_to_openai_key_without_provider_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+
+    cli.create_chat_model(fake_settings(tmp_path))
+
+    assert calls == [(("fake:model",), {"api_key": "test-key", "timeout": 60, "max_retries": 2})]
+
+
+@pytest.mark.parametrize(
+    "chat_model,chat_base_url,expected",
+    [
+        ("openai:gpt-4.1-mini", None, ("api.openai.com", "api.meta.ai")),
+        ("openai:muse-spark-1.3", "https://api.meta.ai/v1", ("api.openai.com", "api.meta.ai")),
+        (
+            "openai:local",
+            "https://llm.example.com/v1",
+            ("api.openai.com", "api.meta.ai", "llm.example.com"),
+        ),
+        ("anthropic:claude", None, ("api.openai.com", "api.meta.ai")),
+    ],
+)
+def test_preflight_hosts_follow_the_configured_chat_endpoint(
+    tmp_path: Path, chat_model: str, chat_base_url: str | None, expected: tuple
+) -> None:
+    settings = fake_settings(tmp_path)
+    settings.chat_model = chat_model
+    settings.chat_base_url = chat_base_url
+
+    assert cli.preflight_hosts(settings) == expected
+
+
+def test_check_reports_models_per_role(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    settings = fake_settings(tmp_path)
+    settings.model_api_key = SecretStr("muse-key")
+
+    cli.check_setup(settings)
+
+    models = json.loads(capsys.readouterr().out)["models"]
+    assert models["reply"] == {"model": "fake:model", "base_url": None, "reasoning_effort": None}
+    assert models["memory"] == {
+        "llm": "memory-model",
+        "small": "memory-small",
+        "embedding": "memory-embedding",
+    }
+    assert models["stt"]["model"] == "muse-voice-transcribe-1.0"
+    assert models["tts"]["model"]

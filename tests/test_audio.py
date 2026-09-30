@@ -848,3 +848,29 @@ async def test_capture_observer_meters_frame_energy() -> None:
     assert snapshot.frames_delivered == 2
     assert snapshot.energetic_ms == 20.0
     assert snapshot.last_energetic_at is not None
+
+
+async def test_capture_observer_journals_speech_boundaries() -> None:
+    import json
+
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    from fakeyou.journal import ProviderJournal
+
+    lines: list[str] = []
+    observer = _CaptureObserver(CaptureActivity(), journal=ProviderJournal("m", emit=lines.append))
+
+    async def sink(frame, direction):
+        return None
+
+    observer.push_frame = sink  # type: ignore[method-assign]
+    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    rows = [json.loads(line) for line in lines]
+    assert [(row["event"], row["source"]) for row in rows] == [
+        ("speech_started", "capture"),
+        ("speech_stopped", "capture"),
+    ]
+    assert all(row["at"] for row in rows)

@@ -46,13 +46,20 @@ class Neo4jMemoryConfig:
     user: str
     password: str = field(repr=False)
     api_key: str = field(repr=False)
+    llm_model: str
+    small_model: str
+    embedding_model: str
     database: str = "neo4j"
 
 
 def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
-    llm_config = LLMConfig(api_key=config.api_key)
+    llm_config = LLMConfig(
+        api_key=config.api_key, model=config.llm_model, small_model=config.small_model
+    )
     llm_client = OpenAIClient(config=llm_config)
-    embedder = OpenAIEmbedder(config=OpenAIEmbedderConfig(api_key=config.api_key))
+    embedder = OpenAIEmbedder(
+        config=OpenAIEmbedderConfig(api_key=config.api_key, embedding_model=config.embedding_model)
+    )
     cross_encoder = OpenAIRerankerClient(config=llm_config)
     driver = Neo4jDriver(
         uri=config.uri,

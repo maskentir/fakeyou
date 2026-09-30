@@ -65,12 +65,22 @@ class ConversationResponder(Protocol):
     ) -> str: ...
 
 
+ToolResultCallback = Callable[[str, str, float], None]
+
+
 class _ToolActivity(AsyncCallbackHandler):
     raise_error = True
 
-    def __init__(self, on_start: Callable[[], None], journal: ProviderJournal | None) -> None:
+    def __init__(
+        self,
+        on_start: Callable[[], None],
+        journal: ProviderJournal | None,
+        on_result: ToolResultCallback | None = None,
+    ) -> None:
         self._on_start = on_start
         self._journal = journal
+        self._on_result = on_result
+        self._running: dict[UUID | None, tuple[str, float]] = {}
 
     async def on_chat_model_start(
         self,
@@ -94,7 +104,38 @@ class _ToolActivity(AsyncCallbackHandler):
     async def on_tool_start(
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
     ) -> None:
+        name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
+        self._running[run_id] = (str(name), time.monotonic())
         self._on_start()
+
+    async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        name, duration_ms = self._finish(run_id)
+        text = output.text if isinstance(output, BaseMessage) else str(output)
+        if self._journal is not None:
+            self._journal.record(
+                "tool_finished",
+                source="agent",
+                tool=name,
+                duration_ms=duration_ms,
+                output_lines=len(text.splitlines()),
+            )
+        if self._on_result is not None:
+            self._on_result(name, text, duration_ms)
+
+    async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        name, duration_ms = self._finish(run_id)
+        if self._journal is not None:
+            self._journal.record(
+                "tool_failed",
+                source="agent",
+                tool=name,
+                duration_ms=duration_ms,
+                error=type(error).__name__,
+            )
+
+    def _finish(self, run_id: UUID) -> tuple[str, float]:
+        name, started = self._running.pop(run_id, ("tool", time.monotonic()))
+        return name, (time.monotonic() - started) * 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +143,7 @@ class LangGraphResponder:
     agent: Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
     thread_id: str
     journal: ProviderJournal | None = None
+    on_tool_result: ToolResultCallback | None = None
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
@@ -127,7 +169,7 @@ class LangGraphResponder:
                 config={
                     "configurable": {"thread_id": self.thread_id},
                     "recursion_limit": 30,
-                    "callbacks": [_ToolActivity(on_tool_start, self.journal)],
+                    "callbacks": [_ToolActivity(on_tool_start, self.journal, self.on_tool_result)],
                 },
             )
         except Exception as error:

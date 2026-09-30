@@ -428,3 +428,87 @@ async def test_loop_journals_turn_without_modifying_injected_responder():
 )
 def test_voice_cap_uses_language_aware_sentence_boundaries(reply, expected):
     assert cap_spoken_reply(reply) == expected
+
+
+class _ToolCallingModel(FakeMessagesListChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def _recall_then_reply() -> _ToolCallingModel:
+    return _ToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "recall_meeting_context",
+                        "args": {"query": "demo"},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Demonya Jumat."),
+        ]
+    )
+
+
+async def test_responder_reports_tool_results_to_journal_and_callback():
+    import json
+
+    from langchain_core.tools import tool
+
+    from fakeyou.journal import ProviderJournal
+
+    @tool(description="Search long-term meeting memory for relevant context.")
+    async def recall_meeting_context(query: str) -> str:
+        return "Demo Jumat (source: owner note)\nBudi PIC (source: Google Meet m1 transcript)"
+
+    lines: list[str] = []
+    results: list[tuple] = []
+    agent = create_meeting_agent(
+        _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
+    )
+    responder = LangGraphResponder(
+        agent,
+        "thread",
+        journal=ProviderJournal("m", emit=lines.append),
+        on_tool_result=lambda *result: results.append(result),
+    )
+
+    assert await responder.respond([event("one", "Demo kapan?")], lambda: None) == "Demonya Jumat."
+
+    [(tool_name, output, duration_ms)] = results
+    assert tool_name == "recall_meeting_context"
+    assert output.splitlines()[0] == "Demo Jumat (source: owner note)"
+    assert duration_ms >= 0
+    [finished] = [json.loads(line) for line in lines if '"tool_finished"' in line]
+    assert finished["tool"] == "recall_meeting_context"
+    assert finished["output_lines"] == 2
+    assert "owner note" not in json.dumps(finished)
+
+
+async def test_responder_journals_tool_failures():
+    import json
+
+    from langchain_core.tools import tool
+
+    from fakeyou.journal import ProviderJournal
+    from fakeyou.provider_faults import ProviderFault
+
+    @tool(description="Search long-term meeting memory for relevant context.")
+    async def recall_meeting_context(query: str) -> str:
+        raise RuntimeError("graph down")
+
+    lines: list[str] = []
+    agent = create_meeting_agent(
+        _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
+    )
+    responder = LangGraphResponder(agent, "thread", journal=ProviderJournal("m", emit=lines.append))
+
+    with pytest.raises(ProviderFault):
+        await responder.respond([event("one", "Demo kapan?")], lambda: None)
+
+    [failed] = [json.loads(line) for line in lines if '"tool_failed"' in line]
+    assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")

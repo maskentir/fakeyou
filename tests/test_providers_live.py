@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 
 from fakeyou.agent import create_meeting_agent
+from fakeyou.cli import memory_config
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import MeetingIngestion
@@ -102,19 +103,16 @@ async def test_native_openai_tts_synthesizes_pcm_audio() -> None:
 
 def _neo4j_config_or_skip() -> Neo4jMemoryConfig:
     settings = Settings()
-    api_key = _secret_or_skip(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
     parsed = urlparse(settings.neo4j_uri)
     try:
         with socket.create_connection((parsed.hostname or "localhost", parsed.port or 7687), 2):
             pass
     except OSError:
         pytest.skip("Neo4j is not listening at the configured URI")
-    return Neo4jMemoryConfig(
-        uri=settings.neo4j_uri,
-        user=settings.neo4j_user,
-        password=_secret_or_skip(settings.neo4j_password, "FAKEYOU_NEO4J_PASSWORD"),
-        api_key=api_key,
-    )
+    try:
+        return memory_config(settings)
+    except ValueError as error:
+        pytest.skip(str(error))
 
 
 @pytest.mark.live

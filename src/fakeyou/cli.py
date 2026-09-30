@@ -9,7 +9,6 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
 from functools import partial
 from importlib.metadata import version
 from importlib.util import find_spec
@@ -20,6 +19,7 @@ from urllib.parse import urlparse
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
@@ -27,12 +27,18 @@ from pipecat.services.meta.stt import META_STT_WS_URL
 from pydantic import TypeAdapter
 
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
-from fakeyou.audio import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME, open_meeting_audio
+from fakeyou.audio import (
+    AGENT_SINK_NAME,
+    CAPTURE_SAMPLE_RATE,
+    MEETING_MONITOR_SOURCE_NAME,
+    open_meeting_audio,
+)
 from fakeyou.browser import open_browser_tools
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
     LangGraphResponder,
+    ToolResultCallback,
     conversation_thread_id,
     transcript_event,
 )
@@ -54,20 +60,49 @@ from fakeyou.persona import PersonaProfile, build_persona, load_persona
 from fakeyou.playback import PlaybackEvent
 from fakeyou.preflight import provider_probe_hosts
 from fakeyou.provider_faults import ProviderFault, classify_exception
+from fakeyou.record import MeetingRecord, meeting_record_path
+from fakeyou.report import build_session_report, read_journal
 from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.session import SessionId
 from fakeyou.settings import Settings, require_secret
+from fakeyou.voice import TTS_MODEL, TTS_VOICE
 
 
 class CliError(ValueError):
     pass
 
 
-_PREFLIGHT_HOSTS = provider_probe_hosts(
-    tts_base_url="https://api.openai.com",
-    stt_ws_url=META_STT_WS_URL,
-    agent_base_url="https://api.openai.com",
-)
+OPENAI_API_URL = "https://api.openai.com"
+CHAT_TIMEOUT_SECONDS = 60
+CHAT_MAX_RETRIES = 2
+
+
+def chat_endpoint(settings: Settings) -> str:
+    if settings.chat_base_url:
+        return settings.chat_base_url
+    return OPENAI_API_URL if settings.chat_model.startswith("openai:") else ""
+
+
+def preflight_hosts(settings: Settings) -> tuple[str, ...]:
+    return provider_probe_hosts(
+        tts_base_url=OPENAI_API_URL,
+        stt_ws_url=META_STT_WS_URL,
+        agent_base_url=chat_endpoint(settings),
+    )
+
+
+def create_chat_model(settings: Settings) -> BaseChatModel:
+    api_key = require_secret(
+        settings.chat_api_key or settings.openai_api_key,
+        "FAKEYOU_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
+    )
+    options: dict[str, Any] = {"timeout": CHAT_TIMEOUT_SECONDS, "max_retries": CHAT_MAX_RETRIES}
+    if settings.chat_base_url:
+        options["base_url"] = settings.chat_base_url
+    if settings.chat_reasoning_effort:
+        options["reasoning_effort"] = settings.chat_reasoning_effort
+    model: BaseChatModel = init_chat_model(settings.chat_model, api_key=api_key, **options)
+    return model
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -102,6 +137,24 @@ def check_setup(settings: Settings) -> None:
                     settings.model_api_key and settings.model_api_key.get_secret_value().strip()
                 ),
                 "chat_model": settings.chat_model,
+                "models": {
+                    "reply": {
+                        "model": settings.chat_model,
+                        "base_url": settings.chat_base_url,
+                        "reasoning_effort": settings.chat_reasoning_effort,
+                    },
+                    "memory": {
+                        "llm": settings.memory_llm_model,
+                        "small": settings.memory_small_model,
+                        "embedding": settings.memory_embedding_model,
+                    },
+                    "stt": {
+                        "model": settings.stt_model,
+                        "mode": "ENDPOINTING",
+                        "sample_rate": CAPTURE_SAMPLE_RATE,
+                    },
+                    "tts": {"model": TTS_MODEL, "voice": TTS_VOICE},
+                },
                 "live_services_verified": False,
             },
             indent=2,
@@ -123,6 +176,9 @@ def memory_config(settings: Settings) -> Neo4jMemoryConfig:
         user=settings.neo4j_user,
         password=require_secret(settings.neo4j_password, "FAKEYOU_NEO4J_PASSWORD"),
         api_key=require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY"),
+        llm_model=settings.memory_llm_model,
+        small_model=settings.memory_small_model,
+        embedding_model=settings.memory_embedding_model,
     )
 
 
@@ -212,13 +268,21 @@ async def forget_memory(
     print(json.dumps({"removed_episodes": removed}))
 
 
+def show_session_report(meeting_id: str, journal_dir: Path | None, settings: Settings) -> None:
+    TypeAdapter(SessionId).validate_python(meeting_id)
+    journal_path = (journal_dir or settings.journal_dir) / f"{meeting_id}.jsonl"
+    if not journal_path.exists():
+        raise CliError(f"no journal for meeting {meeting_id} at {journal_path}")
+    report = build_session_report(read_journal(journal_path))
+    print(json.dumps({"meeting_id": meeting_id, **report}, ensure_ascii=False, indent=2))
+
+
 async def chat(
     message: str, thread: str, use_browser: bool, use_memory: bool, settings: Settings
 ) -> None:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", thread):
         raise CliError("--thread must be 1-128 characters using letters, numbers, '_' or '-'")
-    api_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
-    model = init_chat_model(settings.chat_model, api_key=api_key, timeout=60, max_retries=2)
+    model = create_chat_model(settings)
     settings.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
@@ -357,6 +421,9 @@ async def join_meeting(
     journal = ProviderJournal(
         resolved_meeting_id, path=settings.journal_dir / f"{resolved_meeting_id}.jsonl"
     )
+    record = MeetingRecord(
+        meeting_record_path(settings.meeting_record_dir, resolved_meeting_id), faults=faults
+    )
 
     conversation: ConversationLoop | None = None
     graphiti: Graphiti | None = None
@@ -364,6 +431,7 @@ async def join_meeting(
     result: SessionResult | None = None
     async with AsyncExitStack() as resources:
         resources.callback(journal.close)
+        resources.callback(record.close)
         if memory and profile is not None:
             try:
                 graphiti = await resources.enter_async_context(open_persona_memory(settings))
@@ -386,34 +454,20 @@ async def join_meeting(
         def log_transition(
             from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
         ) -> None:
-            print(
-                json.dumps(
-                    {
-                        "event": "conversation_transition",
-                        "meeting_id": config.meeting_id,
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "from": from_phase,
-                        "to": to_phase,
-                        "detail": detail,
-                    }
-                ),
-                flush=True,
+            journal.record(
+                "conversation_transition",
+                source="conversation",
+                from_phase=from_phase,
+                to_phase=to_phase,
+                detail=detail,
             )
 
         def log_playback(event: PlaybackEvent) -> None:
-            print(
-                json.dumps(
-                    {
-                        "event": event.name,
-                        "meeting_id": config.meeting_id,
-                        "text": event.text,
-                        "detail": event.detail,
-                    }
-                ),
-                flush=True,
-            )
-            if ingestion is not None and event.name == "speak_finished":
-                ingestion.add_twin_speech(event.text)
+            journal.record(event.name, source="playback", text=event.text, detail=event.detail)
+            if event.name == "speak_finished":
+                record.add_twin_speech(event.text)
+                if ingestion is not None:
+                    ingestion.add_twin_speech(event.text)
 
         if conversation_enabled and result is None:
             conversation = await resources.enter_async_context(
@@ -422,6 +476,7 @@ async def join_meeting(
                     config,
                     graphiti=graphiti,
                     profile=profile,
+                    on_tool_result=record.add_tool_result,
                     on_transition=log_transition,
                     wake_phrases=[phrase.strip() for phrase in (wake_phrase or "").split(",")],
                     barge_in=barge_in,
@@ -432,23 +487,16 @@ async def join_meeting(
 
         async def transcript(frame: TranscriptionFrame) -> None:
             event = transcript_event(frame)
-            print(
-                json.dumps(
-                    {
-                        "event": "transcript_final",
-                        "owner_id": config.owner_id,
-                        "twin_id": config.twin_id,
-                        "meeting_id": config.meeting_id,
-                        "transcript_id": event.id,
-                        "text": event.text,
-                        "participant": event.participant,
-                        "timestamp": event.timestamp,
-                        "source": event.source,
-                        "finalized": event.finalized,
-                    }
-                ),
-                flush=True,
+            journal.record(
+                "transcript_final",
+                source=event.source,
+                transcript_id=event.id,
+                text=event.text,
+                participant=event.participant,
+                spoken_at=event.timestamp,
+                finalized=event.finalized,
             )
+            record.add_transcript(event)
             if ingestion is not None:
                 ingestion.add_transcript(event)
             if conversation is not None:
@@ -465,10 +513,11 @@ async def join_meeting(
                 journal=journal,
                 deaf_window_seconds=config.deaf_window_seconds,
                 deaf_grace_seconds=config.deaf_grace_seconds,
+                stt_model=settings.stt_model,
             )
         preflight_kwargs: dict[str, Any] = (
             {
-                "preflight_hosts": _PREFLIGHT_HOSTS,
+                "preflight_hosts": preflight_hosts(settings),
                 "preflight_budget_seconds": config.preflight_budget_seconds,
             }
             if audio_enabled
@@ -486,6 +535,17 @@ async def join_meeting(
                     journal=journal,
                     **preflight_kwargs,
                 )
+        exit_code = (
+            1
+            if result.terminal_reason is None
+            else _FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
+        )
+        journal.record(
+            "session_result",
+            phase=result.phase,
+            terminal_reason=result.terminal_reason,
+            exit_code=exit_code,
+        )
     print(
         json.dumps(
             {
@@ -498,10 +558,6 @@ async def join_meeting(
             indent=2,
         )
     )
-    if result.terminal_reason is None:
-        exit_code = 1
-    else:
-        exit_code = _FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
     print(
         json.dumps(
             {
@@ -530,9 +586,9 @@ async def open_conversation(
     barge_in: bool = False,
     faults: FaultReporter | None = None,
     journal: ProviderJournal | None = None,
+    on_tool_result: ToolResultCallback | None = None,
 ) -> AsyncIterator[ConversationLoop]:
-    api_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
-    model = init_chat_model(settings.chat_model, api_key=api_key, timeout=60, max_retries=2)
+    model = create_chat_model(settings)
     settings.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
@@ -559,6 +615,7 @@ async def open_conversation(
                 agent,
                 conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id),
                 journal=journal,
+                on_tool_result=on_tool_result,
             ),
             on_transition=on_transition,
             wake_phrases=wake_phrases,
@@ -570,7 +627,7 @@ async def open_conversation(
         yield conversation
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Digital twin integration foundation")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check", help="Inspect installed packages and credential presence")
@@ -586,6 +643,11 @@ def main() -> None:
     forget_target = memory_forget_parser.add_mutually_exclusive_group(required=True)
     forget_target.add_argument("--meeting", dest="meeting_id", default=None)
     forget_target.add_argument("--episode", dest="episode_uuid", default=None)
+    report_parser = commands.add_parser(
+        "report", help="Summarize latency, replies, tools, ingestion, and faults of one meeting"
+    )
+    report_parser.add_argument("--meeting", dest="meeting_id", required=True)
+    report_parser.add_argument("--journal-dir", type=Path, default=None)
     for operator_parser in (memory_add_parser, memory_forget_parser):
         operator_parser.add_argument("--persona", type=Path, required=True)
         operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
@@ -643,7 +705,11 @@ def main() -> None:
     chat_parser.add_argument(
         "--memory", action="store_true", help="Enable Graphiti recall and writes"
     )
-    arguments = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    arguments = build_parser().parse_args()
     try:
         settings = Settings()
         if arguments.command == "check":
@@ -652,6 +718,8 @@ def main() -> None:
             asyncio.run(show_browser_tools(settings))
         elif arguments.command == "memory-init":
             asyncio.run(initialize_memory(settings))
+        elif arguments.command == "report":
+            show_session_report(arguments.meeting_id, arguments.journal_dir, settings)
         elif arguments.command == "memory-add":
             asyncio.run(
                 add_owner_note(

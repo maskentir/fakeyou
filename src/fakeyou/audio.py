@@ -20,7 +20,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.meta.stt import MetaSTTService
+from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.callbacks import record_consumer_fault
@@ -122,9 +122,10 @@ async def run_stt_reconnect(stt: object) -> None:
 
 
 class _CaptureObserver(FrameProcessor):
-    def __init__(self, activity: CaptureActivity) -> None:
+    def __init__(self, activity: CaptureActivity, journal: ProviderJournal | None = None) -> None:
         super().__init__()
         self._activity = activity
+        self._journal = journal
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -138,9 +139,16 @@ class _CaptureObserver(FrameProcessor):
                 )
             elif isinstance(frame, (VADUserStartedSpeakingFrame, UserSpeakingFrame)):
                 self._activity.observe_speech(True)
+                if isinstance(frame, VADUserStartedSpeakingFrame):
+                    self._record("speech_started")
             elif isinstance(frame, VADUserStoppedSpeakingFrame):
                 self._activity.observe_speech(False)
+                self._record("speech_stopped")
         await self.push_frame(frame, direction)
+
+    def _record(self, event: str) -> None:
+        if self._journal is not None:
+            self._journal.record(event, source="capture")
 
 
 class _TranscriptObserver(FrameProcessor):
@@ -459,6 +467,7 @@ async def open_meeting_audio(
     journal: ProviderJournal | None = None,
     deaf_window_seconds: float = 120.0,
     deaf_grace_seconds: float = 120.0,
+    stt_model: str = META_STT_MODEL,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -481,6 +490,7 @@ async def open_meeting_audio(
                 else create_muse_stt(
                     api_key=muse_api_key,
                     sample_rate=CAPTURE_SAMPLE_RATE,
+                    model=stt_model,
                     service_class=ManagedMuseSTT,
                 )
             )
@@ -492,7 +502,7 @@ async def open_meeting_audio(
                         VADProcessor(
                             vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
                         ),
-                        _CaptureObserver(activity),
+                        _CaptureObserver(activity, journal),
                         stt,
                         _TranscriptObserver(on_transcript, activity, fault_reporter, on_interim),
                     ]

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -79,3 +80,23 @@ def test_secret_keys_read_prefixed_environment(
     monkeypatch.delenv(bare_key, raising=False)
     monkeypatch.setenv(f"FAKEYOU_{bare_key}", "prefixed-secret")
     assert _revealed(getattr(Settings(), attribute)) == "prefixed-secret"
+
+
+def test_env_example_values_match_settings_defaults(monkeypatch) -> None:
+    for name in list(os.environ):
+        if name.startswith("FAKEYOU_"):
+            monkeypatch.delenv(name)
+    example = Path(__file__).resolve().parent.parent / ".env.example"
+    documented = {
+        key.removeprefix("FAKEYOU_").lower()
+        for key, _, value in (
+            line.partition("=") for line in example.read_text().splitlines() if line
+        )
+        if key.startswith("FAKEYOU_") and value
+    }
+    from_example = Settings(_env_file=example)
+    defaults = Settings(_env_file=None)
+
+    assert {"memory_llm_model", "stt_model", "chat_model"} <= documented
+    for field in documented:
+        assert getattr(from_example, field) == getattr(defaults, field), field

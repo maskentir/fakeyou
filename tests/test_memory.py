@@ -70,7 +70,23 @@ class FakeGraphiti:
 
 
 def _config() -> Neo4jMemoryConfig:
-    return Neo4jMemoryConfig(uri="bolt://localhost:7687", user="neo4j", password="p", api_key="k")
+    return Neo4jMemoryConfig(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="p",
+        api_key="k",
+        llm_model="memory-model",
+        small_model="memory-small",
+        embedding_model="memory-embedding",
+    )
+
+
+def test_graphiti_memory_uses_explicit_models() -> None:
+    memory = memory_module.create_graphiti_memory(_config())
+
+    assert memory.llm_client.config.model == "memory-model"
+    assert memory.llm_client.config.small_model == "memory-small"
+    assert memory.embedder.config.embedding_model == "memory-embedding"
 
 
 async def test_open_graphiti_memory_is_lightweight(monkeypatch: pytest.MonkeyPatch) -> None:
