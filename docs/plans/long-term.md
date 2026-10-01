@@ -199,6 +199,12 @@ Prompt caching provider menangkap sekitar 99% token karena system prompt stabil 
 
 Acceptance kedua (`acc2-0930-s1`, `acc2-0930-s2`) dan perbaikannya tercatat di [dokumen acceptance](../reports/2026-09-30-acceptance.md#acceptance-kedua-setelah-fase-14). Audio dan STT sekarang dibuka sebelum twin meminta masuk. Journal dan `fakeyou report` mengukur jeda startup. Barge-in tercatat sekali per interupsi. Fakta memori ditulis dalam bahasa meeting. Istilah internal prompt tidak diucapkan. Acceptance ketiga dibutuhkan untuk membuktikan urutan startup di Meet live.
 
+### Acceptance ketiga (1 Oktober 2026)
+
+[Acceptance setelah refactor](../reports/2026-10-01-refactor-acceptance.md) pada `acc3-1001-s2` membuktikan audio siap sebelum admission dan pertanyaan pertama tertangkap. Recall owner note dan kickoff, konteks kata ganti, interupsi, serta stop saat model bekerja sesuai dengan journal dan konfirmasi pendengaran host. Twin keluar tanpa playback baru setelah SIGINT; ingestion tiga jendela selesai tanpa fault. Seluruh 17 fakta dalam grup persona masih berlaku setelah ingestion.
+
+Performa belum mencapai target sekitar tiga detik: median akhir ucapan ke PCM pertama 5,727 detik, p95 16,895 detik, maksimum 18,080 detik; lima pertanyaan utama berada pada rentang 4,557–14,695 detik. Interupsi menghentikan playback dengan median 1,618 detik dan maksimum 1,833 detik. Pertahankan angka ini sebagai pembanding untuk optimasi berikutnya; ambang eval tidak dilonggarkan. Sesi memakai satu host dan belum membuktikan atribusi audio per participant.
+
 ## Urutan
 
 | Fase | Isi | Mencegah |
