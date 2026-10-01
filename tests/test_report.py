@@ -917,3 +917,81 @@ def test_report_counts_requests_with_unusable_durations_without_adding_time():
     assert (turn["llm_count"], turn["llm_duration_seconds"]) == (1, 0)
     assert (turn["recall_count"], turn["recall_duration_seconds"]) == (2, 0)
     assert report["evidence"] == {"excluded": {"nonfinite_duration": 1, "invalid_duration": 1}}
+
+
+def test_streamed_synthesis_links_to_own_turn_by_transcript():
+    rows = [
+        row(0.0, "speech_stopped", source="audio"),
+        row(0.4, "transcript_finalized", transcript_id="tA", text="first"),
+        row(0.4, "agent_started", request_id="tA:1"),
+        row(1.0, "agent_finished", request_id="tA:1", duration_ms=600),
+        row(1.0, "playback_started", source="playback", text="Reply A."),
+        row(1.1, "synthesis_started", source="tts", request_id="sA", chars=8, streaming=True),
+        row(
+            1.9,
+            "synthesis_pcm_emitted",
+            source="tts",
+            request_id="sA",
+            first_chunk_ms=800,
+            bytes_out=100,
+        ),
+        row(
+            2.0,
+            "synthesis_finished",
+            source="tts",
+            request_id="sA",
+            duration_ms=900,
+            first_chunk_ms=800,
+        ),
+        row(3.0, "speech_stopped", source="audio"),
+        row(3.4, "transcript_finalized", transcript_id="tB", text="second"),
+        row(3.4, "agent_started", request_id="tB:2"),
+        row(4.0, "answer_text_emitted", source="llm", request_id="tB:2", transcript_id="tB"),
+        row(
+            4.2,
+            "answer_sentence_emitted",
+            source="agent",
+            request_id="tB:2",
+            transcript_id="tB",
+            sentence_index=0,
+            chars=20,
+        ),
+        row(4.2, "playback_started", source="playback", text="Reply B."),
+        row(
+            4.3,
+            "synthesis_started",
+            source="tts",
+            request_id="sB",
+            transcript_id="tB",
+            chars=20,
+            streaming=True,
+            sentence_index=0,
+        ),
+        row(
+            5.3,
+            "synthesis_pcm_emitted",
+            source="tts",
+            request_id="sB",
+            transcript_id="tB",
+            first_chunk_ms=1000,
+            bytes_out=120,
+            sentence_index=0,
+        ),
+        row(
+            5.4,
+            "synthesis_finished",
+            source="tts",
+            request_id="sB",
+            transcript_id="tB",
+            duration_ms=1100,
+            first_chunk_ms=1000,
+        ),
+        row(5.4, "agent_finished", request_id="tB:2", duration_ms=2000),
+    ]
+    report = build_session_report(sorted(rows, key=lambda entry: entry["at"]))
+    first, second = report["turns"]
+    assert first["speech_stopped_to_first_pcm_seconds"] == 1.9
+    assert second["streamed"] is True
+    assert second["sentence_count"] == 1
+    assert second["first_sentence_to_first_pcm_seconds"] == 1.1
+    assert second["speech_stopped_to_first_pcm_seconds"] == 2.3

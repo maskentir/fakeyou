@@ -564,3 +564,19 @@ async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(journa
         0,
         0,
     )
+
+
+async def test_synthesis_tags_transcript_id_on_all_events(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(
+        client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
+    )
+    stream = synthesizer.stream("Hello.", transcript_id="t9")
+    try:
+        assert await anext(stream) == b"\x00\x01"
+        [started] = journal.events("synthesis_started")
+        [first] = journal.events("synthesis_pcm_emitted")
+        assert started["transcript_id"] == "t9"
+        assert first["transcript_id"] == "t9"
+    finally:
+        await stream.aclose()
+        await synthesizer.aclose()

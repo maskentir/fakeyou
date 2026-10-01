@@ -407,14 +407,22 @@ class MeetingAudioSession:
     def is_speaking(self) -> bool:
         return self._engine.is_speaking
 
-    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None:
         self.raise_if_failed()
         if self._stopping:
             raise MeetingAudioError("meeting audio session is stopped")
-        if sentence_index is None:
-            await self._engine.speak(text)
-        else:
-            await self._engine.speak(text, sentence_index=sentence_index)
+        extra: dict[str, Any] = {}
+        if sentence_index is not None:
+            extra["sentence_index"] = sentence_index
+        if transcript_id is not None:
+            extra["transcript_id"] = transcript_id
+        await self._engine.speak(text, **extra)
         self.raise_if_failed()
 
     async def stop_playback(self) -> None:

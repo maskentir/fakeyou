@@ -82,9 +82,19 @@ class OpenAISpeechSynthesizer:
             api_key=api_key, base_url=base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
         )
 
-    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]:
+    def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> AsyncIterator[bytes]:
         return _journaled_stream(
-            self._journal, text, self._stream_pcm, sentence_index=sentence_index
+            self._journal,
+            text,
+            self._stream_pcm,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
         )
 
     async def aclose(self) -> None:
@@ -137,9 +147,19 @@ class MiniMaxSpeechSynthesizer:
         self._owns_client = client is None
         self._client = client or httpx2.AsyncClient(timeout=TTS_HTTP_TIMEOUT)
 
-    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]:
+    def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> AsyncIterator[bytes]:
         return _journaled_stream(
-            self._journal, text, self._stream_pcm, sentence_index=sentence_index
+            self._journal,
+            text,
+            self._stream_pcm,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
         )
 
     async def aclose(self) -> None:
@@ -220,6 +240,7 @@ async def _journaled_stream(
     open_stream: Callable[[str], AsyncGenerator[bytes]],
     *,
     sentence_index: int | None = None,
+    transcript_id: str | None = None,
 ) -> AsyncGenerator[bytes]:
     if not text.strip():
         raise ValueError("cannot synthesize blank text")
@@ -227,6 +248,8 @@ async def _journaled_stream(
     tags: dict[str, Any] = {"chars": len(text), "streaming": True}
     if sentence_index is not None:
         tags["sentence_index"] = sentence_index
+    if transcript_id is not None:
+        tags["transcript_id"] = transcript_id
     with journal.timed(
         started="synthesis_started",
         finished="synthesis_finished",
@@ -250,6 +273,8 @@ async def _journaled_stream(
                         }
                         if sentence_index is not None:
                             pcm["sentence_index"] = sentence_index
+                        if transcript_id is not None:
+                            pcm["transcript_id"] = transcript_id
                         journal.record("synthesis_pcm_emitted", source="tts", **pcm)
                     yield chunk
         except Exception as error:

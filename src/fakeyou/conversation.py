@@ -678,7 +678,7 @@ class ConversationLoop:
                             self._move("queued", event_id)
                         self.raise_if_failed()
                         self._interrupted = False
-                        await session.speak(sentence, sentence_index=spoken)
+                        await session.speak(sentence, sentence_index=spoken, transcript_id=event_id)
                         spoken += 1
                 finally:
                     close = getattr(stream, "aclose", None)

@@ -1173,3 +1173,20 @@ def test_sentence_streaming_default_follows_settings_flag():
     assert DEFAULTS.conversation.sentence_streaming is False
     params = inspect.signature(ConversationLoop).parameters
     assert params["sentence_streaming"].default == DEFAULTS.conversation.sentence_streaming
+
+
+async def test_streamed_speak_passes_transcript_id_to_session(journal):
+    agent = ScriptedAgent(
+        [
+            ("chunk", "First sent", "model"),
+            ("chunk", "ence here. Second sent", "model"),
+            ("chunk", "ence here.", "model"),
+        ]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+    await loop.handle_transcript(event("t1", "hello"))
+    await loop.wait_idle()
+    assert audio.spoken == ["First sentence here.", "Second sentence here."]
+    assert audio.transcripts == ["t1", "t1"]
+    await loop.close()

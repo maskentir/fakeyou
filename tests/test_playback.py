@@ -19,11 +19,15 @@ class _Synth:
         self.error = error
         self.texts: list[str] = []
         self.indices: list[int | None] = []
+        self.transcripts: list[str | None] = []
         self.closed = False
 
-    async def stream(self, text: str, *, sentence_index: int | None = None):
+    async def stream(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ):
         self.texts.append(text)
         self.indices.append(sentence_index)
+        self.transcripts.append(transcript_id)
         if self.error is not None:
             raise self.error
         yield self.audio
@@ -946,3 +950,18 @@ async def test_engine_closes_dequeued_iterator_when_unmute_is_cancelled():
     finally:
         queued.cancel()
         await asyncio.gather(queued, return_exceptions=True)
+
+
+async def test_engine_speak_forwards_transcript_id_to_synthesizer() -> None:
+    synth = _Synth()
+    player = _Player()
+    muter = _Muter()
+    events: list[PlaybackEvent] = []
+    engine = _engine(synth, player, muter, events, tail_seconds=0)
+    try:
+        await engine.speak("Hello.", sentence_index=0, transcript_id="t9")
+        assert synth.texts == ["Hello."]
+        assert synth.indices == [0]
+        assert synth.transcripts == ["t9"]
+    finally:
+        await engine.close()

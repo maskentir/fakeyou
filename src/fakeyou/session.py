@@ -14,7 +14,13 @@ from fakeyou.settings import DEFAULTS
 
 
 class MeetingAudio(Protocol):
-    async def speak(self, text: str, *, sentence_index: int | None = None) -> None: ...
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None: ...
 
     async def stop_playback(self) -> None: ...
 

@@ -33,6 +33,7 @@ class _Transport:
         return self.source
 
 
+        self.transcripts: list[str | None] = []
 class _Playback:
     def __init__(self) -> None:
         self.spoken: list[str] = []
@@ -45,7 +46,14 @@ class _Playback:
     def is_speaking(self) -> bool:
         return self.speaking
 
-    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        self.transcripts.append(transcript_id)
+        transcript_id: str | None = None,
+    ) -> None:
         self.spoken.append(text)
         self.indices.append(sentence_index)
 
@@ -895,6 +903,27 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         for row in read_journal(path)
         if row["event"] == "fault_recorded" and row["kind"] == "callback_failed"
     ]
+
+
+async def test_session_threads_transcript_id_to_playback_engine() -> None:
+    engine = _Playback()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        pass
+
+    async with open_meeting_audio(
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
+        on_transcript=on_transcript,
+        transport=_Transport(),
+        stt=FakeSTT(),
+        playback=engine,
+    ) as session:
+        await session.speak("Hello.", sentence_index=0, transcript_id="t9")
+        await session.speak("Legacy reply.")
+        assert engine.spoken == ["Hello.", "Legacy reply."]
+        assert engine.transcripts == ["t9", None]
+        await session.stop()
     assert len(callbacks) == 1
     assert callbacks[0]["meeting_id"] == "meeting-7"
     assert callbacks[0]["at"]

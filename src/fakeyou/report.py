@@ -192,12 +192,21 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         elif event == "synthesis_started":
             request_id = row.get("request_id")
             if isinstance(request_id, str):
-                if request_id in synthesis_turns:
-                    synthesis_turns[request_id] = None
+                linked = row.get("transcript_id")
+                if isinstance(linked, str) and linked in turns:
+                    if synthesis_turns.get(request_id, linked) != linked:
+                        synthesis_turns[request_id] = None
+                    else:
+                        synthesis_turns[request_id] = linked
                 else:
-                    synthesis_turns[request_id] = (
-                        replying["transcript_id"] if replying is not None else None
-                    )
+                    if isinstance(linked, str):
+                        excluded["unknown_transcript"] += 1
+                    if request_id in synthesis_turns:
+                        synthesis_turns[request_id] = None
+                    else:
+                        synthesis_turns[request_id] = (
+                            replying["transcript_id"] if replying is not None else None
+                        )
         elif event == "synthesis_pcm_emitted":
             turn = _synthesis_turn(turns, synthesis_turns, row, excluded)
             if turn is not None and at is not None:

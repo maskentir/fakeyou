@@ -24,7 +24,13 @@ class PlaybackEvent:
 
 
 class SpeechSynthesizer(Protocol):
-    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]: ...
+    def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...
 
@@ -185,7 +191,13 @@ class PlaybackEngine:
     def is_speaking(self) -> bool:
         return self._speaking
 
-    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None:
         if self._closed:
             return
         generation = self._generation
@@ -195,10 +207,12 @@ class PlaybackEngine:
                 emitted = False
                 chunks: AsyncIterator[bytes] | None = None
                 try:
-                    if sentence_index is None:
-                        chunks = self._synthesizer.stream(text)
-                    else:
-                        chunks = self._synthesizer.stream(text, sentence_index=sentence_index)
+                    extra: dict[str, Any] = {}
+                    if sentence_index is not None:
+                        extra["sentence_index"] = sentence_index
+                    if transcript_id is not None:
+                        extra["transcript_id"] = transcript_id
+                    chunks = self._synthesizer.stream(text, **extra)
                     if not hasattr(chunks, "__aiter__"):
                         raise TypeError("stream() must return an async iterator")
                     async with asyncio.timeout(self._synth_timeout_seconds):
