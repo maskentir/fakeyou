@@ -336,13 +336,13 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
             finally:
                 await memory.close()
 
-    episodes = [json.loads(line) for line in lines if '"memory_episode"' in line]
+    episodes = [json.loads(line) for line in lines if '"memory_episode_' in line]
     summary = [(row["utterances"], row["facts"], round(row["duration_ms"])) for row in episodes]
     print(f"\nepisodes (utterances, facts, ms): {summary}\nrecalled:\n{recalled}")
     print(f"corrected:\n{corrected}")
     assert (first.windows, first.ingested, first.completed) == (1, 1, True)
     assert (again.resumed_from, again.ingested, again.completed) == (1, 0, True)
-    assert not [line for line in lines if '"event":"fault"' in line]
+    assert not [line for line in lines if '"event":"fault_recorded"' in line]
     assert first.facts > 0, f"Graphiti extracted no facts: {episodes}"
     assert f"Google Meet {meeting_id} transcript" in recalled
     assert "owner note" in corrected

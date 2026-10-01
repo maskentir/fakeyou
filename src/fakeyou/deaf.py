@@ -9,12 +9,23 @@ from fakeyou.faults import Fault, FaultReporter
 from fakeyou.invariants import PCM_CHANNELS
 from fakeyou.journal import ProviderJournal
 from fakeyou.settings import DEFAULTS
+from fakeyou.taxonomy import Subsystem
 
 DeafVerdict = Literal[
-    "hearing", "silent", "unavailable", "alone", "capture_fault", "stt_fault", "capture_silent"
+    "hearing",
+    "silent",
+    "unavailable",
+    "alone",
+    "no_audio_frames",
+    "no_transcripts",
+    "silent_capture",
 ]
 
 ENERGY_THRESHOLD = 0.005
+_VERDICT_SOURCES: dict[DeafVerdict, Subsystem] = {
+    "no_audio_frames": "audio",
+    "no_transcripts": "stt",
+}
 
 
 def rms_level(pcm: bytes, *, channels: int = PCM_CHANNELS) -> float:
@@ -127,7 +138,7 @@ def evaluate_deafness(
         return "unavailable"
     heartbeat = snapshot.last_frame_at if snapshot.last_frame_at is not None else snapshot.ready_at
     if heartbeat is not None and now - heartbeat > 30:
-        return "capture_fault"
+        return "no_audio_frames"
     if (
         snapshot.ready_at is not None
         and now - snapshot.ready_at >= deaf_grace_seconds
@@ -138,7 +149,7 @@ def evaluate_deafness(
         and snapshot.presence_at is not None
         and now - snapshot.presence_at <= 30
     ):
-        return "capture_silent"
+        return "silent_capture"
     if (
         snapshot.remote_participants == 0
         and snapshot.presence_at is not None
@@ -151,7 +162,7 @@ def evaluate_deafness(
         snapshot.pending_speech_at is not None
         and now - snapshot.pending_speech_at >= deaf_window_seconds
     ):
-        return "stt_fault"
+        return "no_transcripts"
     if snapshot.last_final_at is not None and now - snapshot.last_final_at <= 30:
         return "hearing"
     return "silent"
@@ -190,19 +201,20 @@ class DeafMonitor:
         )
 
     def _report(self, verdict: DeafVerdict) -> None:
-        if self._reporter is not None and verdict != "capture_silent":
-            self._reporter.record(Fault(source="stt", kind=verdict))
-        if self._journal is not None and verdict == "capture_silent":
+        if self._reporter is not None and verdict in ("no_audio_frames", "no_transcripts"):
+            self._reporter.record(Fault(source=_VERDICT_SOURCES[verdict], kind=verdict))
+        if self._journal is not None and verdict == "silent_capture":
             snapshot = self._activity.snapshot()
             self._journal.record(
-                "capture_silent",
+                "capture_silence_detected",
+                source="audio",
                 frames_delivered=snapshot.frames_delivered,
                 energetic_ms=round(snapshot.energetic_ms, 1),
                 remote_participants=snapshot.remote_participants,
             )
 
     def note_tick(self, now: float, verdict: DeafVerdict) -> str | None:
-        if verdict not in ("capture_fault", "stt_fault", "capture_silent"):
+        if verdict not in ("no_audio_frames", "no_transcripts", "silent_capture"):
             self._first_fault_at = None
             self._last_report_at = None
             self._fault_kind = None
@@ -213,8 +225,8 @@ class DeafMonitor:
             self._last_report_at = now
             self._fault_kind = verdict
             self._report(verdict)
-            return "repair" if verdict == "stt_fault" else verdict
-        if now - first >= self.deaf_grace_seconds and verdict != "capture_silent":
+            return "repair" if verdict == "no_transcripts" else verdict
+        if now - first >= self.deaf_grace_seconds and verdict != "silent_capture":
             return "terminal"
         if (
             self._last_report_at is not None

@@ -162,17 +162,17 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
 
     assert chunks == [b"\x00" * 64, b"\x01" * 64]
     assert len(lines) == 2
-    [started] = journal.events("synth_started")
-    [finished] = journal.events("synth_finished")
-    assert started["event"] == "synth_started"
+    [started] = journal.events("synthesis_started")
+    [finished] = journal.events("synthesis_finished")
+    assert started["event"] == "synthesis_started"
     assert started["streaming"] is True
     assert started["chars"] == len("Hello.")
-    assert finished["event"] == "synth_finished"
+    assert finished["event"] == "synthesis_finished"
     assert finished["request_id"] == started["request_id"]
     assert finished["chars"] == len("Hello.")
     assert finished["bytes_out"] == 128
     assert finished["duration_ms"] >= 0
-    assert finished["first_chunk_latency_ms"] >= 0
+    assert finished["first_chunk_ms"] >= 0
     assert finished["streaming"] is True
 
 
@@ -193,8 +193,8 @@ async def test_synthesizer_stream_failure_raises_typed_fault(journal, openai_cli
     assert caught.value.source == "tts"
     assert caught.value.kind == "timeout"
     assert len(lines) == 2
-    [failed] = journal.events("synth_failed")
-    assert failed["event"] == "synth_failed"
+    [failed] = journal.events("synthesis_failed")
+    assert failed["event"] == "synthesis_failed"
     assert failed["kind"] == "timeout"
     assert failed["duration_ms"] >= 0
     assert failed["request_id"] == journal.events()[0]["request_id"]
@@ -263,9 +263,9 @@ async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event
     chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
 
     assert chunks == [b"\x00\x01", b"\x02\x03"]
-    [finished] = journal.events("synth_finished")
+    [finished] = journal.events("synthesis_finished")
     assert (finished["event"], finished["bytes_out"], finished["streaming"]) == (
-        "synth_finished",
+        "synthesis_finished",
         4,
         True,
     )

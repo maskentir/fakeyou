@@ -231,18 +231,19 @@ async def _journaled_stream(
         raise ValueError("cannot synthesize blank text")
     journal = journal or ProviderJournal("", stdout=False)
     with journal.timed(
-        started="synth_started",
-        finished="synth_finished",
-        failed="synth_failed",
+        started="synthesis_started",
+        finished="synthesis_finished",
+        failed="synthesis_failed",
+        source="tts",
         chars=len(text),
         streaming=True,
     ) as timing:
-        timing.fields.update(bytes_out=0, first_chunk_latency_ms=None)
+        timing.fields.update(bytes_out=0, first_chunk_ms=None)
         try:
             async with aclosing(open_stream(text)) as chunks:
                 async for chunk in chunks:
-                    if timing.fields["first_chunk_latency_ms"] is None:
-                        timing.fields["first_chunk_latency_ms"] = timing.elapsed_ms
+                    if timing.fields["first_chunk_ms"] is None:
+                        timing.fields["first_chunk_ms"] = timing.elapsed_ms
                     timing.fields["bytes_out"] += len(chunk)
                     yield chunk
         except Exception as error:

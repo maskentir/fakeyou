@@ -50,7 +50,7 @@ class _BlockingTerminalSaver(InMemorySaver):
         if (
             not self._blocked
             and values.get("phase") == "ended"
-            and values.get("terminal_reason") == "owner_stop"
+            and values.get("terminal_reason") == "stopped_by_owner"
         ):
             self._blocked = True
             self.terminal_started.set()
@@ -97,7 +97,7 @@ async def test_run_meeting_session_aborts_join_when_stop_requested() -> None:
     result = await _run(_config(headless=True), browser, saver, FakeClock(), stop)
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "owner_stop"
+    assert result.terminal_reason == "stopped_by_owner"
     assert browser.opened == 0
     assert browser.closed == 0
 
@@ -113,7 +113,7 @@ async def test_run_meeting_session_stops_and_leaves_after_admission() -> None:
     result = await _run(_config(), browser, FakeSaverSession(), FakeClock(), stop)
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
 
 
 async def test_run_meeting_session_enforces_duration_limit() -> None:
@@ -127,7 +127,7 @@ async def test_run_meeting_session_enforces_duration_limit() -> None:
     )
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "duration_limit"
+    assert result.terminal_reason == "duration_limit_reached"
 
 
 async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
@@ -142,15 +142,15 @@ async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
 
     result = await _run(_config(), browser, FakeSaverSession(), clock)
 
-    assert result.terminal_reason == "meeting_ended"
+    assert result.terminal_reason == "ended_by_host"
     polls = [
         json.loads(line)
         for line in capsys.readouterr().out.splitlines()
-        if json.loads(line).get("event") == "monitor_poll"
+        if json.loads(line).get("event") == "monitor_polled"
     ]
     assert len(polls) == 1
     assert polls[0]["meeting_id"] == "meeting-1"
-    assert polls[0]["seconds"] == 2.5
+    assert polls[0]["duration_ms"] == 2500
 
 
 async def test_run_meeting_session_skips_monitor_poll_log_when_fast(capsys) -> None:
@@ -158,8 +158,8 @@ async def test_run_meeting_session_skips_monitor_poll_log_when_fast(capsys) -> N
 
     result = await _run(_config(), browser, FakeSaverSession(), FakeClock())
 
-    assert result.terminal_reason == "meeting_ended"
-    assert "monitor_poll" not in capsys.readouterr().out
+    assert result.terminal_reason == "ended_by_host"
+    assert "monitor_polled" not in capsys.readouterr().out
 
 
 async def test_run_meeting_session_recovers_from_transient_lobby() -> None:
@@ -183,7 +183,7 @@ async def test_run_meeting_session_enforces_duration_limit_while_disconnected() 
     )
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "duration_limit"
+    assert result.terminal_reason == "duration_limit_reached"
     assert ASK_SELECTOR in page.clicked
     assert LEAVE_SELECTOR not in page.clicked
 
@@ -219,7 +219,7 @@ async def test_run_meeting_session_tolerates_single_observation_blip() -> None:
     result = await _run(_config(), browser, FakeSaverSession(), FakeClock())
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "meeting_ended"
+    assert result.terminal_reason == "ended_by_host"
 
 
 async def test_run_meeting_session_returns_ended_result_without_reopening_browser() -> None:
@@ -243,7 +243,7 @@ async def test_run_meeting_session_rejects_resume_of_interrupted_session() -> No
     graph.invoke(
         {
             **initial_lifecycle_state("owner-1", "twin-1", "meeting-1"),
-            "event": {"kind": "join_requested", "attribution": "user_action", "detail": "t"},
+            "event": {"kind": "join_requested", "attribution": "owner_action", "detail": "t"},
         },
         {"configurable": {"thread_id": "twin-1:meeting-1"}},
     )
@@ -289,7 +289,7 @@ async def test_stop_arriving_with_browser_startup_does_not_request_join() -> Non
         _config(), stop=stop, open_page=open_then_stop, saver_factory=saver.factory
     )
 
-    assert result.terminal_reason == "owner_stop"
+    assert result.terminal_reason == "stopped_by_owner"
     assert page.visited == []
     assert page.clicked == []
     assert browser.closed == 1
@@ -342,7 +342,7 @@ async def test_stop_cancels_pending_navigation_and_closes_browser() -> None:
         stop.set()
         result = await asyncio.wait_for(running, timeout=1)
 
-    assert result.terminal_reason == "owner_stop"
+    assert result.terminal_reason == "stopped_by_owner"
     assert navigation_cancelled.is_set()
     assert page.clicked == []
     assert browser.closed == 1
@@ -391,7 +391,7 @@ async def test_repeated_cancellation_preserves_terminal_checkpoint() -> None:
         {"configurable": {"thread_id": "twin-1:meeting-1"}}
     )
     assert state.values["phase"] == "ended"
-    assert state.values["terminal_reason"] == "owner_stop"
+    assert state.values["terminal_reason"] == "stopped_by_owner"
     assert browser.closed == 1
 
 
@@ -425,7 +425,7 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
         {"configurable": {"thread_id": "twin-1:meeting-1"}}
     )
     assert saved.values["phase"] == "ended"
-    assert saved.values["terminal_reason"] == "owner_stop"
+    assert saved.values["terminal_reason"] == "stopped_by_owner"
     assert saved.values["evidence"][-1]["event"] == "cancelled"
     assert page.clicked.count(LEAVE_SELECTOR) == 1
     assert browser.closed == 1
@@ -483,10 +483,10 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     )
     journal.close()
 
-    polls = [row for row in read_journal(path) if row["event"] == "monitor_poll"]
+    polls = [row for row in read_journal(path) if row["event"] == "monitor_polled"]
     assert len(polls) == 1
     assert polls[0]["meeting_id"] == "journal-meeting"
-    assert polls[0]["seconds"] == 2.5
+    assert polls[0]["duration_ms"] == 2500
     assert polls[0]["at"]
 
 
@@ -500,15 +500,15 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
             [],
             {},
             {"lobby_timeout_seconds": 5.0, "join_poll_interval_seconds": 2.0},
-            "lobby_timeout",
+            "lobby_timeout_reached",
             "",
         ),
         ([], [], {NAME_SELECTOR: [0]}, {}, "browser_failure", "name field"),
         ([RuntimeError("cdp gone")], [], {}, {}, "browser_failure", ""),
         ([IN_CALL, IN_CALL, REMOVED], [], {}, {}, "removed_by_host", ""),
-        ([IN_CALL, IN_CALL, ENDED], [], {}, {}, "meeting_ended", ""),
+        ([IN_CALL, IN_CALL, ENDED], [], {}, {}, "ended_by_host", ""),
     ],
-    ids=["denied", "blocked", "lobby_timeout", "missing_name", "join_crash", "removed", "ended"],
+    ids=["denied", "blocked", "lobby_timed_out", "missing_name", "join_crash", "removed", "ended"],
 )
 async def test_run_meeting_session_reports_terminal_outcome(
     contents, evaluates, counts, overrides, expected, detail

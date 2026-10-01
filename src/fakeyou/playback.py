@@ -9,9 +9,10 @@ from fakeyou.faults import FaultReporter
 from fakeyou.invariants import PCM_CHANNELS, PCM_FORMAT
 from fakeyou.journal import ProviderJournal
 from fakeyou.provider_faults import ProviderFault, classify_exception
+from fakeyou.taxonomy import Subsystem
 
 PlaybackEventName = Literal[
-    "speak_started", "speak_finished", "speak_failed", "speak_dropped", "mute_failed"
+    "playback_started", "playback_finished", "playback_failed", "playback_dropped", "mute_failed"
 ]
 
 
@@ -218,7 +219,7 @@ class PlaybackEngine:
                                 await close()
 
         if generation != self._generation or self._closed:
-            self._emit("speak_dropped", text, "interrupted")
+            self._emit("playback_dropped", text, "interrupted")
             return
         await self._play_queued(retryable_stream(), text)
         return
@@ -247,7 +248,7 @@ class PlaybackEngine:
                 break
             if not done.cancelled():
                 done.set_result(None)
-            self._emit("speak_dropped", text, "interrupted")
+            self._emit("playback_dropped", text, "interrupted")
         await self._cancelled_tasks_cleanup()
         await self._mute()
 
@@ -282,14 +283,20 @@ class PlaybackEngine:
         with suppress(Exception):
             self._on_event(PlaybackEvent(name, text, detail))
 
-    def _record_fault(self, source: str, error: BaseException) -> None:
+    def _record_fault(self, source: Subsystem, error: BaseException) -> None:
         if self._faults is None:
             return
         self._faults.record(classify_exception(source, error))
 
     def _record_retry(self, *, streaming: bool) -> None:
         if self._journal is not None:
-            self._journal.record("synth_retry", attempt=2, streaming=streaming, reason="timeout")
+            self._journal.record(
+                "synthesis_retried",
+                source="playback",
+                attempt=2,
+                streaming=streaming,
+                reason="timeout",
+            )
 
     async def _mute(self) -> None:
         if self._muted:
@@ -330,12 +337,12 @@ class PlaybackEngine:
                 if not done.cancelled() and not done.done():
                     done.set_result(None)
                 self._emit(
-                    "speak_dropped",
+                    "playback_dropped",
                     text,
                     "cancelled" if done.cancelled() else "interrupted",
                 )
                 continue
-            self._emit("speak_started", text)
+            self._emit("playback_started", text)
             play_task = asyncio.create_task(self._stream_audio(audio))
             self._play_tasks.add(play_task)
             self._active_done = done
@@ -348,18 +355,18 @@ class PlaybackEngine:
                 with suppress(TimeoutError):
                     async with asyncio.timeout(self._cleanup_timeout_seconds):
                         await play_task
-                self._emit("speak_failed", text, "playback timed out")
+                self._emit("playback_failed", text, "playback timed out")
                 self._record_fault("playback", TimeoutError("playback timed out"))
             except asyncio.CancelledError:
                 current = asyncio.current_task()
                 if current is None or current.cancelling() > 0 or not play_task.cancelled():
                     raise
-                self._emit("speak_dropped", text, "interrupted")
+                self._emit("playback_dropped", text, "interrupted")
             except Exception as error:
-                self._emit("speak_failed", text, f"{type(error).__name__}: {error}")
+                self._emit("playback_failed", text, f"{type(error).__name__}: {error}")
                 self._record_fault("playback", error)
             else:
-                self._emit("speak_finished", text)
+                self._emit("playback_finished", text)
             finally:
                 self._play_tasks.discard(play_task)
                 self._active_done = None

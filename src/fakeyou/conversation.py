@@ -286,7 +286,7 @@ class ConversationLoop:
         if self._task is not None and not self._task.done():
             self._move("interrupted", event.id)
         if self._session is not None and self._barge_in and self._session.is_speaking:
-            self._record("barge_in", trigger="final", words=len(event.text.split()))
+            self._record("barge_in_detected", trigger="final", words=len(event.text.split()))
         if self._session is not None and (
             self._barge_in
             and self._session.is_speaking
@@ -311,7 +311,7 @@ class ConversationLoop:
         words = len(text.split())
         if words >= self._barge_in_min_words and not self._interrupted:
             self._interrupted = True
-            self._record("barge_in", trigger="interim", words=words)
+            self._record("barge_in_detected", trigger="interim", words=words)
             await session.stop_playback()
 
     def _addressed(self, event: TranscriptEvent) -> bool:
@@ -349,7 +349,9 @@ class ConversationLoop:
                 self._on_transition(previous, phase, detail)
             except Exception as error:
                 if self._faults is not None:
-                    self._faults.record(classify_exception("conversation_observer", error))
+                    self._faults.record(
+                        classify_exception("agent", error, operation="transition_observer")
+                    )
 
     def _record(self, event: str, **fields: Any) -> None:
         if self._journal is not None:
@@ -391,14 +393,14 @@ class ConversationLoop:
                         if isinstance(error, asyncio.CancelledError)
                         else "agent_failed",
                         request_id=request_id,
-                        latency_ms=(self._clock() - started) * 1000,
+                        duration_ms=(self._clock() - started) * 1000,
                     )
                     raise
                 else:
                     self._record(
                         "agent_finished",
                         request_id=request_id,
-                        latency_ms=(self._clock() - started) * 1000,
+                        duration_ms=(self._clock() - started) * 1000,
                     )
                 self.raise_if_failed()
                 if generation != self._generation or self._closed:

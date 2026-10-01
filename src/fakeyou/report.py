@@ -8,21 +8,21 @@ from typing import Any
 from fakeyou.journal import JOURNAL_BACKUP_COUNT
 
 LATENCY_STAGES = (
-    "speech_stopped_to_final_s",
-    "final_to_reply_s",
-    "reply_to_first_pcm_s",
-    "speech_stopped_to_first_pcm_s",
+    "speech_stopped_to_final_seconds",
+    "final_to_reply_seconds",
+    "reply_to_first_pcm_seconds",
+    "speech_stopped_to_first_pcm_seconds",
 )
 _STAGE_BOUNDS = {
-    "speech_stopped_to_final_s": ("speech_stopped_at", "final_at"),
-    "final_to_reply_s": ("final_at", "reply_at"),
-    "reply_to_first_pcm_s": ("reply_at", "first_pcm_at"),
-    "speech_stopped_to_first_pcm_s": ("speech_stopped_at", "first_pcm_at"),
+    "speech_stopped_to_final_seconds": ("speech_stopped_at", "final_at"),
+    "final_to_reply_seconds": ("final_at", "reply_at"),
+    "reply_to_first_pcm_seconds": ("reply_at", "first_pcm_at"),
+    "speech_stopped_to_first_pcm_seconds": ("speech_stopped_at", "first_pcm_at"),
 }
 STARTUP_MILESTONES = (
-    "audio_ready",
+    "audio_opened",
     "join_requested",
-    "join_result",
+    "join_finished",
     "microphone_enabled",
     "conversation_bound",
 )
@@ -82,9 +82,9 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             speech_stopped_at = at
         elif event == "speech_started":
             speech_started_at = at
-        elif event == "barge_in":
+        elif event == "barge_in_detected":
             barge_in_triggers[str(row.get("trigger"))] += 1
-        elif event == "transcript_final":
+        elif event == "transcript_finalized":
             transcript_id = str(row.get("transcript_id"))
             turns[transcript_id] = {
                 "transcript_id": transcript_id,
@@ -111,19 +111,19 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             turn = _turn_for(turns, row)
             if turn is not None:
                 turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
-        elif event == "speak_started":
+        elif event == "playback_started":
             speak_started_at = at
             if replying is not None:
                 replying.setdefault("speak_at", at)
-        elif event == "synth_finished" and replying is not None and "speak_at" in replying:
+        elif event == "synthesis_finished" and replying is not None and "speak_at" in replying:
             replying.setdefault("first_pcm_at", _first_pcm_at(row, at))
-        elif event == "speak_finished":
+        elif event == "playback_finished":
             replies["spoken"] += 1
             replies["trailing_questions"] += row.get("ends_with_question") is True
             if replying is not None:
                 replying["outcome"] = "spoken"
             replying = None
-        elif event == "speak_dropped":
+        elif event == "playback_dropped":
             replies["interrupted"] += 1
             if (
                 row.get("detail") == "interrupted"
@@ -136,11 +136,11 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if replying is not None:
                 replying["outcome"] = "interrupted"
             replying = None
-        elif event == "memory_episode":
+        elif event in ("memory_episode_ingested", "memory_episode_failed"):
             episodes.append(row)
-        elif event == "fault":
+        elif event == "fault_recorded":
             faults[(str(row.get("source")), str(row.get("kind")))] += 1
-        elif event == "session_result":
+        elif event == "session_finished":
             result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
     turn_reports = [_turn_report(turn) for turn in turns.values()]
     return {
@@ -154,14 +154,17 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "tools": {name: dict(counts) for name, counts in tools.items()},
         "interruptions": {
             "triggers": dict(barge_in_triggers),
-            "speech_to_stop_s": summarize(interruption_seconds),
+            "speech_to_stop_seconds": summarize(interruption_seconds),
         },
         "ingestion": {
             "episodes": len(episodes),
             "facts": sum(int(episode.get("facts") or 0) for episode in episodes),
-            "empty": sum(episode.get("outcome") == "empty" for episode in episodes),
-            "failed": sum(episode.get("outcome") == "failed" for episode in episodes),
-            "duration_s": summarize(
+            "empty": sum(
+                episode["event"] == "memory_episode_ingested" and not episode.get("facts")
+                for episode in episodes
+            ),
+            "failed": sum(episode["event"] == "memory_episode_failed" for episode in episodes),
+            "duration_seconds": summarize(
                 [float(episode.get("duration_ms") or 0) / 1000 for episode in episodes]
             ),
         },
@@ -174,7 +177,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    join = milestones.get("join_result", {})
+    join = milestones.get("join_finished", {})
     admitted_at = join.get("at") if join.get("status") == "admitted" else None
 
     def since_admission(event: str) -> float | None:
@@ -185,12 +188,12 @@ def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
         return round(float(row["duration_ms"]) / 1000, 3) if "duration_ms" in row else None
 
     return {
-        "audio_startup_s": seconds(milestones.get("audio_ready", {})),
+        "audio_startup_seconds": seconds(milestones.get("audio_opened", {})),
         "join_status": join.get("status"),
-        "lobby_wait_s": seconds(join),
+        "lobby_wait_seconds": seconds(join),
         "audio_ready_at_admission": join.get("audio_ready") if admitted_at else None,
-        "admission_to_microphone_s": since_admission("microphone_enabled"),
-        "admission_to_listening_s": since_admission("conversation_bound"),
+        "admission_to_microphone_seconds": since_admission("microphone_enabled"),
+        "admission_to_listening_seconds": since_admission("conversation_bound"),
     }
 
 
@@ -202,7 +205,7 @@ def _turn_for(turns: dict[str, dict[str, Any]], row: dict[str, Any]) -> dict[str
 def _first_pcm_at(row: dict[str, Any], finished_at: datetime | None) -> datetime | None:
     if finished_at is None:
         return None
-    first_chunk_ms = row.get("first_chunk_latency_ms")
+    first_chunk_ms = row.get("first_chunk_ms")
     if first_chunk_ms is None:
         return finished_at
     started = finished_at - timedelta(milliseconds=float(row.get("duration_ms") or 0))

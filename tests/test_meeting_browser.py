@@ -52,7 +52,7 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state(t
     result = await run_meeting_session(config, open_page=open_fixture)
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "duration_limit"
+    assert result.terminal_reason == "duration_limit_reached"
     assert pages[0].is_closed()
     async with AsyncSqliteSaver.from_conn_string(str(database)) as saver:
         state = await create_lifecycle_graph(saver).aget_state(

@@ -132,7 +132,7 @@ async def test_should_escalate_when_allowlisted_dismissal_fails(page, observe):
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
-    assert [event.kind for event in result.events] == ["watchdog_error", "manual_action_required"]
+    assert [event.kind for event in result.events] == ["watchdog_failed", "manual_action_required"]
 
 
 CAMERA_NOT_FOUND_DIALOG = "close Close error Camera not found Make sure your camera is plugged in"
@@ -158,7 +158,7 @@ async def test_should_escalate_when_camera_dismissal_fails(page, observe):
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
-    assert [event.kind for event in result.events] == ["watchdog_error", "manual_action_required"]
+    assert [event.kind for event in result.events] == ["watchdog_failed", "manual_action_required"]
 
 
 async def test_should_not_claim_recovery_when_observation_fails(page, observe):
@@ -167,7 +167,7 @@ async def test_should_not_claim_recovery_when_observation_fails(page, observe):
     await watchdog.check()
     observe.side_effect = RuntimeError("disconnected")
     result = await watchdog.check()
-    assert [event.kind for event in result.events] == ["watchdog_error"]
+    assert [event.kind for event in result.events] == ["watchdog_failed"]
     assert result.observation.state == "unknown"
     assert result.next_check_seconds == 5
 

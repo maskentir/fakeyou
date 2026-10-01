@@ -12,36 +12,36 @@ MeetingPhase = Literal["preparing", "lobby", "admitted", "disconnected", "leavin
 
 TerminalReason = Literal[
     "infra_failure",
-    "left_alone",
-    "owner_stop",
-    "admitted_then_stopped",
-    "denied_by_host",
-    "blocked_by_platform",
-    "removed_by_host",
-    "lobby_timeout",
     "browser_failure",
     "audio_failure",
     "conversation_failure",
-    "meeting_ended",
-    "duration_limit",
+    "stopped_by_owner",
+    "left_by_owner",
+    "denied_by_host",
+    "removed_by_host",
+    "ended_by_host",
+    "blocked_by_platform",
+    "lobby_timeout_reached",
+    "duration_limit_reached",
+    "alone_limit_reached",
 ]
 
-LifecycleAttribution = Literal["host_action", "system_fault", "user_action"]
+LifecycleAttribution = Literal["host_action", "system_fault", "owner_action", "policy"]
 LifecycleEventKind = Literal[
     "infra_failed",
-    "left_alone",
+    "participants_left",
     "join_requested",
     "admitted",
     "denied",
     "blocked",
-    "lobby_timeout",
-    "owner_stop",
+    "lobby_timed_out",
+    "owner_stopped",
     "browser_failed",
     "audio_failed",
     "conversation_failed",
     "connection_lost",
     "reconnected",
-    "duration_limit",
+    "duration_reached",
     "removed",
     "meeting_ended",
     "leave_sent",
@@ -61,28 +61,28 @@ class _Transition:
 
 _TRANSITIONS: dict[tuple[MeetingPhase, str], _Transition] = {
     ("preparing", "infra_failed"): _Transition("ended", reason="infra_failure"),
-    ("admitted", "left_alone"): _Transition(
-        "leaving", effect="leave_requested", pending_reason="left_alone"
+    ("admitted", "participants_left"): _Transition(
+        "leaving", effect="leave_requested", pending_reason="alone_limit_reached"
     ),
-    ("disconnected", "left_alone"): _Transition("ended", reason="left_alone"),
+    ("disconnected", "participants_left"): _Transition("ended", reason="alone_limit_reached"),
     ("preparing", "join_requested"): _Transition("lobby", effect="join_requested"),
-    ("preparing", "owner_stop"): _Transition("ended", reason="owner_stop"),
+    ("preparing", "owner_stopped"): _Transition("ended", reason="stopped_by_owner"),
     ("preparing", "browser_failed"): _Transition("ended", reason="browser_failure"),
     ("lobby", "admitted"): _Transition("admitted"),
     ("lobby", "denied"): _Transition("ended", reason="denied_by_host"),
     ("lobby", "blocked"): _Transition("ended", reason="blocked_by_platform"),
-    ("lobby", "lobby_timeout"): _Transition("ended", reason="lobby_timeout"),
-    ("lobby", "owner_stop"): _Transition("ended", reason="owner_stop"),
+    ("lobby", "lobby_timed_out"): _Transition("ended", reason="lobby_timeout_reached"),
+    ("lobby", "owner_stopped"): _Transition("ended", reason="stopped_by_owner"),
     ("lobby", "browser_failed"): _Transition("ended", reason="browser_failure"),
     ("lobby", "connection_lost"): _Transition("disconnected"),
-    ("admitted", "owner_stop"): _Transition(
-        "leaving", effect="leave_requested", pending_reason="admitted_then_stopped"
+    ("admitted", "owner_stopped"): _Transition(
+        "leaving", effect="leave_requested", pending_reason="left_by_owner"
     ),
-    ("admitted", "duration_limit"): _Transition(
-        "leaving", effect="leave_requested", pending_reason="duration_limit"
+    ("admitted", "duration_reached"): _Transition(
+        "leaving", effect="leave_requested", pending_reason="duration_limit_reached"
     ),
     ("admitted", "removed"): _Transition("ended", reason="removed_by_host"),
-    ("admitted", "meeting_ended"): _Transition("ended", reason="meeting_ended"),
+    ("admitted", "meeting_ended"): _Transition("ended", reason="ended_by_host"),
     ("admitted", "browser_failed"): _Transition("ended", reason="browser_failure"),
     ("admitted", "audio_failed"): _Transition(
         "leaving", effect="leave_requested", pending_reason="audio_failure"
@@ -91,17 +91,17 @@ _TRANSITIONS: dict[tuple[MeetingPhase, str], _Transition] = {
         "leaving", effect="leave_requested", pending_reason="conversation_failure"
     ),
     ("admitted", "connection_lost"): _Transition("disconnected"),
-    ("disconnected", "owner_stop"): _Transition("ended", reason="owner_stop"),
+    ("disconnected", "owner_stopped"): _Transition("ended", reason="stopped_by_owner"),
     ("disconnected", "denied"): _Transition("ended", reason="denied_by_host"),
-    ("disconnected", "lobby_timeout"): _Transition("ended", reason="lobby_timeout"),
-    ("disconnected", "meeting_ended"): _Transition("ended", reason="meeting_ended"),
+    ("disconnected", "lobby_timed_out"): _Transition("ended", reason="lobby_timeout_reached"),
+    ("disconnected", "meeting_ended"): _Transition("ended", reason="ended_by_host"),
     ("disconnected", "removed"): _Transition("ended", reason="removed_by_host"),
     ("disconnected", "browser_failed"): _Transition("ended", reason="browser_failure"),
     ("disconnected", "audio_failed"): _Transition("ended", reason="audio_failure"),
     ("disconnected", "conversation_failed"): _Transition("ended", reason="conversation_failure"),
-    ("disconnected", "duration_limit"): _Transition("ended", reason="duration_limit"),
-    ("leaving", "leave_sent"): _Transition("ended", reason="admitted_then_stopped"),
-    ("leaving", "owner_stop"): _Transition("leaving"),
+    ("disconnected", "duration_reached"): _Transition("ended", reason="duration_limit_reached"),
+    ("leaving", "leave_sent"): _Transition("ended", reason="left_by_owner"),
+    ("leaving", "owner_stopped"): _Transition("leaving"),
     ("leaving", "browser_failed"): _Transition("ended", reason="browser_failure"),
 }
 
@@ -187,7 +187,7 @@ def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
     if event["kind"] == "cancelled":
         return {
             "phase": "ended",
-            "terminal_reason": "owner_stop",
+            "terminal_reason": "stopped_by_owner",
             "pending_reason": None,
             "previous_phase": None,
             "evidence": [build_evidence(phase, "ended", event)],
@@ -208,7 +208,7 @@ def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
         raise ValueError(f"invalid lifecycle event {event['kind']!r} for phase {phase!r}")
     to_phase, reason = transition.phase, transition.reason
     if phase == "leaving" and event["kind"] == "leave_sent":
-        reason = state["pending_reason"] or "admitted_then_stopped"
+        reason = state["pending_reason"] or "left_by_owner"
     elif (
         phase == "leaving"
         and event["kind"] == "browser_failed"

@@ -152,7 +152,9 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
 ) -> None:
     captured = session_run
 
-    session_run.result.update({"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok"})
+    session_run.result.update(
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+    )
 
     await join(
         "https://meet.google.com/abc-defg-hij",
@@ -173,11 +175,11 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
 @pytest.mark.parametrize(
     "terminal_reason,exit_code",
     [
-        ("owner_stop", 0),
+        ("stopped_by_owner", 0),
         ("denied_by_host", 0),
-        ("meeting_ended", 0),
-        ("duration_limit", 0),
-        ("left_alone", 0),
+        ("ended_by_host", 0),
+        ("duration_limit_reached", 0),
+        ("alone_limit_reached", 0),
         ("browser_failure", 1),
         ("audio_failure", 1),
         ("conversation_failure", 1),
@@ -207,7 +209,7 @@ async def test_join_exit_code_matches_terminal_reason(
         json.loads(line)
         for line in (tmp_path / "journals" / "meeting-1.jsonl").read_text().splitlines()
     ]
-    [exit_row] = [row for row in rows if row["event"] == "cli_exit"]
+    [exit_row] = [row for row in rows if row["event"] == "cli_exited"]
     assert exit_row["exit_code"] == exit_code
     assert exit_row["at"]
     assert exit_row["meeting_id"] == "meeting-1"
@@ -223,7 +225,7 @@ async def test_join_result_carries_terminal_fault_report(
     report = {"faults": {"kinds": [{"kind": "timeout", "count": 2}], "total": 2}}
 
     session_run.result.update(
-        {"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok", "faults": report}
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok", "faults": report}
     )
 
     await join(
@@ -241,7 +243,9 @@ async def test_join_without_audio_still_wires_faults_and_journal(
 
     captured = session_run
 
-    session_run.result.update({"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok"})
+    session_run.result.update(
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+    )
 
     await join(
         "https://meet.google.com/abc-defg-hij",
@@ -333,7 +337,9 @@ def test_main_exits_1_on_cli_error(monkeypatch, capsys) -> None:
 async def test_join_headless_override(session_run, join, settings) -> None:
     captured = session_run
 
-    session_run.result.update({"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok"})
+    session_run.result.update(
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+    )
 
     await join(
         "https://meet.google.com/abc-defg-hij",
@@ -571,7 +577,7 @@ async def test_join_audio_transcript_reaches_conversation(
         )
         await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -591,10 +597,10 @@ async def test_join_audio_transcript_reaches_conversation(
     rows = [
         json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
     ]
-    transitions = [row for row in rows if row["event"] == "conversation_transition"]
+    transitions = [row for row in rows if row["event"] == "conversation_transitioned"]
     assert len(transitions) == 3
     assert all(row["at"] for row in transitions)
-    [final] = [row for row in rows if row["event"] == "transcript_final"]
+    [final] = [row for row in rows if row["event"] == "transcript_finalized"]
     assert "text" not in final
     assert (final["participant"], final["meeting_id"]) == ("unknown", "meeting-9")
     assert final["at"]
@@ -679,7 +685,7 @@ async def test_join_wake_phrase_gates_agent_replies(
             )
             await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -728,7 +734,7 @@ async def test_join_barge_in_stops_speaking_session(
         )
         await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -755,10 +761,10 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
 ) -> None:
     async def run(config, **kwargs):
         handler = kwargs["open_audio"].keywords["on_playback_event"]
-        handler(PlaybackEvent("speak_started", "hello", ""))
-        handler(PlaybackEvent("speak_dropped", "cut off", "interrupted"))
-        handler(PlaybackEvent("speak_finished", "hello?  ", ""))
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        handler(PlaybackEvent("playback_started", "hello", ""))
+        handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
+        handler(PlaybackEvent("playback_finished", "hello?  ", ""))
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -775,9 +781,9 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         if row.get("source") == "playback"
     ]
     assert playback == [
-        ("speak_started", False, None),
-        ("speak_dropped", False, "interrupted"),
-        ("speak_finished", True, None),
+        ("playback_started", False, None),
+        ("playback_dropped", False, "interrupted"),
+        ("playback_finished", True, None),
     ]
     assert all(
         row["meeting_id"] == "meeting-9" and row["at"]
@@ -809,7 +815,9 @@ async def test_join_without_audio_skips_preflight(
 ) -> None:
     captured = session_run
 
-    session_run.result.update({"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok"})
+    session_run.result.update(
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+    )
 
     await join(
         "https://meet.google.com/abc-defg-hij",
@@ -939,7 +947,7 @@ async def _join_persona_conversation(
         else:
             await settle()
         outcome["phase"] = loop.phase
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     monkeypatch.setattr(cli, "run_meeting_session", run)
     arguments = persona_join_arguments(
@@ -1140,7 +1148,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     faults = [
         json.loads(line)
         for line in capsys.readouterr().out.splitlines()
-        if line.startswith('{"event":"fault"')
+        if line.startswith('{"event":"fault_recorded"')
     ]
     assert [(fault["source"], fault["kind"]) for fault in faults] == [("memory", "unknown")]
     assert "neo4j went away" not in json.dumps(faults)
@@ -1652,7 +1660,12 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     assert graphiti.search_cancelled.is_set()
     assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"
-    assert '"source":"memory","kind":"timeout"' in capsys.readouterr().out
+    faults = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith('{"event":"fault_recorded"')
+    ]
+    assert [(row["source"], row["kind"]) for row in faults] == [("memory", "timeout")]
 
 
 async def test_join_journals_session_result(session_run, join, tmp_path: Path) -> None:
@@ -1669,7 +1682,7 @@ async def test_join_journals_session_result(session_run, join, tmp_path: Path) -
         json.loads(line)
         for line in (tmp_path / "journals" / "meeting-1.jsonl").read_text().splitlines()
     ]
-    [result] = [row for row in rows if row["event"] == "session_result"]
+    [result] = [row for row in rows if row["event"] == "session_finished"]
     assert (result["terminal_reason"], result["exit_code"]) == ("infra_failure", 3)
 
 
@@ -1681,11 +1694,11 @@ def test_report_command_prints_summary_from_journal(
     (journal_dir / "meeting-1.jsonl").write_text(
         json.dumps(
             {
-                "event": "session_result",
+                "event": "session_finished",
                 "meeting_id": "meeting-1",
                 "at": "2026-09-30T10:00:00+00:00",
                 "phase": "ended",
-                "terminal_reason": "owner_stop",
+                "terminal_reason": "stopped_by_owner",
                 "exit_code": 0,
             }
         )
@@ -1702,7 +1715,7 @@ def test_report_command_prints_summary_from_journal(
 
     report = json.loads(capsys.readouterr().out)
     assert report["meeting_id"] == "meeting-1"
-    assert report["result"]["terminal_reason"] == "owner_stop"
+    assert report["result"]["terminal_reason"] == "stopped_by_owner"
 
 
 @pytest.mark.parametrize("meeting_id,match", [("missing", "no journal"), ("bad id", "pattern")])
@@ -2071,7 +2084,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
         interim = kwargs["open_audio"].keywords["on_interim"]
         await interim(SimpleNamespace(text="wait"))
         await interim(SimpleNamespace(text="wait a moment"))
-        return SimpleNamespace(phase="ended", terminal_reason="owner_stop", detail="ok")
+        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 

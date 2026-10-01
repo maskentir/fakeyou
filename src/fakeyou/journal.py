@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fakeyou.provider_faults import ProviderFault, trim_detail
+from fakeyou.taxonomy import Subsystem
 
 JOURNAL_BACKUP_COUNT = 2
 
@@ -100,13 +101,14 @@ class ProviderJournal:
             except BaseException:
                 self._file_handler = None
 
-    def record(self, event: str, **fields: Any) -> str | None:
+    def record(self, event: str, *, source: Subsystem, **fields: Any) -> str | None:
         try:
             at = self._now().isoformat()
             row: dict[str, Any] = {
                 "event": event,
                 "meeting_id": self._meeting_id,
                 "at": at,
+                "source": source,
             }
             row.update(_safe_value("", fields))
             line = _encode_bounded(row, self._max_bytes)
@@ -141,10 +143,13 @@ class ProviderJournal:
         started: str | None = None,
         finished: str,
         failed: str,
+        source: Subsystem,
         elapsed_key: str = "duration_ms",
         **fields: Any,
     ) -> Iterator[JournalTiming]:
-        timing = JournalTiming({"request_id": uuid.uuid4().hex, **fields}, time.monotonic())
+        timing = JournalTiming(
+            {"request_id": uuid.uuid4().hex, "source": source, **fields}, time.monotonic()
+        )
         if started is not None:
             self.record(started, **timing.fields)
         try:
@@ -161,7 +166,7 @@ class ProviderJournal:
             self.record(finished, **timing.fields)
 
     def request_started(
-        self, request_id: str | None = None, *, source: str, operation: str, **fields: Any
+        self, request_id: str | None = None, *, source: Subsystem, operation: str, **fields: Any
     ) -> str:
         identifier = request_id or uuid.uuid4().hex
         timing = JournalTiming(
@@ -180,9 +185,9 @@ class ProviderJournal:
     def _finish_request(self, request_id: str, event: str, fields: dict[str, Any]) -> None:
         timing = self._started.pop(request_id, None)
         if timing is None:
-            self.record(event, request_id=request_id, elapsed_ms=None, **fields)
+            self.record(event, request_id=request_id, duration_ms=None, **fields)
             return
-        self.record(event, **{**timing.fields, "elapsed_ms": timing.elapsed_ms, **fields})
+        self.record(event, **{**timing.fields, "duration_ms": timing.elapsed_ms, **fields})
 
 
 def _encode_bounded(row: dict[str, Any], max_bytes: int) -> str:

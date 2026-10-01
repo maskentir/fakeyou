@@ -162,7 +162,7 @@ async def test_callback_failure_degrades_without_killing_session(
         report = reporter.report()
         assert report is not None
         kinds = {entry["kind"]: entry["count"] for entry in report["faults"]["kinds"]}
-        assert kinds.get("callback", 0) >= 1
+        assert kinds.get("callback_failed", 0) >= 1
 
 
 async def test_startup_provider_error_fails_before_timeout() -> None:
@@ -717,9 +717,9 @@ async def test_stt_reconnect_lifecycle_is_journaled(
     assert stt.calls == 1
     assert session.reconnect_state() == "idle"
     rows = journal.events()
-    assert [(row["event"], row["outcome"]) for row in rows] == [
-        ("stt_reconnect", "queued"),
-        ("stt_reconnect", "ok"),
+    assert [(row["event"], row["source"]) for row in rows] == [
+        ("stt_reconnect_queued", "stt"),
+        ("stt_reconnect_finished", "stt"),
     ]
     assert rows[0]["reason"] == "deaf"
     assert rows[1]["attempts"] == 1
@@ -808,8 +808,8 @@ async def test_capture_observer_journals_speech_boundaries(
 
     rows = journal.events()
     assert [(row["event"], row["source"]) for row in rows] == [
-        ("speech_started", "capture"),
-        ("speech_stopped", "capture"),
+        ("speech_started", "audio"),
+        ("speech_stopped", "audio"),
     ]
     assert all(row["at"] for row in rows)
 
@@ -862,7 +862,11 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         session.raise_if_failed()
     journal.close()
 
-    callbacks = [row for row in read_journal(path) if row["event"] == "callback_fault"]
+    callbacks = [
+        row
+        for row in read_journal(path)
+        if row["event"] == "fault_recorded" and row["kind"] == "callback_failed"
+    ]
     assert len(callbacks) == 1
     assert callbacks[0]["meeting_id"] == "meeting-7"
     assert callbacks[0]["at"]

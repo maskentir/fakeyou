@@ -589,8 +589,8 @@ async def join_meeting(
             from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
         ) -> None:
             journal.record(
-                "conversation_transition",
-                source="conversation",
+                "conversation_transitioned",
+                source="agent",
                 from_phase=from_phase,
                 to_phase=to_phase,
                 detail=detail,
@@ -603,7 +603,7 @@ async def join_meeting(
                 ends_with_question=event.text.rstrip().endswith("?"),
                 detail=event.detail,
             )
-            if event.name == "speak_finished":
+            if event.name == "playback_finished":
                 record.add_twin_speech(event.text)
 
         if conversation_enabled and result is None:
@@ -625,8 +625,9 @@ async def join_meeting(
         async def transcript(frame: TranscriptionFrame) -> None:
             event = transcript_event(frame)
             journal.record(
-                "transcript_final",
-                source=event.source,
+                "transcript_finalized",
+                source="stt",
+                origin=event.source,
                 transcript_id=event.id,
                 participant=event.participant,
                 spoken_at=event.timestamp,
@@ -684,7 +685,8 @@ async def join_meeting(
             else _FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
         )
         journal.record(
-            "session_result",
+            "session_finished",
+            source="cli",
             phase=result.phase,
             terminal_reason=result.terminal_reason,
             exit_code=exit_code,
@@ -703,7 +705,12 @@ async def join_meeting(
                 )
             except Exception as error:
                 faults.record(classify_exception("memory_ingest", error))
-        journal.record("cli_exit", terminal_reason=result.terminal_reason, exit_code=exit_code)
+        journal.record(
+            "cli_exited",
+            source="cli",
+            terminal_reason=result.terminal_reason,
+            exit_code=exit_code,
+        )
     print(
         json.dumps(
             {

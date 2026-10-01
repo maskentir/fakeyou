@@ -522,7 +522,7 @@ class SessionRun(dict[str, Any]):
     def __init__(self) -> None:
         super().__init__()
         self.effect: Callable[..., Awaitable[Any]] | None = None
-        self.result = {"phase": "ended", "terminal_reason": "owner_stop", "detail": "ok"}
+        self.result = {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
 
     async def __call__(self, config: Any, **kwargs: Any) -> Any:
         self["config"] = config
@@ -662,7 +662,7 @@ class FakeReplyAudio(FakeAudio):
     async def speak(self, text: str) -> None:
         self.spoken.append(text)
         if self.on_playback_event is not None:
-            self.on_playback_event(PlaybackEvent("speak_finished", text))
+            self.on_playback_event(PlaybackEvent("playback_finished", text))
 
     async def stop_playback(self) -> None:
         self.stops += 1

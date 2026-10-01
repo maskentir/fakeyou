@@ -71,7 +71,7 @@ async def test_audio_is_ready_before_join_and_stops_before_leave(open_audio, ses
         session.config, open_audio=open_audio, initial_speech="Hello", **session.kwargs
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
     assert session.events == [
         "audio_started",
         "admitted",
@@ -113,7 +113,7 @@ async def test_owner_stop_during_audio_startup_never_joins(session):
     result = await runtime.run_meeting_session(
         session.config, open_audio=open_audio, **session.kwargs
     )
-    assert result.terminal_reason == "owner_stop"
+    assert result.terminal_reason == "stopped_by_owner"
     assert session.events == ["audio_start_cancelled", "browser_closed"]
 
 
@@ -170,7 +170,9 @@ async def test_camera_failure_is_recorded_without_failing_session(
     )
     assert result.terminal_reason != "audio_failure"
     assert "leave" in session.events
-    assert any(entry.source == "camera" for entry in reporter.summaries())
+    assert any(
+        (entry.source, entry.operation) == ("browser", "camera") for entry in reporter.summaries()
+    )
 
 
 async def test_session_duration_counts_from_admission(session, monkeypatch):
@@ -213,7 +215,7 @@ async def test_session_duration_counts_from_admission(session, monkeypatch):
         monotonic=clock.monotonic,
         **session.kwargs,
     )
-    assert result.terminal_reason == "duration_limit"
+    assert result.terminal_reason == "duration_limit_reached"
     assert clock.sleeps[:2] == [50.0, 30.0]
     assert clock.now - admitted_at[0] == 100.0
 
@@ -226,7 +228,7 @@ async def test_conversation_binds_after_audio_and_closes_before_leave(open_audio
         session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
     assert conversation.bound is not None
     assert session.events == [
         "audio_started",
@@ -249,7 +251,7 @@ async def test_conversation_failure_keeps_listening_until_owner_stop(open_audio,
         session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
     assert "left" in result.detail
     assert session.events == [
         "audio_started",
@@ -288,7 +290,7 @@ async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session)
         timeout=1,
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
     assert conversation.bound is None
     assert session.events == [
         "admitted",
@@ -430,7 +432,7 @@ async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
         session.config, open_audio=open_audio, faults=reporter, **session.kwargs
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
     assert result.detail == "left [stt_degraded: timeoutx2]"
 
 
@@ -539,7 +541,7 @@ async def test_stop_during_preflight_returns_owner_stop(session):
     kwargs["open_page"] = counting_page
     result = await runtime.run_meeting_session(session.config, preflight=hanging, **kwargs)
 
-    assert result.terminal_reason == "owner_stop"
+    assert result.terminal_reason == "stopped_by_owner"
     assert opened == []
 
 
@@ -597,7 +599,7 @@ async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
         session.config, open_audio=open_audio, **session.kwargs
     )
 
-    assert result.terminal_reason == "admitted_then_stopped"
+    assert result.terminal_reason == "left_by_owner"
 
 
 @pytest.mark.parametrize("leave_raises", [False, True])
@@ -649,9 +651,9 @@ async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_ad
         json.loads(line)["event"] for line in lines if json.loads(line).get("source") == "runtime"
     ]
     assert milestones == [
-        "audio_ready",
+        "audio_opened",
         "join_requested",
-        "join_result",
+        "join_finished",
         "microphone_enabled",
         "conversation_bound",
     ]

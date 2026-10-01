@@ -30,7 +30,6 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 
-from fakeyou.callbacks import record_consumer_fault
 from fakeyou.deaf import (
     CaptureActivity,
     DeafMonitor,
@@ -38,7 +37,7 @@ from fakeyou.deaf import (
     audio_duration_ms,
     rms_level,
 )
-from fakeyou.faults import Fault, FaultReporter
+from fakeyou.faults import Fault, FaultReporter, record_consumer_fault
 from fakeyou.invariants import AGENT_MIC_SOURCE_NAME as AGENT_MIC_SOURCE_NAME
 from fakeyou.invariants import AGENT_SINK_NAME as AGENT_SINK_NAME
 from fakeyou.invariants import CAPTURE_SAMPLE_RATE as CAPTURE_SAMPLE_RATE
@@ -155,7 +154,7 @@ class _CaptureObserver(FrameProcessor):
 
     def _record(self, event: str) -> None:
         if self._journal is not None:
-            self._journal.record(event, source="capture")
+            self._journal.record(event, source="audio")
 
 
 class _TranscriptObserver(FrameProcessor):
@@ -201,7 +200,11 @@ class _TranscriptObserver(FrameProcessor):
                     raise
                 except Exception as error:
                     record_consumer_fault(
-                        self._reporter, "transcript_consumer", error, journal=self._journal
+                        self._reporter,
+                        self._journal,
+                        source="stt",
+                        detail="transcript_consumer",
+                        error=error,
                     )
         await self.push_frame(frame, direction)
 
@@ -322,13 +325,13 @@ class MeetingAudioSession:
             if self._reporter is not None:
                 self._reporter.record(Fault(source="stt", kind="reconnect_unsupported"))
             if self._journal is not None:
-                self._journal.record("stt_reconnect", outcome="unsupported", reason=reason)
+                self._journal.record("stt_reconnect_skipped", source="stt", reason=reason)
             return
         self._reconnect_state = "queued"
         self._reconnect_since = self._now()
         self._reconnect_attempts = 0
         if self._journal is not None:
-            self._journal.record("stt_reconnect", outcome="queued", reason=reason)
+            self._journal.record("stt_reconnect_queued", source="stt", reason=reason)
 
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
@@ -381,8 +384,8 @@ class MeetingAudioSession:
                     self._reporter.record(fault)
                 if self._journal is not None:
                     self._journal.record(
-                        "stt_reconnect",
-                        outcome="failed",
+                        "stt_reconnect_failed",
+                        source="stt",
                         kind=fault.kind,
                         attempts=self._reconnect_attempts,
                     )
@@ -394,8 +397,8 @@ class MeetingAudioSession:
                 self._reconnect_state = "idle"
                 if self._journal is not None:
                     self._journal.record(
-                        "stt_reconnect",
-                        outcome="ok",
+                        "stt_reconnect_finished",
+                        source="stt",
                         attempts=self._reconnect_attempts,
                     )
             return verdict
@@ -624,6 +627,8 @@ async def open_meeting_audio(
             if native_transport and transport is not None:
                 _terminate_native_audio(transport)
         for cleanup_error in cleanup_errors:
-            record_consumer_fault(fault_reporter, "audio_cleanup", cleanup_error, journal=journal)
+            record_consumer_fault(
+                fault_reporter, journal, source="audio", detail="audio_cleanup", error=cleanup_error
+            )
         if cleanup_errors and original_error is None:
             raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]

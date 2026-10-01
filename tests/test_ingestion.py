@@ -136,10 +136,9 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
         2,
         True,
     )
-    assert [row["outcome"] for row in rows if row["event"] == "memory_episode"] == [
-        "extracted",
-        "extracted",
-    ]
+    assert [
+        (row["event"], row["facts"]) for row in rows if row["event"].startswith("memory_episode")
+    ] == [("memory_episode_ingested", 1), ("memory_episode_ingested", 1)]
     [finished] = [row for row in rows if row["event"] == "memory_ingest_finished"]
     assert (finished["windows"], finished["ingested"], finished["completed"]) == (2, 2, True)
 
@@ -178,7 +177,7 @@ async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> N
     resumed, _rows = await run(memory, entries)
 
     assert (result.ingested, result.completed) == (1, False)
-    assert [(row["source"], row["kind"]) for row in rows if row["event"] == "fault"] == [
+    assert [(row["source"], row["kind"]) for row in rows if row["event"] == "fault_recorded"] == [
         ("memory_ingest", "unknown")
     ]
     assert "secret graph detail" not in json.dumps(rows)
@@ -197,7 +196,7 @@ async def test_ingest_times_out_a_hung_window() -> None:
     result, rows = await run(memory, [said(0, "Stuck.")], episode_timeout_seconds=0.01)
 
     assert (result.ingested, result.completed) == (0, False)
-    assert [row["kind"] for row in rows if row["event"] == "fault"] == ["timeout"]
+    assert [row["kind"] for row in rows if row["event"] == "fault_recorded"] == ["timeout"]
 
 
 async def test_ingest_stops_between_windows_when_requested() -> None:

@@ -3,12 +3,14 @@ from collections.abc import Awaitable, Callable
 
 from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
+from fakeyou.taxonomy import Subsystem
 
 
 async def close_safely(
     close: Callable[[], Awaitable[None]],
     *,
-    source: str,
+    source: Subsystem,
+    operation: str = "close",
     faults: FaultReporter | None = None,
     timeout_seconds: float = 8.0,
 ) -> None:
@@ -17,4 +19,4 @@ async def close_safely(
             await close()
     except Exception as error:
         if faults is not None:
-            faults.record(classify_exception(source, error))
+            faults.record(classify_exception(source, error, operation=operation))

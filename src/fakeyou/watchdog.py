@@ -20,7 +20,7 @@ WatchdogEventKind = Literal[
     "manual_action_cleared",
     "manual_action_expired",
     "modal_dismissed",
-    "watchdog_error",
+    "watchdog_failed",
 ]
 
 _DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
@@ -111,7 +111,7 @@ class UIWatchdog:
                 self._quiet_checks = 0
                 return WatchdogCheck(
                     self._last_observation,
-                    (WatchdogEvent("watchdog_error", "", "TimeoutError"),),
+                    (WatchdogEvent("watchdog_failed", "", "TimeoutError"),),
                     5.0,
                 )
 
@@ -132,7 +132,7 @@ class UIWatchdog:
             self._quiet_checks = 0
             self._lobby_detail = None
             self._lobby_checks = 0
-            events.append(WatchdogEvent("watchdog_error", "", type(error).__name__))
+            events.append(WatchdogEvent("watchdog_failed", "", type(error).__name__))
             return WatchdogCheck(
                 CallObservation("unknown", "UI observation failed"),
                 tuple(events),
@@ -146,7 +146,7 @@ class UIWatchdog:
         except Exception as error:
             self._quiet_checks = 0
             self._stable.clear()
-            events.append(WatchdogEvent("watchdog_error", "", type(error).__name__))
+            events.append(WatchdogEvent("watchdog_failed", "", type(error).__name__))
             return WatchdogCheck(observation, tuple(events), 5.0)
         visible = {modal.fingerprint for modal in modals}
         self._stable = {
@@ -194,7 +194,7 @@ class UIWatchdog:
                         dismissed = True
                 except Exception as error:
                     events.append(
-                        WatchdogEvent("watchdog_error", modal.fingerprint, type(error).__name__)
+                        WatchdogEvent("watchdog_failed", modal.fingerprint, type(error).__name__)
                     )
             self._handled.add(modal.fingerprint)
             if dismissed:

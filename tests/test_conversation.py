@@ -453,7 +453,7 @@ async def test_interim_speech_interrupts_playback_after_enough_words(
     await loop.handle_interim("okay wait please")
 
     assert audio.stops == 1
-    [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
+    [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
     assert (row["trigger"], row["words"]) == ("interim", 3)
 
 
@@ -504,7 +504,7 @@ async def test_final_barge_in_is_journaled_with_its_trigger(
 
     await loop.handle_transcript(event("t1", "enough"))
 
-    [row] = [json.loads(line) for line in lines if '"barge_in"' in line]
+    [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
     assert row["trigger"] == "final"
     await loop.close()
 
@@ -523,7 +523,7 @@ async def test_one_interruption_is_journaled_and_stopped_once(
     await loop.handle_interim("wait a second please")
 
     assert audio.stops == 1
-    assert len([line for line in lines if '"barge_in"' in line]) == 1
+    assert len([line for line in lines if '"barge_in_detected"' in line]) == 1
 
 
 async def test_interim_barge_in_rearms_for_the_next_reply():

@@ -126,12 +126,11 @@ async def ingest_meeting(
         try:
             timer_journal = journal or ProviderJournal("", stdout=False)
             with timer_journal.timed(
-                finished="memory_episode",
-                failed="memory_episode",
+                finished="memory_episode_ingested",
+                failed="memory_episode_failed",
                 source="memory_ingest",
                 window=index,
                 utterances=len(window),
-                outcome="failed",
                 facts=0,
             ) as timing:
                 async with asyncio.timeout(episode_timeout_seconds):
@@ -146,9 +145,7 @@ async def ingest_meeting(
                         saga_previous_episode_uuid=previous_uuid,
                         custom_extraction_instructions=instructions,
                     )
-                timing.fields.update(
-                    outcome="extracted" if result.edges else "empty", facts=len(result.edges)
-                )
+                timing.fields.update(facts=len(result.edges))
         except Exception as error:
             if faults is not None:
                 faults.record(classify_exception("memory_ingest", error))
