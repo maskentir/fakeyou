@@ -24,6 +24,7 @@ EventVerb = Literal[
     "disabled",
     "dismissed",
     "dropped",
+    "emitted",
     "enabled",
     "exited",
     "expired",

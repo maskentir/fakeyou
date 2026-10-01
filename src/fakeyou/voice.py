@@ -228,9 +228,18 @@ async def _journaled_stream(
         try:
             async with aclosing(open_stream(text)) as chunks:
                 async for chunk in chunks:
+                    if not chunk:
+                        continue
+                    timing.fields["bytes_out"] += len(chunk)
                     if timing.fields["first_chunk_ms"] is None:
                         timing.fields["first_chunk_ms"] = timing.elapsed_ms
-                    timing.fields["bytes_out"] += len(chunk)
+                        journal.record(
+                            "synthesis_pcm_emitted",
+                            source="tts",
+                            request_id=timing.fields["request_id"],
+                            first_chunk_ms=timing.fields["first_chunk_ms"],
+                            bytes_out=timing.fields["bytes_out"],
+                        )
                     yield chunk
         except Exception as error:
             fault = classify_exception("tts", error)

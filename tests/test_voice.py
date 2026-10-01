@@ -158,12 +158,15 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
         await synthesizer.aclose()
 
     assert chunks == [b"\x00" * 64, b"\x01" * 64]
-    assert len(lines) == 2
+    assert len(lines) == 3
     [started] = journal.events("synthesis_started")
+    [first] = journal.events("synthesis_pcm_emitted")
     [finished] = journal.events("synthesis_finished")
     assert started["event"] == "synthesis_started"
     assert started["streaming"] is True
     assert started["chars"] == len("Hello.")
+    assert first["request_id"] == started["request_id"]
+    assert first["bytes_out"] == 64
     assert finished["event"] == "synthesis_finished"
     assert finished["request_id"] == started["request_id"]
     assert finished["chars"] == len("Hello.")
@@ -189,8 +192,10 @@ async def test_synthesizer_stream_failure_raises_typed_fault(journal, openai_cli
 
     assert caught.value.source == "tts"
     assert caught.value.kind == "timeout"
-    assert len(lines) == 2
+    assert len(lines) == 3
+    [first] = journal.events("synthesis_pcm_emitted")
     [failed] = journal.events("synthesis_failed")
+    assert first["bytes_out"] == 64
     assert failed["event"] == "synthesis_failed"
     assert failed["kind"] == "timeout"
     assert failed["duration_ms"] >= 0
@@ -316,6 +321,176 @@ async def test_minimax_synthesizer_closes_only_its_own_client() -> None:
     assert owned._client.is_closed
     assert not shared.is_closed
     await shared.aclose()
+
+
+async def test_first_pcm_is_reported_before_synthesis_finishes(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(
+        client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
+    )
+    stream = synthesizer.stream("Hello.")
+    try:
+        assert await anext(stream) == b"\x00\x01"
+        [first] = journal.events("synthesis_pcm_emitted")
+        assert first["first_chunk_ms"] >= 0
+        assert first["bytes_out"] == 2
+        assert journal.events("synthesis_finished") == []
+    finally:
+        await stream.aclose()
+        await synthesizer.aclose()
+
+
+async def test_first_pcm_event_carries_correlation_without_content(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(
+        client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
+    )
+    try:
+        chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+    assert chunks == [b"\x00\x01", b"\x02\x03"]
+    [started] = journal.events("synthesis_started")
+    [first] = journal.events("synthesis_pcm_emitted")
+    [finished] = journal.events("synthesis_finished")
+    started_request = started["request_id"]
+    assert set(first) == {
+        "event",
+        "meeting_id",
+        "at",
+        "source",
+        "request_id",
+        "first_chunk_ms",
+        "bytes_out",
+    }
+    assert first["source"] == "tts"
+    assert first["request_id"] == started_request
+    assert finished["request_id"] == started_request
+    assert first["bytes_out"] == 2
+    assert finished["bytes_out"] == 4
+    assert finished["first_chunk_ms"] == first["first_chunk_ms"]
+
+
+async def test_empty_chunks_are_skipped_before_first_pcm(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(
+        client=openai_client(chunks=[b"", b"\x00\x01", b""]), journal=journal
+    )
+    try:
+        chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+    assert chunks == [b"\x00\x01"]
+    [first] = journal.events("synthesis_pcm_emitted")
+    [finished] = journal.events("synthesis_finished")
+    assert first["bytes_out"] == 2
+    assert finished["bytes_out"] == 2
+    assert finished["first_chunk_ms"] == first["first_chunk_ms"]
+
+
+async def test_journaled_stream_skips_empty_chunks(journal):
+    from fakeyou.voice import _journaled_stream
+
+    async def open_stream(text):
+        assert text == "Hello."
+        yield b""
+        yield b"\x00\x01"
+        yield b""
+
+    chunks = [chunk async for chunk in _journaled_stream(journal, "Hello.", open_stream)]
+
+    assert chunks == [b"\x00\x01"]
+    [first] = journal.events("synthesis_pcm_emitted")
+    [finished] = journal.events("synthesis_finished")
+    assert first["bytes_out"] == 2
+    assert finished["bytes_out"] == 2
+
+
+async def test_empty_stream_records_no_first_pcm(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(client=openai_client(chunks=[b"", b""]), journal=journal)
+    try:
+        chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+    assert chunks == []
+    assert journal.events("synthesis_pcm_emitted") == []
+    [finished] = journal.events("synthesis_finished")
+    assert finished["bytes_out"] == 0
+    assert finished["first_chunk_ms"] is None
+
+
+async def test_failure_before_first_pcm_records_no_first_pcm(openai_client, journal):
+    from fakeyou.provider_faults import ProviderFault
+
+    synthesizer = OpenAISpeechSynthesizer(
+        api_key="k",
+        client=openai_client(chunks=[], stream_error=httpx2.ReadTimeout("stalled")),
+        journal=journal,
+    )
+    try:
+        with pytest.raises(ProviderFault):
+            [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+    assert journal.events("synthesis_pcm_emitted") == []
+    assert len(journal.events("synthesis_failed")) == 1
+
+
+async def test_failure_after_first_pcm_keeps_the_first_pcm_proof(openai_client, journal):
+    from fakeyou.provider_faults import ProviderFault
+
+    synthesizer = OpenAISpeechSynthesizer(
+        api_key="k",
+        client=openai_client(chunks=[b"\x00\x01"], stream_error=httpx2.ReadTimeout("stalled")),
+        journal=journal,
+    )
+    try:
+        with pytest.raises(ProviderFault):
+            [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+    [first] = journal.events("synthesis_pcm_emitted")
+    [failed] = journal.events("synthesis_failed")
+    assert first["bytes_out"] == 2
+    assert failed["request_id"] == first["request_id"]
+    assert journal.events("synthesis_finished") == []
+
+
+async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(openai_client, journal):
+    synthesizer = OpenAISpeechSynthesizer(
+        client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
+    )
+    stream = synthesizer.stream("Hello.")
+    try:
+        assert await anext(stream) == b"\x00\x01"
+    finally:
+        await stream.aclose()
+        await synthesizer.aclose()
+    [first] = journal.events("synthesis_pcm_emitted")
+    assert first["bytes_out"] == 2
+    assert journal.events("synthesis_finished") == []
+
+
+async def test_minimax_first_pcm_is_reported_once(journal):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            content=_sse(
+                {"data": {"audio": "0001", "status": 1}, "base_resp": {"status_code": 0}},
+                {"data": {"audio": "0203", "status": 1}, "base_resp": {"status_code": 0}},
+            ),
+        )
+
+    synthesizer = MiniMaxSpeechSynthesizer(
+        api_key="k",
+        client=_minimax_client(handler),
+        journal=journal,
+    )
+    chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+    assert chunks == [b"\x00\x01", b"\x02\x03"]
+    [first] = journal.events("synthesis_pcm_emitted")
+    [finished] = journal.events("synthesis_finished")
+    assert first["source"] == "tts"
+    assert first["bytes_out"] == 2
+    assert finished["bytes_out"] == 4
+    assert finished["request_id"] == first["request_id"]
 
 
 def test_create_speech_synthesizer_picks_provider_defaults() -> None:

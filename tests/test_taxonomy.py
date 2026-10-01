@@ -49,6 +49,10 @@ def test_the_scan_finds_the_journal_events() -> None:
     assert len({event for _file, _line, event, _node in JOURNAL_CALLS}) >= 30
 
 
+def test_event_verbs_include_first_pcm_emission() -> None:
+    assert "emitted" in get_args(EventVerb)
+
+
 @pytest.mark.parametrize("call", JOURNAL_CALLS, ids=_event_id)
 def test_journal_event_names_end_with_a_controlled_past_participle(call) -> None:
     _file, _line, event, _node = call
