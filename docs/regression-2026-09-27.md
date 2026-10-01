@@ -10,7 +10,7 @@
 | `uv run ruff format --check .` | PASS | 25 files already formatted |
 | `uv run mypy` | PASS | 7 source files, 0 issues |
 | `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest` | PASS | 19 passed, browser and live Muse deselected |
-| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py` | PASS | 1 passed, 100% pass rate |
+| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent_eval.py` | PASS | 1 passed, 100% pass rate |
 | `uv run pytest tests/test_browser.py -m browser` | PASS | 1 passed, 1 non-browser test deselected |
 | `uv lock --check` | PASS | Lockfile is current |
 | `uv pip check` | PASS | Installed packages compatible |

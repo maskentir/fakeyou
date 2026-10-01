@@ -60,9 +60,9 @@ async def test_meta_stt_drops_diarization_speaker_labels() -> None:
     async def no_metrics(*_args, **_kwargs):
         return None
 
-    stt.push_frame = collect  # type: ignore[method-assign]
-    stt.emit_stt_usage_metrics = no_metrics  # type: ignore[method-assign]
-    stt._trace_transcription = no_metrics  # type: ignore[method-assign]
+    stt.push_frame = collect
+    stt.emit_stt_usage_metrics = no_metrics
+    stt._trace_transcription = no_metrics
     await stt._handle_message({"type": "speaker", "label": "A"})
     await stt._handle_message({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
 

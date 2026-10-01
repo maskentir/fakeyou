@@ -29,7 +29,7 @@ Fondasi guest, audio dua arah, dan conversation loop sudah tersedia. Live conver
 | `compose.yaml` | Worker memakai `bolt://neo4j:7687` (override `FAKEYOU_WORKER_NEO4J_URI`) dan mount `examples/` read-only |
 | `examples/persona.example.json` | Profil sintetis Rani Twin/Orchid |
 | `tests/test_persona.py`, `tests/test_cli.py`, `tests/test_memory.py` | Validasi, isolasi, wiring, failure path |
-| `tests/test_providers_live.py` | Isolasi dua namespace Graphiti setelah reopen |
+| `tests/test_providers.py` | Isolasi dua namespace Graphiti setelah reopen |
 | `evals/test_persona.py` | Wiring deterministik dan penilaian kualitas live |
 
 ### Kontrak profil
@@ -114,7 +114,7 @@ Dijalankan 30 September 2026 pada sesi `acc-0930-s1` dan `acc-0930-s2`; lihat [a
 | Ruff check/format, strict mypy | Lulus |
 | DeepEval deterministik (`test_meeting_agent.py`, `test_persona.py`) | 1 + 3 lulus |
 | DeepEval live `test_persona.py -m live` (judge `gpt-4.1-mini`, threshold 0.7) | 5/5 lulus pada tiga run berturut-turut setelah perbaikan prompt; run pertama sebelum perbaikan 4/5 (recall tidak dipanggil) |
-| Provider live `tests/test_providers_live.py -m live` | 4/4 lulus pada 5 dari 6 run; 1 run gagal pada satu tes tanpa pesan yang tertangkap |
+| Provider live `tests/test_providers.py -m live` | 4/4 lulus pada 5 dari 6 run; 1 run gagal pada satu tes tanpa pesan yang tertangkap |
 | `uv build`, `docker compose --profile production config` | Lulus |
 
 Flake live yang diketahui: ekstraksi Graphiti bersifat nondeterministik. Dalam lima eksekusi script debug, satu episode menghasilkan `edges: []` sehingga tidak ada fakta yang dapat di-recall. Tes isolasi kini memisahkan kegagalan ekstraksi ("Graphiti extraction produced no fact edge") dari kegagalan isolasi. Kegagalan satu dari enam run penuh kemungkinan besar berasal dari sini, tetapi pesannya tidak tertangkap sehingga belum terbukti. Tidak ada run yang menunjukkan fakta namespace lain muncul.

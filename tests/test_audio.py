@@ -773,7 +773,7 @@ async def test_capture_observer_meters_frame_energy() -> None:
     async def sink(frame, direction):
         return None
 
-    observer.push_frame = sink  # type: ignore[method-assign]
+    observer.push_frame = sink
     tone = struct.pack("<320h", *[int(16384 * math.sin(i / 10)) for i in range(320)])
     await observer.process_frame(
         InputAudioRawFrame(audio=tone, sample_rate=16000, num_channels=1),
@@ -801,7 +801,7 @@ async def test_capture_observer_journals_speech_boundaries(
     async def sink(frame, direction):
         return None
 
-    observer.push_frame = sink  # type: ignore[method-assign]
+    observer.push_frame = sink
     await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)

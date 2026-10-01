@@ -1,9 +1,9 @@
 # Live provider verification — 2026-09-28
 
-The opt-in checks in `tests/test_providers_live.py` exercise the native library factories with the configured `.env` credentials. They use synthetic text and a short generated speech sample. Run them from the repository root with:
+The opt-in checks in `tests/test_providers.py` exercise the native library factories with the configured `.env` credentials. They use synthetic text and a short generated speech sample. Run them from the repository root with:
 
 ```sh
-uv run --no-sync pytest -m live tests/test_providers_live.py -q --tb=short
+uv run --no-sync pytest -m live tests/test_providers.py -q --tb=short
 ```
 
 Result on 2026-09-28: **3 passed, 3 warnings in 20.84s**.

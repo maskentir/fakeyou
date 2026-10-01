@@ -230,10 +230,10 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
-DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent.py
+DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent_eval.py
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona_eval.py
-DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_replay.py
-uv run pytest tests/test_browser.py tests/test_meeting_browser.py -m browser
+DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_replay_eval.py
+uv run pytest tests/test_browser.py tests/test_runtime_meeting.py -m browser
 uv run pytest tests/test_worker_image.py -m container
 uv build
 docker compose --profile production config --quiet
@@ -243,11 +243,11 @@ Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke t
 
 ```sh
 uv run --env-file .env deepeval test run evals/test_persona_eval.py -m live
-uv run --env-file .env pytest evals/test_replay.py -m live -s
-uv run --env-file .env pytest tests/test_providers_live.py -m live
+uv run --env-file .env pytest evals/test_replay_eval.py -m live -s
+uv run --env-file .env pytest tests/test_providers.py -m live
 ```
 
-`evals/test_replay.py` memutar transkrip STT nyata dari sesi `acc-0930-s1`/`s2` ke model yang sedang dikonfigurasi dalam satu thread per sesi, tiga kali, lalu menghitung pass rate fakta wajib/terlarang, recall, batas dua kalimat, pertanyaan penutup, dan latency p95. Mengganti model jawaban lisan harus lolos replay ini.
+`evals/test_replay_eval.py` memutar transkrip STT nyata dari sesi `acc-0930-s1`/`s2` ke model yang sedang dikonfigurasi dalam satu thread per sesi, tiga kali, lalu menghitung pass rate fakta wajib/terlarang, recall, batas dua kalimat, pertanyaan penutup, dan latency p95. Mengganti model jawaban lisan harus lolos replay ini.
 
 Eval persona live memerlukan `EVAL_JUDGE_API_KEY` tersendiri untuk judge OpenAI; key jawaban aktif tidak dipinjam. Variabel ini hanya untuk evaluator, bukan runtime.
 

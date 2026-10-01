@@ -138,7 +138,7 @@ Bukti:
 Selesai di branch `feat/memory-ingestion`:
 
 - Aturan penutup (`ENDING_RULE`) menjadi bagian terakhir prompt default dan persona. Aturan asal fakta (`PROVENANCE_RULE`) ditempatkan tepat sebelumnya bila recall diizinkan; kalimat yang sama di tengah prompt dicabut.
-- Eval replay `evals/test_replay.py` memutar transkrip STT nyata `acc-0930-s1`/`s2` (termasuk salah dengar) lewat `LangGraphResponder` produksi, tiga kali, dengan memori per sesi dari hasil replay ingestion. Pemeriksaan deterministik: jawaban ada, fakta wajib/terlarang, recall dipanggil, maksimal dua kalimat, pertanyaan penutup ≤ 20%, dan latency p95 ≤ 4 detik. Pass rate wajib 0,9. Logika penilaian diuji offline dan berjalan di CI.
+- Eval replay `evals/test_replay_eval.py` memutar transkrip STT nyata `acc-0930-s1`/`s2` (termasuk salah dengar) lewat `LangGraphResponder` produksi, tiga kali, dengan memori per sesi dari hasil replay ingestion. Pemeriksaan deterministik: jawaban ada, fakta wajib/terlarang, recall dipanggil, maksimal dua kalimat, pertanyaan penutup ≤ 20%, dan latency p95 ≤ 4 detik. Pass rate wajib 0,9. Logika penilaian diuji offline dan berjalan di CI.
 - Model cadangan `FAKEYOU_FALLBACK_CHAT_*` lewat `ModelFallbackMiddleware`. Timeout panggilan model jawaban turun dari 60 ke 20 detik; model utama tidak di-retry bila cadangan aktif; host cadangan tidak ikut preflight.
 
 Bukti:

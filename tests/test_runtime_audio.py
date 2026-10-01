@@ -379,13 +379,6 @@ def _faulty_reporter():
 
 
 class _ScriptedMaintenanceAudio(FakeAudio):
-    """Audio fake whose maintenance_tick follows a script.
-
-    Each entry is ("repair", verdict) to queue a reconnect and return the
-    verdict, or ("terminal", detail) to raise MeetingAudioError. Once the
-    script is exhausted the fake keeps returning "hearing" without new requests.
-    """
-
     def __init__(self, events, script):
         super().__init__(events)
         self._script = list(script)

@@ -319,7 +319,7 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
         assert task is not None
         task.cancel()
         raise BrokenPipeError(32, "Broken pipe")
-        yield b""  # unreachable: marks this body as an async generator
+        yield b""
 
     with pytest.raises(asyncio.CancelledError):
         await create_paplay_stream_runner(sink="agent_output", rate=24000)(fail_while_cancelling())

@@ -149,7 +149,7 @@ def test_profile_is_immutable() -> None:
     loaded = profile()
 
     with pytest.raises(ValidationError):
-        loaded.owner_id = "owner-b"  # type: ignore[misc]
+        loaded.owner_id = "owner-b"
     assert isinstance(loaded.verified_facts, tuple)
     assert isinstance(loaded.allowed_tools, frozenset)
 
@@ -266,7 +266,7 @@ async def test_recall_tool_arguments_cannot_select_another_group() -> None:
     other_group = profile(owner_id="owner-b").memory_group
     recall = next(
         tool
-        for tool in create_memory_tools(memory, group_id=group)  # type: ignore[arg-type]
+        for tool in create_memory_tools(memory, group_id=group)
         if tool.name == "recall_meeting_context"
     )
 

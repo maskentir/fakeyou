@@ -114,7 +114,7 @@ CLI yang diusulkan: `fakeyou join <link> --twin-name ... --owner ...`, berjalan 
 | Penolakan host | Manual/live | Status `denied_by_host`, bukan timeout generik |
 | Replay/reconnect | pytest + live | Tidak ada join/leave ganda |
 
-Evaluasi DeepEval tahap ini tetap deterministik: trajectory tool adapter (navigasi → isi nama → ask-to-join → observasi), mengikuti pola `evals/test_meeting_agent.py`, bukan kualitas penalaran.
+Evaluasi DeepEval tahap ini tetap deterministik: trajectory tool adapter (navigasi → isi nama → ask-to-join → observasi), mengikuti pola `evals/test_meeting_agent_eval.py`, bukan kualitas penalaran.
 
 ## Status implementasi
 

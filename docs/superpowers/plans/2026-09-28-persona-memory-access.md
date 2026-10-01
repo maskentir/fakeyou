@@ -37,7 +37,7 @@
 | `src/fakeyou/cli.py` | Load optional persona and compose the existing agent with permitted tools |
 | `tests/test_persona.py` (new) | Validation, namespace isolation, prompt data |
 | `tests/test_cli.py` | CLI contract and actual composed tool list |
-| `tests/test_providers_live.py` | Opt-in isolation check using synthetic facts in disposable groups |
+| `tests/test_providers.py` | Opt-in isolation check using synthetic facts in disposable groups |
 | `README.md`, `docs/project-status.md` | Commands, compatibility notes, measured verification |
 
 ## Task 1: profile contract and owner identity

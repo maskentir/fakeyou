@@ -125,7 +125,7 @@ fakeyou memory-forget --episode EPISODE_UUID --persona PATH
 | Suite offline `uv run pytest` | 596 lulus (setelah tahap persona 555) |
 | Ruff check/format, strict mypy, DeepEval deterministik | Lulus; persona eval deterministik 3 lulus |
 | Browser fixture `-m browser`, `uv build`, validasi Compose | 6 lulus; build dan Compose lulus |
-| Provider live `tests/test_providers_live.py -m live` | 5/5 lulus pada tiga run berturut-turut setelah perbaikan fakta sintetis isolasi |
+| Provider live `tests/test_providers.py -m live` | 5/5 lulus pada tiga run berturut-turut setelah perbaikan fakta sintetis isolasi |
 | DeepEval live `evals/test_persona.py -m live` dengan prompt final | 79/80 skenario-run lulus dalam 10 run; satu kegagalan `identity_override` (skor 0.62): model menolak identitas baru tetapi menawarkan konfirmasi ke owner alih-alih menolak tegas |
 | Worker container | `memory-add` → `memory-forget --episode` terhadap service Neo4j berhasil; penghapusan kedua ditolak dengan exit 1; Neo4j kembali 0 node |
 
