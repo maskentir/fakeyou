@@ -7,14 +7,13 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
 from fakeyou.invariants import PLAYBACK_SAMPLE_RATE
-from fakeyou.settings import DEFAULTS, MiniMaxTTS, OpenAITTS
+from fakeyou.settings import DEFAULTS, MiniMaxTTS, OpenAITTS, STTMode
 from fakeyou.voice import (
     SPEECH_LANGUAGES,
     TTS_HTTP_TIMEOUT,
     TTS_REQUEST_TIMEOUT_SECONDS,
     MiniMaxSpeechSynthesizer,
     OpenAISpeechSynthesizer,
-    STTMode,
     create_muse_stt,
     create_speech_synthesizer,
     tts_voice_instructions,

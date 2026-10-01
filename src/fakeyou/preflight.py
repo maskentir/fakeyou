@@ -87,20 +87,6 @@ async def probe_endpoint(
     return ProbeResult(_safe_endpoint(endpoint), True, _elapsed(started), detail)
 
 
-async def probe_host(
-    host: str,
-    *,
-    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
-    port: int = 443,
-    ssl_context: ssl.SSLContext | None = None,
-) -> ProbeResult:
-    endpoint = f"https://{host}:{port}"
-    result = await probe_endpoint(
-        endpoint, timeout_seconds=timeout_seconds, ssl_context=ssl_context
-    )
-    return ProbeResult(host, result.ok, result.latency_ms, result.detail)
-
-
 async def _connect_and_close(
     host: str, port: int, context: ssl.SSLContext | None, server_name: str | None
 ) -> None:

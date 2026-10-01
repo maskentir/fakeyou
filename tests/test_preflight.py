@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.preflight import ProbeResult, probe_host, run_preflight
+from fakeyou.preflight import ProbeResult, probe_endpoint, run_preflight
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LOCAL_CERT = FIXTURES / "preflight-localhost.pem"
@@ -29,36 +29,34 @@ async def _serve_tls_once() -> tuple:
     return server
 
 
-async def test_probe_host_succeeds_against_local_tls_stub() -> None:
+async def test_probe_endpoint_succeeds_against_local_tls_stub() -> None:
     server = await _serve_tls_once()
     port = server.sockets[0].getsockname()[1]
     try:
-        result = await probe_host(
-            "127.0.0.1",
-            timeout_seconds=5.0,
-            port=port,
-            ssl_context=_trusting_client_context(),
+        endpoint = f"https://127.0.0.1:{port}"
+        result = await probe_endpoint(
+            endpoint, timeout_seconds=5.0, ssl_context=_trusting_client_context()
         )
     finally:
         server.close()
         await server.wait_closed()
 
     assert result.ok is True
-    assert result.host == "127.0.0.1"
+    assert result.host == "<url>"
     assert result.latency_ms >= 0
     assert json.dumps(result.detail) != ""
 
 
-async def test_probe_host_reports_closed_port() -> None:
-    result = await probe_host("127.0.0.1", timeout_seconds=2.0, port=9)
+async def test_probe_endpoint_reports_closed_port() -> None:
+    result = await probe_endpoint("https://127.0.0.1:9", timeout_seconds=2.0)
 
     assert result.ok is False
     assert "Error" in result.detail or "error" in result.detail.lower()
     assert result.latency_ms >= 0
 
 
-async def test_probe_host_never_raises_on_garbage() -> None:
-    result = await probe_host("not a host !@#", timeout_seconds=2.0)
+async def test_probe_endpoint_never_raises_on_garbage() -> None:
+    result = await probe_endpoint("not a host !@#", timeout_seconds=2.0)
 
     assert result.ok is False
     assert result.detail != ""
@@ -141,7 +139,7 @@ async def test_run_preflight_never_raises() -> None:
 
 @pytest.mark.live
 async def test_live_tls_to_openai_opt_in() -> None:
-    result = await probe_host("api.openai.com", timeout_seconds=10.0)
+    result = await probe_endpoint("https://api.openai.com", timeout_seconds=10.0)
 
     assert result.ok is True
 
