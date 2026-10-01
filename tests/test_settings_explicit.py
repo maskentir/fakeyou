@@ -130,7 +130,9 @@ async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeyp
         }
     )
     monkeypatch.setattr(
-        module, "create_graphiti_memory", lambda _: pytest.fail("must validate before opening")
+        module,
+        "create_graphiti_memory",
+        lambda _, **_kwargs: pytest.fail("must validate before opening"),
     )
     with pytest.raises(ValueError, match="EMBEDDING_DIM"):
         async with open_graphiti_memory(config):

@@ -1,7 +1,7 @@
 import asyncio
 import re
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
@@ -34,6 +34,7 @@ from graphiti_core.prompts.models import Message
 from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fakeyou.faults import FaultReporter
@@ -104,7 +105,9 @@ class AnthropicReranker(CrossEncoderClient):
         return sorted(zip(passages, scores, strict=True), key=lambda item: item[1], reverse=True)
 
 
-def create_graphiti_memory(config: MemorySettings) -> Graphiti:
+def create_graphiti_memory(
+    config: MemorySettings, *, resources: AsyncExitStack | None = None
+) -> Graphiti:
     role = config.llm
     llm_endpoint = role.resolved_base_url
     llm_key = require_secret(role.api_key, "FAKEYOU_MEMORY__LLM__API_KEY")
@@ -115,41 +118,54 @@ def create_graphiti_memory(config: MemorySettings) -> Graphiti:
         small_model=role.small_model,
         base_url=llm_endpoint,
     )
-    llm_client = (
-        AnthropicClient(
-            config=llm_config,
-            client=GraphitiAnthropicSDK(api_key=llm_key, base_url=llm_endpoint),
-        )
-        if isinstance(role, AnthropicMemoryLLM)
-        else {OpenAIMemoryLLM: OpenAIClient, GenericMemoryLLM: OpenAIGenericClient}[type(role)](
-            config=llm_config
-        )
-    )
+    if isinstance(role, AnthropicMemoryLLM):
+        anthropic_sdk = GraphitiAnthropicSDK(api_key=llm_key, base_url=llm_endpoint)
+        if resources is not None:
+            resources.push_async_callback(anthropic_sdk.close)
+        llm_client = AnthropicClient(config=llm_config, client=anthropic_sdk)
+    else:
+        openai_sdk = AsyncOpenAI(api_key=llm_key, base_url=llm_endpoint)
+        if resources is not None:
+            resources.push_async_callback(openai_sdk.close)
+        llm_client = {OpenAIMemoryLLM: OpenAIClient, GenericMemoryLLM: OpenAIGenericClient}[
+            type(role)
+        ](config=llm_config, client=openai_sdk)
+    embedding_sdk = AsyncOpenAI(api_key=embedding_key, base_url=config.embedder.resolved_base_url)
+    if resources is not None:
+        resources.push_async_callback(embedding_sdk.close)
     embedder = OpenAIEmbedder(
         config=OpenAIEmbedderConfig(
             api_key=embedding_key,
             base_url=config.embedder.resolved_base_url,
             embedding_model=config.embedder.model,
             embedding_dim=config.embedder.dim,
-        )
+        ),
+        client=embedding_sdk,
     )
-    cross_encoder = (
-        AnthropicReranker(llm_client)
-        if isinstance(llm_client, AnthropicClient)
-        else OpenAIRerankerClient(config=llm_config)
-    )
+    if isinstance(llm_client, AnthropicClient):
+        cross_encoder = AnthropicReranker(llm_client)
+    else:
+        reranker_sdk = AsyncOpenAI(api_key=llm_key, base_url=llm_endpoint)
+        if resources is not None:
+            resources.push_async_callback(reranker_sdk.close)
+        cross_encoder = OpenAIRerankerClient(config=llm_config, client=reranker_sdk)
     driver = Neo4jDriver(
         uri=config.store.uri,
         user=config.store.user,
         password=require_secret(config.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD"),
         database=config.store.database,
     )
-    return Graphiti(
-        graph_driver=driver,
-        llm_client=llm_client,
-        embedder=embedder,
-        cross_encoder=cross_encoder,
-    )
+    try:
+        return Graphiti(
+            graph_driver=driver,
+            llm_client=llm_client,
+            embedder=embedder,
+            cross_encoder=cross_encoder,
+        )
+    except BaseException:
+        if resources is not None:
+            resources.push_async_callback(driver.close)
+        raise
 
 
 @asynccontextmanager
@@ -160,7 +176,16 @@ async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti
             "export EMBEDDING_DIM before startup"
         )
     async with AsyncExitStack() as resources:
-        memory = await asyncio.to_thread(create_graphiti_memory, config)
+        construction = asyncio.create_task(
+            asyncio.to_thread(create_graphiti_memory, config, resources=resources)
+        )
+        try:
+            memory = await asyncio.shield(construction)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                memory = await construction
+                resources.push_async_callback(memory.close)
+            raise
         resources.push_async_callback(memory.close)
         yield memory
 

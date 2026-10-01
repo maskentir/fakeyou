@@ -94,12 +94,21 @@ def create_paplay_stream_runner(*, sink: str, rate: int) -> PlayStream:
                 raise asyncio.CancelledError from error
             raise PlaybackError(f"paplay stream failed: {error}") from error
         finally:
-            if proc.returncode is None:
-                await _cleanup_process(proc)
-            if stderr_task is not None and not stderr_task.done():
-                stderr_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stderr_task
+
+            async def cleanup() -> None:
+                if proc.returncode is None:
+                    await _cleanup_process(proc)
+                if stderr_task is not None and not stderr_task.done():
+                    stderr_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await stderr_task
+
+            cleanup_task = asyncio.create_task(cleanup())
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                await cleanup_task
+                raise
         if returncode != 0:
             raise PlaybackError(
                 f"paplay exited with {returncode}: {stderr.decode(errors='replace')[:200]}"
@@ -241,16 +250,39 @@ class PlaybackEngine:
         self._generation += 1
         for task in self._play_tasks:
             task.cancel()
+        dropped = []
+        closing = []
         while True:
             try:
-                _, text, done = self._queue.get_nowait()
+                audio, text, done = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            if not done.cancelled():
-                done.set_result(None)
-            self._emit("playback_dropped", text, "interrupted")
-        await self._cancelled_tasks_cleanup()
+            dropped.append((text, done))
+            task = asyncio.create_task(self._close_audio(audio))
+            closing.append(task)
+            self._play_tasks.add(task)
+        try:
+            await self._cancelled_tasks_cleanup()
+        finally:
+            self._play_tasks.difference_update(closing)
+            for text, done in dropped:
+                if not done.cancelled() and not done.done():
+                    done.set_result(None)
+                self._emit("playback_dropped", text, "interrupted")
         await self._mute()
+
+    async def _close_audio(self, audio: AsyncIterator[bytes]) -> None:
+        close = getattr(audio, "aclose", None)
+        if close is not None:
+            with suppress(Exception):
+                async with asyncio.timeout(self._cleanup_timeout_seconds):
+                    await close()
+
+    async def _consume_audio(self, audio: AsyncIterator[bytes]) -> None:
+        try:
+            await self._stream_audio(audio)
+        finally:
+            await self._close_audio(audio)
 
     async def _cancelled_tasks_cleanup(self) -> None:
         tasks = [task for task in self._play_tasks if not task.done()]
@@ -330,9 +362,17 @@ class PlaybackEngine:
             audio, text, done = await self._queue.get()
             generation = self._generation
             if done.cancelled():
+                await self._close_audio(audio)
                 continue
-            await self._unmute()
+            try:
+                await self._unmute()
+            except BaseException:
+                await self._close_audio(audio)
+                if not done.cancelled() and not done.done():
+                    done.set_result(None)
+                raise
             if generation != self._generation or done.cancelled() or self._closed:
+                await self._close_audio(audio)
                 await self._mute()
                 if not done.cancelled() and not done.done():
                     done.set_result(None)
@@ -343,7 +383,7 @@ class PlaybackEngine:
                 )
                 continue
             self._emit("playback_started", text)
-            play_task = asyncio.create_task(self._stream_audio(audio))
+            play_task = asyncio.create_task(self._consume_audio(audio))
             self._play_tasks.add(play_task)
             self._active_done = done
             self._active_play_task = play_task

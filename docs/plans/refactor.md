@@ -97,7 +97,7 @@ Migrasi: `.env` lama ditolak dengan pesan yang menyebut key barunya. Tabel pemet
 | CLI | argparse `set_defaults(handler=...)`; satu context manager operator yang mengembalikan persona dan memori untuk `memory-*`; `TypeAdapter(SessionId)` sebagai `type=` argumen; validasi durasi cukup di pydantic | ~70 |
 | Provider | Pembuatan model jawaban, TTS, STT, dan client Graphiti dari bagian konfigurasi masing-masing, tanpa percabangan string | ~40 |
 | TTS | `AsyncOpenAI(timeout=..., max_retries=0)` dan `close()` SDK menggantikan pembungkus HTTP client; argumen request dipakai bersama unary dan stream | ~30 |
-| Resource | Penutupan conversation dimiliki satu pembuka (sekarang didaftarkan di enam tempat); helper `journal_path`, `journal_files`, `open_checkpointer` | ~30 |
+| Resource | Penutupan conversation diutamakan pada pembuka; batas kepemilikan API runtime dicatat sebagai pengecualian; helper `journal_path`, `journal_files`, `open_checkpointer` | ~30 |
 | Audio dan playback | Spawn `paplay` tunggal, satu `_consume_task`, `CaptureActivity.snapshot` lewat `dataclasses.replace`, klasifikasi kategori error STT memakai fungsi dari `provider_faults` | ~60 |
 | Meet dan preflight | Satu `_toggle_control` untuk mikrofon dan kamera; preflight tanpa dedupe ganda, timeout ganda, dan pembungkus `invoke` | ~50 |
 | Transkrip | Dedupe dan filter final hanya di satu tempat | ~6 |
@@ -171,7 +171,7 @@ Dikerjakan di worktree `feat/explicit-config-refactor` di atas `f30d295`. Commit
 | 0 | `47db0a9` | Fault, kegagalan callback, polling monitor, dan keluar CLI tercatat di journal; teks percakapan tidak lagi masuk journal; percakapan dan lifecycle berbagi satu database checkpoint |
 | 1 | `e92f595`, `916d1ac` | `tests/conftest.py`, `tests/fakes.py`, fixture `Settings` asli dengan env dibersihkan, fake Graphiti `create_autospec`, fixture journal, jam, halaman Meet, model chat |
 | 2 | `a787023`, `cd0ad89`, `60bdf26` | Skema konfigurasi bersarang per peran dengan discriminated union, `extra="forbid"`, penolakan key lama beserta penggantinya, anggaran waktu jawaban tervalidasi, bahasa speech eksplisit, bagian `browser` terpisah |
-| 3 | `151ca0a`, `69f9587` | Satu jalur TTS streaming (jalur unary dihapus), `journal.timed`, satu tipe `Fault`, dispatch argparse `set_defaults`, satu konteks memori operator, satu `open_checkpointer`, penutupan percakapan didaftarkan sekali |
+| 3 | `151ca0a`, `69f9587` | Satu jalur TTS streaming (jalur unary dihapus), `journal.timed`, satu tipe `Fault`, dispatch argparse `set_defaults`, satu konteks memori operator, satu `open_checkpointer`, pemilik penutupan percakapan dicatat eksplisit; pengecualian API runtime dijelaskan di bawah |
 | 4 | `a08e1ac`, `cf36999`, `2d62e2c` | Kosakata `Subsystem` dan `EventVerb` di `taxonomy.py`; event journal, fault, dan lifecycle diganti nama sesuai aturan; `journal.record` mewajibkan `source` bertipe; tabel kata kerja factory; paket `fakeyou.cli` ditambah `providers.py` dan `assembly.py`; nama file tes `test_<modul>[_<aspek>]` dan eval `*_eval.py` |
 | 5 | `3bc8791`, `f7d16fb` | Folder `docs/plans`, `docs/reports`, `docs/reference`, `docs/runbooks` dengan tautan relatif yang dicek tes; dokumen keadaan saat ini memakai key konfigurasi baru |
 
@@ -179,8 +179,11 @@ Status bug audit: B1, B2, B3, B4, B5, B6 (setelan sesi dan percakapan masuk skem
 
 Penegakan otomatis yang kini menjalankan aturan: `tests/test_taxonomy.py` (nama event, source, tanpa field isi, satuan `_ms`, keluarga alasan terminal, atribusi), `tests/test_code_rules.py` (tanpa komentar, docstring, maupun kata Bahasa Indonesia di `.py`; penamaan file tes dan eval; tabel kata kerja factory), dan `tests/test_documentation.py` (tautan relatif dan taksonomi folder dokumen). `journal.record`, `ProviderFault`, dan `Fault` menerima `source` bertipe `Subsystem`, sehingga mypy menolak source di luar kosakata.
 
-Yang sengaja tidak dikerjakan:
+Keputusan implementasi dan pengecualian:
 
+- Penutupan percakapan tidak memiliki satu registrasi global: `open_conversation` menjamin percakapan berhenti sebelum checkpoint pembukanya ditutup; `run_meeting_session` menerima percakapan mandiri dan menjamin penutupan pada kegagalan checkpoint, preflight, atau startup browser; stack audio menjamin penutupan sebelum audio dan browser pada kegagalan setelah audio dibuka. Penutupan langsung saat percakapan dinonaktifkan atau sesi selesai tetap mendahului penghentian audio dan permintaan keluar Meet. Ketiga registrasi sengaja dipertahankan sebagai batas pengamanan API; `ConversationLoop.close` idempoten. Klaim sebelumnya bahwa registrasi hanya sekali dikoreksi, bukan dijadikan perubahan urutan shutdown.
+- Konteks memori memiliki SDK LLM, embedding, dan reranker selain driver Graphiti. SDK Anthropic dipakai bersama reranker dan ditutup sekali. SDK didaftarkan saat dibuat agar kegagalan konstruksi berikutnya tidak membocorkan transport; pembatalan pembukaan menunggu konstruksi thread selesai sebelum menutup resource. Factory langsung `create_graphiti_memory` menerima stack pemilik opsional; pemanggil langsung tanpa stack bertanggung jawab menutup SDK dan driver sendiri.
+- Engine playback memiliki iterator PCM luar sejak antrean menerima stream. Penyelesaian, kegagalan consumer, pembatalan, dan pembuangan antrean menutup iterator dengan anggaran cleanup yang sudah ada; finalizer yang tidak kooperatif tetap dibatasi anggaran tersebut.
 - `voice.py` tidak dipecah menjadi `stt.py` dan `tts.py`: modul ini adalah I/O suara dua arah dan pemetaan `SPEECH_LANGUAGES` dipakai kedua sisi.
 - Dedupe transkrip final tetap ada di `MeetingRecord` dan `ConversationLoop`: keduanya dipakai dan diuji terpisah, sehingga masing-masing menjaga invariannya sendiri.
 - `TypeAdapter(SessionId)` tidak dijadikan `type=` argparse: fungsi command tetap memvalidasi sendiri karena juga dipanggil langsung oleh tes dan modul lain.

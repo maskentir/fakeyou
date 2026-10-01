@@ -51,7 +51,7 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
     memory = make_graphiti()
     memory.events = events
 
-    def create_memory(_config):
+    def create_memory(_config, **_kwargs):
         events.append("construct")
         memory.factory_thread = threading.get_ident()
         return memory
@@ -88,7 +88,7 @@ async def test_memory_init_builds_indexes(
     memory = make_graphiti()
     memory.events = events
 
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
 
     await cli_memory.initialize_memory(settings)
 
@@ -104,7 +104,7 @@ async def test_memory_init_closes_memory_when_index_setup_fails(
     memory = make_graphiti(fail_build=True)
     memory.events = events
 
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
 
     with pytest.raises(RuntimeError, match="index setup failed"):
         await cli_memory.initialize_memory(settings)
@@ -920,12 +920,14 @@ async def _join_persona_conversation(
 
     monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
     if graphiti is not None:
-        monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
+        monkeypatch.setattr(
+            memory_module, "create_graphiti_memory", lambda _config, **_kwargs: graphiti
+        )
     else:
         monkeypatch.setattr(
             memory_module,
             "create_graphiti_memory",
-            lambda _config: pytest.fail("graphiti must stay closed without --memory"),
+            lambda _config, **_kwargs: pytest.fail("graphiti must stay closed without --memory"),
         )
     created: dict = {}
 
@@ -1223,7 +1225,9 @@ async def test_join_memory_startup_failure_exits_before_browser(
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "MEMORY_CONNECT_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
+    monkeypatch.setattr(
+        memory_module, "create_graphiti_memory", lambda _config, **_kwargs: graphiti
+    )
     monkeypatch.setattr(
         cli_join, "run_meeting_session", lambda *_a, **_k: pytest.fail("browser must stay closed")
     )

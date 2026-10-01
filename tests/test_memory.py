@@ -121,7 +121,7 @@ async def test_open_graphiti_memory_is_lightweight(
     graphiti, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = graphiti
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
 
     async with open_graphiti_memory(
         MemorySettings.model_validate(
@@ -412,3 +412,160 @@ async def test_reembed_group_pages_through_entities_and_facts(
         ("e2", [6.0, 1.0]),
         ("e1", [6.0, 1.0]),
     ]
+
+
+@pytest.mark.parametrize("provider", ["openai", "openai_generic", "anthropic"])
+@pytest.mark.parametrize("fail_body", [False, True])
+async def test_memory_context_closes_owned_transports(provider, fail_body, monkeypatch):
+    config = MemorySettings.model_validate(
+        {
+            **_config().model_dump(),
+            "llm": {**_config().llm.model_dump(), "client": provider},
+            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+        }
+    )
+    from anthropic import AsyncAnthropic
+    from openai import AsyncOpenAI
+
+    clients = []
+    closed = []
+    for sdk in (AsyncOpenAI, AsyncAnthropic):
+        original = sdk.close
+
+        async def close(client, original=original):
+            closed.append(client)
+            await original(client)
+
+        monkeypatch.setattr(sdk, "close", close)
+    try:
+        async with open_graphiti_memory(config) as memory:
+            clients = [memory.llm_client.client, memory.embedder.client]
+            if provider != "anthropic":
+                clients.append(memory.cross_encoder.client)
+            else:
+                assert memory.cross_encoder.client is memory.llm_client
+            if fail_body:
+                raise RuntimeError("setup failed")
+    except RuntimeError as error:
+        assert fail_body and str(error) == "setup failed"
+    try:
+        assert all(client.is_closed() for client in clients)
+        assert [closed.count(client) for client in clients] == [1] * len(clients)
+    finally:
+        for client in clients:
+            await client.close()
+
+
+@pytest.mark.parametrize(
+    "component,provider",
+    [
+        ("AnthropicClient", "anthropic"),
+        ("OpenAIClient", "openai"),
+        ("OpenAIEmbedder", "anthropic"),
+        ("OpenAIRerankerClient", "openai"),
+        ("Neo4jDriver", "anthropic"),
+        ("Graphiti", "anthropic"),
+    ],
+)
+async def test_memory_context_closes_transports_on_partial_construction(
+    component, provider, monkeypatch
+):
+    from openai import AsyncOpenAI
+
+    clients = []
+    original_anthropic = memory_module.GraphitiAnthropicSDK
+
+    def anthropic(*args, **kwargs):
+        client = original_anthropic(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    def openai(*args, **kwargs):
+        client = AsyncOpenAI(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("construction failed")
+
+    monkeypatch.setattr(memory_module, "GraphitiAnthropicSDK", anthropic)
+    monkeypatch.setattr(memory_module, "AsyncOpenAI", openai, raising=False)
+    drivers = []
+    if component == "Graphiti":
+        original_driver = memory_module.Neo4jDriver
+
+        def driver(*args, **kwargs):
+            created = original_driver(*args, **kwargs)
+            drivers.append(created)
+            return created
+
+        monkeypatch.setattr(memory_module, "Neo4jDriver", driver)
+    monkeypatch.setattr(memory_module, component, fail)
+    config = MemorySettings.model_validate(
+        {
+            **_config().model_dump(),
+            "llm": {**_config().llm.model_dump(), "client": provider},
+            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+        }
+    )
+    try:
+        with pytest.raises(RuntimeError, match="construction failed"):
+            async with open_graphiti_memory(config):
+                pytest.fail("construction must fail before yielding")
+        assert clients
+        assert all(client.is_closed() for client in clients)
+        assert all(driver.client._closed for driver in drivers)
+    finally:
+        for client in clients:
+            await client.close()
+
+
+async def test_memory_context_waits_for_construction_cleanup_when_cancelled(monkeypatch):
+    import threading
+
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    constructed = []
+    original = memory_module.create_graphiti_memory
+
+    def construct(config, **kwargs):
+        memory = original(config, **kwargs)
+        constructed.append(memory)
+        loop.call_soon_threadsafe(started.set)
+        release.wait(2)
+        return memory
+
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", construct)
+    config = MemorySettings.model_validate(
+        {
+            **_config().model_dump(),
+            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+        }
+    )
+
+    async def open_memory():
+        async with open_graphiti_memory(config):
+            pytest.fail("cancelled construction must not yield")
+
+    opening = asyncio.create_task(open_memory())
+    try:
+        await started.wait()
+        opening.cancel()
+        await asyncio.sleep(0)
+        assert not opening.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await opening
+        memory = constructed[0]
+        assert memory.driver.client._closed
+        assert memory.llm_client.client.is_closed()
+        assert memory.embedder.client.is_closed()
+        assert memory.cross_encoder.client.is_closed()
+    finally:
+        release.set()
+        for memory in constructed:
+            await memory.close()
+            await memory.llm_client.client.close()
+            await memory.embedder.client.close()
+            await memory.cross_encoder.client.close()

@@ -314,6 +314,16 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
+    processes = []
+    create_subprocess = asyncio.create_subprocess_exec
+
+    async def capture_process(*args, **kwargs):
+        proc = await create_subprocess(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process)
+
     async def fail_while_cancelling():
         task = asyncio.current_task()
         assert task is not None
@@ -321,13 +331,20 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
         raise BrokenPipeError(32, "Broken pipe")
         yield b""
 
-    with pytest.raises(asyncio.CancelledError):
-        await create_paplay_stream_runner(sink="agent_output", rate=24000)(fail_while_cancelling())
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await create_paplay_stream_runner(sink="agent_output", rate=24000)(
+                fail_while_cancelling()
+            )
+        assert processes[0].returncode is not None
+        assert processes[0].stdin.is_closing()
+    finally:
+        await processes[0].wait()
 
 
 async def test_paplay_stream_runner_cleans_up_source_failure(tmp_path, monkeypatch) -> None:
     script = tmp_path / "paplay"
-    script.write_text('#!/bin/sh\necho $$ > "$FAKE_PAPLAY_PID"\nsleep 30\n')
+    script.write_text('#!/bin/sh\necho $$ > "$FAKE_PAPLAY_PID"\nexec sleep 30\n')
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     pid_file = tmp_path / "pid"
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -383,7 +400,7 @@ async def test_pactl_muter_toggles_sink_only(tmp_path, monkeypatch) -> None:
 
 async def test_pactl_muter_reaps_child_on_cancel(tmp_path, monkeypatch) -> None:
     script = tmp_path / "pactl"
-    script.write_text('#!/bin/sh\necho $$ > "$FAKE_PACTL_PID"\nsleep 30\n')
+    script.write_text('#!/bin/sh\necho $$ > "$FAKE_PACTL_PID"\nexec sleep 30\n')
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     pid_file = tmp_path / "pid"
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -716,3 +733,153 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
     assert names.count("playback_finished") == 1
     assert reporter.total() >= 1
     assert streamer.chunks == synth.chunks + synth.chunks
+
+
+@pytest.mark.parametrize("outcome", ["failure", "return", "cancel"])
+async def test_engine_closes_retained_stream_after_first_chunk(outcome):
+    finalized = asyncio.Event()
+    started = asyncio.Event()
+    retained = []
+
+    class Synth(_Synth):
+        async def stream(self, text):
+            try:
+                yield b"first"
+                yield b"second"
+            finally:
+                finalized.set()
+
+    async def consume(chunks):
+        retained.append(chunks)
+        assert await anext(chunks) == b"first"
+        started.set()
+        if outcome == "failure":
+            raise PlaybackError("pipe failed")
+        if outcome == "cancel":
+            await asyncio.Event().wait()
+
+    engine = _engine(Synth(), consume, _Muter(), [], tail_seconds=0)
+    speaking = asyncio.create_task(engine.speak("test"))
+    try:
+        await started.wait()
+        if outcome == "cancel":
+            await engine.stop()
+        await speaking
+        assert finalized.is_set()
+    finally:
+        await engine.close()
+        for chunks in retained:
+            await chunks.aclose()
+
+
+@pytest.mark.parametrize("drop", ["stop", "cancel", "unmute_stop"])
+async def test_engine_closes_dropped_pcm_iterators(drop):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Chunks:
+        closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.closed = True
+
+    async def consume(chunks):
+        started.set()
+        await release.wait()
+
+    async def mute(muted):
+        if not muted and drop == "unmute_stop":
+            await engine.stop()
+
+    engine = _engine(_Synth(), consume, mute, [], tail_seconds=0)
+    chunks = Chunks()
+    try:
+        if drop != "unmute_stop":
+            active = asyncio.create_task(engine.speak("active"))
+            await started.wait()
+        queued = asyncio.create_task(engine._play_queued(chunks, "queued"))
+        await asyncio.sleep(0)
+        if drop == "stop":
+            await engine.stop()
+        elif drop == "cancel":
+            queued.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await queued
+            release.set()
+            await active
+        if drop != "cancel":
+            await queued
+        if drop == "stop":
+            await active
+        assert chunks.closed
+    finally:
+        release.set()
+        await engine.close()
+
+
+async def test_engine_limits_stream_finalizer_to_cleanup_budget():
+    finalized = asyncio.Event()
+    retained = []
+
+    class Synth(_Synth):
+        async def stream(self, text):
+            try:
+                yield b"first"
+            finally:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    finalized.set()
+
+    async def consume(chunks):
+        retained.append(chunks)
+        await anext(chunks)
+        raise PlaybackError("pipe failed")
+
+    engine = _engine(Synth(), consume, _Muter(), [], tail_seconds=0, cleanup_timeout_seconds=0.01)
+    try:
+        await asyncio.wait_for(engine.speak("test"), 1)
+        assert finalized.is_set()
+    finally:
+        await engine.close()
+        for chunks in retained:
+            await chunks.aclose()
+
+
+async def test_engine_closes_dequeued_iterator_when_unmute_is_cancelled():
+    entered = asyncio.Event()
+
+    class Chunks:
+        closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.closed = True
+
+    async def mute(muted):
+        if not muted:
+            entered.set()
+            await asyncio.Event().wait()
+
+    chunks = Chunks()
+    engine = _engine(_Synth(), _Player(), mute, [], tail_seconds=0)
+    queued = asyncio.create_task(engine._play_queued(chunks, "test"))
+    await entered.wait()
+    try:
+        await engine.close()
+        assert chunks.closed
+        await asyncio.wait_for(queued, 1)
+    finally:
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
