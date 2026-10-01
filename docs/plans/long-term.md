@@ -89,6 +89,14 @@ MiniMax tidak dipakai untuk Graphiti: key Coding Plan selalu `rate limit exceede
 
 Mengganti model embedding membuat vektor lama tidak sebanding. `fakeyou memory-reembed` menghitung ulang embedding entity dan fakta satu persona dengan model yang dikonfigurasi tanpa menghapus episode maupun owner note; grup `acc2` dan `demo` sudah dimigrasi.
 
+#### Invalidasi fakta dan re-ingest `acc2` (1 Oktober 2026)
+
+Ingestion `acc2` dengan `gpt-5.5` menandai fakta yang benar sebagai tidak berlaku. LLM mengisi `valid_at` owner note "demo dipindah ke Jumat" dengan tanggal demonya, lalu fakta itu kedaluwarsa saat ingestion sesi 1. Fakta yang hanya diulang juga dianggap bertentangan, misalnya keputusan kickoff sesi 1 dibatalkan oleh pengulangan twin di sesi 2. Karena recall menyaring fakta yang tidak berlaku, pertanyaan "demo hari apa" di namespace `acc2` tidak menemukan fakta demo sama sekali.
+
+Episode `acc2-0930-s1` dan `acc2-0930-s2` dihapus dengan `--keep-record` dan di-ingest ulang dengan ekstraksi `muse-spark-1.2`; episode owner note yang kedaluwarsa dihapus dan teks yang sama dimasukkan ulang lebih dulu agar urutan aslinya terjaga. Hasilnya 14 fakta, semuanya berlaku, semuanya menyebut speaker, dan isinya berbahasa Indonesia. Recall produksi di worker menjawab "demo customer old shield jadinya hari apa" dengan owner note Jumat 3 Oktober 2026 di urutan pertama, kickoff vendor dengan Selasa jam 10 pagi dan PIC Budi, serta checklist launch dengan Rani. Waktu owner note pada provenance sekarang 1 Oktober karena dimasukkan ulang.
+
+Sisa catatan: awalan atribusi masih bercampur ("said that" dan "mengatakan bahwa"), satu fakta checklist tercatat dua kali, dan satu jendela sesi 1 memakan 93 detik dari batas 120 detik per episode (`FAKEYOU_MEMORY__INGESTION__EPISODE_TIMEOUT_SECONDS`), sehingga jendela yang lebih padat dapat melewati batas dengan Muse.
+
 ### 5. Laporan sesi standar (pola F)
 
 - Semua event runtime, termasuk playback dan hasil tool, masuk journal dengan `at`, sehingga tidak ada event tanpa waktu di stdout.
