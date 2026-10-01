@@ -10,7 +10,7 @@
 
 **Spesifikasi:** [Acceptance 1 Oktober](../reports/2026-10-01-refactor-acceptance.md), [rencana jangka panjang](long-term.md), serta kontrak dan kriteria dalam dokumen ini.
 
-**Status:** Task 1–3 selesai dan terintegrasi pada 2 Oktober 2026 (gate lokal hijau); Task 4 selesai sebagai laporan negatif; Task 5 menunggu build container dan acceptance live bersama host.
+**Status:** Task 1–3 selesai dan terintegrasi pada 2 Oktober 2026 (gate lokal hijau); Task 4 selesai sebagai laporan negatif; Task 5: gate lokal dan build container terverifikasi, acceptance live menunggu link dan kesiapan host.
 
 ## Dasar keputusan
 
@@ -258,7 +258,7 @@ uv run --env-file .env pytest evals/test_replay_eval.py -m live -v -s \
 **File:** Buat laporan performa bertanggal; perbarui [status proyek](../reference/project-status.md) dan bagian status dalam rencana ini berdasarkan hasil sebenarnya.
 
 - [x] Jalankan gate lokal: `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy`, dan `uv run pytest -m 'not live and not container' -q`.
-- [ ] Bangun image dengan `docker compose --profile audio build meeting-worker`. Cocokkan hash source image dengan commit yang diuji. Jalankan tes container sesuai marker proyek; jangan menukar hasil image lama sebagai bukti commit baru.
+- [x] Bangun image dengan `docker compose --profile audio build meeting-worker`. Cocokkan hash source image dengan commit yang diuji. Jalankan tes container sesuai marker proyek; jangan menukar hasil image lama sebagai bukti commit baru.
 - [ ] Setelah host siap, buat dua sesi baru memakai profil/namespace uji dan pertanyaan tetap: fakta sederhana, owner note, recall meeting sebelumnya, pertanyaan lanjutan dengan kata ganti, pertanyaan yang tidak diketahui, serta permintaan di luar kewenangan.
 - [ ] Kumpulkan sedikitnya 20 giliran jawaban. Pisahkan giliran interupsi/stop dari distribusi jawaban utuh, tetapi tetap laporkan jumlahnya; jangan menghapus jawaban lambat dari sampel.
 - [ ] Uji barge-in sedikitnya tiga kali dan stop ketika model bekerja maupun ketika audio berjalan. Tidak ada PCM/playback generasi usang setelah stop. Target pembanding interupsi: median maksimal 1,618 detik dan maksimum maksimal 1,833 detik pada skenario yang setara.
