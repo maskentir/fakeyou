@@ -155,7 +155,7 @@ Provider jawaban adalah `openai`, `openai_compatible`, atau `anthropic`. Contoh 
 
 TTS memiliki `provider`, `model`, `voice`, `api_key`, `base_url`, dan `sample_rate` yang terlihat di `check`. Pilih `FAKEYOU_TTS__PROVIDER=minimax` untuk default `speech-2.8-turbo` dan `Indonesian_CalmWoman`. Voice OpenAI divalidasi terhadap daftar library. Format audio tetap PCM s16le mono, capture 16 kHz, playback 24 kHz; sample rate TTS selain 24 kHz ditolak.
 
-`FAKEYOU_SPEECH__LANGUAGE=id` atau `en` mengatur STT, pemisahan kalimat, instruksi TTS, dan language boost. Bahasa profil persona harus sama; `join` menolak ketidaksesuaian sebelum membuka resource. Kontrol browser (`headless`, `warmup_browser`, `monitor_poll_seconds`), percakapan, ingestion, kesehatan audio, dan preflight ada pada bagian masing-masing dalam `.env.example`.
+`FAKEYOU_SPEECH__LANGUAGE=id` atau `en` mengatur STT, pemisahan kalimat, instruksi TTS, dan language boost. Bahasa profil persona harus sama; `join` menolak ketidaksesuaian sebelum membuka resource. Kontrol browser (`FAKEYOU_BROWSER__HEADLESS`, `FAKEYOU_BROWSER__WARMUP`) dan polling monitor (`FAKEYOU_MEETING__MONITOR_POLL_SECONDS`), percakapan, ingestion, kesehatan audio, dan preflight ada pada bagian masing-masing dalam `.env.example`.
 
 ### Migrasi konfigurasi lama
 

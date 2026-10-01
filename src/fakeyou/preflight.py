@@ -20,31 +20,6 @@ class ProbeResult:
     detail: str
 
 
-def provider_probe_targets(
-    *, tts_base_url: str, stt_ws_url: str, agent_base_url: str
-) -> tuple[str, ...]:
-    return tuple(
-        dict.fromkeys(raw for raw in (tts_base_url, stt_ws_url, agent_base_url) if raw.strip())
-    )
-
-
-def provider_probe_hosts(
-    *, tts_base_url: str, stt_ws_url: str, agent_base_url: str
-) -> tuple[str, ...]:
-    hosts: list[str] = []
-    for raw in provider_probe_targets(
-        tts_base_url=tts_base_url, stt_ws_url=stt_ws_url, agent_base_url=agent_base_url
-    ):
-        try:
-            parsed = urlparse(raw)
-            name = parsed.hostname
-        except ValueError:
-            continue
-        if name and name not in hosts:
-            hosts.append(name)
-    return tuple(hosts)
-
-
 def _endpoint_parts(endpoint: str) -> tuple[str, int, bool, bool] | None:
     raw = endpoint if "://" in endpoint else f"https://{endpoint}"
     try:

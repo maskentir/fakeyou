@@ -6,20 +6,18 @@ import pytest
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
-from fakeyou.settings import MiniMaxTTS, OpenAITTS
+from fakeyou.invariants import PLAYBACK_SAMPLE_RATE
+from fakeyou.settings import DEFAULTS, MiniMaxTTS, OpenAITTS
 from fakeyou.voice import (
-    MINIMAX_TTS_MODEL,
-    MINIMAX_TTS_VOICE,
+    SPEECH_LANGUAGES,
     TTS_HTTP_TIMEOUT,
-    TTS_MODEL,
     TTS_REQUEST_TIMEOUT_SECONDS,
-    TTS_VOICE,
-    TTS_VOICE_INSTRUCTIONS,
     MiniMaxSpeechSynthesizer,
     OpenAISpeechSynthesizer,
     STTMode,
     create_muse_stt,
     create_speech_synthesizer,
+    tts_voice_instructions,
 )
 
 
@@ -68,10 +66,10 @@ async def test_synthesizer_streams_a_pcm_request(openai_client) -> None:
     assert request.url == "https://api.openai.com/v1/audio/speech"
     assert request.headers["authorization"] == "Bearer test-openai-key"
     call = json.loads(request.content)
-    assert call["model"] == TTS_MODEL
-    assert call["voice"] == TTS_VOICE
+    assert call["model"] == DEFAULTS.tts.model
+    assert call["voice"] == DEFAULTS.tts.voice
     assert call["input"] == "Hello."
-    assert call["instructions"] == TTS_VOICE_INSTRUCTIONS
+    assert call["instructions"] == tts_voice_instructions(DEFAULTS.speech.language)
     assert call["response_format"] == "pcm"
     assert call["stream_format"] == "audio"
     assert "speed" not in call
@@ -227,12 +225,12 @@ async def test_minimax_synthesizer_streams_an_indonesian_pcm_request() -> None:
     [request] = requests
     assert request.headers["authorization"] == "Bearer minimax-key"
     assert json.loads(request.content) == {
-        "model": MINIMAX_TTS_MODEL,
+        "model": MiniMaxTTS().model,
         "text": "Hello.",
         "stream": True,
-        "language_boost": "Indonesian",
-        "voice_setting": {"voice_id": MINIMAX_TTS_VOICE},
-        "audio_setting": {"sample_rate": 24000, "format": "pcm", "channel": 1},
+        "language_boost": SPEECH_LANGUAGES[DEFAULTS.speech.language][2],
+        "voice_setting": {"voice_id": MiniMaxTTS().voice},
+        "audio_setting": {"sample_rate": PLAYBACK_SAMPLE_RATE, "format": "pcm", "channel": 1},
         "stream_options": {"exclude_aggregated_audio": True},
     }
 
@@ -326,6 +324,6 @@ def test_create_speech_synthesizer_picks_provider_defaults() -> None:
     openai = create_speech_synthesizer(OpenAITTS(api_key="k", voice="nova"))
 
     assert isinstance(minimax, MiniMaxSpeechSynthesizer)
-    assert (minimax._model, minimax._voice) == (MINIMAX_TTS_MODEL, MINIMAX_TTS_VOICE)
+    assert (minimax._model, minimax._voice) == (MiniMaxTTS().model, MiniMaxTTS().voice)
     assert isinstance(openai, OpenAISpeechSynthesizer)
-    assert (openai._model, openai._voice) == (TTS_MODEL, "nova")
+    assert (openai._model, openai._voice) == (DEFAULTS.tts.model, "nova")

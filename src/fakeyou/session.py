@@ -12,8 +12,6 @@ from fakeyou.invariants import TwinName as TwinName
 from fakeyou.lifecycle import MeetingPhase, TerminalReason
 from fakeyou.settings import DEFAULTS
 
-DEFAULT_CHECKPOINT_PATH = DEFAULTS.paths.checkpoint_path
-
 
 class MeetingAudio(Protocol):
     async def speak(self, text: str) -> None: ...
@@ -72,7 +70,7 @@ class SessionConfig:
     deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
-    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
+    checkpoint_path: Path = DEFAULTS.paths.checkpoint_path
     browser_profile_dir: Path | None = None
     warmup_browser: bool = DEFAULTS.browser.warmup
     headless: bool = DEFAULTS.browser.headless

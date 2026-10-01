@@ -17,9 +17,6 @@ from fakeyou.settings import DEFAULTS, MiniMaxTTS, STTMode, TTSSettings, require
 
 TTS_HTTP_TIMEOUT = httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 TTS_REQUEST_TIMEOUT_SECONDS = 45.0
-TTS_SAMPLE_RATE = PLAYBACK_SAMPLE_RATE
-TTS_VOICE = DEFAULTS.tts.voice
-TTS_MODEL = DEFAULTS.tts.model
 SPEECH_LANGUAGES = {
     "id": (Language.ID, "Bahasa Indonesia", "Indonesian"),
     "en": (Language.EN, "English", "English"),
@@ -33,15 +30,6 @@ def tts_voice_instructions(language: str) -> str:
         "Pacing: Steady and conversational.\n"
         f"Language: {SPEECH_LANGUAGES[language][1]}."
     )
-
-
-TTS_VOICE_INSTRUCTIONS = tts_voice_instructions(DEFAULTS.speech.language)
-
-
-MINIMAX_TTS_URL = MiniMaxTTS().base_url
-MINIMAX_TTS_MODEL = MiniMaxTTS().model
-MINIMAX_TTS_VOICE = MiniMaxTTS().voice
-MINIMAX_LANGUAGE_BOOST = SPEECH_LANGUAGES[DEFAULTS.speech.language][2]
 
 
 def create_muse_stt(
@@ -75,9 +63,9 @@ class OpenAISpeechSynthesizer:
         *,
         api_key: str | None = None,
         base_url: str = DEFAULTS.tts.base_url,
-        voice: str = TTS_VOICE,
-        model: str = TTS_MODEL,
-        instructions: str | None = TTS_VOICE_INSTRUCTIONS,
+        voice: str = DEFAULTS.tts.voice,
+        model: str = DEFAULTS.tts.model,
+        instructions: str | None = tts_voice_instructions(DEFAULTS.speech.language),
         speed: float | None = None,
         client: AsyncOpenAI | None = None,
         journal: Journal | None = None,
@@ -131,10 +119,10 @@ class MiniMaxSpeechSynthesizer:
         self,
         *,
         api_key: str,
-        voice: str = MINIMAX_TTS_VOICE,
-        model: str = MINIMAX_TTS_MODEL,
-        language_boost: str = MINIMAX_LANGUAGE_BOOST,
-        url: str = MINIMAX_TTS_URL,
+        voice: str = MiniMaxTTS().voice,
+        model: str = MiniMaxTTS().model,
+        language_boost: str = SPEECH_LANGUAGES[DEFAULTS.speech.language][2],
+        url: str = MiniMaxTTS().base_url,
         client: httpx2.AsyncClient | None = None,
         journal: Journal | None = None,
     ) -> None:
@@ -163,7 +151,7 @@ class MiniMaxSpeechSynthesizer:
             "language_boost": self._language_boost,
             "voice_setting": {"voice_id": self._voice},
             "audio_setting": {
-                "sample_rate": TTS_SAMPLE_RATE,
+                "sample_rate": PLAYBACK_SAMPLE_RATE,
                 "format": "pcm",
                 "channel": PCM_CHANNELS,
             },

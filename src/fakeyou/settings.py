@@ -10,7 +10,6 @@ from fakeyou.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId,
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
-TTSProvider = Literal["openai", "minimax"]
 OptionalURL = Annotated[str | None, BeforeValidator(lambda value: None if value == "" else value)]
 
 

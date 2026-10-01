@@ -5,39 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.preflight import ProbeResult, probe_host, provider_probe_hosts, run_preflight
+from fakeyou.preflight import ProbeResult, probe_host, run_preflight
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LOCAL_CERT = FIXTURES / "preflight-localhost.pem"
 LOCAL_KEY = FIXTURES / "preflight-localhost-key.pem"
-
-
-def test_default_hosts_cover_openai_and_meta() -> None:
-    assert provider_probe_hosts(
-        tts_base_url="https://api.openai.com",
-        stt_ws_url="wss://api.meta.ai/v1/asr/realtime",
-        agent_base_url="https://api.openai.com",
-    ) == ("api.openai.com", "api.meta.ai")
-
-
-def test_hosts_follow_settings_overrides() -> None:
-    hosts = provider_probe_hosts(
-        tts_base_url="https://tts.example.com/v1",
-        stt_ws_url="wss://api.meta.ai/v1/asr/realtime",
-        agent_base_url="https://api.anthropic.com",
-    )
-
-    assert hosts == ("tts.example.com", "api.meta.ai", "api.anthropic.com")
-
-
-def test_hosts_deduplicate_and_skip_blanks() -> None:
-    hosts = provider_probe_hosts(
-        tts_base_url="https://api.openai.com",
-        stt_ws_url="wss://api.openai.com/stt",
-        agent_base_url="not a url",
-    )
-
-    assert hosts == ("api.openai.com",)
 
 
 def _trusting_client_context() -> ssl.SSLContext:
