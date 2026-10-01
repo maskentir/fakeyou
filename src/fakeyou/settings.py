@@ -209,8 +209,11 @@ class MeetingSettings(Section):
     join_poll_seconds: PositiveSeconds = 2.0
     monitor_poll_seconds: PositiveSeconds = 5.0
     leave_timeout_seconds: PositiveSeconds = 30.0
+
+
+class BrowserSettings(Section):
     headless: bool = False
-    warmup_browser: bool = True
+    warmup: bool = True
     license_key: SecretStr | None = None
 
 
@@ -239,6 +242,7 @@ class Configuration(Section):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)
+    browser: BrowserSettings = Field(default_factory=BrowserSettings)
     audio_health: AudioHealthSettings = Field(default_factory=AudioHealthSettings)
     preflight: PreflightSettings = Field(default_factory=PreflightSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)

@@ -74,8 +74,8 @@ class SessionConfig:
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
     browser_profile_dir: Path | None = None
-    warmup_browser: bool = DEFAULTS.meeting.warmup_browser
-    headless: bool = DEFAULTS.meeting.headless
+    warmup_browser: bool = DEFAULTS.browser.warmup
+    headless: bool = DEFAULTS.browser.headless
     license_key: str | None = field(default=None, repr=False)
 
 

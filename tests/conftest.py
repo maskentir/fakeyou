@@ -14,9 +14,9 @@ from pydantic import SecretStr
 
 import fakeyou.cli.join as cli_join
 from fakeyou.settings import (
+    BrowserSettings,
     EmbedderSettings,
     IdentitySettings,
-    MeetingSettings,
     MemorySettings,
     OpenAIMemoryLLM,
     OpenAIReply,
@@ -51,7 +51,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         identity=IdentitySettings(
             owner_id="settings-owner", twin_id="settings-twin", twin_name="Settings Twin"
         ),
-        meeting=MeetingSettings(headless=True),
+        browser=BrowserSettings(headless=True),
         memory=MemorySettings(
             store=StoreSettings(group="test-group", password=SecretStr("password")),
             llm=OpenAIMemoryLLM(

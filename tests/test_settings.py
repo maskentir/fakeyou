@@ -48,7 +48,7 @@ def test_secret_keys_ignore_bare_environment(monkeypatch, key):
     assert settings.stt.api_key is None
     assert settings.memory.llm.api_key is None
     assert settings.memory.embedder.api_key is None
-    assert settings.meeting.license_key is None
+    assert settings.browser.license_key is None
 
 
 def test_secret_keys_read_explicit_role_environment(monkeypatch):

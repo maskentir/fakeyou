@@ -48,9 +48,9 @@ uv run --env-file .env fakeyou browser-tools
 uv run --env-file .env fakeyou chat "Buka https://example.com lalu baca judulnya." --thread browser-demo --browser
 ```
 
-Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua memberikan agent akses tindakan browser. Default headed; `FAKEYOU_MEETING__HEADLESS=true` tersedia untuk smoke test. Setiap invocation menggunakan profile sementara terisolasi. Untuk meeting panjang, pertahankan context `open_browser_tools` sepanjang sesi; CLI satu turn bukan daemon meeting.
+Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua memberikan agent akses tindakan browser. Default headed; `FAKEYOU_BROWSER__HEADLESS=true` tersedia untuk smoke test. Setiap invocation menggunakan profile sementara terisolasi. Untuk meeting panjang, pertahankan context `open_browser_tools` sepanjang sesi; CLI satu turn bukan daemon meeting.
 
-CloakBrowser mengunduh binary resmi saat dibutuhkan. Key opsional diisi lewat `FAKEYOU_MEETING__LICENSE_KEY`; tanpa key memakai jalur binary gratis upstream. Browser binary tidak dibundel di repository. MCP terhubung ke CDP loopback browser yang baru diluncurkan. Opsi humanize pada wrapper Python tidak otomatis berlaku pada aksi proses MCP.
+CloakBrowser mengunduh binary resmi saat dibutuhkan. Key opsional diisi lewat `FAKEYOU_BROWSER__LICENSE_KEY`; tanpa key memakai jalur binary gratis upstream. Browser binary tidak dibundel di repository. MCP terhubung ke CDP loopback browser yang baru diluncurkan. Opsi humanize pada wrapper Python tidak otomatis berlaku pada aksi proses MCP.
 
 Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser humanized langsung; tool MCP tetap tersedia untuk agent browser. Hasil uji guest live tercatat di [rencana runtime sesi](docs/meeting-runtime-plan.md).
 
@@ -186,8 +186,8 @@ Key `FAKEYOU_*` yang tidak dikenal ditolak, termasuk typo bernilai kosong dalam 
 | `FAKEYOU_TTS_API_KEY` | `FAKEYOU_TTS__API_KEY` |
 | `FAKEYOU_TTS_VOICE` | `FAKEYOU_TTS__VOICE` |
 | `FAKEYOU_CHECKPOINT_PATH` | `FAKEYOU_PATHS__CHECKPOINT_PATH` |
-| `FAKEYOU_HEADLESS` | `FAKEYOU_MEETING__HEADLESS` |
-| `FAKEYOU_CLOAKBROWSER_LICENSE_KEY` | `FAKEYOU_MEETING__LICENSE_KEY` |
+| `FAKEYOU_HEADLESS` | `FAKEYOU_BROWSER__HEADLESS` |
+| `FAKEYOU_CLOAKBROWSER_LICENSE_KEY` | `FAKEYOU_BROWSER__LICENSE_KEY` |
 | `FAKEYOU_OPENAI_API_KEY` | `FAKEYOU_REPLY__API_KEY` |
 | `FAKEYOU_MODEL_API_KEY` | `FAKEYOU_STT__API_KEY` |
 | `FAKEYOU_NEO4J_URI` | `FAKEYOU_MEMORY__STORE__URI` |

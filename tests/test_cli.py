@@ -355,7 +355,7 @@ async def test_join_headless_override(session_run, join, settings) -> None:
         headless=False,
     )
     assert captured["config"].headless is False
-    settings.meeting.headless = False
+    settings.browser.headless = False
     await join(
         "https://meet.google.com/abc-defg-hij",
         meeting_id=None,

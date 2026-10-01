@@ -19,9 +19,9 @@ def check_setup(settings: Settings) -> None:
 
 async def show_browser_tools(settings: Settings) -> None:
     async with open_browser_tools(
-        headless=settings.meeting.headless,
-        license_key=settings.meeting.license_key.get_secret_value()
-        if settings.meeting.license_key
+        headless=settings.browser.headless,
+        license_key=settings.browser.license_key.get_secret_value()
+        if settings.browser.license_key
         else None,
     ) as tools:
         print("\n".join(tool.name for tool in tools))

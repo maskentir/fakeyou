@@ -106,7 +106,7 @@ async def join_meeting(
     stop = asyncio.Event()
     resolved_meeting_id = meeting_id or uuid.uuid4().hex[:12]
     resolved_twin_id = twin_id or settings.identity.twin_id
-    resolved_headless = settings.meeting.headless if headless is None else headless
+    resolved_headless = settings.browser.headless if headless is None else headless
     config = SessionConfig(
         owner_id=owner_id or settings.identity.owner_id,
         twin_id=resolved_twin_id,
@@ -125,13 +125,13 @@ async def join_meeting(
         join_poll_interval_seconds=settings.meeting.join_poll_seconds,
         monitor_interval_seconds=settings.meeting.monitor_poll_seconds,
         leave_timeout_seconds=settings.meeting.leave_timeout_seconds,
-        warmup_browser=settings.meeting.warmup_browser,
+        warmup_browser=settings.browser.warmup,
         deaf_window_seconds=settings.audio_health.deaf_window_seconds,
         deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
         preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,
-        license_key=settings.meeting.license_key.get_secret_value()
-        if settings.meeting.license_key
+        license_key=settings.browser.license_key.get_secret_value()
+        if settings.browser.license_key
         else None,
         checkpoint_path=settings.paths.checkpoint_path,
     )

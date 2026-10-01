@@ -44,9 +44,9 @@ async def chat(
             tools.extend(
                 await resources.enter_async_context(
                     open_browser_tools(
-                        headless=settings.meeting.headless,
-                        license_key=settings.meeting.license_key.get_secret_value()
-                        if settings.meeting.license_key
+                        headless=settings.browser.headless,
+                        license_key=settings.browser.license_key.get_secret_value()
+                        if settings.browser.license_key
                         else None,
                     )
                 )
