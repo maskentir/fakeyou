@@ -168,6 +168,20 @@ def create_graphiti_memory(
         raise
 
 
+async def _finish_memory_task[T](task: asyncio.Task[T]) -> T:
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except Exception:
+            break
+    if cancellation is not None:
+        raise cancellation
+    return task.result()
+
+
 @asynccontextmanager
 async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti]:
     if config.embedder.dim != EMBEDDING_DIM:
@@ -175,19 +189,22 @@ async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti
             "memory.embedder.dim must equal EMBEDDING_DIM loaded by Graphiti; "
             "export EMBEDDING_DIM before startup"
         )
-    async with AsyncExitStack() as resources:
+    resources = AsyncExitStack()
+    try:
         construction = asyncio.create_task(
             asyncio.to_thread(create_graphiti_memory, config, resources=resources)
         )
         try:
-            memory = await asyncio.shield(construction)
+            memory = await _finish_memory_task(construction)
         except asyncio.CancelledError:
             with suppress(Exception):
-                memory = await construction
+                memory = construction.result()
                 resources.push_async_callback(memory.close)
             raise
         resources.push_async_callback(memory.close)
         yield memory
+    finally:
+        await _finish_memory_task(asyncio.create_task(resources.aclose()))
 
 
 async def ensure_indexes(memory: Graphiti) -> None:

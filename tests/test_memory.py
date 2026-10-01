@@ -569,3 +569,124 @@ async def test_memory_context_waits_for_construction_cleanup_when_cancelled(monk
             await memory.llm_client.client.close()
             await memory.embedder.client.close()
             await memory.cross_encoder.client.close()
+
+
+@pytest.mark.parametrize("fail_construction", [False, True])
+async def test_memory_context_finishes_late_construction_after_repeated_cancellation(
+    monkeypatch, fail_construction
+):
+    import threading
+
+    started = asyncio.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop = asyncio.get_running_loop()
+    constructed = []
+    clients = []
+    original_factory = memory_module.create_graphiti_memory
+    original_embedder = memory_module.OpenAIEmbedder
+    original_sdk = memory_module.AsyncOpenAI
+
+    def sdk(*args, **kwargs):
+        client = original_sdk(*args, **kwargs)
+        clients.append(client)
+        return client
+
+    def embedder(*args, **kwargs):
+        loop.call_soon_threadsafe(started.set)
+        if not release.wait(2):
+            raise RuntimeError("construction gate timed out")
+        if fail_construction:
+            raise RuntimeError("late construction failed")
+        return original_embedder(*args, **kwargs)
+
+    def construct(config, **kwargs):
+        try:
+            memory = original_factory(config, **kwargs)
+            constructed.append(memory)
+            return memory
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(memory_module, "AsyncOpenAI", sdk)
+    monkeypatch.setattr(memory_module, "OpenAIEmbedder", embedder)
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", construct)
+    config = MemorySettings.model_validate(
+        {
+            **_config().model_dump(),
+            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+        }
+    )
+
+    async def open_memory():
+        async with open_graphiti_memory(config):
+            pytest.fail("cancelled construction must not yield")
+
+    opening = asyncio.create_task(open_memory())
+    try:
+        await started.wait()
+        for _ in range(3):
+            opening.cancel()
+            await asyncio.sleep(0)
+        assert not opening.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await opening
+        assert all(client.is_closed() for client in clients)
+        if not fail_construction:
+            assert len(clients) == 3
+            assert constructed[0].driver.client._closed
+    finally:
+        release.set()
+        await asyncio.to_thread(finished.wait, 2)
+        await asyncio.gather(opening, return_exceptions=True)
+        for memory in constructed:
+            await memory.close()
+        for client in clients:
+            await client.close()
+
+
+async def test_memory_context_finishes_disposal_after_repeated_cancellation(monkeypatch):
+    from openai import AsyncOpenAI
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    clients = []
+    original_close = AsyncOpenAI.close
+
+    async def close(client):
+        if not started.is_set():
+            started.set()
+            await release.wait()
+        await original_close(client)
+
+    monkeypatch.setattr(AsyncOpenAI, "close", close)
+    config = MemorySettings.model_validate(
+        {
+            **_config().model_dump(),
+            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+        }
+    )
+
+    async def open_memory():
+        async with open_graphiti_memory(config) as memory:
+            clients.extend(
+                [memory.llm_client.client, memory.embedder.client, memory.cross_encoder.client]
+            )
+
+    opening = asyncio.create_task(open_memory())
+    try:
+        await started.wait()
+        for _ in range(3):
+            opening.cancel()
+            await asyncio.sleep(0)
+        assert not opening.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await opening
+        assert all(client.is_closed() for client in clients)
+    finally:
+        release.set()
+        await asyncio.gather(opening, return_exceptions=True)
+        for client in clients:
+            await original_close(client)
