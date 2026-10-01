@@ -1,44 +1,44 @@
-# Meeting conversation loop
+# Loop percakapan meeting
 
-Status: refactored and verified offline on 28 September 2026. Live conversation acceptance remains open. Specification: [project status](../reference/project-status.md), Stage 3.
+Status: direfactor dan diverifikasi offline pada 28 September 2026. Acceptance percakapan live masih terbuka. Spesifikasi: [status proyek](../reference/project-status.md), Tahap 3.
 
-## Goal
+## Tujuan
 
-Connect final transcripts to the LangGraph meeting agent and queue answers in the same meeting. Preserve every accepted utterance and serialize access to its checkpoint. This is the conversation foundation; a meeting participant still needs persona, turn-taking, interruption, visual context, and tools on its actual Meet page.
+Hubungkan transkrip final ke meeting agent LangGraph dan masukkan jawabannya ke antrean di meeting yang sama. Pertahankan setiap ucapan yang diterima dan buat akses ke checkpoint-nya berurutan (serial). Ini adalah fondasi percakapan; peserta meeting masih membutuhkan persona, turn-taking, interupsi, konteks visual, dan tool pada halaman Meet yang sebenarnya.
 
-## Adapter decision
+## Keputusan adapter
 
-Checked installed Pipecat 1.12.0 `processors/frameworks/langchain.py` against our contract. `LangchainProcessor` passes only `{transcript_key: latest_text}` with `session_id`, accepts string/`AIMessageChunk` stream tokens, and needs the `pipecat-ai[langchain]` extra. A raw graph's update dictionaries yield empty tokens through that adapter. It does not pass our message history or `thread_id` contract.
+`processors/frameworks/langchain.py` milik Pipecat 1.12.0 yang terpasang telah diperiksa terhadap kontrak kita. `LangchainProcessor` hanya meneruskan `{transcript_key: latest_text}` bersama `session_id`, menerima token stream berupa string/`AIMessageChunk`, dan memerlukan extra `pipecat-ai[langchain]`. Dictionary update dari graph mentah menghasilkan token kosong melalui adapter tersebut. Adapter itu tidak meneruskan riwayat pesan maupun kontrak `thread_id` kita.
 
-Decision: thin adapter outside the voice pipeline, in `src/fakeyou/conversation.py`. No new Pipecat extra.
+Keputusan: adapter tipis di luar pipeline suara, di `src/fakeyou/conversation.py`. Tidak ada extra Pipecat baru.
 
-## Responsibilities
+## Tanggung jawab
 
-| Component | Responsibility |
+| Komponen | Tanggung jawab |
 | --- | --- |
-| `TranscriptEvent` / `transcript_event` | Typed event and thin Pipecat boundary; source metadata and payload identity |
-| `LangGraphResponder` | Native messages, checkpoint configuration, tool callbacks, and assistant text extraction |
-| `ConversationLoop` | One task processes pending utterances in order; stale reply suppression and cancellation on close |
-| `MeetingConversation` protocol | Runtime depends on readiness, failure, and cleanup contracts |
-| CLI `open_conversation` | Own model, SQLite, optional Graphiti, and loop lifetimes |
-| Meeting worker | Admission, microphone readiness, stop, leave, and terminal reason |
+| `TranscriptEvent` / `transcript_event` | Event bertipe dan batas tipis dengan Pipecat; metadata sumber dan identitas payload |
+| `LangGraphResponder` | Pesan native, konfigurasi checkpoint, callback tool, dan ekstraksi teks assistant |
+| `ConversationLoop` | Satu task memproses ucapan yang tertunda secara berurutan; penahanan jawaban usang dan pembatalan saat close |
+| `MeetingConversation` protocol | Runtime bergantung pada kontrak kesiapan, kegagalan, dan cleanup |
+| CLI `open_conversation` | Memegang lifetime model, SQLite, Graphiti opsional, dan loop |
+| Meeting worker | Admission, kesiapan mikrofon, stop, leave, dan terminal reason |
 
-## Contracts and tradeoffs
+## Kontrak dan trade-off
 
-- Only nonempty finalized events are accepted. Before binding, events are buffered without starting the agent. Runtime binds after admission, microphone readiness, and optional greeting submission.
-- Exactly one graph invocation uses a meeting thread at a time. Finals arriving during that invocation form the next batch; none are discarded by keeping only the newest text.
-- A newer final invalidates the current reply before speech submission. The running graph may finish so tool results and checkpoints stay consistent. It is cancelled on session close or a 60-second response deadline, rather than restarted concurrently.
-- A generation guard cannot undo a completed tool call or an already submitted utterance. No automatic graph retry occurs after a timeout. Durable action idempotency remains separate work. Barge-in stops the active playback through the engine when enabled.
-- The graph stores generated assistant replies, including suppressed drafts. Playback/delivery events are not yet written back into that history; do not treat it as a record of everything other participants heard.
-- Thread identity derives from `owner_id`, `twin_id`, and `meeting_id`. `HumanMessage.id` uses the event id; LangGraph owns history persistence and message replacement.
-- Duplicate event ids are ignored for the lifetime of this loop. The frame adapter hashes source, original timestamp, and text. When a timestamp is absent it uses the local frame id. Muse's current adapter creates receipt timestamps, so a reconnect that retranscribes the same audio can produce a new id. This does not guarantee deduplication across reconnects or process restarts.
-- `participant` stays `unknown`: the current Muse `user_id` is not verified Meet identity. Event timestamps are receipt times, not measured microphone capture times.
-- Only the final `AIMessage` without pending tool calls can become speech. Native `AIMessage.text` excludes reasoning/non-text blocks. User messages and raw tool results are never spoken directly.
-- `acting` is emitted by a native tool-start callback for the current generation. `queued` means TTS submission; it does not claim playback began or the remote participant heard it. `listening` describes the loop's readiness, not speaker silence.
-- Runtime closes conversation tasks before audio and agent dependencies on stop, denial, removal, browser failure, cancellation, and early startup failure. Model/loop failures produce `conversation_failure`; audio errors remain `audio_failure`.
-- Pending events and dedupe history are in process memory for one session. There is one response task and a per-response deadline, but no durable inbox or multi-worker admission control.
+- Hanya event final yang tidak kosong yang diterima. Sebelum bind, event ditampung di buffer tanpa menjalankan agent. Runtime melakukan bind setelah admission, kesiapan mikrofon, dan pengiriman sapaan opsional.
+- Tepat satu invocation graph memakai thread meeting pada satu waktu. Transkrip final yang tiba selama invocation itu membentuk batch berikutnya; tidak ada yang dibuang dengan cara hanya mempertahankan teks terbaru.
+- Transkrip final yang lebih baru membuat jawaban saat ini tidak berlaku sebelum pengiriman ucapan. Graph yang sedang berjalan boleh selesai agar hasil tool dan checkpoint tetap konsisten. Graph dibatalkan saat sesi ditutup atau saat deadline respons 60 detik tercapai, bukan dimulai ulang secara bersamaan.
+- Generation guard tidak dapat mengurungkan tool call yang sudah selesai atau ucapan yang sudah dikirim. Tidak ada retry graph otomatis setelah timeout. Idempotensi aksi yang durable tetap menjadi pekerjaan terpisah. Barge-in menghentikan playback aktif melalui engine bila diaktifkan.
+- Graph menyimpan jawaban assistant yang dihasilkan, termasuk draf yang ditahan. Event playback/delivery belum ditulis kembali ke riwayat tersebut; jangan perlakukan riwayat itu sebagai catatan dari semua yang didengar participant lain.
+- Identitas thread diturunkan dari `owner_id`, `twin_id`, dan `meeting_id`. `HumanMessage.id` memakai id event; LangGraph memegang persistence riwayat dan penggantian pesan.
+- Id event duplikat diabaikan selama lifetime loop ini. Adapter frame meng-hash sumber, timestamp asli, dan teks. Saat timestamp tidak ada, adapter memakai id frame lokal. Adapter Muse saat ini membuat timestamp waktu penerimaan, sehingga reconnect yang mentranskripsi ulang audio yang sama dapat menghasilkan id baru. Ini tidak menjamin deduplikasi lintas reconnect atau restart proses.
+- `participant` tetap `unknown`: `user_id` Muse saat ini bukan identitas Meet yang terverifikasi. Timestamp event adalah waktu penerimaan, bukan waktu capture mikrofon yang terukur.
+- Hanya `AIMessage` final tanpa tool call yang tertunda yang dapat menjadi ucapan. `AIMessage.text` native tidak menyertakan blok reasoning/non-teks. Pesan user dan hasil tool mentah tidak pernah diucapkan secara langsung.
+- `acting` di-emit oleh callback tool-start native untuk generation saat ini. `queued` berarti pengiriman ke TTS; ini tidak mengklaim bahwa playback sudah dimulai atau participant remote sudah mendengarnya. `listening` menggambarkan kesiapan loop, bukan keheningan speaker.
+- Runtime menutup task percakapan sebelum dependency audio dan agent saat stop, penolakan, removal, kegagalan browser, pembatalan, dan kegagalan startup awal. Kegagalan model/loop menghasilkan `conversation_failure`; error audio tetap `audio_failure`.
+- Event yang tertunda dan riwayat dedupe berada di memori proses untuk satu sesi. Ada satu task respons dan deadline per respons, tetapi tidak ada inbox durable maupun kontrol admission multi-worker.
 
-## Usage
+## Penggunaan
 
 ```sh
 docker compose --profile audio build meeting-worker
@@ -47,25 +47,25 @@ docker compose --profile audio run --rm --no-deps meeting-worker \
   --audio --converse --twin-name "Fakeyou AI"
 ```
 
-`--audio` alone retains transcription and optional `--speak` testing. `--converse` enables replies to final transcripts. `--memory` requires `--converse` and `--persona`; recall and transcript ingestion are scoped to the persona's owner/twin namespace. See [persona and memory](persona-memory.md) and [memory ingestion](memory-ingestion.md).
+`--audio` saja mempertahankan transkripsi dan pengujian `--speak` opsional. `--converse` mengaktifkan jawaban atas transkrip final. `--memory` memerlukan `--converse` dan `--persona`; recall dan ingestion transkrip dibatasi pada namespace owner/twin milik persona. Lihat [persona dan memori](persona-memory.md) dan [ingestion memori](memory-ingestion.md).
 
-No chat/raise-hand/vision tool is attached to this meeting agent yet. MCP's separate browser command does not become a tool on the worker's Meet page automatically.
+Belum ada tool chat/raise-hand/vision yang dipasang pada meeting agent ini. Command browser MCP yang terpisah tidak otomatis menjadi tool pada halaman Meet milik worker.
 
-## Tasks and verification
+## Tugas dan verifikasi
 
-- [x] Typed boundary and duplicate-delivery tests.
-- [x] Serialized responder, buffered startup, timeout/cancel, and assistant-only speech tests.
-- [x] Native LangGraph checkpoint history and identity isolation tests.
-- [x] Runtime ownership, greeting stop race, and distinct failure tests.
-- [x] CLI opt-in composition, lint, typing, build, browser regression, and independent review.
-- [ ] One controlled live conversation: two linked questions, audible replies, stop during reasoning, and a separately observed remote-hearing result.
+- [x] Tes batas bertipe dan duplicate delivery.
+- [x] Tes responder serial, startup ber-buffer, timeout/cancel, dan ucapan yang hanya berasal dari assistant.
+- [x] Tes riwayat checkpoint LangGraph native dan isolasi identitas.
+- [x] Tes kepemilikan runtime, race stop pada sapaan, dan kegagalan yang berbeda-beda.
+- [x] Komposisi CLI opt-in, lint, typing, build, regresi browser, dan review independen.
+- [ ] Satu percakapan live terkontrol: dua pertanyaan berkaitan, jawaban terdengar, stop saat reasoning, dan hasil pendengaran remote yang diamati secara terpisah.
 
-Latest evidence: [conversation refactor report](../reports/2026-09-28-conversation-refactor.md). Next scoped task: [persona and memory access](persona-memory-access.md).
+Bukti terbaru: [laporan refactor conversation](../reports/2026-09-28-conversation-refactor.md). Tugas ber-scope berikutnya: [akses persona dan memori](persona-memory-access.md).
 
-## Documentation read
+## Dokumentasi yang dibaca
 
-- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence).
-- [LangChain short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory).
-- [Python task cancellation](https://docs.python.org/3.12/library/asyncio-task.html#task-cancellation).
-- Installed Pipecat 1.12.0 `LangchainProcessor`, `MetaSTTService`, `PipelineWorker`, and frame sources.
-- Installed LangChain core `AIMessage.text`, `HumanMessage`, and `AsyncCallbackHandler`; native `add_messages` reducer.
+- [Persistence LangGraph](https://docs.langchain.com/oss/python/langgraph/persistence).
+- [Short-term memory LangChain](https://docs.langchain.com/oss/python/langchain/short-term-memory).
+- [Pembatalan task Python](https://docs.python.org/3.12/library/asyncio-task.html#task-cancellation).
+- Pipecat 1.12.0 terpasang: `LangchainProcessor`, `MetaSTTService`, `PipelineWorker`, dan source frame.
+- LangChain core terpasang: `AIMessage.text`, `HumanMessage`, dan `AsyncCallbackHandler`; reducer `add_messages` native.

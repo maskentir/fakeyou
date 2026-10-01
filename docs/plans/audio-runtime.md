@@ -1,38 +1,38 @@
-# Meeting audio runtime
+# Runtime audio meeting
 
-Status: done and verified live (`audio-bua-1`). Specification: [meeting runtime plan](meeting-runtime.md), Stage 2.
+Status: selesai dan terverifikasi live (`audio-bua-1`). Spesifikasi: [rencana runtime meeting](meeting-runtime.md), Tahap 2.
 
-## Goal
+## Tujuan
 
-Run one Google Meet guest per Linux container, transcribe participant audio through Muse, and play an explicitly requested TTS sentence through the guest microphone. Host admission remains required. Conversation policy belongs to Stage 3.
+Menjalankan satu guest Google Meet per container Linux, mentranskripsikan audio participant lewat Muse, dan memutar satu kalimat TTS yang diminta secara eksplisit melalui microphone guest. Admission oleh host tetap diperlukan. Kebijakan percakapan menjadi bagian Tahap 3.
 
-## Contracts
+## Kontrak
 
-- Reuse the official CloakBrowser image, native PulseAudio devices, and Pipecat `LocalAudioTransport`, `PipelineWorker`, and `WorkerRunner`.
-- Browser output goes to `meeting_audio`; Muse captures `meeting_audio.monitor` at 16 kHz mono PCM16.
-- OpenAI synthesis stays at its native 24 kHz rate. A serial `PlaybackEngine` streams PCM directly into `paplay` on `agent_output`; `agent_mic` remaps that monitor for Chromium. The engine mutes only the output sink between utterances, leaving the microphone source unmuted so Meet does not show an OS-mute dialog. Synthesizers without streaming support use buffered playback.
-- Source of truth for sink/source names and sample rates is `src/fakeyou/audio.py`; `compose.yaml`, `docker/audio/Dockerfile`, `docker/audio/default.pa`, and `docker/audio/daemon.conf` keep literal copies in sync, and the entrypoint asserts the expected sinks, rates, and defaults at startup.
-- No loopback connects agent output to Muse input. Each meeting owns its PulseAudio server and browser profile lock.
-- The worker starts audio after admission, enables the microphone, then queues an optional explicit sentence. Audio failures terminate the session with their own reason and release resources.
-- Browser PulseAudio environment overrides apply to the child process only. No physical host audio devices are mounted.
-- API keys enter at runtime through the existing `.env`; build context excludes credentials and local recordings.
-- Synthesis carries a per-request timeout (the SDK default would override the HTTP client) and the engine additionally bounds each synthesis call, so one dead request fails the utterance instead of wedging later speech. Stopping playback cancels an in-flight synthesis the same way it kills active audio.
-- Synthesis uses native OpenAI HTTP streaming and casual-Indonesian delivery instructions. A timeout retries once before any PCM is emitted; a partial stream is never replayed. See [voice reliability](voice-reliability.md) and its refactor report.
-- The worker bypasses the Docker Desktop embedded DNS forwarder with public resolvers; it stopped resolving mid-call during live runs.
-- Keep code readable without comments or docstrings. Use thin adapters around native APIs.
+- Gunakan ulang image CloakBrowser resmi, perangkat PulseAudio native, serta `LocalAudioTransport`, `PipelineWorker`, dan `WorkerRunner` milik Pipecat.
+- Output browser masuk ke `meeting_audio`; Muse menangkap `meeting_audio.monitor` pada 16 kHz mono PCM16.
+- Sintesis OpenAI tetap pada sample rate native 24 kHz. `PlaybackEngine` serial mengalirkan PCM langsung ke `paplay` pada `agent_output`; `agent_mic` me-remap monitor tersebut untuk Chromium. Engine hanya melakukan mute pada sink output di antara ucapan dan membiarkan source microphone tidak di-mute agar Meet tidak menampilkan dialog OS-mute. Synthesizer tanpa dukungan streaming memakai playback buffered.
+- Sumber kebenaran untuk nama sink/source dan sample rate adalah `src/fakeyou/audio.py`; `compose.yaml`, `docker/audio/Dockerfile`, `docker/audio/default.pa`, dan `docker/audio/daemon.conf` menyimpan salinan literal yang dijaga tetap sinkron, dan entrypoint memastikan (assert) sink, rate, serta default yang diharapkan saat startup.
+- Tidak ada loopback yang menghubungkan output agent ke input Muse. Setiap meeting memiliki server PulseAudio dan lock profile browsernya sendiri.
+- Worker memulai audio setelah admission, mengaktifkan microphone, lalu mengantrekan satu kalimat eksplisit yang opsional. Kegagalan audio mengakhiri sesi dengan alasannya sendiri dan melepaskan resource.
+- Override environment PulseAudio untuk browser hanya berlaku pada proses anak. Tidak ada perangkat audio fisik milik host yang di-mount.
+- API key masuk saat runtime melalui `.env` yang sudah ada; build context tidak menyertakan kredensial maupun rekaman lokal.
+- Sintesis membawa timeout per request (default SDK akan menimpa client HTTP), dan engine juga membatasi setiap panggilan sintesis, sehingga satu request yang mati menggagalkan ucapan itu alih-alih membuat ucapan berikutnya macet. Menghentikan playback membatalkan sintesis yang sedang berjalan dengan cara yang sama seperti mematikan audio yang aktif.
+- Sintesis memakai streaming HTTP OpenAI native dan instruksi penyampaian dalam bahasa Indonesia santai. Timeout di-retry satu kali sebelum PCM apa pun dikeluarkan; stream parsial tidak pernah diputar ulang. Lihat [keandalan voice](voice-reliability.md) dan laporan refactor-nya.
+- Worker melewati (bypass) DNS forwarder tertanam milik Docker Desktop dengan resolver publik; forwarder itu berhenti me-resolve di tengah panggilan pada run live.
+- Jaga agar kode tetap terbaca tanpa komentar atau docstring. Gunakan adapter tipis di sekitar API native.
 
-## Tasks and verification
+## Tugas dan verifikasi
 
-1. Add a pinned Linux image, PulseAudio configuration, ALSA default adapter, and an opt-in Compose worker. Verify startup, sink/source mapping, and process shutdown on ARM64.
-2. Implement the Pipecat audio context with final transcript callbacks, explicit speech, startup deadlines, and provider/background failure propagation. Exercise native pipelines in offline tests.
-3. Integrate the context with admission, stop, cancellation, microphone state, CLI flags, and lifecycle checkpoints. Verify default guest behavior remains unchanged.
-4. Exercise real container audio: browser output to capture, TTS output to browser microphone, and isolation between both paths. Run Muse against a known fixture with the native transport.
-5. Attempt one controlled live Meet verification when a host is available. Record local evidence separately from actual remote participant hearing confirmation.
-6. Run lint, typing, offline tests, container probes, and review. Update the runbook and project status with remaining limitations.
+1. Tambahkan image Linux yang dipin, konfigurasi PulseAudio, adapter default ALSA, dan worker Compose opt-in. Verifikasi startup, pemetaan sink/source, dan penghentian proses di ARM64.
+2. Implementasikan audio context Pipecat dengan callback transkrip final, ucapan eksplisit, deadline startup, serta propagasi kegagalan provider/latar belakang. Uji pipeline native lewat tes offline.
+3. Integrasikan context tersebut dengan admission, stop, pembatalan, status microphone, flag CLI, dan checkpoint lifecycle. Verifikasi bahwa perilaku guest default tidak berubah.
+4. Uji audio container yang sungguhan: output browser ke capture, output TTS ke microphone browser, dan isolasi antara kedua jalur. Jalankan Muse terhadap fixture yang diketahui dengan transport native.
+5. Upayakan satu verifikasi Meet live yang terkontrol ketika host tersedia. Catat bukti lokal secara terpisah dari konfirmasi bahwa participant remote benar-benar mendengar.
+6. Jalankan lint, typing, tes offline, probe container, dan review. Perbarui runbook dan status proyek dengan keterbatasan yang tersisa.
 
-## Documentation consulted
+## Dokumentasi yang diperiksa
 
-- [CloakBrowser Dockerfile](https://github.com/CloakHQ/cloakbrowser/blob/main/Dockerfile) and [entrypoint](https://github.com/CloakHQ/cloakbrowser/blob/main/bin/docker-entrypoint.sh).
-- [PulseAudio client configuration](https://manpages.debian.org/trixie/pulseaudio/pulse-client.conf.5.en.html) and [daemon configuration](https://manpages.debian.org/trixie/pulseaudio/pulse-daemon.conf.5.en.html).
-- [Pipecat OpenAI TTS](https://docs.pipecat.ai/api-reference/server/services/tts/openai), plus installed Pipecat 1.12.0 transport, worker, runner, STT, and TTS sources.
-- LMA's local entrypoint and audio idempotency tests for routing lessons; no application code copied.
+- [Dockerfile CloakBrowser](https://github.com/CloakHQ/cloakbrowser/blob/main/Dockerfile) dan [entrypoint](https://github.com/CloakHQ/cloakbrowser/blob/main/bin/docker-entrypoint.sh).
+- [Konfigurasi client PulseAudio](https://manpages.debian.org/trixie/pulseaudio/pulse-client.conf.5.en.html) dan [konfigurasi daemon](https://manpages.debian.org/trixie/pulseaudio/pulse-daemon.conf.5.en.html).
+- [Pipecat OpenAI TTS](https://docs.pipecat.ai/api-reference/server/services/tts/openai), serta source transport, worker, runner, STT, dan TTS Pipecat 1.12.0 yang terpasang.
+- Entrypoint lokal dan tes idempotensi audio milik LMA untuk pelajaran routing; tidak ada kode aplikasi yang disalin.

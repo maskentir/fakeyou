@@ -1,139 +1,139 @@
-# Reliability Refactor Completion and Next Milestones
+# Penyelesaian refactor keandalan dan milestone berikutnya
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Untuk agentic worker:** SUB-SKILL WAJIB: Gunakan superpowers:subagent-driven-development (disarankan) atau superpowers:executing-plans untuk mengimplementasikan rencana ini task demi task. Langkah memakai sintaks checkbox (`- [ ]`) untuk pelacakan.
 
-**Goal:** Finish the interrupted reliability refactor (9 red tests, 1 slow suite) and land every B0–B10 finding on a green gate.
+**Tujuan:** Selesaikan refactor keandalan yang terputus (9 tes merah, 1 suite lambat) dan tuntaskan setiap temuan B0–B10 sampai gate hijau.
 
-**Architecture:** Keep the noon Codex direction (degrade-and-continue conversation, all-must-pass preflight, audio-owned deaf evaluation, dormant streaming capability); repair each half-finished edit to its pinned contract; replace the 180-second unknown timer with 2-consecutive observation failures.
+**Arsitektur:** Pertahankan arah Codex siang hari (percakapan degrade-and-continue, preflight yang harus lulus seluruhnya, evaluasi deaf yang dimiliki sesi audio, kapabilitas streaming yang dormant); perbaiki setiap edit setengah jadi sampai sesuai kontrak yang dipin; ganti timer unknown 180 detik dengan 2 kegagalan observasi berturut-turut.
 
-**Tech Stack:** Python 3.12, Pipecat 1.12.0, pytest, mypy --strict, ruff.
+**Stack teknologi:** Python 3.12, Pipecat 1.12.0, pytest, mypy --strict, ruff.
 
-**Spec:** Temuan Vexa/LMA B0–B10 (user message 2026-09-29) plus the four prior plans: [meeting-runtime-plan.md](meeting-runtime.md), [audio-runtime-plan.md](audio-runtime.md), [conversation-plan.md](conversation.md), [implementation-plan.md](implementation.md).
+**Spesifikasi:** Temuan Vexa/LMA B0–B10 (pesan pengguna 2026-09-29) ditambah empat rencana sebelumnya: [meeting-runtime-plan.md](meeting-runtime.md), [audio-runtime-plan.md](audio-runtime.md), [conversation-plan.md](conversation.md), [implementation-plan.md](implementation.md).
 
-## Global Constraints
+## Batasan global
 
-- Committed tests are contracts; a changed expectation needs a stated reason tied to the findings.
-- `uv run pytest` (default markers), `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`, and `docker compose --profile production config --quiet` must all pass.
-- Never commit, push, or tag; leave work uncommitted for review.
-- No live provider calls in unit verification; live acceptance stays a separate gated milestone.
+- Tes yang sudah di-commit adalah kontrak; perubahan ekspektasi memerlukan alasan yang dinyatakan dan terkait dengan temuan.
+- `uv run pytest` (marker default), `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`, dan `docker compose --profile production config --quiet` semuanya harus lulus.
+- Jangan pernah commit, push, atau tag; biarkan pekerjaan tidak di-commit untuk review.
+- Tidak ada panggilan provider live pada verifikasi unit; acceptance live tetap menjadi milestone terpisah yang di-gate.
 
 ---
 
-## Starting state (verified 2026-09-29)
+## Kondisi awal (diverifikasi 2026-09-29)
 
-- Morning: 451 passed, 14 deselected, all static gates green.
-- Noon: parent + 3 review subagents edited concurrently, all died on usage limits mid-edit.
-- Now: 442 passed, 9 failed, suite takes ~196s (one test burns 180 real seconds).
+- Pagi: 451 lulus, 14 deselected, semua gate statis hijau.
+- Siang: parent + 3 subagent review mengedit secara bersamaan, semuanya mati karena batas penggunaan di tengah edit.
+- Sekarang: 442 lulus, 9 gagal, suite memakan waktu ~196s (satu tes menghabiskan 180 detik nyata).
 
-## Contract decisions (locked)
+## Keputusan kontrak (terkunci)
 
-1. Preflight refuses unless every probe succeeds; refusal reason stays `infra_failure` (B9 explicit infra reason, B8 exit 3). Mixed probes refuse.
-2. A single UI observation failure is tolerated; 2 consecutive observation failures end the session as `browser_failure`. Legit `unknown` states keep HEAD behavior (tolerated, no transition).
-3. A failed conversation loop disables replies and keeps listening; transcript-callback isolation stays in `_TranscriptObserver`.
-4. Deaf evaluation lives in the audio session (`maintenance_tick`); the injected `deaf_monitor` seam stays removed.
-5. Preflight passes hostnames (`preflight_hosts`); the kwarg name, the CLI pins, and B9 DNS+TLS semantics agree.
-6. TTS streaming stays a dormant, unit-tested capability; no CLI flag until Linux-audio end-to-end verification exists.
-7. Leave problems (exception or unsuccessful status) map to `browser_failed`; the `leave_failed` event stays removed.
+1. Preflight menolak kecuali setiap probe berhasil; alasan penolakan tetap `infra_failure` (B9 alasan infra eksplisit, B8 exit 3). Probe campuran membuat preflight menolak.
+2. Satu kegagalan observasi UI ditoleransi; 2 kegagalan observasi berturut-turut mengakhiri sesi sebagai `browser_failure`. State `unknown` yang sah mempertahankan perilaku HEAD (ditoleransi, tanpa transisi).
+3. Loop percakapan yang gagal menonaktifkan jawaban dan tetap mendengarkan; isolasi callback transkrip tetap berada di `_TranscriptObserver`.
+4. Evaluasi deaf berada di sesi audio (`maintenance_tick`); seam `deaf_monitor` yang diinjeksi tetap dihapus.
+5. Preflight meneruskan hostname (`preflight_hosts`); nama kwarg, pin CLI, dan semantik DNS+TLS B9 selaras.
+6. Streaming TTS tetap menjadi kapabilitas dormant yang diuji unit; tidak ada flag CLI sampai verifikasi end-to-end audio Linux tersedia.
+7. Masalah saat leave (exception atau status tidak berhasil) dipetakan ke `browser_failed`; event `leave_failed` tetap dihapus.
 
-## Part A: reconciliation tasks
+## Bagian A: task rekonsiliasi
 
-### Task 1: leave mapping back to `browser_failed`
+### Task 1: pemetaan leave kembali ke `browser_failed`
 
-**Files:**
-- Modify: `src/fakeyou/runtime.py` (`finish`, exception path + status path)
-- Modify: `src/fakeyou/lifecycle.py` (remove `leave_failed` kind, transition, apply branch)
+**File:**
+- Ubah: `src/fakeyou/runtime.py` (`finish`, jalur exception + jalur status)
+- Ubah: `src/fakeyou/lifecycle.py` (hapus kind `leave_failed`, transisi, cabang apply)
 
-- [x] Send `browser_failed` (not `leave_failed`) when `leave_meeting` raises and when its status is not `left`.
-- [x] Run: `uv run pytest tests/test_runtime.py -q -k 'leave_failure or leave_crash'`
-- [x] Expected: 2 passed (committed pins restored).
+- [x] Kirim `browser_failed` (bukan `leave_failed`) saat `leave_meeting` melempar exception dan saat statusnya bukan `left`.
+- [x] Jalankan: `uv run pytest tests/test_runtime.py -q -k 'leave_failure or leave_crash'`
+- [x] Diharapkan: 2 lulus (pin yang sudah di-commit dipulihkan).
 
-### Task 2: consecutive observation failures escalate, single blip tolerated
+### Task 2: kegagalan observasi berturut-turut dieskalasi, satu blip ditoleransi
 
-**Files:**
-- Modify: `src/fakeyou/runtime.py` (`monitor`: replace `unknown_since`/180s block with a consecutive-failure counter on `checked.observation_failed`, threshold 2, reset on clean check)
-- Test: `tests/test_runtime.py` (add `test_run_meeting_session_tolerates_single_observation_blip`: page `[IN_CALL, RuntimeError, IN_CALL, ENDED]` ends `meeting_ended`)
+**File:**
+- Ubah: `src/fakeyou/runtime.py` (`monitor`: ganti blok `unknown_since`/180s dengan penghitung kegagalan berturut-turut pada `checked.observation_failed`, threshold 2, reset saat pemeriksaan bersih)
+- Tes: `tests/test_runtime.py` (tambahkan `test_run_meeting_session_tolerates_single_observation_blip`: halaman `[IN_CALL, RuntimeError, IN_CALL, ENDED]` berakhir `meeting_ended`)
 
-- [x] Implement the counter; legit `unknown` states must not increment it.
-- [x] Run: `uv run pytest tests/test_runtime.py tests/test_runtime_audio.py -q`
-- [x] Expected: all pass, suite back under ~30s (no 180s burn).
+- [x] Implementasikan penghitung; state `unknown` yang sah tidak boleh menaikkannya.
+- [x] Jalankan: `uv run pytest tests/test_runtime.py tests/test_runtime_audio.py -q`
+- [x] Diharapkan: semua lulus, suite kembali di bawah ~30s (tidak ada 180s yang terbuang).
 
-### Task 3: deaf tests through the canonical maintenance path
+### Task 3: tes deaf lewat jalur maintenance kanonis
 
-**Files:**
-- Modify: `tests/test_runtime_audio.py` (remove `_ScriptedDeafMonitor`; give the `Audio` fake a scripted `maintenance_tick(is_busy, remote_participants)` making it `AudioMaintenance`; override `observe` per-test so it does not set stop)
+**File:**
+- Ubah: `tests/test_runtime_audio.py` (hapus `_ScriptedDeafMonitor`; beri fake `Audio` sebuah `maintenance_tick(is_busy, remote_participants)` berskrip sehingga menjadi `AudioMaintenance`; override `observe` per tes agar tidak men-set stop)
 
-- [x] Expiry test: tick 1 requests reconnect and returns `silent`; tick 2 raises `MeetingAudioError("deaf: persistent stt_fault")`; assert `audio_failure`, detail startswith `deaf:`, one reconnect request, tick count >= 2.
-- [x] Repair test: tick 1 requests reconnect; tick 2 sets stop and returns `hearing`; assert `admitted_then_stopped`.
-- [x] Run: `uv run pytest tests/test_runtime_audio.py -q -k deaf`
-- [x] Expected: 2 passed.
+- [x] Tes kedaluwarsa: tick 1 meminta reconnect dan mengembalikan `silent`; tick 2 melempar `MeetingAudioError("deaf: persistent stt_fault")`; assert `audio_failure`, detail diawali `deaf:`, satu permintaan reconnect, jumlah tick >= 2.
+- [x] Tes perbaikan: tick 1 meminta reconnect; tick 2 men-set stop dan mengembalikan `hearing`; assert `admitted_then_stopped`.
+- [x] Jalankan: `uv run pytest tests/test_runtime_audio.py -q -k deaf`
+- [x] Diharapkan: 2 lulus.
 
-### Task 4: restore journal conferral fallback
+### Task 4: pulihkan fallback pemberian journal
 
-**Files:**
-- Modify: `src/fakeyou/conversation.py` (restore `_with_journal` + `is_dataclass`/`replace`/`cast` imports; `self._responder = _with_journal(responder, journal)`)
+**File:**
+- Ubah: `src/fakeyou/conversation.py` (pulihkan `_with_journal` + import `is_dataclass`/`replace`/`cast`; `self._responder = _with_journal(responder, journal)`)
 
-- [x] Responder with explicit journal keeps it; dataclass responder with `None` journal receives the loop journal; anything else passes through untouched.
-- [x] Run: `uv run pytest tests/test_conversation.py -q`
-- [x] Expected: all pass, including `test_loop_passes_journal_through_to_responder`.
+- [x] Responder dengan journal eksplisit mempertahankannya; responder dataclass dengan journal `None` menerima journal milik loop; selain itu diteruskan tanpa diubah.
+- [x] Jalankan: `uv run pytest tests/test_conversation.py -q`
+- [x] Diharapkan: semua lulus, termasuk `test_loop_passes_journal_through_to_responder`.
 
-### Task 5: preflight hostnames
+### Task 5: hostname preflight
 
-**Files:**
-- Modify: `src/fakeyou/cli.py` (`provider_probe_targets` back to `provider_probe_hosts`, `_PREFLIGHT_TARGETS` back to `_PREFLIGHT_HOSTS`)
+**File:**
+- Ubah: `src/fakeyou/cli.py` (`provider_probe_targets` dikembalikan ke `provider_probe_hosts`, `_PREFLIGHT_TARGETS` dikembalikan ke `_PREFLIGHT_HOSTS`)
 
-- [x] Run: `uv run pytest tests/test_cli.py -q -k 'preflight_hosts or conversation_receives_journal'`
-- [x] Expected: 2 passed.
+- [x] Jalankan: `uv run pytest tests/test_cli.py -q -k 'preflight_hosts or conversation_receives_journal'`
+- [x] Diharapkan: 2 lulus.
 
-### Task 6: remove half-integrated streaming flag, cover dormant streaming
+### Task 6: hapus flag streaming yang setengah terintegrasi, cakup streaming dormant
 
-**Files:**
-- Modify: `src/fakeyou/cli.py` (remove `--stream-tts` flag, validation, `main` pass-through, `streaming_tts` partial kwarg — `open_meeting_audio` has no such parameter)
-- Test: `tests/test_playback.py` (add streamed-speak happy path with fake stream synthesizer + stream player; add stream-play-failure emits `speak_failed` and records a fault)
+**File:**
+- Ubah: `src/fakeyou/cli.py` (hapus flag `--stream-tts`, validasi, pass-through di `main`, kwarg partial `streaming_tts` — `open_meeting_audio` tidak memiliki parameter tersebut)
+- Tes: `tests/test_playback.py` (tambahkan happy path streamed-speak dengan fake stream synthesizer + stream player; tambahkan kasus stream-play-failure yang meng-emit `speak_failed` dan mencatat fault)
 
-- [x] Non-streaming default paths unchanged (`streaming=False`).
-- [x] Run: `uv run pytest tests/test_playback.py tests/test_cli.py -q`
-- [x] Expected: all pass.
+- [x] Jalur default non-streaming tidak berubah (`streaming=False`).
+- [x] Jalankan: `uv run pytest tests/test_playback.py tests/test_cli.py -q`
+- [x] Diharapkan: semua lulus.
 
-### Task 7: playback regressions
+### Task 7: regresi playback
 
-**Files:**
-- Modify: `src/fakeyou/playback.py` (unpack `_, stderr = await proc.communicate(audio)`; `_unmute` back to play-through: emit `mute_failed`, record fault, continue playback)
+**File:**
+- Ubah: `src/fakeyou/playback.py` (unpack `_, stderr = await proc.communicate(audio)`; `_unmute` kembali ke play-through: emit `mute_failed`, catat fault, lanjutkan playback)
 
-- [x] Run: `uv run pytest tests/test_playback.py -q`
-- [x] Expected: all pass, including mute-failure-continues and nonzero-exit tests.
+- [x] Jalankan: `uv run pytest tests/test_playback.py -q`
+- [x] Diharapkan: semua lulus, termasuk tes mute-failure-continues dan nonzero-exit.
 
-### Task 8: remove dead STT progress field
+### Task 8: hapus field progres STT yang mati
 
-**Files:**
-- Modify: `src/fakeyou/deaf.py` (remove `last_stt_progress_at` from snapshot, activity state, stamping, and snapshot construction — stamped but never read)
+**File:**
+- Ubah: `src/fakeyou/deaf.py` (hapus `last_stt_progress_at` dari snapshot, state aktivitas, stamping, dan konstruksi snapshot — di-stamp tetapi tidak pernah dibaca)
 
-- [x] Keep the capture-fault-before-alone ordering (finding: capture-fault suppresses left-alone).
-- [x] Run: `uv run pytest tests/test_deaf.py tests/test_audio.py -q`
-- [x] Expected: all pass.
+- [x] Pertahankan urutan capture-fault sebelum alone (temuan: capture-fault menahan left-alone).
+- [x] Jalankan: `uv run pytest tests/test_deaf.py tests/test_audio.py -q`
+- [x] Diharapkan: semua lulus.
 
-### Task 9: full gates
+### Task 9: gate penuh
 
-- [x] Run: `uv run pytest -q`, `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`, `FAKEYOU_NEO4J_PASSWORD=ci-config-check-only docker compose --profile production config --quiet`
-- [x] Expected: 451+ passed with 0 failed, mypy clean on 22+ files, ruff clean, compose OK.
+- [x] Jalankan: `uv run pytest -q`, `uv run mypy`, `uv run ruff check .`, `uv run ruff format --check .`, `FAKEYOU_NEO4J_PASSWORD=ci-config-check-only docker compose --profile production config --quiet`
+- [x] Diharapkan: 451+ lulus dengan 0 gagal, mypy bersih pada 22+ file, ruff bersih, compose OK.
 
-## Part B: next milestones (after Part A is green)
+## Bagian B: milestone berikutnya (setelah Bagian A hijau)
 
-### M1: live conversation acceptance (needs hosted Meet)
+### M1: acceptance percakapan live (memerlukan Meet yang di-host)
 
-- [ ] Join a user-hosted Meet with `--audio --converse` and a short duration; ask two linked questions; confirm both replies audible and the second uses first-turn context.
-- [ ] Confirm transcripts, journal tape (`.runtime/journals/<meeting>.jsonl` with `synth_*`/`agent_invoke` pairs), and terminal result agree.
-- [ ] Stop mid-reply; confirm no late speech, ended lifecycle, no leftover containers.
+- [ ] Bergabung ke Meet yang di-host pengguna dengan `--audio --converse` dan durasi singkat; ajukan dua pertanyaan berkaitan; pastikan kedua jawaban terdengar dan jawaban kedua memakai konteks giliran pertama.
+- [ ] Pastikan transkrip, tape journal (`.runtime/journals/<meeting>.jsonl` dengan pasangan `synth_*`/`agent_invoke`), dan hasil terminal konsisten satu sama lain.
+- [ ] Stop di tengah jawaban; pastikan tidak ada ucapan terlambat, lifecycle berakhir (ended), dan tidak ada container tersisa.
 
-### M2: live reliability acceptance
+### M2: acceptance keandalan live
 
-- [ ] Preflight refusal: point the worker at an unroutable network (or block provider hosts) and confirm `infra_failure` with exit code 3 before any browser opens.
-- [ ] Deaf termination: join with STT credentials revoked and confirm the session ends `audio_failure` (deaf) within grace instead of sitting silent until duration.
-- [ ] Fault report: confirm the terminal output carries a `faults` summary after a real provider error.
+- [ ] Penolakan preflight: arahkan worker ke jaringan yang tidak dapat dirutekan (atau blokir host provider) dan pastikan `infra_failure` dengan exit code 3 sebelum browser apa pun dibuka.
+- [ ] Terminasi deaf: bergabung dengan kredensial STT yang dicabut dan pastikan sesi berakhir `audio_failure` (deaf) dalam masa grace alih-alih diam sampai durasi habis.
+- [ ] Laporan fault: pastikan output terminal memuat ringkasan `faults` setelah error provider yang nyata.
 
 ### M3: streaming TTS end-to-end (P2)
 
-- [ ] Reintroduce the CLI flag only with Linux-audio verification: streamed reply fully audible via `paplay`, journal shows `streaming=True` with first-chunk latency, generation drop still interrupts cleanly.
+- [ ] Perkenalkan kembali flag CLI hanya bersama verifikasi audio Linux: jawaban streaming terdengar utuh lewat `paplay`, journal menampilkan `streaming=True` dengan latency first-chunk, dan generation drop tetap menginterupsi dengan bersih.
 
-### M4: deployment and CI
+### M4: deployment dan CI
 
-- [ ] Run the real GitHub CI workflow end to end; schedule the meeting worker (duration caps, journal rotation across meetings, remote stop).
+- [ ] Jalankan workflow CI GitHub yang sesungguhnya secara end-to-end; jadwalkan worker meeting (batas durasi, rotasi journal lintas meeting, stop jarak jauh).

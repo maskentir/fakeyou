@@ -1,6 +1,6 @@
 # Rencana refactor: DRY, konfigurasi eksplisit, dan taksonomi
 
-Status: rencana, belum dieksekusi (1 Oktober 2026). Dasar: audit baca-saja atas 26 modul `src/fakeyou` (6,8 ribu baris), `tests/` dan `evals/` (12,7 ribu baris), `compose.yaml`, dan dokumentasi. Temuan berdampak besar diverifikasi ulang langsung di kode dan data `.runtime/`. Re-ingest `acc2` dijalankan setelah refactor selesai.
+Status: fase 0–5 diimplementasikan di branch `feat/explicit-config-refactor` (1 Oktober 2026); lihat [status implementasi](#status-implementasi). Dasar: audit baca-saja atas 26 modul `src/fakeyou` (6,8 ribu baris), `tests/` dan `evals/` (12,7 ribu baris), `compose.yaml`, dan dokumentasi. Temuan berdampak besar diverifikasi ulang langsung di kode dan data `.runtime/`. Re-ingest `acc2` dijalankan setelah refactor selesai.
 
 ## Prinsip
 
@@ -161,3 +161,32 @@ Parameter memakai satu nama per konsep (`faults`, `journal`, `meeting_record`). 
 ## Di luar cakupan
 
 Perbaikan invalidasi fakta Graphiti (dibahas setelah re-ingest), pemilihan model jawaban permanen (menunggu key Anthropic yang valid dan eval replay), dan deployment Kubernetes.
+
+## Status implementasi
+
+Dikerjakan di worktree `feat/explicit-config-refactor` di atas `f30d295`. Commit `89111d6` menyimpan perubahan lokal sebelumnya (jawaban dan TTS MiniMax, embedding lokal, `memory-reembed`, persiapan Claude, dan rencana ini) apa adanya.
+
+| Fase | Commit | Isi |
+| --- | --- | --- |
+| 0 | `47db0a9` | Fault, kegagalan callback, polling monitor, dan keluar CLI tercatat di journal; teks percakapan tidak lagi masuk journal; percakapan dan lifecycle berbagi satu database checkpoint |
+| 1 | `e92f595`, `916d1ac` | `tests/conftest.py`, `tests/fakes.py`, fixture `Settings` asli dengan env dibersihkan, fake Graphiti `create_autospec`, fixture journal, jam, halaman Meet, model chat |
+| 2 | `a787023`, `cd0ad89`, `60bdf26` | Skema konfigurasi bersarang per peran dengan discriminated union, `extra="forbid"`, penolakan key lama beserta penggantinya, anggaran waktu jawaban tervalidasi, bahasa speech eksplisit, bagian `browser` terpisah |
+| 3 | `151ca0a`, `69f9587` | Satu jalur TTS streaming (jalur unary dihapus), `journal.timed`, satu tipe `Fault`, dispatch argparse `set_defaults`, satu konteks memori operator, satu `open_checkpointer`, penutupan percakapan didaftarkan sekali |
+| 4 | `a08e1ac`, `cf36999`, `2d62e2c` | Kosakata `Subsystem` dan `EventVerb` di `taxonomy.py`; event journal, fault, dan lifecycle diganti nama sesuai aturan; `journal.record` mewajibkan `source` bertipe; tabel kata kerja factory; paket `fakeyou.cli` ditambah `providers.py` dan `assembly.py`; nama file tes `test_<modul>[_<aspek>]` dan eval `*_eval.py` |
+| 5 | `3bc8791`, `f7d16fb` | Folder `docs/plans`, `docs/reports`, `docs/reference`, `docs/runbooks` dengan tautan relatif yang dicek tes; dokumen keadaan saat ini memakai key konfigurasi baru |
+
+Status bug audit: B1, B2, B3, B4, B5, B6 (setelan sesi dan percakapan masuk skema), B7 (`speech.language`), B8 (target preflight dengan skema dan port, termasuk memori), B9 (`extra="forbid"`), dan B10 (validator anggaran) selesai. Bug tambahan yang ditemukan saat implementasi: stream TTS yang macet melewati batas waktu tercatat sebagai timeout playback; sekarang tercatat sebagai `tts timeout`. Kegagalan consumer tercatat dua kali (`fault` dan `callback_fault`); sekarang sekali sebagai `fault_recorded`. Tes timeout recall menambal salinan konstanta `RECALL_TIMEOUT_SECONDS` yang tidak lagi dibaca kode, sehingga diam-diam menunggu budget asli 15 detik; salinan `RECALL_*` dihapus, batas pencarian menjadi `RecallSettings.search_limit`, dan pemindaian memastikan tidak ada tes lain yang menambal konstanta mati serta tidak ada field konfigurasi yang tidak dibaca kode.
+
+Penegakan otomatis yang kini menjalankan aturan: `tests/test_taxonomy.py` (nama event, source, tanpa field isi, satuan `_ms`, keluarga alasan terminal, atribusi), `tests/test_code_rules.py` (tanpa komentar, docstring, maupun kata Bahasa Indonesia di `.py`; penamaan file tes dan eval; tabel kata kerja factory), dan `tests/test_documentation.py` (tautan relatif dan taksonomi folder dokumen). `journal.record`, `ProviderFault`, dan `Fault` menerima `source` bertipe `Subsystem`, sehingga mypy menolak source di luar kosakata.
+
+Yang sengaja tidak dikerjakan:
+
+- `voice.py` tidak dipecah menjadi `stt.py` dan `tts.py`: modul ini adalah I/O suara dua arah dan pemetaan `SPEECH_LANGUAGES` dipakai kedua sisi.
+- Dedupe transkrip final tetap ada di `MeetingRecord` dan `ConversationLoop`: keduanya dipakai dan diuji terpisah, sehingga masing-masing menjaga invariannya sendiri.
+- `TypeAdapter(SessionId)` tidak dijadikan `type=` argparse: fungsi command tetap memvalidasi sendiri karena juga dipanggil langsung oleh tes dan modul lain.
+- Aturan kata kerja tidak memaksa semua nama fungsi publik masuk satu tabel; kata kerja domain (`forget_`, `ingest_`, `probe_`) dan kata benda turunan (`journal_path`, `episode_name`) tetap sah. Yang ditegakkan: sinonim factory dilarang, `create_` tidak async, `open_` adalah context manager.
+
+Ukuran: `src` naik dari 6.804 menjadi 7.043 baris. Sekitar 284 baris duplikasi dan kode mati dihapus (terbesar `playback.py` −100, `voice.py` −57, `callbacks.py` −33); skema konfigurasi bertipe, peta migrasi, kosakata taksonomi, dan konstanta invarian menambah sekitar 390 baris; client Anthropic untuk memori dan preflight sadar skema/port menambah sisanya. Pemecahan `cli.py` hampir netral (1.018 menjadi 1.032 baris). Tes: 1.407 baris duplikasi dihapus dari file tes lama dan dipusatkan di `tests/fakes.py` dan `tests/conftest.py` (+831); cakupan baru menambah skema konfigurasi (+410) serta penegakan taksonomi, aturan kode, dan dokumen (+284).
+
+Verifikasi pada HEAD branch: `ruff`, `ruff format --check`, dan `mypy` bersih; 1.356 tes offline dan browser (termasuk pemeriksaan eval offline) lulus; tes container lulus dengan image worker yang dibangun dari branch ini; 6 tes provider live lulus (jawaban dan TTS MiniMax, tiga tes Graphiti dengan ekstraksi Muse dan embedding lokal, fallback Muse). Eval replay berjalan lengkap 24 giliran dengan `recall_called` dan `no_trailing_question` 1,0; `must_mention_any` 0,833 sama dengan sebelum refactor, dan latency p95 mengikuti variasi MiniMax (permintaan mentah tanpa kode proyek 1,8–7,3 detik).
+

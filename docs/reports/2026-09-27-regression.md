@@ -1,46 +1,46 @@
-# Regression Report: Digital Twin Foundation
+# Laporan regresi: fondasi Digital Twin
 
-**Date** 2026-09-27 · **Version** 0.1.0 · **Scope** local static, unit, evaluation, browser smoke, live Muse STT, packaging, and Compose checks
+**Tanggal** 2026-09-27 · **Versi** 0.1.0 · **Cakupan** pemeriksaan lokal static, unit, evaluasi, browser smoke, Muse STT live, packaging, dan Compose
 
-## Summary
+## Ringkasan
 
-| Check | Result | Scope |
+| Pemeriksaan | Hasil | Cakupan |
 | --- | --- | --- |
-| `uv run ruff check .` | PASS | 0 lint errors |
-| `uv run ruff format --check .` | PASS | 25 files already formatted |
-| `uv run mypy` | PASS | 7 source files, 0 issues |
-| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest` | PASS | 19 passed, browser and live Muse deselected |
-| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent_eval.py` | PASS | 1 passed, 100% pass rate |
-| `uv run pytest tests/test_browser.py -m browser` | PASS | 1 passed, 1 non-browser test deselected |
-| `uv lock --check` | PASS | Lockfile is current |
-| `uv pip check` | PASS | Installed packages compatible |
-| `uv build` | PASS | Source distribution and wheel built |
-| `docker compose --profile production config --quiet` | PASS | Compose configuration valid |
-| Existing Compose service health | PASS | `fakeyou-neo4j-1` healthy; ports loopback-only |
-| Graphiti startup lifecycle | PASS | Worker construction, schema readiness, local connectivity, and cleanup |
-| Native Pipecat lifecycle | PASS | Audio frame flow, final transcript, shutdown, and upstream error rejection without provider calls |
-| Live Muse test with Indonesian synthetic audio | PASS | 9.076-second PCM fixture streamed in real time; final transcription matched |
+| `uv run ruff check .` | LULUS | 0 error lint |
+| `uv run ruff format --check .` | LULUS | 25 file sudah terformat |
+| `uv run mypy` | LULUS | 7 file source, 0 masalah |
+| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest` | LULUS | 19 lulus, browser dan Muse live deselected |
+| `DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent_eval.py` | LULUS | 1 lulus, pass rate 100% |
+| `uv run pytest tests/test_browser.py -m browser` | LULUS | 1 lulus, 1 tes non-browser deselected |
+| `uv lock --check` | LULUS | Lockfile sudah mutakhir |
+| `uv pip check` | LULUS | Paket terpasang saling kompatibel |
+| `uv build` | LULUS | Source distribution dan wheel berhasil dibangun |
+| `docker compose --profile production config --quiet` | LULUS | Konfigurasi Compose valid |
+| Kesehatan service Compose yang sudah ada | LULUS | `fakeyou-neo4j-1` healthy; port hanya loopback |
+| Lifecycle startup Graphiti | LULUS | Konstruksi worker, kesiapan schema, konektivitas lokal, dan cleanup |
+| Lifecycle Pipecat native | LULUS | Aliran frame audio, transkrip final, shutdown, dan penolakan error upstream tanpa panggilan provider |
+| Tes Muse live dengan audio sintetis berbahasa Indonesia | LULUS | Fixture PCM 9,076 detik dialirkan secara real-time; transkripsi final cocok |
 
-## Findings
+## Temuan
 
-### Fixed: Graphiti tools could run before schema initialization
+### Diperbaiki: Tool Graphiti dapat berjalan sebelum inisialisasi schema
 
-`chat --memory` now constructs Graphiti outside the active event loop and awaits schema setup before exposing tools. Regression tests cover readiness ordering and cleanup after setup failure. A local Neo4j smoke check exercised the native construction, setup, connectivity, and close path with an offline placeholder model key.
+`chat --memory` kini membangun Graphiti di luar event loop yang aktif dan menunggu setup schema selesai sebelum mengekspos tool. Tes regresi mencakup urutan kesiapan dan cleanup setelah setup gagal. Smoke check Neo4j lokal menjalankan jalur konstruksi, setup, konektivitas, dan penutupan native dengan key model placeholder offline.
 
-### Limitation: concurrent SQLite writers
+### Keterbatasan: concurrent writer SQLite
 
-A separate stress probe opening 32 native SQLite saver connections against a fresh temporary file produced 5 `database is locked` failures. The CLI remains a local single-writer development interface. The configured PostgreSQL backend still needs CLI integration before concurrent meeting workers. SQLite uses the driver's default lock timeout; it has no project-level write coordination.
+Probe stress terpisah yang membuka 32 koneksi saver SQLite native terhadap file sementara yang baru menghasilkan 5 kegagalan `database is locked`. CLI tetap menjadi antarmuka pengembangan lokal dengan single writer. Backend PostgreSQL yang sudah dikonfigurasi masih memerlukan integrasi CLI sebelum ada worker meeting yang berjalan bersamaan. SQLite memakai timeout lock bawaan driver; tidak ada koordinasi penulisan di level proyek.
 
-### [LOW] Third-party deprecation warnings during pytest
+### [LOW] Peringatan deprecation pihak ketiga selama pytest
 
-- **Location** installed dependencies (`graphiti_core`, `pipecat`)
-- **Detail** Pytest reported three warnings: Pydantic class-based config deprecation in Graphiti, Python `audioop` deprecation, and Pipecat `AudioContextTTSService` deprecation.
-- **Impact** No current test failure; future dependency or Python upgrades may require compatibility updates.
-- **Confidence** High
+- **Lokasi** dependency terpasang (`graphiti_core`, `pipecat`)
+- **Detail** Pytest melaporkan tiga peringatan: deprecation config berbasis class Pydantic di Graphiti, deprecation `audioop` Python, dan deprecation `AudioContextTTSService` Pipecat.
+- **Dampak** Tidak ada kegagalan tes saat ini; upgrade dependency atau Python di masa depan mungkin memerlukan pembaruan kompatibilitas.
+- **Keyakinan** Tinggi
 
-## Coverage gaps and limitations
+## Celah cakupan dan keterbatasan
 
-- The live Muse check used the local credential bundle and made one short external STT call. Other checks used no provider credentials and made no external model, TTS, Graphiti retrieval, or Google Meet calls.
-- DeepEval validated the deterministic `raise_hand` tool trajectory with its offline metric; it did not judge live model reasoning.
-- The browser test exercised the local browser/MCP path and a local page only. It does not prove guest admission, Meet media, or long-running meeting behavior.
-- No coverage percentage was collected; this regression run focused on pass/fail behavior and configured smoke paths.
+- Pemeriksaan Muse live memakai kumpulan kredensial lokal dan melakukan satu panggilan STT eksternal singkat. Pemeriksaan lain tidak memakai kredensial provider dan tidak melakukan panggilan eksternal ke model, TTS, retrieval Graphiti, maupun Google Meet.
+- DeepEval memvalidasi tool trajectory `raise_hand` yang deterministik dengan metrik offline-nya; DeepEval tidak menilai penalaran model live.
+- Tes browser hanya menjalankan jalur browser/MCP lokal dan sebuah halaman lokal. Tes ini tidak membuktikan admission guest, media Meet, atau perilaku meeting yang berjalan lama.
+- Tidak ada persentase coverage yang dikumpulkan; regresi ini berfokus pada perilaku lulus/gagal dan jalur smoke yang dikonfigurasi.

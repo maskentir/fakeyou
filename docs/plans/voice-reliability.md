@@ -1,60 +1,60 @@
-# Voice loop reliability plan
+# Rencana keandalan voice loop
 
-Status: implemented 29–30 September 2026 and refactored on 30 September; see the refactor and verification report. Historical live runs: `027fe902e88d` and `8581ccc34446`. Their local logs demonstrate conversation activity, but do not measure first-audible latency or independently establish every acceptance criterion below. Next implementation: [persona and scoped memory](persona-memory.md).
+Status: diimplementasikan pada 29–30 September 2026 dan direfactor pada 30 September; lihat laporan refactor dan verifikasi. Run live historis: `027fe902e88d` dan `8581ccc34446`. Log lokal keduanya menunjukkan aktivitas percakapan, tetapi tidak mengukur latency first-audible dan tidak secara mandiri membuktikan setiap kriteria acceptance di bawah. Implementasi berikutnya: [persona dan memori ber-scope](persona-memory.md).
 
-## Goal
+## Tujuan
 
-Make the admitted voice loop fast, robust, and diagnosable: replies start within seconds, transient TTS failures do not eat turns, barge-in is verified live, and a dead capture path is distinguishable from a quiet room.
+Buat voice loop pada fase admitted menjadi cepat, tangguh, dan mudah didiagnosis: jawaban mulai dalam hitungan detik, kegagalan TTS sementara tidak menghilangkan giliran, barge-in terverifikasi secara live, dan jalur capture yang mati dapat dibedakan dari ruangan yang sepi.
 
-Non-goals: swapping the STT→LLM→TTS cascade for a speech-to-speech provider (spike only if the cascade still misses the bar after streaming), speaker attribution, recording, and memory ingestion.
+Bukan tujuan: mengganti cascade STT→LLM→TTS dengan provider speech-to-speech (spike hanya jika cascade masih belum memenuhi standar setelah streaming), atribusi speaker, perekaman, dan ingestion memori.
 
-## Success Criteria
+## Kriteria keberhasilan
 
-- First audible reply audio starts within seconds of a final transcript on a normal turn (no more `kok diam` gaps).
-- Zero `Microphone muted by system` dialogs across a full live session.
-- A single transient TTS timeout no longer loses a turn.
-- Deliberate over-talk with `--barge-in` stops playback and produces a fresh reply.
-- Full suite, `mypy --strict`, and `ruff` stay green; radio silence from capture becomes an attributed verdict (follow-up item) instead of an absence of evidence.
+- Audio jawaban pertama yang terdengar mulai dalam hitungan detik setelah transkrip final pada giliran normal (tidak ada lagi jeda `kok diam`).
+- Nol dialog `Microphone muted by system` sepanjang sesi live penuh.
+- Satu timeout TTS sementara tidak lagi menghilangkan giliran.
+- Over-talk yang disengaja dengan `--barge-in` menghentikan playback dan menghasilkan jawaban baru.
+- Suite penuh, `mypy --strict`, dan `ruff` tetap hijau; keheningan total dari capture menjadi verdict yang diatribusikan (item tindak lanjut), bukan ketiadaan bukti.
 
-## Approach
+## Pendekatan
 
-Apply the cheapest structural fixes first, in this order: stream TTS audio straight to paplay (Vexa lesson — the engine already has the streaming branch, only the full-buffer path is wired); cap spoken agent replies deterministically to two sentences (the persona already asks for this but the model disobeyed live, so enforcement cannot depend on model cooperation); retry TTS synthesis exactly once on timeout; verify barge-in live before writing any new interruption code; then add energy-based capture liveness as a follow-up. No provider swap and no new abstraction layers in this plan.
+Terapkan perbaikan struktural termurah lebih dulu, dengan urutan berikut: alirkan audio TTS langsung ke paplay (pelajaran Vexa — engine sudah memiliki cabang streaming, hanya jalur full-buffer yang tersambung); batasi jawaban agent yang diucapkan menjadi dua kalimat secara deterministik (persona sudah meminta ini tetapi model melanggarnya saat live, sehingga penegakannya tidak boleh bergantung pada kepatuhan model); retry sintesis TTS tepat satu kali saat timeout; verifikasi barge-in secara live sebelum menulis kode interupsi baru; lalu tambahkan liveness capture berbasis energi sebagai tindak lanjut. Tidak ada penggantian provider dan tidak ada lapisan abstraksi baru dalam rencana ini.
 
-## Steps
+## Langkah
 
 1. Streaming TTS → paplay.
-   - Add `stream(text)` to the OpenAI speech synthesizer in `src/fakeyou/voice.py`: async iterator of PCM s16le chunks over the client's streaming speech API (verify chunk shape against the installed SDK during implementation).
-   - Pass `stream_audio=create_paplay_stream_runner(...)` and enable streaming in `open_meeting_audio` (`src/fakeyou/audio.py`). Keep full-buffer as fallback when `stream` is absent (the engine already branches on its presence).
-   - Treat paplay stdin `EPIPE` on cancel as expected cleanup (LMA pattern), not a fault.
-   - Tests: streaming order/cancel/fallback in `tests/test_voice.py`, `tests/test_playback.py`.
-2. Deterministic two-sentence cap on agent replies in `src/fakeyou/conversation.py`, before speech submission. `--speak` text is exempt (explicit operator input). Remainder is dropped for voice, never queued; full text stays in checkpoint history. Tests: 1/2/5-sentence boundaries plus the `--speak` exemption.
-3. Retry TTS synthesis once on `TimeoutError` or a classified provider timeout, in `PlaybackEngine.speak` (`src/fakeyou/playback.py`), with one bounded budget per attempt. Disable additional SDK retries in the owned speech client. For streaming, retry only before any nonempty PCM was emitted; never restart an already audible utterance. Record `synth_retry` in the journal. No retry on auth/validation/playback errors. Tests: timeout-then-success, double-timeout, partial stream, cancellation, and journal wiring.
-4. Rebuild the `meeting-worker` image; run the full suite plus `mypy --strict`, `ruff check`, `ruff format --check`.
-5. Round 2 live verification on the test link: admit → greeting audible → two linked questions → deliberate over-talk with `--converse --barge-in` → wake-phrase run → leave. Collect transcripts, speak events, transitions, journal, checkpoints.
-6. Capture activity: meter RMS on input audio frames, track startup, frame heartbeat, energy, and recent remote presence. Zero RMS with present participants produces a nonfatal `capture_silent` journal observation; everyone may be muted. It does not prove dead capture and does not degrade STT. Missing frames remain `capture_fault`; speech without finals can produce `stt_fault`. Preserve recent positive presence across unknown updates until its TTL expires.
-7. Append the voice-loop findings to `docs/reference-lessons.md` as a dated section.
+   - Tambahkan `stream(text)` ke synthesizer speech OpenAI di `src/fakeyou/voice.py`: async iterator berisi chunk PCM s16le melalui API speech streaming milik client (verifikasi bentuk chunk terhadap SDK terpasang selama implementasi).
+   - Teruskan `stream_audio=create_paplay_stream_runner(...)` dan aktifkan streaming di `open_meeting_audio` (`src/fakeyou/audio.py`). Pertahankan full-buffer sebagai fallback saat `stream` tidak ada (engine sudah bercabang berdasarkan keberadaannya).
+   - Perlakukan `EPIPE` pada stdin paplay saat cancel sebagai cleanup yang diharapkan (pola LMA), bukan fault.
+   - Tes: urutan/cancel/fallback streaming di `tests/test_voice.py`, `tests/test_playback.py`.
+2. Batas dua kalimat yang deterministik pada jawaban agent di `src/fakeyou/conversation.py`, sebelum ucapan dikirim. Teks `--speak` dikecualikan (input eksplisit operator). Sisanya dibuang untuk suara dan tidak pernah dimasukkan ke antrean; teks lengkap tetap ada di riwayat checkpoint. Tes: batas 1/2/5 kalimat ditambah pengecualian `--speak`.
+3. Retry sintesis TTS satu kali saat `TimeoutError` atau timeout provider yang terklasifikasi, di `PlaybackEngine.speak` (`src/fakeyou/playback.py`), dengan satu budget terbatas per percobaan. Nonaktifkan retry SDK tambahan pada client speech milik kita. Untuk streaming, retry hanya sebelum ada PCM tidak kosong yang dikeluarkan; jangan pernah memulai ulang ucapan yang sudah terdengar. Catat `synth_retry` di journal. Tidak ada retry untuk error auth/validasi/playback. Tes: timeout lalu berhasil, timeout ganda, stream parsial, pembatalan, dan wiring journal.
+4. Bangun ulang image `meeting-worker`; jalankan suite penuh beserta `mypy --strict`, `ruff check`, `ruff format --check`.
+5. Verifikasi live ronde 2 pada link uji: admit → sapaan terdengar → dua pertanyaan berkaitan → over-talk yang disengaja dengan `--converse --barge-in` → run wake-phrase → leave. Kumpulkan transkrip, event speak, transisi, journal, checkpoint.
+6. Aktivitas capture: ukur RMS pada frame audio input, lacak startup, heartbeat frame, energi, dan kehadiran remote terbaru. RMS nol saat ada participant menghasilkan observasi journal `capture_silent` yang tidak fatal; bisa jadi semua orang sedang di-mute. Ini tidak membuktikan capture mati dan tidak men-degrade STT. Frame yang hilang tetap `capture_fault`; ucapan tanpa final dapat menghasilkan `stt_fault`. Pertahankan kehadiran positif terbaru melewati update unknown sampai TTL-nya berakhir.
+7. Tambahkan temuan voice-loop ke `docs/reference-lessons.md` sebagai bagian bertanggal.
 
-## Validation Plan
+## Rencana validasi
 
-- Unit: `uv run pytest -q -p no:cacheprovider` (expect all green), `uv run mypy --strict src`, `uv run ruff check src tests`, `uv run ruff format --check src tests`.
-- Offline: existing container probes still pass (browser render RMS high, `agent_mic` unmuted after muter cycles); new streaming path covered by unit tests with a fake paplay on `PATH` (established pattern in `tests/test_playback.py`).
-- Live round 2: the script in step 5. Record remote hearing separately from `speak_started`, which is local dispatch/unmute before first PCM. Journal first-chunk latency measures the provider path only. Over-talk should yield stop + `speak_dropped` + a fresh reply; verify audible stop separately. Check UI/log evidence for `Microphone muted by system` and an ended lifecycle.
-- If round 2 still shows multi-tens-of-seconds replies, the plan fails over to a time-boxed speech-to-speech spike instead of further cascade tuning.
+- Unit: `uv run pytest -q -p no:cacheprovider` (diharapkan hijau semua), `uv run mypy --strict src`, `uv run ruff check src tests`, `uv run ruff format --check src tests`.
+- Offline: probe container yang sudah ada tetap lulus (RMS render browser tinggi, `agent_mic` unmuted setelah siklus muter); jalur streaming baru dicakup tes unit dengan paplay palsu di `PATH` (pola yang sudah mapan di `tests/test_playback.py`).
+- Live ronde 2: skrip pada langkah 5. Catat pendengaran remote secara terpisah dari `speak_started`, yang merupakan dispatch/unmute lokal sebelum PCM pertama. Latency first-chunk di journal hanya mengukur jalur provider. Over-talk seharusnya menghasilkan stop + `speak_dropped` + jawaban baru; verifikasi penghentian yang terdengar secara terpisah. Periksa bukti UI/log untuk `Microphone muted by system` dan lifecycle yang sudah ended.
+- Jika ronde 2 masih menunjukkan jawaban yang memerlukan beberapa puluh detik, rencana beralih ke spike speech-to-speech dengan batas waktu alih-alih tuning cascade lebih lanjut.
 
-## Risks / Open Questions
+## Risiko / pertanyaan terbuka
 
-- OpenAI streaming TTS chunk sizes and first-byte latency are provider behavior. Buffered synthesis is a compatibility path when the synthesizer lacks streaming support, not an automatic recovery after a stalled partial stream. Replaying a partially emitted utterance would repeat speech.
-- Two-sentence truncation can cut an answer mid-thought; accepted for voice (checkpoint keeps full text), flagged here so the reviewer can veto the cap length.
-- Barge-in step writes no code until a live gap is observed; if none appears, step 5 closes it with evidence only.
-- The topology remains isolated per worker. Only the playback sink is muted between utterances; muting the microphone source triggers Meet's system-mute dialog. Preserve the primary audio/conversation failure if leave cleanup also fails; leave failure during a normal duration/owner-stop path still reports `browser_failure`.
+- Ukuran chunk TTS streaming OpenAI dan latency first-byte adalah perilaku provider. Sintesis buffered adalah jalur kompatibilitas saat synthesizer tidak mendukung streaming, bukan pemulihan otomatis setelah stream parsial yang macet. Memutar ulang ucapan yang sebagian sudah dikeluarkan akan membuat ucapan terulang.
+- Pemotongan dua kalimat dapat memutus jawaban di tengah gagasan; diterima untuk suara (checkpoint menyimpan teks lengkap), dicatat di sini agar reviewer dapat memveto panjang batasnya.
+- Langkah barge-in tidak menulis kode sampai celah live teramati; jika tidak ada celah yang muncul, langkah 5 menutupnya hanya dengan bukti.
+- Topologi tetap terisolasi per worker. Hanya sink playback yang di-mute di antara ucapan; me-mute sumber mikrofon memicu dialog system-mute Meet. Pertahankan kegagalan utama audio/percakapan jika cleanup leave juga gagal; kegagalan leave pada jalur normal berbasis durasi/stop owner tetap dilaporkan sebagai `browser_failure`.
 
-## Historical live evidence
+## Bukti live historis
 
-Run `8581ccc34446` has 13 agent invocations, 3 capped replies, and local log events for 13 speech starts, 9 finishes, and 4 drops. It ends with `duration_limit`, exit 0. The inspected log contains no literal `Microphone muted by system` message. This is not proof that an unlogged dialog never appeared.
+Run `8581ccc34446` memiliki 13 invocation agent, 3 jawaban yang dibatasi, serta event log lokal berupa 13 speech start, 9 finish, dan 4 drop. Run berakhir dengan `duration_limit`, exit 0. Log yang diperiksa tidak memuat pesan literal `Microphone muted by system`. Ini bukan bukti bahwa dialog yang tidak tercatat di log tidak pernah muncul.
 
-The historical journals lack `synth_*` events because production playback did not receive the journal dependency; the refactor fixes that wiring. Durations in those journals are agent/LLM timings, not remote audio latency. A new hosted acceptance run should collect the now-wired synthesis events plus remote hearing and interruption timing.
+Journal historis tidak memiliki event `synth_*` karena playback produksi tidak menerima dependency journal; refactor memperbaiki wiring tersebut. Durasi di journal itu adalah timing agent/LLM, bukan latency audio remote. Run acceptance baru pada Meet yang di-host sebaiknya mengumpulkan event sintesis yang kini sudah tersambung, ditambah pendengaran remote dan timing interupsi.
 
-## Sources
+## Sumber
 
 - https://github.com/Vexa-ai/vexa
 - https://github.com/aws-samples/amazon-transcribe-live-meeting-assistant

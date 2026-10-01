@@ -1,32 +1,32 @@
-# Conversation refactor — 28 September 2026
+# Refactor conversation — 28 September 2026
 
-The refactor replaces overlapping graph calls with one serial consumer and keeps early transcripts until the meeting is ready. Native LangGraph still owns message history, Pipecat still owns audio, and the adapter only connects their contracts.
+Refactor ini mengganti pemanggilan graph yang tumpang tindih dengan satu consumer serial dan mempertahankan transkrip awal sampai meeting siap. LangGraph native tetap memegang riwayat pesan, Pipecat tetap memegang audio, dan adapter hanya menghubungkan kontrak keduanya.
 
-## Changed behavior
+## Perubahan perilaku
 
-- Typed transcript events are separate from native frame objects. Identical delivered payloads share an id; repeated speech at another timestamp remains a new utterance.
-- A single graph invocation writes each thread. Pending finals are processed together, preserving their order. An outdated answer is suppressed before TTS submission.
-- Owner, twin, and meeting identify the conversation checkpoint. Native message ids and metadata preserve transcript provenance.
-- Native assistant text extraction replaces custom content-block parsing. Native tool callbacks replace scanning the whole history for old tool calls.
-- Conversation startup waits for microphone readiness. Stop cancels a blocked greeting and prevents the conversation from binding afterward.
-- All runtime exit paths close the loop before its audio/client dependencies. Conversation failures have a separate terminal reason and nonzero CLI exit.
-- `--converse` explicitly enables responses; existing audio-only smoke testing stays available.
+- Event transkrip bertipe dipisahkan dari objek frame native. Payload identik yang terkirim memakai id yang sama; ucapan yang diulang pada timestamp lain tetap menjadi ucapan baru.
+- Setiap thread ditulis oleh satu invocation graph. Transkrip final yang tertunda diproses bersama, dengan urutannya dipertahankan. Jawaban usang ditahan sebelum dikirim ke TTS.
+- Owner, twin, dan meeting menentukan checkpoint percakapan. Id pesan dan metadata native menjaga provenance transkrip.
+- Ekstraksi teks assistant native menggantikan parsing content block kustom. Callback tool native menggantikan pemindaian seluruh riwayat untuk mencari tool call lama.
+- Startup percakapan menunggu kesiapan mikrofon. Stop membatalkan sapaan yang terblokir dan mencegah percakapan melakukan bind sesudahnya.
+- Semua jalur keluar runtime menutup loop sebelum dependency audio/client-nya. Kegagalan percakapan memiliki terminal reason tersendiri dan exit code CLI bukan nol.
+- `--converse` mengaktifkan respons secara eksplisit; smoke test khusus audio yang sudah ada tetap tersedia.
 
-## Verification
+## Verifikasi
 
-- 244 default tests passed; 12 opt-in tests deselected.
-- 6 real CloakBrowser tests passed, including guest lifecycle and microphone controls on local fixtures.
-- The Linux audio test image built successfully; all 64 conversation, runtime-audio, and CLI tests passed inside it. Tests and repository configuration fixtures were mounted read-only.
-- The existing deterministic DeepEval tool-correctness evaluation passed; it is not a live persona-quality score.
-- Ruff, formatting, strict mypy across 13 source files, wheel/sdist build, and Compose validation passed.
-- A separate read-only review found no important actionable defect in the refactored code.
+- 244 tes default lulus; 12 tes opt-in deselected.
+- 6 tes CloakBrowser asli lulus, termasuk lifecycle guest dan kontrol mikrofon pada fixture lokal.
+- Image tes audio Linux berhasil dibangun; seluruh 64 tes conversation, runtime-audio, dan CLI lulus di dalamnya. Tes dan fixture konfigurasi repository di-mount read-only.
+- Evaluasi tool-correctness DeepEval deterministik yang sudah ada lulus; ini bukan skor kualitas persona live.
+- Ruff, format, mypy strict pada 13 file source, build wheel/sdist, dan validasi Compose lulus.
+- Review baca-saja yang terpisah tidak menemukan cacat penting yang dapat ditindaklanjuti pada kode hasil refactor.
 
-These checks use local fixtures and native LangGraph checkpoints. They do not prove a participant has heard a model-generated reply in live Meet. The earlier Stage 2 live audio evidence remains valid and distinct.
+Pemeriksaan ini memakai fixture lokal dan checkpoint LangGraph native. Pemeriksaan ini tidak membuktikan bahwa participant telah mendengar jawaban hasil model di Meet live. Bukti audio live Tahap 2 yang lebih awal tetap berlaku dan terpisah.
 
-## Remaining limits
+## Keterbatasan yang tersisa
 
-The generation guard suppresses stale replies; it does not roll back tools or retract queued speech. A model deadline cancels the graph and ends this session; external operations still need their own idempotency. Dedupe is local to one loop, and Muse does not expose a stable utterance id through the installed adapter. Native turn detection, interruption, delivery tracking, participant mapping, and continuous visual observation remain future work.
+Generation guard menahan jawaban usang; ia tidak me-rollback tool dan tidak menarik kembali ucapan yang sudah masuk antrean. Deadline model membatalkan graph dan mengakhiri sesi ini; operasi eksternal tetap memerlukan idempotensi sendiri. Dedupe hanya berlaku di dalam satu loop, dan Muse tidak mengekspos id ucapan yang stabil melalui adapter terpasang. Turn detection native, interupsi, pelacakan delivery, pemetaan participant, dan observasi visual berkelanjutan tetap menjadi pekerjaan mendatang.
 
-Graph history includes generated replies, including drafts suppressed before speech. It is reasoning history rather than a delivery ledger; later participation work must distinguish generated, queued, played, and interrupted output.
+Riwayat graph memuat jawaban yang dihasilkan, termasuk draf yang ditahan sebelum diucapkan. Ini adalah riwayat penalaran, bukan ledger delivery; pekerjaan partisipasi berikutnya harus membedakan output yang dihasilkan, masuk antrean, diputar, dan diinterupsi.
 
-The next task is [validated persona and scoped memory access](../plans/persona-memory-access.md), beginning with the open conversation acceptance gate.
+Tugas berikutnya adalah [persona tervalidasi dan akses memori ber-scope](../plans/persona-memory-access.md), dimulai dari gate acceptance percakapan yang masih terbuka.

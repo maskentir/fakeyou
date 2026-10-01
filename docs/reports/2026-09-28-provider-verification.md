@@ -1,21 +1,21 @@
-# Live provider verification — 2026-09-28
+# Verifikasi provider live — 2026-09-28
 
-The opt-in checks in `tests/test_providers.py` exercise the native library factories with the configured `.env` credentials. They use synthetic text and a short generated speech sample. Run them from the repository root with:
+Pemeriksaan opt-in di `tests/test_providers.py` menjalankan factory library native dengan kredensial `.env` yang sudah dikonfigurasi. Pemeriksaan ini memakai teks sintetis dan sampel ucapan pendek yang dihasilkan. Jalankan dari root repository dengan:
 
 ```sh
 uv run --no-sync pytest -m live tests/test_providers.py -q --tb=short
 ```
 
-Result on 2026-09-28: **3 passed, 3 warnings in 20.84s**.
+Hasil pada 2026-09-28: **3 passed, 3 warnings in 20.84s**.
 
-| Check | Observed result |
+| Pemeriksaan | Hasil yang diamati |
 | --- | --- |
-| LangChain agent and OpenAI | `create_meeting_agent` returned an OpenAI assistant message containing the exact marker returned by a harmless local tool. The message history included the corresponding `ToolMessage`. |
-| Pipecat and OpenAI TTS | `create_openai_tts` ran inside a `PipelineWorker` and `WorkerRunner`. The collector received at least one nonempty `TTSAudioRawFrame` and a `TTSStoppedFrame`; the worker shut down. |
-| Graphiti and Neo4j | `create_graphiti_memory` added one synthetic episode in a unique `live_provider_...` group. After closing and reopening the client, scoped search found its marker in an edge fact. The test removed the episode by its returned UUID and closed the client. |
+| Agent LangChain dan OpenAI | `create_meeting_agent` mengembalikan pesan assistant OpenAI yang memuat marker persis sama dengan yang dikembalikan oleh tool lokal yang tidak berbahaya. Riwayat pesan memuat `ToolMessage` yang bersesuaian. |
+| Pipecat dan OpenAI TTS | `create_openai_tts` berjalan di dalam `PipelineWorker` dan `WorkerRunner`. Collector menerima setidaknya satu `TTSAudioRawFrame` yang tidak kosong dan satu `TTSStoppedFrame`; worker berhenti. |
+| Graphiti dan Neo4j | `create_graphiti_memory` menambahkan satu episode sintetis dalam grup `live_provider_...` yang unik. Setelah client ditutup dan dibuka ulang, pencarian ber-scope menemukan marker-nya pada fakta sebuah edge. Tes menghapus episode berdasarkan UUID yang dikembalikan, lalu menutup client. |
 
-The checks use bounded timeouts. Missing API credentials or an unavailable Neo4j listener skip the affected test. Once a provider call starts, authentication, billing, API, and database errors fail the check with a concise exception type and status where available. The tests do not log credentials or full provider responses.
+Pemeriksaan memakai timeout yang dibatasi. Kredensial API yang tidak ada atau listener Neo4j yang tidak tersedia membuat tes yang terdampak dilewati (skip). Setelah panggilan provider dimulai, error autentikasi, billing, API, dan database menggagalkan pemeriksaan dengan tipe exception dan status yang ringkas bila tersedia. Tes tidak mencatat kredensial maupun respons provider secara lengkap.
 
-These results verify one live request per path and do not establish Google Meet access, meeting audio quality, sustained latency, or production reliability. The three warnings came from installed dependencies: Graphiti's Pydantic class-based config, Pipecat's `audioop` import, and Pipecat's deprecated `AudioContextTTSService` class. None failed the checks.
+Hasil ini memverifikasi satu request live per jalur dan tidak membuktikan akses Google Meet, kualitas audio meeting, latency berkelanjutan, atau keandalan produksi. Ketiga warning berasal dari dependency terpasang: konfigurasi Pydantic berbasis class milik Graphiti, import `audioop` milik Pipecat, dan class `AudioContextTTSService` milik Pipecat yang sudah deprecated. Tidak satu pun menggagalkan pemeriksaan.
 
-API references read before implementation: [LangChain agents](https://docs.langchain.com/oss/python/langchain/agents), [Pipecat OpenAI TTS](https://docs.pipecat.ai/api-reference/server/services/tts/openai), [Graphiti episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes), and [Graphiti namespacing](https://help.getzep.com/v2/graphiti/core-concepts/graph-namespacing). Installed package signatures and the Pipecat TTS and Graphiti cleanup implementations were also inspected for the project's resolved versions.
+Referensi API yang dibaca sebelum implementasi: [LangChain agents](https://docs.langchain.com/oss/python/langchain/agents), [Pipecat OpenAI TTS](https://docs.pipecat.ai/api-reference/server/services/tts/openai), [Graphiti episodes](https://help.getzep.com/graphiti/core-concepts/adding-episodes), dan [Graphiti namespacing](https://help.getzep.com/v2/graphiti/core-concepts/graph-namespacing). Signature package terpasang serta implementasi TTS Pipecat dan cleanup Graphiti juga diperiksa untuk versi hasil resolusi proyek ini.
