@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, Pydantic 2, LangChain 1.4.2, LangGraph 1.2.12, Graphiti 0.30.2, Pipecat 1.12.0, pytest, DeepEval.
 
-**Spec:** [Project status, Stage 4](../../project-status.md), with [conversation contracts](../../conversation-plan.md) as the integration boundary.
+**Spec:** [Project status, Stage 4](../reference/project-status.md), with [conversation contracts](conversation.md) as the integration boundary.
 
 ## Global constraints
 

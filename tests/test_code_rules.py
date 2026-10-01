@@ -21,6 +21,7 @@ INDONESIAN = re.compile(
 MODULES = {path.stem for path in SOURCE_FILES} | {"cli"}
 CROSS_CUTTING_SUITES = {
     "code_rules",
+    "documentation",
     "documented_commands",
     "fakes",
     "library_contracts",

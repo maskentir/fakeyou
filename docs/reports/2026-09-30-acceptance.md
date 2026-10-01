@@ -1,6 +1,6 @@
 # Acceptance Meet 30 September 2026 dan rencana perbaikan
 
-Dokumen ini mencatat acceptance live untuk [persona dan retrieval memori](persona-memory-plan.md) (Task 4) dan [ingestion memori](memory-ingestion-plan.md) (Task 5), lalu riset perbaikan untuk kekurangan yang terlihat di log. Status: fase 1–4 diimplementasikan, acceptance kedua selesai, dan perbaikan temuan acceptance kedua diimplementasikan; bukti live untuk urutan startup baru menunggu acceptance ketiga.
+Dokumen ini mencatat acceptance live untuk [persona dan retrieval memori](../plans/persona-memory.md) (Task 4) dan [ingestion memori](../plans/memory-ingestion.md) (Task 5), lalu riset perbaikan untuk kekurangan yang terlihat di log. Status: fase 1–4 diimplementasikan, acceptance kedua selesai, dan perbaikan temuan acceptance kedua diimplementasikan; bukti live untuk urutan startup baru menunggu acceptance ketiga.
 
 ## Setup
 
@@ -127,7 +127,7 @@ Twin baru berhenti ketika transkrip final "Oke cukup" tiba, 0,62 detik setelah V
 
 ## Urutan implementasi yang diusulkan
 
-Urutan ini digantikan oleh [rencana jangka panjang](long-term-plan.md), yang mengelompokkan perbaikan berdasarkan penyebab berulang. Daftar di bawah tetap sebagai catatan riset.
+Urutan ini digantikan oleh [rencana jangka panjang](../plans/long-term.md), yang mengelompokkan perbaikan berdasarkan penyebab berulang. Daftar di bawah tetap sebagai catatan riset.
 
 1. Aturan penutup di akhir prompt dan eval multi-giliran.
 2. Jendela ingestion lintas speaker, aturan atribusi, dedupe fakta recall, dan detail fault drain.

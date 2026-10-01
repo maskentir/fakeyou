@@ -21,31 +21,31 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Mulut: sintesis unary + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in | Acceptance conversation live: jawaban model terdengar utuh tanpa patah |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
 | Mata | Tool DOM dan screenshot tersedia | Observasi screenshare/kamera berkelanjutan dan pemahaman visual oleh model multimodal |
-| Memori pengetahuan: Graphiti + Neo4j | Isolasi namespace owner/twin, ingestion transkrip dan ucapan twin per saga meeting, recall fakta berlaku dengan sumber dan waktu, catatan pemilik, serta hapus per meeting/episode teruji live ([ingestion](memory-ingestion-plan.md)) | Acceptance lintas dua meeting di Meet; atribusi nama participant; replay ucapan yang tertinggal saat drain |
+| Memori pengetahuan: Graphiti + Neo4j | Isolasi namespace owner/twin, ingestion transkrip dan ucapan twin per saga meeting, recall fakta berlaku dengan sumber dan waktu, catatan pemilik, serta hapus per meeting/episode teruji live ([ingestion](../plans/memory-ingestion.md)) | Acceptance lintas dua meeting di Meet; atribusi nama participant; replay ucapan yang tertinggal saat drain |
 | Persona | Profil JSON tervalidasi (`join --persona`), prompt yang memisahkan fakta pemilik/klaim participant/inferensi, permission tool di composition root, namespace `twin_<uuid5>` | Acceptance di Meet; kewenangan granular selain aturan "konfirmasi ke owner" |
 | Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, dan 5 skenario kualitas persona live (GEval) | Skenario meeting nyata, interupsi, kegagalan media, dan evaluasi memori hasil ingestion |
 | Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan | Kontrol jarak jauh, pemulihan crash, penjadwalan, serta antarmuka pengguna |
 
-Sumber implementasi: [agent](../src/fakeyou/agent.py), [browser](../src/fakeyou/browser.py), [voice](../src/fakeyou/voice.py), [memory](../src/fakeyou/memory.py), dan [CLI](../src/fakeyou/cli.py).
+Sumber implementasi: [agent](../../src/fakeyou/agent.py), [browser](../../src/fakeyou/browser.py), [voice](../../src/fakeyou/voice.py), [memory](../../src/fakeyou/memory.py), dan [CLI](../../src/fakeyou/cli/).
 
-LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan satu permintaan; CLI `join` memiliki browser sepanjang sesi. Checkpoint tidak mempertahankan resource browser/audio setelah proses mati. Refactor memisahkan konfigurasi, persistence lifecycle, adapter Meet, dan worker; lihat [batas modul dan verifikasi](refactor-2026-09-28.md).
+LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan satu permintaan; CLI `join` memiliki browser sepanjang sesi. Checkpoint tidak mempertahankan resource browser/audio setelah proses mati. Refactor memisahkan konfigurasi, persistence lifecycle, adapter Meet, dan worker; lihat [batas modul dan verifikasi](../reports/2026-09-28-refactor.md).
 
 ## Pengujian dan konfigurasi
 
 Hasil pengujian terakhir yang tercatat:
 
-- Acceptance Meet persona + ingestion (30 September): dua sesi `acc-0930-s1`/`acc-0930-s2` berhasil end-to-end, termasuk recall lintas meeting, interupsi, dan stop tanpa jawaban terlambat; kekurangan dan rencana perbaikan di [acceptance 30 September](acceptance-2026-09-30.md).
-- Ingestion memori (30 September): 596 tes default lulus; 5 tes provider live lulus pada tiga run berturut-turut, termasuk roundtrip ingest → recall → koreksi → forget; DeepEval persona live 79/80 skenario-run dalam 10 run. Lihat [bukti ingestion](memory-ingestion-plan.md#bukti-pengujian-30-september-2026).
-- Persona dan retrieval memori (30 September): 555 tes default dan 6 tes browser lulus; 4 tes provider live dan 5 skenario DeepEval persona live lulus, dengan satu flake ekstraksi Graphiti yang tercatat. Lihat [bukti persona](persona-memory-plan.md#bukti-pengujian-30-september-2026).
-- Refactor conversation: 244 tes default dan 6 tes browser lulus; [bukti dan batas verifikasi](conversation-refactor-2026-09-28.md).
-- Hasil regresi refactor terbaru tersedia di [laporan refactor](refactor-2026-09-28.md).
+- Acceptance Meet persona + ingestion (30 September): dua sesi `acc-0930-s1`/`acc-0930-s2` berhasil end-to-end, termasuk recall lintas meeting, interupsi, dan stop tanpa jawaban terlambat; kekurangan dan rencana perbaikan di [acceptance 30 September](../reports/2026-09-30-acceptance.md).
+- Ingestion memori (30 September): 596 tes default lulus; 5 tes provider live lulus pada tiga run berturut-turut, termasuk roundtrip ingest → recall → koreksi → forget; DeepEval persona live 79/80 skenario-run dalam 10 run. Lihat [bukti ingestion](../plans/memory-ingestion.md#bukti-pengujian-30-september-2026).
+- Persona dan retrieval memori (30 September): 555 tes default dan 6 tes browser lulus; 4 tes provider live dan 5 skenario DeepEval persona live lulus, dengan satu flake ekstraksi Graphiti yang tercatat. Lihat [bukti persona](../plans/persona-memory.md#bukti-pengujian-30-september-2026).
+- Refactor conversation: 244 tes default dan 6 tes browser lulus; [bukti dan batas verifikasi](../reports/2026-09-28-conversation-refactor.md).
+- Hasil regresi refactor terbaru tersedia di [laporan refactor](../reports/2026-09-28-refactor.md).
 - 5 tes browser asli lulus, termasuk join sampai leave pada fixture lokal dengan checkpoint SQLite asli.
-- 3 tes provider live lulus: agent/tool call, TTS, dan Graphiti reopen/search. Lihat [laporan provider](provider-verification-2026-09-28.md).
+- 3 tes provider live lulus: agent/tool call, TTS, dan Graphiti reopen/search. Lihat [laporan provider](../reports/2026-09-28-provider-verification.md).
 - 1 tes Muse live lulus; fixture audio sepanjang 9,076 detik. Run setelah penyederhanaan nama konfigurasi selesai dalam 11,17 detik, termasuk startup dan streaming. Angka ini bukan latency percakapan.
 - 1 evaluasi DeepEval lulus dengan Tool Correctness 1.0 dan respons model terprogram. Tool `raise_hand` di evaluasi adalah test double, bukan tindakan di Google Meet.
 - Ruff, format, mypy, build, resolusi dependency, dan konfigurasi Compose lulus.
 
-Lihat [verifikasi](verification.md) dan [laporan regresi](regression-2026-09-27.md) untuk cakupan dan keterbatasan. Pemeriksaan status ini tidak mengulang panggilan provider berbayar.
+Lihat [verifikasi](../runbooks/verification.md) dan [laporan regresi](../reports/2026-09-27-regression.md) untuk cakupan dan keterbatasan. Pemeriksaan status ini tidak mengulang panggilan provider berbayar.
 
 `FAKEYOU_OPENAI_API_KEY` dan `FAKEYOU_MODEL_API_KEY` sudah terbaca oleh settings. `FAKEYOU_MODEL_API_KEY` dipakai integrasi Muse saat ini; nama generik tidak berarti adapter STT otomatis mendukung semua provider. OpenAI masih menjadi provider yang disusun untuk penalaran, komponen Graphiti, dan TTS.
 
@@ -69,7 +69,7 @@ Definisikan identitas `owner_id`, `twin_id`, `meeting_id`, dan `thread_id`, lalu
 
 Bangun adapter guest: buka link, isi nama twin, atur perangkat, minta masuk, tunggu host, amati penolakan/removal, dan keluar. Admission tetap mengikuti host. Pakai CloakBrowser dan API Playwright/MCP yang tersedia; review modul join Vexa sebelum memutuskan bagian yang layak digunakan ulang.
 
-**Selesai ketika:** satu guest masuk ke meeting uji setelah diterima host, tetap hidup sampai dihentikan, lalu menutup resource. Penolakan, lobby timeout, dan gangguan browser menghasilkan status yang berbeda dan dapat diperiksa. Rinciannya di [rencana runtime sesi](meeting-runtime-plan.md).
+**Selesai ketika:** satu guest masuk ke meeting uji setelah diterima host, tetap hidup sampai dihentikan, lalu menutup resource. Penolakan, lobby timeout, dan gangguan browser menghasilkan status yang berbeda dan dapat diperiksa. Rinciannya di [rencana runtime sesi](../plans/meeting-runtime.md).
 
 **Kemajuan:** guest masuk meeting uji setelah di-admit host via CLI (`live-qus-2`), monitor sampai batas durasi, leave terverifikasi. Aksi Meet terbukti harus lewat halaman humanized langsung — klik via MCP diblokir server (`CreateMeetingDevice` 403). Ketiga jalur gagal (deny, lobby timeout, stop Ctrl+C) terverifikasi live; keputusan runtime media sudah disetujui. Tahap 1 selesai.
 
@@ -93,11 +93,11 @@ Pipecat `LangchainProcessor` versi terpasang belum meneruskan seluruh kontrak pe
 
 **Selesai ketika:** peserta bertanya di Meet, twin memakai konteks thread yang benar, lalu jawaban terdengar di meeting yang sama. Replay atau reconnect tidak menggandakan aksi eksternal.
 
-**Kemajuan:** adapter tipis native LangGraph, antrean percakapan berurutan, buffer sebelum audio siap, penolakan jawaban usang, serta cleanup sudah diuji. Duplicate delivery dengan id sama ditangani selama sesi; replay lintas proses dan efek eksternal belum memiliki jaminan exactly-once. Acceptance live masih terbuka. Lihat [kontrak conversation](conversation-plan.md).
+**Kemajuan:** adapter tipis native LangGraph, antrean percakapan berurutan, buffer sebelum audio siap, penolakan jawaban usang, serta cleanup sudah diuji. Duplicate delivery dengan id sama ditangani selama sesi; replay lintas proses dan efek eksternal belum memiliki jaminan exactly-once. Acceptance live masih terbuka. Lihat [kontrak conversation](../plans/conversation.md).
 
 ### 4. Persona dan memori pemilik
 
-Profil, prompt, dan retrieval sudah diimplementasikan dan diuji; lihat [persona dan retrieval memori](persona-memory-plan.md). Ingestion otomatis dipisahkan ke [rencana ingestion dengan provenance](memory-ingestion-plan.md) agar provenance, koreksi, dan idempotensi dapat diuji sendiri.
+Profil, prompt, dan retrieval sudah diimplementasikan dan diuji; lihat [persona dan retrieval memori](../plans/persona-memory.md). Ingestion otomatis dipisahkan ke [rencana ingestion dengan provenance](../plans/memory-ingestion.md) agar provenance, koreksi, dan idempotensi dapat diuji sendiri.
 
 Sediakan profil pemilik: identitas, gaya bahasa, tujuan meeting, pengetahuan yang diberikan, dan kewenangan untuk berbicara atau membuat komitmen. Bedakan fakta pemilik, ucapan peserta, dan kesimpulan model.
 
@@ -111,7 +111,7 @@ Sambungkan transkrip final ke Graphiti dengan ID sumber, waktu kejadian, provena
 
 Tambahkan observasi participant, active speaker, chat, screenshare, dan perubahan slide. Kirim konteks visual yang relevan ke model multimodal dengan timestamp agar referensi seperti “bagian ini” dapat dikaitkan dengan pembicaraan.
 
-Petakan speaker ke participant hanya jika buktinya cukup. Mode diarization Muse tidak otomatis menghasilkan identitas peserta Meet; adapter Pipecat saat ini juga belum memetakan event speaker ke identitas peserta pada transkrip. Simpan `unknown` ketika ambigu. Probe 30 September membuktikan Muse mengirim label per giliran (`A`, `B`) yang dibuang adapter Pipecat 1.12; rencana pemakaiannya ada di [acceptance 30 September](acceptance-2026-09-30.md#2a-diarisasi-untuk-atribusi-participant).
+Petakan speaker ke participant hanya jika buktinya cukup. Mode diarization Muse tidak otomatis menghasilkan identitas peserta Meet; adapter Pipecat saat ini juga belum memetakan event speaker ke identitas peserta pada transkrip. Simpan `unknown` ketika ambigu. Probe 30 September membuktikan Muse mengirim label per giliran (`A`, `B`) yang dibuang adapter Pipecat 1.12; rencana pemakaiannya ada di [acceptance 30 September](../reports/2026-09-30-acceptance.md#2a-diarisasi-untuk-atribusi-participant).
 
 Susun tindakan Meet yang memeriksa hasilnya: raise/lower hand, chat, mute/unmute, pemilihan perangkat, dan leave. Tambahkan presentasi/screenshare ketika skenario produk memerlukannya.
 

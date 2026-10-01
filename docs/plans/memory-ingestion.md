@@ -1,6 +1,6 @@
 # Ingestion memori dengan provenance
 
-Status: Task 1–5 selesai pada 30 September 2026 di branch `feat/memory-ingestion`, termasuk acceptance Meet dua sesi. Desain ingestion di dalam proses meeting di dokumen ini digantikan oleh ingestion dari catatan meeting setelah meeting (fase 2 [rencana jangka panjang](long-term-plan.md#status-fase-2-30-september-2026)); bagian di bawah tetap sebagai catatan tahap pertama. Acceptance menemukan kekurangan throughput, fakta pertanyaan, dan nama salah dengar; bukti dan rencana perbaikannya ada di [acceptance 30 September](acceptance-2026-09-30.md).
+Status: Task 1–5 selesai pada 30 September 2026 di branch `feat/memory-ingestion`, termasuk acceptance Meet dua sesi. Desain ingestion di dalam proses meeting di dokumen ini digantikan oleh ingestion dari catatan meeting setelah meeting (fase 2 [rencana jangka panjang](long-term.md#status-fase-2-30-september-2026)); bagian di bawah tetap sebagai catatan tahap pertama. Acceptance menemukan kekurangan throughput, fakta pertanyaan, dan nama salah dengar; bukti dan rencana perbaikannya ada di [acceptance 30 September](../reports/2026-09-30-acceptance.md).
 
 ## Hasil yang dituju
 
@@ -116,7 +116,7 @@ fakeyou memory-forget --episode EPISODE_UUID --persona PATH
 - [x] Tes offline: 16 tes ingestion (dedupe, batching, backpressure, timeout, drain, fault, whitespace), tes provenance/forget/owner note di `test_memory.py`, dan tes `join`/operator di `test_cli.py`.
 - [x] Tes live Graphiti: ingest ucapan twin dan participant → reopen → recall dengan provenance → owner note → recall → forget meeting dan episode → jumlah node grup kembali 0.
 - [x] DeepEval live: delapan skenario, termasuk ucapan twin lama, klaim participant yang bertentangan, dan owner note yang mengoreksi meeting.
-- [x] Acceptance Meet: `acc-0930-s1` → `acc-0930-s2` dengan owner/twin sama; keputusan kickoff dari sesi pertama dijawab benar di sesi kedua, tetapi asal meeting tidak disebut. Lihat [acceptance 30 September](acceptance-2026-09-30.md).
+- [x] Acceptance Meet: `acc-0930-s1` → `acc-0930-s2` dengan owner/twin sama; keputusan kickoff dari sesi pertama dijawab benar di sesi kedua, tetapi asal meeting tidak disebut. Lihat [acceptance 30 September](../reports/2026-09-30-acceptance.md).
 
 ## Bukti pengujian 30 September 2026
 

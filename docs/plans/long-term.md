@@ -1,6 +1,6 @@
 # Rencana jangka panjang: memori, suara, dan bukti kualitas
 
-Disusun 30 September 2026 dari seluruh temuan persona, ingestion, dan [acceptance Meet](acceptance-2026-09-30.md). Tujuannya menghentikan pola "lulus tes lalu gagal di live" dengan memperbaiki penyebab yang berulang, bukan setiap gejala.
+Disusun 30 September 2026 dari seluruh temuan persona, ingestion, dan [acceptance Meet](../reports/2026-09-30-acceptance.md). Tujuannya menghentikan pola "lulus tes lalu gagal di live" dengan memperbaiki penyebab yang berulang, bukan setiap gejala.
 
 ## Pola penyebab
 
@@ -51,7 +51,7 @@ Setiap sesi live menghasilkan catatan meeting yang dapat diputar ulang:
 ### 4. Konfigurasi eksplisit dan tes kontrak library (pola C)
 
 - Semua pilihan model dan provider dinyatakan di `Settings` atau profil, bukan diambil dari default library: model LLM dan small model Graphiti, embedder, mode/keyword/sample rate STT, model dan voice TTS. `fakeyou check` mencetaknya.
-- Tes kontrak kecil untuk setiap perilaku library yang kita andalkan: label `speaker` Muse ditangkap oleh `ManagedMuseSTT`, `NodeNotFoundError` bukan `ValueError`, saga menyimpan urutan, `verify_connectivity` gagal cepat, filter `is_null` diterapkan. Upgrade versi terkunci wajib melewati tes ini; [sumber library](library-sources.md) mencatat checklist upgrade.
+- Tes kontrak kecil untuk setiap perilaku library yang kita andalkan: label `speaker` Muse ditangkap oleh `ManagedMuseSTT`, `NodeNotFoundError` bukan `ValueError`, saga menyimpan urutan, `verify_connectivity` gagal cepat, filter `is_null` diterapkan. Upgrade versi terkunci wajib melewati tes ini; [sumber library](../reference/library-sources.md) mencatat checklist upgrade.
 
 ### 4a. Model per peran lewat LangChain
 
@@ -98,13 +98,13 @@ Mengganti model embedding membuat vektor lama tidak sebanding. `fakeyou memory-r
 ### 6. Identitas speaker berlapis (pola D, A)
 
 1. Sekarang: label diarisasi Muse (`A`, `B`) ditangkap `ManagedMuseSTT` dan dicakup per meeting (`Participant A of <meeting_id>`). Latency mode `DIARIZATION` diukur terlebih dahulu.
-2. Jangka panjang: audio per participant dari halaman Meet dengan korelasi tile aktif dan batas keyakinan, mengikuti pelajaran Vexa di [reference lessons](reference-lessons.md). Label diarisasi menjadi fallback.
+2. Jangka panjang: audio per participant dari halaman Meet dengan korelasi tile aktif dan batas keyakinan, mengikuti pelajaran Vexa di [reference lessons](../reference/reference-lessons.md). Label diarisasi menjadi fallback.
 3. Selalu `unknown` bila keyakinan rendah; label speaker membawa sumber keyakinannya ke catatan meeting.
 
 ### 7. Hot path yang tahan meeting panjang
 
 - Latency model per giliran perlu diukur terhadap panjang thread. Bila naik, gunakan `SummarizationMiddleware` LangChain (trigger berdasarkan ukuran konteks) atau model dengan konteks panjang; prompt caching provider membantu karena system prompt dan awal thread tetap.
-- Barge-in berbasis transkrip interim memakai `MinWordsUserTurnStartStrategy` Pipecat yang diberi status bicara dari `PlaybackEngine`. Playback tetap di luar pipeline karena TTS di dalam pipeline sebelumnya patah di live Meet ([voice](voice.md)).
+- Barge-in berbasis transkrip interim memakai `MinWordsUserTurnStartStrategy` Pipecat yang diberi status bicara dari `PlaybackEngine`. Playback tetap di luar pipeline karena TTS di dalam pipeline sebelumnya patah di live Meet ([voice](../reference/voice.md)).
 
 ## Status fase 1 (30 September 2026)
 
@@ -112,7 +112,7 @@ Selesai di branch `feat/memory-ingestion`:
 
 - Catatan meeting `MeetingRecord` (`src/fakeyou/record.py`): transkrip final, ucapan twin `speak_finished`, dan hasil tool, append-only per `meeting_id`, dibaca kembali dengan `TypeAdapter` bertipe diskriminan.
 - Journal lengkap: `speech_started`/`speech_stopped` dari VAD, `transcript_final`, `conversation_transition`, event playback, `tool_finished`/`tool_failed` (callback LangChain), dan `session_result`, semuanya dengan `at`.
-- `fakeyou report --meeting ID`. Divalidasi pada log `acc-0930-s1` yang dikonversi: angka per giliran sama dengan perhitungan manual di [acceptance](acceptance-2026-09-30.md).
+- `fakeyou report --meeting ID`. Divalidasi pada log `acc-0930-s1` yang dikonversi: angka per giliran sama dengan perhitungan manual di [acceptance](../reports/2026-09-30-acceptance.md).
 - Model per peran di `Settings` (`FAKEYOU_CHAT_*`, `FAKEYOU_MEMORY_*`, `FAKEYOU_STT_MODEL`), `create_chat_model`, host preflight dari endpoint chat, dan bagian `models` di `fakeyou check`. Tes `.env.example` menjaga nilai contoh tetap sama dengan default.
 - Tes kontrak library (`tests/test_library_contracts.py`, termasuk bukti Pipecat 1.12 membuang label diarisasi), tes command dokumentasi (`tests/test_documented_commands.py`), dan tes stop bersinyal pada image worker asli (`tests/test_worker_image.py`, marker `container`).
 
@@ -189,7 +189,7 @@ Prompt caching provider menangkap sekitar 99% token karena system prompt stabil 
 
 ## Status fase 5 (30 September 2026)
 
-Acceptance kedua (`acc2-0930-s1`, `acc2-0930-s2`) dan perbaikannya tercatat di [dokumen acceptance](acceptance-2026-09-30.md#acceptance-kedua-setelah-fase-14). Audio dan STT sekarang dibuka sebelum twin meminta masuk. Journal dan `fakeyou report` mengukur jeda startup. Barge-in tercatat sekali per interupsi. Fakta memori ditulis dalam bahasa meeting. Istilah internal prompt tidak diucapkan. Acceptance ketiga dibutuhkan untuk membuktikan urutan startup di Meet live.
+Acceptance kedua (`acc2-0930-s1`, `acc2-0930-s2`) dan perbaikannya tercatat di [dokumen acceptance](../reports/2026-09-30-acceptance.md#acceptance-kedua-setelah-fase-14). Audio dan STT sekarang dibuka sebelum twin meminta masuk. Journal dan `fakeyou report` mengukur jeda startup. Barge-in tercatat sekali per interupsi. Fakta memori ditulis dalam bahasa meeting. Istilah internal prompt tidak diucapkan. Acceptance ketiga dibutuhkan untuk membuktikan urutan startup di Meet live.
 
 ## Urutan
 
@@ -202,7 +202,7 @@ Acceptance kedua (`acc2-0930-s1`, `acc2-0930-s2`) dan perbaikannya tercatat di [
 | 5. Acceptance ulang | Skrip yang sama, dua meeting ID baru, dua pembicara bila memungkinkan, dibandingkan dengan laporan standar | Semua |
 | Berikutnya | Audio per participant, structured output bila metrik penutup tetap buruk, job ingestion Kubernetes | A, D, E |
 
-Fase 1 dan 2 mengganti butir 2–5 di urutan [dokumen acceptance](acceptance-2026-09-30.md#urutan-implementasi-yang-diusulkan). Fase 3 mengambil butir 1 dan 6.
+Fase 1 dan 2 mengganti butir 2–5 di urutan [dokumen acceptance](../reports/2026-09-30-acceptance.md#urutan-implementasi-yang-diusulkan). Fase 3 mengambil butir 1 dan 6.
 
 ## Keputusan pengguna (30 September 2026)
 

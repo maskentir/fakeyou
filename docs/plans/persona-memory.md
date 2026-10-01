@@ -1,6 +1,6 @@
 # Persona pemilik dan retrieval memori
 
-Status: Task 1–3 selesai dan teruji pada 30 September 2026 di branch `feat/persona-memory`. Task 4 dijalankan live pada hari yang sama; hasil dan sisa pekerjaan ada di [acceptance 30 September](acceptance-2026-09-30.md). Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`. Tahap berikutnya ada di [rencana ingestion memori](memory-ingestion-plan.md).
+Status: Task 1–3 selesai dan teruji pada 30 September 2026 di branch `feat/persona-memory`. Task 4 dijalankan live pada hari yang sama; hasil dan sisa pekerjaan ada di [acceptance 30 September](../reports/2026-09-30-acceptance.md). Dokumen ini menggantikan rencana persona tanggal 28 September di `docs/superpowers/plans/`. Tahap berikutnya ada di [rencana ingestion memori](memory-ingestion.md).
 
 ## Hasil yang dituju
 
@@ -97,7 +97,7 @@ Urutan di `join_meeting`:
 
 ## Task 4 — Acceptance Meet terkontrol
 
-Dijalankan 30 September 2026 pada sesi `acc-0930-s1` dan `acc-0930-s2`; lihat [acceptance 30 September](acceptance-2026-09-30.md).
+Dijalankan 30 September 2026 pada sesi `acc-0930-s1` dan `acc-0930-s2`; lihat [acceptance 30 September](../reports/2026-09-30-acceptance.md).
 
 - [x] Twin menjawab fakta profil (beta launch 14 Oktober 2026) dan fakta Graphiti dari owner note `memory-add` (demo Jumat 3 Oktober jam 2 siang), lalu mengakui harga lisensi belum diketahui.
 - [x] Pertanyaan terkait ("…harus lewat dia juga") dijawab dengan konteks thread. "Oke cukup" memotong playback; stop saat agent bekerja membatalkan agent 45 ms kemudian tanpa `speak_started` setelahnya.

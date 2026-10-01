@@ -125,7 +125,7 @@ The document's recommendation to retain transcript provenance is ahead of the cu
 
 ## Voice-loop lessons (second review, 2026-09-29)
 
-Same checkouts as above (Vexa `dba990b`, LMA `a23420a`). This pass covered the speak path, TTS latency, capture liveness, activation modes, and interruption handling. Applied in [voice-reliability-plan](voice-reliability-plan.md).
+Same checkouts as above (Vexa `dba990b`, LMA `a23420a`). This pass covered the speak path, TTS latency, capture liveness, activation modes, and interruption handling. Applied in [voice-reliability-plan](../plans/voice-reliability.md).
 
 Speak-path mute pairing: Vexa injects TTS through PulseAudio `tts_sink` into `virtual_mic` via paplay, and toggles mute per utterance — but the OS mute is always paired with a meeting-UI mic click in the same breath (unmute UI, unmute OS, speak, mute OS, mute UI) ([`tts-playback.ts`](https://github.com/Vexa-ai/vexa/blob/dba990b/core/meetings/services/bot/src/tts-playback.ts), [`capture-bridge.ts`](https://github.com/Vexa-ai/vexa/blob/dba990b/core/meetings/services/bot/src/capture-bridge.ts) SpeakController). No Vexa code handles a system-mute dialog because that pairing never produces one. Our live run on 2026-09-29 showed the failure mode directly: Meet-UI mic on plus OS source muted yields a blocking `Microphone muted by system` dialog. LMA never OS-mutes at all — its `pactl` usage is read-only topology diagnostics ([`audio-diagnostics.ts`](https://github.com/aws-samples/amazon-transcribe-live-meeting-assistant/blob/a23420a/lma-virtual-participant-stack/backend/src/audio-diagnostics.ts)). Rule: touch the source mute flag only while the meeting-UI mic is also muted, or leave the source live with silence.
 

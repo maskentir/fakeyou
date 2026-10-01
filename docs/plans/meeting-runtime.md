@@ -1,6 +1,6 @@
 # Rencana runtime sesi dan guest Google Meet
 
-Tahap 1 dari [status fondasi](project-status.md): satu worker yang hidup sepanjang meeting dan masuk sebagai guest. Dokumen ini merinci desain sebelum implementasi; kriteria selesai mengikuti tahap 1 di sana.
+Tahap 1 dari [status fondasi](../reference/project-status.md): satu worker yang hidup sepanjang meeting dan masuk sebagai guest. Dokumen ini merinci desain sebelum implementasi; kriteria selesai mengikuti tahap 1 di sana.
 
 ## Tujuan
 
@@ -30,7 +30,7 @@ Satu worker = satu meeting = satu proses logis yang memiliki:
 - Thread LangGraph + checkpointer
 - Ruang memori (`group_id` owner)
 
-Worker adalah composition root: membuka resource dalam `AsyncExitStack`, menjalankan lifecycle, lalu menutup semuanya. Mengikuti pola `chat` di [cli.py](../src/fakeyou/cli.py), tetapi hidup selama sesi, bukan satu turn.
+Worker adalah composition root: membuka resource dalam `AsyncExitStack`, menjalankan lifecycle, lalu menutup semuanya. Mengikuti pola `chat` di [cli.py](../../src/fakeyou/cli/), tetapi hidup selama sesi, bukan satu turn.
 
 Modul yang diusulkan:
 
@@ -53,7 +53,7 @@ Klasifikasi verdict mengikuti Vexa: copy penolakan eksplisit ("denied your reque
 Aturan:
 
 - Gunakan state dan persistence resmi LangGraph untuk alur aplikasi, bukan state machine tulisan tangan di atas variabel.
-- Setiap transisi menyimpan bukti: timestamp, state asal/tujuan, detail mentah platform bila ada, dan atribusi (`host_action`, `system_fault`, `user_action`). Kosakata ini mengikuti pelajaran Vexa di [reference lessons](reference-lessons.md).
+- Setiap transisi menyimpan bukti: timestamp, state asal/tujuan, detail mentah platform bila ada, dan atribusi (`host_action`, `system_fault`, `user_action`). Kosakata ini mengikuti pelajaran Vexa di [reference lessons](../reference/reference-lessons.md).
 - Aksi eksternal yang sudah terjadi (join diminta, leave dikirim) dicatat sebelum transisi agar retry tidak menggandakan efek.
 
 ## Guest adapter
@@ -167,4 +167,4 @@ Sinyal default `MeetSignals` sebagian sudah terverifikasi dari snapshot live 202
 
 ## Refactor sebelum tahap 2
 
-[Laporan refactor 28 September](refactor-2026-09-28.md) mencatat pembagian konfigurasi sesi, persistence lifecycle, worker, serta perbaikan cleanup/cancellation. Jalur humanized langsung dipertahankan. State sesi aktif setelah process crash tetap ditolak untuk mencegah replay efek eksternal; pemulihan resource otomatis belum tersedia.
+[Laporan refactor 28 September](../reports/2026-09-28-refactor.md) mencatat pembagian konfigurasi sesi, persistence lifecycle, worker, serta perbaikan cleanup/cancellation. Jalur humanized langsung dipertahankan. State sesi aktif setelah process crash tetap ditolak untuk mencegah replay efek eksternal; pemulihan resource otomatis belum tersedia.

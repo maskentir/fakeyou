@@ -1,6 +1,6 @@
 # Meeting conversation loop
 
-Status: refactored and verified offline on 28 September 2026. Live conversation acceptance remains open. Specification: [project status](project-status.md), Stage 3.
+Status: refactored and verified offline on 28 September 2026. Live conversation acceptance remains open. Specification: [project status](../reference/project-status.md), Stage 3.
 
 ## Goal
 
@@ -47,7 +47,7 @@ docker compose --profile audio run --rm --no-deps meeting-worker \
   --audio --converse --twin-name "Fakeyou AI"
 ```
 
-`--audio` alone retains transcription and optional `--speak` testing. `--converse` enables replies to final transcripts. `--memory` requires `--converse` and `--persona`; recall and transcript ingestion are scoped to the persona's owner/twin namespace. See [persona and memory](persona-memory-plan.md) and [memory ingestion](memory-ingestion-plan.md).
+`--audio` alone retains transcription and optional `--speak` testing. `--converse` enables replies to final transcripts. `--memory` requires `--converse` and `--persona`; recall and transcript ingestion are scoped to the persona's owner/twin namespace. See [persona and memory](persona-memory.md) and [memory ingestion](memory-ingestion.md).
 
 No chat/raise-hand/vision tool is attached to this meeting agent yet. MCP's separate browser command does not become a tool on the worker's Meet page automatically.
 
@@ -60,7 +60,7 @@ No chat/raise-hand/vision tool is attached to this meeting agent yet. MCP's sepa
 - [x] CLI opt-in composition, lint, typing, build, browser regression, and independent review.
 - [ ] One controlled live conversation: two linked questions, audible replies, stop during reasoning, and a separately observed remote-hearing result.
 
-Latest evidence: [conversation refactor report](conversation-refactor-2026-09-28.md). Next scoped task: [persona and memory access](superpowers/plans/2026-09-28-persona-memory-access.md).
+Latest evidence: [conversation refactor report](../reports/2026-09-28-conversation-refactor.md). Next scoped task: [persona and memory access](persona-memory-access.md).
 
 ## Documentation read
 

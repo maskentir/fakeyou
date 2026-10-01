@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, Pipecat 1.12.0, pytest, mypy --strict, ruff.
 
-**Spec:** Temuan Vexa/LMA B0–B10 (user message 2026-09-29) plus the four prior plans: [meeting-runtime-plan.md](../../meeting-runtime-plan.md), [audio-runtime-plan.md](../../audio-runtime-plan.md), [conversation-plan.md](../../conversation-plan.md), [implementation-plan.md](../../implementation-plan.md).
+**Spec:** Temuan Vexa/LMA B0–B10 (user message 2026-09-29) plus the four prior plans: [meeting-runtime-plan.md](meeting-runtime.md), [audio-runtime-plan.md](audio-runtime.md), [conversation-plan.md](conversation.md), [implementation-plan.md](implementation.md).
 
 ## Global Constraints
 

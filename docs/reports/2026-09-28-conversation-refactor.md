@@ -29,4 +29,4 @@ The generation guard suppresses stale replies; it does not roll back tools or re
 
 Graph history includes generated replies, including drafts suppressed before speech. It is reasoning history rather than a delivery ledger; later participation work must distinguish generated, queued, played, and interrupted output.
 
-The next task is [validated persona and scoped memory access](superpowers/plans/2026-09-28-persona-memory-access.md), beginning with the open conversation acceptance gate.
+The next task is [validated persona and scoped memory access](../plans/persona-memory-access.md), beginning with the open conversation acceptance gate.

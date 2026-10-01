@@ -7,7 +7,7 @@ import pytest
 from fakeyou.cli.main import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCUMENTS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+DOCUMENTS = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
 
 
 def documented_command_lines() -> list[tuple[str, str]]:

@@ -2,7 +2,7 @@
 
 Tanggal: 2026-09-27. Lingkungan: macOS ARM64, Python 3.12.13, uv 0.11.7. Status ini membedakan komponen yang diuji lokal dari integrasi provider/meeting live.
 
-Dokumen ini adalah hasil historis fondasi. Hasil terbaru tersedia di [laporan refactor](refactor-2026-09-28.md), [verifikasi provider](provider-verification-2026-09-28.md), dan [pengujian guest runtime](meeting-runtime-plan.md).
+Dokumen ini adalah hasil historis fondasi. Hasil terbaru tersedia di [laporan refactor](../reports/2026-09-28-refactor.md), [verifikasi provider](../reports/2026-09-28-provider-verification.md), dan [pengujian guest runtime](../plans/meeting-runtime.md).
 
 | Pemeriksaan | Hasil |
 | --- | --- |

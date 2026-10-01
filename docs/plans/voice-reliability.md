@@ -1,6 +1,6 @@
 # Voice loop reliability plan
 
-Status: implemented 29–30 September 2026 and refactored on 30 September; see the [refactor and verification report](voice-reliability-refactor-2026-09-30.md). Historical live runs: `027fe902e88d` and `8581ccc34446`. Their local logs demonstrate conversation activity, but do not measure first-audible latency or independently establish every acceptance criterion below. Next implementation: [persona and scoped memory](persona-memory-plan.md).
+Status: implemented 29–30 September 2026 and refactored on 30 September; see the refactor and verification report. Historical live runs: `027fe902e88d` and `8581ccc34446`. Their local logs demonstrate conversation activity, but do not measure first-audible latency or independently establish every acceptance criterion below. Next implementation: [persona and scoped memory](persona-memory.md).
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # Meeting audio runtime
 
-Status: done and verified live (`audio-bua-1`). Specification: [meeting runtime plan](meeting-runtime-plan.md), Stage 2.
+Status: done and verified live (`audio-bua-1`). Specification: [meeting runtime plan](meeting-runtime.md), Stage 2.
 
 ## Goal
 
@@ -17,7 +17,7 @@ Run one Google Meet guest per Linux container, transcribe participant audio thro
 - Browser PulseAudio environment overrides apply to the child process only. No physical host audio devices are mounted.
 - API keys enter at runtime through the existing `.env`; build context excludes credentials and local recordings.
 - Synthesis carries a per-request timeout (the SDK default would override the HTTP client) and the engine additionally bounds each synthesis call, so one dead request fails the utterance instead of wedging later speech. Stopping playback cancels an in-flight synthesis the same way it kills active audio.
-- Synthesis uses native OpenAI HTTP streaming and casual-Indonesian delivery instructions. A timeout retries once before any PCM is emitted; a partial stream is never replayed. See [voice reliability](voice-reliability-plan.md) and its [refactor report](voice-reliability-refactor-2026-09-30.md).
+- Synthesis uses native OpenAI HTTP streaming and casual-Indonesian delivery instructions. A timeout retries once before any PCM is emitted; a partial stream is never replayed. See [voice reliability](voice-reliability.md) and its refactor report.
 - The worker bypasses the Docker Desktop embedded DNS forwarder with public resolvers; it stopped resolving mid-call during live runs.
 - Keep code readable without comments or docstrings. Use thin adapters around native APIs.
 

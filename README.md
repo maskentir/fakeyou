@@ -4,7 +4,7 @@ Fondasi AI Digital Twin untuk menjadi peserta meeting online, dimulai dari Googl
 
 Fondasi SDK, worker guest Google Meet, dan audio dua arah sudah tersedia. Loop percakapan opt-in, profil persona tervalidasi, dan recall Graphiti per owner/twin sudah diuji lokal dan dengan provider live; acceptance di Google Meet serta perilaku partisipasi menjadi tahap berikutnya.
 
-Lihat [status fondasi dan pekerjaan berikutnya](docs/project-status.md) serta [hasil refactor](docs/refactor-2026-09-28.md) untuk bukti kemampuan, batas modul, dan urutan pembangunan.
+Lihat [status fondasi dan pekerjaan berikutnya](docs/reference/project-status.md) serta [hasil refactor](docs/reports/2026-09-28-refactor.md) untuk bukti kemampuan, batas modul, dan urutan pembangunan.
 
 ## Stack
 
@@ -52,7 +52,7 @@ Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua
 
 CloakBrowser mengunduh binary resmi saat dibutuhkan. Key opsional diisi lewat `FAKEYOU_BROWSER__LICENSE_KEY`; tanpa key memakai jalur binary gratis upstream. Browser binary tidak dibundel di repository. MCP terhubung ke CDP loopback browser yang baru diluncurkan. Opsi humanize pada wrapper Python tidak otomatis berlaku pada aksi proses MCP.
 
-Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser humanized langsung; tool MCP tetap tersedia untuk agent browser. Hasil uji guest live tercatat di [rencana runtime sesi](docs/meeting-runtime-plan.md).
+Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser humanized langsung; tool MCP tetap tersedia untuk agent browser. Hasil uji guest live tercatat di [rencana runtime sesi](docs/plans/meeting-runtime.md).
 
 ## Sesi Meet
 
@@ -60,7 +60,7 @@ Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser h
 uv run --env-file .env fakeyou join https://meet.google.com/xxx-yyyy-zzz --twin-name "Fakeyou Twin"
 ```
 
-Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_IDENTITY__OWNER_ID`, `FAKEYOU_IDENTITY__TWIN_ID`, `FAKEYOU_IDENTITY__TWIN_NAME`, `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_MEETING__SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/meeting-runtime-plan.md).
+Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_IDENTITY__OWNER_ID`, `FAKEYOU_IDENTITY__TWIN_ID`, `FAKEYOU_IDENTITY__TWIN_NAME`, `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_MEETING__SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/plans/meeting-runtime.md).
 
 ID sesi menerima 1–128 huruf, angka, `_`, atau `-`, dimulai dengan huruf/angka. Semua batas waktu harus positif dan finite. Checkpoint sesi yang sudah selesai dapat dibaca kembali tanpa membuka browser; checkpoint sesi aktif setelah process crash ditolak agar join tidak diulang tanpa mengetahui keadaan panggilan.
 
@@ -96,9 +96,9 @@ PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk pe
 
 ## Suara dan partisipasi
 
-`voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/voice.md). Tidak ada custom WebSocket Muse atau VAD.
+`voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/reference/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
-Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Dengan `--audio`, pipeline audio dan STT dibuka sebelum twin meminta masuk, sehingga twin sudah mendengar saat di-admit; mikrofon, ucapan awal, dan jawaban baru aktif setelah admission. Gagal membuka audio mengakhiri sesi sebagai `infra_failure` tanpa mengetuk meeting. Lihat [kontrak conversation dan batas replay](docs/conversation-plan.md) dan [hasil refactor](docs/conversation-refactor-2026-09-28.md).
+Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Dengan `--audio`, pipeline audio dan STT dibuka sebelum twin meminta masuk, sehingga twin sudah mendengar saat di-admit; mikrofon, ucapan awal, dan jawaban baru aktif setelah admission. Gagal membuka audio mengakhiri sesi sebagai `infra_failure` tanpa mengetuk meeting. Lihat [kontrak conversation dan batas replay](docs/plans/conversation.md) dan [hasil refactor](docs/reports/2026-09-28-conversation-refactor.md).
 
 ## Persona pemilik
 
@@ -134,7 +134,7 @@ docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_U
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Detail keputusan dan bukti ada di [rencana persona dan memori](docs/persona-memory-plan.md), [ingestion memori](docs/memory-ingestion-plan.md), dan [rencana jangka panjang](docs/long-term-plan.md).
+Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/persona-memory.md), [ingestion memori](docs/plans/memory-ingestion.md), dan [rencana jangka panjang](docs/plans/long-term.md).
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 
@@ -253,17 +253,17 @@ Eval persona live memerlukan `EVAL_JUDGE_API_KEY` tersendiri untuk judge OpenAI;
 
 CI menjalankan lint, format, type check, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 
-Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/live-muse-test.md). Tes ini opt-in dan memakai Model API key terpisah dari login OAuth Muse Code.
+Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/runbooks/live-muse-test.md). Tes ini opt-in dan memakai Model API key terpisah dari login OAuth Muse Code.
 
 ## Dokumen
 
-- [Arsitektur](docs/architecture.md)
-- [Kemampuan Digital Twin](docs/capabilities.md)
-- [Lesson learned Amazon LMA, Attendee, Vexa](docs/reference-lessons.md)
-- [Sumber dokumentasi library](docs/library-sources.md)
-- [Rencana fondasi](docs/implementation-plan.md)
-- [Rencana runtime sesi dan guest Meet](docs/meeting-runtime-plan.md)
-- [Persona pemilik dan retrieval memori](docs/persona-memory-plan.md)
-- [Ingestion memori dengan provenance](docs/memory-ingestion-plan.md)
-- [Acceptance Meet 30 September dan rencana perbaikan](docs/acceptance-2026-09-30.md)
-- [Rencana jangka panjang memori, suara, dan bukti kualitas](docs/long-term-plan.md)
+- [Arsitektur](docs/reference/architecture.md)
+- [Kemampuan Digital Twin](docs/reference/capabilities.md)
+- [Lesson learned Amazon LMA, Attendee, Vexa](docs/reference/reference-lessons.md)
+- [Sumber dokumentasi library](docs/reference/library-sources.md)
+- [Rencana fondasi](docs/plans/implementation.md)
+- [Rencana runtime sesi dan guest Meet](docs/plans/meeting-runtime.md)
+- [Persona pemilik dan retrieval memori](docs/plans/persona-memory.md)
+- [Ingestion memori dengan provenance](docs/plans/memory-ingestion.md)
+- [Acceptance Meet 30 September dan rencana perbaikan](docs/reports/2026-09-30-acceptance.md)
+- [Rencana jangka panjang memori, suara, dan bukti kualitas](docs/plans/long-term.md)
