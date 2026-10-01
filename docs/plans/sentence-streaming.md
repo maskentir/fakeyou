@@ -148,3 +148,7 @@ Urutan: 7 → 1 → 2 → 3 → 4 → 5 → 6 → 8. Tiap tugas: tulis regresi d
 - Chunking kasar provider (2–18 chunk) membuat kalimat siap hampir bersamaan balasan penuh; mitigasi: ukur dulu, kriteria henti tegas.
 - TTS per kalimat menambah request (dua request pendek lawan satu); mitigasi: bandingkan mulai-sintesis → PCM per kalimat pada Tugas 8.
 - Stream tak kompatibel pada fallback model tertentu; mitigasi: fallback ke `ainvoke` per giliran bila `astream` gagal, dicatat sebagai `agent_failed` stream lalu alur lama.
+
+## 8 Koreksi pasca-acceptance (2 Oktober 2026)
+
+Acceptance live menemukan `agent_finished` tercatat setelah seluruh speak sehingga pemetaan sintesis→giliran lewat `replying` mengaitkan PCM ke giliran berikut (e2e semu p50 ~15 dtk). Diperbaiki dengan `transcript_id` pada `session.speak` → `PlaybackEngine.speak` → `stream` → event `synthesis_started`/`synthesis_pcm_emitted`, dan report memakai tautan itu dengan fallback peta lama (commit `da09b49`, 5 regresi). Angka koreksi: streaming utuh n=18 median 2,918 dtk p95 8,046 dtk; baseline n=23 median 3,243 dtk p95 8,319 dtk. Putusan STOP per §6; flag tetap mati. Bukti: [acceptance streaming](../reports/2026-10-02-streaming-acceptance.md).
