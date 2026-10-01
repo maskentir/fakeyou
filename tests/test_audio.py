@@ -36,6 +36,7 @@ class _Transport:
 class _Playback:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self.indices: list[int | None] = []
         self.stops = 0
         self.closed = False
         self.speaking = False
@@ -44,8 +45,9 @@ class _Playback:
     def is_speaking(self) -> bool:
         return self.speaking
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
         self.spoken.append(text)
+        self.indices.append(sentence_index)
 
     async def stop(self) -> None:
         self.stops += 1
@@ -84,6 +86,32 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
         assert session.is_speaking is False
         await session.speak("reply")
         assert engine.spoken == ["reply"]
+        await session.stop_playback()
+        assert engine.stops == 1
+        await session.stop()
+        await session.stop()
+    assert engine.closed
+
+
+async def test_session_threads_sentence_index_to_playback_engine() -> None:
+    engine = _Playback()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        pass
+
+    async with open_meeting_audio(
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
+        on_transcript=on_transcript,
+        transport=_Transport(),
+        stt=FakeSTT(),
+        playback=engine,
+    ) as session:
+        await session.speak("First sentence.", sentence_index=0)
+        await session.speak("Second sentence.", sentence_index=1)
+        await session.speak("Legacy reply.")
+        assert engine.spoken == ["First sentence.", "Second sentence.", "Legacy reply."]
+        assert engine.indices == [0, 1, None]
         await session.stop_playback()
         assert engine.stops == 1
         await session.stop()

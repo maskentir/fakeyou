@@ -82,8 +82,10 @@ class OpenAISpeechSynthesizer:
             api_key=api_key, base_url=base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
         )
 
-    def stream(self, text: str) -> AsyncIterator[bytes]:
-        return _journaled_stream(self._journal, text, self._stream_pcm)
+    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]:
+        return _journaled_stream(
+            self._journal, text, self._stream_pcm, sentence_index=sentence_index
+        )
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -135,8 +137,10 @@ class MiniMaxSpeechSynthesizer:
         self._owns_client = client is None
         self._client = client or httpx2.AsyncClient(timeout=TTS_HTTP_TIMEOUT)
 
-    def stream(self, text: str) -> AsyncIterator[bytes]:
-        return _journaled_stream(self._journal, text, self._stream_pcm)
+    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]:
+        return _journaled_stream(
+            self._journal, text, self._stream_pcm, sentence_index=sentence_index
+        )
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -211,18 +215,24 @@ def _minimax_audio(body: dict[str, Any]) -> bytes | None:
 
 
 async def _journaled_stream(
-    journal: Journal | None, text: str, open_stream: Callable[[str], AsyncGenerator[bytes]]
+    journal: Journal | None,
+    text: str,
+    open_stream: Callable[[str], AsyncGenerator[bytes]],
+    *,
+    sentence_index: int | None = None,
 ) -> AsyncGenerator[bytes]:
     if not text.strip():
         raise ValueError("cannot synthesize blank text")
     journal = journal or Journal("", stdout=False)
+    tags: dict[str, Any] = {"chars": len(text), "streaming": True}
+    if sentence_index is not None:
+        tags["sentence_index"] = sentence_index
     with journal.timed(
         started="synthesis_started",
         finished="synthesis_finished",
         failed="synthesis_failed",
         source="tts",
-        chars=len(text),
-        streaming=True,
+        **tags,
     ) as timing:
         timing.fields.update(bytes_out=0, first_chunk_ms=None)
         try:
@@ -233,13 +243,14 @@ async def _journaled_stream(
                     timing.fields["bytes_out"] += len(chunk)
                     if timing.fields["first_chunk_ms"] is None:
                         timing.fields["first_chunk_ms"] = timing.elapsed_ms
-                        journal.record(
-                            "synthesis_pcm_emitted",
-                            source="tts",
-                            request_id=timing.fields["request_id"],
-                            first_chunk_ms=timing.fields["first_chunk_ms"],
-                            bytes_out=timing.fields["bytes_out"],
-                        )
+                        pcm: dict[str, Any] = {
+                            "request_id": timing.fields["request_id"],
+                            "first_chunk_ms": timing.fields["first_chunk_ms"],
+                            "bytes_out": timing.fields["bytes_out"],
+                        }
+                        if sentence_index is not None:
+                            pcm["sentence_index"] = sentence_index
+                        journal.record("synthesis_pcm_emitted", source="tts", **pcm)
                     yield chunk
         except Exception as error:
             fault = classify_exception("tts", error)

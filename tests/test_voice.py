@@ -501,3 +501,66 @@ def test_create_speech_synthesizer_picks_provider_defaults() -> None:
     assert (minimax._model, minimax._voice) == (MiniMaxTTS().model, MiniMaxTTS().voice)
     assert isinstance(openai, OpenAISpeechSynthesizer)
     assert (openai._model, openai._voice) == (DEFAULTS.tts.model, "nova")
+
+
+async def test_synthesizer_tags_sentence_synthesis_with_its_index(journal, openai_client) -> None:
+    client = openai_client(chunks=[b"\x00" * 64, b"\x01" * 64])
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
+
+    try:
+        first = [chunk async for chunk in synthesizer.stream("First sentence.", sentence_index=0)]
+        second = [chunk async for chunk in synthesizer.stream("Second sentence.", sentence_index=1)]
+    finally:
+        await synthesizer.aclose()
+
+    assert first == [b"\x00" * 64, b"\x01" * 64]
+    assert second == [b"\x00" * 64, b"\x01" * 64]
+    assert [row["sentence_index"] for row in journal.events("synthesis_started")] == [0, 1]
+    assert [row["sentence_index"] for row in journal.events("synthesis_pcm_emitted")] == [0, 1]
+    assert [row["sentence_index"] for row in journal.events("synthesis_finished")] == [0, 1]
+    assert [row["chars"] for row in journal.events("synthesis_started")] == [
+        len("First sentence."),
+        len("Second sentence."),
+    ]
+
+
+async def test_synthesizer_without_sentence_index_omits_the_tag(journal, openai_client) -> None:
+    client = openai_client(chunks=[b"\x00" * 64])
+    synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
+
+    try:
+        chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
+    finally:
+        await synthesizer.aclose()
+
+    assert chunks == [b"\x00" * 64]
+    for row in journal.events():
+        assert "sentence_index" not in row
+
+
+async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(journal) -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            content=_sse(
+                {"data": {"audio": "0001", "status": 1}, "base_resp": {"status_code": 0}},
+            ),
+        )
+
+    synthesizer = MiniMaxSpeechSynthesizer(
+        api_key="k",
+        client=_minimax_client(handler),
+        journal=journal,
+    )
+
+    chunks = [chunk async for chunk in synthesizer.stream("First sentence.", sentence_index=0)]
+
+    assert chunks == [b"\x00\x01"]
+    [started] = journal.events("synthesis_started")
+    [first] = journal.events("synthesis_pcm_emitted")
+    [finished] = journal.events("synthesis_finished")
+    assert (started["sentence_index"], first["sentence_index"], finished["sentence_index"]) == (
+        0,
+        0,
+        0,
+    )

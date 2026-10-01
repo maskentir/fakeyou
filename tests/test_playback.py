@@ -18,10 +18,12 @@ class _Synth:
         self.audio = audio
         self.error = error
         self.texts: list[str] = []
+        self.indices: list[int | None] = []
         self.closed = False
 
-    async def stream(self, text: str):
+    async def stream(self, text: str, *, sentence_index: int | None = None):
         self.texts.append(text)
+        self.indices.append(sentence_index)
         if self.error is not None:
             raise self.error
         yield self.audio
@@ -117,6 +119,67 @@ async def test_speak_plays_in_order_and_mutes_around_playback() -> None:
     ]
     assert engine.is_speaking is False
     assert synth.closed
+
+
+async def test_speak_threads_sentence_index_to_synthesis_in_order() -> None:
+    synth = _Synth()
+    player = _Player()
+    muter = _Muter()
+    events: list[PlaybackEvent] = []
+    engine = _engine(synth, player, muter, events, tail_seconds=0)
+
+    try:
+        await engine.speak("First sentence.", sentence_index=0)
+        await engine.speak("Second sentence.", sentence_index=1)
+    finally:
+        await engine.close()
+
+    assert synth.texts == ["First sentence.", "Second sentence."]
+    assert synth.indices == [0, 1]
+    assert player.played == [synth.audio, synth.audio]
+    assert [event.kind for event in events] == [
+        "playback_started",
+        "playback_finished",
+        "playback_started",
+        "playback_finished",
+    ]
+
+
+async def test_stop_between_sentences_drops_queued_sentence_without_trailing_audio() -> None:
+    synth = _Synth()
+    player = _Player()
+    player.release.clear()
+    muter = _Muter()
+    events: list[PlaybackEvent] = []
+    engine = _engine(synth, player, muter, events, tail_seconds=0)
+
+    try:
+        first = asyncio.create_task(engine.speak("First sentence.", sentence_index=0))
+        await asyncio.wait_for(player.started.wait(), timeout=2)
+        second = asyncio.create_task(engine.speak("Second sentence.", sentence_index=1))
+        await asyncio.sleep(0)
+        await engine.stop()
+        await asyncio.wait_for(asyncio.gather(first, second), timeout=2)
+        assert synth.texts == ["First sentence."]
+        assert synth.indices == [0]
+        assert player.played == [synth.audio]
+        assert player.cancelled == [synth.audio]
+        assert engine.is_speaking is False
+        player.release.set()
+        await engine.speak("Third sentence.", sentence_index=2)
+        assert player.played == [synth.audio, synth.audio]
+        assert synth.texts == ["First sentence.", "Third sentence."]
+        assert synth.indices == [0, 2]
+    finally:
+        player.release.set()
+        await engine.close()
+
+    dropped = [event for event in events if event.text == "Second sentence."]
+    assert [(event.kind, event.detail) for event in dropped] == [
+        ("playback_dropped", "interrupted")
+    ]
+    assert [event.kind for event in events].count("playback_dropped") == 2
+    assert [event.kind for event in events].count("playback_finished") == 1
 
 
 async def test_is_speaking_covers_playback_until_tail_elapses() -> None:

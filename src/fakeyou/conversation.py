@@ -4,12 +4,12 @@ import json
 import math
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -63,6 +63,17 @@ class ConversationResponder(Protocol):
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
     ) -> str: ...
+
+
+@runtime_checkable
+class StreamingConversationResponder(Protocol):
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]: ...
 
 
 ToolResultCallback = Callable[[str, str, float], None]
@@ -144,6 +155,64 @@ class _ToolActivity(AsyncCallbackHandler):
         context.__exit__(type(error), error, error.__traceback__)
 
 
+class _StreamPhase(_ToolActivity):
+    def __init__(
+        self,
+        on_start: Callable[[], None],
+        journal: Journal | None,
+        on_result: ToolResultCallback | None = None,
+        *,
+        transcript_id: str | None = None,
+    ) -> None:
+        super().__init__(on_start, journal, on_result, transcript_id=transcript_id)
+        self.pending = 0
+        self.boundary = 0
+        self._counted: set[UUID] = set()
+
+    async def on_tool_start(
+        self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
+    ) -> None:
+        await super().on_tool_start(serialized, input_str, run_id=run_id, **kwargs)
+        self.pending += 1
+        self.boundary += 1
+        self._counted.add(run_id)
+
+    async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        try:
+            await super().on_tool_end(output, run_id=run_id, **kwargs)
+        finally:
+            if run_id in self._counted:
+                self._counted.discard(run_id)
+                self.pending -= 1
+            self.boundary += 1
+
+    async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        try:
+            await super().on_tool_error(error, run_id=run_id, **kwargs)
+        finally:
+            if run_id in self._counted:
+                self._counted.discard(run_id)
+                self.pending -= 1
+            self.boundary += 1
+
+
+def _request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
+    return [
+        HumanMessage(
+            content=event.text,
+            id=event.id,
+            additional_kwargs={
+                "meeting_event": {
+                    "timestamp": event.timestamp,
+                    "source": event.source,
+                    "participant": event.participant,
+                }
+            },
+        )
+        for event in events
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class LangGraphResponder:
     agent: Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
@@ -154,20 +223,7 @@ class LangGraphResponder:
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
     ) -> str:
-        messages = [
-            HumanMessage(
-                content=event.text,
-                id=event.id,
-                additional_kwargs={
-                    "meeting_event": {
-                        "timestamp": event.timestamp,
-                        "source": event.source,
-                        "participant": event.participant,
-                    }
-                },
-            )
-            for event in events
-        ]
+        messages = _request_messages(events)
         try:
             result = await self.agent.ainvoke(
                 {"messages": messages},
@@ -193,6 +249,171 @@ class LangGraphResponder:
         else:
             reply = output[-1].text.strip()
         return reply
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingLangGraphResponder(LangGraphResponder):
+    language: str = DEFAULTS.speech.language
+    max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
+
+    def __post_init__(self) -> None:
+        if self.max_sentences <= 0:
+            raise ValueError("max_sentences must be positive")
+
+    async def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
+        started = time.monotonic()
+        transcript_id = events[-1].id if events else None
+        phase = _StreamPhase(
+            on_tool_start, self.journal, self.on_tool_result, transcript_id=transcript_id
+        )
+        buffer = ""
+        yielded = 0
+        spoken_chars = 0
+        observed_chars = 0
+        first_text = False
+        capped = False
+        snapshot = phase.boundary
+        try:
+            stream: AsyncIterator[Any] = self.agent.astream(
+                {"messages": _request_messages(events)},
+                config={
+                    "configurable": {"thread_id": self.thread_id},
+                    "recursion_limit": 30,
+                    "callbacks": [phase],
+                },
+                stream_mode="messages",
+            )
+            try:
+                async for message, metadata in stream:
+                    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model":
+                        continue
+                    if phase.boundary != snapshot:
+                        snapshot = phase.boundary
+                        buffer = ""
+                    if phase.pending:
+                        continue
+                    piece = message.text if isinstance(message, BaseMessage) else ""
+                    if not piece:
+                        continue
+                    observed_chars += len(piece)
+                    if not first_text and (buffer + piece).strip():
+                        first_text = True
+                        if self.journal is not None:
+                            self.journal.record(
+                                "answer_text_emitted",
+                                source="llm",
+                                request_id=request_id,
+                                transcript_id=transcript_id,
+                            )
+                    buffer += piece
+                    while yielded < self.max_sentences:
+                        boundary = match_endofsentence(buffer, language=self.language)
+                        if not boundary:
+                            break
+                        sentence, buffer = buffer[:boundary].strip(), buffer[boundary:].lstrip()
+                        if not sentence:
+                            continue
+                        if self.journal is not None:
+                            self.journal.record(
+                                "answer_sentence_emitted",
+                                source="agent",
+                                request_id=request_id,
+                                transcript_id=transcript_id,
+                                sentence_index=yielded,
+                                chars=len(sentence),
+                            )
+                        yielded += 1
+                        spoken_chars += len(sentence) + (1 if spoken_chars else 0)
+                        yield sentence
+                    if yielded >= self.max_sentences and buffer.strip():
+                        if self.journal is not None:
+                            self.journal.record(
+                                "reply_capped",
+                                source="agent",
+                                request_id=request_id,
+                                chars_in=observed_chars,
+                                chars_out=spoken_chars,
+                            )
+                        capped = True
+                        break
+            finally:
+                close = getattr(stream, "aclose", None)
+                if close is not None:
+                    with suppress(Exception):
+                        await close()
+        except TimeoutError:
+            raise
+        except Exception as error:
+            if yielded:
+                raise classify_exception("agent", error) from error
+            if self.journal is not None:
+                self.journal.record(
+                    "agent_failed",
+                    source="agent",
+                    request_id=request_id,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    detail="stream",
+                )
+            reply = await self.respond(events, on_tool_start)
+            if not first_text and reply.strip():
+                first_text = True
+                if self.journal is not None:
+                    self.journal.record(
+                        "answer_text_emitted",
+                        source="llm",
+                        request_id=request_id,
+                        transcript_id=transcript_id,
+                    )
+            capped_text = cap_spoken_reply(reply, self.max_sentences, self.language)
+            if capped_text != reply.strip():
+                if self.journal is not None:
+                    self.journal.record(
+                        "reply_capped",
+                        source="agent",
+                        request_id=request_id,
+                        chars_in=len(reply),
+                        chars_out=len(capped_text),
+                    )
+            rest = capped_text.strip()
+            while rest:
+                boundary = match_endofsentence(rest, language=self.language)
+                if not boundary:
+                    sentence = rest
+                    rest = ""
+                else:
+                    sentence, rest = rest[:boundary].strip(), rest[boundary:].strip()
+                    if not sentence:
+                        continue
+                if self.journal is not None:
+                    self.journal.record(
+                        "answer_sentence_emitted",
+                        source="agent",
+                        request_id=request_id,
+                        transcript_id=transcript_id,
+                        sentence_index=yielded,
+                        chars=len(sentence),
+                    )
+                yielded += 1
+                yield sentence
+            return
+        if not capped and yielded < self.max_sentences and buffer.strip():
+            sentence = buffer.strip()
+            if self.journal is not None:
+                self.journal.record(
+                    "answer_sentence_emitted",
+                    source="agent",
+                    request_id=request_id,
+                    transcript_id=transcript_id,
+                    sentence_index=yielded,
+                    chars=len(sentence),
+                )
+            yield sentence
 
 
 def cap_spoken_reply(
@@ -231,6 +452,7 @@ class ConversationLoop:
         barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words,
         max_spoken_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
         language: str = DEFAULTS.speech.language,
+        sentence_streaming: bool = DEFAULTS.conversation.sentence_streaming,
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,
         journal: Journal | None = None,
@@ -251,6 +473,8 @@ class ConversationLoop:
         self._barge_in_min_words = barge_in_min_words
         self._max_spoken_sentences = max_spoken_sentences
         self._language = language
+        self._sentence_streaming = sentence_streaming
+        self._stream_stops = 0
         self._barge_in = barge_in
         self._clock = clock
         self._active_until = 0.0
@@ -335,6 +559,7 @@ class ConversationLoop:
             self._interrupted = True
             self._record("barge_in_detected", trigger="interim", words=words)
             await session.stop_playback()
+            self._stream_stops += 1
 
     def _addressed(self, event: TranscriptEvent) -> bool:
         now = self._clock()
@@ -392,6 +617,95 @@ class ConversationLoop:
             self._move("acting", event_id)
             self.raise_if_failed()
 
+    async def _speak_streamed(
+        self,
+        responder: StreamingConversationResponder,
+        events: tuple[TranscriptEvent, ...],
+        generation: int,
+        event_id: str,
+        request_id: str,
+        started: float,
+    ) -> None:
+        stop_mark = self._stream_stops
+        spoken = 0
+        try:
+            async with asyncio.timeout(self._response_timeout):
+                stream = responder.stream_sentences(
+                    events, partial(self._tool_started, generation, event_id), request_id=request_id
+                )
+                try:
+                    async for sentence in stream:
+                        if (
+                            self._closed
+                            or generation != self._generation
+                            or self._stream_stops != stop_mark
+                        ):
+                            if self._closed:
+                                detail = "closed"
+                            elif generation != self._generation:
+                                detail = "stale_generation"
+                            else:
+                                detail = "stopped"
+                            self._record(
+                                "sentence_dropped",
+                                request_id=request_id,
+                                transcript_id=event_id,
+                                sentence_index=spoken,
+                                detail=detail,
+                            )
+                            self._record(
+                                "agent_cancelled",
+                                request_id=request_id,
+                                duration_ms=(self._clock() - started) * 1000,
+                            )
+                            return
+                        session = self._session
+                        if session is None:
+                            self._record(
+                                "sentence_dropped",
+                                request_id=request_id,
+                                transcript_id=event_id,
+                                sentence_index=spoken,
+                                detail="closed",
+                            )
+                            self._record(
+                                "agent_cancelled",
+                                request_id=request_id,
+                                duration_ms=(self._clock() - started) * 1000,
+                            )
+                            return
+                        if not spoken:
+                            self._move("queued", event_id)
+                        self.raise_if_failed()
+                        self._interrupted = False
+                        await session.speak(sentence, sentence_index=spoken)
+                        spoken += 1
+                finally:
+                    close = getattr(stream, "aclose", None)
+                    if close is not None:
+                        with suppress(Exception):
+                            await close()
+        except BaseException as error:
+            self._record(
+                "agent_cancelled" if isinstance(error, asyncio.CancelledError) else "agent_failed",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+            raise
+        else:
+            self._record(
+                "agent_finished",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+        self.raise_if_failed()
+        if generation != self._generation or self._closed:
+            return
+        if not spoken:
+            self._move("waiting", event_id)
+        else:
+            self._move("listening", event_id)
+
     async def _respond_pending(self) -> None:
         try:
             while self._pending and not self._closed:
@@ -404,6 +718,14 @@ class ConversationLoop:
                 started = self._clock()
                 request_id = f"{event_id}:{generation}"
                 self._record("agent_started", request_id=request_id)
+                responder = self._responder
+                if self._sentence_streaming and isinstance(
+                    responder, StreamingConversationResponder
+                ):
+                    await self._speak_streamed(
+                        responder, events, generation, event_id, request_id, started
+                    )
+                    continue
                 try:
                     async with asyncio.timeout(self._response_timeout):
                         reply = await self._responder.respond(

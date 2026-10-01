@@ -15,6 +15,9 @@ LATENCY_STAGES = (
     "final_to_reply_seconds",
     "reply_to_first_pcm_seconds",
     "speech_stopped_to_first_pcm_seconds",
+    "agent_to_first_text_seconds",
+    "agent_to_first_sentence_seconds",
+    "first_sentence_to_first_pcm_seconds",
 )
 _STAGE_BOUNDS = {
     "speech_stopped_to_final_seconds": ("speech_stopped_at", "final_at"),
@@ -23,6 +26,11 @@ _STAGE_BOUNDS = {
     "final_to_reply_seconds": ("final_at", "reply_at"),
     "reply_to_first_pcm_seconds": ("reply_at", "first_pcm_at"),
     "speech_stopped_to_first_pcm_seconds": ("speech_stopped_at", "first_pcm_at"),
+}
+_STREAM_STAGE_BOUNDS = {
+    "agent_to_first_text_seconds": ("agent_at", "first_text_at"),
+    "agent_to_first_sentence_seconds": ("agent_at", "first_sentence_at"),
+    "first_sentence_to_first_pcm_seconds": ("first_sentence_at", "first_pcm_at"),
 }
 STARTUP_MILESTONES = (
     "audio_opened",
@@ -108,6 +116,8 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "recall_count": 0,
                 "recall_ms": 0.0,
                 "incomplete": 0,
+                "sentence_count": 0,
+                "streamed": False,
             }
             speech_stopped_at = None
         elif event == "agent_started":
@@ -162,6 +172,19 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             turn = _turn_for(turns, row)
             if turn is not None:
                 turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
+        elif event == "answer_text_emitted":
+            turn = _transcript_turn(turns, row, excluded)
+            if turn is not None:
+                turn["streamed"] = True
+                if at is not None and turn.get("first_text_at") is None:
+                    turn["first_text_at"] = at
+        elif event == "answer_sentence_emitted":
+            turn = _transcript_turn(turns, row, excluded)
+            if turn is not None:
+                turn["streamed"] = True
+                if at is not None and turn.get("first_sentence_at") is None:
+                    turn["first_sentence_at"] = at
+                turn["sentence_count"] += 1
         elif event == "playback_started":
             speak_started_at = at
             if replying is not None:
@@ -368,8 +391,25 @@ def _turn_report(turn: dict[str, Any], excluded: Counter[str]) -> dict[str, Any]
         "llm_duration_seconds": round(turn["llm_ms"] / 1000, 3),
         "recall_duration_seconds": round(turn["recall_ms"] / 1000, 3),
         "incomplete_request_count": turn["incomplete"],
+        "sentence_count": turn["sentence_count"],
+        "streamed": turn["streamed"],
     }
     for stage, (start_key, end_key) in _STAGE_BOUNDS.items():
+        start, end = turn.get(start_key), turn.get(end_key)
+        if start is None or end is None:
+            excluded["missing_timestamp"] += 1
+            report[stage] = None
+            continue
+        delta = (end - start).total_seconds()
+        if delta < 0:
+            excluded["negative_latency"] += 1
+            report[stage] = None
+            continue
+        report[stage] = round(delta, 3)
+    for stage, (start_key, end_key) in _STREAM_STAGE_BOUNDS.items():
+        if not turn["streamed"]:
+            report[stage] = None
+            continue
         start, end = turn.get(start_key), turn.get(end_key)
         if start is None or end is None:
             excluded["missing_timestamp"] += 1

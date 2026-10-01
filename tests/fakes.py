@@ -378,7 +378,7 @@ class FakeAudio:
     def reconnect_state(self) -> str:
         return "queued" if self.reconnect_requests else "idle"
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
         self.events.append(f"speak:{text}")
 
     async def stop_playback(self) -> None:
@@ -651,6 +651,7 @@ class FakeReplyAudio(FakeAudio):
     def __init__(self) -> None:
         super().__init__([])
         self.spoken: list[str] = []
+        self.indices: list[int | None] = []
         self.stops = 0
         self.speaking = False
         self.on_playback_event: Callable[[PlaybackEvent], None] | None = None
@@ -659,8 +660,9 @@ class FakeReplyAudio(FakeAudio):
     def is_speaking(self) -> bool:
         return self.speaking
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
         self.spoken.append(text)
+        self.indices.append(sentence_index)
         if self.on_playback_event is not None:
             self.on_playback_event(PlaybackEvent("playback_finished", text))
 

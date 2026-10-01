@@ -24,7 +24,7 @@ class PlaybackEvent:
 
 
 class SpeechSynthesizer(Protocol):
-    def stream(self, text: str) -> AsyncIterator[bytes]: ...
+    def stream(self, text: str, *, sentence_index: int | None = None) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...
 
@@ -185,7 +185,7 @@ class PlaybackEngine:
     def is_speaking(self) -> bool:
         return self._speaking
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, *, sentence_index: int | None = None) -> None:
         if self._closed:
             return
         generation = self._generation
@@ -195,7 +195,10 @@ class PlaybackEngine:
                 emitted = False
                 chunks: AsyncIterator[bytes] | None = None
                 try:
-                    chunks = self._synthesizer.stream(text)
+                    if sentence_index is None:
+                        chunks = self._synthesizer.stream(text)
+                    else:
+                        chunks = self._synthesizer.stream(text, sentence_index=sentence_index)
                     if not hasattr(chunks, "__aiter__"):
                         raise TypeError("stream() must return an async iterator")
                     async with asyncio.timeout(self._synth_timeout_seconds):

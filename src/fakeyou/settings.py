@@ -204,6 +204,7 @@ class ConversationSettings(Section):
     barge_in_min_words: int = Field(default=3, gt=0)
     max_spoken_sentences: int = Field(default=2, gt=0)
     activation_seconds: PositiveSeconds = 30.0
+    sentence_streaming: bool = False
 
 
 class MeetingSettings(Section):

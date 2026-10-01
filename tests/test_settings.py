@@ -64,3 +64,12 @@ def test_secret_keys_read_explicit_role_environment(monkeypatch):
 def test_env_example_values_match_settings_defaults():
     example = Path(__file__).resolve().parent.parent / ".env.example"
     assert Settings(_env_file=example).model_dump() == Settings(_env_file=None).model_dump()
+
+
+def test_conversation_sentence_streaming_defaults_off():
+    assert Settings().conversation.sentence_streaming is False
+
+
+def test_conversation_sentence_streaming_reads_environment(monkeypatch):
+    monkeypatch.setenv("FAKEYOU_CONVERSATION__SENTENCE_STREAMING", "true")
+    assert Settings().conversation.sentence_streaming is True

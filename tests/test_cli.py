@@ -2060,6 +2060,41 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     assert [type(item) for item in created["middleware"]] == [ModelFallbackMiddleware]
 
 
+async def test_open_conversation_wires_sentence_streaming_flag(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.conversation import LangGraphResponder, StreamingLangGraphResponder
+
+    seen: dict = {}
+
+    class StubLoop:
+        async def close(self) -> None:
+            pass
+
+    def fake_loop(responder, **kwargs):
+        seen["responder"] = responder
+        seen["kwargs"] = kwargs
+        return StubLoop()
+
+    monkeypatch.setattr(
+        assembly, "create_meeting_agent", lambda *args, **kwargs: SimpleNamespace(name="agent")
+    )
+    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(assembly, "ConversationLoop", fake_loop)
+    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+
+    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
+        pass
+    assert type(seen["responder"]) is LangGraphResponder
+    assert seen["kwargs"]["sentence_streaming"] is False
+
+    settings.conversation.sentence_streaming = True
+    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
+        pass
+    assert isinstance(seen["responder"], StreamingLangGraphResponder)
+    assert seen["kwargs"]["sentence_streaming"] is True
+
+
 def test_preflight_probes_the_fallback_endpoint(settings):
     settings = with_muse_fallback(settings)
     settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"

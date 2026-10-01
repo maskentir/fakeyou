@@ -18,7 +18,9 @@ from fakeyou.checkpoint import open_checkpointer
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
+    ConversationResponder,
     LangGraphResponder,
+    StreamingLangGraphResponder,
     ToolResultCallback,
     conversation_thread_id,
 )
@@ -99,13 +101,26 @@ async def open_conversation(
             else default_persona(settings),
             middleware=middleware,
         )
-        conversation = ConversationLoop(
-            LangGraphResponder(
+        thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
+        responder: ConversationResponder
+        if settings.conversation.sentence_streaming:
+            responder = StreamingLangGraphResponder(
                 agent,
-                conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id),
+                thread_id,
                 journal=journal,
                 on_tool_result=on_tool_result,
-            ),
+                language=settings.speech.language,
+                max_sentences=settings.conversation.max_spoken_sentences,
+            )
+        else:
+            responder = LangGraphResponder(
+                agent,
+                thread_id,
+                journal=journal,
+                on_tool_result=on_tool_result,
+            )
+        conversation = ConversationLoop(
+            responder,
             on_transition=on_transition,
             wake_phrases=wake_phrases,
             barge_in=barge_in,
@@ -114,6 +129,7 @@ async def open_conversation(
             barge_in_min_words=settings.conversation.barge_in_min_words,
             max_spoken_sentences=settings.conversation.max_spoken_sentences,
             language=settings.speech.language,
+            sentence_streaming=settings.conversation.sentence_streaming,
             faults=faults,
             journal=journal,
         )
