@@ -88,7 +88,7 @@ def default_persona(settings: Settings) -> str:
 
 
 def chat_endpoint(settings: Settings) -> str:
-    return settings.reply.base_url or ""
+    return settings.reply.resolved_base_url
 
 
 def tts_endpoint(settings: Settings) -> str:
@@ -104,15 +104,15 @@ def preflight_hosts(
 ) -> tuple[str, ...]:
     targets: list[str | None] = [settings.tts.base_url, settings.stt.url]
     if reply:
-        targets.append(settings.reply.base_url)
+        targets.append(settings.reply.resolved_base_url)
         if settings.reply_fallback:
-            targets.append(settings.reply_fallback.base_url)
+            targets.append(settings.reply_fallback.resolved_base_url)
     if memory:
         targets.extend(
             [
                 settings.memory.store.uri,
-                settings.memory.llm.base_url,
-                settings.memory.embedder.base_url,
+                settings.memory.llm.resolved_base_url,
+                settings.memory.embedder.resolved_base_url,
             ]
         )
     return tuple(dict.fromkeys(target for target in targets if target))
@@ -120,8 +120,7 @@ def preflight_hosts(
 
 def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
     options: dict[str, Any] = {"timeout": role.timeout_seconds, "max_retries": role.max_retries}
-    if role.base_url is not None:
-        options["base_url"] = role.base_url
+    options["base_url"] = role.resolved_base_url
     if isinstance(role, (OpenAIReply, CompatibleReply)) and role.reasoning_effort is not None:
         options["reasoning_effort"] = role.reasoning_effort
     if isinstance(role, CompatibleReply) and role.extra_body is not None:
@@ -180,10 +179,10 @@ def memory_config(settings: Settings) -> Neo4jMemoryConfig:
         llm_model=settings.memory.llm.model,
         small_model=settings.memory.llm.small_model,
         llm_client=settings.memory.llm.client,
-        llm_base_url=settings.memory.llm.base_url,
+        llm_base_url=settings.memory.llm.resolved_base_url,
         llm_api_key=require_secret(settings.memory.llm.api_key, "FAKEYOU_MEMORY__LLM__API_KEY"),
         embedding_model=settings.memory.embedder.model,
-        embedding_base_url=settings.memory.embedder.base_url,
+        embedding_base_url=settings.memory.embedder.resolved_base_url,
         embedding_api_key=require_secret(
             settings.memory.embedder.api_key, "FAKEYOU_MEMORY__EMBEDDER__API_KEY"
         ),

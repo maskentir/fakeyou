@@ -34,11 +34,11 @@ from graphiti_core.prompts.models import Message
 from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
-from fakeyou.settings import DEFAULTS, RecallSettings
+from fakeyou.settings import DEFAULTS, EmbedderSettings, MemoryLLMSettings, RecallSettings
 
 RECALL_RESULT_LIMIT = DEFAULTS.memory.recall.result_limit
 RECALL_SEARCH_LIMIT = RECALL_RESULT_LIMIT * 2
@@ -117,18 +117,24 @@ class AnthropicReranker(CrossEncoderClient):
 
 
 def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
+    llm_endpoint: str = (
+        TypeAdapter(MemoryLLMSettings)
+        .validate_python({"client": config.llm_client, "base_url": config.llm_base_url})
+        .resolved_base_url
+    )
+    embedding_endpoint = EmbedderSettings(base_url=config.embedding_base_url).resolved_base_url
     llm_config = LLMConfig(
         api_key=config.llm_api_key,
         model=config.llm_model,
         small_model=config.small_model,
-        base_url=config.llm_base_url,
+        base_url=llm_endpoint,
     )
     if not config.llm_api_key or not config.embedding_api_key:
         raise ValueError("memory LLM and embedder each require their own api_key")
     llm_client = (
         AnthropicClient(
             config=llm_config,
-            client=GraphitiAnthropicSDK(api_key=config.llm_api_key, base_url=config.llm_base_url),
+            client=GraphitiAnthropicSDK(api_key=config.llm_api_key, base_url=llm_endpoint),
         )
         if config.llm_client == "anthropic"
         else {"openai": OpenAIClient, "openai_generic": OpenAIGenericClient}[config.llm_client](
@@ -138,7 +144,7 @@ def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
     embedder = OpenAIEmbedder(
         config=OpenAIEmbedderConfig(
             api_key=config.embedding_api_key,
-            base_url=config.embedding_base_url,
+            base_url=embedding_endpoint,
             embedding_model=config.embedding_model,
             embedding_dim=config.embedding_dim,
         )

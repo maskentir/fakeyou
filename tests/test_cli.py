@@ -1769,7 +1769,8 @@ def test_check_reports_the_speech_provider_defaults(settings, capsys):
 
 def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings):
     settings.memory.embedder = EmbedderSettings(base_url="", api_key=SecretStr("local"))
-    assert cli.memory_config(settings).embedding_base_url is None
+    assert settings.memory.embedder.base_url is None
+    assert cli.memory_config(settings).embedding_base_url == "https://api.openai.com/v1"
 
 
 def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> None:

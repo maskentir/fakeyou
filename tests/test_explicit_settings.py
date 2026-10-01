@@ -337,3 +337,71 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
     assert json.loads(requests[0].content)["model"] == config.llm_model
     assert "embedding-role-key" not in str(requests[0].headers)
     assert json.loads(requests[0].content)["temperature"] == memory.llm_client.temperature
+
+
+@pytest.mark.parametrize("role", ["reply", "reply_fallback"])
+@pytest.mark.parametrize(
+    "provider,expected",
+    [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
+)
+def test_blank_reply_endpoint_ignores_library_destination_environment(
+    monkeypatch, provider, expected, role
+):
+    from fakeyou.cli import create_chat_model, create_fallback_chat_model, preflight_hosts
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")
+    configuration = {"reply": {"provider": "openai", "max_retries": 0}}
+    configuration[role] = {
+        "provider": provider,
+        "base_url": "",
+        "api_key": "reply-role-key",
+        "max_retries": 0,
+    }
+    settings = Settings(_env_file=None, **configuration)
+    assert getattr(settings, role).base_url is None
+    model = create_chat_model(settings) if role == "reply" else create_fallback_chat_model(settings)
+    client = model.root_client if provider == "openai" else model._client
+    assert str(client.base_url).rstrip("/") == expected
+    assert client.api_key == "reply-role-key"
+    assert expected in preflight_hosts(settings)
+
+
+@pytest.mark.parametrize(
+    "client,expected",
+    [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
+)
+def test_blank_memory_endpoints_ignore_library_destination_environment(
+    monkeypatch, client, expected
+):
+    from fakeyou.cli import memory_config, preflight_hosts
+    from fakeyou.memory import create_graphiti_memory
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")
+    settings = Settings(
+        _env_file=None,
+        memory={
+            "llm": {"client": client, "base_url": "", "api_key": "memory-role-key"},
+            "embedder": {"base_url": "", "api_key": "embedding-role-key"},
+            "store": {"password": "store-key"},
+        },
+    )
+    assert settings.memory.llm.base_url is None
+    assert settings.memory.embedder.base_url is None
+    from dataclasses import replace
+
+    config = memory_config(settings)
+    assert config.llm_base_url == expected
+    assert config.embedding_base_url == "https://api.openai.com/v1"
+    memory = create_graphiti_memory(replace(config, llm_base_url=None, embedding_base_url=None))
+    assert str(memory.llm_client.client.base_url).rstrip("/") == expected
+    assert memory.llm_client.client.api_key == "memory-role-key"
+    assert str(memory.embedder.client.base_url).rstrip("/") == "https://api.openai.com/v1"
+    assert memory.embedder.client.api_key == "embedding-role-key"
+    if client == "openai":
+        assert str(memory.cross_encoder.client.base_url).rstrip("/") == expected
+        assert memory.cross_encoder.client.api_key == "memory-role-key"
+    targets = preflight_hosts(settings, memory=True)
+    assert expected in targets
+    assert "https://api.openai.com/v1" in targets

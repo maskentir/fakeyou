@@ -17,6 +17,19 @@ class Section(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
+class EndpointSettings(Section):
+    base_url: OptionalURL = None
+
+    @property
+    def resolved_base_url(self) -> str:
+        value = self.base_url
+        if value is None:
+            value = type(self).model_fields["base_url"].default
+        if not isinstance(value, str) or not value:
+            raise ValueError("base_url must be configured for this provider")
+        return value
+
+
 class IdentitySettings(Section):
     owner_id: SessionId = "local_owner"
     twin_id: SessionId = "local_twin"
@@ -34,7 +47,7 @@ class SpeechSettings(Section):
     language: Literal["id", "en"] = "id"
 
 
-class ReplyBase(Section):
+class ReplyBase(EndpointSettings):
     model: str = "gpt-4.1-mini"
     api_key: SecretStr | None = None
     timeout_seconds: PositiveSeconds = 15.0
@@ -125,7 +138,7 @@ class StoreSettings(Section):
     group: str = "local_twin"
 
 
-class MemoryLLMBase(Section):
+class MemoryLLMBase(EndpointSettings):
     model: str = "gpt-5.5"
     small_model: str = "gpt-4.1-nano"
     api_key: SecretStr | None = None
@@ -153,7 +166,7 @@ MemoryLLMSettings = Annotated[
 ]
 
 
-class EmbedderSettings(Section):
+class EmbedderSettings(EndpointSettings):
     model: str = "text-embedding-3-small"
     api_key: SecretStr | None = None
     base_url: OptionalURL = "https://api.openai.com/v1"

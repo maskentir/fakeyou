@@ -44,7 +44,7 @@ def provider_probe_hosts(
     return tuple(hosts)
 
 
-def _endpoint_parts(endpoint: str) -> tuple[str, int, bool] | None:
+def _endpoint_parts(endpoint: str) -> tuple[str, int, bool, bool] | None:
     raw = endpoint if "://" in endpoint else f"https://{endpoint}"
     try:
         parsed = urlparse(raw)
@@ -71,6 +71,7 @@ def _endpoint_parts(endpoint: str) -> tuple[str, int, bool] | None:
             parsed.port
             or (7687 if scheme.startswith(("bolt", "neo4j")) else 443 if secure else 80),
             secure,
+            scheme not in {"bolt+ssc", "neo4j+ssc"},
         )
     except (ValueError, UnicodeError):
         return None
@@ -86,9 +87,14 @@ async def probe_endpoint(
     parts = _endpoint_parts(endpoint)
     if parts is None:
         return ProbeResult(_safe_endpoint(endpoint), False, 0.0, "invalid endpoint")
-    host, port, secure = parts
+    host, port, secure, verify_certificate = parts
     try:
-        context = ssl_context or ssl.create_default_context() if secure else None
+        context = ssl_context if secure else None
+        if secure and context is None:
+            context = ssl.create_default_context()
+            if not verify_certificate:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
         server_name = host if secure and _is_dns_name(host) else None
         operation = _connect_and_close(host, port, context, server_name)
         if timeout_seconds is None:
