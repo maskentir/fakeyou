@@ -50,7 +50,6 @@ from fakeyou.ingestion import IngestResult, ingest_meeting
 from fakeyou.journal import JOURNAL_BACKUP_COUNT, ProviderJournal
 from fakeyou.lifecycle import meeting_thread_id
 from fakeyou.memory import (
-    Neo4jMemoryConfig,
     create_memory_tools,
     ensure_indexes,
     forget_episode,
@@ -70,6 +69,7 @@ from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.session import SessionId
 from fakeyou.settings import (
     CompatibleReply,
+    MemorySettings,
     OpenAIReply,
     ReplySettings,
     Settings,
@@ -127,7 +127,7 @@ def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
         options["extra_body"] = role.extra_body
     model: BaseChatModel = init_chat_model(
         role.model,
-        model_provider="openai" if role.provider == "openai_compatible" else role.provider,
+        model_provider=role.langchain_provider,
         api_key=require_secret(role.api_key, name),
         **options,
     )
@@ -169,25 +169,10 @@ async def show_browser_tools(settings: Settings) -> None:
         print("\n".join(tool.name for tool in tools))
 
 
-def memory_config(settings: Settings) -> Neo4jMemoryConfig:
+def memory_config(settings: Settings) -> MemorySettings:
     settings.require_roles("memory.llm", "memory.embedder")
-    return Neo4jMemoryConfig(
-        uri=settings.memory.store.uri,
-        user=settings.memory.store.user,
-        password=require_secret(settings.memory.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD"),
-        database=settings.memory.store.database,
-        llm_model=settings.memory.llm.model,
-        small_model=settings.memory.llm.small_model,
-        llm_client=settings.memory.llm.client,
-        llm_base_url=settings.memory.llm.resolved_base_url,
-        llm_api_key=require_secret(settings.memory.llm.api_key, "FAKEYOU_MEMORY__LLM__API_KEY"),
-        embedding_model=settings.memory.embedder.model,
-        embedding_base_url=settings.memory.embedder.resolved_base_url,
-        embedding_api_key=require_secret(
-            settings.memory.embedder.api_key, "FAKEYOU_MEMORY__EMBEDDER__API_KEY"
-        ),
-        embedding_dim=settings.memory.embedder.dim,
-    )
+    require_secret(settings.memory.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD")
+    return settings.memory
 
 
 async def initialize_memory(settings: Settings) -> None:
@@ -515,8 +500,7 @@ async def join_meeting(
             raise CliError(
                 "--audio requires the Linux audio worker; use docker compose run meeting-worker"
             )
-        muse_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
-        tts_key = tts_api_key(settings)
+        settings.require_roles("stt", "tts")
     stop = asyncio.Event()
     resolved_meeting_id = meeting_id or uuid.uuid4().hex[:12]
     resolved_twin_id = twin_id or settings.identity.twin_id
@@ -643,8 +627,6 @@ async def join_meeting(
         if audio_enabled:
             audio_factory = partial(
                 open_meeting_audio,
-                muse_api_key=muse_key,
-                tts_api_key=tts_key,
                 tts_settings=settings.tts,
                 speech_language=settings.speech.language,
                 stt_settings=settings.stt,
@@ -656,7 +638,6 @@ async def join_meeting(
                 journal=journal,
                 deaf_window_seconds=config.deaf_window_seconds,
                 deaf_grace_seconds=config.deaf_grace_seconds,
-                stt_model=settings.stt.model,
                 stt_keywords=speech_keywords(profile, config.twin_name) if profile else None,
             )
         preflight_kwargs: dict[str, Any] = (

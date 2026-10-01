@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Literal, Self, get_args, get_origin
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -9,6 +9,7 @@ from fakeyou.config_migration import LEGACY_KEYS
 from fakeyou.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
 TTSProvider = Literal["openai", "minimax"]
 OptionalURL = Annotated[str | None, BeforeValidator(lambda value: None if value == "" else value)]
 
@@ -63,12 +64,14 @@ class ReplyBase(EndpointSettings):
 
 
 class OpenAIReply(ReplyBase):
+    langchain_provider: ClassVar[str] = "openai"
     provider: Literal["openai"] = "openai"
     base_url: OptionalURL = "https://api.openai.com/v1"
     reasoning_effort: ReasoningEffort | None = None
 
 
 class CompatibleReply(ReplyBase):
+    langchain_provider: ClassVar[str] = "openai"
     provider: Literal["openai_compatible"] = "openai_compatible"
     base_url: str = Field(min_length=1)
     reasoning_effort: ReasoningEffort | None = None
@@ -76,6 +79,7 @@ class CompatibleReply(ReplyBase):
 
 
 class AnthropicReply(ReplyBase):
+    langchain_provider: ClassVar[str] = "anthropic"
     provider: Literal["anthropic"] = "anthropic"
     model: str = "claude-haiku-4-5-20251001"
     base_url: OptionalURL = "https://api.anthropic.com"
@@ -127,7 +131,7 @@ class STTSettings(Section):
     model: str = "muse-voice-transcribe-1.0"
     api_key: SecretStr | None = None
     url: str = "wss://api.meta.ai/v1/asr/realtime"
-    mode: Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"] = "ENDPOINTING"
+    mode: STTMode = "ENDPOINTING"
 
 
 class StoreSettings(Section):

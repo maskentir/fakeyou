@@ -1,6 +1,6 @@
 import asyncio
 import re
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
@@ -29,17 +29,7 @@ ERROR_CATEGORY_KINDS: dict[str, tuple[ProviderFaultKind, bool]] = {
 
 MAX_DETAIL_CHARS = 300
 MAX_SOURCE_CHARS = 64
-_FAULT_KINDS = frozenset(
-    {
-        "payment_required",
-        "unauthorized",
-        "rate_limited",
-        "unavailable",
-        "timeout",
-        "bad_request",
-        "unknown",
-    }
-)
+_FAULT_KINDS = frozenset(get_args(ProviderFaultKind))
 _SECRET = re.compile(r"(?i)(bearer\s+|api[_-]?key[=:]\s*|token[=:]\s*)[^\s,;]+")
 _URL = re.compile(r"https?://[^\s]+")
 _JSON_SECRET = re.compile(
@@ -118,7 +108,7 @@ def classify_minimax_status(source: str, code: int, detail: str | None = None) -
     return ProviderFault(source, kind, status=code, detail=detail, retryable=retryable)
 
 
-def _category_fault(source: str, error: BaseException) -> ProviderFault | None:
+def category_fault(source: str, error: object) -> ProviderFault | None:
     category = getattr(error, "category", None) or getattr(error, "error_category", None)
     name = getattr(category, "name", None) or getattr(category, "value", None)
     if not isinstance(name, str):
@@ -143,9 +133,9 @@ def classify_exception(source: str, error: BaseException) -> ProviderFault:
         raise error
     if isinstance(error, ProviderFault):
         return error
-    category_fault = _category_fault(source, error)
-    if category_fault is not None:
-        return category_fault
+    categorized = category_fault(source, error)
+    if categorized is not None:
+        return categorized
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):

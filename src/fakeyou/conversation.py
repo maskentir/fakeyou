@@ -5,6 +5,7 @@ import math
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -19,7 +20,7 @@ from pipecat.frames.frames import TranscriptionFrame
 from pipecat.utils.string import match_endofsentence
 
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import JournalTiming, ProviderJournal
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError as ConversationError
 from fakeyou.session import MeetingAudio
@@ -83,7 +84,9 @@ class _ToolActivity(AsyncCallbackHandler):
         self._on_start = on_start
         self._journal = journal
         self._on_result = on_result
-        self._running: dict[UUID | None, tuple[str, float]] = {}
+        self._running: dict[
+            UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
+        ] = {}
 
     async def on_chat_model_start(
         self,
@@ -108,37 +111,24 @@ class _ToolActivity(AsyncCallbackHandler):
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
     ) -> None:
         name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
-        self._running[run_id] = (str(name), time.monotonic())
+        journal = self._journal or ProviderJournal("", stdout=False)
+        context = journal.timed(
+            finished="tool_finished", failed="tool_failed", source="agent", tool=str(name)
+        )
+        self._running[run_id] = (str(name), context, context.__enter__())
         self._on_start()
 
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
-        name, duration_ms = self._finish(run_id)
         text = output.text if isinstance(output, BaseMessage) else str(output)
-        if self._journal is not None:
-            self._journal.record(
-                "tool_finished",
-                source="agent",
-                tool=name,
-                duration_ms=duration_ms,
-                output_lines=len(text.splitlines()),
-            )
+        name, context, timing = self._running.pop(run_id)
+        timing.fields["output_lines"] = len(text.splitlines())
+        context.__exit__(None, None, None)
         if self._on_result is not None:
-            self._on_result(name, text, duration_ms)
+            self._on_result(name, text, timing.fields["duration_ms"])
 
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
-        name, duration_ms = self._finish(run_id)
-        if self._journal is not None:
-            self._journal.record(
-                "tool_failed",
-                source="agent",
-                tool=name,
-                duration_ms=duration_ms,
-                error=type(error).__name__,
-            )
-
-    def _finish(self, run_id: UUID) -> tuple[str, float]:
-        name, started = self._running.pop(run_id, ("tool", time.monotonic()))
-        return name, (time.monotonic() - started) * 1000
+        _, context, _ = self._running.pop(run_id)
+        context.__exit__(type(error), error, error.__traceback__)
 
 
 @dataclass(frozen=True, slots=True)

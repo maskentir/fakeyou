@@ -1,6 +1,5 @@
 import asyncio
 import re
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -124,31 +123,40 @@ async def ingest_meeting(
             completed = False
             break
         window = windows[index]
-        started = time.monotonic()
         try:
-            async with asyncio.timeout(episode_timeout_seconds):
-                result = await memory.add_episode(
-                    name=episode_name(meeting_id, index),
-                    episode_body="\n".join(f"{u.speaker}: {u.text}" for u in window),
-                    source_description=f"Google Meet {meeting_id} transcript",
-                    reference_time=window[0].at,
-                    source=EpisodeType.message,
-                    group_id=group_id,
-                    saga=meeting_saga(meeting_id),
-                    saga_previous_episode_uuid=previous_uuid,
-                    custom_extraction_instructions=instructions,
+            timer_journal = journal or ProviderJournal("", stdout=False)
+            with timer_journal.timed(
+                finished="memory_episode",
+                failed="memory_episode",
+                source="memory_ingest",
+                window=index,
+                utterances=len(window),
+                outcome="failed",
+                facts=0,
+            ) as timing:
+                async with asyncio.timeout(episode_timeout_seconds):
+                    result = await memory.add_episode(
+                        name=episode_name(meeting_id, index),
+                        episode_body="\n".join(f"{u.speaker}: {u.text}" for u in window),
+                        source_description=f"Google Meet {meeting_id} transcript",
+                        reference_time=window[0].at,
+                        source=EpisodeType.message,
+                        group_id=group_id,
+                        saga=meeting_saga(meeting_id),
+                        saga_previous_episode_uuid=previous_uuid,
+                        custom_extraction_instructions=instructions,
+                    )
+                timing.fields.update(
+                    outcome="extracted" if result.edges else "empty", facts=len(result.edges)
                 )
         except Exception as error:
             if faults is not None:
                 faults.record(classify_exception("memory_ingest", error))
-            _record_episode(journal, index, window, started, outcome="failed", facts=0)
             completed = False
             break
         previous_uuid = result.episode.uuid
         ingested += 1
         facts += len(result.edges)
-        outcome = "extracted" if result.edges else "empty"
-        _record_episode(journal, index, window, started, outcome=outcome, facts=len(result.edges))
     if journal is not None:
         journal.record(
             "memory_ingest_finished",
@@ -170,24 +178,3 @@ def _next_window(name: str, meeting_id: str) -> int:
             "run memory-forget --meeting with --keep-record before ingesting again"
         )
     return int(match.group(1)) + 1
-
-
-def _record_episode(
-    journal: ProviderJournal | None,
-    index: int,
-    window: list[Utterance],
-    started: float,
-    *,
-    outcome: str,
-    facts: int,
-) -> None:
-    if journal is not None:
-        journal.record(
-            "memory_episode",
-            source="memory_ingest",
-            window=index,
-            utterances=len(window),
-            facts=facts,
-            outcome=outcome,
-            duration_ms=(time.monotonic() - started) * 1000,
-        )

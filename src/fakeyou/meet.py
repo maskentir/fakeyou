@@ -348,19 +348,7 @@ async def enable_meeting_microphone(
     disabled = (
         'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
     )
-    try:
-        if await page.locator(enabled).first.is_visible():
-            return True
-    except Exception as error:
-        raise RuntimeError(f"checking microphone state failed: {error}") from error
-    failure = await _click_when_ready(partial(page.locator, disabled), "microphone button", sleep)
-    if failure is not None:
-        raise RuntimeError(failure)
-    try:
-        await page.locator(enabled).first.wait_for(state="visible", timeout=10000)
-    except Exception as error:
-        raise RuntimeError(f"waiting for enabled microphone failed: {error}") from error
-    return True
+    return await _toggle_control(page, enabled, disabled, "microphone", "enabled", sleep)
 
 
 async def disable_meeting_camera(
@@ -368,18 +356,29 @@ async def disable_meeting_camera(
 ) -> bool:
     on = 'button[aria-label^="Turn off camera" i]'
     off = 'button[aria-label^="Turn on camera" i]'
+    return await _toggle_control(page, off, on, "camera", "disabled", sleep)
+
+
+async def _toggle_control(
+    page: Page,
+    desired: str,
+    toggle: str,
+    control: str,
+    state: str,
+    sleep: Callable[[float], Awaitable[None]],
+) -> bool:
     try:
-        if await page.locator(off).first.is_visible():
+        if await page.locator(desired).first.is_visible():
             return True
     except Exception as error:
-        raise RuntimeError(f"checking camera state failed: {error}") from error
-    failure = await _click_when_ready(partial(page.locator, on), "camera button", sleep)
+        raise RuntimeError(f"checking {control} state failed: {error}") from error
+    failure = await _click_when_ready(partial(page.locator, toggle), f"{control} button", sleep)
     if failure is not None:
         raise RuntimeError(failure)
     try:
-        await page.locator(off).first.wait_for(state="visible", timeout=10000)
+        await page.locator(desired).first.wait_for(state="visible", timeout=10000)
     except Exception as error:
-        raise RuntimeError(f"waiting for disabled camera failed: {error}") from error
+        raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
     return True
 
 

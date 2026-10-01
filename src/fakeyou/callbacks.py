@@ -1,20 +1,11 @@
-from dataclasses import dataclass
-
+from fakeyou.faults import Fault
 from fakeyou.journal import ProviderJournal
-
-
-@dataclass(frozen=True, slots=True)
-class ConsumerFault:
-    source: str = "stt"
-    kind: str = "callback"
-    status: int | None = None
-    detail: str | None = None
 
 
 def record_consumer_fault(
     reporter: object, detail: str, error: BaseException, *, journal: ProviderJournal | None = None
 ) -> None:
-    fault = ConsumerFault(detail=f"{detail}: {type(error).__name__}")
+    fault = Fault(source="stt", kind="callback", detail=f"{detail}: {type(error).__name__}")
     record = getattr(reporter, "record", None)
     if record is not None:
         try:

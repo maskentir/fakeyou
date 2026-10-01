@@ -3,7 +3,7 @@ from asyncio.subprocess import DEVNULL, PIPE
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol
 
 from fakeyou.faults import FaultReporter
 from fakeyou.invariants import PCM_CHANNELS, PCM_FORMAT
@@ -23,12 +23,11 @@ class PlaybackEvent:
 
 
 class SpeechSynthesizer(Protocol):
-    async def synthesize(self, text: str) -> bytes: ...
+    def stream(self, text: str) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...
 
 
-PlayAudio = Callable[[bytes], Coroutine[Any, Any, None]]
 PlayStream = Callable[[AsyncIterator[bytes]], Coroutine[Any, Any, None]]
 SetMuted = Callable[[bool], Coroutine[Any, Any, None]]
 
@@ -54,48 +53,10 @@ async def _cleanup_process(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
-def _consume_synth_outcome(task: asyncio.Task[Any]) -> None:
-    if not task.cancelled():
-        task.exception()
-
-
 def _is_timeout(error: BaseException) -> bool:
     return isinstance(error, (TimeoutError, ProviderFault)) and (
         not isinstance(error, ProviderFault) or error.kind == "timeout"
     )
-
-
-def create_paplay_runner(*, sink: str, rate: int) -> PlayAudio:
-    async def play(audio: bytes) -> None:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "paplay",
-                f"--device={sink}",
-                f"--format={PCM_FORMAT}",
-                f"--rate={rate}",
-                f"--channels={PCM_CHANNELS}",
-                "--raw",
-                stdin=PIPE,
-                stdout=DEVNULL,
-                stderr=PIPE,
-            )
-        except OSError as error:
-            raise PlaybackError(f"paplay is unavailable: {error}") from error
-
-        try:
-            _, stderr = await proc.communicate(audio)
-            returncode = proc.returncode
-        except OSError as error:
-            raise PlaybackError(f"paplay stream failed: {error}") from error
-        finally:
-            if proc.returncode is None:
-                await _cleanup_process(proc)
-        if returncode != 0:
-            raise PlaybackError(
-                f"paplay exited with {returncode}: {stderr.decode(errors='replace')[:200]}"
-            )
-
-    return play
 
 
 def create_paplay_stream_runner(*, sink: str, rate: int) -> PlayStream:
@@ -178,35 +139,30 @@ class PlaybackEngine:
         self,
         synthesizer: SpeechSynthesizer,
         *,
-        play_audio: PlayAudio,
         set_muted: SetMuted,
         on_event: Callable[[PlaybackEvent], None] | None = None,
         tail_seconds: float = 0.5,
         synth_timeout_seconds: float = SYNTH_TIMEOUT_SECONDS,
-        stream_audio: PlayStream | None = None,
-        streaming: bool = False,
+        stream_audio: PlayStream,
         playback_timeout_seconds: float = PLAYBACK_TIMEOUT_SECONDS,
         cleanup_timeout_seconds: float = CLEANUP_TIMEOUT_SECONDS,
         fault_reporter: FaultReporter | None = None,
         journal: ProviderJournal | None = None,
     ) -> None:
         self._synthesizer = synthesizer
-        self._play_audio = play_audio
         self._set_muted = set_muted
         self._on_event = on_event
         self._tail_seconds = tail_seconds
         self._synth_timeout_seconds = synth_timeout_seconds
         self._stream_audio = stream_audio
-        self._streaming = streaming
         self._playback_timeout_seconds = playback_timeout_seconds
         self._cleanup_timeout_seconds = cleanup_timeout_seconds
         self._faults = fault_reporter
         self._journal = journal
-        self._queue: asyncio.Queue[
-            tuple[bytes | AsyncIterator[bytes], str, asyncio.Future[None]]
-        ] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[AsyncIterator[bytes], str, asyncio.Future[None]]] = (
+            asyncio.Queue()
+        )
         self._worker: asyncio.Task[None] | None = None
-        self._synth_tasks: set[asyncio.Task[Any]] = set()
         self._play_tasks: set[asyncio.Task[Any]] = set()
         self._muted = True
         self._speaking = False
@@ -223,110 +179,51 @@ class PlaybackEngine:
         if self._closed:
             return
         generation = self._generation
-        stream_call = getattr(self._synthesizer, "stream", None) if self._streaming else None
-        if stream_call is not None and self._stream_audio is not None:
 
-            async def retryable_stream() -> AsyncIterator[bytes]:
-                for attempt in range(2):
-                    emitted = False
-                    chunks: AsyncIterator[bytes] | None = None
-                    try:
-                        chunks = stream_call(text)
-                        if not hasattr(chunks, "__aiter__"):
-                            raise TypeError("stream() must return an async iterator")
-                        async with asyncio.timeout(self._synth_timeout_seconds):
-                            async for chunk in chunks:
-                                if chunk:
-                                    emitted = True
-                                yield chunk
-                        return
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as error:
-                        if (
-                            attempt == 0
-                            and not emitted
-                            and _is_timeout(error)
-                            and generation == self._generation
-                            and not self._closed
-                        ):
-                            self._record_retry(streaming=True)
-                            continue
-                        raise
-                    finally:
-                        if chunks is not None:
-                            close = getattr(chunks, "aclose", None)
-                            if close is not None:
-                                with suppress(Exception):
-                                    await close()
-
-            if generation != self._generation or self._closed:
-                self._emit("speak_dropped", text, "interrupted")
-                return
-            await self._play_queued(retryable_stream(), text)
-            return
-        audio: bytes | None = None
-        attempts = 0
-        while audio is None:
-            attempts += 1
-            if attempts > 1 and (generation != self._generation or self._closed):
-                self._emit("speak_dropped", text, "interrupted")
-                return
-            synth_task = asyncio.create_task(self._synthesizer.synthesize(text))
-            self._synth_tasks.add(synth_task)
-            synth_task.add_done_callback(_consume_synth_outcome)
-            try:
+        async def retryable_stream() -> AsyncIterator[bytes]:
+            for attempt in range(2):
+                emitted = False
+                chunks: AsyncIterator[bytes] | None = None
                 try:
+                    chunks = self._synthesizer.stream(text)
+                    if not hasattr(chunks, "__aiter__"):
+                        raise TypeError("stream() must return an async iterator")
                     async with asyncio.timeout(self._synth_timeout_seconds):
-                        audio = await synth_task
-                except TimeoutError:
-                    if synth_task.done() and not synth_task.cancelled():
-                        outcome = synth_task.exception()
-                        if outcome is not None and _is_timeout(outcome) and attempts == 1:
-                            self._record_retry(streaming=False)
-                            continue
-                        detail = (
-                            f"{type(outcome).__name__}: {outcome}"
-                            if outcome is not None
-                            else "synthesis failed"
-                        )
-                        self._emit("speak_failed", text, detail)
-                        self._record_fault(
-                            "tts", outcome if outcome is not None else TimeoutError(detail)
-                        )
-                    else:
-                        synth_task.cancel()
-                        if attempts == 1:
-                            self._record_retry(streaming=False)
-                            continue
-                        self._emit("speak_failed", text, "synthesis timed out after retry")
-                        self._record_fault("tts", TimeoutError("synthesis timed out"))
+                        async for chunk in chunks:
+                            if chunk:
+                                emitted = True
+                            yield chunk
                     return
-            except asyncio.CancelledError:
-                if not synth_task.done():
-                    synth_task.cancel()
-                current = asyncio.current_task()
-                if current is not None and current.cancelling() > 0:
+                except asyncio.CancelledError:
                     raise
-                if generation != self._generation or self._closed:
-                    self._emit("speak_dropped", text, "interrupted")
-                    return
-                raise
-            except Exception as error:
-                if attempts == 1 and _is_timeout(error):
-                    self._record_retry(streaming=False)
-                    continue
-                self._emit("speak_failed", text, f"{type(error).__name__}: {error}")
-                self._record_fault("tts", error)
-                return
-            finally:
-                self._synth_tasks.discard(synth_task)
+                except Exception as error:
+                    if (
+                        attempt == 0
+                        and not emitted
+                        and _is_timeout(error)
+                        and generation == self._generation
+                        and not self._closed
+                    ):
+                        self._record_retry(streaming=True)
+                        continue
+                    fault = classify_exception("tts", error)
+                    if fault is error:
+                        raise
+                    raise fault from error
+                finally:
+                    if chunks is not None:
+                        close = getattr(chunks, "aclose", None)
+                        if close is not None:
+                            with suppress(Exception):
+                                await close()
+
         if generation != self._generation or self._closed:
             self._emit("speak_dropped", text, "interrupted")
             return
-        await self._play_queued(audio, text)
+        await self._play_queued(retryable_stream(), text)
+        return
 
-    async def _play_queued(self, audio: bytes | AsyncIterator[bytes], text: str) -> None:
+    async def _play_queued(self, audio: AsyncIterator[bytes], text: str) -> None:
         loop = asyncio.get_running_loop()
         done: asyncio.Future[None] = loop.create_future()
         await self._queue.put((audio, text, done))
@@ -341,7 +238,7 @@ class PlaybackEngine:
 
     async def stop(self) -> None:
         self._generation += 1
-        for task in (*self._synth_tasks, *self._play_tasks):
+        for task in self._play_tasks:
             task.cancel()
         while True:
             try:
@@ -355,7 +252,7 @@ class PlaybackEngine:
         await self._mute()
 
     async def _cancelled_tasks_cleanup(self) -> None:
-        tasks = [task for task in (*self._synth_tasks, *self._play_tasks) if not task.done()]
+        tasks = [task for task in self._play_tasks if not task.done()]
         if not tasks:
             return
         with suppress(TimeoutError):
@@ -439,12 +336,7 @@ class PlaybackEngine:
                 )
                 continue
             self._emit("speak_started", text)
-            play_stream = self._stream_audio
-            if self._streaming and play_stream is not None and not isinstance(audio, bytes):
-                play_call = play_stream(audio)
-            else:
-                play_call = self._play_audio(cast(bytes, audio))
-            play_task = asyncio.create_task(play_call)
+            play_task = asyncio.create_task(self._stream_audio(audio))
             self._play_tasks.add(play_task)
             self._active_done = done
             self._active_play_task = play_task

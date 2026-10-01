@@ -26,7 +26,6 @@ from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import ingest_meeting
 from fakeyou.journal import ProviderJournal
 from fakeyou.memory import (
-    Neo4jMemoryConfig,
     create_graphiti_memory,
     create_memory_tools,
     forget_episode,
@@ -35,7 +34,7 @@ from fakeyou.memory import (
 )
 from fakeyou.persona import PersonaProfile
 from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
-from fakeyou.settings import CompatibleReply, Settings, require_secret
+from fakeyou.settings import CompatibleReply, MemorySettings, Settings, require_secret
 from fakeyou.voice import create_speech_synthesizer
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
@@ -100,22 +99,19 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
 
 
 @pytest.mark.live
-async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
+async def test_configured_tts_streams_pcm_audio() -> None:
     settings = Settings()
     try:
-        api_key = tts_api_key(settings)
+        tts_api_key(settings)
     except ValueError as error:
         pytest.skip(str(error))
     synthesizer = create_speech_synthesizer(
-        settings.tts.provider,
-        api_key=api_key,
-        settings=settings.tts,
+        settings.tts,
         language=settings.speech.language,
     )
     try:
         try:
             async with asyncio.timeout(60):
-                audio = await synthesizer.synthesize("Hello from the test meeting.")
                 streamed = b"".join(
                     [chunk async for chunk in synthesizer.stream("Hello from the test meeting.")]
                 )
@@ -124,12 +120,11 @@ async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
     finally:
         await synthesizer.aclose()
 
-    for pcm in (audio, streamed):
-        assert len(pcm) > 0
-        assert len(pcm) % 2 == 0
+    assert len(streamed) > 0
+    assert len(streamed) % 2 == 0
 
 
-def _neo4j_config_or_skip() -> Neo4jMemoryConfig:
+def _neo4j_config_or_skip() -> MemorySettings:
     settings = Settings()
     parsed = urlparse(settings.memory.store.uri)
     try:

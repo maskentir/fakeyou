@@ -26,7 +26,6 @@ from fakeyou.cli import tts_api_key
 from fakeyou.playback import (
     PlaybackEngine,
     create_pactl_muter,
-    create_paplay_runner,
     create_paplay_stream_runner,
 )
 from fakeyou.settings import Settings, require_secret
@@ -43,11 +42,6 @@ class _ToneSynth:
         )
         return struct.pack("<72000h", *samples)
 
-    async def synthesize(self, text: str) -> bytes:
-        if not text.strip():
-            raise ValueError("cannot synthesize blank text")
-        return self._audio()
-
     async def stream(self, text: str) -> AsyncIterator[bytes]:
         if not text.strip():
             raise ValueError("cannot synthesize blank text")
@@ -60,16 +54,10 @@ class _ToneSynth:
         pass
 
 
-def _container_playback(*, streaming: bool) -> PlaybackEngine:
+def _container_playback() -> PlaybackEngine:
     return PlaybackEngine(
         _ToneSynth(),
-        play_audio=create_paplay_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
-        stream_audio=(
-            create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE)
-            if streaming
-            else None
-        ),
-        streaming=streaming,
+        stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
     )
 
@@ -142,14 +130,11 @@ def _normalise(text: str) -> str:
 
 
 @pytest.mark.browser
-@pytest.mark.parametrize("streaming", [False, True], ids=["buffered", "streamed"])
 @pytest.mark.skipif(
     sys.platform != "linux" or os.getenv("PULSE_SOURCE") != MEETING_MONITOR_SOURCE_NAME,
     reason="requires the Linux audio worker and isolated PulseAudio source",
 )
-async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser(
-    streaming: bool,
-) -> None:
+async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser() -> None:
     stt = FakeSTT(finalized=(), signal=True)
 
     async def on_transcript(_frame) -> None:
@@ -157,11 +142,9 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
 
     async with _audio_page() as page:
         async with open_meeting_audio(
-            muse_api_key="unused",
-            tts_api_key="unused",
             on_transcript=on_transcript,
             stt=stt,
-            playback=_container_playback(streaming=streaming),
+            playback=_container_playback(),
         ) as session:
             await page.evaluate("window.audioProbe.start()")
             await asyncio.wait_for(stt.signal.wait(), timeout=10)
@@ -200,8 +183,8 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
         pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     settings = Settings()
     try:
-        muse_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
-        speech_key = tts_api_key(settings)
+        require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
+        tts_api_key(settings)
     except ValueError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)
@@ -219,10 +202,9 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
 
     async with _audio_page() as page:
         async with open_meeting_audio(
-            muse_api_key=muse_key,
-            tts_api_key=speech_key,
-            tts_provider=settings.tts.provider,
-            tts_voice=settings.tts.voice,
+            stt_settings=settings.stt,
+            tts_settings=settings.tts,
+            speech_language=settings.speech.language,
             on_transcript=on_transcript,
         ) as session:
             await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)

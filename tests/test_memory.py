@@ -1,5 +1,4 @@
 import asyncio
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -11,7 +10,6 @@ from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory as memory_module
 from fakeyou.memory import (
-    Neo4jMemoryConfig,
     create_memory_tools,
     ensure_indexes,
     forget_episode,
@@ -22,6 +20,7 @@ from fakeyou.memory import (
     remember_owner_note,
     verify_memory_connection,
 )
+from fakeyou.settings import MemorySettings
 from tests.fakes import FakeSaga, make_graphiti
 
 
@@ -49,16 +48,18 @@ async def test_memory_tools_keep_group_id_scoped(
     }
 
 
-def _config() -> Neo4jMemoryConfig:
-    return Neo4jMemoryConfig(
-        uri="bolt://localhost:7687",
-        user="neo4j",
-        password="p",
-        llm_api_key="k",
-        embedding_api_key="k",
-        llm_model="memory-model",
-        small_model="memory-small",
-        embedding_model="memory-embedding",
+def _config() -> MemorySettings:
+    return MemorySettings.model_validate(
+        {
+            "store": {"uri": "bolt://localhost:7687", "user": "neo4j", "password": "p"},
+            "llm": {
+                "client": "openai",
+                "api_key": "k",
+                "model": "memory-model",
+                "small_model": "memory-small",
+            },
+            "embedder": {"api_key": "k", "model": "memory-embedding"},
+        }
     )
 
 
@@ -72,14 +73,17 @@ def test_graphiti_memory_uses_explicit_models() -> None:
 
 
 def test_graphiti_memory_embeds_through_a_separate_endpoint() -> None:
-    from dataclasses import replace
-
     memory = memory_module.create_graphiti_memory(
-        replace(
-            _config(),
-            embedding_base_url="http://embeddings:11434/v1",
-            embedding_api_key="local",
-            embedding_dim=768,
+        MemorySettings.model_validate(
+            {
+                **_config().model_dump(),
+                "embedder": {
+                    **_config().embedder.model_dump(),
+                    "base_url": "http://embeddings:11434/v1",
+                    "api_key": "local",
+                    "dim": 768,
+                },
+            }
         )
     )
 
@@ -90,16 +94,19 @@ def test_graphiti_memory_embeds_through_a_separate_endpoint() -> None:
 
 
 def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> None:
-    from dataclasses import replace
-
     from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
     memory = memory_module.create_graphiti_memory(
-        replace(
-            _config(),
-            llm_client="openai_generic",
-            llm_base_url="https://api.meta.ai/v1",
-            llm_api_key="meta-key",
+        MemorySettings.model_validate(
+            {
+                **_config().model_dump(),
+                "llm": {
+                    **_config().llm.model_dump(),
+                    "client": "openai_generic",
+                    "base_url": "https://api.meta.ai/v1",
+                    "api_key": "meta-key",
+                },
+            }
         )
     )
 
@@ -117,7 +124,12 @@ async def test_open_graphiti_memory_is_lightweight(
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
 
     async with open_graphiti_memory(
-        replace(_config(), embedding_dim=memory_module.EMBEDDING_DIM)
+        MemorySettings.model_validate(
+            {
+                **_config().model_dump(),
+                "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            }
+        )
     ) as opened:
         assert opened is memory
 
@@ -331,7 +343,6 @@ async def test_remember_owner_note_stores_text_episode_in_group() -> None:
 
 
 async def test_recall_times_out_below_the_agent_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-
     monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
     _remember, recall = create_memory_tools(
         make_graphiti(search_gate=asyncio.Event()), group_id="team_alpha"

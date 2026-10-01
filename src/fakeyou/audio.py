@@ -33,13 +33,12 @@ from pipecat.workers.runner import WorkerRunner
 from fakeyou.callbacks import record_consumer_fault
 from fakeyou.deaf import (
     CaptureActivity,
-    CaptureFault,
     DeafMonitor,
     DeafVerdict,
     audio_duration_ms,
     rms_level,
 )
-from fakeyou.faults import FaultReporter
+from fakeyou.faults import Fault, FaultReporter
 from fakeyou.invariants import AGENT_MIC_SOURCE_NAME as AGENT_MIC_SOURCE_NAME
 from fakeyou.invariants import AGENT_SINK_NAME as AGENT_SINK_NAME
 from fakeyou.invariants import CAPTURE_SAMPLE_RATE as CAPTURE_SAMPLE_RATE
@@ -52,11 +51,10 @@ from fakeyou.playback import (
     PlaybackEngine,
     PlaybackEvent,
     create_pactl_muter,
-    create_paplay_runner,
     create_paplay_stream_runner,
 )
-from fakeyou.provider_faults import ERROR_CATEGORY_KINDS, ProviderFault, classify_exception
-from fakeyou.settings import DEFAULTS, STTSettings, TTSProvider, TTSSettings
+from fakeyou.provider_faults import category_fault, classify_exception
+from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings, require_secret
 from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
 
 STOP_DEADLINE_SECONDS = 8.0
@@ -322,7 +320,7 @@ class MeetingAudioSession:
         if not stt_reconnect_supported(self._stt):
             self._reconnect_state = "unsupported"
             if self._reporter is not None:
-                self._reporter.record(CaptureFault("reconnect_unsupported"))
+                self._reporter.record(Fault(source="stt", kind="reconnect_unsupported"))
             if self._journal is not None:
                 self._journal.record("stt_reconnect", outcome="unsupported", reason=reason)
             return
@@ -454,10 +452,7 @@ class MeetingAudioSession:
 
 def default_playback_engine(
     *,
-    tts_api_key: str,
-    tts_provider: TTSProvider = "openai",
-    tts_voice: str | None = None,
-    tts_settings: TTSSettings | None = None,
+    tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
     on_event: Callable[[PlaybackEvent], None] | None = None,
     fault_reporter: FaultReporter | None = None,
@@ -465,16 +460,11 @@ def default_playback_engine(
 ) -> PlaybackEngine:
     return PlaybackEngine(
         create_speech_synthesizer(
-            tts_provider,
-            api_key=tts_api_key,
-            voice=tts_voice,
             settings=tts_settings,
             language=speech_language,
             journal=journal,
         ),
-        play_audio=create_paplay_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
-        streaming=True,
         set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
         on_event=on_event,
         fault_reporter=fault_reporter,
@@ -485,8 +475,6 @@ def default_playback_engine(
 @asynccontextmanager
 async def open_meeting_audio(
     *,
-    muse_api_key: str,
-    tts_api_key: str,
     on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
     transport: Any | None = None,
     stt: FrameProcessor | None = None,
@@ -499,12 +487,9 @@ async def open_meeting_audio(
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
     deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
     alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-    stt_model: str = DEFAULTS.stt.model,
     stt_settings: STTSettings = DEFAULTS.stt,
     stt_keywords: Sequence[str] | None = None,
-    tts_provider: TTSProvider = "openai",
-    tts_voice: str | None = None,
-    tts_settings: TTSSettings | None = None,
+    tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
@@ -514,9 +499,6 @@ async def open_meeting_audio(
         playback
         if playback is not None
         else default_playback_engine(
-            tts_api_key=tts_api_key,
-            tts_provider=tts_provider,
-            tts_voice=tts_voice,
             tts_settings=tts_settings,
             speech_language=speech_language,
             on_event=on_playback_event,
@@ -530,9 +512,9 @@ async def open_meeting_audio(
                 stt
                 if stt is not None
                 else create_muse_stt(
-                    api_key=muse_api_key,
+                    api_key=require_secret(stt_settings.api_key, "FAKEYOU_STT__API_KEY"),
                     sample_rate=CAPTURE_SAMPLE_RATE,
-                    model=stt_settings.model if stt_model == DEFAULTS.stt.model else stt_model,
+                    model=stt_settings.model,
                     url=stt_settings.url,
                     mode=stt_settings.mode,
                     language=SPEECH_LANGUAGES[speech_language][0],
@@ -567,15 +549,9 @@ async def open_meeting_audio(
                 started.set()
 
             async def on_pipeline_error(_: PipelineWorker, frame: ErrorFrame) -> None:
-                if frame.category is not None:
-                    kind, retryable = ERROR_CATEGORY_KINDS.get(
-                        frame.category.name, ("unknown", False)
-                    )
-                    detail = ProviderFault("stt", kind, retryable=retryable)
-                else:
-                    detail = classify_exception(
-                        "stt", frame.exception or RuntimeError("provider failure")
-                    )
+                detail = category_fault("stt", frame) or classify_exception(
+                    "stt", frame.exception or RuntimeError("provider failure")
+                )
                 if fault_reporter is not None:
                     fault_reporter.record(detail)
                 if frame.category is not None and not frame.category.is_permanent:

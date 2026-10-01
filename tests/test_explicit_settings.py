@@ -3,7 +3,7 @@ import os
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from fakeyou.settings import Settings
+from fakeyou.settings import MemorySettings, Settings
 
 
 @pytest.fixture(autouse=True)
@@ -120,18 +120,14 @@ def test_empty_embedding_url_is_normalized_at_schema_boundary(monkeypatch):
 
 async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeypatch):
     import fakeyou.memory as module
-    from fakeyou.memory import Neo4jMemoryConfig, open_graphiti_memory
+    from fakeyou.memory import open_graphiti_memory
 
-    config = Neo4jMemoryConfig(
-        uri="bolt://localhost:7687",
-        user="test",
-        password="test",
-        llm_model="llm",
-        small_model="small",
-        embedding_model="embed",
-        llm_api_key="llm",
-        embedding_api_key="embedding",
-        embedding_dim=module.EMBEDDING_DIM + 1,
+    config = MemorySettings.model_validate(
+        {
+            "store": {"uri": "bolt://localhost:7687", "user": "test", "password": "test"},
+            "llm": {"client": "openai", "model": "llm", "small_model": "small", "api_key": "llm"},
+            "embedder": {"model": "embed", "api_key": "embedding", "dim": module.EMBEDDING_DIM + 1},
+        }
     )
     monkeypatch.setattr(
         module, "create_graphiti_memory", lambda _: pytest.fail("must validate before opening")
@@ -166,19 +162,20 @@ def test_preflight_preserves_all_active_role_urls_and_ports():
 def test_anthropic_memory_client_uses_explicit_endpoint_and_key():
     from graphiti_core.llm_client.anthropic_client import AnthropicClient
 
-    from fakeyou.memory import AnthropicReranker, Neo4jMemoryConfig, create_graphiti_memory
+    from fakeyou.memory import AnthropicReranker, create_graphiti_memory
 
-    config = Neo4jMemoryConfig(
-        uri="bolt://localhost:7687",
-        user="test",
-        password="test",
-        llm_model="claude-haiku-4-5-20251001",
-        small_model="claude-haiku-4-5-20251001",
-        embedding_model="embed",
-        llm_api_key="llm",
-        embedding_api_key="embedding",
-        llm_client="anthropic",
-        llm_base_url="https://anthropic.example.com",
+    config = MemorySettings.model_validate(
+        {
+            "store": {"uri": "bolt://localhost:7687", "user": "test", "password": "test"},
+            "llm": {
+                "model": "claude-haiku-4-5-20251001",
+                "small_model": "claude-haiku-4-5-20251001",
+                "api_key": "llm",
+                "client": "anthropic",
+                "base_url": "https://anthropic.example.com",
+            },
+            "embedder": {"model": "embed", "api_key": "embedding"},
+        }
     )
     memory = create_graphiti_memory(config)
     assert isinstance(memory.llm_client, AnthropicClient)
@@ -220,30 +217,28 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
 
     monkeypatch.setattr(
         voice,
-        "create_tts_http_client",
-        lambda: httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
+        "AsyncOpenAI",
+        lambda **kwargs: __import__("openai").AsyncOpenAI(
+            **kwargs, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
+        ),
     )
     synthesizer = voice.create_speech_synthesizer(
-        "openai",
-        api_key="tts",
-        settings=OpenAITTS(model="explicit-model", voice="nova"),
+        OpenAITTS(api_key="tts", model="explicit-model", voice="nova"),
         language="en",
     )
     try:
-        assert await synthesizer.synthesize("Hello.") == b"\x00\x01"
+        assert b"".join([chunk async for chunk in synthesizer.stream("Hello.")]) == b"\x00\x01"
     finally:
         await synthesizer.aclose()
     assert requests[0]["model"] == "explicit-model"
     assert requests[0]["voice"] == "nova"
     assert "Language: English." in requests[0]["instructions"]
     synthesizer = voice.create_speech_synthesizer(
-        "minimax",
-        api_key="tts",
-        settings=MiniMaxTTS(model="explicit-minimax", voice="explicit-voice"),
+        MiniMaxTTS(api_key="tts", model="explicit-minimax", voice="explicit-voice"),
         language="en",
     )
     try:
-        payload = synthesizer._payload("Hello.", stream=True)
+        payload = synthesizer._payload("Hello.")
     finally:
         await synthesizer.aclose()
     assert payload["language_boost"] == "English"
@@ -277,7 +272,7 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
     import httpx2
 
     import fakeyou.memory as memory_module
-    from fakeyou.memory import GraphitiAnthropicSDK, Neo4jMemoryConfig, create_graphiti_memory
+    from fakeyou.memory import GraphitiAnthropicSDK, create_graphiti_memory
 
     requests = []
 
@@ -309,17 +304,18 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
         "GraphitiAnthropicSDK",
         lambda **kwargs: GraphitiAnthropicSDK(**kwargs, http_client=transport),
     )
-    config = Neo4jMemoryConfig(
-        uri="bolt://localhost:7687",
-        user="test",
-        password="test",
-        llm_model="claude-haiku-4-5-20251001",
-        small_model="claude-haiku-4-5-20251001",
-        embedding_model="embed",
-        llm_api_key="anthropic-role-key",
-        embedding_api_key="embedding-role-key",
-        llm_client="anthropic",
-        llm_base_url="https://custom.anthropic.test:8443",
+    config = MemorySettings.model_validate(
+        {
+            "store": {"uri": "bolt://localhost:7687", "user": "test", "password": "test"},
+            "llm": {
+                "model": "claude-haiku-4-5-20251001",
+                "small_model": "claude-haiku-4-5-20251001",
+                "api_key": "anthropic-role-key",
+                "client": "anthropic",
+                "base_url": "https://custom.anthropic.test:8443",
+            },
+            "embedder": {"model": "embed", "api_key": "embedding-role-key"},
+        }
     )
     memory = await asyncio.to_thread(create_graphiti_memory, config)
     try:
@@ -334,7 +330,7 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
     assert len(requests) == 1
     assert str(requests[0].url) == "https://custom.anthropic.test:8443/v1/messages"
     assert requests[0].headers["x-api-key"] == "anthropic-role-key"
-    assert json.loads(requests[0].content)["model"] == config.llm_model
+    assert json.loads(requests[0].content)["model"] == config.llm.model
     assert "embedding-role-key" not in str(requests[0].headers)
     assert json.loads(requests[0].content)["temperature"] == memory.llm_client.temperature
 
@@ -389,12 +385,19 @@ def test_blank_memory_endpoints_ignore_library_destination_environment(
     )
     assert settings.memory.llm.base_url is None
     assert settings.memory.embedder.base_url is None
-    from dataclasses import replace
 
     config = memory_config(settings)
-    assert config.llm_base_url == expected
-    assert config.embedding_base_url == "https://api.openai.com/v1"
-    memory = create_graphiti_memory(replace(config, llm_base_url=None, embedding_base_url=None))
+    assert config.llm.resolved_base_url == expected
+    assert config.embedder.resolved_base_url == "https://api.openai.com/v1"
+    memory = create_graphiti_memory(
+        MemorySettings.model_validate(
+            {
+                **config.model_dump(),
+                "llm": {**config.llm.model_dump(), "base_url": None},
+                "embedder": {**config.embedder.model_dump(), "base_url": None},
+            }
+        )
+    )
     assert str(memory.llm_client.client.base_url).rstrip("/") == expected
     assert memory.llm_client.client.api_key == "memory-role-key"
     assert str(memory.embedder.client.base_url).rstrip("/") == "https://api.openai.com/v1"

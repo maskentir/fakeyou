@@ -5,6 +5,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from fakeyou.provider_faults import trim_detail
@@ -179,17 +180,14 @@ async def run_preflight(
     budget_seconds: float = DEFAULTS.preflight.budget_seconds,
     probe: Callable[[str], Awaitable[ProbeResult]] | None = None,
 ) -> list[ProbeResult]:
-    endpoints = tuple(hosts)
-    check = probe or _default_probe
-
-    async def invoke(endpoint: str) -> ProbeResult:
-        return await check(endpoint)
+    endpoints = tuple(dict.fromkeys(hosts))
+    check = probe or partial(probe_endpoint, timeout_seconds=None)
 
     semaphore = asyncio.Semaphore(5)
 
     async def bounded(endpoint: str) -> ProbeResult:
         async with semaphore:
-            return await invoke(endpoint)
+            return await check(endpoint)
 
     tasks: list[asyncio.Task[ProbeResult]] = [
         asyncio.create_task(bounded(endpoint)) for endpoint in endpoints
@@ -225,7 +223,3 @@ async def run_preflight(
         else:
             results.append(ProbeResult(endpoint, False, 0.0, "invalid probe result"))
     return results
-
-
-async def _default_probe(endpoint: str) -> ProbeResult:
-    return await probe_endpoint(endpoint, timeout_seconds=None)

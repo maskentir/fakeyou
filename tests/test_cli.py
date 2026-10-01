@@ -1770,7 +1770,7 @@ def test_check_reports_the_speech_provider_defaults(settings, capsys):
 def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings):
     settings.memory.embedder = EmbedderSettings(base_url="", api_key=SecretStr("local"))
     assert settings.memory.embedder.base_url is None
-    assert cli.memory_config(settings).embedding_base_url == "https://api.openai.com/v1"
+    assert cli.memory_config(settings).embedder.resolved_base_url == "https://api.openai.com/v1"
 
 
 def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> None:
@@ -1782,12 +1782,19 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> 
 
     config = cli.memory_config(settings)
 
-    assert (config.embedding_base_url, config.embedding_api_key, config.embedding_dim) == (
+    assert (
+        config.embedder.resolved_base_url,
+        config.embedder.api_key.get_secret_value(),
+        config.embedder.dim,
+    ) == (
         "http://embeddings/v1",
         "local",
         768,
     )
-    assert (config.llm_base_url, config.llm_api_key) == ("https://api.meta.ai/v1", "meta-key")
+    assert (config.llm.resolved_base_url, config.llm.api_key.get_secret_value()) == (
+        "https://api.meta.ai/v1",
+        "meta-key",
+    )
 
 
 def test_check_reports_models_per_role(settings, capsys):

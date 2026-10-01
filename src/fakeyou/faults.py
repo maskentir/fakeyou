@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from fakeyou.journal import ProviderJournal
@@ -8,23 +8,13 @@ _MAX_FAULT_RECORDS = 128
 
 
 @dataclass(frozen=True, slots=True)
-class FaultSummary:
+class Fault:
     source: str
     kind: str
-    count: int
-    status: int | None
-    detail: str | None
-    first_at: str
-
-
-@dataclass(slots=True)
-class _FaultRecord:
-    source: str
-    kind: str
-    count: int
-    status: int | None
-    detail: str | None
-    first_at: str
+    status: int | None = None
+    detail: str | None = None
+    count: int = 1
+    first_at: str = ""
 
 
 def is_recordable_fault(fault: object) -> bool:
@@ -38,7 +28,7 @@ def is_recordable_fault(fault: object) -> bool:
 class FaultReporter:
     def __init__(self, *, journal: ProviderJournal) -> None:
         self.journal = journal
-        self._records: dict[tuple[str, str, int | None], _FaultRecord] = {}
+        self._records: dict[tuple[str, str, int | None], Fault] = {}
         self._total = 0
 
     def record(self, fault: object) -> None:
@@ -64,12 +54,12 @@ class FaultReporter:
             self._total += 1
             record = self._records.get(key)
             if record is not None:
-                record.count += 1
+                self._records[key] = replace(record, count=record.count + 1)
                 return
             if len(self._records) >= _MAX_FAULT_RECORDS:
                 return
             raw_detail = getattr(typed_fault, "detail", None)
-            record = _FaultRecord(
+            record = Fault(
                 source=source,
                 kind=kind,
                 count=1,
@@ -78,23 +68,24 @@ class FaultReporter:
                 first_at="",
             )
             self._records[key] = record
-            record.first_at = (
-                self.journal.record(
-                    "fault", source=source, kind=kind, status=status, detail=record.detail
-                )
-                or ""
+            self._records[key] = replace(
+                record,
+                first_at=(
+                    self.journal.record(
+                        "fault", source=source, kind=kind, status=status, detail=record.detail
+                    )
+                    or ""
+                ),
             )
         except BaseException:
             return
 
-    def summaries(self) -> tuple[FaultSummary, ...]:
+    def summaries(self) -> tuple[Fault, ...]:
         rows = sorted(
             self._records.values(),
             key=lambda row: (-row.count, row.source, row.kind, row.status or -1),
         )
-        return tuple(
-            FaultSummary(r.source, r.kind, r.count, r.status, r.detail, r.first_at) for r in rows
-        )
+        return tuple(rows)
 
     def report(self) -> dict[str, object] | None:
         try:

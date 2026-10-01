@@ -2,10 +2,10 @@ import asyncio
 import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from anthropic import AsyncAnthropic
@@ -34,11 +34,19 @@ from graphiti_core.prompts.models import Message
 from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
-from fakeyou.settings import DEFAULTS, EmbedderSettings, MemoryLLMSettings, RecallSettings
+from fakeyou.settings import (
+    DEFAULTS,
+    AnthropicMemoryLLM,
+    GenericMemoryLLM,
+    MemorySettings,
+    OpenAIMemoryLLM,
+    RecallSettings,
+    require_secret,
+)
 
 RECALL_RESULT_LIMIT = DEFAULTS.memory.recall.result_limit
 RECALL_SEARCH_LIMIT = RECALL_RESULT_LIMIT * 2
@@ -56,23 +64,6 @@ CURRENT_FACTS_FILTER = SearchFilters(
 
 def meeting_saga(meeting_id: str) -> str:
     return f"meeting:{meeting_id}"
-
-
-@dataclass(frozen=True, slots=True)
-class Neo4jMemoryConfig:
-    uri: str
-    user: str
-    password: str = field(repr=False)
-    llm_model: str
-    small_model: str
-    embedding_model: str
-    database: str = DEFAULTS.memory.store.database
-    embedding_base_url: str | None = None
-    embedding_api_key: str | None = field(default=None, repr=False)
-    embedding_dim: int = DEFAULTS.memory.embedder.dim
-    llm_base_url: str | None = None
-    llm_api_key: str = field(default="", repr=False)
-    llm_client: Literal["openai", "openai_generic", "anthropic"] = "openai"
 
 
 class GraphitiAnthropicMessages(AsyncMessages):
@@ -116,37 +107,33 @@ class AnthropicReranker(CrossEncoderClient):
         return sorted(zip(passages, scores, strict=True), key=lambda item: item[1], reverse=True)
 
 
-def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
-    llm_endpoint: str = (
-        TypeAdapter(MemoryLLMSettings)
-        .validate_python({"client": config.llm_client, "base_url": config.llm_base_url})
-        .resolved_base_url
-    )
-    embedding_endpoint = EmbedderSettings(base_url=config.embedding_base_url).resolved_base_url
+def create_graphiti_memory(config: MemorySettings) -> Graphiti:
+    role = config.llm
+    llm_endpoint = role.resolved_base_url
+    llm_key = require_secret(role.api_key, "FAKEYOU_MEMORY__LLM__API_KEY")
+    embedding_key = require_secret(config.embedder.api_key, "FAKEYOU_MEMORY__EMBEDDER__API_KEY")
     llm_config = LLMConfig(
-        api_key=config.llm_api_key,
-        model=config.llm_model,
-        small_model=config.small_model,
+        api_key=llm_key,
+        model=role.model,
+        small_model=role.small_model,
         base_url=llm_endpoint,
     )
-    if not config.llm_api_key or not config.embedding_api_key:
-        raise ValueError("memory LLM and embedder each require their own api_key")
     llm_client = (
         AnthropicClient(
             config=llm_config,
-            client=GraphitiAnthropicSDK(api_key=config.llm_api_key, base_url=llm_endpoint),
+            client=GraphitiAnthropicSDK(api_key=llm_key, base_url=llm_endpoint),
         )
-        if config.llm_client == "anthropic"
-        else {"openai": OpenAIClient, "openai_generic": OpenAIGenericClient}[config.llm_client](
+        if isinstance(role, AnthropicMemoryLLM)
+        else {OpenAIMemoryLLM: OpenAIClient, GenericMemoryLLM: OpenAIGenericClient}[type(role)](
             config=llm_config
         )
     )
     embedder = OpenAIEmbedder(
         config=OpenAIEmbedderConfig(
-            api_key=config.embedding_api_key,
-            base_url=embedding_endpoint,
-            embedding_model=config.embedding_model,
-            embedding_dim=config.embedding_dim,
+            api_key=embedding_key,
+            base_url=config.embedder.resolved_base_url,
+            embedding_model=config.embedder.model,
+            embedding_dim=config.embedder.dim,
         )
     )
     cross_encoder = (
@@ -155,10 +142,10 @@ def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
         else OpenAIRerankerClient(config=llm_config)
     )
     driver = Neo4jDriver(
-        uri=config.uri,
-        user=config.user,
-        password=config.password,
-        database=config.database,
+        uri=config.store.uri,
+        user=config.store.user,
+        password=require_secret(config.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD"),
+        database=config.store.database,
     )
     return Graphiti(
         graph_driver=driver,
@@ -169,8 +156,8 @@ def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
 
 
 @asynccontextmanager
-async def open_graphiti_memory(config: Neo4jMemoryConfig) -> AsyncIterator[Graphiti]:
-    if config.embedding_dim != EMBEDDING_DIM:
+async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti]:
+    if config.embedder.dim != EMBEDDING_DIM:
         raise ValueError(
             "memory.embedder.dim must equal EMBEDDING_DIM loaded by Graphiti; "
             "export EMBEDDING_DIM before startup"

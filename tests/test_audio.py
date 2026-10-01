@@ -21,6 +21,7 @@ from fakeyou.audio import (
 )
 from fakeyou.deaf import CaptureActivity
 from fakeyou.journal import ProviderJournal
+from fakeyou.settings import MiniMaxTTS, OpenAITTS, STTSettings
 from tests.fakes import FakeReconnectableSTT, FakeSTT
 
 
@@ -69,8 +70,8 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
         received.set()
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -97,8 +98,8 @@ async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=transport,
         stt=FakeSTT(error="secret-provider-key", finalized=()),
@@ -117,8 +118,8 @@ async def test_unexpected_worker_exit_is_reported() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -142,8 +143,8 @@ async def test_callback_failure_degrades_without_killing_session(
         raise ValueError("secret-callback-data")
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -171,8 +172,8 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
     with pytest.raises(MeetingAudioError) as caught:
         async with asyncio.timeout(2):
             async with open_meeting_audio(
-                muse_api_key="muse-secret",
-                tts_api_key="openai-secret",
+                stt_settings=STTSettings(api_key="muse-secret"),
+                tts_settings=OpenAITTS(api_key="openai-secret"),
                 on_transcript=on_transcript,
                 transport=_Transport(),
                 stt=FakeSTT(error="startup-secret", finalized=(), startup=True),
@@ -205,8 +206,8 @@ async def test_native_transport_is_terminated_when_construction_fails(monkeypatc
 
     with pytest.raises(MeetingAudioError) as caught:
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            tts_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
             stt=FakeSTT(),
             playback=_Playback(),
@@ -228,8 +229,8 @@ async def test_native_transport_without_backend_still_reports_root_error(monkeyp
 
     with pytest.raises(MeetingAudioError, match="initialization failed") as caught:
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            tts_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
             stt=FakeSTT(),
             playback=_Playback(),
@@ -265,8 +266,8 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch) -> None:
         pass
 
     context = open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -301,8 +302,8 @@ async def test_error_handler_registered_before_add_workers(monkeypatch) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -322,8 +323,8 @@ async def test_pipeline_error_chains_frame_detail() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="secret-provider-key", finalized=()),
@@ -369,8 +370,8 @@ async def test_terminate_failure_does_not_mask_initialization_error(monkeypatch)
 
     with pytest.raises(MeetingAudioError, match="initialization failed"):
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            tts_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
             stt=FakeSTT(),
             playback=_Playback(),
@@ -385,8 +386,8 @@ async def test_nonpermanent_stt_error_keeps_session_alive() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.UNKNOWN),
@@ -404,8 +405,8 @@ async def test_permanent_stt_error_fails_session() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
@@ -423,8 +424,8 @@ async def test_injected_playback_engine_is_closed_on_shutdown() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -439,16 +440,15 @@ async def test_default_playback_engine_closes_speech_client() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
     ) as session:
-        owned = session._engine._synthesizer._http_client
-        assert owned is not None
-        assert not owned.is_closed
-    assert owned.is_closed
+        owned = session._engine._synthesizer._client
+        assert not owned.is_closed()
+    assert owned.is_closed()
 
 
 async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> None:
@@ -467,8 +467,8 @@ async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> No
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         stt=FakeSTT(),
         playback=_Playback(),
@@ -492,8 +492,8 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
         interim_seen.set()
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         on_interim=on_interim,
         transport=_Transport(),
@@ -521,8 +521,8 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="secret-provider-key", finalized=()),
@@ -548,8 +548,8 @@ async def test_permanent_error_records_before_kill_with_typed_cause(
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
@@ -578,8 +578,8 @@ async def test_nonpermanent_error_records_without_killing(
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.CONNECTIVITY),
@@ -609,8 +609,8 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(
@@ -639,8 +639,8 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),
@@ -667,8 +667,8 @@ async def test_supported_stt_reconnect_queues_request(
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeReconnectableSTT(),
@@ -728,9 +728,8 @@ async def test_stt_reconnect_lifecycle_is_journaled(
 def test_default_playback_engine_streams_tts_to_paplay() -> None:
     import inspect
 
-    engine = default_playback_engine(tts_api_key="k")
+    engine = default_playback_engine(tts_settings=OpenAITTS(api_key="k"))
 
-    assert engine._streaming is True
     assert engine._stream_audio is not None
     assert inspect.isasyncgen(engine._synthesizer.stream("hello"))
 
@@ -739,7 +738,7 @@ def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
     from fakeyou.voice import MiniMaxSpeechSynthesizer
 
     engine = default_playback_engine(
-        tts_api_key="k", tts_provider="minimax", tts_voice="Indonesian_CaringMan"
+        tts_settings=MiniMaxTTS(api_key="k", voice="Indonesian_CaringMan")
     )
 
     assert isinstance(engine._synthesizer, MiniMaxSpeechSynthesizer)
@@ -752,7 +751,9 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
 
     reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
     journal = ProviderJournal("meeting-1", emit=lambda _: None, stdout=False)
-    engine = default_playback_engine(tts_api_key="k", fault_reporter=reporter, journal=journal)
+    engine = default_playback_engine(
+        tts_settings=OpenAITTS(api_key="k"), fault_reporter=reporter, journal=journal
+    )
     try:
         assert engine._faults is reporter
         assert engine._journal is journal
@@ -848,8 +849,8 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         raise ValueError("private callback data")
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        tts_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
         stt=FakeSTT(),

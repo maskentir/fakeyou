@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 
-from fakeyou.journal import ProviderJournal, registered_journal_events
+from fakeyou.journal import ProviderJournal
 
 
 def test_record_carries_meeting_id_timestamp_and_fields() -> None:
@@ -38,18 +38,6 @@ def test_unregistered_event_is_recorded_never_rejected() -> None:
 
     assert len(lines) == 1
     assert json.loads(lines[0])["event"] == "future_custom_event"
-    assert "future_custom_event" in registered_journal_events()
-
-
-def test_known_events_are_registered() -> None:
-    registered = registered_journal_events()
-
-    assert {
-        "synth_started",
-        "synth_finished",
-        "synth_failed",
-        "stt_reconnect",
-    } <= registered
 
 
 def test_record_never_raises_on_bad_fields() -> None:
@@ -100,3 +88,41 @@ def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
     assert len(rows) == 4
     assert all("text" not in row and "text" not in row["metadata"] for row in rows)
     assert "private" not in path.read_text()
+
+
+def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
+    import fakeyou.journal as module
+
+    lines = []
+    journal = ProviderJournal("timed", emit=lines.append)
+    ticks = iter([1.0, 1.25])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    with journal.timed(
+        started="synth_started", finished="synth_finished", failed="synth_failed", chars=4
+    ) as timing:
+        timing.fields["bytes_out"] = 128
+    rows = [json.loads(line) for line in lines]
+    assert [row["event"] for row in rows] == ["synth_started", "synth_finished"]
+    assert rows[0]["request_id"] == rows[1]["request_id"]
+    assert rows[1]["duration_ms"] == 250
+    assert rows[1]["bytes_out"] == 128
+
+
+def test_timed_should_record_failure_and_propagate_original_error():
+    import pytest
+
+    from fakeyou.provider_faults import ProviderFault
+
+    lines = []
+    journal = ProviderJournal("timed", emit=lines.append)
+    error = ProviderFault("tts", "timeout")
+    with pytest.raises(ProviderFault) as raised:
+        with journal.timed(
+            started="synth_started", finished="synth_finished", failed="synth_failed"
+        ):
+            raise error
+    assert raised.value is error
+    rows = [json.loads(line) for line in lines]
+    assert [row["event"] for row in rows] == ["synth_started", "synth_failed"]
+    assert rows[-1]["kind"] == "timeout"
+    assert rows[-1]["duration_ms"] >= 0

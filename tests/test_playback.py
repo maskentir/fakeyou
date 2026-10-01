@@ -9,7 +9,6 @@ from fakeyou.playback import (
     PlaybackError,
     PlaybackEvent,
     create_pactl_muter,
-    create_paplay_runner,
     create_paplay_stream_runner,
 )
 
@@ -21,11 +20,11 @@ class _Synth:
         self.texts: list[str] = []
         self.closed = False
 
-    async def synthesize(self, text: str) -> bytes:
+    async def stream(self, text: str):
         self.texts.append(text)
         if self.error is not None:
             raise self.error
-        return self.audio
+        yield self.audio
 
     async def aclose(self) -> None:
         self.closed = True
@@ -40,7 +39,8 @@ class _Player:
         self.release = asyncio.Event()
         self.release.set()
 
-    async def __call__(self, data: bytes) -> None:
+    async def __call__(self, chunks) -> None:
+        data = b"".join([chunk async for chunk in chunks])
         self.played.append(data)
         self.started.set()
         try:
@@ -60,7 +60,7 @@ class _SlowSynth:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def synthesize(self, text: str) -> bytes:
+    async def stream(self, text: str):
         self.texts.append(text)
         self.started.set()
         try:
@@ -68,7 +68,7 @@ class _SlowSynth:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
-        return self.audio
+        yield self.audio
 
     async def aclose(self) -> None:
         pass
@@ -87,7 +87,11 @@ class _Muter:
 
 def _engine(synth, player, muter, events, **overrides):
     return PlaybackEngine(
-        synth, play_audio=player, set_muted=muter, on_event=events.append, **overrides
+        synth,
+        stream_audio=overrides.pop("stream_audio", player),
+        set_muted=muter,
+        on_event=events.append,
+        **overrides,
     )
 
 
@@ -166,36 +170,6 @@ async def test_stop_kills_in_flight_playback_and_keeps_engine_usable() -> None:
     assert "speak_finished" in names
 
 
-async def test_stop_during_synthesis_drops_before_playback() -> None:
-    release = asyncio.Event()
-
-    class _SlowSynth(_Synth):
-        async def synthesize(self, text: str) -> bytes:
-            self.texts.append(text)
-            await release.wait()
-            return self.audio
-
-    synth = _SlowSynth()
-    player = _Player()
-    muter = _Muter()
-    events: list[PlaybackEvent] = []
-    engine = _engine(synth, player, muter, events, tail_seconds=0)
-
-    try:
-        speaking = asyncio.create_task(engine.speak("late"))
-        await asyncio.sleep(0)
-        await engine.stop()
-        release.set()
-        await asyncio.wait_for(speaking, timeout=2)
-        assert player.played == []
-        assert muter.calls == []
-    finally:
-        release.set()
-        await engine.close()
-
-    assert [event.name for event in events] == ["speak_dropped"]
-
-
 async def test_synthesis_failure_reports_event_and_keeps_queue_alive() -> None:
     synth = _Synth(error=TimeoutError("stream stalled"))
     player = _Player()
@@ -214,7 +188,8 @@ async def test_synthesis_failure_reports_event_and_keeps_queue_alive() -> None:
     failed = [event for event in events if event.name == "speak_failed"]
     assert len(failed) == 1
     assert failed[0].text == "fail"
-    assert "TimeoutError" in failed[0].detail
+    assert "tts timeout" in failed[0].detail
+    assert "playback timed out" not in failed[0].detail
 
 
 async def test_playback_failure_reports_event_and_drains_queue() -> None:
@@ -284,60 +259,6 @@ async def test_close_is_idempotent_and_blocks_late_speaks() -> None:
 
     assert synth.texts == ["one"]
     assert synth.closed
-
-
-async def test_paplay_runner_reports_missing_binary() -> None:
-    play = create_paplay_runner(sink="nope", rate=24000)
-
-    with pytest.raises(PlaybackError, match="paplay"):
-        await play(b"\x00" * 10)
-
-
-async def test_paplay_runner_streams_bytes_and_argv(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "paplay"
-    script.write_text(
-        '#!/bin/sh\necho "$@" > "$FAKE_PAPLAY_ARGS"\ncat > "$FAKE_PAPLAY_STDIN"\nexit 0\n'
-    )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    args_file = tmp_path / "args"
-    stdin_file = tmp_path / "stdin"
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("FAKE_PAPLAY_ARGS", str(args_file))
-    monkeypatch.setenv("FAKE_PAPLAY_STDIN", str(stdin_file))
-
-    await create_paplay_runner(sink="agent_output", rate=24000)(b"\x01\x02")
-
-    assert args_file.read_text().split() == [
-        "--device=agent_output",
-        "--format=s16le",
-        "--rate=24000",
-        "--channels=1",
-        "--raw",
-    ]
-    assert stdin_file.read_bytes() == b"\x01\x02"
-
-
-async def test_paplay_runner_reports_nonzero_exit(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "paplay"
-    script.write_text("#!/bin/sh\necho sink-gone >&2\nexit 3\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-
-    with pytest.raises(PlaybackError, match="paplay exited with 3"):
-        await create_paplay_runner(sink="agent_output", rate=24000)(b"\x00")
-
-
-async def test_paplay_runner_kills_process_on_cancel(tmp_path, monkeypatch) -> None:
-    script = tmp_path / "paplay"
-    script.write_text("#!/bin/sh\nexec sleep 30\n")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-
-    playing = asyncio.create_task(create_paplay_runner(sink="agent_output", rate=24000)(b"\x00"))
-    await asyncio.sleep(0.2)
-    playing.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await playing
 
 
 async def _collect(chunks):
@@ -504,79 +425,8 @@ async def test_stop_during_synthesis_drops_without_playing() -> None:
 
     assert synth.cancelled
     assert player.played == []
-    assert [event.name for event in events] == ["speak_dropped"]
-    assert events[0].detail == "interrupted"
-
-
-async def test_slow_synthesis_times_out_and_engine_stays_usable() -> None:
-    synth = _SlowSynth()
-    player = _Player()
-    muter = _Muter()
-    events: list[PlaybackEvent] = []
-    engine = _engine(synth, player, muter, events, tail_seconds=0, synth_timeout_seconds=0.05)
-
-    await engine.speak("stuck")
-    assert synth.cancelled
-    assert synth.texts == ["stuck", "stuck"]
-    assert [event.name for event in events] == ["speak_failed"]
-    assert events[0].detail == "synthesis timed out after retry"
-
-    synth.release.set()
-    await engine.speak("smooth")
-    await engine.close()
-
-    assert player.played == [synth.audio]
-    assert [event.name for event in events][1:] == ["speak_started", "speak_finished"]
-
-
-async def test_speak_retries_transient_timeout_once() -> None:
-    synth = _SlowSynth()
-    player = _Player()
-    muter = _Muter()
-    events: list[PlaybackEvent] = []
-    engine = _engine(synth, player, muter, events, tail_seconds=0, synth_timeout_seconds=0.05)
-
-    async def release_after_first_timeout() -> None:
-        await asyncio.sleep(0.08)
-        synth.release.set()
-
-    releaser = asyncio.create_task(release_after_first_timeout())
-    await engine.speak("sluggish")
-    await releaser
-    await engine.close()
-
-    assert synth.texts == ["sluggish", "sluggish"]
-    assert player.played == [synth.audio]
-    assert [event.name for event in events] == ["speak_started", "speak_finished"]
-
-
-async def test_speak_retries_typed_timeout_once() -> None:
-    from fakeyou.provider_faults import ProviderFault
-
-    class _TypedTimeoutSynth(_Synth):
-        def __init__(self) -> None:
-            super().__init__()
-            self.calls = 0
-
-        async def synthesize(self, text: str) -> bytes:
-            self.calls += 1
-            if self.calls == 1:
-                raise ProviderFault("tts", "timeout", retryable=True)
-            return self.audio
-
-    synth = _TypedTimeoutSynth()
-    player = _Player()
-    muter = _Muter()
-    events: list[PlaybackEvent] = []
-    engine = _engine(synth, player, muter, events, tail_seconds=0)
-    try:
-        await engine.speak("retry")
-    finally:
-        await engine.close()
-
-    assert synth.calls == 2
-    assert player.played == [synth.audio]
-    assert [event.name for event in events] == ["speak_started", "speak_finished"]
+    assert [event.name for event in events] == ["speak_started", "speak_dropped"]
+    assert events[-1].detail == "interrupted"
 
 
 async def test_speak_retry_is_journaled(
@@ -601,7 +451,7 @@ async def test_speak_retry_is_journaled(
             "meeting_id": "meeting-1",
             "at": retries[0]["at"],
             "attempt": 2,
-            "streaming": False,
+            "streaming": True,
             "reason": "timeout",
         }
     ]
@@ -643,7 +493,7 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
 
     assert synth.cancelled
     assert player.played == []
-    assert events == []
+    assert all(event.name in {"speak_started", "speak_dropped"} for event in events)
 
 
 async def test_typed_synth_fault_records_and_engine_recovers(
@@ -659,7 +509,7 @@ async def test_typed_synth_fault_records_and_engine_recovers(
     events: list[PlaybackEvent] = []
     engine = PlaybackEngine(
         synth,
-        play_audio=player,
+        stream_audio=player,
         set_muted=muter,
         on_event=events.append,
         tail_seconds=0,
@@ -692,7 +542,7 @@ async def test_play_failure_records_and_worker_survives(
     events: list[PlaybackEvent] = []
     engine = PlaybackEngine(
         synth,
-        play_audio=player,
+        stream_audio=player,
         set_muted=muter,
         on_event=events.append,
         tail_seconds=0,
@@ -718,9 +568,6 @@ class _StreamSynth:
         self.chunks = list(chunks)
         self.texts: list[str] = []
         self.closed = False
-
-    async def synthesize(self, text: str) -> bytes:
-        raise AssertionError("streaming speak must not call synthesize")
 
     async def stream(self, text: str):
         self.texts.append(text)
@@ -765,7 +612,6 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
         _Muter(),
         events,
         tail_seconds=0,
-        streaming=True,
         stream_audio=streamer,
     )
     try:
@@ -798,7 +644,6 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
         _Muter(),
         events,
         tail_seconds=0,
-        streaming=True,
         stream_audio=streamer,
     )
     try:
@@ -823,7 +668,6 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
         muter,
         events,
         tail_seconds=0,
-        streaming=True,
         stream_audio=streamer,
     )
 
@@ -855,7 +699,6 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
         muter,
         events,
         tail_seconds=0,
-        streaming=True,
         stream_audio=streamer,
         fault_reporter=reporter,
     )

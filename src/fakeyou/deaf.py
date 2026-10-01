@@ -2,10 +2,10 @@ import math
 import struct
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
-from fakeyou.faults import FaultReporter
+from fakeyou.faults import Fault, FaultReporter
 from fakeyou.invariants import PCM_CHANNELS
 from fakeyou.journal import ProviderJournal
 from fakeyou.settings import DEFAULTS
@@ -33,7 +33,7 @@ def audio_duration_ms(num_bytes: int, sample_rate: int, channels: int) -> float:
     return samples / sample_rate * 1000
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class CaptureSnapshot:
     available: bool
     frames_delivered: int
@@ -55,89 +55,64 @@ class CaptureSnapshot:
 class CaptureActivity:
     def __init__(self, *, now: Callable[[], float] | None = None) -> None:
         self._now = now or time.monotonic
-        self._available = False
-        self._frames_delivered = 0
-        self._finals_delivered = 0
-        self._last_frame_at: float | None = None
-        self._last_final_at: float | None = None
-        self._ready_at: float | None = None
-        self._interim_count = 0
-        self._last_speech_at: float | None = None
-        self._speech_active = False
-        self._pending_speech_at: float | None = None
-        self._remote_participants: int | None = None
-        self._presence_at: float | None = None
-        self._alone_since: float | None = None
-        self._energetic_ms = 0.0
-        self._last_energetic_at: float | None = None
+        self._snapshot = CaptureSnapshot(False, 0, 0, None, None, None, 0)
 
     def mark_ready(self) -> None:
-        self._available = True
-        self._ready_at = self._now()
+        self._snapshot.available = True
+        self._snapshot.ready_at = self._now()
 
     def observe_audio(self, *, energy: float | None = None, duration_ms: float = 0.0) -> None:
-        self._frames_delivered += 1
-        self._last_frame_at = self._now()
+        self._snapshot.frames_delivered += 1
+        self._snapshot.last_frame_at = self._now()
         if energy is not None and energy >= ENERGY_THRESHOLD:
-            self._energetic_ms += max(duration_ms, 0.0)
-            self._last_energetic_at = self._last_frame_at
+            self._snapshot.energetic_ms += max(duration_ms, 0.0)
+            self._snapshot.last_energetic_at = self._snapshot.last_frame_at
 
     def observe_speech(self, active: bool) -> None:
-        self._speech_active = active
-        self._last_speech_at = self._now()
-        if active and self._pending_speech_at is None:
-            self._pending_speech_at = self._last_speech_at
+        self._snapshot.speech_active = active
+        self._snapshot.last_speech_at = self._now()
+        if active and self._snapshot.pending_speech_at is None:
+            self._snapshot.pending_speech_at = self._snapshot.last_speech_at
 
     def observe_transcript(self, finalized: bool) -> None:
         stamp = self._now()
         if finalized:
-            self._finals_delivered += 1
-            self._last_final_at = stamp
-            self._pending_speech_at = stamp if self._speech_active else None
+            self._snapshot.finals_delivered += 1
+            self._snapshot.last_final_at = stamp
+            self._snapshot.pending_speech_at = stamp if self._snapshot.speech_active else None
         else:
-            self._interim_count += 1
+            self._snapshot.interim_count += 1
 
     def observe_presence(self, count: int | None) -> None:
         stamp = self._now()
         if count is None:
-            if self._remote_participants is not None and self._remote_participants > 0:
+            if (
+                self._snapshot.remote_participants is not None
+                and self._snapshot.remote_participants > 0
+            ):
                 return
-            self._alone_since = None
-            self._presence_at = None
-            self._remote_participants = None
+            self._snapshot.alone_since = None
+            self._snapshot.presence_at = None
+            self._snapshot.remote_participants = None
             return
         if count is not None and count < 0:
             raise ValueError("participant count cannot be negative")
         if count != 0:
-            self._alone_since = None
+            self._snapshot.alone_since = None
         elif (
-            self._presence_at is None or stamp - self._presence_at > 30 or self._alone_since is None
+            self._snapshot.presence_at is None
+            or stamp - self._snapshot.presence_at > 30
+            or self._snapshot.alone_since is None
         ):
-            self._alone_since = stamp
-        self._presence_at = stamp
-        self._remote_participants = count
+            self._snapshot.alone_since = stamp
+        self._snapshot.presence_at = stamp
+        self._snapshot.remote_participants = count
 
     def mark_unavailable(self) -> None:
-        self._available = False
+        self._snapshot.available = False
 
     def snapshot(self) -> CaptureSnapshot:
-        return CaptureSnapshot(
-            self._available,
-            self._frames_delivered,
-            self._finals_delivered,
-            self._last_frame_at,
-            self._last_final_at,
-            self._ready_at,
-            self._interim_count,
-            self._last_speech_at,
-            self._speech_active,
-            self._pending_speech_at,
-            self._remote_participants,
-            self._presence_at,
-            self._alone_since,
-            self._energetic_ms,
-            self._last_energetic_at,
-        )
+        return replace(self._snapshot)
 
 
 def evaluate_deafness(
@@ -182,14 +157,6 @@ def evaluate_deafness(
     return "silent"
 
 
-@dataclass(frozen=True, slots=True)
-class CaptureFault:
-    kind: str
-    source: str = "stt"
-    status: int | None = None
-    detail: str | None = None
-
-
 class DeafMonitor:
     def __init__(
         self,
@@ -224,7 +191,7 @@ class DeafMonitor:
 
     def _report(self, verdict: DeafVerdict) -> None:
         if self._reporter is not None and verdict != "capture_silent":
-            self._reporter.record(CaptureFault(verdict))
+            self._reporter.record(Fault(source="stt", kind=verdict))
         if self._journal is not None and verdict == "capture_silent":
             snapshot = self._activity.snapshot()
             self._journal.record(
