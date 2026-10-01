@@ -31,10 +31,6 @@ ConversationPhase = Literal[
 ]
 
 
-MAX_SPOKEN_SENTENCES = DEFAULTS.conversation.max_spoken_sentences
-BARGE_IN_MIN_WORDS = DEFAULTS.conversation.barge_in_min_words
-
-
 @dataclass(frozen=True, slots=True)
 class TranscriptEvent:
     id: str
@@ -176,7 +172,9 @@ class LangGraphResponder:
 
 
 def cap_spoken_reply(
-    reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES, language: str = DEFAULTS.speech.language
+    reply: str,
+    max_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
+    language: str = DEFAULTS.speech.language,
 ) -> str:
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
@@ -206,8 +204,8 @@ class ConversationLoop:
         wake_phrases: Sequence[str] = (),
         activation_seconds: float = DEFAULTS.conversation.activation_seconds,
         barge_in: bool = False,
-        barge_in_min_words: int = BARGE_IN_MIN_WORDS,
-        max_spoken_sentences: int = MAX_SPOKEN_SENTENCES,
+        barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words,
+        max_spoken_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
         language: str = DEFAULTS.speech.language,
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,

@@ -37,7 +37,7 @@ from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.persona import PersonaProfile, build_system_prompt
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import load_meeting_record, meeting_record_path
-from fakeyou.settings import CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
+from fakeyou.settings import DEFAULTS, CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
 from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
 
@@ -1115,7 +1115,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         {
             "query": "Orchid launch",
             "group_ids": [profile.memory_group],
-            "num_results": memory_module.RECALL_SEARCH_LIMIT,
+            "num_results": DEFAULTS.memory.recall.search_limit,
             "search_filter": memory_module.CURRENT_FACTS_FILTER,
         }
     ]

@@ -48,9 +48,6 @@ from fakeyou.settings import (
     require_secret,
 )
 
-RECALL_RESULT_LIMIT = DEFAULTS.memory.recall.result_limit
-RECALL_SEARCH_LIMIT = RECALL_RESULT_LIMIT * 2
-RECALL_TIMEOUT_SECONDS = DEFAULTS.memory.recall.timeout_seconds
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
 OWNER_NOTE_SOURCE = "owner note"
@@ -212,7 +209,7 @@ def create_memory_tools(
             results = await memory.search(
                 query,
                 group_ids=[group_id],
-                num_results=recall.result_limit * 2,
+                num_results=recall.search_limit,
                 search_filter=CURRENT_FACTS_FILTER,
             )
             first_by_fact: dict[str, EntityEdge] = {}

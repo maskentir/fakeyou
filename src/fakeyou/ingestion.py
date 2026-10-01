@@ -17,10 +17,6 @@ from fakeyou.settings import DEFAULTS
 UNIDENTIFIED_PARTICIPANT = "Unidentified participant"
 TWIN_SPEAKER = "Digital twin"
 
-WINDOW_UTTERANCES = DEFAULTS.memory.ingestion.window_utterances
-WINDOW_SPAN = timedelta(seconds=DEFAULTS.memory.ingestion.window_seconds)
-EPISODE_TIMEOUT_SECONDS = DEFAULTS.memory.ingestion.episode_timeout_seconds
-
 
 @dataclass(frozen=True, slots=True)
 class Utterance:
@@ -68,7 +64,7 @@ def episode_name(meeting_id: str, index: int) -> str:
 def meeting_windows(
     entries: Sequence[RecordEntry],
     *,
-    window_utterances: int = WINDOW_UTTERANCES,
+    window_utterances: int = DEFAULTS.memory.ingestion.window_utterances,
     window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
 ) -> list[list[Utterance]]:
     windows: list[list[Utterance]] = []
@@ -105,8 +101,8 @@ async def ingest_meeting(
     journal: Journal | None = None,
     faults: FaultReporter | None = None,
     stop: asyncio.Event | None = None,
-    episode_timeout_seconds: float = EPISODE_TIMEOUT_SECONDS,
-    window_utterances: int = WINDOW_UTTERANCES,
+    episode_timeout_seconds: float = DEFAULTS.memory.ingestion.episode_timeout_seconds,
+    window_utterances: int = DEFAULTS.memory.ingestion.window_utterances,
     window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
 ) -> IngestResult:
     windows = meeting_windows(

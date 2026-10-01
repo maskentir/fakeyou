@@ -181,6 +181,10 @@ class RecallSettings(Section):
     result_limit: int = Field(default=5, gt=0)
     timeout_seconds: PositiveSeconds = 15.0
 
+    @property
+    def search_limit(self) -> int:
+        return self.result_limit * 2
+
 
 class IngestionSettings(Section):
     window_utterances: int = Field(default=20, gt=0)

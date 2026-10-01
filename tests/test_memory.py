@@ -20,7 +20,7 @@ from fakeyou.memory import (
     remember_owner_note,
     verify_memory_connection,
 )
-from fakeyou.settings import MemorySettings
+from fakeyou.settings import DEFAULTS, MemorySettings, RecallSettings
 from tests.fakes import FakeSaga, make_graphiti
 
 
@@ -43,7 +43,7 @@ async def test_memory_tools_keep_group_id_scoped(
     assert memory.searched[0] == {
         "query": "agenda",
         "group_ids": ["team_alpha"],
-        "num_results": memory_module.RECALL_SEARCH_LIMIT,
+        "num_results": DEFAULTS.memory.recall.search_limit,
         "search_filter": memory_module.CURRENT_FACTS_FILTER,
     }
 
@@ -153,7 +153,7 @@ async def test_recall_caps_results() -> None:
     result = await recall.ainvoke({"query": "agenda"})
 
     assert result.splitlines() == [f"From an unknown source: fact-{index}" for index in range(5)]
-    assert memory.searched[0]["num_results"] == memory_module.RECALL_SEARCH_LIMIT
+    assert memory.searched[0]["num_results"] == DEFAULTS.memory.recall.search_limit
 
 
 async def test_recall_drops_identical_facts_before_applying_the_limit() -> None:
@@ -342,15 +342,19 @@ async def test_remember_owner_note_stores_text_episode_in_group() -> None:
     assert note["reference_time"].tzinfo is not None
 
 
-async def test_recall_times_out_below_the_agent_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
+async def test_recall_times_out_with_its_configured_budget() -> None:
     _remember, recall = create_memory_tools(
-        make_graphiti(search_gate=asyncio.Event()), group_id="team_alpha"
+        make_graphiti(search_gate=asyncio.Event()),
+        group_id="team_alpha",
+        recall=RecallSettings(timeout_seconds=0.01),
     )
 
     with pytest.raises(TimeoutError):
         await recall.ainvoke({"query": "agenda"})
-    assert memory_module.RECALL_TIMEOUT_SECONDS < 60
+
+
+def test_default_recall_budget_fits_inside_the_reply_deadline() -> None:
+    assert DEFAULTS.memory.recall.timeout_seconds < DEFAULTS.conversation.response_timeout_seconds
 
 
 async def test_reembed_group_pages_through_entities_and_facts(
