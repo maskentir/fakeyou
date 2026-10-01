@@ -32,3 +32,16 @@ def test_documents_follow_the_folder_taxonomy(document: Path) -> None:
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md", relative.name)
     else:
         assert re.fullmatch(r"[a-z0-9-]+\.md", relative.name)
+
+
+ENGLISH_FUNCTION_WORDS = re.compile(
+    r"\b(the|and|which|that|when|with|because|this|from|into)\b", re.IGNORECASE
+)
+NON_PROSE = re.compile(r"```.*?```|`[^`\n]*`|\]\([^)]*\)|\"[^\"\n]*\"|“[^”\n]*”|https?://\S+", re.S)
+
+
+@pytest.mark.parametrize("document", DOCUMENTS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_documents_are_written_in_indonesian(document: Path) -> None:
+    prose = NON_PROSE.sub("", document.read_text())
+
+    assert len(ENGLISH_FUNCTION_WORDS.findall(prose)) / max(len(prose.split()), 1) <= 0.005
