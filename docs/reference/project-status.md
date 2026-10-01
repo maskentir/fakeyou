@@ -1,6 +1,6 @@
 # Status fondasi dan pekerjaan berikutnya
 
-Diperbarui: 2 Oktober 2026. Status mencakup refactor yang sudah digabung, cleanup lokal, dan acceptance ketiga. Prioritas selanjutnya ada di [rencana pengembangan berikutnya](../plans/next-development.md).
+Diperbarui: 2 Oktober 2026. Status mencakup refactor yang sudah digabung, cleanup lokal, acceptance ketiga, dan acceptance live kinerja percakapan. Rencana pengembangan berikutnya selesai dilaksanakan; langkah lanjut ada di [rencana tersebut](../plans/next-development.md).
 
 ## Posisi proyek sekarang
 
@@ -8,7 +8,7 @@ Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint, browser 
 
 Worker sudah dapat masuk sebagai guest, menunggu admission, mendengar lewat Muse, menjawab melalui TTS streaming, dan leave. [Acceptance ketiga](../reports/2026-10-01-refactor-acceptance.md) membuktikan startup, recall lintas sesi, konteks kata ganti, interupsi, dan stop tanpa suara terlambat; host mengonfirmasi jawaban terdengar utuh. Performa belum lulus: median akhir ucapan → PCM pertama 5,727 detik dan p95 16,895 detik pada delapan giliran. Atribusi per participant belum terbukti karena sesi ini memakai satu host.
 
-Refactor utama sudah digabung ke `master` pada `6926e9b`. Audit cleanup berikutnya tersimpan dalam tiga commit lokal pada `feat/legacy-config-cleanup`, terakhir `ff60109`: alias konfigurasi yang mati serta jalur preflight lama dihapus, dan runbook/harness Muse diselaraskan dengan konfigurasi. Regresi terakhir pada commit itu: 1.403 tes non-live dan non-container lulus, termasuk browser lokal; Ruff, format, serta mypy bersih. Cleanup belum di-push atau digabung ketika status ini diperbarui.
+Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup dan rencana terukur mendarat di `feat/legacy-config-cleanup` (`15faf58`), lalu implementasi kinerja percakapan di `feat/conversation-performance`: bukti PCM pertama antri-interupsi, korelasi model/recall per transkrip, artefak benchmark tersamar, laporan negatif Task 4, dan acceptance live Task 5. Gate lokal hijau (1.463 tes non-live/non-container termasuk browser; Ruff, format, mypy bersih), image terverifikasi cocok dengan source, dan container lulus. Fungsi live lulus pada 4 sesi Meet (recall lintas sesi, kata ganti, 11 interupsi, stop saat model dan audio, tanpa audio susulan); milestone performa belum lulus dengan median 3,243 dtk dan p95 8,319 dtk pada 23 jawaban. Bukti: [acceptance live](../reports/2026-10-02-live-acceptance.md). Branch belum di-push atau digabung.
 
 Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan visual, mengingat, berbicara, serta memakai UI atas nama pemilik dengan kewenangan yang jelas.
 
@@ -157,6 +157,6 @@ Ketiganya sudah dipelajari sebagai referensi. Modul-modulnya belum menjadi depen
 
 ## Target demonstrasi berikutnya
 
-Ulangi percakapan persona dan recall di dua sesi dengan sedikitnya 20 jawaban terukur. Rencana berikutnya mengusulkan median akhir ucapan → PCM pertama maksimal 3 detik dan p95 maksimal 6 detik, sambil mempertahankan gate kualitas replay, interupsi, serta stop. Target ini masih perlu dibuktikan; angka baseline terakhir ada pada laporan acceptance.
+Percakapan persona dan recall dua sesi dengan 23 jawaban terukur sudah dilaksanakan pada 2 Oktober 2026: median akhir ucapan → PCM pertama 3,243 detik dan p95 8,319 detik, sehingga target 3/6 detik belum tercapai; gate kualitas replay juga belum lulus. Interupsi serta stop lulus (11 pemicu dalam batas pembanding, tanpa audio susulan). Langkah berikut adalah desain streaming teks per kalimat sebelum perubahan alur, lalu atribusi participant, provenance memori, tindakan Meet yang terverifikasi, operasi beberapa sesi, dan konteks visual.
 
 Setelah performa percakapan, lanjutkan atribusi participant, provenance memori, tindakan Meet yang terverifikasi, operasi beberapa sesi, dan konteks visual. Detail task dan batas setiap milestone ada di [rencana pengembangan berikutnya](../plans/next-development.md).

@@ -10,7 +10,7 @@
 
 **Spesifikasi:** [Acceptance 1 Oktober](../reports/2026-10-01-refactor-acceptance.md), [rencana jangka panjang](long-term.md), serta kontrak dan kriteria dalam dokumen ini.
 
-**Status:** Task 1–3 selesai dan terintegrasi pada 2 Oktober 2026 (gate lokal hijau); Task 4 selesai sebagai laporan negatif; Task 5: gate lokal dan build container terverifikasi, acceptance live menunggu link dan kesiapan host.
+**Status:** Task 1–5 selesai dilaksanakan pada 2 Oktober 2026. Fungsi live lulus; milestone performa belum lulus (median 3,243 dtk lawan target 3 dtk, p95 8,319 dtk lawan target 6 dtk). Bukti: [acceptance live](../reports/2026-10-02-live-acceptance.md).
 
 ## Dasar keputusan
 
@@ -259,12 +259,12 @@ uv run --env-file .env pytest evals/test_replay_eval.py -m live -v -s \
 
 - [x] Jalankan gate lokal: `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy`, dan `uv run pytest -m 'not live and not container' -q`.
 - [x] Bangun image dengan `docker compose --profile audio build meeting-worker`. Cocokkan hash source image dengan commit yang diuji. Jalankan tes container sesuai marker proyek; jangan menukar hasil image lama sebagai bukti commit baru.
-- [ ] Setelah host siap, buat dua sesi baru memakai profil/namespace uji dan pertanyaan tetap: fakta sederhana, owner note, recall meeting sebelumnya, pertanyaan lanjutan dengan kata ganti, pertanyaan yang tidak diketahui, serta permintaan di luar kewenangan.
-- [ ] Kumpulkan sedikitnya 20 giliran jawaban. Pisahkan giliran interupsi/stop dari distribusi jawaban utuh, tetapi tetap laporkan jumlahnya; jangan menghapus jawaban lambat dari sampel.
-- [ ] Uji barge-in sedikitnya tiga kali dan stop ketika model bekerja maupun ketika audio berjalan. Tidak ada PCM/playback generasi usang setelah stop. Target pembanding interupsi: median maksimal 1,618 detik dan maksimum maksimal 1,833 detik pada skenario yang setara.
-- [ ] Jalankan `fakeyou report --meeting ID` pada journal masing-masing sesi. Simpan laporan, commit, konfigurasi yang disamarkan, jumlah sampel/missing evidence, serta konfirmasi host tentang suara utuh.
-- [ ] Nyatakan hasil fungsi, kualitas, dan performa secara terpisah. Milestone performa lulus hanya bila gate replay dan target live keduanya terpenuhi. Sampel yang kurang atau event hilang menghasilkan bukti belum cukup.
-- [ ] Commit laporan dan pembaruan status. Push/merge mengikuti instruksi pengguna pada saat pelaksanaan.
+- [x] Setelah host siap, buat dua sesi baru memakai profil/namespace uji dan pertanyaan tetap: fakta sederhana, owner note, recall meeting sebelumnya, pertanyaan lanjutan dengan kata ganti, pertanyaan yang tidak diketahui, serta permintaan di luar kewenangan.
+- [x] Kumpulkan sedikitnya 20 giliran jawaban. Pisahkan giliran interupsi/stop dari distribusi jawaban utuh, tetapi tetap laporkan jumlahnya; jangan menghapus jawaban lambat dari sampel.
+- [x] Uji barge-in sedikitnya tiga kali dan stop ketika model bekerja maupun ketika audio berjalan. Tidak ada PCM/playback generasi usang setelah stop. Target pembanding interupsi: median maksimal 1,618 detik dan maksimum maksimal 1,833 detik pada skenario yang setara.
+- [x] Jalankan `fakeyou report --meeting ID` pada journal masing-masing sesi. Simpan laporan, commit, konfigurasi yang disamarkan, jumlah sampel/missing evidence, serta konfirmasi host tentang suara utuh.
+- [x] Nyatakan hasil fungsi, kualitas, dan performa secara terpisah. Milestone performa lulus hanya bila gate replay dan target live keduanya terpenuhi. Sampel yang kurang atau event hilang menghasilkan bukti belum cukup.
+- [x] Commit laporan dan pembaruan status. Push/merge mengikuti instruksi pengguna pada saat pelaksanaan.
 
 ## Milestone sesudah jawaban responsif
 
