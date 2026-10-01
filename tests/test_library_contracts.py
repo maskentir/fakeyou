@@ -9,7 +9,7 @@ from langchain.chat_models import init_chat_model
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
 
-from fakeyou.settings import Settings
+from fakeyou.settings import STTSettings
 
 
 def test_graphiti_add_episode_accepts_the_arguments_ingestion_relies_on() -> None:
@@ -46,7 +46,7 @@ def test_meta_stt_exposes_keywords_language_bias_and_mode() -> None:
 
     for name in ("keywords", "language_bias", "mode"):
         assert name in fields
-    assert Settings.model_fields["stt_model"].default == META_STT_MODEL
+    assert STTSettings.model_fields["model"].default == META_STT_MODEL
 
 
 async def test_meta_stt_drops_diarization_speaker_labels() -> None:

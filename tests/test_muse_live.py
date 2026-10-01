@@ -156,18 +156,18 @@ async def test_native_pipeline_harness_rejects_upstream_errors() -> None:
 @pytest.mark.live
 async def test_muse_endpointing_transcribes_realtime_wav() -> None:
     settings = Settings()
-    audio_name = os.environ.get("FAKEYOU_MUSE_TEST_AUDIO")
-    expected = os.environ.get("FAKEYOU_MUSE_EXPECTED_TEXT")
+    audio_name = os.environ.get("MUSE_TEST_AUDIO")
+    expected = os.environ.get("MUSE_EXPECTED_TEXT")
     if not audio_name or not expected:
-        pytest.skip("set FAKEYOU_MUSE_TEST_AUDIO and FAKEYOU_MUSE_EXPECTED_TEXT")
+        pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     try:
-        api_key = require_secret(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
+        api_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
     except ValueError as error:
         pytest.skip(str(error))
     sample_rate, pcm = _read_wav(Path(audio_name))
     expected_text = _normalise(expected)
     if not expected_text:
-        pytest.fail("FAKEYOU_MUSE_EXPECTED_TEXT must contain text")
+        pytest.fail("MUSE_EXPECTED_TEXT must contain text")
 
     stt = create_muse_stt(api_key=api_key, mode="ENDPOINTING", sample_rate=sample_rate)
     await _run_pipeline(stt, pcm, sample_rate, expected_text, api_key)

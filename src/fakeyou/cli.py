@@ -11,7 +11,6 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict, replace
 from functools import partial
-from importlib.metadata import version
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -24,13 +23,16 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
-from pipecat.services.meta.stt import META_STT_WS_URL
-from pydantic import SecretStr, TypeAdapter
+from pydantic import TypeAdapter
 
-from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
+from fakeyou.agent import (
+    ENDING_RULE,
+    MEETING_GUIDANCE,
+    SPOKEN_LANGUAGE_GUIDANCE,
+    create_meeting_agent,
+)
 from fakeyou.audio import (
     AGENT_SINK_NAME,
-    CAPTURE_SAMPLE_RATE,
     MEETING_MONITOR_SOURCE_NAME,
     open_meeting_audio,
 )
@@ -61,101 +63,87 @@ from fakeyou.memory import (
 )
 from fakeyou.persona import PersonaProfile, build_persona, load_persona, speech_keywords
 from fakeyou.playback import PlaybackEvent
-from fakeyou.preflight import provider_probe_hosts
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
 from fakeyou.report import build_session_report, read_journal
 from fakeyou.runtime import SessionConfig, SessionResult, run_meeting_session
 from fakeyou.session import SessionId
-from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import MINIMAX_TTS_URL, TTS_DEFAULTS
+from fakeyou.settings import (
+    CompatibleReply,
+    OpenAIReply,
+    ReplySettings,
+    Settings,
+    require_secret,
+)
 
 
 class CliError(ValueError):
     pass
 
 
-OPENAI_API_URL = "https://api.openai.com"
-PROVIDER_API_URLS = {"openai": OPENAI_API_URL, "anthropic": "https://api.anthropic.com"}
-CHAT_TIMEOUT_SECONDS = 20
-CHAT_MAX_RETRIES = 2
+def default_persona(settings: Settings) -> str:
+    return (
+        f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[settings.speech.language]}\n\n{ENDING_RULE}"
+    )
 
 
 def chat_endpoint(settings: Settings) -> str:
-    if settings.chat_base_url:
-        return settings.chat_base_url
-    provider, _, _ = settings.chat_model.partition(":")
-    return PROVIDER_API_URLS.get(provider, "")
+    return settings.reply.base_url or ""
 
 
 def tts_endpoint(settings: Settings) -> str:
-    return MINIMAX_TTS_URL if settings.tts_provider == "minimax" else OPENAI_API_URL
+    return settings.tts.base_url
 
 
 def tts_api_key(settings: Settings) -> str:
-    if settings.tts_provider == "minimax":
-        return require_secret(settings.tts_api_key, "FAKEYOU_TTS_API_KEY")
-    return require_secret(
-        settings.tts_api_key or settings.openai_api_key,
-        "FAKEYOU_TTS_API_KEY or FAKEYOU_OPENAI_API_KEY",
-    )
+    return require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
 
 
-def preflight_hosts(settings: Settings) -> tuple[str, ...]:
-    return provider_probe_hosts(
-        tts_base_url=tts_endpoint(settings),
-        stt_ws_url=META_STT_WS_URL,
-        agent_base_url=chat_endpoint(settings),
-    )
+def preflight_hosts(
+    settings: Settings, *, reply: bool = True, memory: bool = False
+) -> tuple[str, ...]:
+    targets: list[str | None] = [settings.tts.base_url, settings.stt.url]
+    if reply:
+        targets.append(settings.reply.base_url)
+        if settings.reply_fallback:
+            targets.append(settings.reply_fallback.base_url)
+    if memory:
+        targets.extend(
+            [
+                settings.memory.store.uri,
+                settings.memory.llm.base_url,
+                settings.memory.embedder.base_url,
+            ]
+        )
+    return tuple(dict.fromkeys(target for target in targets if target))
 
 
-def _init_chat_model(
-    model_name: str,
-    *,
-    api_key: SecretStr | None,
-    key_names: str,
-    base_url: str | None,
-    reasoning_effort: str | None,
-    extra_body: dict[str, Any] | None,
-    max_retries: int,
-) -> BaseChatModel:
-    options: dict[str, Any] = {"timeout": CHAT_TIMEOUT_SECONDS, "max_retries": max_retries}
-    if base_url:
-        options["base_url"] = base_url
-    if reasoning_effort:
-        options["reasoning_effort"] = reasoning_effort
-    if extra_body:
-        options["extra_body"] = extra_body
+def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
+    options: dict[str, Any] = {"timeout": role.timeout_seconds, "max_retries": role.max_retries}
+    if role.base_url is not None:
+        options["base_url"] = role.base_url
+    if isinstance(role, (OpenAIReply, CompatibleReply)) and role.reasoning_effort is not None:
+        options["reasoning_effort"] = role.reasoning_effort
+    if isinstance(role, CompatibleReply) and role.extra_body is not None:
+        options["extra_body"] = role.extra_body
     model: BaseChatModel = init_chat_model(
-        model_name, api_key=require_secret(api_key, key_names), **options
+        role.model,
+        model_provider="openai" if role.provider == "openai_compatible" else role.provider,
+        api_key=require_secret(role.api_key, name),
+        **options,
     )
     return model
 
 
 def create_chat_model(settings: Settings) -> BaseChatModel:
-    return _init_chat_model(
-        settings.chat_model,
-        api_key=settings.chat_api_key or settings.openai_api_key,
-        key_names="FAKEYOU_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
-        base_url=settings.chat_base_url,
-        reasoning_effort=settings.chat_reasoning_effort,
-        extra_body=settings.chat_extra_body,
-        max_retries=0 if settings.fallback_chat_model else CHAT_MAX_RETRIES,
-    )
+    settings.require_roles("reply", "reply_fallback")
+    return _init_chat_model(settings.reply, "FAKEYOU_REPLY__API_KEY")
 
 
 def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
-    if not settings.fallback_chat_model:
+    if settings.reply_fallback is None:
         return None
-    return _init_chat_model(
-        settings.fallback_chat_model,
-        api_key=settings.fallback_chat_api_key or settings.openai_api_key,
-        key_names="FAKEYOU_FALLBACK_CHAT_API_KEY or FAKEYOU_OPENAI_API_KEY",
-        base_url=settings.fallback_chat_base_url,
-        reasoning_effort=settings.fallback_chat_reasoning_effort,
-        extra_body=settings.fallback_chat_extra_body,
-        max_retries=CHAT_MAX_RETRIES,
-    )
+    return _init_chat_model(settings.reply_fallback, "FAKEYOU_REPLY_FALLBACK__API_KEY")
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -169,94 +157,37 @@ _FAILURE_EXIT_CODES = {
 
 
 def check_setup(settings: Settings) -> None:
-    packages = (
-        "langchain",
-        "langgraph",
-        "langchain-mcp-adapters",
-        "mcp",
-        "cloakbrowser",
-        "pipecat-ai",
-        "graphiti-core",
-    )
-    print(
-        json.dumps(
-            {
-                "packages": {name: version(name) for name in packages},
-                "playwright_mcp_installed": Path("node_modules/@playwright/mcp/cli.js").is_file(),
-                "openai_key_configured": bool(
-                    settings.openai_api_key and settings.openai_api_key.get_secret_value().strip()
-                ),
-                "model_key_configured": bool(
-                    settings.model_api_key and settings.model_api_key.get_secret_value().strip()
-                ),
-                "chat_model": settings.chat_model,
-                "models": {
-                    "reply": {
-                        "model": settings.chat_model,
-                        "base_url": settings.chat_base_url,
-                        "reasoning_effort": settings.chat_reasoning_effort,
-                        "extra_body": settings.chat_extra_body,
-                    },
-                    "fallback": {
-                        "model": settings.fallback_chat_model,
-                        "base_url": settings.fallback_chat_base_url,
-                        "reasoning_effort": settings.fallback_chat_reasoning_effort,
-                        "extra_body": settings.fallback_chat_extra_body,
-                    }
-                    if settings.fallback_chat_model
-                    else None,
-                    "memory": {
-                        "llm": settings.memory_llm_model,
-                        "llm_base_url": settings.memory_llm_base_url,
-                        "small": settings.memory_small_model,
-                        "embedding": settings.memory_embedding_model,
-                        "embedding_base_url": settings.memory_embedding_base_url,
-                        "embedding_dim": settings.memory_embedding_dim,
-                    },
-                    "stt": {
-                        "model": settings.stt_model,
-                        "mode": "ENDPOINTING",
-                        "sample_rate": CAPTURE_SAMPLE_RATE,
-                    },
-                    "tts": {
-                        "provider": settings.tts_provider,
-                        "model": TTS_DEFAULTS[settings.tts_provider][0],
-                        "voice": settings.tts_voice or TTS_DEFAULTS[settings.tts_provider][1],
-                    },
-                },
-                "live_services_verified": False,
-            },
-            indent=2,
-        )
-    )
+    print(json.dumps(settings.model_dump(mode="json"), indent=2))
 
 
 async def show_browser_tools(settings: Settings) -> None:
     async with open_browser_tools(
-        headless=settings.headless,
-        license_key=settings.cloakbrowser_license_key,
+        headless=settings.meeting.headless,
+        license_key=settings.meeting.license_key.get_secret_value()
+        if settings.meeting.license_key
+        else None,
     ) as tools:
         print("\n".join(tool.name for tool in tools))
 
 
 def memory_config(settings: Settings) -> Neo4jMemoryConfig:
+    settings.require_roles("memory.llm", "memory.embedder")
     return Neo4jMemoryConfig(
-        uri=settings.neo4j_uri,
-        user=settings.neo4j_user,
-        password=require_secret(settings.neo4j_password, "FAKEYOU_NEO4J_PASSWORD"),
-        api_key=require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY"),
-        llm_model=settings.memory_llm_model,
-        small_model=settings.memory_small_model,
-        embedding_model=settings.memory_embedding_model,
-        embedding_base_url=settings.memory_embedding_base_url or None,
-        embedding_api_key=settings.memory_embedding_api_key.get_secret_value()
-        if settings.memory_embedding_api_key
-        else None,
-        embedding_dim=settings.memory_embedding_dim,
-        llm_base_url=settings.memory_llm_base_url,
-        llm_api_key=settings.memory_llm_api_key.get_secret_value()
-        if settings.memory_llm_api_key
-        else None,
+        uri=settings.memory.store.uri,
+        user=settings.memory.store.user,
+        password=require_secret(settings.memory.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD"),
+        database=settings.memory.store.database,
+        llm_model=settings.memory.llm.model,
+        small_model=settings.memory.llm.small_model,
+        llm_client=settings.memory.llm.client,
+        llm_base_url=settings.memory.llm.base_url,
+        llm_api_key=require_secret(settings.memory.llm.api_key, "FAKEYOU_MEMORY__LLM__API_KEY"),
+        embedding_model=settings.memory.embedder.model,
+        embedding_base_url=settings.memory.embedder.base_url,
+        embedding_api_key=require_secret(
+            settings.memory.embedder.api_key, "FAKEYOU_MEMORY__EMBEDDER__API_KEY"
+        ),
+        embedding_dim=settings.memory.embedder.dim,
     )
 
 
@@ -283,8 +214,8 @@ async def load_operator_persona(
     try:
         return await load_persona(
             persona_path,
-            owner_id=owner_id or settings.owner_id,
-            twin_id=twin_id or settings.twin_id,
+            owner_id=owner_id or settings.identity.owner_id,
+            twin_id=twin_id or settings.identity.twin_id,
         )
     except OSError as error:
         raise CliError(f"--persona cannot be read: {error.strerror}") from None
@@ -330,6 +261,7 @@ async def ingest_until_stopped(
     twin_name: str,
     journal: ProviderJournal,
     faults: FaultReporter,
+    settings: Settings,
 ) -> IngestResult:
     stop = asyncio.Event()
     with stop_signal_handlers(stop):
@@ -343,6 +275,9 @@ async def ingest_until_stopped(
             journal=journal,
             faults=faults,
             stop=stop,
+            window_utterances=settings.memory.ingestion.window_utterances,
+            window_seconds=settings.memory.ingestion.window_seconds,
+            episode_timeout_seconds=settings.memory.ingestion.episode_timeout_seconds,
         )
 
 
@@ -357,10 +292,10 @@ async def ingest_recorded_meeting(
 ) -> None:
     TypeAdapter(SessionId).validate_python(meeting_id)
     profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
-    record_path = meeting_record_path(settings.meeting_record_dir, meeting_id)
+    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not record_path.exists():
         raise CliError(f"no meeting record for {meeting_id} at {record_path}")
-    journal = ProviderJournal(meeting_id, path=settings.journal_dir / f"{meeting_id}.jsonl")
+    journal = ProviderJournal(meeting_id, path=settings.paths.journal_dir / f"{meeting_id}.jsonl")
     try:
         async with open_persona_memory(settings) as memory:
             result = await ingest_until_stopped(
@@ -371,6 +306,7 @@ async def ingest_recorded_meeting(
                 twin_name=twin_name or profile.display_name,
                 journal=journal,
                 faults=FaultReporter(journal=journal),
+                settings=settings,
             )
     finally:
         journal.close()
@@ -419,8 +355,8 @@ async def reembed_memory(
     print(
         json.dumps(
             {
-                "embedding_model": settings.memory_embedding_model,
-                "embedding_dim": settings.memory_embedding_dim,
+                "embedding_model": settings.memory.embedder.model,
+                "embedding_dim": settings.memory.embedder.dim,
                 **asdict(result),
             }
         )
@@ -430,19 +366,19 @@ async def reembed_memory(
 async def forget_meeting_files(
     settings: Settings, profile: PersonaProfile, meeting_id: str
 ) -> dict[str, Any]:
-    record_dir = meeting_record_path(settings.meeting_record_dir, meeting_id).parent
+    record_dir = meeting_record_path(settings.paths.record_dir, meeting_id).parent
     record_removed = record_dir.exists()
     shutil.rmtree(record_dir, ignore_errors=True)
-    journal_path = settings.journal_dir / f"{meeting_id}.jsonl"
+    journal_path = settings.paths.journal_dir / f"{meeting_id}.jsonl"
     journal_files = [journal_path] + [
         Path(f"{journal_path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)
     ]
     removed_journals = [path for path in journal_files if path.exists()]
     for path in removed_journals:
         path.unlink()
-    thread_removed = settings.checkpoint_path.exists()
+    thread_removed = settings.paths.checkpoint_path.exists()
     if thread_removed:
-        async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
             await saver.adelete_thread(
                 conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id)
             )
@@ -456,7 +392,7 @@ async def forget_meeting_files(
 
 def show_session_report(meeting_id: str, journal_dir: Path | None, settings: Settings) -> None:
     TypeAdapter(SessionId).validate_python(meeting_id)
-    journal_path = (journal_dir or settings.journal_dir) / f"{meeting_id}.jsonl"
+    journal_path = (journal_dir or settings.paths.journal_dir) / f"{meeting_id}.jsonl"
     if not journal_path.exists():
         raise CliError(f"no journal for meeting {meeting_id} at {journal_path}")
     report = build_session_report(read_journal(journal_path))
@@ -469,27 +405,35 @@ async def chat(
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", thread):
         raise CliError("--thread must be 1-128 characters using letters, numbers, '_' or '-'")
     model = create_chat_model(settings)
-    settings.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.paths.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path))
+            AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path))
         )
         tools: list[BaseTool] = []
         if use_memory:
             memory = await resources.enter_async_context(
                 open_graphiti_memory(memory_config(settings))
             )
-            tools.extend(create_memory_tools(memory, group_id=settings.memory_group))
+            tools.extend(
+                create_memory_tools(
+                    memory, group_id=settings.memory.store.group, recall=settings.memory.recall
+                )
+            )
         if use_browser:
             tools.extend(
                 await resources.enter_async_context(
                     open_browser_tools(
-                        headless=settings.headless,
-                        license_key=settings.cloakbrowser_license_key,
+                        headless=settings.meeting.headless,
+                        license_key=settings.meeting.license_key.get_secret_value()
+                        if settings.meeting.license_key
+                        else None,
                     )
                 )
             )
-        agent = create_meeting_agent(model, tools=tools, checkpointer=checkpointer)
+        agent = create_meeting_agent(
+            model, tools=tools, checkpointer=checkpointer, persona=default_persona(settings)
+        )
         response = await agent.ainvoke(
             {"messages": [{"role": "user", "content": message}]},
             config={"configurable": {"thread_id": thread}, "recursion_limit": 30},
@@ -557,6 +501,10 @@ async def join_meeting(
         raise CliError("--wake-phrase requires --converse")
     if barge_in and not conversation_enabled:
         raise CliError("--barge-in requires --converse")
+    if conversation_enabled:
+        settings.require_roles("reply", "reply_fallback")
+    if memory:
+        memory_config(settings)
     audio_factory = None
     if audio_enabled:
         if (
@@ -568,36 +516,47 @@ async def join_meeting(
             raise CliError(
                 "--audio requires the Linux audio worker; use docker compose run meeting-worker"
             )
-        muse_key = require_secret(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
+        muse_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
         tts_key = tts_api_key(settings)
     stop = asyncio.Event()
     resolved_meeting_id = meeting_id or uuid.uuid4().hex[:12]
-    resolved_twin_id = twin_id or settings.twin_id
-    resolved_headless = settings.headless if headless is None else headless
+    resolved_twin_id = twin_id or settings.identity.twin_id
+    resolved_headless = settings.meeting.headless if headless is None else headless
     config = SessionConfig(
-        owner_id=owner_id or settings.owner_id,
+        owner_id=owner_id or settings.identity.owner_id,
         twin_id=resolved_twin_id,
         meeting_id=resolved_meeting_id,
         link=link,
-        twin_name=twin_name or settings.twin_name,
+        twin_name=twin_name or settings.identity.twin_name,
         browser_profile_dir=Path(profile_dir)
         if profile_dir
-        else Path(".runtime/profiles") / resolved_twin_id,
+        else settings.paths.browser_profile_dir / resolved_twin_id,
         lobby_timeout_seconds=lobby_timeout
         if lobby_timeout is not None
-        else settings.lobby_timeout_seconds,
+        else settings.meeting.lobby_timeout_seconds,
         session_duration_seconds=duration
         if duration is not None
-        else settings.session_duration_seconds,
+        else settings.meeting.session_duration_seconds,
+        join_poll_interval_seconds=settings.meeting.join_poll_seconds,
+        monitor_interval_seconds=settings.meeting.monitor_poll_seconds,
+        leave_timeout_seconds=settings.meeting.leave_timeout_seconds,
+        warmup_browser=settings.meeting.warmup_browser,
+        deaf_window_seconds=settings.audio_health.deaf_window_seconds,
+        deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
+        preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,
-        license_key=settings.cloakbrowser_license_key,
-        checkpoint_path=settings.checkpoint_path,
+        license_key=settings.meeting.license_key.get_secret_value()
+        if settings.meeting.license_key
+        else None,
+        checkpoint_path=settings.paths.checkpoint_path,
     )
     profile: PersonaProfile | None = None
     if persona_path is not None:
         profile = await load_operator_persona(
             persona_path, config.owner_id, config.twin_id, settings
         )
+        if profile.language != settings.speech.language:
+            raise CliError("persona language must match speech.language")
         if memory and not (profile.allowed_tools or profile.ingest_transcripts):
             raise CliError(
                 "--memory requires recall_meeting_context or ingest_transcripts in the persona"
@@ -605,11 +564,11 @@ async def join_meeting(
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
     journal = ProviderJournal(
-        resolved_meeting_id, path=settings.journal_dir / f"{resolved_meeting_id}.jsonl"
+        resolved_meeting_id, path=settings.paths.journal_dir / f"{resolved_meeting_id}.jsonl"
     )
     faults = FaultReporter(journal=journal)
     record = MeetingRecord(
-        meeting_record_path(settings.meeting_record_dir, resolved_meeting_id), faults=faults
+        meeting_record_path(settings.paths.record_dir, resolved_meeting_id), faults=faults
     )
 
     conversation: ConversationLoop | None = None
@@ -687,8 +646,10 @@ async def join_meeting(
                 open_meeting_audio,
                 muse_api_key=muse_key,
                 tts_api_key=tts_key,
-                tts_provider=settings.tts_provider,
-                tts_voice=settings.tts_voice,
+                tts_settings=settings.tts,
+                speech_language=settings.speech.language,
+                stt_settings=settings.stt,
+                alone_leave_seconds=settings.audio_health.alone_leave_seconds,
                 on_transcript=transcript,
                 on_interim=interim,
                 on_playback_event=log_playback,
@@ -696,12 +657,14 @@ async def join_meeting(
                 journal=journal,
                 deaf_window_seconds=config.deaf_window_seconds,
                 deaf_grace_seconds=config.deaf_grace_seconds,
-                stt_model=settings.stt_model,
+                stt_model=settings.stt.model,
                 stt_keywords=speech_keywords(profile, config.twin_name) if profile else None,
             )
         preflight_kwargs: dict[str, Any] = (
             {
-                "preflight_hosts": preflight_hosts(settings),
+                "preflight_hosts": preflight_hosts(
+                    settings, reply=conversation_enabled, memory=memory
+                ),
                 "preflight_budget_seconds": config.preflight_budget_seconds,
             }
             if audio_enabled
@@ -734,12 +697,13 @@ async def join_meeting(
             try:
                 await ingest_until_stopped(
                     graphiti,
-                    meeting_record_path(settings.meeting_record_dir, resolved_meeting_id),
+                    meeting_record_path(settings.paths.record_dir, resolved_meeting_id),
                     profile=profile,
                     meeting_id=resolved_meeting_id,
                     twin_name=config.twin_name,
                     journal=journal,
                     faults=faults,
+                    settings=settings,
                 )
             except Exception as error:
                 faults.record(classify_exception("memory_ingest", error))
@@ -775,10 +739,10 @@ async def open_conversation(
     on_tool_result: ToolResultCallback | None = None,
 ) -> AsyncIterator[ConversationLoop]:
     model = create_chat_model(settings)
-    settings.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.paths.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path))
+            AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path))
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
@@ -788,7 +752,9 @@ async def open_conversation(
         if graphiti is not None and profile is not None and profile.allowed_tools:
             tools.extend(
                 tool
-                for tool in create_memory_tools(graphiti, group_id=profile.memory_group)
+                for tool in create_memory_tools(
+                    graphiti, group_id=profile.memory_group, recall=settings.memory.recall
+                )
                 if tool.name in profile.allowed_tools
             )
             middleware.append(recall_error_middleware(faults))
@@ -796,7 +762,7 @@ async def open_conversation(
             model,
             tools=tools,
             checkpointer=checkpointer,
-            persona=build_persona(profile) if profile is not None else DEFAULT_PERSONA,
+            persona=build_persona(profile) if profile is not None else default_persona(settings),
             middleware=middleware,
         )
         conversation = ConversationLoop(
@@ -809,6 +775,11 @@ async def open_conversation(
             on_transition=on_transition,
             wake_phrases=wake_phrases,
             barge_in=barge_in,
+            response_timeout_seconds=settings.conversation.response_timeout_seconds,
+            activation_seconds=settings.conversation.activation_seconds,
+            barge_in_min_words=settings.conversation.barge_in_min_words,
+            max_spoken_sentences=settings.conversation.max_spoken_sentences,
+            language=settings.speech.language,
             faults=faults,
             journal=journal,
         )
@@ -982,7 +953,7 @@ def main() -> None:
                     duration=arguments.duration,
                     profile_dir=arguments.profile_dir,
                     settings=settings,
-                    audio_enabled=arguments.audio,
+                    audio_enabled=arguments.audio or settings.worker.audio,
                     initial_speech=arguments.speak,
                     headless=arguments.headless,
                     memory=arguments.memory,

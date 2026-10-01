@@ -32,14 +32,14 @@ cp -n .env.example .env
 uv run fakeyou check
 ```
 
-Isi `FAKEYOU_OPENAI_API_KEY` untuk model utama, Graphiti, dan TTS; `FAKEYOU_MODEL_API_KEY` untuk transkripsi Muse. Key tidak dicetak oleh command pemeriksaan, dan `.env` diabaikan Git.
+Isi key masing-masing peran aktif: `FAKEYOU_REPLY__API_KEY`, `FAKEYOU_TTS__API_KEY`, `FAKEYOU_STT__API_KEY`, `FAKEYOU_MEMORY__LLM__API_KEY`, dan `FAKEYOU_MEMORY__EMBEDDER__API_KEY`. Tidak ada peminjaman key antarperan. `check`, help, browser, dan laporan dapat digunakan tanpa kredensial provider. `.env` diabaikan Git; `check` menyamarkan secret.
 
 ```sh
 uv run --env-file .env fakeyou chat "Kita menyiapkan digital twin meeting." --thread demo
 uv run --env-file .env fakeyou chat "Apa konteks percakapan kita?" --thread demo
 ```
 
-`--thread` mengidentifikasi percakapan checkpoint. Gunakan ID berbeda untuk konteks yang harus terpisah. Model awal `openai:gpt-4.1-mini` dapat diganti lewat `FAKEYOU_CHAT_MODEL`; provider lain memerlukan package LangChain terkait. `chat` memakai persona default; profil pemilik tersedia untuk `join` lewat `--persona`.
+`--thread` mengidentifikasi percakapan checkpoint. Gunakan ID berbeda untuk konteks yang harus terpisah. Model awal `gpt-4.1-mini` dapat diganti lewat `FAKEYOU_REPLY__MODEL`; pilih provider secara eksplisit lewat `FAKEYOU_REPLY__PROVIDER`. Nama model tidak memakai prefix provider. `chat` memakai persona default; profil pemilik tersedia untuk `join` lewat `--persona`.
 
 ## Browser
 
@@ -48,9 +48,9 @@ uv run --env-file .env fakeyou browser-tools
 uv run --env-file .env fakeyou chat "Buka https://example.com lalu baca judulnya." --thread browser-demo --browser
 ```
 
-Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua memberikan agent akses tindakan browser. Default headed; `FAKEYOU_HEADLESS=true` tersedia untuk smoke test. Setiap invocation menggunakan profile sementara terisolasi. Untuk meeting panjang, pertahankan context `open_browser_tools` sepanjang sesi; CLI satu turn bukan daemon meeting.
+Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua memberikan agent akses tindakan browser. Default headed; `FAKEYOU_MEETING__HEADLESS=true` tersedia untuk smoke test. Setiap invocation menggunakan profile sementara terisolasi. Untuk meeting panjang, pertahankan context `open_browser_tools` sepanjang sesi; CLI satu turn bukan daemon meeting.
 
-CloakBrowser mengunduh binary resmi saat dibutuhkan. Key opsional diisi lewat `FAKEYOU_CLOAKBROWSER_LICENSE_KEY`; tanpa key memakai jalur binary gratis upstream. Browser binary tidak dibundel di repository. MCP terhubung ke CDP loopback browser yang baru diluncurkan. Opsi humanize pada wrapper Python tidak otomatis berlaku pada aksi proses MCP.
+CloakBrowser mengunduh binary resmi saat dibutuhkan. Key opsional diisi lewat `FAKEYOU_MEETING__LICENSE_KEY`; tanpa key memakai jalur binary gratis upstream. Browser binary tidak dibundel di repository. MCP terhubung ke CDP loopback browser yang baru diluncurkan. Opsi humanize pada wrapper Python tidak otomatis berlaku pada aksi proses MCP.
 
 Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser humanized langsung; tool MCP tetap tersedia untuk agent browser. Hasil uji guest live tercatat di [rencana runtime sesi](docs/meeting-runtime-plan.md).
 
@@ -60,7 +60,7 @@ Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser h
 uv run --env-file .env fakeyou join https://meet.google.com/xxx-yyyy-zzz --twin-name "Fakeyou Twin"
 ```
 
-Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_OWNER_ID`, `FAKEYOU_TWIN_ID`, `FAKEYOU_TWIN_NAME`, `FAKEYOU_LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/meeting-runtime-plan.md).
+Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_IDENTITY__OWNER_ID`, `FAKEYOU_IDENTITY__TWIN_ID`, `FAKEYOU_IDENTITY__TWIN_NAME`, `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_MEETING__SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/meeting-runtime-plan.md).
 
 ID sesi menerima 1–128 huruf, angka, `_`, atau `-`, dimulai dengan huruf/angka. Semua batas waktu harus positif dan finite. Checkpoint sesi yang sudah selesai dapat dibaca kembali tanpa membuka browser; checkpoint sesi aktif setelah process crash ditolak agar join tidak diulang tanpa mengetahui keadaan panggilan.
 
@@ -72,11 +72,11 @@ uv run --env-file .env fakeyou memory-init
 uv run --env-file .env fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --thread memory-demo --memory
 ```
 
-`FAKEYOU_MEMORY_GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`. Ingestion transkrip meeting, catatan pemilik, dan penghapusan manual dijelaskan di bagian persona.
+`FAKEYOU_MEMORY__STORE__GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`. Ingestion transkrip meeting, catatan pemilik, dan penghapusan manual dijelaskan di bagian persona.
 
 Neo4j memakai named volume dan port loopback. Password contoh hanya untuk lokal. Mengubah `.env` tidak mereset password volume yang sudah terisi. `docker compose stop` mematikan layanan tanpa menghapus data.
 
-Model Graphiti dipilih per peran. Default memakai OpenAI (`FAKEYOU_MEMORY_LLM_MODEL`, `FAKEYOU_MEMORY_SMALL_MODEL`, `FAKEYOU_MEMORY_EMBEDDING_MODEL`). Ekstraksi dapat memakai endpoint kompatibel OpenAI lewat `FAKEYOU_MEMORY_LLM_BASE_URL` dan `FAKEYOU_MEMORY_LLM_API_KEY` (`OpenAIGenericClient` dengan `json_schema`), misalnya Muse Spark 1.2. Embedding dapat berjalan lokal dengan model open-source lewat service `embeddings` (Text Embeddings Inference, `ibm-granite/granite-embedding-97m-multilingual-r2` dengan revisi dipin):
+Model Graphiti dipilih per peran. Default memakai OpenAI (`FAKEYOU_MEMORY__LLM__MODEL`, `FAKEYOU_MEMORY__LLM__SMALL_MODEL`, `FAKEYOU_MEMORY__EMBEDDER__MODEL`). Ekstraksi memilih kelas client lewat `FAKEYOU_MEMORY__LLM__CLIENT` (`openai`, `openai_generic`, atau `anthropic`). Untuk endpoint kompatibel OpenAI pilih `openai_generic`, lalu atur `FAKEYOU_MEMORY__LLM__BASE_URL` dan `FAKEYOU_MEMORY__LLM__API_KEY` (`OpenAIGenericClient` dengan `json_schema`), misalnya Muse Spark 1.2. Embedding dapat berjalan lokal dengan model open-source lewat service `embeddings` (Text Embeddings Inference, `ibm-granite/granite-embedding-97m-multilingual-r2` dengan revisi dipin):
 
 ```sh
 docker compose --profile embeddings up -d --wait embeddings
@@ -86,7 +86,7 @@ docker compose run --rm meeting-worker fakeyou memory-reembed \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Setel `FAKEYOU_MEMORY_EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY_EMBEDDING_API_KEY=local`, dan `FAKEYOU_MEMORY_EMBEDDING_DIM=384`. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
+Setel `FAKEYOU_MEMORY__EMBEDDER__BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY__EMBEDDER__API_KEY=local`, dan `FAKEYOU_MEMORY__EMBEDDER__DIM=384`. Tambahkan `EMBEDDING_DIM=384` dalam `.env`, lalu jalankan dengan `uv run --env-file .env` supaya Graphiti membaca dimensi sebelum import. Worker Compose mengekspor dimensi yang sama. Perubahan dimensi setelah Graphiti di-import ditolak saat memori dibuka. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
 
 ```sh
 docker compose --profile production up -d --wait postgres
@@ -109,7 +109,7 @@ docker compose run --rm meeting-worker fakeyou join https://meet.google.com/xxx-
   --audio --converse --persona examples/persona.example.json --memory
 ```
 
-Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service Compose `bolt://neo4j:7687`; override dengan `FAKEYOU_WORKER_NEO4J_URI` bila perlu. Simpan profil pribadi di `.runtime/audio/persona.json` (diabaikan Git) lalu pakai `--persona .runtime/persona.json` di dalam worker.
+Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service Compose `bolt://neo4j:7687`; override dengan `FAKEYOU_COMPOSE_WORKER_NEO4J_URI` bila perlu. Simpan profil pribadi di `.runtime/audio/persona.json` (diabaikan Git) lalu pakai `--persona .runtime/persona.json` di dalam worker.
 
 `--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context` atau `ingest_transcripts`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
 
@@ -140,18 +140,75 @@ Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersinte
 
 ## Model dan laporan sesi
 
-Model dipilih per peran lewat `Settings`, bukan dari default library. `fakeyou check` mencetak semuanya di bagian `models`:
+Konfigurasi menggunakan bagian bertipe dan nested env dengan pemisah `__`. `fakeyou check` mencetak seluruh `settings.model_dump(mode="json")`, termasuk default dan secret tersamarkan:
 
 | Peran | Setelan | Default |
 | --- | --- | --- |
-| Jawaban lisan | `FAKEYOU_CHAT_MODEL`, `FAKEYOU_CHAT_BASE_URL`, `FAKEYOU_CHAT_API_KEY`, `FAKEYOU_CHAT_REASONING_EFFORT` | `openai:gpt-4.1-mini` dengan key OpenAI |
-| Cadangan jawaban lisan | `FAKEYOU_FALLBACK_CHAT_MODEL`, `FAKEYOU_FALLBACK_CHAT_BASE_URL`, `FAKEYOU_FALLBACK_CHAT_API_KEY`, `FAKEYOU_FALLBACK_CHAT_REASONING_EFFORT` | Tidak aktif |
-| Memori Graphiti | `FAKEYOU_MEMORY_LLM_MODEL`, `FAKEYOU_MEMORY_SMALL_MODEL`, `FAKEYOU_MEMORY_EMBEDDING_MODEL` | `gpt-5.5`, `gpt-4.1-nano`, `text-embedding-3-small` |
-| STT | `FAKEYOU_STT_MODEL` | `muse-voice-transcribe-1.0` |
+| Jawaban lisan | `FAKEYOU_REPLY__MODEL`, `FAKEYOU_REPLY__BASE_URL`, `FAKEYOU_REPLY__API_KEY`, `FAKEYOU_REPLY__REASONING_EFFORT` | `gpt-4.1-mini`, provider `openai`, key peran sendiri |
+| Cadangan jawaban lisan | `FAKEYOU_REPLY_FALLBACK__MODEL`, `FAKEYOU_REPLY_FALLBACK__BASE_URL`, `FAKEYOU_REPLY_FALLBACK__API_KEY`, `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT` | Tidak aktif |
+| Memori Graphiti | `FAKEYOU_MEMORY__LLM__MODEL`, `FAKEYOU_MEMORY__LLM__SMALL_MODEL`, `FAKEYOU_MEMORY__EMBEDDER__MODEL` | `gpt-5.5`, `gpt-4.1-nano`, `text-embedding-3-small` |
+| STT | `FAKEYOU_STT__MODEL` | `muse-voice-transcribe-1.0` |
 
-Setiap panggilan model jawaban dibatasi 20 detik agar dua panggilan plus recall muat dalam deadline percakapan 60 detik. Bila cadangan diatur, model utama tidak di-retry; `ModelFallbackMiddleware` LangChain langsung memindahkan panggilan ke model cadangan (terukur 7,5 detik untuk jawaban dengan tool call saat provider utama mati, memakai Muse Spark 1.2 `reasoning_effort=minimal`). Host cadangan tidak ikut preflight agar cadangan yang mati tidak memblokir meeting.
+Anggaran waktu diperiksa saat konfigurasi dibaca: jumlah `timeout_seconds × (max_retries + 1)` untuk jawaban utama dan cadangan, ditambah timeout recall, harus muat dalam `FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`. Default utama 15 detik × 3 percobaan dan recall 15 detik, total 60 detik. Retry utama dan cadangan selalu berasal dari konfigurasi; bila mengaktifkan cadangan, kurangi retry atau sesuaikan deadline secara eksplisit. Cadangan memakai API key sendiri. Preflight memeriksa URL peran aktif, termasuk cadangan dan memori, dengan skema dan port utuh.
 
-Model yang kompatibel OpenAI dapat dipakai lewat `FAKEYOU_CHAT_BASE_URL`, misalnya Muse Spark di `https://api.meta.ai/v1` dengan `FAKEYOU_CHAT_MODEL=openai:muse-spark-1.3`. Provider lain yang punya integrasi LangChain terpasang dipakai lewat prefix model, misalnya `FAKEYOU_CHAT_MODEL=anthropic:claude-haiku-4-5-20251001` dengan `FAKEYOU_CHAT_API_KEY` berisi key Anthropic; preflight ikut memeriksa `api.anthropic.com`. Field request khusus provider dikirim lewat `FAKEYOU_CHAT_EXTRA_BODY` (JSON), misalnya `{"reasoning_split": true}` untuk MiniMax agar penalaran tidak ikut diucapkan. TTS dipilih dengan `FAKEYOU_TTS_PROVIDER` (`openai` atau `minimax`), `FAKEYOU_TTS_API_KEY`, dan `FAKEYOU_TTS_VOICE`; MiniMax memakai `speech-2.8-turbo` dengan voice default `Indonesian_CalmWoman`. Host preflight mengikuti endpoint itu. Perbandingan latency dan perilaku antarmodel ada di [rencana jangka panjang](docs/long-term-plan.md#4a-model-per-peran-lewat-langchain); mengganti model lisan harus lolos eval yang sama.
+Provider jawaban adalah `openai`, `openai_compatible`, atau `anthropic`. Contoh MiniMax: `FAKEYOU_REPLY__PROVIDER=openai_compatible`, `FAKEYOU_REPLY__MODEL=MiniMax-M3`, dan `FAKEYOU_REPLY__BASE_URL=https://api.minimax.io/v1`. `openai_compatible` wajib memiliki URL. Field khusus provider hanya tersedia pada variannya; `extra_body` hanya untuk `openai_compatible`. Kutip JSON agar dibaca konsisten oleh dotenv dan `uv --env-file`: `FAKEYOU_REPLY__EXTRA_BODY='{"reasoning_split": true}'`.
+
+TTS memiliki `provider`, `model`, `voice`, `api_key`, `base_url`, dan `sample_rate` yang terlihat di `check`. Pilih `FAKEYOU_TTS__PROVIDER=minimax` untuk default `speech-2.8-turbo` dan `Indonesian_CalmWoman`. Voice OpenAI divalidasi terhadap daftar library. Format audio tetap PCM s16le mono, capture 16 kHz, playback 24 kHz; sample rate TTS selain 24 kHz ditolak.
+
+`FAKEYOU_SPEECH__LANGUAGE=id` atau `en` mengatur STT, pemisahan kalimat, instruksi TTS, dan language boost. Bahasa profil persona harus sama; `join` menolak ketidaksesuaian sebelum membuka resource. Kontrol browser (`headless`, `warmup_browser`, `monitor_poll_seconds`), percakapan, ingestion, kesehatan audio, dan preflight ada pada bagian masing-masing dalam `.env.example`.
+
+### Migrasi konfigurasi lama
+
+Key `FAKEYOU_*` yang tidak dikenal ditolak, termasuk typo bernilai kosong dalam dotenv maupun environment proses, tanpa membedakan kapitalisasi. Hanya `FAKEYOU_COMPOSE_*` yang dikecualikan untuk interpolasi Compose. Variabel library seperti `EMBEDDING_DIM` dan `LANGSMITH_*` tetap diperbolehkan. Simpan salinan `.env` yang diabaikan Git sebelum migrasi; jangan mengaktifkan provider hanya karena key lama tersedia. Key bersama lama harus dipindahkan secara sengaja ke setiap peran yang memang menggunakannya.
+
+| Key lama | Pengganti |
+| --- | --- |
+| `FAKEYOU_CHAT_MODEL` | `FAKEYOU_REPLY__MODEL` |
+| `FAKEYOU_CHAT_BASE_URL` | `FAKEYOU_REPLY__BASE_URL` |
+| `FAKEYOU_CHAT_API_KEY` | `FAKEYOU_REPLY__API_KEY` |
+| `FAKEYOU_CHAT_REASONING_EFFORT` | `FAKEYOU_REPLY__REASONING_EFFORT` |
+| `FAKEYOU_CHAT_EXTRA_BODY` | `FAKEYOU_REPLY__EXTRA_BODY` |
+| `FAKEYOU_FALLBACK_CHAT_MODEL` | `FAKEYOU_REPLY_FALLBACK__MODEL` |
+| `FAKEYOU_FALLBACK_CHAT_BASE_URL` | `FAKEYOU_REPLY_FALLBACK__BASE_URL` |
+| `FAKEYOU_FALLBACK_CHAT_API_KEY` | `FAKEYOU_REPLY_FALLBACK__API_KEY` |
+| `FAKEYOU_FALLBACK_CHAT_REASONING_EFFORT` | `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT` |
+| `FAKEYOU_FALLBACK_CHAT_EXTRA_BODY` | `FAKEYOU_REPLY_FALLBACK__EXTRA_BODY` |
+| `FAKEYOU_MEMORY_LLM_MODEL` | `FAKEYOU_MEMORY__LLM__MODEL` |
+| `FAKEYOU_MEMORY_SMALL_MODEL` | `FAKEYOU_MEMORY__LLM__SMALL_MODEL` |
+| `FAKEYOU_MEMORY_LLM_BASE_URL` | `FAKEYOU_MEMORY__LLM__BASE_URL` |
+| `FAKEYOU_MEMORY_LLM_API_KEY` | `FAKEYOU_MEMORY__LLM__API_KEY` |
+| `FAKEYOU_MEMORY_EMBEDDING_MODEL` | `FAKEYOU_MEMORY__EMBEDDER__MODEL` |
+| `FAKEYOU_MEMORY_EMBEDDING_BASE_URL` | `FAKEYOU_MEMORY__EMBEDDER__BASE_URL` |
+| `FAKEYOU_MEMORY_EMBEDDING_API_KEY` | `FAKEYOU_MEMORY__EMBEDDER__API_KEY` |
+| `FAKEYOU_MEMORY_EMBEDDING_DIM` | `FAKEYOU_MEMORY__EMBEDDER__DIM` |
+| `FAKEYOU_STT_MODEL` | `FAKEYOU_STT__MODEL` |
+| `FAKEYOU_TTS_PROVIDER` | `FAKEYOU_TTS__PROVIDER` |
+| `FAKEYOU_TTS_API_KEY` | `FAKEYOU_TTS__API_KEY` |
+| `FAKEYOU_TTS_VOICE` | `FAKEYOU_TTS__VOICE` |
+| `FAKEYOU_CHECKPOINT_PATH` | `FAKEYOU_PATHS__CHECKPOINT_PATH` |
+| `FAKEYOU_HEADLESS` | `FAKEYOU_MEETING__HEADLESS` |
+| `FAKEYOU_CLOAKBROWSER_LICENSE_KEY` | `FAKEYOU_MEETING__LICENSE_KEY` |
+| `FAKEYOU_OPENAI_API_KEY` | `FAKEYOU_REPLY__API_KEY` |
+| `FAKEYOU_MODEL_API_KEY` | `FAKEYOU_STT__API_KEY` |
+| `FAKEYOU_NEO4J_URI` | `FAKEYOU_MEMORY__STORE__URI` |
+| `FAKEYOU_NEO4J_USER` | `FAKEYOU_MEMORY__STORE__USER` |
+| `FAKEYOU_NEO4J_PASSWORD` | `FAKEYOU_MEMORY__STORE__PASSWORD` |
+| `FAKEYOU_MEMORY_GROUP` | `FAKEYOU_MEMORY__STORE__GROUP` |
+| `FAKEYOU_OWNER_ID` | `FAKEYOU_IDENTITY__OWNER_ID` |
+| `FAKEYOU_TWIN_ID` | `FAKEYOU_IDENTITY__TWIN_ID` |
+| `FAKEYOU_TWIN_NAME` | `FAKEYOU_IDENTITY__TWIN_NAME` |
+| `FAKEYOU_LOBBY_TIMEOUT_SECONDS` | `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS` |
+| `FAKEYOU_SESSION_DURATION_SECONDS` | `FAKEYOU_MEETING__SESSION_DURATION_SECONDS` |
+| `FAKEYOU_JOURNAL_DIR` | `FAKEYOU_PATHS__JOURNAL_DIR` |
+| `FAKEYOU_MEETING_RECORD_DIR` | `FAKEYOU_PATHS__RECORD_DIR` |
+| `FAKEYOU_ANTHROPIC_API_KEY` | `FAKEYOU_REPLY__API_KEY (select provider explicitly)` |
+| `FAKEYOU_AUDIO` | `FAKEYOU_WORKER__AUDIO` |
+| `FAKEYOU_WORKER_NEO4J_URI` | `FAKEYOU_COMPOSE_WORKER_NEO4J_URI` |
+| `FAKEYOU_WORKER_EMBEDDING_BASE_URL` | `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL` |
+| `FAKEYOU_EMBEDDINGS_IMAGE` | `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE` |
+| `FAKEYOU_EMBEDDINGS_MODEL_ID` | `FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID` |
+| `FAKEYOU_EMBEDDINGS_REVISION` | `FAKEYOU_COMPOSE_EMBEDDINGS_REVISION` |
+
 
 Setiap `join` menulis dua berkas:
 
@@ -191,6 +248,8 @@ uv run --env-file .env pytest tests/test_providers_live.py -m live
 ```
 
 `evals/test_replay.py` memutar transkrip STT nyata dari sesi `acc-0930-s1`/`s2` ke model yang sedang dikonfigurasi dalam satu thread per sesi, tiga kali, lalu menghitung pass rate fakta wajib/terlarang, recall, batas dua kalimat, pertanyaan penutup, dan latency p95. Mengganti model jawaban lisan harus lolos replay ini.
+
+Eval persona live memerlukan `EVAL_JUDGE_API_KEY` tersendiri untuk judge OpenAI; key jawaban aktif tidak dipinjam. Variabel ini hanya untuk evaluator, bukan runtime.
 
 CI menjalankan lint, format, type check, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 

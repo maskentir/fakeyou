@@ -194,19 +194,19 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
     reason="requires the Linux audio worker and isolated PulseAudio source",
 )
 async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> None:
-    audio_name = os.getenv("FAKEYOU_MUSE_TEST_AUDIO")
-    expected = os.getenv("FAKEYOU_MUSE_EXPECTED_TEXT")
+    audio_name = os.getenv("MUSE_TEST_AUDIO")
+    expected = os.getenv("MUSE_EXPECTED_TEXT")
     if not audio_name or not expected:
-        pytest.skip("set FAKEYOU_MUSE_TEST_AUDIO and FAKEYOU_MUSE_EXPECTED_TEXT")
+        pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     settings = Settings()
     try:
-        muse_key = require_secret(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
+        muse_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
         speech_key = tts_api_key(settings)
     except ValueError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)
     if not expected_text:
-        pytest.fail("FAKEYOU_MUSE_EXPECTED_TEXT must contain text")
+        pytest.fail("MUSE_EXPECTED_TEXT must contain text")
     wav = await asyncio.to_thread(Path(audio_name).read_bytes)
     data_uri = "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii")
     finals: list[str] = []
@@ -221,8 +221,8 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
         async with open_meeting_audio(
             muse_api_key=muse_key,
             tts_api_key=speech_key,
-            tts_provider=settings.tts_provider,
-            tts_voice=settings.tts_voice,
+            tts_provider=settings.tts.provider,
+            tts_voice=settings.tts.voice,
             on_transcript=on_transcript,
         ) as session:
             await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)

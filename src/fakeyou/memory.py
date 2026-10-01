@@ -4,16 +4,22 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from functools import cached_property
+from typing import Any, Literal
 from uuid import uuid4
 
+from anthropic import AsyncAnthropic
+from anthropic.resources.messages import AsyncMessages
 from graphiti_core import Graphiti
+from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.edges import EntityEdge, create_entity_edge_embeddings
+from graphiti_core.embedder.client import EMBEDDING_DIM
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.errors import GroupsEdgesNotFoundError, NodeNotFoundError
 from graphiti_core.graphiti import AddEpisodeResults
+from graphiti_core.llm_client.anthropic_client import AnthropicClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
@@ -24,16 +30,19 @@ from graphiti_core.nodes import (
     SagaNode,
     create_entity_node_embeddings,
 )
+from graphiti_core.prompts.models import Message
 from graphiti_core.search.search_filters import ComparisonOperator, DateFilter, SearchFilters
 from langchain.agents.middleware import ToolCallRequest, ToolErrorMiddleware
 from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel
 
 from fakeyou.faults import FaultReporter
 from fakeyou.provider_faults import classify_exception
+from fakeyou.settings import DEFAULTS, RecallSettings
 
-RECALL_RESULT_LIMIT = 5
+RECALL_RESULT_LIMIT = DEFAULTS.memory.recall.result_limit
 RECALL_SEARCH_LIMIT = RECALL_RESULT_LIMIT * 2
-RECALL_TIMEOUT_SECONDS = 15.0
+RECALL_TIMEOUT_SECONDS = DEFAULTS.memory.recall.timeout_seconds
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
 OWNER_NOTE_SOURCE = "owner note"
@@ -54,39 +63,91 @@ class Neo4jMemoryConfig:
     uri: str
     user: str
     password: str = field(repr=False)
-    api_key: str = field(repr=False)
     llm_model: str
     small_model: str
     embedding_model: str
-    database: str = "neo4j"
+    database: str = DEFAULTS.memory.store.database
     embedding_base_url: str | None = None
     embedding_api_key: str | None = field(default=None, repr=False)
-    embedding_dim: int = 1024
+    embedding_dim: int = DEFAULTS.memory.embedder.dim
     llm_base_url: str | None = None
-    llm_api_key: str | None = field(default=None, repr=False)
+    llm_api_key: str = field(default="", repr=False)
+    llm_client: Literal["openai", "openai_generic", "anthropic"] = "openai"
+
+
+class GraphitiAnthropicMessages(AsyncMessages):
+    async def create(self, *, temperature: float | None = None, **kwargs: Any) -> Any:
+        if temperature is not None:
+            kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "temperature": temperature}
+        return await super().create(**kwargs)
+
+
+class GraphitiAnthropicSDK(AsyncAnthropic):
+    @cached_property
+    def messages(self) -> GraphitiAnthropicMessages:
+        return GraphitiAnthropicMessages(self)
+
+
+class RelevanceScores(BaseModel):
+    scores: list[float]
+
+
+class AnthropicReranker(CrossEncoderClient):
+    def __init__(self, client: AnthropicClient) -> None:
+        self.client = client
+
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        if not passages:
+            return []
+        response = await self.client.generate_response(
+            [
+                Message(
+                    role="system",
+                    content=(
+                        "Score each passage's relevance to the query from 0 to 1. "
+                        "Return scores in passage order."
+                    ),
+                ),
+                Message(role="user", content=str({"query": query, "passages": passages})),
+            ],
+            response_model=RelevanceScores,
+        )
+        scores = RelevanceScores.model_validate(response).scores
+        return sorted(zip(passages, scores, strict=True), key=lambda item: item[1], reverse=True)
 
 
 def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
     llm_config = LLMConfig(
-        api_key=config.llm_api_key or config.api_key,
+        api_key=config.llm_api_key,
         model=config.llm_model,
         small_model=config.small_model,
         base_url=config.llm_base_url,
     )
+    if not config.llm_api_key or not config.embedding_api_key:
+        raise ValueError("memory LLM and embedder each require their own api_key")
     llm_client = (
-        OpenAIGenericClient(config=llm_config)
-        if config.llm_base_url
-        else OpenAIClient(config=llm_config)
+        AnthropicClient(
+            config=llm_config,
+            client=GraphitiAnthropicSDK(api_key=config.llm_api_key, base_url=config.llm_base_url),
+        )
+        if config.llm_client == "anthropic"
+        else {"openai": OpenAIClient, "openai_generic": OpenAIGenericClient}[config.llm_client](
+            config=llm_config
+        )
     )
     embedder = OpenAIEmbedder(
         config=OpenAIEmbedderConfig(
-            api_key=config.embedding_api_key or config.api_key,
+            api_key=config.embedding_api_key,
             base_url=config.embedding_base_url,
             embedding_model=config.embedding_model,
             embedding_dim=config.embedding_dim,
         )
     )
-    cross_encoder = OpenAIRerankerClient(config=llm_config)
+    cross_encoder = (
+        AnthropicReranker(llm_client)
+        if isinstance(llm_client, AnthropicClient)
+        else OpenAIRerankerClient(config=llm_config)
+    )
     driver = Neo4jDriver(
         uri=config.uri,
         user=config.user,
@@ -103,6 +164,11 @@ def create_graphiti_memory(config: Neo4jMemoryConfig) -> Graphiti:
 
 @asynccontextmanager
 async def open_graphiti_memory(config: Neo4jMemoryConfig) -> AsyncIterator[Graphiti]:
+    if config.embedding_dim != EMBEDDING_DIM:
+        raise ValueError(
+            "memory.embedder.dim must equal EMBEDDING_DIM loaded by Graphiti; "
+            "export EMBEDDING_DIM before startup"
+        )
     async with AsyncExitStack() as resources:
         memory = await asyncio.to_thread(create_graphiti_memory, config)
         resources.push_async_callback(memory.close)
@@ -128,7 +194,9 @@ def recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMiddleware
     return ToolErrorMiddleware(report_unavailable, tools=["recall_meeting_context"])
 
 
-def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:
+def create_memory_tools(
+    memory: Graphiti, *, group_id: str, recall: RecallSettings = DEFAULTS.memory.recall
+) -> list[BaseTool]:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", group_id):
         raise ValueError("group_id must be 1-128 characters using letters, numbers, '_' or '-'")
 
@@ -147,11 +215,11 @@ def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
-        async with asyncio.timeout(RECALL_TIMEOUT_SECONDS):
+        async with asyncio.timeout(recall.timeout_seconds):
             results = await memory.search(
                 query,
                 group_ids=[group_id],
-                num_results=RECALL_SEARCH_LIMIT,
+                num_results=recall.result_limit * 2,
                 search_filter=CURRENT_FACTS_FILTER,
             )
             first_by_fact: dict[str, EntityEdge] = {}
@@ -159,7 +227,7 @@ def create_memory_tools(memory: Graphiti, *, group_id: str) -> list[BaseTool]:
                 first_by_fact.setdefault(edge.fact, edge)
             if not first_by_fact:
                 return RECALL_EMPTY_RESULT
-            return await describe_facts(memory, list(first_by_fact.values())[:RECALL_RESULT_LIMIT])
+            return await describe_facts(memory, list(first_by_fact.values())[: recall.result_limit])
 
     return [remember_meeting_fact, recall_meeting_context]
 

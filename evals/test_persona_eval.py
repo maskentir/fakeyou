@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,6 +11,7 @@ from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall, ToolCall
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.cli import create_chat_model
@@ -161,7 +163,9 @@ KNOWN_MODEL_LIMITATIONS = {
 def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
     try:
-        api_key = require_secret(settings.openai_api_key, "FAKEYOU_OPENAI_API_KEY")
+        api_key = require_secret(
+            SecretStr(os.environ.get("EVAL_JUDGE_API_KEY", "")), "EVAL_JUDGE_API_KEY"
+        )
         model = create_chat_model(settings)
     except ValueError as error:
         pytest.skip(str(error))

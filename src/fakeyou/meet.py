@@ -8,6 +8,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from playwright.async_api import Locator, Page
 
+from fakeyou.settings import DEFAULTS
+
 JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed"]
 CallState = Literal["in_call", "removed", "ended", "lobby", "unknown"]
 LeaveStatus = Literal["left", "failed"]
@@ -73,8 +75,8 @@ DEFAULT_MEET_SIGNALS = MeetSignals()
 class GuestJoinRequest:
     link: str
     twin_name: str
-    lobby_timeout_seconds: float = 300.0
-    poll_interval_seconds: float = 2.0
+    lobby_timeout_seconds: float = DEFAULTS.meeting.lobby_timeout_seconds
+    poll_interval_seconds: float = DEFAULTS.meeting.join_poll_seconds
     button_timeout_seconds: float = 10.0
     captcha_grace_seconds: float = 120.0
 
@@ -386,7 +388,7 @@ async def leave_meeting(
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = DEFAULTS.meeting.leave_timeout_seconds,
 ) -> LeaveResult:
     locator = page.locator(f'button[aria-label="{signals.leave_call}"]')
     try:

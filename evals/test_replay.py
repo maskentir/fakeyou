@@ -168,7 +168,7 @@ async def test_live_replay_meets_quality_and_latency_budgets() -> None:
     score = await replay(lambda: create_chat_model(settings), load_fixture(), REPLAY_RUNS)
 
     summary = score.summary()
-    print("\nreplay summary:", json.dumps({"model": settings.chat_model, **summary}))
+    print("\nreplay summary:", json.dumps({"model": settings.reply.model, **summary}))
     for reply in score.replies:
         print("  reply:", reply)
     for name in REQUIRED_CHECKS:

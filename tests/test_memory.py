@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -53,7 +54,8 @@ def _config() -> Neo4jMemoryConfig:
         uri="bolt://localhost:7687",
         user="neo4j",
         password="p",
-        api_key="k",
+        llm_api_key="k",
+        embedding_api_key="k",
         llm_model="memory-model",
         small_model="memory-small",
         embedding_model="memory-embedding",
@@ -93,7 +95,12 @@ def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> Non
     from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
     memory = memory_module.create_graphiti_memory(
-        replace(_config(), llm_base_url="https://api.meta.ai/v1", llm_api_key="meta-key")
+        replace(
+            _config(),
+            llm_client="openai_generic",
+            llm_base_url="https://api.meta.ai/v1",
+            llm_api_key="meta-key",
+        )
     )
 
     assert isinstance(memory.llm_client, OpenAIGenericClient)
@@ -109,7 +116,9 @@ async def test_open_graphiti_memory_is_lightweight(
     memory = graphiti
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
 
-    async with open_graphiti_memory(_config()) as opened:
+    async with open_graphiti_memory(
+        replace(_config(), embedding_dim=memory_module.EMBEDDING_DIM)
+    ) as opened:
         assert opened is memory
 
     assert memory.events == ["close"]

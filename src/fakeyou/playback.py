@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import PCM_CHANNELS, PCM_FORMAT
 from fakeyou.journal import ProviderJournal
 from fakeyou.provider_faults import ProviderFault, classify_exception
 
@@ -70,9 +71,9 @@ def create_paplay_runner(*, sink: str, rate: int) -> PlayAudio:
             proc = await asyncio.create_subprocess_exec(
                 "paplay",
                 f"--device={sink}",
-                "--format=s16le",
+                f"--format={PCM_FORMAT}",
                 f"--rate={rate}",
-                "--channels=1",
+                f"--channels={PCM_CHANNELS}",
                 "--raw",
                 stdin=PIPE,
                 stdout=DEVNULL,
@@ -103,9 +104,9 @@ def create_paplay_stream_runner(*, sink: str, rate: int) -> PlayStream:
             proc = await asyncio.create_subprocess_exec(
                 "paplay",
                 f"--device={sink}",
-                "--format=s16le",
+                f"--format={PCM_FORMAT}",
                 f"--rate={rate}",
-                "--channels=1",
+                f"--channels={PCM_CHANNELS}",
                 "--raw",
                 stdin=PIPE,
                 stdout=DEVNULL,

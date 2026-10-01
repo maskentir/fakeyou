@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from fakeyou.provider_faults import trim_detail
+from fakeyou.settings import DEFAULTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,16 +52,35 @@ def _endpoint_parts(endpoint: str) -> tuple[str, int, bool] | None:
         if not host:
             return None
         scheme = parsed.scheme.lower()
-        if scheme not in {"http", "https", "ws", "wss"}:
+        if scheme not in {
+            "http",
+            "https",
+            "ws",
+            "wss",
+            "bolt",
+            "neo4j",
+            "bolt+s",
+            "neo4j+s",
+            "bolt+ssc",
+            "neo4j+ssc",
+        }:
             return None
-        secure = scheme in {"https", "wss"}
-        return host, parsed.port or (443 if secure else 80), secure
+        secure = scheme in {"https", "wss", "bolt+s", "neo4j+s", "bolt+ssc", "neo4j+ssc"}
+        return (
+            host,
+            parsed.port
+            or (7687 if scheme.startswith(("bolt", "neo4j")) else 443 if secure else 80),
+            secure,
+        )
     except (ValueError, UnicodeError):
         return None
 
 
 async def probe_endpoint(
-    endpoint: str, *, timeout_seconds: float | None = 5.0, ssl_context: ssl.SSLContext | None = None
+    endpoint: str,
+    *,
+    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> ProbeResult:
     started = time.monotonic()
     parts = _endpoint_parts(endpoint)
@@ -88,7 +108,7 @@ async def probe_endpoint(
 async def probe_host(
     host: str,
     *,
-    timeout_seconds: float | None = 5.0,
+    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
     port: int = 443,
     ssl_context: ssl.SSLContext | None = None,
 ) -> ProbeResult:
@@ -150,7 +170,7 @@ def _safe_endpoint(endpoint: str) -> str:
 async def run_preflight(
     hosts: tuple[str, ...] | list[str],
     *,
-    budget_seconds: float = 5.0,
+    budget_seconds: float = DEFAULTS.preflight.budget_seconds,
     probe: Callable[[str], Awaitable[ProbeResult]] | None = None,
 ) -> list[ProbeResult]:
     endpoints = tuple(hosts)

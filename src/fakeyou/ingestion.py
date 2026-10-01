@@ -13,12 +13,14 @@ from fakeyou.journal import ProviderJournal
 from fakeyou.memory import meeting_episodes, meeting_saga
 from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
+from fakeyou.settings import DEFAULTS
 
 UNIDENTIFIED_PARTICIPANT = "Unidentified participant"
 TWIN_SPEAKER = "Digital twin"
-WINDOW_UTTERANCES = 20
-WINDOW_SPAN = timedelta(seconds=60)
-EPISODE_TIMEOUT_SECONDS = 120.0
+
+WINDOW_UTTERANCES = DEFAULTS.memory.ingestion.window_utterances
+WINDOW_SPAN = timedelta(seconds=DEFAULTS.memory.ingestion.window_seconds)
+EPISODE_TIMEOUT_SECONDS = DEFAULTS.memory.ingestion.episode_timeout_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +66,12 @@ def episode_name(meeting_id: str, index: int) -> str:
     return f"{meeting_id}:w{index:05d}"
 
 
-def meeting_windows(entries: Sequence[RecordEntry]) -> list[list[Utterance]]:
+def meeting_windows(
+    entries: Sequence[RecordEntry],
+    *,
+    window_utterances: int = WINDOW_UTTERANCES,
+    window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
+) -> list[list[Utterance]]:
     windows: list[list[Utterance]] = []
     for entry in entries:
         if isinstance(entry, TranscriptEntry):
@@ -79,8 +86,8 @@ def meeting_windows(entries: Sequence[RecordEntry]) -> list[list[Utterance]]:
         current = windows[-1] if windows else None
         if (
             current is None
-            or len(current) >= WINDOW_UTTERANCES
-            or utterance.at - current[0].at >= WINDOW_SPAN
+            or len(current) >= window_utterances
+            or utterance.at - current[0].at >= timedelta(seconds=window_seconds)
         ):
             windows.append([utterance])
         else:
@@ -100,8 +107,12 @@ async def ingest_meeting(
     faults: FaultReporter | None = None,
     stop: asyncio.Event | None = None,
     episode_timeout_seconds: float = EPISODE_TIMEOUT_SECONDS,
+    window_utterances: int = WINDOW_UTTERANCES,
+    window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
 ) -> IngestResult:
-    windows = meeting_windows(entries)
+    windows = meeting_windows(
+        entries, window_utterances=window_utterances, window_seconds=window_seconds
+    )
     last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
     resumed_from = _next_window(last[-1].name, meeting_id) if last else 0
     previous_uuid = last[-1].uuid if last else None

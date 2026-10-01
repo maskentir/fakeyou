@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import PCM_CHANNELS
 from fakeyou.journal import ProviderJournal
+from fakeyou.settings import DEFAULTS
 
 DeafVerdict = Literal[
     "hearing", "silent", "unavailable", "alone", "capture_fault", "stt_fault", "capture_silent"
@@ -15,7 +17,7 @@ DeafVerdict = Literal[
 ENERGY_THRESHOLD = 0.005
 
 
-def rms_level(pcm: bytes, *, channels: int = 1) -> float:
+def rms_level(pcm: bytes, *, channels: int = PCM_CHANNELS) -> float:
     stride = 2 * max(channels, 1)
     count = len(pcm) // stride
     if count == 0:
@@ -142,8 +144,9 @@ def evaluate_deafness(
     snapshot: CaptureSnapshot,
     now: float,
     *,
-    deaf_window_seconds: float = 120.0,
-    deaf_grace_seconds: float = 120.0,
+    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
 ) -> DeafVerdict:
     if not snapshot.available:
         return "unavailable"
@@ -166,7 +169,7 @@ def evaluate_deafness(
         and snapshot.presence_at is not None
         and now - snapshot.presence_at <= 30
         and snapshot.alone_since is not None
-        and now - snapshot.alone_since >= 600
+        and now - snapshot.alone_since >= alone_leave_seconds
     ):
         return "alone"
     if (
@@ -193,13 +196,15 @@ class DeafMonitor:
         *,
         activity: CaptureActivity,
         reporter: FaultReporter | None = None,
-        deaf_window_seconds: float = 120.0,
-        deaf_grace_seconds: float = 120.0,
+        deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+        deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+        alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
         restate_interval_seconds: float = 60.0,
         journal: ProviderJournal | None = None,
     ) -> None:
         self._activity = activity
         self._reporter = reporter
+        self.alone_leave_seconds = alone_leave_seconds
         self.deaf_window_seconds = deaf_window_seconds
         self.deaf_grace_seconds = deaf_grace_seconds
         self.restate_interval_seconds = restate_interval_seconds
@@ -214,6 +219,7 @@ class DeafMonitor:
             now,
             deaf_window_seconds=self.deaf_window_seconds,
             deaf_grace_seconds=self.deaf_grace_seconds,
+            alone_leave_seconds=self.alone_leave_seconds,
         )
 
     def _report(self, verdict: DeafVerdict) -> None:

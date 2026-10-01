@@ -30,7 +30,7 @@ from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.persona import PersonaProfile, build_persona
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import meeting_record_path, read_meeting_record
-from fakeyou.settings import Settings
+from fakeyou.settings import CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
 from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
 
 
@@ -48,7 +48,7 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
         memory.factory_thread = threading.get_ident()
         return memory
 
-    def create_tools(_memory, *, group_id):
+    def create_tools(_memory, *, group_id, recall):
         events.append(f"tools:{group_id}")
         return []
 
@@ -341,7 +341,7 @@ async def test_join_headless_override(session_run, join, settings) -> None:
         headless=False,
     )
     assert captured["config"].headless is False
-    settings.headless = False
+    settings.meeting.headless = False
     await join(
         "https://meet.google.com/abc-defg-hij",
         meeting_id=None,
@@ -396,7 +396,10 @@ def test_compose_pulse_defaults_match_audio_constants() -> None:
 
 def test_compose_worker_reaches_neo4j_service_and_example_profiles() -> None:
     compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text()
-    assert "FAKEYOU_NEO4J_URI: ${FAKEYOU_WORKER_NEO4J_URI:-bolt://neo4j:7687}" in compose
+    assert (
+        "FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}"
+        in compose
+    )
     assert "./examples:/workspace/examples:ro" in compose
 
 
@@ -431,7 +434,7 @@ def _enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _join_with_audio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, join, settings, session_run, **overrides
 ):
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(cli, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
@@ -748,7 +751,7 @@ async def test_join_audio_wires_journal_and_preflight_hosts(
 
     journal = captured["open_audio"].keywords["journal"]
     assert journal._meeting_id == "meeting-9"
-    assert captured["preflight_hosts"] == ("api.openai.com", "api.meta.ai")
+    assert captured["preflight_hosts"] == BASE_HOSTS
     assert captured["preflight_budget_seconds"] == 5.0
 
 
@@ -777,7 +780,7 @@ PERSONA_DATA = {
     "allowed_tools": ["recall_meeting_context"],
 }
 MEET_LINK = "https://meet.google.com/abc-defg-hij"
-BASE_HOSTS = ("api.openai.com", "api.meta.ai")
+BASE_HOSTS = ("https://api.openai.com/v1", "wss://api.meta.ai/v1/asr/realtime")
 
 
 def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
@@ -842,7 +845,7 @@ async def _join_persona_conversation(
     persona_overrides: dict | None = None,
     **overrides,
 ) -> tuple[dict, FakeReplyAudio, dict]:
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: model)
 
@@ -928,7 +931,7 @@ async def test_join_memory_requires_persona(join, settings, tmp_path: Path, monk
 async def test_join_rejects_invalid_persona_before_resources(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict
 ) -> None:
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
@@ -942,13 +945,13 @@ async def test_join_rejects_invalid_persona_before_resources(
                 persona_path=write_persona(tmp_path, **overrides),
             ),
         )
-    assert not settings.journal_dir.exists()
+    assert not settings.paths.journal_dir.exists()
 
 
 async def test_join_memory_rejects_persona_without_recall_permission(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
@@ -967,7 +970,7 @@ async def test_join_memory_rejects_persona_without_recall_permission(
 async def test_join_rejects_unreadable_persona(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
@@ -1051,7 +1054,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
             "search_filter": memory_module.CURRENT_FACTS_FILTER,
         }
     ]
-    assert profile.memory_group != settings.memory_group
+    assert profile.memory_group != settings.memory.store.group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     assert [m.content for m in tool_results] == [
         f"From an unknown source: {fact}" for fact in graphiti.facts
@@ -1151,7 +1154,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
 ) -> None:
     graphiti = make_graphiti(**graphiti_options)
     saver_events: list[str] = []
-    settings.model_api_key = SecretStr("muse-key")
+    settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(cli, "MEMORY_CONNECT_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: object())
@@ -1381,15 +1384,15 @@ async def _forget_meeting_with_local_files(
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     profile = PersonaProfile.model_validate(PERSONA_DATA)
-    record_path = meeting_record_path(settings.meeting_record_dir, "meeting-9")
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
     record_path.write_text("{}\n")
-    settings.journal_dir.mkdir()
+    settings.paths.journal_dir.mkdir()
     for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
-        (settings.journal_dir / name).write_text("{}\n")
+        (settings.paths.journal_dir / name).write_text("{}\n")
     thread_id = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-9")
     other_thread = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
-    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
         agent = create_meeting_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
         )
@@ -1400,7 +1403,7 @@ async def _forget_meeting_with_local_files(
             )
     from fakeyou.lifecycle import MeetingLifecycle
 
-    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
         for meeting in ("meeting-9", "meeting-10"):
             lifecycle = MeetingLifecycle(profile.owner_id, profile.twin_id, meeting, saver)
             await lifecycle.initialize()
@@ -1425,7 +1428,7 @@ async def _forget_meeting_with_local_files(
 async def _thread_exists(settings: Settings, thread_id: str) -> bool:
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-    async with AsyncSqliteSaver.from_conn_string(str(settings.checkpoint_path)) as saver:
+    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
         return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
 
 
@@ -1442,8 +1445,10 @@ async def test_memory_forget_meeting_removes_record_journal_and_thread(
         "journal_files_removed": 2,
         "conversation_thread_removed": True,
     }
-    assert not (settings.meeting_record_dir / "meeting-9").exists()
-    assert sorted(path.name for path in settings.journal_dir.iterdir()) == ["meeting-10.jsonl"]
+    assert not (settings.paths.record_dir / "meeting-9").exists()
+    assert sorted(path.name for path in settings.paths.journal_dir.iterdir()) == [
+        "meeting-10.jsonl"
+    ]
     assert not await _thread_exists(settings, thread_id)
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     other = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
@@ -1458,8 +1463,8 @@ async def test_memory_forget_meeting_keep_record_only_removes_episodes(
     )
 
     assert json.loads(capsys.readouterr().out) == {"removed_episodes": 2}
-    assert meeting_record_path(settings.meeting_record_dir, "meeting-9").exists()
-    assert (settings.journal_dir / "meeting-9.jsonl").exists()
+    assert meeting_record_path(settings.paths.record_dir, "meeting-9").exists()
+    assert (settings.paths.journal_dir / "meeting-9.jsonl").exists()
     assert await _thread_exists(settings, thread_id)
 
 
@@ -1583,7 +1588,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
 ) -> None:
     graphiti = make_graphiti(search_gate=asyncio.Event())
     model = recall_then_reply("I don't know yet, I'll check with Rani.")
-    monkeypatch.setattr(memory_module, "RECALL_TIMEOUT_SECONDS", 0.01)
+    settings.memory.recall.timeout_seconds = 0.01
 
     _created, audio, outcome = await _join_persona_conversation(
         tmp_path,
@@ -1661,24 +1666,22 @@ def test_report_command_rejects_unknown_or_invalid_meeting(
         cli.show_session_report(meeting_id, tmp_path, settings)
 
 
-def test_chat_model_uses_role_configuration(settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+def test_chat_model_uses_role_configuration(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings.reply = CompatibleReply(
+        model="muse-spark-1.3",
+        base_url="https://api.meta.ai/v1",
+        api_key=SecretStr("meta-key"),
+        reasoning_effort="minimal",
     )
-    settings.chat_model = "openai:muse-spark-1.3"
-    settings.chat_base_url = "https://api.meta.ai/v1"
-    settings.chat_api_key = SecretStr("meta-key")
-    settings.chat_reasoning_effort = "minimal"
-
     cli.create_chat_model(settings)
-
     assert calls == [
         (
-            ("openai:muse-spark-1.3",),
+            ("muse-spark-1.3",),
             {
+                "model_provider": "openai",
                 "api_key": "meta-key",
-                "timeout": 20,
+                "timeout": 15.0,
                 "max_retries": 2,
                 "base_url": "https://api.meta.ai/v1",
                 "reasoning_effort": "minimal",
@@ -1687,118 +1690,94 @@ def test_chat_model_uses_role_configuration(settings, monkeypatch: pytest.Monkey
     ]
 
 
-def test_chat_model_passes_provider_request_fields_as_extra_body(
-    settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_chat_model_passes_provider_request_fields_as_extra_body(settings, monkeypatch):
     calls = record_chat_model_calls(monkeypatch)
-    settings.chat_model = "openai:MiniMax-M2.7-highspeed"
-    settings.chat_base_url = "https://api.minimax.io/v1"
-    settings.chat_api_key = SecretStr("minimax-key")
-    settings.chat_extra_body = {"reasoning_split": True}
-    settings.fallback_chat_model = "openai:MiniMax-M2.5-highspeed"
-    settings.fallback_chat_api_key = SecretStr("minimax-key")
-    settings.fallback_chat_extra_body = {"reasoning_split": True}
-
+    settings.reply = CompatibleReply(
+        model="MiniMax-M3",
+        base_url="https://api.minimax.io/v1",
+        api_key=SecretStr("minimax-key"),
+        extra_body={"reasoning_split": True},
+        max_retries=0,
+    )
+    settings.reply_fallback = settings.reply.model_copy(update={"model": "MiniMax-M2.5-highspeed"})
     cli.create_chat_model(settings)
     cli.create_fallback_chat_model(settings)
-
     assert [kwargs.get("extra_body") for _args, kwargs in calls] == [
         {"reasoning_split": True},
         {"reasoning_split": True},
     ]
 
 
-def test_settings_read_extra_body_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fakeyou.settings import Settings
+def test_settings_read_extra_body_as_json(settings, monkeypatch):
+    monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
+    monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
+    monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
+    assert Settings(_env_file=None).reply.extra_body == {"reasoning_split": True}
 
-    monkeypatch.setenv("FAKEYOU_CHAT_EXTRA_BODY", '{"reasoning_split": true}')
 
-    assert Settings(_env_file=None).chat_extra_body == {"reasoning_split": True}
-
-
-def test_chat_model_defaults_to_openai_key_without_provider_options(
-    settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
-    )
-
+def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
     cli.create_chat_model(settings)
-
-    assert calls == [(("fake:model",), {"api_key": "test-key", "timeout": 20, "max_retries": 2})]
+    assert calls == [
+        (
+            ("model",),
+            {
+                "api_key": "test-key",
+                "model_provider": "openai",
+                "timeout": 15.0,
+                "max_retries": 2,
+                "base_url": "https://api.openai.com/v1",
+            },
+        )
+    ]
 
 
 @pytest.mark.parametrize(
-    "chat_model,chat_base_url,expected",
-    [
-        ("openai:gpt-4.1-mini", None, ("api.openai.com", "api.meta.ai")),
-        ("openai:muse-spark-1.3", "https://api.meta.ai/v1", ("api.openai.com", "api.meta.ai")),
-        (
-            "openai:local",
-            "https://llm.example.com/v1",
-            ("api.openai.com", "api.meta.ai", "llm.example.com"),
-        ),
-        (
-            "anthropic:claude-haiku-4-5",
-            None,
-            ("api.openai.com", "api.meta.ai", "api.anthropic.com"),
-        ),
-        ("ollama:llama", None, ("api.openai.com", "api.meta.ai")),
-    ],
+    "endpoint",
+    ["http://127.0.0.1:8080/v1", "https://api.meta.ai:8443/v1", "https://api.anthropic.com"],
 )
-def test_preflight_hosts_follow_the_configured_chat_endpoint(
-    settings, chat_model: str, chat_base_url: str | None, expected: tuple
-) -> None:
-    settings.chat_model = chat_model
-    settings.chat_base_url = chat_base_url
-
-    assert cli.preflight_hosts(settings) == expected
+def test_preflight_hosts_follow_the_configured_chat_endpoint(settings, endpoint):
+    settings.reply.base_url = endpoint
+    assert cli.preflight_hosts(settings) == (*BASE_HOSTS, endpoint)
 
 
-def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings) -> None:
-    settings.tts_provider = "minimax"
-    settings.chat_model = "openai:MiniMax-M3"
-    settings.chat_base_url = "https://api.minimax.io/v1"
-
-    with pytest.raises(ValueError, match="FAKEYOU_TTS_API_KEY"):
+def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
+    settings.tts = MiniMaxTTS()
+    settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
+    with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
         cli.tts_api_key(settings)
-    settings.tts_api_key = SecretStr("minimax-key")
-
+    settings.tts.api_key = SecretStr("minimax-key")
     assert cli.tts_api_key(settings) == "minimax-key"
-    assert cli.preflight_hosts(settings) == ("api.minimax.io", "api.meta.ai")
+    assert cli.preflight_hosts(settings) == (
+        "https://api.minimax.io/v1/t2a_v2",
+        "wss://api.meta.ai/v1/asr/realtime",
+        "https://api.minimax.io/v1",
+    )
 
 
-def test_openai_speech_falls_back_to_the_openai_key(settings) -> None:
-    assert cli.tts_api_key(settings) == "test-key"
+def test_openai_speech_requires_its_own_key(settings):
+    settings.tts.api_key = None
+    with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
+        cli.tts_api_key(settings)
 
 
-def test_check_reports_the_speech_provider_defaults(
-    settings, capsys: pytest.CaptureFixture[str]
-) -> None:
-    settings.tts_provider = "minimax"
-
+def test_check_reports_the_speech_provider_defaults(settings, capsys):
+    settings.tts = MiniMaxTTS()
     cli.check_setup(settings)
-
-    assert json.loads(capsys.readouterr().out)["models"]["tts"] == {
-        "provider": "minimax",
-        "model": "speech-2.8-turbo",
-        "voice": "Indonesian_CalmWoman",
-    }
+    assert json.loads(capsys.readouterr().out)["tts"] == settings.tts.model_dump(mode="json")
 
 
-def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings) -> None:
-    settings.memory_embedding_base_url = ""
-
+def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings):
+    settings.memory.embedder = EmbedderSettings(base_url="", api_key=SecretStr("local"))
     assert cli.memory_config(settings).embedding_base_url is None
 
 
 def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> None:
-    settings.memory_embedding_base_url = "http://embeddings/v1"
-    settings.memory_embedding_api_key = SecretStr("local")
-    settings.memory_embedding_dim = 768
-    settings.memory_llm_base_url = "https://api.meta.ai/v1"
-    settings.memory_llm_api_key = SecretStr("meta-key")
+    settings.memory.embedder.base_url = "http://embeddings/v1"
+    settings.memory.embedder.api_key = SecretStr("local")
+    settings.memory.embedder.dim = 768
+    settings.memory.llm.base_url = "https://api.meta.ai/v1"
+    settings.memory.llm.api_key = SecretStr("meta-key")
 
     config = cli.memory_config(settings)
 
@@ -1810,35 +1789,19 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> 
     assert (config.llm_base_url, config.llm_api_key) == ("https://api.meta.ai/v1", "meta-key")
 
 
-def test_check_reports_models_per_role(settings, capsys: pytest.CaptureFixture[str]) -> None:
-    settings.model_api_key = SecretStr("muse-key")
-
+def test_check_reports_models_per_role(settings, capsys):
     cli.check_setup(settings)
-
-    models = json.loads(capsys.readouterr().out)["models"]
-    assert models["reply"] == {
-        "model": "fake:model",
-        "base_url": None,
-        "reasoning_effort": None,
-        "extra_body": None,
-    }
-    assert models["memory"] == {
-        "llm": "memory-model",
-        "llm_base_url": None,
-        "small": "memory-small",
-        "embedding": "memory-embedding",
-        "embedding_base_url": None,
-        "embedding_dim": 1024,
-    }
-    assert models["stt"]["model"] == "muse-voice-transcribe-1.0"
-    assert models["tts"]["model"]
+    report = capsys.readouterr().out
+    assert json.loads(report) == settings.model_dump(mode="json")
+    assert "test-key" not in report
+    assert "memory-key" not in report
 
 
 def write_record(settings: Settings, meeting_id: str) -> None:
     from fakeyou.conversation import TranscriptEvent
     from fakeyou.record import MeetingRecord
 
-    record = MeetingRecord(meeting_record_path(settings.meeting_record_dir, meeting_id))
+    record = MeetingRecord(meeting_record_path(settings.paths.record_dir, meeting_id))
     record.add_transcript(
         TranscriptEvent(
             id="t1",
@@ -1880,7 +1843,7 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
         1,
         True,
     )
-    journal = (settings.journal_dir / "meeting-9.jsonl").read_text()
+    journal = (settings.paths.journal_dir / "meeting-9.jsonl").read_text()
     assert '"event":"memory_ingest_finished"' in journal
 
 
@@ -1966,35 +1929,24 @@ async def test_join_without_persona_has_no_speech_keywords(
 
 
 def with_muse_fallback(settings: Settings) -> Settings:
-    settings.fallback_chat_model = "openai:muse-spark-1.2"
-    settings.fallback_chat_base_url = "https://api.meta.ai/v1"
-    settings.fallback_chat_api_key = SecretStr("meta-key")
-    settings.fallback_chat_reasoning_effort = "minimal"
+    settings.reply.max_retries = 0
+    settings.reply_fallback = CompatibleReply(
+        model="muse-spark-1.2",
+        base_url="https://api.meta.ai/v1",
+        api_key=SecretStr("meta-key"),
+        reasoning_effort="minimal",
+        max_retries=1,
+    )
     return settings
 
 
-def test_primary_chat_model_hands_retries_to_the_fallback(
-    settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_primary_and_fallback_use_explicit_retry_budgets(settings, monkeypatch):
     calls = record_chat_model_calls(monkeypatch)
     settings = with_muse_fallback(settings)
-
     cli.create_chat_model(settings)
     cli.create_fallback_chat_model(settings)
-
-    assert calls == [
-        (("fake:model",), {"api_key": "test-key", "timeout": 20, "max_retries": 0}),
-        (
-            ("openai:muse-spark-1.2",),
-            {
-                "api_key": "meta-key",
-                "timeout": 20,
-                "max_retries": 2,
-                "base_url": "https://api.meta.ai/v1",
-                "reasoning_effort": "minimal",
-            },
-        ),
-    ]
+    assert [kwargs["max_retries"] for _args, kwargs in calls] == [0, 1]
+    assert [args for args, _kwargs in calls] == [("model",), ("muse-spark-1.2",)]
 
 
 def test_fallback_chat_model_is_optional(settings) -> None:
@@ -2023,29 +1975,23 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     assert [type(item) for item in created["middleware"]] == [ModelFallbackMiddleware]
 
 
-def test_preflight_does_not_probe_the_fallback_endpoint(settings) -> None:
+def test_preflight_probes_the_fallback_endpoint(settings):
     settings = with_muse_fallback(settings)
-    settings.fallback_chat_base_url = "https://fallback.example.com/v1"
-
-    assert cli.preflight_hosts(settings) == BASE_HOSTS
-
-
-def test_check_reports_the_fallback_model(settings, capsys: pytest.CaptureFixture[str]) -> None:
-    cli.check_setup(with_muse_fallback(settings))
-
-    models = json.loads(capsys.readouterr().out)["models"]
-    assert models["fallback"] == {
-        "model": "openai:muse-spark-1.2",
-        "base_url": "https://api.meta.ai/v1",
-        "reasoning_effort": "minimal",
-        "extra_body": None,
-    }
+    settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"
+    assert cli.preflight_hosts(settings) == (*BASE_HOSTS, "https://fallback.example.com:8443/v1")
 
 
-def test_check_reports_no_fallback_by_default(settings, capsys: pytest.CaptureFixture[str]) -> None:
+def test_check_reports_the_fallback_model(settings, capsys):
+    settings = with_muse_fallback(settings)
     cli.check_setup(settings)
+    assert json.loads(capsys.readouterr().out)[
+        "reply_fallback"
+    ] == settings.reply_fallback.model_dump(mode="json")
 
-    assert json.loads(capsys.readouterr().out)["models"]["fallback"] is None
+
+def test_check_reports_no_fallback_by_default(settings, capsys):
+    cli.check_setup(settings)
+    assert json.loads(capsys.readouterr().out)["reply_fallback"] is None
 
 
 async def test_join_routes_interim_transcripts_to_barge_in(
@@ -2100,3 +2046,15 @@ async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings
     assert not await _thread_exists(settings, thread_id)
     assert not await _thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-9"))
     assert await _thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-10"))
+
+
+async def test_join_rejects_persona_language_mismatch_before_resources(
+    join, settings, tmp_path, monkeypatch
+):
+    _enable_audio_platform(monkeypatch)
+    settings.stt.api_key = SecretStr("muse-key")
+    forbid_resources(monkeypatch)
+    persona = write_persona(tmp_path, language="en")
+    with pytest.raises(cli.CliError, match="persona language"):
+        await join(MEET_LINK, audio_enabled=True, conversation_enabled=True, persona_path=persona)
+    assert not settings.paths.journal_dir.exists()

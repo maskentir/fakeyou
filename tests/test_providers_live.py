@@ -35,8 +35,10 @@ from fakeyou.memory import (
 )
 from fakeyou.persona import PersonaProfile
 from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
-from fakeyou.settings import Settings, require_secret
+from fakeyou.settings import CompatibleReply, Settings, require_secret
 from fakeyou.voice import create_speech_synthesizer
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 LIVE_INGESTION_MEETING = (
     Path(__file__).resolve().parent / "fixtures" / "live-ingestion-meeting.json"
@@ -86,7 +88,7 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
                 config={"recursion_limit": 8},
             )
     except Exception as error:
-        _fail_provider(error, f"{settings.chat_model} agent")
+        _fail_provider(error, f"{settings.reply.model} agent")
 
     messages = result["messages"]
     assert any(
@@ -105,7 +107,10 @@ async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
     except ValueError as error:
         pytest.skip(str(error))
     synthesizer = create_speech_synthesizer(
-        settings.tts_provider, api_key=api_key, voice=settings.tts_voice
+        settings.tts.provider,
+        api_key=api_key,
+        settings=settings.tts,
+        language=settings.speech.language,
     )
     try:
         try:
@@ -115,7 +120,7 @@ async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
                     [chunk async for chunk in synthesizer.stream("Hello from the test meeting.")]
                 )
         except Exception as error:
-            _fail_provider(error, f"{settings.tts_provider} TTS")
+            _fail_provider(error, f"{settings.tts.provider} TTS")
     finally:
         await synthesizer.aclose()
 
@@ -126,7 +131,7 @@ async def test_configured_tts_synthesizes_and_streams_pcm_audio() -> None:
 
 def _neo4j_config_or_skip() -> Neo4jMemoryConfig:
     settings = Settings()
-    parsed = urlparse(settings.neo4j_uri)
+    parsed = urlparse(settings.memory.store.uri)
     try:
         with socket.create_connection((parsed.hostname or "localhost", parsed.port or 7687), 2):
             pass
@@ -353,16 +358,18 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
 @pytest.mark.live
 async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down() -> None:
     settings = Settings()
-    meta_key = _secret_or_skip(settings.model_api_key, "FAKEYOU_MODEL_API_KEY")
+    fallback_key = _secret_or_skip(settings.reply.api_key, "FAKEYOU_REPLY__API_KEY")
     broken = settings.model_copy(
         update={
-            "chat_model": "openai:gpt-4.1-mini",
-            "chat_base_url": "http://127.0.0.1:9/v1",
-            "chat_api_key": SecretStr("unused"),
-            "fallback_chat_model": "openai:muse-spark-1.2",
-            "fallback_chat_base_url": "https://api.meta.ai/v1",
-            "fallback_chat_api_key": SecretStr(meta_key),
-            "fallback_chat_reasoning_effort": "minimal",
+            "reply": CompatibleReply(
+                model="gpt-4.1-mini",
+                base_url="http://127.0.0.1:9/v1",
+                api_key=SecretStr("unused"),
+                max_retries=0,
+            ),
+            "reply_fallback": settings.reply.model_copy(
+                update={"api_key": SecretStr(fallback_key), "max_retries": 1}
+            ),
         }
     )
 

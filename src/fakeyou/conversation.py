@@ -23,13 +23,15 @@ from fakeyou.journal import ProviderJournal
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError as ConversationError
 from fakeyou.session import MeetingAudio
+from fakeyou.settings import DEFAULTS
 
 ConversationPhase = Literal[
     "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
 ]
 
-MAX_SPOKEN_SENTENCES = 2
-BARGE_IN_MIN_WORDS = 3
+
+MAX_SPOKEN_SENTENCES = DEFAULTS.conversation.max_spoken_sentences
+BARGE_IN_MIN_WORDS = DEFAULTS.conversation.barge_in_min_words
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +185,9 @@ class LangGraphResponder:
         return reply
 
 
-def cap_spoken_reply(reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES) -> str:
+def cap_spoken_reply(
+    reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES, language: str = DEFAULTS.speech.language
+) -> str:
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
     if not reply.strip():
@@ -191,7 +195,7 @@ def cap_spoken_reply(reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES) -> s
     remaining = reply.strip()
     sentences: list[str] = []
     for _ in range(max_sentences):
-        boundary = match_endofsentence(remaining, language="id")
+        boundary = match_endofsentence(remaining, language=language)
         if not boundary:
             sentences.append(remaining)
             break
@@ -208,10 +212,13 @@ class ConversationLoop:
         responder: ConversationResponder,
         *,
         on_transition: Callable[[ConversationPhase, ConversationPhase, str], None] | None = None,
-        response_timeout_seconds: float = 60,
+        response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds,
         wake_phrases: Sequence[str] = (),
-        activation_seconds: float = 30,
+        activation_seconds: float = DEFAULTS.conversation.activation_seconds,
         barge_in: bool = False,
+        barge_in_min_words: int = BARGE_IN_MIN_WORDS,
+        max_spoken_sentences: int = MAX_SPOKEN_SENTENCES,
+        language: str = DEFAULTS.speech.language,
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,
         journal: ProviderJournal | None = None,
@@ -229,6 +236,9 @@ class ConversationLoop:
             phrase.strip().casefold() for phrase in wake_phrases if phrase.strip()
         )
         self._activation_seconds = activation_seconds
+        self._barge_in_min_words = barge_in_min_words
+        self._max_spoken_sentences = max_spoken_sentences
+        self._language = language
         self._barge_in = barge_in
         self._clock = clock
         self._active_until = 0.0
@@ -309,7 +319,7 @@ class ConversationLoop:
         ):
             return
         words = len(text.split())
-        if words >= BARGE_IN_MIN_WORDS and not self._interrupted:
+        if words >= self._barge_in_min_words and not self._interrupted:
             self._interrupted = True
             self._record("barge_in", trigger="interim", words=words)
             await session.stop_playback()
@@ -407,7 +417,7 @@ class ConversationLoop:
                 if not reply.strip() or session is None:
                     self._move("waiting", event_id)
                     continue
-                spoken = cap_spoken_reply(reply)
+                spoken = cap_spoken_reply(reply, self._max_spoken_sentences, self._language)
                 if spoken != reply.strip():
                     self._record(
                         "reply_capped",

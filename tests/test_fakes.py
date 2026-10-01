@@ -14,9 +14,9 @@ def test_settings_fixture_cleans_environment_and_uses_the_real_schema(monkeypatc
     settings = request.getfixturevalue("settings")
 
     assert isinstance(settings, Settings)
-    assert settings.chat_model == "fake:model"
-    assert settings.tts_provider == "openai"
-    assert settings.session_duration_seconds == 7200.0
+    assert settings.reply.model == "model"
+    assert settings.tts.provider == "openai"
+    assert settings.meeting.session_duration_seconds == 7200.0
     assert not any(
         name.lower().startswith(Settings.model_config["env_prefix"].lower()) for name in os.environ
     )

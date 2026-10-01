@@ -1,58 +1,303 @@
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Self, get_args, get_origin
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings.sources import EnvSettingsSource
 
-from fakeyou.session import DEFAULT_CHECKPOINT_PATH, PositiveSeconds, SessionId, TwinName
+from fakeyou.config_migration import LEGACY_KEYS
+from fakeyou.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 TTSProvider = Literal["openai", "minimax"]
+OptionalURL = Annotated[str | None, BeforeValidator(lambda value: None if value == "" else value)]
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env", env_prefix="FAKEYOU_", extra="ignore", hide_input_in_errors=True
-    )
+class Section(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    chat_model: str = "openai:gpt-4.1-mini"
-    chat_base_url: str | None = None
-    chat_api_key: SecretStr | None = None
-    chat_reasoning_effort: ReasoningEffort | None = None
-    chat_extra_body: dict[str, Any] | None = None
-    fallback_chat_model: str | None = None
-    fallback_chat_base_url: str | None = None
-    fallback_chat_api_key: SecretStr | None = None
-    fallback_chat_reasoning_effort: ReasoningEffort | None = None
-    fallback_chat_extra_body: dict[str, Any] | None = None
-    memory_llm_model: str = "gpt-5.5"
-    memory_small_model: str = "gpt-4.1-nano"
-    memory_llm_base_url: str | None = None
-    memory_llm_api_key: SecretStr | None = None
-    memory_embedding_model: str = "text-embedding-3-small"
-    memory_embedding_base_url: str | None = None
-    memory_embedding_api_key: SecretStr | None = None
-    memory_embedding_dim: int = Field(default=1024, gt=0)
-    stt_model: str = "muse-voice-transcribe-1.0"
-    tts_provider: TTSProvider = "openai"
-    tts_api_key: SecretStr | None = None
-    tts_voice: str | None = None
-    checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
-    headless: bool = False
-    cloakbrowser_license_key: str | None = Field(default=None, repr=False)
-    openai_api_key: SecretStr | None = None
-    model_api_key: SecretStr | None = None
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: SecretStr | None = None
-    memory_group: str = "local_twin"
+
+class IdentitySettings(Section):
     owner_id: SessionId = "local_owner"
     twin_id: SessionId = "local_twin"
     twin_name: TwinName = "Fakeyou Twin"
+
+
+class PathSettings(Section):
+    journal_dir: Path = Path(".runtime/journals")
+    record_dir: Path = Path(".runtime/meetings")
+    checkpoint_path: Path = Path(".runtime/checkpoints.sqlite")
+    browser_profile_dir: Path = Path(".runtime/profiles")
+
+
+class SpeechSettings(Section):
+    language: Literal["id", "en"] = "id"
+
+
+class ReplyBase(Section):
+    model: str = "gpt-4.1-mini"
+    api_key: SecretStr | None = None
+    timeout_seconds: PositiveSeconds = 15.0
+    max_retries: int = Field(default=2, ge=0)
+
+    @model_validator(mode="after")
+    def unprefixed_model(self) -> Self:
+        if ":" in self.model:
+            raise ValueError(
+                "model must not contain a provider prefix; configure provider explicitly"
+            )
+        return self
+
+
+class OpenAIReply(ReplyBase):
+    provider: Literal["openai"] = "openai"
+    base_url: OptionalURL = "https://api.openai.com/v1"
+    reasoning_effort: ReasoningEffort | None = None
+
+
+class CompatibleReply(ReplyBase):
+    provider: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1)
+    reasoning_effort: ReasoningEffort | None = None
+    extra_body: dict[str, Any] | None = None
+
+
+class AnthropicReply(ReplyBase):
+    provider: Literal["anthropic"] = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
+    base_url: OptionalURL = "https://api.anthropic.com"
+
+
+ReplySettings = Annotated[
+    OpenAIReply | CompatibleReply | AnthropicReply, Field(discriminator="provider")
+]
+
+
+class TTSBase(Section):
+    api_key: SecretStr | None = None
+    sample_rate: int = PLAYBACK_SAMPLE_RATE
+
+    @model_validator(mode="after")
+    def playback_rate(self) -> Self:
+        if self.sample_rate != PLAYBACK_SAMPLE_RATE:
+            raise ValueError("TTS sample_rate must equal playback sample rate")
+        return self
+
+
+class OpenAITTS(TTSBase):
+    provider: Literal["openai"] = "openai"
+    model: str = "gpt-4o-mini-tts"
+    voice: str = "alloy"
+    base_url: str = "https://api.openai.com/v1"
+
+    @model_validator(mode="after")
+    def valid_voice(self) -> Self:
+        from pipecat.services.openai.tts import VALID_VOICES
+
+        if self.voice not in VALID_VOICES:
+            raise ValueError("unsupported OpenAI voice")
+        return self
+
+
+class MiniMaxTTS(TTSBase):
+    provider: Literal["minimax"] = "minimax"
+    model: str = "speech-2.8-turbo"
+    voice: str = "Indonesian_CalmWoman"
+    base_url: str = "https://api.minimax.io/v1/t2a_v2"
+
+
+TTSSettings = Annotated[OpenAITTS | MiniMaxTTS, Field(discriminator="provider")]
+
+
+class STTSettings(Section):
+    provider: Literal["muse"] = "muse"
+    model: str = "muse-voice-transcribe-1.0"
+    api_key: SecretStr | None = None
+    url: str = "wss://api.meta.ai/v1/asr/realtime"
+    mode: Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"] = "ENDPOINTING"
+
+
+class StoreSettings(Section):
+    uri: str = "bolt://localhost:7687"
+    user: str = "neo4j"
+    password: SecretStr | None = None
+    database: str = "neo4j"
+    group: str = "local_twin"
+
+
+class MemoryLLMBase(Section):
+    model: str = "gpt-5.5"
+    small_model: str = "gpt-4.1-nano"
+    api_key: SecretStr | None = None
+
+
+class OpenAIMemoryLLM(MemoryLLMBase):
+    client: Literal["openai"] = "openai"
+    base_url: OptionalURL = "https://api.openai.com/v1"
+
+
+class GenericMemoryLLM(MemoryLLMBase):
+    client: Literal["openai_generic"] = "openai_generic"
+    base_url: str = Field(min_length=1)
+
+
+class AnthropicMemoryLLM(MemoryLLMBase):
+    model: str = "claude-haiku-4-5-20251001"
+    small_model: str = "claude-haiku-4-5-20251001"
+    client: Literal["anthropic"] = "anthropic"
+    base_url: OptionalURL = "https://api.anthropic.com"
+
+
+MemoryLLMSettings = Annotated[
+    OpenAIMemoryLLM | GenericMemoryLLM | AnthropicMemoryLLM, Field(discriminator="client")
+]
+
+
+class EmbedderSettings(Section):
+    model: str = "text-embedding-3-small"
+    api_key: SecretStr | None = None
+    base_url: OptionalURL = "https://api.openai.com/v1"
+    dim: int = Field(default=1024, gt=0)
+
+
+class RecallSettings(Section):
+    result_limit: int = Field(default=5, gt=0)
+    timeout_seconds: PositiveSeconds = 15.0
+
+
+class IngestionSettings(Section):
+    window_utterances: int = Field(default=20, gt=0)
+    window_seconds: PositiveSeconds = 60.0
+    episode_timeout_seconds: PositiveSeconds = 120.0
+
+
+class MemorySettings(Section):
+    store: StoreSettings = Field(default_factory=StoreSettings)
+    llm: MemoryLLMSettings = Field(default_factory=OpenAIMemoryLLM)
+    embedder: EmbedderSettings = Field(default_factory=EmbedderSettings)
+    recall: RecallSettings = Field(default_factory=RecallSettings)
+    ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
+
+
+class ConversationSettings(Section):
+    response_timeout_seconds: PositiveSeconds = 60.0
+    barge_in_min_words: int = Field(default=3, gt=0)
+    max_spoken_sentences: int = Field(default=2, gt=0)
+    activation_seconds: PositiveSeconds = 30.0
+
+
+class MeetingSettings(Section):
     lobby_timeout_seconds: PositiveSeconds = 300.0
     session_duration_seconds: PositiveSeconds = 7200.0
-    journal_dir: Path = Path(".runtime/journals")
-    meeting_record_dir: Path = Path(".runtime/meetings")
+    join_poll_seconds: PositiveSeconds = 2.0
+    monitor_poll_seconds: PositiveSeconds = 5.0
+    leave_timeout_seconds: PositiveSeconds = 30.0
+    headless: bool = False
+    warmup_browser: bool = True
+    license_key: SecretStr | None = None
+
+
+class AudioHealthSettings(Section):
+    deaf_window_seconds: PositiveSeconds = 120.0
+    deaf_grace_seconds: PositiveSeconds = 120.0
+    alone_leave_seconds: PositiveSeconds = 600.0
+
+
+class PreflightSettings(Section):
+    budget_seconds: PositiveSeconds = 5.0
+
+
+class WorkerSettings(Section):
+    audio: bool = False
+
+
+class Configuration(Section):
+    identity: IdentitySettings = Field(default_factory=IdentitySettings)
+    paths: PathSettings = Field(default_factory=PathSettings)
+    speech: SpeechSettings = Field(default_factory=SpeechSettings)
+    reply: ReplySettings = Field(default_factory=OpenAIReply)
+    reply_fallback: ReplySettings | None = None
+    tts: TTSSettings = Field(default_factory=OpenAITTS)
+    stt: STTSettings = Field(default_factory=STTSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
+    conversation: ConversationSettings = Field(default_factory=ConversationSettings)
+    meeting: MeetingSettings = Field(default_factory=MeetingSettings)
+    audio_health: AudioHealthSettings = Field(default_factory=AudioHealthSettings)
+    preflight: PreflightSettings = Field(default_factory=PreflightSettings)
+    worker: WorkerSettings = Field(default_factory=WorkerSettings)
+
+    @model_validator(mode="after")
+    def response_budget(self) -> Self:
+        roles = [self.reply] + ([self.reply_fallback] if self.reply_fallback else [])
+        budget = sum(role.timeout_seconds * (role.max_retries + 1) for role in roles)
+        budget += self.memory.recall.timeout_seconds
+        if budget > self.conversation.response_timeout_seconds:
+            raise ValueError(
+                "reply retries, fallback and recall exceed conversation response budget"
+            )
+        return self
+
+    def require_roles(self, *roles: str) -> None:
+        for role in roles:
+            value: Any = self
+            for part in role.split("."):
+                value = getattr(value, part)
+            if value is not None:
+                require_secret(
+                    value.api_key, "FAKEYOU_" + role.replace(".", "__").upper() + "__API_KEY"
+                )
+
+
+DEFAULTS = Configuration()
+
+
+def _known_env_path(annotation: Any, parts: list[str]) -> bool:
+    if not parts:
+        return True
+    if get_origin(annotation) is Annotated:
+        return _known_env_path(get_args(annotation)[0], parts)
+    if get_origin(annotation) is dict:
+        return True
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        field = annotation.model_fields.get(parts[0])
+        return field is not None and _known_env_path(field.annotation, parts[1:])
+    return any(_known_env_path(option, parts) for option in get_args(annotation))
+
+
+class Settings(Configuration, BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_prefix="FAKEYOU_",
+        env_nested_delimiter="__",
+        extra="forbid",
+        dotenv_filtering="match_prefix",
+        hide_input_in_errors=True,
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        for source in (env_settings, dotenv_settings):
+            if isinstance(source, EnvSettingsSource):
+                for key in list(source.env_vars):
+                    upper = key.upper()
+                    if upper.startswith("FAKEYOU_COMPOSE_"):
+                        source.env_vars = {
+                            name: value for name, value in source.env_vars.items() if name != key
+                        }
+                    elif upper in LEGACY_KEYS:
+                        raise ValueError(f"{upper} was replaced by {LEGACY_KEYS[upper]}")
+                    elif upper.startswith("FAKEYOU_") and not _known_env_path(
+                        cls, key.lower().removeprefix("fakeyou_").split("__")
+                    ):
+                        raise ValueError(f"Unknown configuration key: {upper}")
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
 
 
 def require_secret(value: SecretStr | None, name: str) -> str:

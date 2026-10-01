@@ -27,7 +27,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService
+from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.callbacks import record_consumer_fault
@@ -40,6 +40,13 @@ from fakeyou.deaf import (
     rms_level,
 )
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import AGENT_MIC_SOURCE_NAME as AGENT_MIC_SOURCE_NAME
+from fakeyou.invariants import AGENT_SINK_NAME as AGENT_SINK_NAME
+from fakeyou.invariants import CAPTURE_SAMPLE_RATE as CAPTURE_SAMPLE_RATE
+from fakeyou.invariants import MEETING_MONITOR_SOURCE_NAME as MEETING_MONITOR_SOURCE_NAME
+from fakeyou.invariants import MEETING_SINK_NAME as MEETING_SINK_NAME
+from fakeyou.invariants import PCM_CHANNELS
+from fakeyou.invariants import PLAYBACK_SAMPLE_RATE as PLAYBACK_SAMPLE_RATE
 from fakeyou.journal import ProviderJournal
 from fakeyou.playback import (
     PlaybackEngine,
@@ -49,15 +56,9 @@ from fakeyou.playback import (
     create_paplay_stream_runner,
 )
 from fakeyou.provider_faults import ERROR_CATEGORY_KINDS, ProviderFault, classify_exception
-from fakeyou.settings import TTSProvider
-from fakeyou.voice import create_muse_stt, create_speech_synthesizer
+from fakeyou.settings import DEFAULTS, STTSettings, TTSProvider, TTSSettings
+from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
 
-MEETING_SINK_NAME = "meeting_audio"
-MEETING_MONITOR_SOURCE_NAME = "meeting_audio.monitor"
-AGENT_SINK_NAME = "agent_output"
-AGENT_MIC_SOURCE_NAME = "agent_mic"
-CAPTURE_SAMPLE_RATE = 16_000
-PLAYBACK_SAMPLE_RATE = 24_000
 STOP_DEADLINE_SECONDS = 8.0
 
 
@@ -221,7 +222,7 @@ def _native_transport() -> Any:
         LocalAudioTransportParams(
             audio_in_enabled=True,
             audio_in_sample_rate=CAPTURE_SAMPLE_RATE,
-            audio_in_channels=1,
+            audio_in_channels=PCM_CHANNELS,
             audio_out_enabled=False,
         )
     )
@@ -239,8 +240,9 @@ class MeetingAudioSession:
         activity: CaptureActivity | None = None,
         fault_reporter: FaultReporter | None = None,
         journal: ProviderJournal | None = None,
-        deaf_window_seconds: float = 120.0,
-        deaf_grace_seconds: float = 120.0,
+        deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+        deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+        alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self.activity = activity or CaptureActivity(now=now)
@@ -253,6 +255,7 @@ class MeetingAudioSession:
             reporter=fault_reporter,
             deaf_window_seconds=deaf_window_seconds,
             deaf_grace_seconds=deaf_grace_seconds,
+            alone_leave_seconds=alone_leave_seconds,
             journal=journal,
         )
         self._reconnect_state = "idle"
@@ -454,13 +457,20 @@ def default_playback_engine(
     tts_api_key: str,
     tts_provider: TTSProvider = "openai",
     tts_voice: str | None = None,
+    tts_settings: TTSSettings | None = None,
+    speech_language: str = DEFAULTS.speech.language,
     on_event: Callable[[PlaybackEvent], None] | None = None,
     fault_reporter: FaultReporter | None = None,
     journal: ProviderJournal | None = None,
 ) -> PlaybackEngine:
     return PlaybackEngine(
         create_speech_synthesizer(
-            tts_provider, api_key=tts_api_key, voice=tts_voice, journal=journal
+            tts_provider,
+            api_key=tts_api_key,
+            voice=tts_voice,
+            settings=tts_settings,
+            language=speech_language,
+            journal=journal,
         ),
         play_audio=create_paplay_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
@@ -486,12 +496,16 @@ async def open_meeting_audio(
     activity: CaptureActivity | None = None,
     fault_reporter: FaultReporter | None = None,
     journal: ProviderJournal | None = None,
-    deaf_window_seconds: float = 120.0,
-    deaf_grace_seconds: float = 120.0,
-    stt_model: str = META_STT_MODEL,
+    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
+    stt_model: str = DEFAULTS.stt.model,
+    stt_settings: STTSettings = DEFAULTS.stt,
     stt_keywords: Sequence[str] | None = None,
     tts_provider: TTSProvider = "openai",
     tts_voice: str | None = None,
+    tts_settings: TTSSettings | None = None,
+    speech_language: str = DEFAULTS.speech.language,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -503,6 +517,8 @@ async def open_meeting_audio(
             tts_api_key=tts_api_key,
             tts_provider=tts_provider,
             tts_voice=tts_voice,
+            tts_settings=tts_settings,
+            speech_language=speech_language,
             on_event=on_playback_event,
             fault_reporter=fault_reporter,
             journal=journal,
@@ -516,7 +532,10 @@ async def open_meeting_audio(
                 else create_muse_stt(
                     api_key=muse_api_key,
                     sample_rate=CAPTURE_SAMPLE_RATE,
-                    model=stt_model,
+                    model=stt_settings.model if stt_model == DEFAULTS.stt.model else stt_model,
+                    url=stt_settings.url,
+                    mode=stt_settings.mode,
+                    language=SPEECH_LANGUAGES[speech_language][0],
                     keywords=stt_keywords,
                     service_class=ManagedMuseSTT,
                 )
@@ -584,6 +603,7 @@ async def open_meeting_audio(
                 journal=journal,
                 deaf_window_seconds=deaf_window_seconds,
                 deaf_grace_seconds=deaf_grace_seconds,
+                alone_leave_seconds=alone_leave_seconds,
             )
             for cause in early_failures:
                 session._fail("meeting audio provider failed", cause=cause)

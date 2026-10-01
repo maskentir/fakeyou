@@ -8,11 +8,23 @@ from unittest.mock import MagicMock
 
 import httpx2
 import pytest
+from graphiti_core.embedder.client import EMBEDDING_DIM
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 
 import fakeyou.cli as cli
-from fakeyou.settings import Settings
+from fakeyou.settings import (
+    EmbedderSettings,
+    IdentitySettings,
+    MeetingSettings,
+    MemorySettings,
+    OpenAIMemoryLLM,
+    OpenAIReply,
+    OpenAITTS,
+    PathSettings,
+    Settings,
+    StoreSettings,
+)
 from tests.fakes import FakeAudio, PCMStream, RecordingJournal, SessionRun, make_graphiti
 
 
@@ -29,20 +41,26 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     environment_options: dict[str, Any] = {"_env_file": None}
     return Settings(
         **environment_options,
-        openai_api_key=SecretStr("test-key"),
-        chat_model="fake:model",
-        checkpoint_path=tmp_path / "checkpoints.sqlite",
-        memory_group="test-group",
-        neo4j_password=SecretStr("password"),
-        headless=True,
-        owner_id="settings-owner",
-        twin_id="settings-twin",
-        twin_name="Settings Twin",
-        journal_dir=tmp_path / "journals",
-        meeting_record_dir=tmp_path / "meetings",
-        memory_llm_model="memory-model",
-        memory_small_model="memory-small",
-        memory_embedding_model="memory-embedding",
+        reply=OpenAIReply(api_key=SecretStr("test-key"), model="model"),
+        tts=OpenAITTS(api_key=SecretStr("tts-key")),
+        paths=PathSettings(
+            checkpoint_path=tmp_path / "checkpoints.sqlite",
+            journal_dir=tmp_path / "journals",
+            record_dir=tmp_path / "meetings",
+        ),
+        identity=IdentitySettings(
+            owner_id="settings-owner", twin_id="settings-twin", twin_name="Settings Twin"
+        ),
+        meeting=MeetingSettings(headless=True),
+        memory=MemorySettings(
+            store=StoreSettings(group="test-group", password=SecretStr("password")),
+            llm=OpenAIMemoryLLM(
+                model="memory-model", small_model="memory-small", api_key=SecretStr("memory-key")
+            ),
+            embedder=EmbedderSettings(
+                dim=EMBEDDING_DIM, model="memory-embedding", api_key=SecretStr("embedding-key")
+            ),
+        ),
     )
 
 

@@ -1,15 +1,16 @@
 from dataclasses import field
 from pathlib import Path
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-from pydantic import ConfigDict, Field, StringConstraints
+from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
-DEFAULT_CHECKPOINT_PATH = Path(".runtime/checkpoints.sqlite")
+from fakeyou.invariants import PositiveSeconds
+from fakeyou.invariants import SessionId as SessionId
+from fakeyou.invariants import TwinName as TwinName
+from fakeyou.settings import DEFAULTS
 
-SessionId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
-PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
-TwinName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+DEFAULT_CHECKPOINT_PATH = DEFAULTS.paths.checkpoint_path
 
 
 class MeetingAudio(Protocol):
@@ -61,16 +62,16 @@ class SessionConfig:
     meeting_id: SessionId
     link: str
     twin_name: TwinName
-    lobby_timeout_seconds: PositiveSeconds = 300.0
-    join_poll_interval_seconds: PositiveSeconds = 2.0
-    session_duration_seconds: PositiveSeconds = 7200.0
-    monitor_interval_seconds: PositiveSeconds = 5.0
-    leave_timeout_seconds: PositiveSeconds = 30.0
-    deaf_window_seconds: PositiveSeconds = 120.0
-    deaf_grace_seconds: PositiveSeconds = 120.0
-    preflight_budget_seconds: PositiveSeconds = 5.0
+    lobby_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.lobby_timeout_seconds
+    join_poll_interval_seconds: PositiveSeconds = DEFAULTS.meeting.join_poll_seconds
+    session_duration_seconds: PositiveSeconds = DEFAULTS.meeting.session_duration_seconds
+    monitor_interval_seconds: PositiveSeconds = DEFAULTS.meeting.monitor_poll_seconds
+    leave_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.leave_timeout_seconds
+    deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
+    deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
+    preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
     browser_profile_dir: Path | None = None
-    warmup_browser: bool = True
-    headless: bool = False
+    warmup_browser: bool = DEFAULTS.meeting.warmup_browser
+    headless: bool = DEFAULTS.meeting.headless
     license_key: str | None = field(default=None, repr=False)

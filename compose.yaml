@@ -17,12 +17,13 @@ services:
       - 1.1.1.1
     env_file: .env
     environment:
-      FAKEYOU_HEADLESS: "false"
+      EMBEDDING_DIM: ${FAKEYOU_MEMORY__EMBEDDER__DIM:-1024}
+      FAKEYOU_MEETING__HEADLESS: "false"
       # PULSE defaults follow src/fakeyou/audio.py as source of truth; override via env.
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
       PULSE_SINK: ${PULSE_SINK:-agent_output}
-      FAKEYOU_NEO4J_URI: ${FAKEYOU_WORKER_NEO4J_URI:-bolt://neo4j:7687}
-      FAKEYOU_MEMORY_EMBEDDING_BASE_URL: ${FAKEYOU_WORKER_EMBEDDING_BASE_URL:-${FAKEYOU_MEMORY_EMBEDDING_BASE_URL:-}}
+      FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}
+      FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL:-${FAKEYOU_MEMORY__EMBEDDER__BASE_URL:-}}
     volumes:
       - ./.runtime/audio:/workspace/.runtime
       - ./examples:/workspace/examples:ro
@@ -31,7 +32,7 @@ services:
   neo4j:
     image: neo4j:5.26.31-community
     environment:
-      NEO4J_AUTH: neo4j/${FAKEYOU_NEO4J_PASSWORD:?Set FAKEYOU_NEO4J_PASSWORD in .env before starting neo4j}
+      NEO4J_AUTH: neo4j/${FAKEYOU_MEMORY__STORE__PASSWORD:?Set FAKEYOU_MEMORY__STORE__PASSWORD in .env before starting neo4j}
     ports:
       - "127.0.0.1:7474:7474"
       - "127.0.0.1:7687:7687"
@@ -45,13 +46,13 @@ services:
       start_period: 30s
 
   embeddings:
-    image: ${FAKEYOU_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9}
+    image: ${FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9}
     profiles: ["embeddings"]
     command:
       - --model-id
-      - ${FAKEYOU_EMBEDDINGS_MODEL_ID:-ibm-granite/granite-embedding-97m-multilingual-r2}
+      - ${FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID:-ibm-granite/granite-embedding-97m-multilingual-r2}
       - --revision
-      - ${FAKEYOU_EMBEDDINGS_REVISION:-835ad14087e140460703cf0fae09f97d469d65c2}
+      - ${FAKEYOU_COMPOSE_EMBEDDINGS_REVISION:-835ad14087e140460703cf0fae09f97d469d65c2}
       - --max-batch-tokens
       - "2048"
     ports:
