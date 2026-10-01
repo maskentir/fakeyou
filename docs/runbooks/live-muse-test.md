@@ -4,7 +4,7 @@ Tes ini memakai `MetaSTTService`, `PipelineWorker`, dan `WorkerRunner` Pipecat a
 
 ## Kredensial
 
-Isi `FAKEYOU_MODEL_API_KEY` di `.env` dengan key dari [dashboard Meta Model API](https://dev.meta.ai/help/api-keys/create-api-key). Jangan menaruh key dalam argumen command atau source.
+Isi `FAKEYOU_STT__API_KEY` di `.env` dengan key dari [dashboard Meta Model API](https://dev.meta.ai/help/api-keys/create-api-key). Jangan menaruh key dalam argumen command atau source.
 
 Login OAuth yang tersimpan di Muse Code bukan pengganti key ini. [Dokumentasi Meta](https://dev.meta.ai/help/subscriptions/subscribe-to-muse-code) membatasi kredensial onboarding tersebut untuk Muse Code; key Model API terpisah menggunakan penagihan berdasarkan pemakaian.
 

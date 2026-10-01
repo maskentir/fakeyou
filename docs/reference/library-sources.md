@@ -29,6 +29,6 @@ Perilaku library yang diandalkan dikunci oleh `tests/test_library_contracts.py`.
 
 1. Baca changelog dan source versi baru untuk API di tabel di atas; dokumentasi web bisa berbeda dari source (contoh: `add_episode_bulk` di Graphiti 0.30.2).
 2. Jalankan `uv run pytest tests/test_library_contracts.py`. Tes yang gagal menandai asumsi yang berubah, misalnya Pipecat mulai meneruskan label diarisasi atau `Neo4jDriver.clone` mulai memisahkan database per grup.
-3. Bandingkan default model library dengan setelan eksplisit di `Settings` (`FAKEYOU_MEMORY_*`, `FAKEYOU_STT_MODEL`). Proyek tidak boleh bergantung pada default library.
+3. Bandingkan default model library dengan setelan eksplisit di `Settings` (`FAKEYOU_MEMORY__LLM__*`, `FAKEYOU_MEMORY__EMBEDDER__*`, `FAKEYOU_STT__MODEL`). Proyek tidak boleh bergantung pada default library.
 4. Jalankan suite offline, tes live provider, eval persona live, dan tes image worker (`-m container`) sebelum merge.
 

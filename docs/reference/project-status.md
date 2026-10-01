@@ -47,7 +47,7 @@ Hasil pengujian terakhir yang tercatat:
 
 Lihat [verifikasi](../runbooks/verification.md) dan [laporan regresi](../reports/2026-09-27-regression.md) untuk cakupan dan keterbatasan. Pemeriksaan status ini tidak mengulang panggilan provider berbayar.
 
-`FAKEYOU_OPENAI_API_KEY` dan `FAKEYOU_MODEL_API_KEY` sudah terbaca oleh settings. `FAKEYOU_MODEL_API_KEY` dipakai integrasi Muse saat ini; nama generik tidak berarti adapter STT otomatis mendukung semua provider. OpenAI masih menjadi provider yang disusun untuk penalaran, komponen Graphiti, dan TTS.
+Setiap peran memakai key sendiri lewat bagian konfigurasinya: `FAKEYOU_REPLY__API_KEY`, `FAKEYOU_TTS__API_KEY`, `FAKEYOU_STT__API_KEY` (Muse), `FAKEYOU_MEMORY__LLM__API_KEY`, dan `FAKEYOU_MEMORY__EMBEDDER__API_KEY`; tidak ada key yang dipinjam antarperan. Provider setiap peran dinyatakan eksplisit (`FAKEYOU_REPLY__PROVIDER`, `FAKEYOU_TTS__PROVIDER`, `FAKEYOU_MEMORY__LLM__CLIENT`).
 
 Perintah `fakeyou check` memeriksa instalasi dan keberadaan key. Field `live_services_verified` saat ini selalu `false`; command itu tidak menguji API atau membaca hasil pytest. Bukti Muse live berasal dari tes tersendiri.
 
