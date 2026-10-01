@@ -9,6 +9,7 @@ dependencies = [
     "graphiti-core==0.30.2",
     "httpx2==2.13.1",
     "langchain==1.4.2",
+    "langchain-anthropic>=1,<2",
     "langchain-mcp-adapters>=0.2,<0.3",
     "langchain-openai>=1,<2",
     "langgraph==1.2.12",
@@ -36,7 +37,7 @@ production = [
 ]
 
 [project.scripts]
-fakeyou = "fakeyou.cli:main"
+fakeyou = "fakeyou.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -50,19 +51,22 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "evals"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not browser and not live"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not browser and not live and not container"]
 markers = [
     "browser: launches a real CloakBrowser and local Playwright MCP process",
     "live: uses external model APIs or a running graph database",
+    "container: runs the built meeting worker image through Docker Compose",
 ]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/fakeyou"]
+untyped_calls_exclude = ["deepeval.models.base_model.DeepEvalBaseLLM"]
+files = ["src/fakeyou", "tests/fakes.py", "tests/conftest.py"]
 
 [[tool.mypy.overrides]]
 module = ["cloakbrowser", "cloakbrowser.*"]

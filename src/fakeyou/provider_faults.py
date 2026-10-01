@@ -1,9 +1,11 @@
 import asyncio
 import re
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+from fakeyou.taxonomy import Subsystem
 
 ProviderFaultKind = Literal[
     "payment_required",
@@ -28,18 +30,7 @@ ERROR_CATEGORY_KINDS: dict[str, tuple[ProviderFaultKind, bool]] = {
 }
 
 MAX_DETAIL_CHARS = 300
-MAX_SOURCE_CHARS = 64
-_FAULT_KINDS = frozenset(
-    {
-        "payment_required",
-        "unauthorized",
-        "rate_limited",
-        "unavailable",
-        "timeout",
-        "bad_request",
-        "unknown",
-    }
-)
+_FAULT_KINDS = frozenset(get_args(ProviderFaultKind))
 _SECRET = re.compile(r"(?i)(bearer\s+|api[_-]?key[=:]\s*|token[=:]\s*)[^\s,;]+")
 _URL = re.compile(r"https?://[^\s]+")
 _JSON_SECRET = re.compile(
@@ -56,30 +47,26 @@ def trim_detail(detail: str | None) -> str | None:
     return safe[:MAX_DETAIL_CHARS] or None
 
 
-def _safe_label(value: object, fallback: str) -> str:
-    if not isinstance(value, str):
-        return fallback
-    value = trim_detail(value) or fallback
-    value = re.sub(r"[^A-Za-z0-9_.:-]+", "_", value)
-    return value[:MAX_SOURCE_CHARS] or fallback
-
-
 class ProviderFault(Exception):
     def __init__(
         self,
-        source: str,
+        source: Subsystem,
         kind: ProviderFaultKind,
         *,
         status: int | None = None,
         detail: str | None = None,
         retryable: bool = False,
+        operation: str | None = None,
     ) -> None:
-        self.source = _safe_label(source, "provider")
+        self.source: Subsystem = source
+        self.operation = operation
         self.kind = kind if kind in _FAULT_KINDS else "unknown"
         self.status = status if isinstance(status, int) and not isinstance(status, bool) else None
         self.detail = trim_detail(detail)
         self.retryable = bool(retryable)
         message = f"{self.source} {self.kind}"
+        if self.operation:
+            message = f"{self.source}.{self.operation} {self.kind}"
         if self.status is not None:
             message = f"{message} (status {self.status})"
         if self.detail:
@@ -87,7 +74,7 @@ class ProviderFault(Exception):
         super().__init__(message)
 
 
-def classify_http(source: str, status: int, detail: str | None = None) -> ProviderFault:
+def classify_http(source: Subsystem, status: int, detail: str | None = None) -> ProviderFault:
     if status == 402:
         return ProviderFault(source, "payment_required", status=status, detail=detail)
     if status in (401, 403):
@@ -101,7 +88,26 @@ def classify_http(source: str, status: int, detail: str | None = None) -> Provid
     return ProviderFault(source, "unknown", status=status, detail=detail)
 
 
-def _category_fault(source: str, error: BaseException) -> ProviderFault | None:
+_MINIMAX_STATUS_KINDS: dict[int, tuple[ProviderFaultKind, bool]] = {
+    1001: ("timeout", True),
+    1002: ("rate_limited", True),
+    1004: ("unauthorized", False),
+    1008: ("payment_required", False),
+    1024: ("unavailable", True),
+    1039: ("rate_limited", True),
+    2013: ("bad_request", False),
+    2049: ("unauthorized", False),
+}
+
+
+def classify_minimax_status(
+    source: Subsystem, code: int, detail: str | None = None
+) -> ProviderFault:
+    kind, retryable = _MINIMAX_STATUS_KINDS.get(code, ("unknown", False))
+    return ProviderFault(source, kind, status=code, detail=detail, retryable=retryable)
+
+
+def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
     category = getattr(error, "category", None) or getattr(error, "error_category", None)
     name = getattr(category, "name", None) or getattr(category, "value", None)
     if not isinstance(name, str):
@@ -121,14 +127,22 @@ def _category_fault(source: str, error: BaseException) -> ProviderFault | None:
     )
 
 
-def classify_exception(source: str, error: BaseException) -> ProviderFault:
+def classify_exception(
+    source: Subsystem, error: BaseException, *, operation: str | None = None
+) -> ProviderFault:
     if isinstance(error, asyncio.CancelledError):
         raise error
     if isinstance(error, ProviderFault):
         return error
-    category_fault = _category_fault(source, error)
-    if category_fault is not None:
-        return category_fault
+    fault = _classify(source, error)
+    fault.operation = operation
+    return fault
+
+
+def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
+    categorized = category_fault(source, error)
+    if categorized is not None:
+        return categorized
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):

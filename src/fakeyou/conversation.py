@@ -5,6 +5,7 @@ import math
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -19,16 +20,15 @@ from pipecat.frames.frames import TranscriptionFrame
 from pipecat.utils.string import match_endofsentence
 
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal, JournalTiming
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError as ConversationError
 from fakeyou.session import MeetingAudio
+from fakeyou.settings import DEFAULTS
 
 ConversationPhase = Literal[
     "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
 ]
-
-MAX_SPOKEN_SENTENCES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,12 +65,24 @@ class ConversationResponder(Protocol):
     ) -> str: ...
 
 
+ToolResultCallback = Callable[[str, str, float], None]
+
+
 class _ToolActivity(AsyncCallbackHandler):
     raise_error = True
 
-    def __init__(self, on_start: Callable[[], None], journal: ProviderJournal | None) -> None:
+    def __init__(
+        self,
+        on_start: Callable[[], None],
+        journal: Journal | None,
+        on_result: ToolResultCallback | None = None,
+    ) -> None:
         self._on_start = on_start
         self._journal = journal
+        self._on_result = on_result
+        self._running: dict[
+            UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
+        ] = {}
 
     async def on_chat_model_start(
         self,
@@ -94,14 +106,33 @@ class _ToolActivity(AsyncCallbackHandler):
     async def on_tool_start(
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
     ) -> None:
+        name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
+        journal = self._journal or Journal("", stdout=False)
+        context = journal.timed(
+            finished="tool_finished", failed="tool_failed", source="agent", tool=str(name)
+        )
+        self._running[run_id] = (str(name), context, context.__enter__())
         self._on_start()
+
+    async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        text = output.text if isinstance(output, BaseMessage) else str(output)
+        name, context, timing = self._running.pop(run_id)
+        timing.fields["output_lines"] = len(text.splitlines())
+        context.__exit__(None, None, None)
+        if self._on_result is not None:
+            self._on_result(name, text, timing.fields["duration_ms"])
+
+    async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        _, context, _ = self._running.pop(run_id)
+        context.__exit__(type(error), error, error.__traceback__)
 
 
 @dataclass(frozen=True, slots=True)
 class LangGraphResponder:
     agent: Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
     thread_id: str
-    journal: ProviderJournal | None = None
+    journal: Journal | None = None
+    on_tool_result: ToolResultCallback | None = None
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
@@ -120,45 +151,31 @@ class LangGraphResponder:
             )
             for event in events
         ]
-        started = time.monotonic()
         try:
             result = await self.agent.ainvoke(
                 {"messages": messages},
                 config={
                     "configurable": {"thread_id": self.thread_id},
                     "recursion_limit": 30,
-                    "callbacks": [_ToolActivity(on_tool_start, self.journal)],
+                    "callbacks": [_ToolActivity(on_tool_start, self.journal, self.on_tool_result)],
                 },
             )
         except Exception as error:
             fault = classify_exception("agent", error)
-            if self.journal is not None:
-                self.journal.record(
-                    "agent_invoke",
-                    events=len(events),
-                    chars_out=0,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    outcome="failed",
-                    kind=fault.kind,
-                )
             raise fault from error
         output = result.get("messages", [])
         if not output or not isinstance(output[-1], AIMessage) or output[-1].tool_calls:
             reply = ""
         else:
             reply = output[-1].text.strip()
-        if self.journal is not None:
-            self.journal.record(
-                "agent_invoke",
-                events=len(events),
-                chars_out=len(reply),
-                duration_ms=(time.monotonic() - started) * 1000,
-                outcome="answered" if reply else "empty",
-            )
         return reply
 
 
-def cap_spoken_reply(reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES) -> str:
+def cap_spoken_reply(
+    reply: str,
+    max_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
+    language: str = DEFAULTS.speech.language,
+) -> str:
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
     if not reply.strip():
@@ -166,7 +183,7 @@ def cap_spoken_reply(reply: str, max_sentences: int = MAX_SPOKEN_SENTENCES) -> s
     remaining = reply.strip()
     sentences: list[str] = []
     for _ in range(max_sentences):
-        boundary = match_endofsentence(remaining, language="id")
+        boundary = match_endofsentence(remaining, language=language)
         if not boundary:
             sentences.append(remaining)
             break
@@ -183,13 +200,16 @@ class ConversationLoop:
         responder: ConversationResponder,
         *,
         on_transition: Callable[[ConversationPhase, ConversationPhase, str], None] | None = None,
-        response_timeout_seconds: float = 60,
+        response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds,
         wake_phrases: Sequence[str] = (),
-        activation_seconds: float = 30,
+        activation_seconds: float = DEFAULTS.conversation.activation_seconds,
         barge_in: bool = False,
+        barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words,
+        max_spoken_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
+        language: str = DEFAULTS.speech.language,
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")
@@ -204,6 +224,9 @@ class ConversationLoop:
             phrase.strip().casefold() for phrase in wake_phrases if phrase.strip()
         )
         self._activation_seconds = activation_seconds
+        self._barge_in_min_words = barge_in_min_words
+        self._max_spoken_sentences = max_spoken_sentences
+        self._language = language
         self._barge_in = barge_in
         self._clock = clock
         self._active_until = 0.0
@@ -216,6 +239,7 @@ class ConversationLoop:
         self._task: asyncio.Task[None] | None = None
         self._failure: ConversationError | None = None
         self._closed = False
+        self._interrupted = False
 
     @property
     def is_busy(self) -> bool:
@@ -259,6 +283,8 @@ class ConversationLoop:
         self._generation += 1
         if self._task is not None and not self._task.done():
             self._move("interrupted", event.id)
+        if self._session is not None and self._barge_in and self._session.is_speaking:
+            self._record("barge_in_detected", trigger="final", words=len(event.text.split()))
         if self._session is not None and (
             self._barge_in
             and self._session.is_speaking
@@ -267,6 +293,24 @@ class ConversationLoop:
         ):
             await self._session.stop_playback()
         self._start_pending()
+
+    async def handle_interim(self, text: str) -> None:
+        session = self._session
+        if (
+            self._closed
+            or self._failure is not None
+            or not self._barge_in
+            or session is None
+            or not session.is_speaking
+            or self._wake_phrases
+            and self._clock() >= self._active_until
+        ):
+            return
+        words = len(text.split())
+        if words >= self._barge_in_min_words and not self._interrupted:
+            self._interrupted = True
+            self._record("barge_in_detected", trigger="interim", words=words)
+            await session.stop_playback()
 
     def _addressed(self, event: TranscriptEvent) -> bool:
         now = self._clock()
@@ -303,7 +347,9 @@ class ConversationLoop:
                 self._on_transition(previous, phase, detail)
             except Exception as error:
                 if self._faults is not None:
-                    self._faults.record(classify_exception("conversation_observer", error))
+                    self._faults.record(
+                        classify_exception("agent", error, operation="transition_observer")
+                    )
 
     def _record(self, event: str, **fields: Any) -> None:
         if self._journal is not None:
@@ -345,14 +391,14 @@ class ConversationLoop:
                         if isinstance(error, asyncio.CancelledError)
                         else "agent_failed",
                         request_id=request_id,
-                        latency_ms=(self._clock() - started) * 1000,
+                        duration_ms=(self._clock() - started) * 1000,
                     )
                     raise
                 else:
                     self._record(
                         "agent_finished",
                         request_id=request_id,
-                        latency_ms=(self._clock() - started) * 1000,
+                        duration_ms=(self._clock() - started) * 1000,
                     )
                 self.raise_if_failed()
                 if generation != self._generation or self._closed:
@@ -361,7 +407,7 @@ class ConversationLoop:
                 if not reply.strip() or session is None:
                     self._move("waiting", event_id)
                     continue
-                spoken = cap_spoken_reply(reply)
+                spoken = cap_spoken_reply(reply, self._max_spoken_sentences, self._language)
                 if spoken != reply.strip():
                     self._record(
                         "reply_capped",
@@ -371,6 +417,7 @@ class ConversationLoop:
                     )
                 self._move("queued", event_id)
                 self.raise_if_failed()
+                self._interrupted = False
                 await session.speak(spoken)
                 if generation == self._generation:
                     self._move("listening", event_id)

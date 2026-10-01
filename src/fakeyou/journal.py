@@ -4,21 +4,17 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
-from fakeyou.provider_faults import trim_detail
+from fakeyou.provider_faults import ProviderFault, trim_detail
+from fakeyou.taxonomy import Subsystem
 
-_EVENT_REGISTRY: set[str] = {
-    "synth_started",
-    "synth_finished",
-    "synth_failed",
-    "stt_reconnect",
-    "agent_invoke",
-}
+JOURNAL_BACKUP_COUNT = 2
+
 _SENSITIVE = {
     "authorization",
     "api_key",
@@ -34,8 +30,23 @@ _SENSITIVE = {
 }
 
 
-def registered_journal_events() -> frozenset[str]:
-    return frozenset(_EVENT_REGISTRY)
+def journal_path(directory: Path, meeting_id: str) -> Path:
+    return directory / f"{meeting_id}.jsonl"
+
+
+def journal_files(directory: Path, meeting_id: str) -> tuple[Path, ...]:
+    path = journal_path(directory, meeting_id)
+    return (path, *(Path(f"{path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)))
+
+
+@dataclass(slots=True)
+class JournalTiming:
+    fields: dict[str, Any]
+    started_at: float
+
+    @property
+    def elapsed_ms(self) -> float:
+        return (time.monotonic() - self.started_at) * 1000
 
 
 def _safe_value(key: str, value: Any) -> Any:
@@ -46,13 +57,15 @@ def _safe_value(key: str, value: Any) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, dict):
-        return {str(k): _safe_value(str(k), v) for k, v in value.items()}
+        return {
+            str(k): _safe_value(str(k), v) for k, v in value.items() if str(k).lower() != "text"
+        }
     if isinstance(value, (list, tuple)):
         return [_safe_value(key, item) for item in value]
     return f"<{type(value).__name__}>"
 
 
-class ProviderJournal:
+class Journal:
     def __init__(
         self,
         meeting_id: str,
@@ -70,106 +83,111 @@ class ProviderJournal:
         self._path = Path(path) if path is not None else None
         self._max_bytes = max(0, max_bytes)
         self._file_handler: RotatingFileHandler | None = None
-        self._started: dict[str, float] = {}
-        self._lock = Lock()
+        self._started: dict[str, JournalTiming] = {}
+        self._logger = logging.Logger(f"fakeyou.journal.{uuid.uuid4().hex}")
+        self._logger.propagate = False
         if self._path is not None:
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 handler = RotatingFileHandler(
                     self._path,
                     maxBytes=max(1, self._max_bytes),
-                    backupCount=2,
+                    backupCount=JOURNAL_BACKUP_COUNT,
                     encoding="utf-8",
                 )
                 handler.setFormatter(logging.Formatter("%(message)s"))
                 self._file_handler = handler
+                self._logger.addHandler(handler)
             except BaseException:
                 self._file_handler = None
 
-    def record(self, event: str, **fields: Any) -> None:
+    def record(self, event: str, *, source: Subsystem, **fields: Any) -> str | None:
         try:
-            _EVENT_REGISTRY.add(event)
+            at = self._now().isoformat()
             row: dict[str, Any] = {
                 "event": event,
                 "meeting_id": self._meeting_id,
-                "at": self._now().isoformat(),
+                "at": at,
+                "source": source,
             }
-            row.update({str(key): _safe_value(str(key), value) for key, value in fields.items()})
+            row.update(_safe_value("", fields))
             line = _encode_bounded(row, self._max_bytes)
-            with self._lock:
-                if self._file_handler is not None:
-                    try:
-                        self._file_handler.emit(
-                            logging.LogRecord(
-                                "fakeyou.journal",
-                                logging.INFO,
-                                __file__,
-                                0,
-                                line.rstrip("\n"),
-                                (),
-                                None,
-                            )
-                        )
-                    except BaseException:
-                        pass
-                try:
-                    if self._emit is not None:
-                        self._emit(line.rstrip("\n"))
-                    elif self._stdout:
-                        print(line, end="", flush=True)
-                except BaseException:
-                    pass
+            try:
+                self._logger.info(line.rstrip("\n"))
+            except BaseException:
+                pass
+            try:
+                if self._emit is not None:
+                    self._emit(line.rstrip("\n"))
+                elif self._stdout:
+                    print(line, end="", flush=True)
+            except BaseException:
+                pass
+            return at
         except BaseException:
-            return
+            return None
 
     def close(self) -> None:
-        with self._lock:
-            handler = self._file_handler
-            self._file_handler = None
-            if handler is not None:
-                try:
-                    handler.close()
-                except BaseException:
-                    pass
-
-    def request_started(
-        self, request_id: str | None = None, *, source: str, operation: str, **fields: Any
-    ) -> str:
-        identifier = request_id or uuid.uuid4().hex
-        self._started[identifier] = time.monotonic()
-        self.record(
-            "request_started", request_id=identifier, source=source, operation=operation, **fields
-        )
-        return identifier
-
-    def request_finished(
-        self, request_id: str, *, elapsed_ms: float | None = None, **fields: Any
-    ) -> None:
-        elapsed = elapsed_ms if elapsed_ms is not None else self._elapsed(request_id)
-        self.record("request_finished", request_id=request_id, elapsed_ms=elapsed, **fields)
-        self._started.pop(request_id, None)
-
-    def request_failed(
-        self, request_id: str, *, elapsed_ms: float | None = None, **fields: Any
-    ) -> None:
-        elapsed = elapsed_ms if elapsed_ms is not None else self._elapsed(request_id)
-        self.record("request_failed", request_id=request_id, elapsed_ms=elapsed, **fields)
-        self._started.pop(request_id, None)
-
-    def _elapsed(self, request_id: str) -> float | None:
-        started = self._started.get(request_id)
-        return None if started is None else round((time.monotonic() - started) * 1000, 3)
+        handler, self._file_handler = self._file_handler, None
+        if handler is not None:
+            self._logger.removeHandler(handler)
+            try:
+                handler.close()
+            except BaseException:
+                pass
 
     @contextmanager
-    def request(self, *, source: str, operation: str, **fields: Any) -> Iterator[str]:
-        request_id = self.request_started(source=source, operation=operation, **fields)
+    def timed(
+        self,
+        *,
+        started: str | None = None,
+        finished: str,
+        failed: str,
+        source: Subsystem,
+        elapsed_key: str = "duration_ms",
+        **fields: Any,
+    ) -> Iterator[JournalTiming]:
+        timing = JournalTiming(
+            {"request_id": uuid.uuid4().hex, "source": source, **fields}, time.monotonic()
+        )
+        if started is not None:
+            self.record(started, **timing.fields)
         try:
-            yield request_id
-        except BaseException as error:
-            self.request_failed(request_id, error=type(error).__name__)
+            yield timing
+        except Exception as error:
+            timing.fields.setdefault(elapsed_key, timing.elapsed_ms)
+            if isinstance(error, ProviderFault):
+                timing.fields["kind"] = error.kind
+            timing.fields.setdefault("error", type(error).__name__)
+            self.record(failed, **timing.fields)
             raise
         else:
-            self.request_finished(request_id)
+            timing.fields.setdefault(elapsed_key, timing.elapsed_ms)
+            self.record(finished, **timing.fields)
+
+    def request_started(
+        self, request_id: str | None = None, *, source: Subsystem, operation: str, **fields: Any
+    ) -> str:
+        identifier = request_id or uuid.uuid4().hex
+        timing = JournalTiming(
+            {"request_id": identifier, "source": source, "operation": operation}, time.monotonic()
+        )
+        self._started[identifier] = timing
+        self.record("request_started", **{**timing.fields, **fields})
+        return identifier
+
+    def request_finished(self, request_id: str, **fields: Any) -> None:
+        self._finish_request(request_id, "request_finished", fields)
+
+    def request_failed(self, request_id: str, **fields: Any) -> None:
+        self._finish_request(request_id, "request_failed", fields)
+
+    def _finish_request(self, request_id: str, event: str, fields: dict[str, Any]) -> None:
+        timing = self._started.pop(request_id, None)
+        if timing is None:
+            self.record(event, request_id=request_id, duration_ms=None, **fields)
+            return
+        self.record(event, **{**timing.fields, "duration_ms": timing.elapsed_ms, **fields})
 
 
 def _encode_bounded(row: dict[str, Any], max_bytes: int) -> str:

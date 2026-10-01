@@ -1,35 +1,47 @@
-import asyncio
-import time
-import uuid
-from collections.abc import AsyncIterator, Sequence
-from typing import Literal, cast
+import json
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import aclosing
+from typing import Any, cast, get_args
 
 import httpx2
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, Omit
-from openai.types.audio.speech_create_params import Voice
+from openai import AsyncOpenAI
+from openai.types.audio.speech_create_params import SpeechCreateParams, Voice
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.services.openai.tts import VALID_VOICES
 from pipecat.transcriptions.language import Language
 
-from fakeyou.journal import ProviderJournal
-from fakeyou.provider_faults import classify_exception
-
-MuseMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
+from fakeyou.invariants import PCM_CHANNELS, PLAYBACK_SAMPLE_RATE
+from fakeyou.journal import Journal
+from fakeyou.provider_faults import classify_exception, classify_minimax_status
+from fakeyou.settings import DEFAULTS, MiniMaxTTS, STTMode, TTSSettings, require_secret
 
 TTS_HTTP_TIMEOUT = httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 TTS_REQUEST_TIMEOUT_SECONDS = 45.0
-TTS_VOICE = "alloy"
-TTS_MODEL = "gpt-4o-mini-tts"
-TTS_VOICE_INSTRUCTIONS = (
-    "Voice Affect: Warm and relaxed, like a helpful coworker.\n"
-    "Tone: Casual and friendly.\n"
-    "Pacing: Steady and conversational.\n"
-    "Language: Bahasa Indonesia."
-)
+TTS_SAMPLE_RATE = PLAYBACK_SAMPLE_RATE
+TTS_VOICE = DEFAULTS.tts.voice
+TTS_MODEL = DEFAULTS.tts.model
+SPEECH_LANGUAGES = {
+    "id": (Language.ID, "Bahasa Indonesia", "Indonesian"),
+    "en": (Language.EN, "English", "English"),
+}
 
 
-def create_tts_http_client() -> DefaultAsyncHttpxClient:
-    return DefaultAsyncHttpxClient(timeout=TTS_HTTP_TIMEOUT)
+def tts_voice_instructions(language: str) -> str:
+    return (
+        "Voice Affect: Warm and relaxed, like a helpful coworker.\n"
+        "Tone: Casual and friendly.\n"
+        "Pacing: Steady and conversational.\n"
+        f"Language: {SPEECH_LANGUAGES[language][1]}."
+    )
+
+
+TTS_VOICE_INSTRUCTIONS = tts_voice_instructions(DEFAULTS.speech.language)
+
+
+MINIMAX_TTS_URL = MiniMaxTTS().base_url
+MINIMAX_TTS_MODEL = MiniMaxTTS().model
+MINIMAX_TTS_VOICE = MiniMaxTTS().voice
+MINIMAX_LANGUAGE_BOOST = SPEECH_LANGUAGES[DEFAULTS.speech.language][2]
 
 
 def create_muse_stt(
@@ -38,20 +50,23 @@ def create_muse_stt(
     language: Language | str | None = Language.ID,
     language_bias: Sequence[Language] | None = None,
     keywords: Sequence[str] | None = None,
-    mode: MuseMode = "ENDPOINTING",
+    mode: STTMode = DEFAULTS.stt.mode,
+    model: str = DEFAULTS.stt.model,
+    url: str = DEFAULTS.stt.url,
     sample_rate: int | None = None,
     service_class: type[MetaSTTService] = MetaSTTService,
 ) -> MetaSTTService:
-    if mode not in {"ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"}:
+    if mode not in get_args(STTMode):
         raise ValueError(f"unsupported Muse mode: {mode}")
     settings = MetaSTTService.Settings(
+        model=model,
         language=language,
         language_bias=list(language_bias) if language_bias is not None else None,
         keywords=list(keywords) if keywords is not None else None,
         mode=mode,
         emit_audio_progress=False,
     )
-    return service_class(api_key=api_key, sample_rate=sample_rate, settings=settings)
+    return service_class(api_key=api_key, url=url, sample_rate=sample_rate, settings=settings)
 
 
 class OpenAISpeechSynthesizer:
@@ -59,12 +74,13 @@ class OpenAISpeechSynthesizer:
         self,
         *,
         api_key: str | None = None,
+        base_url: str = DEFAULTS.tts.base_url,
         voice: str = TTS_VOICE,
         model: str = TTS_MODEL,
         instructions: str | None = TTS_VOICE_INSTRUCTIONS,
         speed: float | None = None,
         client: AsyncOpenAI | None = None,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         if voice not in VALID_VOICES:
             raise ValueError(f"unsupported OpenAI voice: {voice}")
@@ -73,112 +89,163 @@ class OpenAISpeechSynthesizer:
         self._instructions = instructions
         self._speed = speed
         self._journal = journal
-        self._http_client: DefaultAsyncHttpxClient | None
-        if client is None:
-            self._http_client = create_tts_http_client()
-            self._client = AsyncOpenAI(
-                api_key=api_key, http_client=self._http_client, max_retries=0
-            )
-        else:
-            self._http_client = None
-            self._client = client
+        self._owns_client = client is None
+        self._client = client or AsyncOpenAI(
+            api_key=api_key, base_url=base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
+        )
 
-    async def synthesize(self, text: str) -> bytes:
-        if not text.strip():
-            raise ValueError("cannot synthesize blank text")
-        started = time.monotonic()
-        request_id = uuid.uuid4().hex
-        if self._journal is not None:
-            self._journal.record("synth_started", request_id=request_id, chars=len(text))
-        try:
-            response = await self._client.audio.speech.create(
-                model=self._model,
-                voice=cast(Voice, self._voice),
-                input=text,
-                instructions=self._instructions if self._instructions is not None else Omit(),
-                response_format="pcm",
-                speed=self._speed if self._speed is not None else Omit(),
-                timeout=TTS_REQUEST_TIMEOUT_SECONDS,
-            )
-            audio = response.read()
-        except Exception as error:
-            fault = classify_exception("tts", error)
-            if self._journal is not None:
-                self._journal.record(
-                    "synth_failed",
-                    request_id=request_id,
-                    kind=fault.kind,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                )
-            raise fault from error
-        if self._journal is not None:
-            self._journal.record(
-                "synth_finished",
-                request_id=request_id,
-                chars=len(text),
-                bytes_out=len(audio),
-                duration_ms=(time.monotonic() - started) * 1000,
-            )
-        return audio
-
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
-        if not text.strip():
-            raise ValueError("cannot synthesize blank text")
-        started = time.monotonic()
-        request_id = uuid.uuid4().hex
-        first_chunk_at: float | None = None
-        total = 0
-        if self._journal is not None:
-            self._journal.record(
-                "synth_started", request_id=request_id, chars=len(text), streaming=True
-            )
-        try:
-            response_context = self._client.audio.speech.with_streaming_response.create(
-                model=self._model,
-                voice=cast(Voice, self._voice),
-                input=text,
-                instructions=self._instructions if self._instructions is not None else Omit(),
-                response_format="pcm",
-                stream_format="audio",
-                speed=self._speed if self._speed is not None else Omit(),
-                timeout=TTS_REQUEST_TIMEOUT_SECONDS,
-            )
-            async with response_context as response:
-                async for chunk in response.iter_bytes():
-                    if first_chunk_at is None:
-                        first_chunk_at = time.monotonic()
-                    total += len(chunk)
-                    yield chunk
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            fault = classify_exception("tts", error)
-            if self._journal is not None:
-                self._journal.record(
-                    "synth_failed",
-                    request_id=request_id,
-                    kind=fault.kind,
-                    bytes_out=total,
-                    first_chunk_latency_ms=(first_chunk_at - started) * 1000
-                    if first_chunk_at
-                    else None,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                )
-            raise fault from error
-        if self._journal is not None:
-            self._journal.record(
-                "synth_finished",
-                request_id=request_id,
-                chars=len(text),
-                bytes_out=total,
-                first_chunk_latency_ms=(first_chunk_at - started) * 1000
-                if first_chunk_at
-                else None,
-                duration_ms=(time.monotonic() - started) * 1000,
-                streaming=True,
-            )
+    def stream(self, text: str) -> AsyncIterator[bytes]:
+        return _journaled_stream(self._journal, text, self._stream_pcm)
 
     async def aclose(self) -> None:
-        if self._http_client is not None:
-            await self._http_client.aclose()
-            self._http_client = None
+        if self._owns_client:
+            await self._client.close()
+            self._owns_client = False
+
+    def _arguments(self, text: str) -> SpeechCreateParams:
+        arguments: SpeechCreateParams = {
+            "model": self._model,
+            "voice": cast(Voice, self._voice),
+            "input": text,
+            "response_format": "pcm",
+        }
+        if self._instructions is not None:
+            arguments["instructions"] = self._instructions
+        if self._speed is not None:
+            arguments["speed"] = self._speed
+        return arguments
+
+    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
+        arguments = self._arguments(text)
+        arguments["stream_format"] = "audio"
+        async with self._client.audio.speech.with_streaming_response.create(
+            **arguments,
+            timeout=TTS_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
+            async for chunk in response.iter_bytes():
+                yield chunk
+
+
+class MiniMaxSpeechSynthesizer:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        voice: str = MINIMAX_TTS_VOICE,
+        model: str = MINIMAX_TTS_MODEL,
+        language_boost: str = MINIMAX_LANGUAGE_BOOST,
+        url: str = MINIMAX_TTS_URL,
+        client: httpx2.AsyncClient | None = None,
+        journal: Journal | None = None,
+    ) -> None:
+        self._headers = {"Authorization": f"Bearer {api_key}"}
+        self._voice = voice
+        self._model = model
+        self._language_boost = language_boost
+        self._url = url
+        self._journal = journal
+        self._owns_client = client is None
+        self._client = client or httpx2.AsyncClient(timeout=TTS_HTTP_TIMEOUT)
+
+    def stream(self, text: str) -> AsyncIterator[bytes]:
+        return _journaled_stream(self._journal, text, self._stream_pcm)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+            self._owns_client = False
+
+    def _payload(self, text: str) -> dict[str, Any]:
+        return {
+            "model": self._model,
+            "text": text,
+            "stream": True,
+            "language_boost": self._language_boost,
+            "voice_setting": {"voice_id": self._voice},
+            "audio_setting": {
+                "sample_rate": TTS_SAMPLE_RATE,
+                "format": "pcm",
+                "channel": PCM_CHANNELS,
+            },
+            "stream_options": {"exclude_aggregated_audio": True},
+        }
+
+    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
+        async with self._client.stream(
+            "POST", self._url, headers=self._headers, json=self._payload(text)
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                event = json.loads(line.removeprefix("data:"))
+                if event.get("extra_info") is not None:
+                    _minimax_audio(event)
+                    return
+                audio = _minimax_audio(event)
+                if audio:
+                    yield audio
+
+
+def create_speech_synthesizer(
+    settings: TTSSettings,
+    *,
+    language: str = DEFAULTS.speech.language,
+    journal: Journal | None = None,
+) -> OpenAISpeechSynthesizer | MiniMaxSpeechSynthesizer:
+    api_key = require_secret(settings.api_key, "FAKEYOU_TTS__API_KEY")
+    if isinstance(settings, MiniMaxTTS):
+        return MiniMaxSpeechSynthesizer(
+            api_key=api_key,
+            voice=settings.voice,
+            model=settings.model,
+            url=settings.base_url,
+            language_boost=SPEECH_LANGUAGES[language][2],
+            journal=journal,
+        )
+    return OpenAISpeechSynthesizer(
+        api_key=api_key,
+        voice=settings.voice,
+        model=settings.model,
+        base_url=settings.base_url,
+        instructions=tts_voice_instructions(language),
+        journal=journal,
+    )
+
+
+def _minimax_audio(body: dict[str, Any]) -> bytes | None:
+    status = body.get("base_resp") or {}
+    code = status.get("status_code", 0)
+    if code:
+        raise classify_minimax_status("tts", code, status.get("status_msg"))
+    audio = (body.get("data") or {}).get("audio")
+    return bytes.fromhex(audio) if audio else None
+
+
+async def _journaled_stream(
+    journal: Journal | None, text: str, open_stream: Callable[[str], AsyncGenerator[bytes]]
+) -> AsyncGenerator[bytes]:
+    if not text.strip():
+        raise ValueError("cannot synthesize blank text")
+    journal = journal or Journal("", stdout=False)
+    with journal.timed(
+        started="synthesis_started",
+        finished="synthesis_finished",
+        failed="synthesis_failed",
+        source="tts",
+        chars=len(text),
+        streaming=True,
+    ) as timing:
+        timing.fields.update(bytes_out=0, first_chunk_ms=None)
+        try:
+            async with aclosing(open_stream(text)) as chunks:
+                async for chunk in chunks:
+                    if timing.fields["first_chunk_ms"] is None:
+                        timing.fields["first_chunk_ms"] = timing.elapsed_ms
+                    timing.fields["bytes_out"] += len(chunk)
+                    yield chunk
+        except Exception as error:
+            fault = classify_exception("tts", error)
+            if fault is error:
+                raise
+            raise fault from error

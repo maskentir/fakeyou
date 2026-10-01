@@ -11,7 +11,6 @@ from fakeyou.deaf import (
     rms_level,
 )
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
 
 
 @pytest.fixture
@@ -36,14 +35,14 @@ def test_transcripts_do_not_fake_capture_heartbeat(activity):
     capture.observe_transcript(False)
     capture.observe_transcript(True)
     assert capture.snapshot().frames_delivered == 0
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "capture_fault"
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_audio_frames"
 
 
 def test_stopped_capture_is_fault_even_without_speech(activity):
     capture, clock = activity
     capture.observe_audio()
     clock[0] += 31
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "capture_fault"
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_audio_frames"
 
 
 def test_speech_without_final_becomes_stt_fault(activity):
@@ -54,7 +53,7 @@ def test_speech_without_final_becomes_stt_fault(activity):
     clock[0] += 120
     capture.observe_audio()
     capture.observe_transcript(False)
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "stt_fault"
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_transcripts"
     capture.observe_transcript(True)
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "hearing"
 
@@ -97,26 +96,26 @@ def test_unknown_presence_keeps_recent_remote_presence_sticky(activity):
     snapshot = capture.snapshot()
     assert snapshot.remote_participants == 2
     assert snapshot.presence_at == 1000.0
-    assert evaluate_deafness(snapshot, clock[0], deaf_grace_seconds=0) == "capture_silent"
+    assert evaluate_deafness(snapshot, clock[0], deaf_grace_seconds=0) == "silent_capture"
 
 
 def test_capture_failure_grace_resets_after_recovery(activity):
     capture, _ = activity
     monitor = DeafMonitor(activity=capture)
-    assert monitor.note_tick(1000, "capture_fault") == "capture_fault"
-    assert monitor.note_tick(1119, "capture_fault") == "restate"
+    assert monitor.note_tick(1000, "no_audio_frames") == "no_audio_frames"
+    assert monitor.note_tick(1119, "no_audio_frames") == "restate"
     assert monitor.note_tick(1120, "silent") is None
-    assert monitor.note_tick(1130, "capture_fault") == "capture_fault"
-    assert monitor.note_tick(1250, "capture_fault") == "terminal"
+    assert monitor.note_tick(1130, "no_audio_frames") == "no_audio_frames"
+    assert monitor.note_tick(1250, "no_audio_frames") == "terminal"
 
 
-def test_fault_reports_repeat_only_every_sixty_seconds(activity):
+def test_fault_reports_repeat_only_every_sixty_seconds(journal, activity):
     capture, _ = activity
-    reporter = FaultReporter(log=lambda _: None)
-    monitor = DeafMonitor(activity=capture, reporter=reporter, deaf_grace_seconds=600)
-    assert monitor.note_tick(1000, "stt_fault") == "repair"
-    assert monitor.note_tick(1059, "stt_fault") is None
-    assert monitor.note_tick(1060, "stt_fault") == "restate"
+    reporter = FaultReporter(journal=journal)
+    monitor = DeafMonitor(activity=capture, faults=reporter, deaf_grace_seconds=600)
+    assert monitor.note_tick(1000, "no_transcripts") == "repair"
+    assert monitor.note_tick(1059, "no_transcripts") is None
+    assert monitor.note_tick(1060, "no_transcripts") == "restate"
     assert reporter.total() == 2
 
 
@@ -156,7 +155,7 @@ def test_silence_with_witnesses_past_grace_is_capture_silent(activity):
     clock[0] += 121
     capture.observe_audio(energy=0.0, duration_ms=20.0)
     capture.observe_presence(2)
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "capture_silent"
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent_capture"
 
 
 def test_capture_silent_requires_grace_frames_presence_and_no_energy(activity):
@@ -183,30 +182,29 @@ def test_capture_silent_ignores_stale_or_empty_presence(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_capture_silent_records_once_restates_and_never_terminals(activity):
+def test_capture_silent_records_once_restates_and_never_terminals(journal, activity):
     capture, clock = activity
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append, stdout=False)
-    reporter = FaultReporter(log=lambda _: None)
-    monitor = DeafMonitor(activity=capture, reporter=reporter, journal=journal)
-    assert monitor.note_tick(1000, "capture_silent") == "capture_silent"
+    lines = journal.lines
+    reporter = FaultReporter(journal=journal)
+    monitor = DeafMonitor(activity=capture, faults=reporter, journal=journal)
+    assert monitor.note_tick(1000, "silent_capture") == "silent_capture"
     assert reporter.total() == 0
     assert len(lines) == 1
-    assert monitor.note_tick(1059, "capture_silent") is None
-    assert monitor.note_tick(1060, "capture_silent") == "restate"
+    assert monitor.note_tick(1059, "silent_capture") is None
+    assert monitor.note_tick(1060, "silent_capture") == "restate"
     assert reporter.total() == 0
     assert len(lines) == 2
-    assert monitor.note_tick(2000, "capture_silent") == "restate"
+    assert monitor.note_tick(2000, "silent_capture") == "restate"
     assert monitor.note_tick(2001, "silent") is None
-    assert monitor.note_tick(2002, "capture_silent") == "capture_silent"
+    assert monitor.note_tick(2002, "silent_capture") == "silent_capture"
 
 
-def test_missing_capture_heartbeat_is_reported_as_fault(activity):
+def test_missing_capture_heartbeat_is_reported_as_fault(journal, activity):
     capture, clock = activity
-    reporter = FaultReporter(log=lambda _: None)
-    monitor = DeafMonitor(activity=capture, reporter=reporter, deaf_grace_seconds=120)
+    reporter = FaultReporter(journal=journal)
+    monitor = DeafMonitor(activity=capture, faults=reporter, deaf_grace_seconds=120)
     capture.observe_presence(2)
     clock[0] += 31
-    assert monitor.verdict(clock[0]) == "capture_fault"
-    assert monitor.note_tick(clock[0], "capture_fault") == "capture_fault"
+    assert monitor.verdict(clock[0]) == "no_audio_frames"
+    assert monitor.note_tick(clock[0], "no_audio_frames") == "no_audio_frames"
     assert reporter.total() == 1

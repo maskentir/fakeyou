@@ -172,3 +172,33 @@ async def test_live_tls_to_openai_opt_in() -> None:
     result = await probe_host("api.openai.com", timeout_seconds=10.0)
 
     assert result.ok is True
+
+
+@pytest.mark.parametrize("scheme", ["bolt+ssc", "neo4j+ssc"])
+async def test_self_signed_neo4j_scheme_accepts_local_certificate(scheme):
+    from fakeyou.preflight import probe_endpoint
+
+    server = await _serve_tls_once()
+    port = server.sockets[0].getsockname()[1]
+    try:
+        result = await probe_endpoint(f"{scheme}://127.0.0.1:{port}")
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert result.ok, result.detail
+    assert result.detail == "tls handshake ok"
+
+
+@pytest.mark.parametrize("scheme", ["bolt+s", "neo4j+s", "https", "wss"])
+async def test_verified_scheme_rejects_untrusted_local_certificate(scheme):
+    from fakeyou.preflight import probe_endpoint
+
+    server = await _serve_tls_once()
+    port = server.sockets[0].getsockname()[1]
+    try:
+        result = await probe_endpoint(f"{scheme}://127.0.0.1:{port}")
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert not result.ok
+    assert "CERTIFICATE_VERIFY_FAILED" in result.detail

@@ -5,9 +5,11 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from fakeyou.provider_faults import trim_detail
+from fakeyou.settings import DEFAULTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +45,7 @@ def provider_probe_hosts(
     return tuple(hosts)
 
 
-def _endpoint_parts(endpoint: str) -> tuple[str, int, bool] | None:
+def _endpoint_parts(endpoint: str) -> tuple[str, int, bool, bool] | None:
     raw = endpoint if "://" in endpoint else f"https://{endpoint}"
     try:
         parsed = urlparse(raw)
@@ -51,24 +53,49 @@ def _endpoint_parts(endpoint: str) -> tuple[str, int, bool] | None:
         if not host:
             return None
         scheme = parsed.scheme.lower()
-        if scheme not in {"http", "https", "ws", "wss"}:
+        if scheme not in {
+            "http",
+            "https",
+            "ws",
+            "wss",
+            "bolt",
+            "neo4j",
+            "bolt+s",
+            "neo4j+s",
+            "bolt+ssc",
+            "neo4j+ssc",
+        }:
             return None
-        secure = scheme in {"https", "wss"}
-        return host, parsed.port or (443 if secure else 80), secure
+        secure = scheme in {"https", "wss", "bolt+s", "neo4j+s", "bolt+ssc", "neo4j+ssc"}
+        return (
+            host,
+            parsed.port
+            or (7687 if scheme.startswith(("bolt", "neo4j")) else 443 if secure else 80),
+            secure,
+            scheme not in {"bolt+ssc", "neo4j+ssc"},
+        )
     except (ValueError, UnicodeError):
         return None
 
 
 async def probe_endpoint(
-    endpoint: str, *, timeout_seconds: float | None = 5.0, ssl_context: ssl.SSLContext | None = None
+    endpoint: str,
+    *,
+    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> ProbeResult:
     started = time.monotonic()
     parts = _endpoint_parts(endpoint)
     if parts is None:
         return ProbeResult(_safe_endpoint(endpoint), False, 0.0, "invalid endpoint")
-    host, port, secure = parts
+    host, port, secure, verify_certificate = parts
     try:
-        context = ssl_context or ssl.create_default_context() if secure else None
+        context = ssl_context if secure else None
+        if secure and context is None:
+            context = ssl.create_default_context()
+            if not verify_certificate:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
         server_name = host if secure and _is_dns_name(host) else None
         operation = _connect_and_close(host, port, context, server_name)
         if timeout_seconds is None:
@@ -88,12 +115,11 @@ async def probe_endpoint(
 async def probe_host(
     host: str,
     *,
-    timeout_seconds: float | None = 5.0,
+    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
     port: int = 443,
     ssl_context: ssl.SSLContext | None = None,
 ) -> ProbeResult:
-    scheme = "https" if port == 443 else "https"
-    endpoint = f"{scheme}://{host}:{port}"
+    endpoint = f"https://{host}:{port}"
     result = await probe_endpoint(
         endpoint, timeout_seconds=timeout_seconds, ssl_context=ssl_context
     )
@@ -151,20 +177,17 @@ def _safe_endpoint(endpoint: str) -> str:
 async def run_preflight(
     hosts: tuple[str, ...] | list[str],
     *,
-    budget_seconds: float = 5.0,
+    budget_seconds: float = DEFAULTS.preflight.budget_seconds,
     probe: Callable[[str], Awaitable[ProbeResult]] | None = None,
 ) -> list[ProbeResult]:
-    endpoints = tuple(hosts)
-    check = probe or _default_probe
-
-    async def invoke(endpoint: str) -> ProbeResult:
-        return await check(endpoint)
+    endpoints = tuple(dict.fromkeys(hosts))
+    check = probe or partial(probe_endpoint, timeout_seconds=None)
 
     semaphore = asyncio.Semaphore(5)
 
     async def bounded(endpoint: str) -> ProbeResult:
         async with semaphore:
-            return await invoke(endpoint)
+            return await check(endpoint)
 
     tasks: list[asyncio.Task[ProbeResult]] = [
         asyncio.create_task(bounded(endpoint)) for endpoint in endpoints
@@ -200,7 +223,3 @@ async def run_preflight(
         else:
             results.append(ProbeResult(endpoint, False, 0.0, "invalid probe result"))
     return results
-
-
-async def _default_probe(endpoint: str) -> ProbeResult:
-    return await probe_endpoint(endpoint, timeout_seconds=None)

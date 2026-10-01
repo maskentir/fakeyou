@@ -16,60 +16,7 @@ from fakeyou.browser import (
     stable_fingerprint_seed,
     warmup_profile,
 )
-
-
-class _FakeWarmupPage:
-    def __init__(self, fail_on=()):
-        self.visited = []
-        self.fail_on = set(fail_on)
-        self.closed = False
-
-    async def goto(self, url, **kwargs):
-        self.visited.append(url)
-        if url in self.fail_on:
-            raise RuntimeError(f"warmup failed for {url}")
-
-    async def wait_for_timeout(self, delay):
-        return None
-
-    async def close(self):
-        self.closed = True
-
-
-class _FakeWarmupContext:
-    def __init__(self, page):
-        self.page = page
-
-    async def new_page(self):
-        return self.page
-
-
-class _FakeBrowserContext:
-    def __init__(
-        self,
-        *,
-        fail_on_init: bool = False,
-        cancel_on_init: bool = False,
-        fail_on_new_page: bool = False,
-    ):
-        self.fail_on_init = fail_on_init
-        self.cancel_on_init = cancel_on_init
-        self.fail_on_new_page = fail_on_new_page
-        self.closed = 0
-
-    async def add_init_script(self, script):
-        if self.cancel_on_init:
-            raise asyncio.CancelledError
-        if self.fail_on_init:
-            raise RuntimeError("init script failed")
-
-    async def new_page(self):
-        if self.fail_on_new_page:
-            raise RuntimeError("new page failed")
-        return _FakeWarmupPage()
-
-    async def close(self):
-        self.closed += 1
+from tests.fakes import FakeBrowserContext, FakeWarmupContext, FakeWarmupPage
 
 
 async def test_missing_mcp_server_fails_before_browser_launch(tmp_path: Path) -> None:
@@ -192,7 +139,7 @@ def test_profile_is_fresh_without_cookies_file(tmp_path: Path) -> None:
 async def test_prepared_context_closes_browser_when_init_script_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext(fail_on_init=True)
+    context = FakeBrowserContext(fail_on_init=True)
 
     async def launch(*args, **kwargs):
         return context
@@ -216,7 +163,7 @@ async def test_prepared_context_closes_browser_when_init_script_fails(
 async def test_prepared_context_closes_browser_when_setup_is_cancelled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext(cancel_on_init=True)
+    context = FakeBrowserContext(cancel_on_init=True)
 
     async def launch(*args, **kwargs):
         return context
@@ -240,7 +187,7 @@ async def test_prepared_context_closes_browser_when_setup_is_cancelled(
 async def test_prepared_context_closes_browser_when_warmup_new_page_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext(fail_on_new_page=True)
+    context = FakeBrowserContext(fail_on_new_page=True)
 
     async def launch(*args, **kwargs):
         return context
@@ -264,7 +211,7 @@ async def test_prepared_context_closes_browser_when_warmup_new_page_fails(
 async def test_prepared_context_captures_freshness_before_launch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext()
+    context = FakeBrowserContext()
     warmed = []
 
     async def launch(*args, **kwargs):
@@ -297,7 +244,7 @@ async def test_prepared_context_captures_freshness_before_launch(
 async def test_prepared_context_preserves_profile_locks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext()
+    context = FakeBrowserContext()
     lock_names = ("SingletonLock", "SingletonSocket", "SingletonCookie")
     lock_paths = [tmp_path / name for name in lock_names]
     for path in lock_paths:
@@ -325,7 +272,7 @@ async def test_prepared_context_preserves_profile_locks(
 async def test_prepared_context_finishes_launch_before_cancellation_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = _FakeBrowserContext()
+    context = FakeBrowserContext()
     launch_started = asyncio.Event()
     release_launch = asyncio.Event()
     launch_cancelled = asyncio.Event()
@@ -370,8 +317,8 @@ async def test_prepared_context_finishes_launch_before_cancellation_cleanup(
 
 
 async def test_warmup_profile_visits_urls_and_closes_page() -> None:
-    page = _FakeWarmupPage()
-    context = _FakeWarmupContext(page)
+    page = FakeWarmupPage()
+    context = FakeWarmupContext(page)
 
     warmed = await warmup_profile(context, ("https://a.example", "https://b.example"))
 
@@ -381,8 +328,8 @@ async def test_warmup_profile_visits_urls_and_closes_page() -> None:
 
 
 async def test_warmup_profile_continues_past_failures() -> None:
-    page = _FakeWarmupPage(fail_on=("https://a.example",))
-    context = _FakeWarmupContext(page)
+    page = FakeWarmupPage(fail_on=("https://a.example",))
+    context = FakeWarmupContext(page)
 
     warmed = await warmup_profile(context, ("https://a.example", "https://b.example"))
 

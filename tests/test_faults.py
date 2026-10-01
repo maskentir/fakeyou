@@ -2,14 +2,18 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fakeyou.faults import FaultReporter, is_recordable_fault
+from fakeyou.faults import Fault, FaultReporter, record_consumer_fault
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import ProviderFault
+from fakeyou.report import build_session_report, read_journal
 
 
 def _reporter(**overrides):
     values: dict = {"meeting_id": "meeting-1"}
     values.update(overrides)
-    return FaultReporter(**values)
+    return FaultReporter(
+        journal=Journal(values["meeting_id"], now=values.get("now"), emit=values.get("log"))
+    )
 
 
 def test_storm_collapses_to_one_kind_with_first_detail() -> None:
@@ -24,7 +28,16 @@ def test_storm_collapses_to_one_kind_with_first_detail() -> None:
     report = reporter.report()
     assert report == {
         "faults": {
-            "kinds": [{"kind": "unavailable", "count": 18, "status": 503, "detail": "flap 0"}],
+            "kinds": [
+                {
+                    "source": "stt",
+                    "operation": None,
+                    "kind": "unavailable",
+                    "count": 18,
+                    "status": 503,
+                    "detail": "flap 0",
+                }
+            ],
             "total": 18,
         }
     }
@@ -83,7 +96,7 @@ def test_empty_report_is_none() -> None:
 def test_first_of_kind_logs_once_with_meeting_id() -> None:
     lines: list[str] = []
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    reporter = FaultReporter(meeting_id="meeting-7", now=lambda: frozen, log=lines.append)
+    reporter = FaultReporter(journal=Journal("meeting-7", now=lambda: frozen, emit=lines.append))
 
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     reporter.record(ProviderFault("stt", "timeout", detail="slow again", retryable=True))
@@ -98,26 +111,21 @@ def test_first_of_kind_logs_once_with_meeting_id() -> None:
     assert second["kind"] == "unknown"
 
 
-def test_duck_typed_fault_is_recordable() -> None:
+def test_health_fault_is_recorded_with_its_operation() -> None:
     reporter = _reporter()
 
+    reporter.record(Fault(source="stt", kind="no_transcripts", detail="silent provider"))
     reporter.record(
-        SimpleNamespace(source="stt", kind="custom", status=None, detail="native words")
+        ProviderFault("browser", "timeout", operation="camera", detail="slow", retryable=True)
     )
 
-    assert reporter.total() == 1
+    assert reporter.total() == 2
     report = reporter.report()
     assert report is not None
-    assert report["faults"]["kinds"][0]["kind"] == "custom"
-
-
-def test_is_recordable_fault_matches_provider_and_ducks() -> None:
-    assert is_recordable_fault(ProviderFault("stt", "timeout", retryable=True)) is True
-    assert is_recordable_fault(SimpleNamespace(source="stt", kind="x")) is True
-    assert is_recordable_fault(SimpleNamespace(kind="x")) is False
-    assert is_recordable_fault(Exception("x")) is False
-    assert is_recordable_fault(None) is False
-    assert is_recordable_fault("timeout") is False
+    assert [(e["source"], e["operation"], e["kind"]) for e in report["faults"]["kinds"]] == [
+        ("browser", "camera", "timeout"),
+        ("stt", None, "no_transcripts"),
+    ]
 
 
 def test_report_shape_matches_session_result_contract() -> None:
@@ -128,7 +136,14 @@ def test_report_shape_matches_session_result_contract() -> None:
 
     assert set(report or {}) == {"faults"}
     assert set((report or {})["faults"]) == {"kinds", "total"}
-    assert set((report or {})["faults"]["kinds"][0]) == {"kind", "count", "status", "detail"}
+    assert set((report or {})["faults"]["kinds"][0]) == {
+        "source",
+        "operation",
+        "kind",
+        "count",
+        "status",
+        "detail",
+    }
 
 
 def test_same_kind_from_different_sources_is_grouped_separately() -> None:
@@ -151,3 +166,40 @@ def test_fault_count_survives_logging_failure() -> None:
 
     assert reporter.total() == 2
     assert reporter.report()["faults"]["total"] == 2
+
+
+def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
+    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    reporter = FaultReporter(journal=journal)
+
+    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
+    reporter.record(ProviderFault("stt", "timeout", detail="again", retryable=True))
+    journal.close()
+
+    rows = read_journal(path)
+    assert len(rows) == 1
+    assert rows[0]["meeting_id"] == "meeting-7"
+    assert rows[0]["at"] == frozen.isoformat()
+    assert reporter.summaries()[0].first_at == rows[0]["at"]
+    assert reporter.total() == 2
+    assert build_session_report(rows)["faults"] == [
+        {"source": "stt", "kind": "timeout", "count": 1}
+    ]
+
+
+def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path):
+    path = tmp_path / "journal.jsonl"
+    frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
+    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    reporter = FaultReporter(journal=journal)
+    record_consumer_fault(
+        reporter, None, source="stt", detail="transcript_consumer", error=ValueError("private")
+    )
+    journal.close()
+
+    rows = read_journal(path)
+    assert [(row["event"], row["kind"]) for row in rows] == [("fault_recorded", "callback_failed")]
+    assert all(row["at"] == frozen.isoformat() and row["meeting_id"] == "meeting-7" for row in rows)
+    assert "private" not in path.read_text()

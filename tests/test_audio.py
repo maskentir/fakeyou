@@ -4,9 +4,7 @@ import pytest
 from pipecat.frames.frames import (
     EndFrame,
     ErrorCategory,
-    ErrorFrame,
     InputAudioRawFrame,
-    StartFrame,
     TranscriptionFrame,
 )
 from pipecat.pipeline.worker import PipelineWorker
@@ -18,10 +16,13 @@ from fakeyou.audio import (
     MeetingAudioError,
     MeetingAudioSession,
     _CaptureObserver,
-    default_playback_engine,
+    create_playback_engine,
     open_meeting_audio,
 )
 from fakeyou.deaf import CaptureActivity
+from fakeyou.journal import Journal
+from fakeyou.settings import MiniMaxTTS, OpenAITTS, STTSettings
+from tests.fakes import FakeReconnectableSTT, FakeSTT
 
 
 class _Transport:
@@ -59,50 +60,6 @@ class _Input(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class _STT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame("heard", "guest", "", finalized=False), direction
-            )
-            await self.push_frame(
-                TranscriptionFrame("heard", "guest", "", finalized=True), direction
-            )
-        await self.push_frame(frame, direction)
-
-
-class _FailingSTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(ErrorFrame("secret-provider-key"), FrameDirection.UPSTREAM)
-        await self.push_frame(frame, direction)
-
-
-class _StartupFailSTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, StartFrame):
-            await self.push_frame(ErrorFrame("startup-secret"), FrameDirection.UPSTREAM)
-        await self.push_frame(frame, direction)
-
-
-class _ClassifiedErrorSTT(FrameProcessor):
-    def __init__(self, category: ErrorCategory) -> None:
-        super().__init__()
-        self._category = category
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                ErrorFrame("provider hiccup", category=self._category),
-                FrameDirection.UPSTREAM,
-            )
-        await self.push_frame(frame, direction)
-
-
 async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
     engine = _Playback()
     heard: list[str] = []
@@ -113,11 +70,11 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
         received.set()
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=engine,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -141,11 +98,11 @@ async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=transport,
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -161,11 +118,11 @@ async def test_unexpected_worker_exit_is_reported() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(EndFrame())
@@ -173,24 +130,26 @@ async def test_unexpected_worker_exit_is_reported() -> None:
             await asyncio.wait_for(session.wait_failed(), timeout=2)
 
 
-async def test_callback_failure_degrades_without_killing_session() -> None:
+async def test_callback_failure_degrades_without_killing_session(
+    journal,
+) -> None:
     from fakeyou.deaf import CaptureActivity
     from fakeyou.faults import FaultReporter
 
     activity = CaptureActivity()
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         raise ValueError("secret-callback-data")
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
         activity=activity,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -203,7 +162,7 @@ async def test_callback_failure_degrades_without_killing_session() -> None:
         report = reporter.report()
         assert report is not None
         kinds = {entry["kind"]: entry["count"] for entry in report["faults"]["kinds"]}
-        assert kinds.get("callback", 0) >= 1
+        assert kinds.get("callback_failed", 0) >= 1
 
 
 async def test_startup_provider_error_fails_before_timeout() -> None:
@@ -213,11 +172,11 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
     with pytest.raises(MeetingAudioError) as caught:
         async with asyncio.timeout(2):
             async with open_meeting_audio(
-                muse_api_key="muse-secret",
-                openai_api_key="openai-secret",
+                stt_settings=STTSettings(api_key="muse-secret"),
+                tts_settings=OpenAITTS(api_key="openai-secret"),
                 on_transcript=on_transcript,
                 transport=_Transport(),
-                stt=_StartupFailSTT(),
+                stt=FakeSTT(error="startup-secret", finalized=(), startup=True),
                 playback=_Playback(),
             ):
                 pass
@@ -247,10 +206,10 @@ async def test_native_transport_is_terminated_when_construction_fails(monkeypatc
 
     with pytest.raises(MeetingAudioError) as caught:
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            openai_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -270,10 +229,10 @@ async def test_native_transport_without_backend_still_reports_root_error(monkeyp
 
     with pytest.raises(MeetingAudioError, match="initialization failed") as caught:
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            openai_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -307,11 +266,11 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch) -> None:
         pass
 
     context = open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     )
     entering = asyncio.create_task(context.__aenter__())
@@ -343,11 +302,11 @@ async def test_error_handler_registered_before_add_workers(monkeypatch) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ):
         pass
@@ -364,11 +323,11 @@ async def test_pipeline_error_chains_frame_detail() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -411,10 +370,10 @@ async def test_terminate_failure_does_not_mask_initialization_error(monkeypatch)
 
     with pytest.raises(MeetingAudioError, match="initialization failed"):
         async with open_meeting_audio(
-            muse_api_key="muse-secret",
-            openai_api_key="openai-secret",
+            stt_settings=STTSettings(api_key="muse-secret"),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
             on_transcript=on_transcript,
-            stt=_STT(),
+            stt=FakeSTT(),
             playback=_Playback(),
         ):
             pass
@@ -427,11 +386,11 @@ async def test_nonpermanent_stt_error_keeps_session_alive() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.UNKNOWN),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.UNKNOWN),
         playback=engine,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -446,11 +405,11 @@ async def test_permanent_stt_error_fails_session() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.AUTHENTICATION),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
         playback=_Playback(),
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -465,11 +424,11 @@ async def test_injected_playback_engine_is_closed_on_shutdown() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=engine,
     ):
         assert engine.closed is False
@@ -481,16 +440,15 @@ async def test_default_playback_engine_closes_speech_client() -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
     ) as session:
-        owned = session._engine._synthesizer._http_client
-        assert owned is not None
-        assert not owned.is_closed
-    assert owned.is_closed
+        owned = session._engine._synthesizer._client
+        assert not owned.is_closed()
+    assert owned.is_closed()
 
 
 async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> None:
@@ -509,38 +467,13 @@ async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> No
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
     ):
         pass
-
-
-class _InterimOnlySTT(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame("partial", "guest", "", finalized=False), direction
-            )
-        await self.push_frame(frame, direction)
-
-
-class _ExceptionalSTT(FrameProcessor):
-    def __init__(self, exception: Exception) -> None:
-        super().__init__()
-        self._exception = exception
-
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, InputAudioRawFrame):
-            await self.push_frame(
-                ErrorFrame("provider blew up", exception=self._exception),
-                FrameDirection.UPSTREAM,
-            )
-        await self.push_frame(frame, direction)
 
 
 async def test_interim_frames_route_to_on_interim_and_tap() -> None:
@@ -559,12 +492,12 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
         interim_seen.set()
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         on_interim=on_interim,
         transport=_Transport(),
-        stt=_InterimOnlySTT(),
+        stt=FakeSTT("partial", finalized=(False,)),
         playback=_Playback(),
         activity=activity,
     ) as session:
@@ -588,11 +521,11 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_FailingSTT(),
+        stt=FakeSTT(error="secret-provider-key", finalized=()),
         playback=_Playback(),
         activity=activity,
     ) as session:
@@ -603,23 +536,25 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         assert activity.snapshot().available is False
 
 
-async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
+async def test_permanent_error_records_before_kill_with_typed_cause(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.AUTHENTICATION),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         with pytest.raises(MeetingAudioError) as caught:
@@ -632,22 +567,24 @@ async def test_permanent_error_records_before_kill_with_typed_cause() -> None:
         assert cause.retryable is False
 
 
-async def test_nonpermanent_error_records_without_killing() -> None:
+async def test_nonpermanent_error_records_without_killing(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ClassifiedErrorSTT(ErrorCategory.CONNECTIVITY),
+        stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.CONNECTIVITY),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         await asyncio.sleep(0.5)
@@ -658,25 +595,29 @@ async def test_nonpermanent_error_records_without_killing() -> None:
         assert "unavailable" in {entry["kind"] for entry in report["faults"]["kinds"]}
 
 
-async def test_uncategorized_error_falls_back_to_exception_classification() -> None:
+async def test_uncategorized_error_falls_back_to_exception_classification(
+    journal,
+) -> None:
     import httpx2
 
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_ExceptionalSTT(httpx2.ConnectError("socket gone")),
+        stt=FakeSTT(
+            error="provider blew up", finalized=(), exception=httpx2.ConnectError("socket gone")
+        ),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         with pytest.raises(MeetingAudioError) as caught:
@@ -687,22 +628,24 @@ async def test_uncategorized_error_falls_back_to_exception_classification() -> N
         assert cause.retryable is True
 
 
-async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
+async def test_unsupported_stt_reconnect_records_without_attempts(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_STT(),
+        stt=FakeSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         assert session.reconnect_state() == "idle"
         session.request_stt_reconnect("deaf")
@@ -713,30 +656,24 @@ async def test_unsupported_stt_reconnect_records_without_attempts() -> None:
         assert "reconnect_unsupported" in kinds
 
 
-async def test_supported_stt_reconnect_queues_request() -> None:
+async def test_supported_stt_reconnect_queues_request(
+    journal,
+) -> None:
     from fakeyou.faults import FaultReporter
 
-    reporter = FaultReporter(meeting_id="meeting-1")
-
-    class _Reconnectable(FrameProcessor):
-        async def reconnect_when_idle(self) -> None:
-            pass
-
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
-            await super().process_frame(frame, direction)
-            await self.push_frame(frame, direction)
+    reporter = FaultReporter(journal=journal)
 
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
     async with open_meeting_audio(
-        muse_api_key="muse-secret",
-        openai_api_key="openai-secret",
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
         on_transcript=on_transcript,
         transport=_Transport(),
-        stt=_Reconnectable(),
+        stt=FakeReconnectableSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         session.request_stt_reconnect("deaf")
         session.request_stt_reconnect("deaf")
@@ -744,28 +681,19 @@ async def test_supported_stt_reconnect_queues_request() -> None:
         assert reporter.total() == 0
 
 
-async def test_stt_reconnect_lifecycle_is_journaled() -> None:
-    import json
+async def test_stt_reconnect_lifecycle_is_journaled(
+    journal,
+) -> None:
 
     from fakeyou.deaf import CaptureActivity
-    from fakeyou.journal import ProviderJournal
 
-    lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
 
-    class _ReconnectableSTT:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def reconnect_when_idle(self) -> None:
-            self.calls += 1
-
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
-    stt = _ReconnectableSTT()
+    stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
         object(),
         object(),
@@ -788,10 +716,10 @@ async def test_stt_reconnect_lifecycle_is_journaled() -> None:
     assert verdict == "silent"
     assert stt.calls == 1
     assert session.reconnect_state() == "idle"
-    rows = [json.loads(line) for line in lines]
-    assert [(row["event"], row["outcome"]) for row in rows] == [
-        ("stt_reconnect", "queued"),
-        ("stt_reconnect", "ok"),
+    rows = journal.events()
+    assert [(row["event"], row["source"]) for row in rows] == [
+        ("stt_reconnect_queued", "stt"),
+        ("stt_reconnect_finished", "stt"),
     ]
     assert rows[0]["reason"] == "deaf"
     assert rows[1]["attempts"] == 1
@@ -800,20 +728,32 @@ async def test_stt_reconnect_lifecycle_is_journaled() -> None:
 def test_default_playback_engine_streams_tts_to_paplay() -> None:
     import inspect
 
-    engine = default_playback_engine(openai_api_key="k")
+    engine = create_playback_engine(tts_settings=OpenAITTS(api_key="k"))
 
-    assert engine._streaming is True
     assert engine._stream_audio is not None
-    assert inspect.isasyncgenfunction(engine._synthesizer.stream)
+    assert inspect.isasyncgen(engine._synthesizer.stream("hello"))
+
+
+def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
+    from fakeyou.voice import MiniMaxSpeechSynthesizer
+
+    engine = create_playback_engine(
+        tts_settings=MiniMaxTTS(api_key="k", voice="Indonesian_CaringMan")
+    )
+
+    assert isinstance(engine._synthesizer, MiniMaxSpeechSynthesizer)
+    assert engine._synthesizer._voice == "Indonesian_CaringMan"
 
 
 async def test_default_playback_engine_wires_faults_and_journal() -> None:
     from fakeyou.faults import FaultReporter
-    from fakeyou.journal import ProviderJournal
+    from fakeyou.journal import Journal
 
-    reporter = FaultReporter(meeting_id="meeting-1")
-    journal = ProviderJournal("meeting-1", emit=lambda _: None, stdout=False)
-    engine = default_playback_engine(openai_api_key="k", fault_reporter=reporter, journal=journal)
+    reporter = FaultReporter(journal=Journal("meeting-1"))
+    journal = Journal("meeting-1", emit=lambda _: None, stdout=False)
+    engine = create_playback_engine(
+        tts_settings=OpenAITTS(api_key="k"), faults=reporter, journal=journal
+    )
     try:
         assert engine._faults is reporter
         assert engine._journal is journal
@@ -833,7 +773,7 @@ async def test_capture_observer_meters_frame_energy() -> None:
     async def sink(frame, direction):
         return None
 
-    observer.push_frame = sink  # type: ignore[method-assign]
+    observer.push_frame = sink
     tone = struct.pack("<320h", *[int(16384 * math.sin(i / 10)) for i in range(320)])
     await observer.process_frame(
         InputAudioRawFrame(audio=tone, sample_rate=16000, num_channels=1),
@@ -848,3 +788,86 @@ async def test_capture_observer_meters_frame_energy() -> None:
     assert snapshot.frames_delivered == 2
     assert snapshot.energetic_ms == 20.0
     assert snapshot.last_energetic_at is not None
+
+
+async def test_capture_observer_journals_speech_boundaries(
+    journal,
+) -> None:
+
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    observer = _CaptureObserver(CaptureActivity(), journal=journal)
+
+    async def sink(frame, direction):
+        return None
+
+    observer.push_frame = sink
+    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    rows = journal.events()
+    assert [(row["event"], row["source"]) for row in rows] == [
+        ("speech_started", "audio"),
+        ("speech_stopped", "audio"),
+    ]
+    assert all(row["at"] for row in rows)
+
+
+async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() -> None:
+    clock = [100.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    activity.mark_ready()
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    session = MeetingAudioSession(
+        object(), object(), runner_task, _Playback(), activity=activity, now=lambda: clock[0]
+    )
+    clock[0] = 400.0
+    session.mark_admitted()
+    admitted = activity.snapshot()
+    gate.set()
+    with pytest.raises(MeetingAudioError):
+        await asyncio.wait_for(session.wait_failed(), timeout=2)
+    clock[0] = 500.0
+    session.mark_admitted()
+    failed = activity.snapshot()
+
+    assert (admitted.available, admitted.ready_at) == (True, 400.0)
+    assert (failed.available, failed.ready_at) == (False, 400.0)
+
+
+async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path):
+    from fakeyou.report import read_journal
+
+    path = tmp_path / "events.jsonl"
+    journal = Journal("meeting-7", path=path, stdout=False)
+    failed = asyncio.Event()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        failed.set()
+        raise ValueError("private callback data")
+
+    async with open_meeting_audio(
+        stt_settings=STTSettings(api_key="muse-secret"),
+        tts_settings=OpenAITTS(api_key="openai-secret"),
+        on_transcript=on_transcript,
+        transport=_Transport(),
+        stt=FakeSTT(),
+        playback=_Playback(),
+        journal=journal,
+    ) as session:
+        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        await asyncio.wait_for(failed.wait(), timeout=2)
+        session.raise_if_failed()
+    journal.close()
+
+    callbacks = [
+        row
+        for row in read_journal(path)
+        if row["event"] == "fault_recorded" and row["kind"] == "callback_failed"
+    ]
+    assert len(callbacks) == 1
+    assert callbacks[0]["meeting_id"] == "meeting-7"
+    assert callbacks[0]["at"]
+    assert "private callback data" not in path.read_text()

@@ -17,6 +17,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from playwright.async_api import BrowserContext, Page
 
+from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
+
 BROWSER_LAUNCH_ARGS = (
     "--remote-debugging-address=127.0.0.1",
     "--remote-debugging-port=0",
@@ -27,8 +29,6 @@ BROWSER_LAUNCH_ARGS = (
     "--accept-lang=en-US,en",
 )
 
-_WORKER_PULSE_SOURCE = "meeting_audio.monitor"
-_WORKER_PULSE_SINK = "agent_output"
 _MUTE_AUDIO_ARG = "--mute-audio"
 
 THIRD_PARTY_COOKIE_ALLOW_PATTERNS = (
@@ -55,9 +55,9 @@ def profile_is_fresh(profile_dir: str) -> bool:
 
 
 def apply_browser_audio_policy() -> bool:
-    if os.environ.get("PULSE_SOURCE") != _WORKER_PULSE_SOURCE:
+    if os.environ.get("PULSE_SOURCE") != MEETING_MONITOR_SOURCE_NAME:
         return False
-    if os.environ.get("PULSE_SINK") != _WORKER_PULSE_SINK:
+    if os.environ.get("PULSE_SINK") != AGENT_SINK_NAME:
         return False
     from cloakbrowser import config as cloakbrowser_config
 

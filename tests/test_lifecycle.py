@@ -12,7 +12,7 @@ from fakeyou.lifecycle import (
 )
 
 
-def _event(kind: str, attribution: str = "user_action", detail: str = "test") -> dict[str, str]:
+def _event(kind: str, attribution: str = "owner_action", detail: str = "test") -> dict[str, str]:
     return {"kind": kind, "attribution": attribution, "detail": detail}
 
 
@@ -27,7 +27,7 @@ def _send(
     graph: CompiledStateGraph[Any, Any, Any, Any],
     thread: str,
     kind: str,
-    attribution: str = "user_action",
+    attribution: str = "owner_action",
     detail: str = "test",
 ) -> dict[str, Any]:
     return graph.invoke(
@@ -43,11 +43,11 @@ def test_lifecycle_join_and_leave_happy_path() -> None:
 
     assert _send(graph, thread, "join_requested")["phase"] == "lobby"
     assert _send(graph, thread, "admitted", "host_action")["phase"] == "admitted"
-    assert _send(graph, thread, "owner_stop")["phase"] == "leaving"
+    assert _send(graph, thread, "owner_stopped")["phase"] == "leaving"
     result = _send(graph, thread, "leave_sent")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "admitted_then_stopped"
+    assert result["terminal_reason"] == "left_by_owner"
     assert result["external_effects"] == ["join_requested", "leave_requested"]
     assert len(result["evidence"]) == 4
     assert result["evidence"][1]["attribution"] == "host_action"
@@ -85,10 +85,10 @@ def test_lifecycle_lobby_timeout() -> None:
     _start(graph, thread)
     _send(graph, thread, "join_requested")
 
-    result = _send(graph, thread, "lobby_timeout", "system_fault")
+    result = _send(graph, thread, "lobby_timed_out", "system_fault")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "lobby_timeout"
+    assert result["terminal_reason"] == "lobby_timeout_reached"
 
 
 def test_lifecycle_removed_by_host() -> None:
@@ -126,14 +126,14 @@ def test_lifecycle_duration_limit_leaves_with_reason() -> None:
     _send(graph, thread, "join_requested")
     _send(graph, thread, "admitted", "host_action")
 
-    leaving = _send(graph, thread, "duration_limit", "system_fault")
+    leaving = _send(graph, thread, "duration_reached", "system_fault")
 
     assert leaving["phase"] == "leaving"
-    assert leaving["pending_reason"] == "duration_limit"
+    assert leaving["pending_reason"] == "duration_limit_reached"
     result = _send(graph, thread, "leave_sent", "system_fault")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "duration_limit"
+    assert result["terminal_reason"] == "duration_limit_reached"
 
 
 def test_lifecycle_duration_limit_ends_disconnected_session() -> None:
@@ -144,23 +144,23 @@ def test_lifecycle_duration_limit_ends_disconnected_session() -> None:
     _send(graph, thread, "admitted", "host_action")
     _send(graph, thread, "connection_lost", "system_fault")
 
-    result = _send(graph, thread, "duration_limit", "system_fault")
+    result = _send(graph, thread, "duration_reached", "system_fault")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "duration_limit"
+    assert result["terminal_reason"] == "duration_limit_reached"
 
 
 def test_lifecycle_ended_ignores_further_events() -> None:
     graph = create_lifecycle_graph(checkpointer=InMemorySaver())
     thread = "absorbing"
     _start(graph, thread)
-    _send(graph, thread, "owner_stop")
+    _send(graph, thread, "owner_stopped")
     before = graph.get_state({"configurable": {"thread_id": thread}})
 
     result = _send(graph, thread, "admitted", "host_action")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "owner_stop"
+    assert result["terminal_reason"] == "stopped_by_owner"
     assert result["external_effects"] == before.values["external_effects"]
     assert len(result["evidence"]) == len(before.values["evidence"])
 
@@ -203,11 +203,11 @@ def test_lifecycle_state_survives_sqlite_reopen(tmp_path) -> None:
         reopened = second.get_state(config)
 
         assert reopened.values["phase"] == "admitted"
-        second.invoke({"event": _event("owner_stop")}, config)
+        second.invoke({"event": _event("owner_stopped")}, config)
         result = second.invoke({"event": _event("leave_sent")}, config)
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "admitted_then_stopped"
+    assert result["terminal_reason"] == "left_by_owner"
     assert result["external_effects"] == ["join_requested", "leave_requested"]
 
 
