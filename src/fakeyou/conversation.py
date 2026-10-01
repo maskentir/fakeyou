@@ -76,10 +76,13 @@ class _ToolActivity(AsyncCallbackHandler):
         on_start: Callable[[], None],
         journal: Journal | None,
         on_result: ToolResultCallback | None = None,
+        *,
+        transcript_id: str | None = None,
     ) -> None:
         self._on_start = on_start
         self._journal = journal
         self._on_result = on_result
+        self._transcript_id = transcript_id
         self._running: dict[
             UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
         ] = {}
@@ -93,15 +96,24 @@ class _ToolActivity(AsyncCallbackHandler):
         **kwargs: Any,
     ) -> None:
         if self._journal is not None:
-            self._journal.request_started(str(run_id), source="llm", operation="chat")
+            self._journal.request_started(
+                str(run_id), source="llm", operation="chat", transcript_id=self._transcript_id
+            )
 
     async def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs: Any) -> None:
         if self._journal is not None:
-            self._journal.request_finished(str(run_id), source="llm")
+            self._journal.request_finished(
+                str(run_id), source="llm", transcript_id=self._transcript_id
+            )
 
     async def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         if self._journal is not None:
-            self._journal.request_failed(str(run_id), source="llm", error=type(error).__name__)
+            self._journal.request_failed(
+                str(run_id),
+                source="llm",
+                transcript_id=self._transcript_id,
+                error=type(error).__name__,
+            )
 
     async def on_tool_start(
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
@@ -109,7 +121,12 @@ class _ToolActivity(AsyncCallbackHandler):
         name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
         journal = self._journal or Journal("", stdout=False)
         context = journal.timed(
-            finished="tool_finished", failed="tool_failed", source="agent", tool=str(name)
+            started="tool_started",
+            finished="tool_finished",
+            failed="tool_failed",
+            source="agent",
+            tool=str(name),
+            transcript_id=self._transcript_id,
         )
         self._running[run_id] = (str(name), context, context.__enter__())
         self._on_start()
@@ -157,7 +174,14 @@ class LangGraphResponder:
                 config={
                     "configurable": {"thread_id": self.thread_id},
                     "recursion_limit": 30,
-                    "callbacks": [_ToolActivity(on_tool_start, self.journal, self.on_tool_result)],
+                    "callbacks": [
+                        _ToolActivity(
+                            on_tool_start,
+                            self.journal,
+                            self.on_tool_result,
+                            transcript_id=events[-1].id if events else None,
+                        )
+                    ],
                 },
             )
         except Exception as error:

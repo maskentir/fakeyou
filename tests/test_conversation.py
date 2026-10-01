@@ -542,3 +542,107 @@ async def test_interim_barge_in_rearms_for_the_next_reply():
     assert audio.spoken == ["what is next"]
     assert audio.stops == 1
     await loop.close()
+
+
+async def test_model_and_tool_events_carry_their_transcript(journal):
+    from langchain_core.tools import tool
+
+    @tool(description="Search long-term meeting memory for relevant context.")
+    async def recall_meeting_context(query: str) -> str:
+        return "From owner note: The demo is on Friday"
+
+    agent = create_meeting_agent(
+        ToolCallingFakeModel(
+            responses=[
+                recall_call({"query": "demo"}, id="call-1"),
+                AIMessage(content="The demo is on Friday."),
+                AIMessage(content="Tuesday at ten."),
+            ]
+        ),
+        tools=[recall_meeting_context],
+        checkpointer=InMemorySaver(),
+    )
+    responder = LangGraphResponder(agent, "thread", journal=journal)
+
+    assert (
+        await responder.respond([event("t1", "When is the demo?")], lambda: None)
+        == "The demo is on Friday."
+    )
+    assert await responder.respond([event("t2", "What time?")], lambda: None) == "Tuesday at ten."
+
+    assert [row["transcript_id"] for row in journal.events("request_started")] == ["t1", "t1", "t2"]
+    assert [row["transcript_id"] for row in journal.events("request_finished")] == [
+        "t1",
+        "t1",
+        "t2",
+    ]
+    [tool_started] = journal.events("tool_started")
+    assert (tool_started["tool"], tool_started["transcript_id"]) == ("recall_meeting_context", "t1")
+    [tool_finished] = journal.events("tool_finished")
+    assert (tool_finished["tool"], tool_finished["transcript_id"]) == (
+        "recall_meeting_context",
+        "t1",
+    )
+    body = "\n".join(journal.lines)
+    assert "When is the demo?" not in body
+    assert "The demo is on Friday" not in body
+    assert "Tuesday at ten" not in body
+    assert "owner note" not in body
+
+
+async def test_failed_model_request_keeps_transcript_and_error_type(journal):
+    from fakeyou.provider_faults import ProviderFault
+
+    class FailingChatModel(ToolCallingFakeModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("model exploded")
+
+    agent = create_meeting_agent(
+        FailingChatModel(responses=[AIMessage(content="unused")]),
+        checkpointer=InMemorySaver(),
+    )
+    responder = LangGraphResponder(agent, "thread", journal=journal)
+
+    with pytest.raises(ProviderFault):
+        await responder.respond([event("t1", "When is the demo?")], lambda: None)
+
+    [started] = journal.events("request_started")
+    assert started["transcript_id"] == "t1"
+    [failed] = journal.events("request_failed")
+    assert (failed["transcript_id"], failed["error"]) == ("t1", "RuntimeError")
+    assert "When is the demo?" not in "\n".join(journal.lines)
+
+
+async def test_cancelled_tool_run_keeps_transcript_without_content(journal):
+    from langchain_core.tools import tool
+
+    gate = asyncio.Event()
+    begun = asyncio.Event()
+
+    @tool(description="Search long-term meeting memory for relevant context.")
+    async def recall_meeting_context(query: str) -> str:
+        await gate.wait()
+        return "a late answer"
+
+    agent = create_meeting_agent(
+        ToolCallingFakeModel(responses=[recall_call({"query": "demo"}, id="call-1")]),
+        tools=[recall_meeting_context],
+        checkpointer=InMemorySaver(),
+    )
+    responder = LangGraphResponder(agent, "thread", journal=journal)
+    task = asyncio.create_task(
+        responder.respond([event("t1", "When is the demo?")], lambda: begun.set())
+    )
+
+    assert await asyncio.wait_for(begun.wait(), 10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [row["transcript_id"] for row in journal.events("request_started")] == ["t1"]
+    [started_tool] = journal.events("tool_started")
+    assert started_tool["transcript_id"] == "t1"
+    assert journal.events("tool_finished") == []
+    body = "\n".join(journal.lines)
+    assert "When is the demo?" not in body
+    assert "a late answer" not in body

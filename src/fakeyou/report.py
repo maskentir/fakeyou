@@ -1,4 +1,5 @@
 import json
+import math
 import statistics
 from collections import Counter
 from datetime import datetime, timedelta
@@ -9,12 +10,16 @@ from fakeyou.journal import JOURNAL_BACKUP_COUNT
 
 LATENCY_STAGES = (
     "speech_stopped_to_final_seconds",
+    "final_to_agent_seconds",
+    "agent_to_reply_seconds",
     "final_to_reply_seconds",
     "reply_to_first_pcm_seconds",
     "speech_stopped_to_first_pcm_seconds",
 )
 _STAGE_BOUNDS = {
     "speech_stopped_to_final_seconds": ("speech_stopped_at", "final_at"),
+    "final_to_agent_seconds": ("final_at", "agent_at"),
+    "agent_to_reply_seconds": ("agent_at", "reply_at"),
     "final_to_reply_seconds": ("final_at", "reply_at"),
     "reply_to_first_pcm_seconds": ("reply_at", "first_pcm_at"),
     "speech_stopped_to_first_pcm_seconds": ("speech_stopped_at", "first_pcm_at"),
@@ -67,6 +72,9 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     barge_in_triggers = Counter[str]()
     active: dict[str, Any] | None = None
     replying: dict[str, Any] | None = None
+    synthesis_turns: dict[str, str | None] = {}
+    pending: dict[str, Any] = {}
+    excluded = Counter[str]()
     replies = Counter[str]()
     tools: dict[str, Counter[str]] = {}
     episodes: list[dict[str, Any]] = []
@@ -75,7 +83,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     milestones: dict[str, dict[str, Any]] = {}
     for row in rows:
         event = row.get("event")
-        at = datetime.fromisoformat(row["at"]) if "at" in row else None
+        try:
+            at = datetime.fromisoformat(row["at"]) if "at" in row else None
+        except (TypeError, ValueError):
+            at = None
         if event in STARTUP_MILESTONES and row.get("source") == "runtime":
             milestones.setdefault(str(event), {**row, "at": at})
         if event == "speech_stopped":
@@ -92,16 +103,56 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "final_at": at,
                 "tools": [],
                 "outcome": "pending",
+                "llm_count": 0,
+                "llm_ms": 0.0,
+                "recall_count": 0,
+                "recall_ms": 0.0,
+                "incomplete": 0,
             }
             speech_stopped_at = None
         elif event == "agent_started":
             active = _turn_for(turns, row)
+            if active is not None:
+                active["agent_at"] = at
+        elif event == "request_started":
+            if row.get("source") == "llm":
+                request_id = row.get("request_id")
+                if isinstance(request_id, str):
+                    pending[request_id] = row.get("transcript_id")
+        elif event in ("request_finished", "request_failed"):
+            if row.get("source") == "llm":
+                request_id = row.get("request_id")
+                if isinstance(request_id, str):
+                    pending.pop(request_id, None)
+                turn = _transcript_turn(turns, row, excluded)
+                if turn is not None:
+                    turn["llm_count"] += 1
+                    _add_duration(turn, "llm_ms", row.get("duration_ms"), excluded)
+        elif event == "tool_started":
+            request_id = row.get("request_id")
+            if isinstance(request_id, str):
+                pending[request_id] = row.get("transcript_id")
         elif event in ("tool_finished", "tool_failed"):
             name = str(row.get("tool"))
             outcome = "finished" if event == "tool_finished" else "failed"
             tools.setdefault(name, Counter())[outcome] += 1
-            if active is not None:
-                active["tools"].append(name)
+            request_id = row.get("request_id")
+            if isinstance(request_id, str):
+                pending.pop(request_id, None)
+            tool_transcript = row.get("transcript_id")
+            if isinstance(tool_transcript, str):
+                turn = turns.get(tool_transcript)
+                if turn is None:
+                    excluded["unknown_transcript"] += 1
+                else:
+                    turn["tools"].append(name)
+                    if name == "recall_meeting_context":
+                        turn["recall_count"] += 1
+                        _add_duration(turn, "recall_ms", row.get("duration_ms"), excluded)
+            else:
+                excluded["missing_transcript"] += 1
+                if active is not None:
+                    active["tools"].append(name)
         elif event == "agent_finished":
             replying = _turn_for(turns, row)
             if replying is not None:
@@ -115,8 +166,31 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             speak_started_at = at
             if replying is not None:
                 replying.setdefault("speak_at", at)
-        elif event == "synthesis_finished" and replying is not None and "speak_at" in replying:
-            replying.setdefault("first_pcm_at", _first_pcm_at(row, at))
+        elif event == "synthesis_started":
+            request_id = row.get("request_id")
+            if isinstance(request_id, str):
+                if request_id in synthesis_turns:
+                    synthesis_turns[request_id] = None
+                else:
+                    synthesis_turns[request_id] = (
+                        replying["transcript_id"] if replying is not None else None
+                    )
+        elif event == "synthesis_pcm_emitted":
+            turn = _synthesis_turn(turns, synthesis_turns, row, excluded)
+            if turn is not None and at is not None:
+                turn.setdefault("first_pcm_at", at)
+        elif event == "synthesis_finished":
+            if not isinstance(row.get("request_id"), str):
+                if replying is not None and "speak_at" in replying:
+                    pcm_at = _first_pcm_at(row, at, excluded)
+                    if pcm_at is not None:
+                        replying.setdefault("first_pcm_at", pcm_at)
+            else:
+                turn = _synthesis_turn(turns, synthesis_turns, row, excluded)
+                if turn is not None:
+                    pcm_at = _first_pcm_at(row, at, excluded)
+                    if pcm_at is not None:
+                        turn.setdefault("first_pcm_at", pcm_at)
         elif event == "playback_finished":
             replies["spoken"] += 1
             replies["trailing_questions"] += row.get("ends_with_question") is True
@@ -142,7 +216,14 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             faults[(str(row.get("source")), str(row.get("kind")))] += 1
         elif event == "session_finished":
             result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
-    turn_reports = [_turn_report(turn) for turn in turns.values()]
+    for transcript_id in pending.values():
+        if isinstance(transcript_id, str) and transcript_id in turns:
+            turns[transcript_id]["incomplete"] += 1
+        elif isinstance(transcript_id, str):
+            excluded["unknown_transcript"] += 1
+        else:
+            excluded["missing_transcript"] += 1
+    turn_reports = [_turn_report(turn, excluded) for turn in turns.values()]
     return {
         "startup": _startup_report(milestones),
         "turns": turn_reports,
@@ -150,6 +231,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             stage: summarize([turn[stage] for turn in turn_reports if turn[stage] is not None])
             for stage in LATENCY_STAGES
         },
+        "evidence": {"excluded": dict(excluded)},
         "replies": {key: replies[key] for key in ("spoken", "interrupted", "trailing_questions")},
         "tools": {name: dict(counts) for name, counts in tools.items()},
         "interruptions": {
@@ -202,23 +284,101 @@ def _turn_for(turns: dict[str, dict[str, Any]], row: dict[str, Any]) -> dict[str
     return turns.get(transcript_id)
 
 
-def _first_pcm_at(row: dict[str, Any], finished_at: datetime | None) -> datetime | None:
+def _transcript_turn(
+    turns: dict[str, dict[str, Any]], row: dict[str, Any], excluded: Counter[str]
+) -> dict[str, Any] | None:
+    transcript_id = row.get("transcript_id")
+    if not isinstance(transcript_id, str):
+        excluded["missing_transcript"] += 1
+        return None
+    turn = turns.get(transcript_id)
+    if turn is None:
+        excluded["unknown_transcript"] += 1
+        return None
+    return turn
+
+
+def _add_duration(turn: dict[str, Any], key: str, value: Any, excluded: Counter[str]) -> None:
+    if value is None:
+        return
+    kind = _duration_kind(value)
+    if kind == "nonfinite":
+        excluded["nonfinite_duration"] += 1
+    elif kind == "invalid":
+        excluded["invalid_duration"] += 1
+    else:
+        turn[key] += float(value)
+
+
+def _synthesis_turn(
+    turns: dict[str, dict[str, Any]],
+    synthesis_turns: dict[str, str | None],
+    row: dict[str, Any],
+    excluded: Counter[str],
+) -> dict[str, Any] | None:
+    request_id = row.get("request_id")
+    if not isinstance(request_id, str) or request_id not in synthesis_turns:
+        excluded["missing_synthesis_start"] += 1
+        return None
+    transcript_id = synthesis_turns[request_id]
+    turn = turns.get(transcript_id) if transcript_id is not None else None
+    if turn is None:
+        excluded["ambiguous_synthesis_request"] += 1
+        return None
+    return turn
+
+
+def _duration_kind(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "invalid"
+    if not math.isfinite(value):
+        return "nonfinite"
+    if value < 0:
+        return "invalid"
+    return "valid"
+
+
+def _first_pcm_at(
+    row: dict[str, Any], finished_at: datetime | None, excluded: Counter[str]
+) -> datetime | None:
     if finished_at is None:
         return None
     first_chunk_ms = row.get("first_chunk_ms")
-    if first_chunk_ms is None:
-        return finished_at
-    started = finished_at - timedelta(milliseconds=float(row.get("duration_ms") or 0))
+    duration_ms = row.get("duration_ms")
+    if first_chunk_ms is None or duration_ms is None:
+        return None
+    kinds = {_duration_kind(first_chunk_ms), _duration_kind(duration_ms)}
+    if "nonfinite" in kinds:
+        excluded["nonfinite_duration"] += 1
+        return None
+    if "invalid" in kinds or float(first_chunk_ms) > float(duration_ms):
+        excluded["invalid_duration"] += 1
+        return None
+    started = finished_at - timedelta(milliseconds=float(duration_ms))
     return started + timedelta(milliseconds=float(first_chunk_ms))
 
 
-def _turn_report(turn: dict[str, Any]) -> dict[str, Any]:
+def _turn_report(turn: dict[str, Any], excluded: Counter[str]) -> dict[str, Any]:
     report: dict[str, Any] = {
         "transcript_id": turn["transcript_id"],
         "outcome": turn["outcome"],
         "tools": turn["tools"],
+        "llm_count": turn["llm_count"],
+        "recall_count": turn["recall_count"],
+        "llm_duration_seconds": round(turn["llm_ms"] / 1000, 3),
+        "recall_duration_seconds": round(turn["recall_ms"] / 1000, 3),
+        "incomplete_request_count": turn["incomplete"],
     }
     for stage, (start_key, end_key) in _STAGE_BOUNDS.items():
         start, end = turn.get(start_key), turn.get(end_key)
-        report[stage] = round((end - start).total_seconds(), 3) if start and end else None
+        if start is None or end is None:
+            excluded["missing_timestamp"] += 1
+            report[stage] = None
+            continue
+        delta = (end - start).total_seconds()
+        if delta < 0:
+            excluded["negative_latency"] += 1
+            report[stage] = None
+            continue
+        report[stage] = round(delta, 3)
     return report
