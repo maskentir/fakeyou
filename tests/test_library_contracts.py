@@ -118,3 +118,16 @@ def test_init_chat_model_builds_claude_with_the_reply_timeout_and_retries() -> N
         0,
     )
     assert model.anthropic_api_key.get_secret_value() == "key"
+
+
+def test_env_settings_source_exposes_mutable_env_vars(monkeypatch) -> None:
+    from pydantic_settings.sources import EnvSettingsSource
+
+    from fakeyou.settings import Settings
+
+    monkeypatch.setenv("FAKEYOU_REPLY__MODEL", "contract-model")
+    source = EnvSettingsSource(Settings, env_prefix="FAKEYOU_", env_nested_delimiter="__")
+
+    assert source.env_vars["fakeyou_reply__model"] == "contract-model"
+    source.env_vars = {}
+    assert source.env_vars == {}

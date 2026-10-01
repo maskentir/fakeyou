@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from playwright.async_api import Page
 
 from fakeyou.audio import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME, MeetingAudioError
 from fakeyou.browser import open_direct_page, stable_fingerprint_seed
+from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cleanup import close_safely
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import ProviderJournal
@@ -432,27 +432,14 @@ async def run_meeting_session(
         faults.journal if faults is not None else ProviderJournal(config.meeting_id)
     )
     stop_event = stop if stop is not None else asyncio.Event()
-    try:
-        if saver_factory is None:
-            config.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-            saver_context: AbstractAsyncContextManager[BaseCheckpointSaver[Any]] = (
-                AsyncSqliteSaver.from_conn_string(str(config.checkpoint_path))
-            )
-        else:
-            saver_context = saver_factory()
-    except BaseException:
-        if conversation is not None:
-            await conversation.close()
-        raise
     async with _session_resources(faults) as resources:
-        try:
-            saver = await resources.enter_async_context(saver_context)
-        except BaseException:
-            if conversation is not None:
-                await conversation.close()
-            raise
         if conversation is not None:
             resources.push_async_callback(conversation.close)
+        saver = await resources.enter_async_context(
+            saver_factory()
+            if saver_factory is not None
+            else open_checkpointer(config.checkpoint_path)
+        )
         lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
         await lifecycle.initialize()
         detail = "session already ended"

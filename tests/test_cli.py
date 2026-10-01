@@ -355,6 +355,53 @@ async def test_join_headless_override(session_run, join, settings) -> None:
     assert captured["config"].headless is False
 
 
+@pytest.mark.parametrize(
+    ("argv", "handler", "expected"),
+    [
+        (
+            ["memory-reembed", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
+            "reembed_memory",
+            {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
+        ),
+        (
+            ["memory-forget", "--meeting", "m1", "--persona", "p.json", "--keep-record"],
+            "forget_memory",
+            {"meeting_id": "m1", "episode_uuid": None, "keep_record": True},
+        ),
+        (
+            ["report", "--meeting", "m1"],
+            "show_session_report",
+            {"meeting_id": "m1", "journal_dir": None},
+        ),
+        (
+            ["chat", "hello", "--thread", "t1", "--memory"],
+            "chat",
+            {"message": "hello", "thread": "t1", "use_browser": False, "use_memory": True},
+        ),
+    ],
+)
+def test_main_dispatches_parsed_options_to_the_command_handler(
+    monkeypatch, argv, handler, expected
+) -> None:
+    calls: list[dict] = []
+
+    def record(**kwargs):
+        calls.append(kwargs)
+
+    async def record_async(**kwargs):
+        calls.append(kwargs)
+
+    sync_handlers = {"show_session_report"}
+    monkeypatch.setattr(cli, handler, record if handler in sync_handlers else record_async)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+
+    cli.main()
+
+    [call] = calls
+    assert isinstance(call.pop("settings"), cli.Settings)
+    assert {key: call[key] for key in expected} == expected
+
+
 @pytest.mark.parametrize("flag", ["--owner-id", "--owner"])
 def test_join_owner_flags(monkeypatch, flag) -> None:
     captured: dict = {}
@@ -442,7 +489,7 @@ async def _join_with_audio(
     async def fake_saver(value):
         yield InMemorySaver()
 
-    monkeypatch.setattr(cli.AsyncSqliteSaver, "from_conn_string", fake_saver)
+    monkeypatch.setattr(cli, "open_checkpointer", fake_saver)
     captured = session_run
     arguments = {
         "twin_name": None,
@@ -853,7 +900,7 @@ async def _join_persona_conversation(
     async def memory_saver(_value):
         yield InMemorySaver()
 
-    monkeypatch.setattr(cli.AsyncSqliteSaver, "from_conn_string", memory_saver)
+    monkeypatch.setattr(cli, "open_checkpointer", memory_saver)
     if graphiti is not None:
         monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
     else:
@@ -1174,7 +1221,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
         finally:
             saver_events.append("close")
 
-    monkeypatch.setattr(cli.AsyncSqliteSaver, "from_conn_string", tracked_saver)
+    monkeypatch.setattr(cli, "open_checkpointer", tracked_saver)
 
     with pytest.raises(SystemExit) as caught:
         await join(

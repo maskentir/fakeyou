@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -21,7 +22,6 @@ from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pipecat.frames.frames import TranscriptionFrame
 from pydantic import TypeAdapter
 
@@ -37,6 +37,7 @@ from fakeyou.audio import (
     open_meeting_audio,
 )
 from fakeyou.browser import open_browser_tools
+from fakeyou.checkpoint import open_checkpointer
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
@@ -47,7 +48,7 @@ from fakeyou.conversation import (
 )
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import IngestResult, ingest_meeting
-from fakeyou.journal import JOURNAL_BACKUP_COUNT, ProviderJournal
+from fakeyou.journal import ProviderJournal, journal_files, journal_path
 from fakeyou.lifecycle import meeting_thread_id
 from fakeyou.memory import (
     create_memory_tools,
@@ -205,6 +206,15 @@ async def load_operator_persona(
         raise CliError(f"--persona cannot be read: {error.strerror}") from None
 
 
+@asynccontextmanager
+async def open_operator_memory(
+    persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
+) -> AsyncIterator[tuple[PersonaProfile, Graphiti]]:
+    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    async with open_persona_memory(settings) as memory:
+        yield profile, memory
+
+
 async def add_owner_note(
     text: str,
     *,
@@ -213,10 +223,12 @@ async def add_owner_note(
     twin_id: str | None,
     settings: Settings,
 ) -> None:
-    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
     if not text.strip():
         raise CliError("note text must not be blank")
-    async with open_persona_memory(settings) as memory:
+    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+        profile,
+        memory,
+    ):
         result = await remember_owner_note(memory, group_id=profile.memory_group, text=text)
     print(
         json.dumps(
@@ -275,13 +287,15 @@ async def ingest_recorded_meeting(
     settings: Settings,
 ) -> None:
     TypeAdapter(SessionId).validate_python(meeting_id)
-    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not record_path.exists():
         raise CliError(f"no meeting record for {meeting_id} at {record_path}")
-    journal = ProviderJournal(meeting_id, path=settings.paths.journal_dir / f"{meeting_id}.jsonl")
+    journal = ProviderJournal(meeting_id, path=journal_path(settings.paths.journal_dir, meeting_id))
     try:
-        async with open_persona_memory(settings) as memory:
+        async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+            profile,
+            memory,
+        ):
             result = await ingest_until_stopped(
                 memory,
                 record_path,
@@ -315,8 +329,10 @@ async def forget_memory(
         raise CliError("--keep-record only applies to --meeting")
     if meeting_id is not None:
         TypeAdapter(SessionId).validate_python(meeting_id)
-    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
-    async with open_persona_memory(settings) as memory:
+    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+        profile,
+        memory,
+    ):
         if meeting_id is not None:
             removed = await forget_meeting(
                 memory, group_id=profile.memory_group, meeting_id=meeting_id
@@ -333,8 +349,10 @@ async def forget_memory(
 async def reembed_memory(
     *, persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
 ) -> None:
-    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
-    async with open_persona_memory(settings) as memory:
+    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+        profile,
+        memory,
+    ):
         result = await reembed_group(memory, group_id=profile.memory_group)
     print(
         json.dumps(
@@ -353,16 +371,14 @@ async def forget_meeting_files(
     record_dir = meeting_record_path(settings.paths.record_dir, meeting_id).parent
     record_removed = record_dir.exists()
     shutil.rmtree(record_dir, ignore_errors=True)
-    journal_path = settings.paths.journal_dir / f"{meeting_id}.jsonl"
-    journal_files = [journal_path] + [
-        Path(f"{journal_path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)
+    removed_journals = [
+        path for path in journal_files(settings.paths.journal_dir, meeting_id) if path.exists()
     ]
-    removed_journals = [path for path in journal_files if path.exists()]
     for path in removed_journals:
         path.unlink()
     thread_removed = settings.paths.checkpoint_path.exists()
     if thread_removed:
-        async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
+        async with open_checkpointer(settings.paths.checkpoint_path) as saver:
             await saver.adelete_thread(
                 conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id)
             )
@@ -376,10 +392,10 @@ async def forget_meeting_files(
 
 def show_session_report(meeting_id: str, journal_dir: Path | None, settings: Settings) -> None:
     TypeAdapter(SessionId).validate_python(meeting_id)
-    journal_path = (journal_dir or settings.paths.journal_dir) / f"{meeting_id}.jsonl"
-    if not journal_path.exists():
-        raise CliError(f"no journal for meeting {meeting_id} at {journal_path}")
-    report = build_session_report(read_journal(journal_path))
+    path = journal_path(journal_dir or settings.paths.journal_dir, meeting_id)
+    if not path.exists():
+        raise CliError(f"no journal for meeting {meeting_id} at {path}")
+    report = build_session_report(read_journal(path))
     print(json.dumps({"meeting_id": meeting_id, **report}, ensure_ascii=False, indent=2))
 
 
@@ -389,10 +405,9 @@ async def chat(
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", thread):
         raise CliError("--thread must be 1-128 characters using letters, numbers, '_' or '-'")
     model = create_chat_model(settings)
-    settings.paths.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path))
+            open_checkpointer(settings.paths.checkpoint_path)
         )
         tools: list[BaseTool] = []
         if use_memory:
@@ -460,6 +475,7 @@ async def join_meeting(
     barge_in: bool = False,
     persona_path: Path | None = None,
 ) -> None:
+    audio_enabled = audio_enabled or settings.worker.audio
     parsed_link = urlparse(link)
     if (
         parsed_link.scheme != "https"
@@ -547,7 +563,7 @@ async def join_meeting(
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
     journal = ProviderJournal(
-        resolved_meeting_id, path=settings.paths.journal_dir / f"{resolved_meeting_id}.jsonl"
+        resolved_meeting_id, path=journal_path(settings.paths.journal_dir, resolved_meeting_id)
     )
     faults = FaultReporter(journal=journal)
     record = MeetingRecord(
@@ -719,10 +735,9 @@ async def open_conversation(
     on_tool_result: ToolResultCallback | None = None,
 ) -> AsyncIterator[ConversationLoop]:
     model = create_chat_model(settings)
-    settings.paths.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path))
+            open_checkpointer(settings.paths.checkpoint_path)
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
@@ -770,13 +785,20 @@ async def open_conversation(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Digital twin integration foundation")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("check", help="Inspect installed packages and credential presence")
-    commands.add_parser("browser-tools", help="Launch CloakBrowser and list its native MCP tools")
-    commands.add_parser("memory-init", help="Create the official Graphiti database indexes")
+    commands.add_parser(
+        "check", help="Inspect installed packages and credential presence"
+    ).set_defaults(handler=check_setup)
+    commands.add_parser(
+        "browser-tools", help="Launch CloakBrowser and list its native MCP tools"
+    ).set_defaults(handler=show_browser_tools)
+    commands.add_parser(
+        "memory-init", help="Create the official Graphiti database indexes"
+    ).set_defaults(handler=initialize_memory)
     memory_add_parser = commands.add_parser(
         "memory-add", help="Store an owner note in the persona's memory"
     )
     memory_add_parser.add_argument("text")
+    memory_add_parser.set_defaults(handler=add_owner_note)
     memory_forget_parser = commands.add_parser(
         "memory-forget", help="Delete one meeting or one episode from the persona's memory"
     )
@@ -788,31 +810,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the meeting record, journal, and thread so the meeting can be ingested again",
     )
+    memory_forget_parser.set_defaults(handler=forget_memory)
     memory_ingest_parser = commands.add_parser(
         "memory-ingest", help="Ingest a recorded meeting into the persona's memory, resuming"
     )
     memory_ingest_parser.add_argument("--meeting", dest="meeting_id", required=True)
     memory_ingest_parser.add_argument("--twin-name", default=None)
+    memory_ingest_parser.set_defaults(handler=ingest_recorded_meeting)
     memory_reembed_parser = commands.add_parser(
         "memory-reembed",
         help="Recompute the persona's entity and fact embeddings with the configured model",
     )
+    memory_reembed_parser.set_defaults(handler=reembed_memory)
     report_parser = commands.add_parser(
         "report", help="Summarize latency, replies, tools, ingestion, and faults of one meeting"
     )
     report_parser.add_argument("--meeting", dest="meeting_id", required=True)
     report_parser.add_argument("--journal-dir", type=Path, default=None)
+    report_parser.set_defaults(handler=show_session_report)
     for operator_parser in (
         memory_add_parser,
         memory_forget_parser,
         memory_ingest_parser,
         memory_reembed_parser,
     ):
-        operator_parser.add_argument("--persona", type=Path, required=True)
+        operator_parser.add_argument("--persona", dest="persona_path", type=Path, required=True)
         operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
         operator_parser.add_argument("--twin-id", default=None)
     join_parser = commands.add_parser("join", help="Join a Google Meet link as a guest twin")
     join_parser.add_argument("link")
+    join_parser.set_defaults(handler=join_meeting)
     join_parser.add_argument("--twin-name", default=None)
     join_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
     join_parser.add_argument("--twin-id", default=None)
@@ -822,20 +849,26 @@ def build_parser() -> argparse.ArgumentParser:
     join_parser.add_argument("--profile-dir", default=None)
     join_parser.add_argument("--headless", action="store_true", default=None)
     join_parser.add_argument(
-        "--audio", action="store_true", help="Enable Linux virtual audio and Muse transcription"
+        "--audio",
+        dest="audio_enabled",
+        action="store_true",
+        help="Enable Linux virtual audio and Muse transcription",
     )
     join_parser.add_argument(
         "--speak",
+        dest="initial_speech",
         default=None,
         help="Speak this test sentence once after admission; requires --audio",
     )
     join_parser.add_argument(
         "--converse",
+        dest="conversation_enabled",
         action="store_true",
         help="Enable agent replies to final transcripts; requires --audio",
     )
     join_parser.add_argument(
         "--persona",
+        dest="persona_path",
         type=Path,
         default=None,
         help="Owner persona JSON profile; requires --converse",
@@ -860,99 +893,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat_parser.add_argument("message")
     chat_parser.add_argument("--thread", required=True)
-    chat_parser.add_argument("--browser", action="store_true", help="Enable real browser actions")
     chat_parser.add_argument(
-        "--memory", action="store_true", help="Enable Graphiti recall and writes"
+        "--browser", dest="use_browser", action="store_true", help="Enable real browser actions"
     )
+    chat_parser.add_argument(
+        "--memory", dest="use_memory", action="store_true", help="Enable Graphiti recall and writes"
+    )
+    chat_parser.set_defaults(handler=chat)
     return parser
 
 
 def main() -> None:
-    arguments = build_parser().parse_args()
+    options = vars(build_parser().parse_args())
+    handler = options.pop("handler")
+    del options["command"]
     try:
-        settings = Settings()
-        if arguments.command == "check":
-            check_setup(settings)
-        elif arguments.command == "browser-tools":
-            asyncio.run(show_browser_tools(settings))
-        elif arguments.command == "memory-init":
-            asyncio.run(initialize_memory(settings))
-        elif arguments.command == "report":
-            show_session_report(arguments.meeting_id, arguments.journal_dir, settings)
-        elif arguments.command == "memory-add":
-            asyncio.run(
-                add_owner_note(
-                    arguments.text,
-                    persona_path=arguments.persona,
-                    owner_id=arguments.owner_id,
-                    twin_id=arguments.twin_id,
-                    settings=settings,
-                )
-            )
-        elif arguments.command == "memory-forget":
-            asyncio.run(
-                forget_memory(
-                    persona_path=arguments.persona,
-                    owner_id=arguments.owner_id,
-                    twin_id=arguments.twin_id,
-                    meeting_id=arguments.meeting_id,
-                    episode_uuid=arguments.episode_uuid,
-                    settings=settings,
-                    keep_record=arguments.keep_record,
-                )
-            )
-        elif arguments.command == "memory-reembed":
-            asyncio.run(
-                reembed_memory(
-                    persona_path=arguments.persona,
-                    owner_id=arguments.owner_id,
-                    twin_id=arguments.twin_id,
-                    settings=settings,
-                )
-            )
-        elif arguments.command == "memory-ingest":
-            asyncio.run(
-                ingest_recorded_meeting(
-                    meeting_id=arguments.meeting_id,
-                    persona_path=arguments.persona,
-                    owner_id=arguments.owner_id,
-                    twin_id=arguments.twin_id,
-                    twin_name=arguments.twin_name,
-                    settings=settings,
-                )
-            )
-        elif arguments.command == "join":
-            asyncio.run(
-                join_meeting(
-                    arguments.link,
-                    twin_name=arguments.twin_name,
-                    owner_id=arguments.owner_id,
-                    twin_id=arguments.twin_id,
-                    meeting_id=arguments.meeting_id,
-                    lobby_timeout=arguments.lobby_timeout,
-                    duration=arguments.duration,
-                    profile_dir=arguments.profile_dir,
-                    settings=settings,
-                    audio_enabled=arguments.audio or settings.worker.audio,
-                    initial_speech=arguments.speak,
-                    headless=arguments.headless,
-                    memory=arguments.memory,
-                    conversation_enabled=arguments.converse,
-                    wake_phrase=arguments.wake_phrase,
-                    barge_in=arguments.barge_in,
-                    persona_path=arguments.persona,
-                )
-            )
-        else:
-            asyncio.run(
-                chat(
-                    arguments.message,
-                    arguments.thread,
-                    arguments.browser,
-                    arguments.memory,
-                    settings,
-                )
-            )
+        outcome = handler(**options, settings=Settings())
+        if inspect.iscoroutine(outcome):
+            asyncio.run(outcome)
     except ValueError as error:
         print(f"fakeyou: error: {error}", file=sys.stderr)
         raise SystemExit(1) from None

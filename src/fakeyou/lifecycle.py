@@ -1,7 +1,7 @@
 import operator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast, get_args
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -48,7 +48,7 @@ LifecycleEventKind = Literal[
     "cancelled",
 ]
 
-_ATTRIBUTIONS = frozenset({"host_action", "system_fault", "user_action"})
+_ATTRIBUTIONS = frozenset(get_args(LifecycleAttribution))
 
 
 @dataclass(frozen=True, slots=True)
