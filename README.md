@@ -2,9 +2,9 @@
 
 Fondasi AI Digital Twin untuk menjadi peserta meeting online, dimulai dari Google Meet: mendengar, melihat, mengingat konteks dan persona, berbicara, serta berinteraksi lewat UI.
 
-Fondasi SDK, worker guest Google Meet, dan audio dua arah sudah tersedia. Loop percakapan opt-in, profil persona tervalidasi, dan recall Graphiti per owner/twin sudah diuji lokal dan dengan provider live; acceptance di Google Meet serta perilaku partisipasi menjadi tahap berikutnya.
+Fondasi SDK, worker guest Google Meet, audio dua arah, loop percakapan, profil persona, dan recall Graphiti per owner/twin sudah tersedia. [Acceptance 1 Oktober](docs/reports/2026-10-01-refactor-acceptance.md) lulus untuk fungsi utama; latency jawaban masih di atas target.
 
-Lihat [status fondasi dan pekerjaan berikutnya](docs/reference/project-status.md) serta [hasil refactor](docs/reports/2026-09-28-refactor.md) untuk bukti kemampuan, batas modul, dan urutan pembangunan.
+Lihat [rencana pengembangan berikutnya](docs/plans/next-development.md), [status proyek](docs/reference/project-status.md), dan [rencana refactor beserta hasilnya](docs/plans/refactor.md) untuk prioritas, bukti kemampuan, dan batas implementasi.
 
 ## Stack
 
@@ -14,7 +14,7 @@ Lihat [status fondasi dan pekerjaan berikutnya](docs/reference/project-status.md
 | State percakapan | LangGraph 1.2.12 | Checkpoint SQLite; dependency PostgreSQL tersedia |
 | Tangan dan mata | CloakBrowser 0.5.11 + Playwright MCP 0.0.82 | Satu sesi untuk navigasi, DOM, screenshot, input |
 | Telinga | Pipecat 1.12.0 `MetaSTTService` | Muse Voice Transcribe resmi, default Bahasa Indonesia |
-| Mulut | `OpenAISpeechSynthesizer` + `PlaybackEngine` | Sintesis unary PCM + `paplay` serial; model/voice dapat diganti |
+| Mulut | `OpenAISpeechSynthesizer` / `MiniMaxSpeechSynthesizer` + `PlaybackEngine` | TTS streaming PCM + `paplay` serial; model/voice dapat diganti |
 | Memori | Graphiti 0.30.2 + Neo4j | Client dan tools dibatasi `group_id` |
 | Evaluasi | DeepEval 4.2.6 + pytest | Tool trajectory deterministik tanpa judge berbayar |
 | Tooling | uv, npm, Ruff, mypy | Dependency terkunci dan pemeriksaan otomatis |
@@ -96,7 +96,7 @@ PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk pe
 
 ## Suara dan partisipasi
 
-`voice.py` menyediakan STT Pipecat asli melalui `create_muse_stt` dan sintesis unary OpenAI melalui `OpenAISpeechSynthesizer`; `playback.py` memutar hasilnya lewat `paplay`. Baca [komposisi suara](docs/reference/voice.md). Tidak ada custom WebSocket Muse atau VAD.
+`voice.py` menyediakan STT Muse melalui `create_muse_stt` serta sintesis streaming OpenAI/MiniMax; `playback.py` mengalirkan PCM ke `paplay`. Baca [komposisi suara](docs/reference/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
 Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Dengan `--audio`, pipeline audio dan STT dibuka sebelum twin meminta masuk, sehingga twin sudah mendengar saat di-admit; mikrofon, ucapan awal, dan jawaban baru aktif setelah admission. Gagal membuka audio mengakhiri sesi sebagai `infra_failure` tanpa mengetuk meeting. Lihat [kontrak conversation dan batas replay](docs/plans/conversation.md) dan [hasil refactor](docs/reports/2026-09-28-conversation-refactor.md).
 

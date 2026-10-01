@@ -2,6 +2,8 @@
 
 Disusun 30 September 2026 dari seluruh temuan persona, ingestion, dan [acceptance Meet](../reports/2026-09-30-acceptance.md). Tujuannya menghentikan pola "lulus tes lalu gagal di live" dengan memperbaiki penyebab yang berulang, bukan setiap gejala.
 
+**Langkah berikutnya setelah refactor (2 Oktober 2026):** [rencana pengembangan berikutnya](next-development.md) mendetailkan pengukuran tahap, benchmark kualitas, optimasi jawaban, dan acceptance performa. Fungsi acceptance ketiga sudah lulus, tetapi median jawaban 5,727 detik dan p95 16,895 detik masih menjadi gap. Uraian keputusan serta status bertanggal di bawah tetap menjadi catatan sejarah; nama konfigurasi aktif mengikuti skema refactor.
+
 ## Pola penyebab
 
 Masalah yang muncul sejauh ini jatuh ke enam pola. Setiap pola sudah muncul lebih dari sekali.
