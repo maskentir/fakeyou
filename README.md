@@ -157,58 +157,9 @@ TTS memiliki `provider`, `model`, `voice`, `api_key`, `base_url`, dan `sample_ra
 
 `FAKEYOU_SPEECH__LANGUAGE=id` atau `en` mengatur STT, pemisahan kalimat, instruksi TTS, dan language boost. Bahasa profil persona harus sama; `join` menolak ketidaksesuaian sebelum membuka resource. Kontrol browser (`FAKEYOU_BROWSER__HEADLESS`, `FAKEYOU_BROWSER__WARMUP`) dan polling monitor (`FAKEYOU_MEETING__MONITOR_POLL_SECONDS`), percakapan, ingestion, kesehatan audio, dan preflight ada pada bagian masing-masing dalam `.env.example`.
 
-### Migrasi konfigurasi lama
+### Validasi konfigurasi
 
-Key `FAKEYOU_*` yang tidak dikenal ditolak, termasuk typo bernilai kosong dalam dotenv maupun environment proses, tanpa membedakan kapitalisasi. Hanya `FAKEYOU_COMPOSE_*` yang dikecualikan untuk interpolasi Compose. Variabel library seperti `EMBEDDING_DIM` dan `LANGSMITH_*` tetap diperbolehkan. Simpan salinan `.env` yang diabaikan Git sebelum migrasi; jangan mengaktifkan provider hanya karena key lama tersedia. Key bersama lama harus dipindahkan secara sengaja ke setiap peran yang memang menggunakannya.
-
-| Key lama | Pengganti |
-| --- | --- |
-| `FAKEYOU_CHAT_MODEL` | `FAKEYOU_REPLY__MODEL` |
-| `FAKEYOU_CHAT_BASE_URL` | `FAKEYOU_REPLY__BASE_URL` |
-| `FAKEYOU_CHAT_API_KEY` | `FAKEYOU_REPLY__API_KEY` |
-| `FAKEYOU_CHAT_REASONING_EFFORT` | `FAKEYOU_REPLY__REASONING_EFFORT` |
-| `FAKEYOU_CHAT_EXTRA_BODY` | `FAKEYOU_REPLY__EXTRA_BODY` |
-| `FAKEYOU_FALLBACK_CHAT_MODEL` | `FAKEYOU_REPLY_FALLBACK__MODEL` |
-| `FAKEYOU_FALLBACK_CHAT_BASE_URL` | `FAKEYOU_REPLY_FALLBACK__BASE_URL` |
-| `FAKEYOU_FALLBACK_CHAT_API_KEY` | `FAKEYOU_REPLY_FALLBACK__API_KEY` |
-| `FAKEYOU_FALLBACK_CHAT_REASONING_EFFORT` | `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT` |
-| `FAKEYOU_FALLBACK_CHAT_EXTRA_BODY` | `FAKEYOU_REPLY_FALLBACK__EXTRA_BODY` |
-| `FAKEYOU_MEMORY_LLM_MODEL` | `FAKEYOU_MEMORY__LLM__MODEL` |
-| `FAKEYOU_MEMORY_SMALL_MODEL` | `FAKEYOU_MEMORY__LLM__SMALL_MODEL` |
-| `FAKEYOU_MEMORY_LLM_BASE_URL` | `FAKEYOU_MEMORY__LLM__BASE_URL` |
-| `FAKEYOU_MEMORY_LLM_API_KEY` | `FAKEYOU_MEMORY__LLM__API_KEY` |
-| `FAKEYOU_MEMORY_EMBEDDING_MODEL` | `FAKEYOU_MEMORY__EMBEDDER__MODEL` |
-| `FAKEYOU_MEMORY_EMBEDDING_BASE_URL` | `FAKEYOU_MEMORY__EMBEDDER__BASE_URL` |
-| `FAKEYOU_MEMORY_EMBEDDING_API_KEY` | `FAKEYOU_MEMORY__EMBEDDER__API_KEY` |
-| `FAKEYOU_MEMORY_EMBEDDING_DIM` | `FAKEYOU_MEMORY__EMBEDDER__DIM` |
-| `FAKEYOU_STT_MODEL` | `FAKEYOU_STT__MODEL` |
-| `FAKEYOU_TTS_PROVIDER` | `FAKEYOU_TTS__PROVIDER` |
-| `FAKEYOU_TTS_API_KEY` | `FAKEYOU_TTS__API_KEY` |
-| `FAKEYOU_TTS_VOICE` | `FAKEYOU_TTS__VOICE` |
-| `FAKEYOU_CHECKPOINT_PATH` | `FAKEYOU_PATHS__CHECKPOINT_PATH` |
-| `FAKEYOU_HEADLESS` | `FAKEYOU_BROWSER__HEADLESS` |
-| `FAKEYOU_CLOAKBROWSER_LICENSE_KEY` | `FAKEYOU_BROWSER__LICENSE_KEY` |
-| `FAKEYOU_OPENAI_API_KEY` | `FAKEYOU_REPLY__API_KEY` |
-| `FAKEYOU_MODEL_API_KEY` | `FAKEYOU_STT__API_KEY` |
-| `FAKEYOU_NEO4J_URI` | `FAKEYOU_MEMORY__STORE__URI` |
-| `FAKEYOU_NEO4J_USER` | `FAKEYOU_MEMORY__STORE__USER` |
-| `FAKEYOU_NEO4J_PASSWORD` | `FAKEYOU_MEMORY__STORE__PASSWORD` |
-| `FAKEYOU_MEMORY_GROUP` | `FAKEYOU_MEMORY__STORE__GROUP` |
-| `FAKEYOU_OWNER_ID` | `FAKEYOU_IDENTITY__OWNER_ID` |
-| `FAKEYOU_TWIN_ID` | `FAKEYOU_IDENTITY__TWIN_ID` |
-| `FAKEYOU_TWIN_NAME` | `FAKEYOU_IDENTITY__TWIN_NAME` |
-| `FAKEYOU_LOBBY_TIMEOUT_SECONDS` | `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS` |
-| `FAKEYOU_SESSION_DURATION_SECONDS` | `FAKEYOU_MEETING__SESSION_DURATION_SECONDS` |
-| `FAKEYOU_JOURNAL_DIR` | `FAKEYOU_PATHS__JOURNAL_DIR` |
-| `FAKEYOU_MEETING_RECORD_DIR` | `FAKEYOU_PATHS__RECORD_DIR` |
-| `FAKEYOU_ANTHROPIC_API_KEY` | `FAKEYOU_REPLY__API_KEY (select provider explicitly)` |
-| `FAKEYOU_AUDIO` | `FAKEYOU_WORKER__AUDIO` |
-| `FAKEYOU_WORKER_NEO4J_URI` | `FAKEYOU_COMPOSE_WORKER_NEO4J_URI` |
-| `FAKEYOU_WORKER_EMBEDDING_BASE_URL` | `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL` |
-| `FAKEYOU_EMBEDDINGS_IMAGE` | `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE` |
-| `FAKEYOU_EMBEDDINGS_MODEL_ID` | `FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID` |
-| `FAKEYOU_EMBEDDINGS_REVISION` | `FAKEYOU_COMPOSE_EMBEDDINGS_REVISION` |
-
+Key `FAKEYOU_*` yang tidak dikenal ditolak dengan `Unknown configuration key`, termasuk typo bernilai kosong dalam dotenv maupun environment proses, tanpa membedakan kapitalisasi. Hanya `FAKEYOU_COMPOSE_*` yang dikecualikan untuk interpolasi Compose. Variabel library seperti `EMBEDDING_DIM` dan `LANGSMITH_*` tetap diperbolehkan. Gunakan nama key aktif dalam `.env.example`; setiap peran memakai konfigurasi dan key sendiri. Flag CLI harus ditulis lengkap, termasuk `--owner-id`; alias `--owner` dan singkatan flag tidak diterima. Endpoint preflight wajib menyebut skema, misalnya `https://` atau `bolt://`.
 
 Setiap `join` menulis dua berkas:
 

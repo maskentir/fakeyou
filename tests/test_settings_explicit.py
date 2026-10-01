@@ -20,11 +20,11 @@ def test_unknown_process_keys_fail_even_when_empty(monkeypatch, name):
         Settings(_env_file=None)
 
 
-def test_legacy_key_explains_replacement_without_secret(monkeypatch):
+def test_unknown_key_is_rejected_without_its_value(monkeypatch):
     monkeypatch.setenv("FAKEYOU_CHAT_API_KEY", "never-print-me")
     with pytest.raises(ValueError) as error:
         Settings(_env_file=None)
-    assert "FAKEYOU_REPLY__API_KEY" in str(error.value)
+    assert str(error.value) == "Unknown configuration key: FAKEYOU_CHAT_API_KEY"
     assert "never-print-me" not in str(error.value)
 
 
@@ -184,23 +184,6 @@ def test_anthropic_memory_client_uses_explicit_endpoint_and_key():
     assert str(memory.llm_client.client.base_url) == "https://anthropic.example.com"
     assert memory.llm_client.client.api_key == "llm"
     assert isinstance(memory.cross_encoder, AnthropicReranker)
-
-
-@pytest.mark.parametrize("source", ["environment", "dotenv"])
-def test_all_legacy_keys_report_their_replacement_without_values(source, monkeypatch, tmp_path):
-    from fakeyou.config_migration import LEGACY_KEYS
-
-    path = tmp_path / ".env"
-    for old, new in LEGACY_KEYS.items():
-        with monkeypatch.context() as context:
-            if source == "environment":
-                context.setenv(old.lower(), "secret-marker")
-            else:
-                path.write_text(f"{old.lower()}=secret-marker\n")
-            with pytest.raises(ValueError) as error:
-                Settings(_env_file=path if source == "dotenv" else None)
-            assert new in str(error.value)
-            assert "secret-marker" not in str(error.value)
 
 
 async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(monkeypatch):

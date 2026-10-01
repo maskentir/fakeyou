@@ -1,14 +1,10 @@
 import asyncio
 
 import pytest
-from pipecat.frames.frames import (
-    EndFrame,
-    ErrorCategory,
-    InputAudioRawFrame,
-    TranscriptionFrame,
-)
+from pipecat.frames.frames import EndFrame, InputAudioRawFrame, TranscriptionFrame
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.utils.errors import ErrorCategory
 from pipecat.workers.runner import WorkerRunner
 
 import fakeyou.audio as audio
@@ -33,11 +29,11 @@ class _Transport:
         return self.source
 
 
-        self.transcripts: list[str | None] = []
 class _Playback:
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.indices: list[int | None] = []
+        self.transcripts: list[str | None] = []
         self.stops = 0
         self.closed = False
         self.speaking = False
@@ -51,11 +47,11 @@ class _Playback:
         text: str,
         *,
         sentence_index: int | None = None,
-        self.transcripts.append(transcript_id)
         transcript_id: str | None = None,
     ) -> None:
         self.spoken.append(text)
         self.indices.append(sentence_index)
+        self.transcripts.append(transcript_id)
 
     async def stop(self) -> None:
         self.stops += 1
@@ -903,6 +899,10 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         for row in read_journal(path)
         if row["event"] == "fault_recorded" and row["kind"] == "callback_failed"
     ]
+    assert len(callbacks) == 1
+    assert callbacks[0]["meeting_id"] == "meeting-7"
+    assert callbacks[0]["at"]
+    assert "private callback data" not in path.read_text()
 
 
 async def test_session_threads_transcript_id_to_playback_engine() -> None:
@@ -924,7 +924,3 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         assert engine.spoken == ["Hello.", "Legacy reply."]
         assert engine.transcripts == ["t9", None]
         await session.stop()
-    assert len(callbacks) == 1
-    assert callbacks[0]["meeting_id"] == "meeting-7"
-    assert callbacks[0]["at"]
-    assert "private callback data" not in path.read_text()

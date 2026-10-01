@@ -25,7 +25,8 @@ import fakeyou.cli.memory as cli_memory
 import fakeyou.memory as memory_module
 import fakeyou.providers as providers
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
-from fakeyou.audio import (
+from fakeyou.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
     CAPTURE_SAMPLE_RATE,
@@ -33,10 +34,10 @@ from fakeyou.audio import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
-from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.persona import PersonaProfile, build_system_prompt
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import load_meeting_record, meeting_record_path
+from fakeyou.session import SessionResult
 from fakeyou.settings import DEFAULTS, CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
 from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
@@ -373,7 +374,7 @@ async def test_join_headless_override(session_run, join, settings) -> None:
     ("argv", "handler", "expected"),
     [
         (
-            ["memory-reembed", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
+            ["memory-reembed", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
             "reembed_memory",
             {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
         ),
@@ -416,8 +417,7 @@ def test_main_dispatches_parsed_options_to_the_command_handler(
     assert {key: call[key] for key in expected} == expected
 
 
-@pytest.mark.parametrize("flag", ["--owner-id", "--owner"])
-def test_join_owner_flags(monkeypatch, flag) -> None:
+def test_join_owner_id_flag(monkeypatch) -> None:
     captured: dict = {}
 
     async def fake_join(link, **kwargs):
@@ -428,10 +428,27 @@ def test_join_owner_flags(monkeypatch, flag) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", flag, "owner-9"],
+        ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", "--owner-id", "owner-9"],
     )
     cli_main.main()
     assert captured["owner_id"] == "owner-9"
+
+
+@pytest.mark.parametrize(
+    "command", ["join", "memory-add", "memory-forget", "memory-ingest", "memory-reembed"]
+)
+def test_cli_rejects_owner_alias(command, capsys) -> None:
+    arguments = {
+        "join": ["https://meet.google.com/abc-defg-hij"],
+        "memory-add": ["A note.", "--persona", "p.json"],
+        "memory-forget": ["--meeting", "meeting-1", "--persona", "p.json"],
+        "memory-ingest": ["--meeting", "meeting-1", "--persona", "p.json"],
+        "memory-reembed": ["--persona", "p.json"],
+    }
+    with pytest.raises(SystemExit) as error:
+        cli_main.build_parser().parse_args([command, *arguments[command], "--owner", "o"])
+    assert error.value.code == 2
+    assert "unrecognized arguments: --owner o" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("argv,expected", [(["--headless"], True), ([], None)])
@@ -585,7 +602,7 @@ async def test_join_audio_transcript_reaches_conversation(
         )
         await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -695,7 +712,7 @@ async def test_join_wake_phrase_gates_agent_replies(
             )
             await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -744,7 +761,7 @@ async def test_join_barge_in_stops_speaking_session(
         )
         await kwargs["open_audio"].keywords["on_transcript"](frame)
         await loop.wait_idle()
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -774,7 +791,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         handler(PlaybackEvent("playback_started", "hello", ""))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
         handler(PlaybackEvent("playback_finished", "hello?  ", ""))
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 
@@ -959,7 +976,7 @@ async def _join_persona_conversation(
         else:
             await settle()
         outcome["phase"] = loop.phase
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     monkeypatch.setattr(cli_join, "run_meeting_session", run)
     arguments = persona_join_arguments(
@@ -1597,7 +1614,7 @@ async def test_memory_forget_validates_before_opening_memory(
     "argv,target,expected",
     [
         (
-            ["memory-add", "A note.", "--persona", "p.json", "--owner", "o", "--twin-id", "t"],
+            ["memory-add", "A note.", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
             "add_owner_note",
             {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
         ),
@@ -2139,7 +2156,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
         interim = kwargs["open_audio"].keywords["on_interim"]
         await interim(SimpleNamespace(text="wait"))
         await interim(SimpleNamespace(text="wait a moment"))
-        return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
 

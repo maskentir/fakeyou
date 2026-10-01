@@ -5,7 +5,6 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, m
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource
 
-from fakeyou.config_migration import LEGACY_KEYS
 from fakeyou.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
@@ -316,8 +315,6 @@ class Settings(Configuration, BaseSettings):
                         source.env_vars = {
                             name: value for name, value in source.env_vars.items() if name != key
                         }
-                    elif upper in LEGACY_KEYS:
-                        raise ValueError(f"{upper} was replaced by {LEGACY_KEYS[upper]}")
                     elif upper.startswith("FAKEYOU_") and not _known_env_path(
                         cls, key.lower().removeprefix("fakeyou_").split("__")
                     ):

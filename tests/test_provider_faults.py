@@ -4,7 +4,7 @@ import httpx
 import httpx2
 import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
-from pipecat.frames.frames import ErrorCategory
+from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.provider_faults import (
     ERROR_CATEGORY_KINDS,

@@ -81,7 +81,8 @@ def test_tool_error_middleware_filters_by_tool_name() -> None:
 
 def test_init_chat_model_forwards_openai_compatible_provider_options() -> None:
     model = init_chat_model(
-        "openai:muse-spark-1.3",
+        "muse-spark-1.3",
+        model_provider="openai",
         api_key="key",
         base_url="https://api.meta.ai/v1",
         reasoning_effort="minimal",

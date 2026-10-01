@@ -15,11 +15,7 @@ from graphiti_core import Graphiti
 from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.assembly import open_conversation, stop_signal_handlers
-from fakeyou.audio import (
-    AGENT_SINK_NAME,
-    MEETING_MONITOR_SOURCE_NAME,
-    open_meeting_audio,
-)
+from fakeyou.audio import open_meeting_audio
 from fakeyou.cli.errors import FAILURE_EXIT_CODES, CliError
 from fakeyou.cli.memory import ingest_until_stopped, load_operator_persona
 from fakeyou.conversation import (
@@ -28,6 +24,7 @@ from fakeyou.conversation import (
     transcript_event,
 )
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 from fakeyou.journal import Journal, journal_path
 from fakeyou.persona import PersonaProfile, speech_keywords
 from fakeyou.playback import PlaybackEvent
@@ -304,7 +301,7 @@ async def join_meeting(
                 "phase": result.phase,
                 "terminal_reason": result.terminal_reason,
                 "detail": result.detail,
-                "faults": getattr(result, "faults", None),
+                "faults": result.faults,
             },
             indent=2,
         )

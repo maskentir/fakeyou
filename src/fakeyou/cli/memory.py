@@ -19,6 +19,7 @@ from fakeyou.conversation import (
 )
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import IngestResult, ingest_meeting
+from fakeyou.invariants import SessionId
 from fakeyou.journal import Journal, journal_files, journal_path
 from fakeyou.lifecycle import meeting_thread_id
 from fakeyou.memory import (
@@ -32,7 +33,6 @@ from fakeyou.memory import (
 from fakeyou.persona import PersonaProfile, load_persona
 from fakeyou.providers import memory_config, open_persona_memory
 from fakeyou.record import load_meeting_record, meeting_record_path
-from fakeyou.session import SessionId
 from fakeyou.settings import (
     Settings,
 )

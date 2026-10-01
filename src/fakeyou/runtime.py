@@ -8,11 +8,12 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from playwright.async_api import Page
 
-from fakeyou.audio import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME, MeetingAudioError
+from fakeyou.audio import MeetingAudioError
 from fakeyou.browser import open_direct_page, stable_fingerprint_seed
 from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cleanup import close_safely
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME
 from fakeyou.journal import Journal
 from fakeyou.lifecycle import (
     LifecycleAttribution,

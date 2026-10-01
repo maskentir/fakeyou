@@ -10,7 +10,6 @@ from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.conversation import (
-    ConversationError,
     ConversationLoop,
     LangGraphResponder,
     StreamingLangGraphResponder,
@@ -20,6 +19,7 @@ from fakeyou.conversation import (
     transcript_event,
 )
 from fakeyou.memory import create_recall_error_middleware
+from fakeyou.session import ConversationError
 from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
 
 

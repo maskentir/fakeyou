@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from fakeyou.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
 from fakeyou.ingestion import TWIN_SPEAKER
-from fakeyou.session import SessionId, TwinName
+from fakeyou.invariants import SessionId, TwinName
 
 PersonaTool = Literal["recall_meeting_context"]
 PersonaLanguage = Literal["id", "en"]

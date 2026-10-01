@@ -13,15 +13,15 @@ from pathlib import Path
 import pytest
 from playwright.async_api import Page
 
-from fakeyou.audio import (
+from fakeyou.audio import open_meeting_audio
+from fakeyou.browser import open_direct_page
+from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
     MEETING_MONITOR_SOURCE_NAME,
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
-    open_meeting_audio,
 )
-from fakeyou.browser import open_direct_page
 from fakeyou.playback import (
     PlaybackEngine,
     create_pactl_muter,

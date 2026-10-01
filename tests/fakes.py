@@ -34,7 +34,7 @@ from pipecat.utils.errors import ErrorCategory
 from fakeyou.conversation import ConversationResponder, TranscriptEvent
 from fakeyou.journal import Journal
 from fakeyou.playback import PlaybackEvent
-from fakeyou.session import ConversationError, MeetingAudio, MeetingConversation
+from fakeyou.session import ConversationError, MeetingAudio, MeetingConversation, SessionResult
 
 LINK = "https://meet.google.com/abc-defg-hij"
 
@@ -528,7 +528,11 @@ class SessionRun(dict[str, Any]):
     def __init__(self) -> None:
         super().__init__()
         self.effect: Callable[..., Awaitable[Any]] | None = None
-        self.result = {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+        self.result: dict[str, Any] = {
+            "phase": "ended",
+            "terminal_reason": "stopped_by_owner",
+            "detail": "ok",
+        }
 
     async def __call__(self, config: Any, **kwargs: Any) -> Any:
         self["config"] = config
@@ -536,7 +540,7 @@ class SessionRun(dict[str, Any]):
         self.update(kwargs)
         if self.effect is not None:
             return await self.effect(config, **kwargs)
-        return SimpleNamespace(**self.result)
+        return SessionResult(**self.result)
 
 
 class FakeReconnectableSTT(FakeSTT):
@@ -658,11 +662,11 @@ class FakeReplyAudio(FakeAudio):
         super().__init__([])
         self.spoken: list[str] = []
         self.indices: list[int | None] = []
+        self.transcripts: list[str | None] = []
         self.stops = 0
         self.speaking = False
         self.on_playback_event: Callable[[PlaybackEvent], None] | None = None
 
-        self.transcripts: list[str | None] = []
     @property
     def is_speaking(self) -> bool:
         return self.speaking
@@ -676,11 +680,11 @@ class FakeReplyAudio(FakeAudio):
     ) -> None:
         self.spoken.append(text)
         self.indices.append(sentence_index)
+        self.transcripts.append(transcript_id)
         if self.on_playback_event is not None:
             self.on_playback_event(PlaybackEvent("playback_finished", text))
 
     async def stop_playback(self) -> None:
-        self.transcripts.append(transcript_id)
         self.stops += 1
 
 

@@ -167,7 +167,7 @@ def _next_window(name: str, meeting_id: str) -> int:
     match = re.fullmatch(rf"{re.escape(meeting_id)}:w(\d+)", name)
     if match is None:
         raise ValueError(
-            f"meeting {meeting_id} has episodes from an older ingestion format; "
+            f"invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; "
             "run memory-forget --meeting with --keep-record before ingesting again"
         )
     return int(match.group(1)) + 1

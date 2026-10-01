@@ -22,8 +22,7 @@ from pipecat.utils.string import match_endofsentence
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal, JournalTiming
 from fakeyou.provider_faults import classify_exception
-from fakeyou.session import ConversationError as ConversationError
-from fakeyou.session import MeetingAudio
+from fakeyou.session import ConversationError, MeetingAudio
 from fakeyou.settings import DEFAULTS
 
 ConversationPhase = Literal[

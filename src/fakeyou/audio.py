@@ -38,13 +38,12 @@ from fakeyou.deaf import (
     rms_level,
 )
 from fakeyou.faults import Fault, FaultReporter, record_consumer_fault
-from fakeyou.invariants import AGENT_MIC_SOURCE_NAME as AGENT_MIC_SOURCE_NAME
-from fakeyou.invariants import AGENT_SINK_NAME as AGENT_SINK_NAME
-from fakeyou.invariants import CAPTURE_SAMPLE_RATE as CAPTURE_SAMPLE_RATE
-from fakeyou.invariants import MEETING_MONITOR_SOURCE_NAME as MEETING_MONITOR_SOURCE_NAME
-from fakeyou.invariants import MEETING_SINK_NAME as MEETING_SINK_NAME
-from fakeyou.invariants import PCM_CHANNELS
-from fakeyou.invariants import PLAYBACK_SAMPLE_RATE as PLAYBACK_SAMPLE_RATE
+from fakeyou.invariants import (
+    AGENT_SINK_NAME,
+    CAPTURE_SAMPLE_RATE,
+    PCM_CHANNELS,
+    PLAYBACK_SAMPLE_RATE,
+)
 from fakeyou.journal import Journal
 from fakeyou.playback import (
     PlaybackEngine,

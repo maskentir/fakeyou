@@ -5,9 +5,9 @@ from pydantic import TypeAdapter
 
 from fakeyou.browser import open_browser_tools
 from fakeyou.cli.errors import CliError
+from fakeyou.invariants import SessionId
 from fakeyou.journal import journal_path
 from fakeyou.report import build_session_report, read_journal
-from fakeyou.session import SessionId
 from fakeyou.settings import (
     Settings,
 )

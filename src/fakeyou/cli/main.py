@@ -22,24 +22,30 @@ from fakeyou.settings import (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Digital twin integration foundation")
+    parser = argparse.ArgumentParser(
+        description="Digital twin integration foundation", allow_abbrev=False
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
-        "check", help="Inspect installed packages and credential presence"
+        "check", help="Inspect installed packages and credential presence", allow_abbrev=False
     ).set_defaults(handler=check_setup)
     commands.add_parser(
-        "browser-tools", help="Launch CloakBrowser and list its native MCP tools"
+        "browser-tools",
+        help="Launch CloakBrowser and list its native MCP tools",
+        allow_abbrev=False,
     ).set_defaults(handler=show_browser_tools)
     commands.add_parser(
-        "memory-init", help="Create the official Graphiti database indexes"
+        "memory-init", help="Create the official Graphiti database indexes", allow_abbrev=False
     ).set_defaults(handler=initialize_memory)
     memory_add_parser = commands.add_parser(
-        "memory-add", help="Store an owner note in the persona's memory"
+        "memory-add", help="Store an owner note in the persona's memory", allow_abbrev=False
     )
     memory_add_parser.add_argument("text")
     memory_add_parser.set_defaults(handler=add_owner_note)
     memory_forget_parser = commands.add_parser(
-        "memory-forget", help="Delete one meeting or one episode from the persona's memory"
+        "memory-forget",
+        help="Delete one meeting or one episode from the persona's memory",
+        allow_abbrev=False,
     )
     forget_target = memory_forget_parser.add_mutually_exclusive_group(required=True)
     forget_target.add_argument("--meeting", dest="meeting_id", default=None)
@@ -51,7 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_forget_parser.set_defaults(handler=forget_memory)
     memory_ingest_parser = commands.add_parser(
-        "memory-ingest", help="Ingest a recorded meeting into the persona's memory, resuming"
+        "memory-ingest",
+        help="Ingest a recorded meeting into the persona's memory, resuming",
+        allow_abbrev=False,
     )
     memory_ingest_parser.add_argument("--meeting", dest="meeting_id", required=True)
     memory_ingest_parser.add_argument("--twin-name", default=None)
@@ -59,10 +67,13 @@ def build_parser() -> argparse.ArgumentParser:
     memory_reembed_parser = commands.add_parser(
         "memory-reembed",
         help="Recompute the persona's entity and fact embeddings with the configured model",
+        allow_abbrev=False,
     )
     memory_reembed_parser.set_defaults(handler=reembed_memory)
     report_parser = commands.add_parser(
-        "report", help="Summarize latency, replies, tools, ingestion, and faults of one meeting"
+        "report",
+        help="Summarize latency, replies, tools, ingestion, and faults of one meeting",
+        allow_abbrev=False,
     )
     report_parser.add_argument("--meeting", dest="meeting_id", required=True)
     report_parser.add_argument("--journal-dir", type=Path, default=None)
@@ -74,13 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
         memory_reembed_parser,
     ):
         operator_parser.add_argument("--persona", dest="persona_path", type=Path, required=True)
-        operator_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
+        operator_parser.add_argument("--owner-id", dest="owner_id", default=None)
         operator_parser.add_argument("--twin-id", default=None)
-    join_parser = commands.add_parser("join", help="Join a Google Meet link as a guest twin")
+    join_parser = commands.add_parser(
+        "join", help="Join a Google Meet link as a guest twin", allow_abbrev=False
+    )
     join_parser.add_argument("link")
     join_parser.set_defaults(handler=join_meeting)
     join_parser.add_argument("--twin-name", default=None)
-    join_parser.add_argument("--owner-id", "--owner", dest="owner_id", default=None)
+    join_parser.add_argument("--owner-id", dest="owner_id", default=None)
     join_parser.add_argument("--twin-id", default=None)
     join_parser.add_argument("--meeting-id", default=None)
     join_parser.add_argument("--lobby-timeout", type=float, default=None)
@@ -128,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Let new speech interrupt playback; requires --converse",
     )
     chat_parser = commands.add_parser(
-        "chat", help="Run one agent turn with a persistent checkpoint"
+        "chat", help="Run one agent turn with a persistent checkpoint", allow_abbrev=False
     )
     chat_parser.add_argument("message")
     chat_parser.add_argument("--thread", required=True)

@@ -108,8 +108,8 @@ def classify_minimax_status(
 
 
 def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
-    category = getattr(error, "category", None) or getattr(error, "error_category", None)
-    name = getattr(category, "name", None) or getattr(category, "value", None)
+    category = getattr(error, "category", None)
+    name = getattr(category, "name", None)
     if not isinstance(name, str):
         return None
     mapped = ERROR_CATEGORY_KINDS.get(name.upper())

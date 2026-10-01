@@ -210,14 +210,14 @@ async def test_ingest_stops_between_windows_when_requested() -> None:
     assert memory.added == []
 
 
-async def test_ingest_refuses_a_saga_written_by_an_older_ingestion_format() -> None:
+async def test_ingest_rejects_an_invalid_episode_name_in_the_saga() -> None:
     memory = make_graphiti(
         episode_prefix="uuid-",
         edges=[SimpleNamespace(fact="fact")],
-        existing=[SimpleNamespace(uuid="legacy", name="meeting-1:00003")],
+        existing=[SimpleNamespace(uuid="invalid-episode", name="not-a-window")],
     )
 
-    with pytest.raises(ValueError, match="memory-forget"):
+    with pytest.raises(ValueError, match="invalid episode name"):
         await run(memory, [said(0, "Hello.")])
 
 

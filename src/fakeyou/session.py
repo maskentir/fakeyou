@@ -6,9 +6,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
-from fakeyou.invariants import PositiveSeconds
-from fakeyou.invariants import SessionId as SessionId
-from fakeyou.invariants import TwinName as TwinName
+from fakeyou.invariants import PositiveSeconds, SessionId, TwinName
 from fakeyou.lifecycle import MeetingPhase, TerminalReason
 from fakeyou.settings import DEFAULTS
 

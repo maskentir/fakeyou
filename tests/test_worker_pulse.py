@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from fakeyou.audio import (
+from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
     CAPTURE_SAMPLE_RATE,

@@ -62,6 +62,19 @@ async def test_probe_endpoint_never_raises_on_garbage() -> None:
     assert result.detail != ""
 
 
+async def test_probe_endpoint_rejects_a_host_without_a_scheme(monkeypatch) -> None:
+    import fakeyou.preflight as preflight
+
+    async def unexpected_connection(*args):
+        pytest.fail("an endpoint without a scheme must not open a connection")
+
+    monkeypatch.setattr(preflight, "_connect_and_close", unexpected_connection)
+    result = await probe_endpoint("127.0.0.1:443", timeout_seconds=2.0)
+
+    assert result.ok is False
+    assert result.detail == "invalid endpoint"
+
+
 async def test_preflight_waits_for_all_endpoints_after_one_succeeds() -> None:
     import asyncio
 

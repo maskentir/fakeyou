@@ -86,7 +86,7 @@ Aturan validasi (`model_validator(mode="after")`):
 
 Konstanta invarian dikumpulkan di satu modul: nama device PulseAudio, 16 kHz capture, 24 kHz playback, format PCM s16le mono. Default yang sekarang tersebar di `settings.py`, `session.py`, `meet.py`, `audio.py`, dan `deaf.py` (misalnya 300 s lobby tiga kali, 120 s deaf sepuluh kali) hanya ada di skema.
 
-Migrasi: `.env` lama ditolak dengan pesan yang menyebut key barunya. Tabel pemetaan key lama ke baru ada di README bersama `.env.example` yang diperbarui.
+Konfigurasi hanya menerima key dari skema aktif. Key yang tidak dikenal ditolak dengan `Unknown configuration key`; tidak ada peta migrasi atau alias konfigurasi lama. Nama key aktif tersedia di `.env.example`.
 
 ## Fase 3 — DRY di `src`
 
@@ -146,7 +146,7 @@ Parameter memakai satu nama per konsep (`faults`, `journal`, `meeting_record`). 
 | Keputusan | Rekomendasi |
 | --- | --- |
 | Jalur playback non-streaming | Hapus; streaming satu-satunya jalur produksi |
-| Migrasi `.env` | Putus bersih tanpa alias lama; `.env` lama ditolak dengan pesan key baru |
+| Migrasi `.env` | Putus bersih tanpa alias atau peta key lama; key di luar skema aktif ditolak |
 | Journal lama setelah rename event | Putus bersih; journal lama hanya data uji |
 | Bahasa dokumen | Bahasa Indonesia untuk semua kelas dokumen (mayoritas saat ini, 13 banding 10) |
 | Bahasa speech | Satu `speech.language` per deployment, divalidasi terhadap persona saat `join` |
@@ -192,4 +192,3 @@ Keputusan implementasi dan pengecualian:
 Ukuran: `src` naik dari 6.804 menjadi 7.043 baris. Sekitar 284 baris duplikasi dan kode mati dihapus (terbesar `playback.py` −100, `voice.py` −57, `callbacks.py` −33); skema konfigurasi bertipe, peta migrasi, kosakata taksonomi, dan konstanta invarian menambah sekitar 390 baris; client Anthropic untuk memori dan preflight sadar skema/port menambah sisanya. Pemecahan `cli.py` hampir netral (1.018 menjadi 1.032 baris). Tes: 1.407 baris duplikasi dihapus dari file tes lama dan dipusatkan di `tests/fakes.py` dan `tests/conftest.py` (+831); cakupan baru menambah skema konfigurasi (+410) serta penegakan taksonomi, aturan kode, dan dokumen (+284).
 
 Verifikasi pada HEAD branch: `ruff`, `ruff format --check`, dan `mypy` bersih; 1.356 tes offline dan browser (termasuk pemeriksaan eval offline) lulus; tes container lulus dengan image worker yang dibangun dari branch ini; 6 tes provider live lulus (jawaban dan TTS MiniMax, tiga tes Graphiti dengan ekstraksi Muse dan embedding lokal, fallback Muse). Eval replay berjalan lengkap 24 giliran dengan `recall_called` dan `no_trailing_question` 1,0; `must_mention_any` 0,833 sama dengan sebelum refactor, dan latency p95 mengikuti variasi MiniMax (permintaan mentah tanpa kode proyek 1,8–7,3 detik).
-

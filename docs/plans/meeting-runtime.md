@@ -100,7 +100,7 @@ Tambahan `Settings` (prefix `FAKEYOU_` tetap):
 | `SESSION_DURATION_SECONDS` | Batas durasi sesi |
 | `OWNER_ID`, `TWIN_ID` | Identitas sesi |
 
-CLI yang diusulkan: `fakeyou join <link> --twin-name ... --owner ...`, berjalan foreground sampai sesi berakhir atau dihentikan. Kontrol start/stop/status jarak jauh dan penjadwalan menyusul di tahap 6.
+CLI yang diusulkan: `fakeyou join <link> --twin-name ... --owner-id ...`, berjalan foreground sampai sesi berakhir atau dihentikan. Kontrol start/stop/status jarak jauh dan penjadwalan menyusul di tahap 6.
 
 ## Rencana pengujian
 

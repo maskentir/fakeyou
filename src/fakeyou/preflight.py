@@ -21,9 +21,8 @@ class ProbeResult:
 
 
 def _endpoint_parts(endpoint: str) -> tuple[str, int, bool, bool] | None:
-    raw = endpoint if "://" in endpoint else f"https://{endpoint}"
     try:
-        parsed = urlparse(raw)
+        parsed = urlparse(endpoint)
         host = parsed.hostname
         if not host:
             return None
@@ -119,8 +118,7 @@ def _safe_endpoint(endpoint: str) -> str:
     if not isinstance(endpoint, str):
         return "<invalid endpoint>"
     try:
-        raw = endpoint if "://" in endpoint else f"https://{endpoint}"
-        parsed = urlsplit(raw)
+        parsed = urlsplit(endpoint)
         if parsed.hostname is None:
             return trim_detail(endpoint) or "<invalid endpoint>"
         host = parsed.hostname
