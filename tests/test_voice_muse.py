@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import sys
 import time
 import unicodedata
 import wave
@@ -16,10 +17,12 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
+from pydantic import SecretStr
 
 from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import create_muse_stt
+from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt
 from tests.fakes import FakeSTT
 
 
@@ -66,6 +69,49 @@ def test_wav_validation_rejects_wrong_sample_rate(tmp_path: Path) -> None:
         audio.writeframes(b"\0\0" * 160)
     with pytest.raises(ValueError, match="24000"):
         _read_wav(path)
+
+
+async def test_endpointing_harness_uses_configured_muse_model_url_and_language(
+    settings: Settings, monkeypatch
+) -> None:
+    configured = settings.model_copy(
+        update={
+            "stt": settings.stt.model_copy(
+                update={
+                    "mode": "PUSH_TO_TALK",
+                    "model": "custom-muse-model",
+                    "url": "wss://muse.example.test/asr",
+                    "api_key": SecretStr("test-key"),
+                }
+            ),
+            "speech": settings.speech.model_copy(update={"language": "en"}),
+        }
+    )
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(sys.modules[__name__], "Settings", lambda: configured)
+    monkeypatch.setattr(sys.modules[__name__], "_read_wav", lambda _path: (24_000, b"\0\0"))
+    monkeypatch.setenv("MUSE_TEST_AUDIO", "unused.wav")
+    monkeypatch.setenv("MUSE_EXPECTED_TEXT", "Hello there")
+
+    async def run_pipeline(stt, pcm, sample_rate, expected, secret) -> None:
+        observed.update(stt=stt, pcm=pcm, sample_rate=sample_rate, expected=expected, secret=secret)
+
+    monkeypatch.setattr(sys.modules[__name__], "_run_pipeline", run_pipeline)
+
+    await test_muse_endpointing_transcribes_realtime_wav()
+
+    service = observed["stt"]
+    assert isinstance(service, MetaSTTService)
+    assert observed["pcm"] == b"\0\0"
+    assert observed["sample_rate"] == 24_000
+    assert observed["expected"] == "hello there"
+    assert observed["secret"] == "test-key"
+
+    assert service._settings.model == "custom-muse-model"
+    assert service._settings.language == "English"
+    assert service._settings.mode == "ENDPOINTING"
+    assert service._url == "wss://muse.example.test/asr"
 
 
 async def _run_pipeline(
@@ -169,5 +215,12 @@ async def test_muse_endpointing_transcribes_realtime_wav() -> None:
     if not expected_text:
         pytest.fail("MUSE_EXPECTED_TEXT must contain text")
 
-    stt = create_muse_stt(api_key=api_key, mode="ENDPOINTING", sample_rate=sample_rate)
+    stt = create_muse_stt(
+        api_key=api_key,
+        language=SPEECH_LANGUAGES[settings.speech.language][0],
+        mode="ENDPOINTING",
+        model=settings.stt.model,
+        url=settings.stt.url,
+        sample_rate=sample_rate,
+    )
     await _run_pipeline(stt, pcm, sample_rate, expected_text, api_key)

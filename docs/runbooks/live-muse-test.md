@@ -27,8 +27,8 @@ Untuk sistem lain, sediakan file WAV mono, PCM signed 16-bit, 24 kHz dengan kali
 ## Menjalankan tes
 
 ```sh
-FAKEYOU_MUSE_TEST_AUDIO=.runtime/live-tests/muse-id.wav \
-FAKEYOU_MUSE_EXPECTED_TEXT='Halo, ini pengujian suara untuk rapat digital. Besok kita membahas jadwal proyek.' \
+MUSE_TEST_AUDIO=.runtime/live-tests/muse-id.wav \
+MUSE_EXPECTED_TEXT='Halo, ini pengujian suara untuk rapat digital. Besok kita membahas jadwal proyek.' \
 uv run pytest tests/test_voice_muse.py -m live -v
 ```
 
