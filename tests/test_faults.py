@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from fakeyou.faults import Fault, FaultReporter, record_consumer_fault
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import ProviderFault
 from fakeyou.report import build_session_report, read_journal
 
@@ -12,7 +12,7 @@ def _reporter(**overrides):
     values: dict = {"meeting_id": "meeting-1"}
     values.update(overrides)
     return FaultReporter(
-        journal=ProviderJournal(values["meeting_id"], now=values.get("now"), emit=values.get("log"))
+        journal=Journal(values["meeting_id"], now=values.get("now"), emit=values.get("log"))
     )
 
 
@@ -96,9 +96,7 @@ def test_empty_report_is_none() -> None:
 def test_first_of_kind_logs_once_with_meeting_id() -> None:
     lines: list[str] = []
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    reporter = FaultReporter(
-        journal=ProviderJournal("meeting-7", now=lambda: frozen, emit=lines.append)
-    )
+    reporter = FaultReporter(journal=Journal("meeting-7", now=lambda: frozen, emit=lines.append))
 
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     reporter.record(ProviderFault("stt", "timeout", detail="slow again", retryable=True))
@@ -173,7 +171,7 @@ def test_fault_count_survives_logging_failure() -> None:
 def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = ProviderJournal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
 
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
@@ -194,7 +192,7 @@ def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clo
 def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = ProviderJournal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
     record_consumer_fault(
         reporter, None, source="stt", detail="transcript_consumer", error=ValueError("private")

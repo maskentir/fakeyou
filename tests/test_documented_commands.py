@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.cli import build_parser
+from fakeyou.cli.main import build_parser
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCUMENTS = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]

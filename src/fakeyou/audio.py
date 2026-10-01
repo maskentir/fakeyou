@@ -45,7 +45,7 @@ from fakeyou.invariants import MEETING_MONITOR_SOURCE_NAME as MEETING_MONITOR_SO
 from fakeyou.invariants import MEETING_SINK_NAME as MEETING_SINK_NAME
 from fakeyou.invariants import PCM_CHANNELS
 from fakeyou.invariants import PLAYBACK_SAMPLE_RATE as PLAYBACK_SAMPLE_RATE
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.playback import (
     PlaybackEngine,
     PlaybackEvent,
@@ -128,7 +128,7 @@ async def run_stt_reconnect(stt: object) -> None:
 
 
 class _CaptureObserver(FrameProcessor):
-    def __init__(self, activity: CaptureActivity, journal: ProviderJournal | None = None) -> None:
+    def __init__(self, activity: CaptureActivity, journal: Journal | None = None) -> None:
         super().__init__()
         self._activity = activity
         self._journal = journal
@@ -162,15 +162,15 @@ class _TranscriptObserver(FrameProcessor):
         self,
         callback: Callable[[TranscriptionFrame], Awaitable[None]],
         activity: CaptureActivity,
-        reporter: FaultReporter | None,
+        faults: FaultReporter | None,
         on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
         *,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         super().__init__()
         self._callback = callback
         self._activity = activity
-        self._reporter = reporter
+        self._faults = faults
         self._on_interim = on_interim
         self._journal = journal
 
@@ -200,7 +200,7 @@ class _TranscriptObserver(FrameProcessor):
                     raise
                 except Exception as error:
                     record_consumer_fault(
-                        self._reporter,
+                        self._faults,
                         self._journal,
                         source="stt",
                         detail="transcript_consumer",
@@ -239,8 +239,8 @@ class MeetingAudioSession:
         *,
         stt: object = None,
         activity: CaptureActivity | None = None,
-        fault_reporter: FaultReporter | None = None,
-        journal: ProviderJournal | None = None,
+        faults: FaultReporter | None = None,
+        journal: Journal | None = None,
         deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
         deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
         alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
@@ -249,11 +249,11 @@ class MeetingAudioSession:
         self.activity = activity or CaptureActivity(now=now)
         self._now = now
         self._stt = stt
-        self._reporter = fault_reporter
+        self._faults = faults
         self._journal = journal
         self._monitor = DeafMonitor(
             activity=self.activity,
-            reporter=fault_reporter,
+            faults=faults,
             deaf_window_seconds=deaf_window_seconds,
             deaf_grace_seconds=deaf_grace_seconds,
             alone_leave_seconds=alone_leave_seconds,
@@ -322,8 +322,8 @@ class MeetingAudioSession:
             return
         if not stt_reconnect_supported(self._stt):
             self._reconnect_state = "unsupported"
-            if self._reporter is not None:
-                self._reporter.record(Fault(source="stt", kind="reconnect_unsupported"))
+            if self._faults is not None:
+                self._faults.record(Fault(source="stt", kind="reconnect_unsupported"))
             if self._journal is not None:
                 self._journal.record("stt_reconnect_skipped", source="stt", reason=reason)
             return
@@ -380,8 +380,8 @@ class MeetingAudioSession:
                 raise
             except Exception as error:
                 fault = classify_exception("stt", error)
-                if self._reporter is not None:
-                    self._reporter.record(fault)
+                if self._faults is not None:
+                    self._faults.record(fault)
                 if self._journal is not None:
                     self._journal.record(
                         "stt_reconnect_failed",
@@ -453,13 +453,13 @@ class MeetingAudioSession:
             raise
 
 
-def default_playback_engine(
+def create_playback_engine(
     *,
     tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
     on_event: Callable[[PlaybackEvent], None] | None = None,
-    fault_reporter: FaultReporter | None = None,
-    journal: ProviderJournal | None = None,
+    faults: FaultReporter | None = None,
+    journal: Journal | None = None,
 ) -> PlaybackEngine:
     return PlaybackEngine(
         create_speech_synthesizer(
@@ -470,7 +470,7 @@ def default_playback_engine(
         stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
         on_event=on_event,
-        fault_reporter=fault_reporter,
+        faults=faults,
         journal=journal,
     )
 
@@ -485,8 +485,8 @@ async def open_meeting_audio(
     on_playback_event: Callable[[PlaybackEvent], None] | None = None,
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
     activity: CaptureActivity | None = None,
-    fault_reporter: FaultReporter | None = None,
-    journal: ProviderJournal | None = None,
+    faults: FaultReporter | None = None,
+    journal: Journal | None = None,
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
     deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
     alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
@@ -501,11 +501,11 @@ async def open_meeting_audio(
     engine = (
         playback
         if playback is not None
-        else default_playback_engine(
+        else create_playback_engine(
             tts_settings=tts_settings,
             speech_language=speech_language,
             on_event=on_playback_event,
-            fault_reporter=fault_reporter,
+            faults=faults,
             journal=journal,
         )
     )
@@ -536,7 +536,7 @@ async def open_meeting_audio(
                         _CaptureObserver(activity, journal),
                         stt,
                         _TranscriptObserver(
-                            on_transcript, activity, fault_reporter, on_interim, journal=journal
+                            on_transcript, activity, faults, on_interim, journal=journal
                         ),
                     ]
                 ),
@@ -555,8 +555,8 @@ async def open_meeting_audio(
                 detail = category_fault("stt", frame) or classify_exception(
                     "stt", frame.exception or RuntimeError("provider failure")
                 )
-                if fault_reporter is not None:
-                    fault_reporter.record(detail)
+                if faults is not None:
+                    faults.record(detail)
                 if frame.category is not None and not frame.category.is_permanent:
                     if session is not None and detail.retryable:
                         session.request_stt_reconnect("provider_fault")
@@ -578,7 +578,7 @@ async def open_meeting_audio(
                 engine,
                 stt=stt,
                 activity=activity,
-                fault_reporter=fault_reporter,
+                faults=faults,
                 journal=journal,
                 deaf_window_seconds=deaf_window_seconds,
                 deaf_grace_seconds=deaf_grace_seconds,
@@ -628,7 +628,7 @@ async def open_meeting_audio(
                 _terminate_native_audio(transport)
         for cleanup_error in cleanup_errors:
             record_consumer_fault(
-                fault_reporter, journal, source="audio", detail="audio_cleanup", error=cleanup_error
+                faults, journal, source="audio", detail="audio_cleanup", error=cleanup_error
             )
         if cleanup_errors and original_error is None:
             raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]

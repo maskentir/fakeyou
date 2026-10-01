@@ -178,7 +178,7 @@ async def verify_memory_connection(memory: Graphiti) -> None:
     await memory.driver.client.verify_connectivity()
 
 
-def recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMiddleware[Any, Any]:
+def create_recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMiddleware[Any, Any]:
     def report_unavailable(error: Exception, request: ToolCallRequest) -> str:
         if faults is not None:
             faults.record(classify_exception("memory", error))

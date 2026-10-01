@@ -90,7 +90,7 @@ async def load_persona(path: Path, *, owner_id: str, twin_id: str) -> PersonaPro
     return profile
 
 
-def build_persona(profile: PersonaProfile) -> str:
+def build_system_prompt(profile: PersonaProfile) -> str:
     sections = [MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE[profile.language], SOURCE_RULES]
     if "recall_meeting_context" in profile.allowed_tools:
         sections.append(RECALL_RULES)

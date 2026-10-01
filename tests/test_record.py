@@ -11,8 +11,8 @@ from fakeyou.record import (
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
+    load_meeting_record,
     meeting_record_path,
-    read_meeting_record,
 )
 
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
@@ -50,7 +50,7 @@ def test_record_roundtrips_transcripts_twin_speech_and_tool_results(tmp_path: Pa
     )
     record.close()
 
-    assert read_meeting_record(meeting_record_path(tmp_path, "meeting-1")) == [
+    assert load_meeting_record(meeting_record_path(tmp_path, "meeting-1")) == [
         TranscriptEntry(
             at=NOW,
             id="event-0",
@@ -92,7 +92,7 @@ def test_record_keeps_only_new_final_nonblank_transcripts(tmp_path: Path) -> Non
     record.add_twin_speech("  ")
     record.close()
 
-    entries = read_meeting_record(meeting_record_path(tmp_path, "meeting-1"))
+    entries = load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))
     assert [entry.id for entry in entries if isinstance(entry, TranscriptEntry)] == ["event-0"]
     assert len(entries) == 1
 
@@ -114,4 +114,4 @@ def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:
     path.write_text('{"kind": "screenshot", "at": "2026-09-30T10:00:00+00:00"}\n', encoding="utf-8")
 
     with pytest.raises(ValueError):
-        read_meeting_record(path)
+        load_meeting_record(path)

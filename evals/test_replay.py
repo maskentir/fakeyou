@@ -12,10 +12,10 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.cli import create_chat_model
 from fakeyou.conversation import LangGraphResponder, TranscriptEvent, cap_spoken_reply
 from fakeyou.memory import RECALL_EMPTY_RESULT
-from fakeyou.persona import PersonaProfile, build_persona
+from fakeyou.persona import PersonaProfile, build_system_prompt
+from fakeyou.providers import create_chat_model
 from fakeyou.settings import Settings
 from tests.fakes import ToolCallingFakeModel
 
@@ -94,7 +94,7 @@ async def replay(model_factory, fixture: dict[str, Any], runs: int) -> ReplaySco
             agent = create_meeting_agent(
                 model_factory(),
                 tools=[recall_tool(session["memory"])],
-                persona=build_persona(profile),
+                persona=build_system_prompt(profile),
                 checkpointer=InMemorySaver(),
             )
             responder = LangGraphResponder(agent, f"replay-{run}-{session['meeting_id']}")

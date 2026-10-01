@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import ProviderFault, ProviderFaultKind, trim_detail
 from fakeyou.taxonomy import Subsystem
 
@@ -30,7 +30,7 @@ class Fault:
 
 def record_consumer_fault(
     faults: "FaultReporter | None",
-    journal: ProviderJournal | None,
+    journal: Journal | None,
     *,
     source: Subsystem,
     detail: str,
@@ -44,7 +44,7 @@ def record_consumer_fault(
 
 
 class FaultReporter:
-    def __init__(self, *, journal: ProviderJournal) -> None:
+    def __init__(self, *, journal: Journal) -> None:
         self.journal = journal
         self._records: dict[tuple[Subsystem, str | None, FaultKind, int | None], Fault] = {}
         self._total = 0

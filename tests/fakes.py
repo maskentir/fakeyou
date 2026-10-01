@@ -32,7 +32,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.conversation import ConversationResponder, TranscriptEvent
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.playback import PlaybackEvent
 from fakeyou.session import ConversationError, MeetingAudio, MeetingConversation
 
@@ -200,7 +200,7 @@ class FakeClock:
         self.now += seconds
 
 
-class RecordingJournal(ProviderJournal):
+class RecordingJournal(Journal):
     def __init__(self, meeting_id: str = "meeting-1", **kwargs: Any) -> None:
         self.lines: list[str] = []
         super().__init__(meeting_id, emit=self.lines.append, **kwargs)

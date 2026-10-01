@@ -22,7 +22,6 @@ from fakeyou.audio import (
     open_meeting_audio,
 )
 from fakeyou.browser import open_direct_page
-from fakeyou.cli import tts_api_key
 from fakeyou.playback import (
     PlaybackEngine,
     create_pactl_muter,
@@ -184,7 +183,7 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
     settings = Settings()
     try:
         require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
-        tts_api_key(settings)
+        require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
     except ValueError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)

@@ -12,7 +12,7 @@ from graphiti_core.embedder.client import EMBEDDING_DIM
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 
-import fakeyou.cli as cli
+import fakeyou.cli.join as cli_join
 from fakeyou.settings import (
     EmbedderSettings,
     IdentitySettings,
@@ -81,7 +81,7 @@ def journal() -> Iterator[RecordingJournal]:
 @pytest.fixture
 def join(settings: Settings) -> Callable[..., Any]:
     return partial(
-        cli.join_meeting,
+        cli_join.join_meeting,
         twin_name=None,
         owner_id=None,
         twin_id=None,
@@ -96,7 +96,7 @@ def join(settings: Settings) -> Callable[..., Any]:
 @pytest.fixture
 def session_run(monkeypatch: pytest.MonkeyPatch) -> SessionRun:
     run = SessionRun()
-    monkeypatch.setattr(cli, "run_meeting_session", run)
+    monkeypatch.setattr(cli_join, "run_meeting_session", run)
     return run
 
 

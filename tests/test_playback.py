@@ -109,7 +109,7 @@ async def test_speak_plays_in_order_and_mutes_around_playback() -> None:
     assert synth.texts == ["one", "two"]
     assert player.played == [synth.audio, synth.audio]
     assert muter.calls == [False, True]
-    assert [event.name for event in events] == [
+    assert [event.kind for event in events] == [
         "playback_started",
         "playback_finished",
         "playback_started",
@@ -165,7 +165,7 @@ async def test_stop_kills_in_flight_playback_and_keeps_engine_usable() -> None:
         player.release.set()
         await engine.close()
 
-    names = [event.name for event in events]
+    names = [event.kind for event in events]
     assert names.count("playback_dropped") == 2
     assert "playback_finished" in names
 
@@ -185,7 +185,7 @@ async def test_synthesis_failure_reports_event_and_keeps_queue_alive() -> None:
     finally:
         await engine.close()
 
-    failed = [event for event in events if event.name == "playback_failed"]
+    failed = [event for event in events if event.kind == "playback_failed"]
     assert len(failed) == 1
     assert failed[0].text == "fail"
     assert "tts timeout" in failed[0].detail
@@ -202,7 +202,7 @@ async def test_playback_failure_reports_event_and_drains_queue() -> None:
     await engine.speak("broken")
     await engine.close()
 
-    assert [event.name for event in events] == ["playback_started", "playback_failed"]
+    assert [event.kind for event in events] == ["playback_started", "playback_failed"]
     assert muter.calls == [False, True]
     assert engine.is_speaking is False
 
@@ -218,7 +218,7 @@ async def test_mute_failure_reports_event_and_playback_continues() -> None:
     assert player.played == [synth.audio]
     await engine.close()
 
-    assert [event.name for event in events].count("mute_failed") == 2
+    assert [event.kind for event in events].count("mute_failed") == 2
 
 
 async def test_cancelled_speak_drops_from_queue() -> None:
@@ -425,7 +425,7 @@ async def test_stop_during_synthesis_drops_without_playing() -> None:
 
     assert synth.cancelled
     assert player.played == []
-    assert [event.name for event in events] == ["playback_started", "playback_dropped"]
+    assert [event.kind for event in events] == ["playback_started", "playback_dropped"]
     assert events[-1].detail == "interrupted"
 
 
@@ -494,7 +494,7 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
 
     assert synth.cancelled
     assert player.played == []
-    assert all(event.name in {"playback_started", "playback_dropped"} for event in events)
+    assert all(event.kind in {"playback_started", "playback_dropped"} for event in events)
 
 
 async def test_typed_synth_fault_records_and_engine_recovers(
@@ -514,7 +514,7 @@ async def test_typed_synth_fault_records_and_engine_recovers(
         set_muted=muter,
         on_event=events.append,
         tail_seconds=0,
-        fault_reporter=reporter,
+        faults=reporter,
     )
 
     try:
@@ -525,7 +525,7 @@ async def test_typed_synth_fault_records_and_engine_recovers(
     finally:
         await engine.close()
 
-    assert [event.name for event in events if event.name == "playback_failed"] != []
+    assert [event.kind for event in events if event.kind == "playback_failed"] != []
     report = reporter.report()
     assert report is not None
     assert report["faults"]["kinds"][0]["kind"] == "timeout"
@@ -547,7 +547,7 @@ async def test_play_failure_records_and_worker_survives(
         set_muted=muter,
         on_event=events.append,
         tail_seconds=0,
-        fault_reporter=reporter,
+        faults=reporter,
     )
 
     try:
@@ -558,7 +558,7 @@ async def test_play_failure_records_and_worker_survives(
     finally:
         await engine.close()
 
-    names = [event.name for event in events]
+    names = [event.kind for event in events]
     assert names.count("playback_failed") == 1
     assert names.count("playback_finished") == 1
     assert reporter.total() >= 1
@@ -622,7 +622,7 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
 
     assert synth.calls == 2
     assert streamer.chunks == synth.chunks
-    assert [event.name for event in events] == ["playback_started", "playback_finished"]
+    assert [event.kind for event in events] == ["playback_started", "playback_finished"]
 
 
 async def test_stream_timeout_after_audio_does_not_retry() -> None:
@@ -654,7 +654,7 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
 
     assert synth.calls == 1
     assert streamer.chunks == [synth.chunks[0]]
-    assert [event.name for event in events] == ["playback_started", "playback_failed"]
+    assert [event.kind for event in events] == ["playback_started", "playback_failed"]
 
 
 async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
@@ -680,7 +680,7 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
     assert synth.texts == ["hello"]
     assert streamer.chunks == synth.chunks
     assert player.played == []
-    assert [event.name for event in events] == ["playback_started", "playback_finished"]
+    assert [event.kind for event in events] == ["playback_started", "playback_finished"]
 
 
 async def test_streaming_play_failure_reports_and_engine_recovers(
@@ -701,7 +701,7 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
         events,
         tail_seconds=0,
         stream_audio=streamer,
-        fault_reporter=reporter,
+        faults=reporter,
     )
 
     try:
@@ -711,7 +711,7 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
     finally:
         await engine.close()
 
-    names = [event.name for event in events]
+    names = [event.kind for event in events]
     assert names.count("playback_failed") == 1
     assert names.count("playback_finished") == 1
     assert reporter.total() >= 1

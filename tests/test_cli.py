@@ -15,8 +15,15 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
-import fakeyou.cli as cli
+import fakeyou.assembly as assembly
+import fakeyou.cli.chat as cli_chat
+import fakeyou.cli.diagnostics as cli_diagnostics
+import fakeyou.cli.errors as cli_errors
+import fakeyou.cli.join as cli_join
+import fakeyou.cli.main as cli_main
+import fakeyou.cli.memory as cli_memory
 import fakeyou.memory as memory_module
+import fakeyou.providers as providers
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.audio import (
     AGENT_MIC_SOURCE_NAME,
@@ -27,10 +34,11 @@ from fakeyou.audio import (
     PLAYBACK_SAMPLE_RATE,
 )
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
-from fakeyou.persona import PersonaProfile, build_persona
+from fakeyou.persona import PersonaProfile, build_system_prompt
 from fakeyou.playback import PlaybackEvent
-from fakeyou.record import meeting_record_path, read_meeting_record
+from fakeyou.record import load_meeting_record, meeting_record_path
 from fakeyou.settings import CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
+from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
 
 
@@ -61,12 +69,12 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
         events.append("agent")
         return FakeAgent()
 
-    monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(memory_module, "create_graphiti_memory", create_memory)
-    monkeypatch.setattr(cli, "create_memory_tools", create_tools)
-    monkeypatch.setattr(cli, "create_meeting_agent", create_agent)
+    monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
+    monkeypatch.setattr(cli_chat, "create_meeting_agent", create_agent)
 
-    await cli.chat("hello", "thread", False, True, settings)
+    await cli_chat.chat("hello", "thread", False, True, settings)
 
     assert memory.factory_thread != main_thread
     assert events == ["construct", "tools:test-group", "agent", "invoke", "close"]
@@ -82,7 +90,7 @@ async def test_memory_init_builds_indexes(
 
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
 
-    await cli.initialize_memory(settings)
+    await cli_memory.initialize_memory(settings)
 
     assert events == ["build", "close"]
     assert "Graphiti indexes initialized." in capsys.readouterr().out
@@ -99,7 +107,7 @@ async def test_memory_init_closes_memory_when_index_setup_fails(
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: memory)
 
     with pytest.raises(RuntimeError, match="index setup failed"):
-        await cli.initialize_memory(settings)
+        await cli_memory.initialize_memory(settings)
 
     assert events == ["build", "close"]
 
@@ -239,7 +247,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
     session_run, join, tmp_path: Path
 ) -> None:
     from fakeyou.faults import FaultReporter
-    from fakeyou.journal import ProviderJournal
+    from fakeyou.journal import Journal
 
     captured = session_run
 
@@ -253,7 +261,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
 
     assert captured["config"].checkpoint_path == tmp_path / "checkpoints.sqlite"
     assert isinstance(captured["faults"], FaultReporter)
-    assert isinstance(captured["journal"], ProviderJournal)
+    assert isinstance(captured["journal"], Journal)
     assert "preflight_hosts" not in captured
     assert (tmp_path / "journals" / "meeting-1.jsonl").is_file()
 
@@ -270,7 +278,7 @@ async def test_join_rejects_invalid_speech_before_browser_start(join, audio_enab
 
 
 def test_cli_error_is_value_error() -> None:
-    assert issubclass(cli.CliError, ValueError)
+    assert issubclass(cli_errors.CliError, ValueError)
 
 
 @pytest.mark.parametrize(
@@ -284,7 +292,7 @@ def test_cli_error_is_value_error() -> None:
     ],
 )
 async def test_join_rejects_invalid_link(join, link) -> None:
-    with pytest.raises(cli.CliError, match="meet.google.com"):
+    with pytest.raises(cli_errors.CliError, match="meet.google.com"):
         await join(
             link,
             meeting_id=None,
@@ -296,7 +304,7 @@ async def test_join_rejects_invalid_link(join, link) -> None:
     [(0.0, None), (-1.0, None), (float("nan"), None), (None, 0.0), (None, -5.0)],
 )
 async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration) -> None:
-    with pytest.raises(cli.CliError, match="positive"):
+    with pytest.raises(cli_errors.CliError, match="positive"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -307,7 +315,7 @@ async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration) 
 
 async def test_join_audio_precondition_raises_cli_error(join, monkeypatch) -> None:
     monkeypatch.setenv("PULSE_SOURCE", "wrong-source")
-    with pytest.raises(cli.CliError, match="--audio"):
+    with pytest.raises(cli_errors.CliError, match="--audio"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -318,18 +326,18 @@ async def test_join_audio_precondition_raises_cli_error(join, monkeypatch) -> No
 @pytest.mark.parametrize("thread", ["", "bad thread", "bad:thread", "x" * 129])
 async def test_chat_rejects_invalid_thread(settings, monkeypatch, thread) -> None:
     monkeypatch.setattr(
-        cli,
+        providers,
         "init_chat_model",
         lambda *_args, **_kwargs: pytest.fail("thread must be validated first"),
     )
-    with pytest.raises(cli.CliError, match="thread"):
-        await cli.chat("hello", thread, False, False, settings)
+    with pytest.raises(cli_errors.CliError, match="thread"):
+        await cli_chat.chat("hello", thread, False, False, settings)
 
 
 def test_main_exits_1_on_cli_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(sys, "argv", ["fakeyou", "join", "not-a-link"])
     with pytest.raises(SystemExit) as excinfo:
-        cli.main()
+        cli_main.main()
     assert excinfo.value.code == 1
     assert "meet.google.com" in capsys.readouterr().err
 
@@ -398,13 +406,13 @@ def test_main_dispatches_parsed_options_to_the_command_handler(
         calls.append(kwargs)
 
     sync_handlers = {"show_session_report"}
-    monkeypatch.setattr(cli, handler, record if handler in sync_handlers else record_async)
+    monkeypatch.setattr(cli_main, handler, record if handler in sync_handlers else record_async)
     monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
 
-    cli.main()
+    cli_main.main()
 
     [call] = calls
-    assert isinstance(call.pop("settings"), cli.Settings)
+    assert isinstance(call.pop("settings"), Settings)
     assert {key: call[key] for key in expected} == expected
 
 
@@ -416,13 +424,13 @@ def test_join_owner_flags(monkeypatch, flag) -> None:
         captured["link"] = link
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
     monkeypatch.setattr(
         sys,
         "argv",
         ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", flag, "owner-9"],
     )
-    cli.main()
+    cli_main.main()
     assert captured["owner_id"] == "owner-9"
 
 
@@ -433,11 +441,11 @@ def test_join_headless_flag(monkeypatch, argv, expected) -> None:
     async def fake_join(link, **kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
     monkeypatch.setattr(
         sys, "argv", ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", *argv]
     )
-    cli.main()
+    cli_main.main()
     assert captured["headless"] is expected
 
 
@@ -481,7 +489,7 @@ def _enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
     monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
-    monkeypatch.setattr(cli, "find_spec", lambda name: SimpleNamespace())
+    monkeypatch.setattr(cli_join, "find_spec", lambda name: SimpleNamespace())
 
 
 async def _join_with_audio(
@@ -489,13 +497,13 @@ async def _join_with_audio(
 ):
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
-    monkeypatch.setattr(cli, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
     async def fake_saver(value):
         yield InMemorySaver()
 
-    monkeypatch.setattr(cli, "open_checkpointer", fake_saver)
+    monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
     captured = session_run
     arguments = {
         "twin_name": None,
@@ -525,7 +533,7 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
         created.update(kwargs)
         return SimpleNamespace(name="agent")
 
-    monkeypatch.setattr(cli, "create_meeting_agent", fake_agent)
+    monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)
     captured = await _join_with_audio(
         tmp_path,
         monkeypatch,
@@ -561,7 +569,7 @@ async def test_join_audio_transcript_reaches_conversation(
             agent_calls.append(config)
             return {"messages": [AIMessage(content="Reply.")]}
 
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
     captured = {}
 
     async def run(config, **kwargs):
@@ -604,7 +612,7 @@ async def test_join_audio_transcript_reaches_conversation(
     assert "text" not in final
     assert (final["participant"], final["meeting_id"]) == ("unknown", "meeting-9")
     assert final["at"]
-    entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
+    entries = load_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
     assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Hello.")]
 
 
@@ -612,7 +620,9 @@ async def test_audio_only_does_not_construct_responding_agent(
     session_run, join, settings, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
-        cli, "create_meeting_agent", lambda *args, **kwargs: pytest.fail("agent must be opt-in")
+        assembly,
+        "create_meeting_agent",
+        lambda *args, **kwargs: pytest.fail("agent must be opt-in"),
     )
     captured = await _join_with_audio(
         tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
@@ -621,7 +631,7 @@ async def test_audio_only_does_not_construct_responding_agent(
 
 
 async def test_conversation_option_requires_audio(join):
-    with pytest.raises(cli.CliError, match="--converse requires --audio"):
+    with pytest.raises(cli_errors.CliError, match="--converse requires --audio"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -631,7 +641,7 @@ async def test_conversation_option_requires_audio(join):
 
 @pytest.mark.asyncio
 async def test_join_memory_requires_audio(join) -> None:
-    with pytest.raises(cli.CliError, match="--memory"):
+    with pytest.raises(cli_errors.CliError, match="--memory"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -641,7 +651,7 @@ async def test_join_memory_requires_audio(join) -> None:
 
 @pytest.mark.asyncio
 async def test_join_wake_phrase_requires_converse(join) -> None:
-    with pytest.raises(cli.CliError, match="--wake-phrase"):
+    with pytest.raises(cli_errors.CliError, match="--wake-phrase"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -651,7 +661,7 @@ async def test_join_wake_phrase_requires_converse(join) -> None:
 
 @pytest.mark.asyncio
 async def test_join_barge_in_requires_converse(join) -> None:
-    with pytest.raises(cli.CliError, match="--barge-in"):
+    with pytest.raises(cli_errors.CliError, match="--barge-in"):
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
@@ -670,7 +680,7 @@ async def test_join_wake_phrase_gates_agent_replies(
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
 
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
     async def run(config, **kwargs):
         loop = kwargs["conversation"]
@@ -714,7 +724,7 @@ async def test_join_barge_in_stops_speaking_session(
     async def stop_playback():
         stops.append(True)
 
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
     async def run(config, **kwargs):
         loop = kwargs["conversation"]
@@ -790,7 +800,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         for row in rows
         if row.get("source") == "playback"
     )
-    entries = read_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
+    entries = load_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
     assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "hello?  ")]
 
 
@@ -841,7 +851,7 @@ BASE_HOSTS = ("https://api.openai.com/v1", "wss://api.meta.ai/v1/asr/realtime")
 def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     calls: list[tuple] = []
     monkeypatch.setattr(
-        cli, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+        providers, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
     )
     return calls
 
@@ -873,8 +883,8 @@ def forbid_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*_args, **_kwargs):
         pytest.fail("resources must not open before persona validation")
 
-    monkeypatch.setattr(cli, "init_chat_model", fail)
-    monkeypatch.setattr(cli, "run_meeting_session", fail)
+    monkeypatch.setattr(providers, "init_chat_model", fail)
+    monkeypatch.setattr(cli_join, "run_meeting_session", fail)
     monkeypatch.setattr(memory_module, "create_graphiti_memory", fail)
 
 
@@ -902,13 +912,13 @@ async def _join_persona_conversation(
 ) -> tuple[dict, FakeReplyAudio, dict]:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
-    monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: model)
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
     @asynccontextmanager
     async def memory_saver(_value):
         yield InMemorySaver()
 
-    monkeypatch.setattr(cli, "open_checkpointer", memory_saver)
+    monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
     if graphiti is not None:
         monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
     else:
@@ -923,7 +933,7 @@ async def _join_persona_conversation(
         created.update(kwargs)
         return create_meeting_agent(agent_model, **kwargs)
 
-    monkeypatch.setattr(cli, "create_meeting_agent", recording_agent)
+    monkeypatch.setattr(assembly, "create_meeting_agent", recording_agent)
     audio = FakeReplyAudio()
     outcome: dict = {}
 
@@ -949,7 +959,7 @@ async def _join_persona_conversation(
         outcome["phase"] = loop.phase
         return SimpleNamespace(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
-    monkeypatch.setattr(cli, "run_meeting_session", run)
+    monkeypatch.setattr(cli_join, "run_meeting_session", run)
     arguments = persona_join_arguments(
         tmp_path,
         settings,
@@ -961,7 +971,7 @@ async def _join_persona_conversation(
 
 
 async def test_join_persona_requires_converse(join, settings, tmp_path: Path) -> None:
-    with pytest.raises(cli.CliError, match="--persona requires --converse"):
+    with pytest.raises(cli_errors.CliError, match="--persona requires --converse"):
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -976,7 +986,7 @@ async def test_join_persona_requires_converse(join, settings, tmp_path: Path) ->
 
 async def test_join_memory_requires_persona(join, settings, tmp_path: Path, monkeypatch) -> None:
     forbid_resources(monkeypatch)
-    with pytest.raises(cli.CliError, match="--memory requires --persona"):
+    with pytest.raises(cli_errors.CliError, match="--memory requires --persona"):
         await join(MEET_LINK, **persona_join_arguments(tmp_path, settings, memory=True))
 
 
@@ -1010,7 +1020,7 @@ async def test_join_memory_rejects_persona_without_recall_permission(
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
-    with pytest.raises(cli.CliError, match="recall_meeting_context"):
+    with pytest.raises(cli_errors.CliError, match="recall_meeting_context"):
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -1029,7 +1039,7 @@ async def test_join_rejects_unreadable_persona(
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
-    with pytest.raises(cli.CliError, match="--persona cannot be read"):
+    with pytest.raises(cli_errors.CliError, match="--persona cannot be read"):
         await join(
             MEET_LINK,
             **persona_join_arguments(tmp_path, settings, persona_path=tmp_path / "missing.json"),
@@ -1046,7 +1056,7 @@ async def test_join_persona_display_name_yields_to_explicit_twin_name(
     twin_name: str | None,
     expected: str,
 ) -> None:
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: object())
     captured = await _join_with_audio(
         tmp_path,
         monkeypatch,
@@ -1076,7 +1086,7 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
         join=join,
     )
 
-    assert created["persona"] == build_persona(PersonaProfile.model_validate(PERSONA_DATA))
+    assert created["persona"] == build_system_prompt(PersonaProfile.model_validate(PERSONA_DATA))
     assert created["tools"] == []
     assert created["middleware"] == []
     assert audio.spoken == ["Hello."]
@@ -1211,14 +1221,14 @@ async def test_join_memory_startup_failure_exits_before_browser(
     saver_events: list[str] = []
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
-    monkeypatch.setattr(cli, "MEMORY_CONNECT_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(cli, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(providers, "MEMORY_CONNECT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config: graphiti)
     monkeypatch.setattr(
-        cli, "run_meeting_session", lambda *_a, **_k: pytest.fail("browser must stay closed")
+        cli_join, "run_meeting_session", lambda *_a, **_k: pytest.fail("browser must stay closed")
     )
     monkeypatch.setattr(
-        cli, "create_meeting_agent", lambda *_a, **_k: pytest.fail("agent must not be built")
+        assembly, "create_meeting_agent", lambda *_a, **_k: pytest.fail("agent must not be built")
     )
 
     @asynccontextmanager
@@ -1229,7 +1239,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
         finally:
             saver_events.append("close")
 
-    monkeypatch.setattr(cli, "open_checkpointer", tracked_saver)
+    monkeypatch.setattr(assembly, "open_checkpointer", tracked_saver)
 
     with pytest.raises(SystemExit) as caught:
         await join(
@@ -1255,13 +1265,13 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
     async def fake_join(link, **kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
     monkeypatch.setattr(
         sys,
         "argv",
         ["fakeyou", "join", MEET_LINK, "--audio", "--converse", "--persona", "p.json", "--memory"],
     )
-    cli.main()
+    cli_main.main()
 
     assert captured["persona_path"] == Path("p.json")
     assert captured["memory"] is True
@@ -1348,7 +1358,8 @@ def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list
         yield memory
         opened.append("close")
 
-    monkeypatch.setattr(cli, "open_persona_memory", open_memory)
+    for module in (cli_join, cli_memory):
+        monkeypatch.setattr(module, "open_persona_memory", open_memory)
     return opened
 
 
@@ -1358,7 +1369,7 @@ async def test_memory_add_stores_owner_note_in_persona_group(
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
 
-    await cli.add_owner_note(
+    await cli_memory.add_owner_note(
         "The Orchid demo moves to Friday.",
         persona_path=write_persona(tmp_path),
         owner_id=None,
@@ -1389,7 +1400,7 @@ async def test_memory_add_validates_before_opening_memory(
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
     with pytest.raises(ValueError, match=match):
-        await cli.add_owner_note(
+        await cli_memory.add_owner_note(
             text,
             persona_path=write_persona(tmp_path),
             owner_id=identity.get("owner_id"),
@@ -1410,9 +1421,9 @@ async def test_memory_forget_meeting_uses_persona_group(
         calls.append({"memory": memory, **kwargs})
         return 3
 
-    monkeypatch.setattr(cli, "forget_meeting", forget)
+    monkeypatch.setattr(cli_memory, "forget_meeting", forget)
 
-    await cli.forget_memory(
+    await cli_memory.forget_memory(
         persona_path=write_persona(tmp_path),
         owner_id=None,
         twin_id=None,
@@ -1467,8 +1478,8 @@ async def _forget_meeting_with_local_files(
     async def forget(memory, **kwargs):
         return 2
 
-    monkeypatch.setattr(cli, "forget_meeting", forget)
-    await cli.forget_memory(
+    monkeypatch.setattr(cli_memory, "forget_meeting", forget)
+    await cli_memory.forget_memory(
         persona_path=write_persona(tmp_path),
         owner_id=None,
         twin_id=None,
@@ -1533,9 +1544,9 @@ async def test_memory_forget_episode_uses_persona_group(
     async def forget(memory, **kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr(cli, "forget_episode", forget)
+    monkeypatch.setattr(cli_memory, "forget_episode", forget)
 
-    await cli.forget_memory(
+    await cli_memory.forget_memory(
         persona_path=write_persona(tmp_path),
         owner_id=None,
         twin_id=None,
@@ -1567,7 +1578,7 @@ async def test_memory_forget_validates_before_opening_memory(
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
     with pytest.raises(ValueError, match=match):
-        await cli.forget_memory(
+        await cli_memory.forget_memory(
             persona_path=write_persona(tmp_path),
             owner_id=None,
             twin_id=None,
@@ -1601,9 +1612,9 @@ def test_memory_operator_commands_parse_arguments(
     async def fake_command(*args, **kwargs):
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli, target, fake_command)
+    monkeypatch.setattr(cli_main, target, fake_command)
     monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
-    cli.main()
+    cli_main.main()
 
     assert {key: captured[key] for key in expected} == expected
 
@@ -1615,7 +1626,7 @@ def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
         ["fakeyou", "memory-forget", "--meeting", "m1", "--episode", "e1", "--persona", "p"],
     )
     with pytest.raises(SystemExit) as caught:
-        cli.main()
+        cli_main.main()
     assert caught.value.code == 2
 
 
@@ -1625,10 +1636,10 @@ def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsy
     async def unavailable(*_args, **_kwargs):
         raise ProviderFault("memory", "unavailable")
 
-    monkeypatch.setattr(cli, "add_owner_note", unavailable)
+    monkeypatch.setattr(cli_main, "add_owner_note", unavailable)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--persona", "p.json"])
     with pytest.raises(SystemExit) as caught:
-        cli.main()
+        cli_main.main()
 
     assert caught.value.code == 3
     assert "memory unavailable" in capsys.readouterr().err
@@ -1711,7 +1722,7 @@ def test_report_command_prints_summary_from_journal(
         ["fakeyou", "report", "--meeting", "meeting-1", "--journal-dir", str(journal_dir)],
     )
 
-    cli.main()
+    cli_main.main()
 
     report = json.loads(capsys.readouterr().out)
     assert report["meeting_id"] == "meeting-1"
@@ -1723,7 +1734,7 @@ def test_report_command_rejects_unknown_or_invalid_meeting(
     settings, tmp_path: Path, meeting_id: str, match: str
 ) -> None:
     with pytest.raises(ValueError, match=match):
-        cli.show_session_report(meeting_id, tmp_path, settings)
+        cli_diagnostics.show_session_report(meeting_id, tmp_path, settings)
 
 
 def test_chat_model_uses_role_configuration(settings, monkeypatch):
@@ -1734,7 +1745,7 @@ def test_chat_model_uses_role_configuration(settings, monkeypatch):
         api_key=SecretStr("meta-key"),
         reasoning_effort="minimal",
     )
-    cli.create_chat_model(settings)
+    providers.create_chat_model(settings)
     assert calls == [
         (
             ("muse-spark-1.3",),
@@ -1760,8 +1771,8 @@ def test_chat_model_passes_provider_request_fields_as_extra_body(settings, monke
         max_retries=0,
     )
     settings.reply_fallback = settings.reply.model_copy(update={"model": "MiniMax-M2.5-highspeed"})
-    cli.create_chat_model(settings)
-    cli.create_fallback_chat_model(settings)
+    providers.create_chat_model(settings)
+    providers.create_fallback_chat_model(settings)
     assert [kwargs.get("extra_body") for _args, kwargs in calls] == [
         {"reasoning_split": True},
         {"reasoning_split": True},
@@ -1777,7 +1788,7 @@ def test_settings_read_extra_body_as_json(settings, monkeypatch):
 
 def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch):
     calls = record_chat_model_calls(monkeypatch)
-    cli.create_chat_model(settings)
+    providers.create_chat_model(settings)
     assert calls == [
         (
             ("model",),
@@ -1798,17 +1809,17 @@ def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch
 )
 def test_preflight_hosts_follow_the_configured_chat_endpoint(settings, endpoint):
     settings.reply.base_url = endpoint
-    assert cli.preflight_hosts(settings) == (*BASE_HOSTS, endpoint)
+    assert providers.preflight_hosts(settings) == (*BASE_HOSTS, endpoint)
 
 
 def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
     settings.tts = MiniMaxTTS()
     settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
     with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
-        cli.tts_api_key(settings)
+        create_speech_synthesizer(settings.tts)
     settings.tts.api_key = SecretStr("minimax-key")
-    assert cli.tts_api_key(settings) == "minimax-key"
-    assert cli.preflight_hosts(settings) == (
+    assert isinstance(create_speech_synthesizer(settings.tts), MiniMaxSpeechSynthesizer)
+    assert providers.preflight_hosts(settings) == (
         "https://api.minimax.io/v1/t2a_v2",
         "wss://api.meta.ai/v1/asr/realtime",
         "https://api.minimax.io/v1",
@@ -1818,19 +1829,21 @@ def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
 def test_openai_speech_requires_its_own_key(settings):
     settings.tts.api_key = None
     with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
-        cli.tts_api_key(settings)
+        create_speech_synthesizer(settings.tts)
 
 
 def test_check_reports_the_speech_provider_defaults(settings, capsys):
     settings.tts = MiniMaxTTS()
-    cli.check_setup(settings)
+    cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)["tts"] == settings.tts.model_dump(mode="json")
 
 
 def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings):
     settings.memory.embedder = EmbedderSettings(base_url="", api_key=SecretStr("local"))
     assert settings.memory.embedder.base_url is None
-    assert cli.memory_config(settings).embedder.resolved_base_url == "https://api.openai.com/v1"
+    assert (
+        providers.memory_config(settings).embedder.resolved_base_url == "https://api.openai.com/v1"
+    )
 
 
 def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> None:
@@ -1840,7 +1853,7 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> 
     settings.memory.llm.base_url = "https://api.meta.ai/v1"
     settings.memory.llm.api_key = SecretStr("meta-key")
 
-    config = cli.memory_config(settings)
+    config = providers.memory_config(settings)
 
     assert (
         config.embedder.resolved_base_url,
@@ -1858,7 +1871,7 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> 
 
 
 def test_check_reports_models_per_role(settings, capsys):
-    cli.check_setup(settings)
+    cli_diagnostics.check_setup(settings)
     report = capsys.readouterr().out
     assert json.loads(report) == settings.model_dump(mode="json")
     assert "test-key" not in report
@@ -1890,7 +1903,7 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
 
-    await cli.ingest_recorded_meeting(
+    await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
         persona_path=write_persona(tmp_path, vocabulary=["Orchid"]),
         owner_id=None,
@@ -1928,7 +1941,7 @@ async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
     fake_persona_memory(monkeypatch, graphiti)
 
     with pytest.raises(SystemExit) as caught:
-        await cli.ingest_recorded_meeting(
+        await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
             persona_path=write_persona(tmp_path),
             owner_id=None,
@@ -1944,8 +1957,8 @@ async def test_memory_ingest_command_requires_a_record(
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(cli.CliError, match="no meeting record"):
-        await cli.ingest_recorded_meeting(
+    with pytest.raises(cli_errors.CliError, match="no meeting record"):
+        await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
             persona_path=write_persona(tmp_path),
             owner_id=None,
@@ -1957,8 +1970,8 @@ async def test_memory_ingest_command_requires_a_record(
 
 
 async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: Path) -> None:
-    with pytest.raises(cli.CliError, match="--keep-record"):
-        await cli.forget_memory(
+    with pytest.raises(cli_errors.CliError, match="--keep-record"):
+        await cli_memory.forget_memory(
             persona_path=write_persona(tmp_path),
             owner_id=None,
             twin_id=None,
@@ -1972,7 +1985,7 @@ async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: 
 async def test_join_passes_persona_vocabulary_as_speech_keywords(
     session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: object())
     captured = await _join_with_audio(
         tmp_path,
         monkeypatch,
@@ -2011,14 +2024,14 @@ def with_muse_fallback(settings: Settings) -> Settings:
 def test_primary_and_fallback_use_explicit_retry_budgets(settings, monkeypatch):
     calls = record_chat_model_calls(monkeypatch)
     settings = with_muse_fallback(settings)
-    cli.create_chat_model(settings)
-    cli.create_fallback_chat_model(settings)
+    providers.create_chat_model(settings)
+    providers.create_fallback_chat_model(settings)
     assert [kwargs["max_retries"] for _args, kwargs in calls] == [0, 1]
     assert [args for args, _kwargs in calls] == [("model",), ("muse-spark-1.2",)]
 
 
 def test_fallback_chat_model_is_optional(settings) -> None:
-    assert cli.create_fallback_chat_model(settings) is None
+    assert providers.create_fallback_chat_model(settings) is None
 
 
 async def test_conversation_adds_model_fallback_middleware_when_configured(
@@ -2032,12 +2045,12 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
         created.update(kwargs)
         return SimpleNamespace(name="agent")
 
-    monkeypatch.setattr(cli, "create_meeting_agent", fake_agent)
-    monkeypatch.setattr(cli, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)
+    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
     settings = with_muse_fallback(settings)
     config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
 
-    async with cli.open_conversation(settings, config, on_transition=lambda *args: None):
+    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
         pass
 
     assert [type(item) for item in created["middleware"]] == [ModelFallbackMiddleware]
@@ -2046,19 +2059,22 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 def test_preflight_probes_the_fallback_endpoint(settings):
     settings = with_muse_fallback(settings)
     settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"
-    assert cli.preflight_hosts(settings) == (*BASE_HOSTS, "https://fallback.example.com:8443/v1")
+    assert providers.preflight_hosts(settings) == (
+        *BASE_HOSTS,
+        "https://fallback.example.com:8443/v1",
+    )
 
 
 def test_check_reports_the_fallback_model(settings, capsys):
     settings = with_muse_fallback(settings)
-    cli.check_setup(settings)
+    cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)[
         "reply_fallback"
     ] == settings.reply_fallback.model_dump(mode="json")
 
 
 def test_check_reports_no_fallback_by_default(settings, capsys):
-    cli.check_setup(settings)
+    cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)["reply_fallback"] is None
 
 
@@ -2070,7 +2086,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
     async def stop_playback():
         stops.append(True)
 
-    monkeypatch.setattr(cli, "create_meeting_agent", lambda *args, **kwargs: object())
+    monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: object())
 
     async def run(config, **kwargs):
         loop = kwargs["conversation"]
@@ -2123,6 +2139,6 @@ async def test_join_rejects_persona_language_mismatch_before_resources(
     settings.stt.api_key = SecretStr("muse-key")
     forbid_resources(monkeypatch)
     persona = write_persona(tmp_path, language="en")
-    with pytest.raises(cli.CliError, match="persona language"):
+    with pytest.raises(cli_errors.CliError, match="persona language"):
         await join(MEET_LINK, audio_enabled=True, conversation_enabled=True, persona_path=persona)
     assert not settings.paths.journal_dir.exists()

@@ -16,7 +16,7 @@ from fakeyou.ingestion import (
     ingest_meeting,
     meeting_windows,
 )
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.memory import meeting_saga
 from fakeyou.record import ToolResultEntry, TranscriptEntry, TwinSpeechEntry
 from tests.fakes import make_graphiti
@@ -46,7 +46,7 @@ async def run(memory: MagicMock, entries: list, **overrides):
         "meeting_id": "meeting-1",
         "twin_name": "Rani Twin",
         "vocabulary": ("Orchid", "Budi"),
-        "journal": ProviderJournal("meeting-1", emit=lines.append),
+        "journal": Journal("meeting-1", emit=lines.append),
     }
     values["faults"] = FaultReporter(journal=values["journal"])
     values.update(overrides)

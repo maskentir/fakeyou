@@ -16,11 +16,11 @@ from fakeyou.audio import (
     MeetingAudioError,
     MeetingAudioSession,
     _CaptureObserver,
-    default_playback_engine,
+    create_playback_engine,
     open_meeting_audio,
 )
 from fakeyou.deaf import CaptureActivity
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.settings import MiniMaxTTS, OpenAITTS, STTSettings
 from tests.fakes import FakeReconnectableSTT, FakeSTT
 
@@ -149,7 +149,7 @@ async def test_callback_failure_degrades_without_killing_session(
         transport=_Transport(),
         stt=FakeSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
         activity=activity,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
@@ -554,7 +554,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause(
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.AUTHENTICATION),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         with pytest.raises(MeetingAudioError) as caught:
@@ -584,7 +584,7 @@ async def test_nonpermanent_error_records_without_killing(
         transport=_Transport(),
         stt=FakeSTT(error="provider hiccup", finalized=(), category=ErrorCategory.CONNECTIVITY),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         await asyncio.sleep(0.5)
@@ -617,7 +617,7 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
             error="provider blew up", finalized=(), exception=httpx2.ConnectError("socket gone")
         ),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
         with pytest.raises(MeetingAudioError) as caught:
@@ -645,7 +645,7 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
         transport=_Transport(),
         stt=FakeSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         assert session.reconnect_state() == "idle"
         session.request_stt_reconnect("deaf")
@@ -673,7 +673,7 @@ async def test_supported_stt_reconnect_queues_request(
         transport=_Transport(),
         stt=FakeReconnectableSTT(),
         playback=_Playback(),
-        fault_reporter=reporter,
+        faults=reporter,
     ) as session:
         session.request_stt_reconnect("deaf")
         session.request_stt_reconnect("deaf")
@@ -728,7 +728,7 @@ async def test_stt_reconnect_lifecycle_is_journaled(
 def test_default_playback_engine_streams_tts_to_paplay() -> None:
     import inspect
 
-    engine = default_playback_engine(tts_settings=OpenAITTS(api_key="k"))
+    engine = create_playback_engine(tts_settings=OpenAITTS(api_key="k"))
 
     assert engine._stream_audio is not None
     assert inspect.isasyncgen(engine._synthesizer.stream("hello"))
@@ -737,7 +737,7 @@ def test_default_playback_engine_streams_tts_to_paplay() -> None:
 def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
     from fakeyou.voice import MiniMaxSpeechSynthesizer
 
-    engine = default_playback_engine(
+    engine = create_playback_engine(
         tts_settings=MiniMaxTTS(api_key="k", voice="Indonesian_CaringMan")
     )
 
@@ -747,12 +747,12 @@ def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
 
 async def test_default_playback_engine_wires_faults_and_journal() -> None:
     from fakeyou.faults import FaultReporter
-    from fakeyou.journal import ProviderJournal
+    from fakeyou.journal import Journal
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting-1"))
-    journal = ProviderJournal("meeting-1", emit=lambda _: None, stdout=False)
-    engine = default_playback_engine(
-        tts_settings=OpenAITTS(api_key="k"), fault_reporter=reporter, journal=journal
+    reporter = FaultReporter(journal=Journal("meeting-1"))
+    journal = Journal("meeting-1", emit=lambda _: None, stdout=False)
+    engine = create_playback_engine(
+        tts_settings=OpenAITTS(api_key="k"), faults=reporter, journal=journal
     )
     try:
         assert engine._faults is reporter
@@ -841,7 +841,7 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
     from fakeyou.report import read_journal
 
     path = tmp_path / "events.jsonl"
-    journal = ProviderJournal("meeting-7", path=path, stdout=False)
+    journal = Journal("meeting-7", path=path, stdout=False)
     failed = asyncio.Event()
 
     async def on_transcript(frame: TranscriptionFrame) -> None:

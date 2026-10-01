@@ -71,7 +71,7 @@ def test_activated_role_never_borrows_a_key(role):
 def test_inspection_does_not_require_credentials(capsys):
     import json
 
-    from fakeyou.cli import check_setup
+    from fakeyou.cli.diagnostics import check_setup
 
     settings = Settings(_env_file=None)
     check_setup(settings)
@@ -138,7 +138,7 @@ async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeyp
 
 
 def test_preflight_preserves_all_active_role_urls_and_ports():
-    from fakeyou.cli import preflight_hosts
+    from fakeyou.providers import preflight_hosts
 
     settings = Settings(
         _env_file=None,
@@ -343,7 +343,7 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
 def test_blank_reply_endpoint_ignores_library_destination_environment(
     monkeypatch, provider, expected, role
 ):
-    from fakeyou.cli import create_chat_model, create_fallback_chat_model, preflight_hosts
+    from fakeyou.providers import create_chat_model, create_fallback_chat_model, preflight_hosts
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")
@@ -370,8 +370,8 @@ def test_blank_reply_endpoint_ignores_library_destination_environment(
 def test_blank_memory_endpoints_ignore_library_destination_environment(
     monkeypatch, client, expected
 ):
-    from fakeyou.cli import memory_config, preflight_hosts
     from fakeyou.memory import create_graphiti_memory
+    from fakeyou.providers import memory_config, preflight_hosts
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")

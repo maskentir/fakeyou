@@ -11,11 +11,9 @@ from pipecat.services.openai.tts import VALID_VOICES
 from pipecat.transcriptions.language import Language
 
 from fakeyou.invariants import PCM_CHANNELS, PLAYBACK_SAMPLE_RATE
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import classify_exception, classify_minimax_status
 from fakeyou.settings import DEFAULTS, MiniMaxTTS, STTMode, TTSSettings, require_secret
-
-MuseMode = STTMode
 
 TTS_HTTP_TIMEOUT = httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 TTS_REQUEST_TIMEOUT_SECONDS = 45.0
@@ -52,13 +50,13 @@ def create_muse_stt(
     language: Language | str | None = Language.ID,
     language_bias: Sequence[Language] | None = None,
     keywords: Sequence[str] | None = None,
-    mode: MuseMode = DEFAULTS.stt.mode,
+    mode: STTMode = DEFAULTS.stt.mode,
     model: str = DEFAULTS.stt.model,
     url: str = DEFAULTS.stt.url,
     sample_rate: int | None = None,
     service_class: type[MetaSTTService] = MetaSTTService,
 ) -> MetaSTTService:
-    if mode not in get_args(MuseMode):
+    if mode not in get_args(STTMode):
         raise ValueError(f"unsupported Muse mode: {mode}")
     settings = MetaSTTService.Settings(
         model=model,
@@ -82,7 +80,7 @@ class OpenAISpeechSynthesizer:
         instructions: str | None = TTS_VOICE_INSTRUCTIONS,
         speed: float | None = None,
         client: AsyncOpenAI | None = None,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         if voice not in VALID_VOICES:
             raise ValueError(f"unsupported OpenAI voice: {voice}")
@@ -138,7 +136,7 @@ class MiniMaxSpeechSynthesizer:
         language_boost: str = MINIMAX_LANGUAGE_BOOST,
         url: str = MINIMAX_TTS_URL,
         client: httpx2.AsyncClient | None = None,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._voice = voice
@@ -193,7 +191,7 @@ def create_speech_synthesizer(
     settings: TTSSettings,
     *,
     language: str = DEFAULTS.speech.language,
-    journal: ProviderJournal | None = None,
+    journal: Journal | None = None,
 ) -> OpenAISpeechSynthesizer | MiniMaxSpeechSynthesizer:
     api_key = require_secret(settings.api_key, "FAKEYOU_TTS__API_KEY")
     if isinstance(settings, MiniMaxTTS):
@@ -225,11 +223,11 @@ def _minimax_audio(body: dict[str, Any]) -> bytes | None:
 
 
 async def _journaled_stream(
-    journal: ProviderJournal | None, text: str, open_stream: Callable[[str], AsyncGenerator[bytes]]
+    journal: Journal | None, text: str, open_stream: Callable[[str], AsyncGenerator[bytes]]
 ) -> AsyncGenerator[bytes]:
     if not text.strip():
         raise ValueError("cannot synthesize blank text")
-    journal = journal or ProviderJournal("", stdout=False)
+    journal = journal or Journal("", stdout=False)
     with journal.timed(
         started="synthesis_started",
         finished="synthesis_finished",

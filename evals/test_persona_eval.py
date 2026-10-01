@@ -14,9 +14,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.cli import create_chat_model
 from fakeyou.memory import create_memory_tools
-from fakeyou.persona import PersonaProfile, build_persona
+from fakeyou.persona import PersonaProfile, build_system_prompt
+from fakeyou.providers import create_chat_model
 from fakeyou.settings import Settings, require_secret
 from tests.fakes import OfflineJudge, ToolCallingFakeModel, make_graphiti, recall_call
 
@@ -44,7 +44,7 @@ def profile_recall_tools(memory: MagicMock) -> list:
 def test_persona_prompt_reaches_model_as_system_message() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="The beta launch is on 14 October.")])
     agent = create_meeting_agent(
-        model, persona=build_persona(EXAMPLE_PROFILE), checkpointer=InMemorySaver()
+        model, persona=build_system_prompt(EXAMPLE_PROFILE), checkpointer=InMemorySaver()
     )
 
     agent.invoke(
@@ -54,7 +54,7 @@ def test_persona_prompt_reaches_model_as_system_message() -> None:
 
     system = model.seen[0][0]
     assert isinstance(system, SystemMessage)
-    assert system.content == build_persona(EXAMPLE_PROFILE)
+    assert system.content == build_system_prompt(EXAMPLE_PROFILE)
     for fact in EXAMPLE_PROFILE.verified_facts:
         assert json.dumps(fact, ensure_ascii=False) in system.content
 
@@ -69,7 +69,7 @@ async def test_recall_trajectory_stays_in_profile_namespace() -> None:
     agent = create_meeting_agent(
         model,
         tools=profile_recall_tools(memory),
-        persona=build_persona(EXAMPLE_PROFILE),
+        persona=build_system_prompt(EXAMPLE_PROFILE),
         checkpointer=InMemorySaver(),
     )
 
@@ -117,7 +117,10 @@ async def test_identity_change_transcript_cannot_move_namespace_or_add_tools() -
         ]
     )
     agent = create_meeting_agent(
-        model, tools=tools, persona=build_persona(EXAMPLE_PROFILE), checkpointer=InMemorySaver()
+        model,
+        tools=tools,
+        persona=build_system_prompt(EXAMPLE_PROFILE),
+        checkpointer=InMemorySaver(),
     )
 
     await agent.ainvoke(
@@ -134,7 +137,7 @@ async def test_identity_change_transcript_cannot_move_namespace_or_add_tools() -
 
     assert [candidate.name for candidate in tools] == ["recall_meeting_context"]
     assert memory.searched[0]["group_ids"] == [EXAMPLE_PROFILE.memory_group]
-    assert model.seen[-1][0].content == build_persona(EXAMPLE_PROFILE)
+    assert model.seen[-1][0].content == build_system_prompt(EXAMPLE_PROFILE)
 
 
 RECALL_REQUIRED_SCENARIOS = frozenset(
@@ -180,7 +183,7 @@ def test_live_persona_quality(scenario: str) -> None:
     agent = create_meeting_agent(
         model,
         tools=[recall_meeting_context],
-        persona=build_persona(EXAMPLE_PROFILE),
+        persona=build_system_prompt(EXAMPLE_PROFILE),
         checkpointer=InMemorySaver(),
     )
     result = agent.invoke(

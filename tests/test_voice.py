@@ -16,8 +16,8 @@ from fakeyou.voice import (
     TTS_VOICE,
     TTS_VOICE_INSTRUCTIONS,
     MiniMaxSpeechSynthesizer,
-    MuseMode,
     OpenAISpeechSynthesizer,
+    STTMode,
     create_muse_stt,
     create_speech_synthesizer,
 )
@@ -39,7 +39,7 @@ def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
 
 def test_create_muse_stt_rejects_unknown_mode_before_connecting() -> None:
     with pytest.raises(ValueError, match="unsupported Muse mode"):
-        create_muse_stt(api_key="test-meta-key", mode=cast(MuseMode, "UNKNOWN"))
+        create_muse_stt(api_key="test-meta-key", mode=cast(STTMode, "UNKNOWN"))
 
 
 async def test_tts_http_client_bounds_slow_streams() -> None:

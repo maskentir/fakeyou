@@ -7,7 +7,8 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.lifecycle import create_lifecycle_graph, initial_lifecycle_state
-from fakeyou.runtime import SessionConfig, run_meeting_session
+from fakeyou.runtime import run_meeting_session
+from fakeyou.session import SessionConfig
 from tests.fakes import (
     ASK_SELECTOR,
     DENIED,
@@ -458,7 +459,7 @@ def test_session_rejects_invalid_timing(field, value) -> None:
 
 
 async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path):
-    from fakeyou.journal import ProviderJournal
+    from fakeyou.journal import Journal
     from fakeyou.report import read_journal
 
     clock = FakeClock()
@@ -472,7 +473,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     )
     saver = FakeSaverSession()
     path = tmp_path / "events.jsonl"
-    journal = ProviderJournal("journal-meeting", path=path, stdout=False)
+    journal = Journal("journal-meeting", path=path, stdout=False)
     await run_meeting_session(
         _config(),
         open_page=browser.open,

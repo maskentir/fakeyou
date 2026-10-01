@@ -49,7 +49,7 @@ def meeting_record_path(root: Path, meeting_id: str) -> Path:
     return root / meeting_id / RECORD_FILE_NAME
 
 
-def read_meeting_record(path: Path) -> list[RecordEntry]:
+def load_meeting_record(path: Path) -> list[RecordEntry]:
     return [
         _RECORD_ENTRY.validate_json(line)
         for line in path.read_text(encoding="utf-8").splitlines()

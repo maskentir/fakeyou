@@ -37,7 +37,7 @@ production = [
 ]
 
 [project.scripts]
-fakeyou = "fakeyou.cli:main"
+fakeyou = "fakeyou.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

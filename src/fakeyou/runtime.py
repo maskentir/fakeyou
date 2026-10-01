@@ -13,7 +13,7 @@ from fakeyou.browser import open_direct_page, stable_fingerprint_seed
 from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cleanup import close_safely
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.lifecycle import (
     LifecycleAttribution,
     LifecycleEventKind,
@@ -35,13 +35,14 @@ from fakeyou.meet import (
 from fakeyou.preflight import ProbeResult, run_preflight
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.session import (
-    AdmissionAware,
-    AudioMaintenance,
     ConversationError,
     MeetingAudio,
     MeetingConversation,
+    SessionConfig,
+    SessionResult,
+    SupportsAdmission,
+    SupportsMaintenance,
 )
-from fakeyou.session import SessionConfig as SessionConfig
 from fakeyou.watchdog import UIWatchdog
 
 
@@ -77,14 +78,6 @@ _JOIN_EVENTS: dict[JoinStatus, tuple[LifecycleEventKind, LifecycleAttribution]] 
     "aborted": ("owner_stopped", "owner_action"),
     "failed": ("browser_failed", "system_fault"),
 }
-
-
-@dataclass(frozen=True, slots=True)
-class SessionResult:
-    phase: MeetingPhase
-    terminal_reason: TerminalReason | None
-    detail: str
-    faults: dict[str, Any] | None = None
 
 
 def _terminal_result(
@@ -124,7 +117,7 @@ class _MeetingWorker:
     conversation: MeetingConversation | None = None
     audio: MeetingAudio | None = None
     faults: FaultReporter | None = None
-    journal: ProviderJournal | None = None
+    journal: Journal | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -189,7 +182,7 @@ class _MeetingWorker:
 
     async def run_admitted(self, audio: MeetingAudio, admitted_at: float) -> str:
         audio.raise_if_failed()
-        if isinstance(audio, AdmissionAware):
+        if isinstance(audio, SupportsAdmission):
             audio.mark_admitted()
         await self.disable_camera_best_effort()
         try:
@@ -273,7 +266,7 @@ class _MeetingWorker:
                     await self.disable_conversation(error)
             if self.audio is not None:
                 self.audio.raise_if_failed()
-                if isinstance(self.audio, AudioMaintenance):
+                if isinstance(self.audio, SupportsMaintenance):
                     verdict = await _until_stopped(
                         self.audio.maintenance_tick(
                             is_busy=self.conversation is not None and self.conversation.is_busy,
@@ -424,7 +417,7 @@ async def run_meeting_session(
     initial_speech: str | None = None,
     conversation: MeetingConversation | None = None,
     faults: FaultReporter | None = None,
-    journal: ProviderJournal | None = None,
+    journal: Journal | None = None,
     preflight: Callable[[], Coroutine[Any, Any, list[ProbeResult]]] | None = None,
     preflight_hosts: tuple[str, ...] | None = None,
     preflight_budget_seconds: float | None = None,
@@ -433,9 +426,7 @@ async def run_meeting_session(
         raise ValueError("initial speech requires meeting audio")
     if conversation is not None and open_audio is None:
         raise ValueError("conversation requires meeting audio")
-    journal = journal or (
-        faults.journal if faults is not None else ProviderJournal(config.meeting_id)
-    )
+    journal = journal or (faults.journal if faults is not None else Journal(config.meeting_id))
     stop_event = stop if stop is not None else asyncio.Event()
     async with _session_resources(faults) as resources:
         if conversation is not None:

@@ -1,6 +1,7 @@
+import dataclasses
 from dataclasses import field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
@@ -8,6 +9,7 @@ from pydantic.dataclasses import dataclass
 from fakeyou.invariants import PositiveSeconds
 from fakeyou.invariants import SessionId as SessionId
 from fakeyou.invariants import TwinName as TwinName
+from fakeyou.lifecycle import MeetingPhase, TerminalReason
 from fakeyou.settings import DEFAULTS
 
 DEFAULT_CHECKPOINT_PATH = DEFAULTS.paths.checkpoint_path
@@ -29,14 +31,14 @@ class MeetingAudio(Protocol):
 
 
 @runtime_checkable
-class AudioMaintenance(Protocol):
+class SupportsMaintenance(Protocol):
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
     ) -> str: ...
 
 
 @runtime_checkable
-class AdmissionAware(Protocol):
+class SupportsAdmission(Protocol):
     def mark_admitted(self) -> None: ...
 
 
@@ -75,3 +77,11 @@ class SessionConfig:
     warmup_browser: bool = DEFAULTS.meeting.warmup_browser
     headless: bool = DEFAULTS.meeting.headless
     license_key: str | None = field(default=None, repr=False)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class SessionResult:
+    phase: MeetingPhase
+    terminal_reason: TerminalReason | None
+    detail: str
+    faults: dict[str, Any] | None = None

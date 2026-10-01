@@ -7,18 +7,18 @@ from typing import Any, Literal, Protocol
 
 from fakeyou.faults import FaultReporter
 from fakeyou.invariants import PCM_CHANNELS, PCM_FORMAT
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.taxonomy import Subsystem
 
-PlaybackEventName = Literal[
+PlaybackEventKind = Literal[
     "playback_started", "playback_finished", "playback_failed", "playback_dropped", "mute_failed"
 ]
 
 
 @dataclass(frozen=True, slots=True)
 class PlaybackEvent:
-    name: PlaybackEventName
+    kind: PlaybackEventKind
     text: str = ""
     detail: str = ""
 
@@ -147,8 +147,8 @@ class PlaybackEngine:
         stream_audio: PlayStream,
         playback_timeout_seconds: float = PLAYBACK_TIMEOUT_SECONDS,
         cleanup_timeout_seconds: float = CLEANUP_TIMEOUT_SECONDS,
-        fault_reporter: FaultReporter | None = None,
-        journal: ProviderJournal | None = None,
+        faults: FaultReporter | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self._synthesizer = synthesizer
         self._set_muted = set_muted
@@ -158,7 +158,7 @@ class PlaybackEngine:
         self._stream_audio = stream_audio
         self._playback_timeout_seconds = playback_timeout_seconds
         self._cleanup_timeout_seconds = cleanup_timeout_seconds
-        self._faults = fault_reporter
+        self._faults = faults
         self._journal = journal
         self._queue: asyncio.Queue[tuple[AsyncIterator[bytes], str, asyncio.Future[None]]] = (
             asyncio.Queue()
@@ -277,11 +277,11 @@ class PlaybackEngine:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run())
 
-    def _emit(self, name: PlaybackEventName, text: str, detail: str = "") -> None:
+    def _emit(self, kind: PlaybackEventKind, text: str, detail: str = "") -> None:
         if self._on_event is None:
             return
         with suppress(Exception):
-            self._on_event(PlaybackEvent(name, text, detail))
+            self._on_event(PlaybackEvent(kind, text, detail))
 
     def _record_fault(self, source: Subsystem, error: BaseException) -> None:
         if self._faults is None:

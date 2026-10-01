@@ -8,7 +8,7 @@ from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
 
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.memory import meeting_episodes, meeting_saga
 from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
@@ -102,7 +102,7 @@ async def ingest_meeting(
     meeting_id: str,
     twin_name: str,
     vocabulary: Sequence[str] = (),
-    journal: ProviderJournal | None = None,
+    journal: Journal | None = None,
     faults: FaultReporter | None = None,
     stop: asyncio.Event | None = None,
     episode_timeout_seconds: float = EPISODE_TIMEOUT_SECONDS,
@@ -124,7 +124,7 @@ async def ingest_meeting(
             break
         window = windows[index]
         try:
-            timer_journal = journal or ProviderJournal("", stdout=False)
+            timer_journal = journal or Journal("", stdout=False)
             with timer_journal.timed(
                 finished="memory_episode_ingested",
                 failed="memory_episode_failed",

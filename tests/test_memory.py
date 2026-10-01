@@ -11,12 +11,12 @@ from neo4j.exceptions import ServiceUnavailable
 import fakeyou.memory as memory_module
 from fakeyou.memory import (
     create_memory_tools,
+    create_recall_error_middleware,
     ensure_indexes,
     forget_episode,
     forget_meeting,
     meeting_saga,
     open_graphiti_memory,
-    recall_error_middleware,
     remember_owner_note,
     verify_memory_connection,
 )
@@ -249,7 +249,7 @@ def test_recall_error_middleware_returns_unknown_and_records_fault(
 
     lines = journal.lines
     faults = FaultReporter(journal=journal)
-    middleware = recall_error_middleware(faults)
+    middleware = create_recall_error_middleware(faults)
     request = SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"})
 
     assert middleware.on_error is not None

@@ -65,7 +65,7 @@ def _safe_value(key: str, value: Any) -> Any:
     return f"<{type(value).__name__}>"
 
 
-class ProviderJournal:
+class Journal:
     def __init__(
         self,
         meeting_id: str,

@@ -7,7 +7,7 @@ from typing import Literal
 
 from fakeyou.faults import Fault, FaultReporter
 from fakeyou.invariants import PCM_CHANNELS
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.settings import DEFAULTS
 from fakeyou.taxonomy import Subsystem
 
@@ -173,15 +173,15 @@ class DeafMonitor:
         self,
         *,
         activity: CaptureActivity,
-        reporter: FaultReporter | None = None,
+        faults: FaultReporter | None = None,
         deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
         deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
         alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
         restate_interval_seconds: float = 60.0,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self._activity = activity
-        self._reporter = reporter
+        self._faults = faults
         self.alone_leave_seconds = alone_leave_seconds
         self.deaf_window_seconds = deaf_window_seconds
         self.deaf_grace_seconds = deaf_grace_seconds
@@ -201,8 +201,8 @@ class DeafMonitor:
         )
 
     def _report(self, verdict: DeafVerdict) -> None:
-        if self._reporter is not None and verdict in ("no_audio_frames", "no_transcripts"):
-            self._reporter.record(Fault(source=_VERDICT_SOURCES[verdict], kind=verdict))
+        if self._faults is not None and verdict in ("no_audio_frames", "no_transcripts"):
+            self._faults.record(Fault(source=_VERDICT_SOURCES[verdict], kind=verdict))
         if self._journal is not None and verdict == "silent_capture":
             snapshot = self._activity.snapshot()
             self._journal.record(

@@ -1,13 +1,13 @@
 import json
 from datetime import UTC, datetime
 
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 
 
 def test_record_carries_meeting_id_timestamp_and_fields() -> None:
     lines: list[str] = []
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = ProviderJournal("meeting-1", emit=lines.append, now=lambda: frozen)
+    journal = Journal("meeting-1", emit=lines.append, now=lambda: frozen)
 
     journal.record("synthesis_finished", source="tts", duration_ms=12.5, chars=5, bytes_out=480)
 
@@ -25,14 +25,14 @@ def test_raising_emit_is_swallowed() -> None:
     def broken(line: str) -> None:
         raise OSError("disk gone")
 
-    journal = ProviderJournal("meeting-1", emit=broken)
+    journal = Journal("meeting-1", emit=broken)
 
     journal.record("synthesis_started", source="tts", chars=3)
 
 
 def test_unregistered_event_is_recorded_never_rejected() -> None:
     lines: list[str] = []
-    journal = ProviderJournal("meeting-1", emit=lines.append)
+    journal = Journal("meeting-1", emit=lines.append)
 
     journal.record("future_custom_event", source="runtime", outcome="ok")
 
@@ -41,14 +41,14 @@ def test_unregistered_event_is_recorded_never_rejected() -> None:
 
 
 def test_record_never_raises_on_bad_fields() -> None:
-    journal = ProviderJournal("meeting-1", emit=lambda line: None)
+    journal = Journal("meeting-1", emit=lambda line: None)
 
     journal.record("synthesis_finished", source="tts", duration_ms=float("nan"))
     journal.record("", source="runtime")
 
 
 def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
-    journal = ProviderJournal("meeting-1", path=tmp_path / "events.jsonl", stdout=False)
+    journal = Journal("meeting-1", path=tmp_path / "events.jsonl", stdout=False)
 
     journal.request_started("req-1", source="tts", operation="synthesize", at=1.0)
     journal.request_finished("req-1", duration_ms=12.5, status=200)
@@ -61,7 +61,7 @@ def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
 
 def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
     path = tmp_path / "events.jsonl"
-    journal = ProviderJournal("meeting-1", path=path, max_bytes=180, stdout=False)
+    journal = Journal("meeting-1", path=path, max_bytes=180, stdout=False)
 
     journal.record(
         "request_failed",
@@ -80,7 +80,7 @@ def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
 
 def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
     path = tmp_path / "events.jsonl"
-    journal = ProviderJournal("meeting-1", path=path, stdout=False)
+    journal = Journal("meeting-1", path=path, stdout=False)
     for name in (
         "transcript_finalized",
         "playback_started",
@@ -102,7 +102,7 @@ def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
     import fakeyou.journal as module
 
     lines = []
-    journal = ProviderJournal("timed", emit=lines.append)
+    journal = Journal("timed", emit=lines.append)
     ticks = iter([1.0, 1.25])
     monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
     with journal.timed(
@@ -126,7 +126,7 @@ def test_timed_should_record_failure_and_propagate_original_error():
     from fakeyou.provider_faults import ProviderFault
 
     lines = []
-    journal = ProviderJournal("timed", emit=lines.append)
+    journal = Journal("timed", emit=lines.append)
     error = ProviderFault("tts", "timeout")
     with pytest.raises(ProviderFault) as raised:
         with journal.timed(

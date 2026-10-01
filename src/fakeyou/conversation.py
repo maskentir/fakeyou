@@ -20,7 +20,7 @@ from pipecat.frames.frames import TranscriptionFrame
 from pipecat.utils.string import match_endofsentence
 
 from fakeyou.faults import FaultReporter
-from fakeyou.journal import JournalTiming, ProviderJournal
+from fakeyou.journal import Journal, JournalTiming
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError as ConversationError
 from fakeyou.session import MeetingAudio
@@ -78,7 +78,7 @@ class _ToolActivity(AsyncCallbackHandler):
     def __init__(
         self,
         on_start: Callable[[], None],
-        journal: ProviderJournal | None,
+        journal: Journal | None,
         on_result: ToolResultCallback | None = None,
     ) -> None:
         self._on_start = on_start
@@ -111,7 +111,7 @@ class _ToolActivity(AsyncCallbackHandler):
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
     ) -> None:
         name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
-        journal = self._journal or ProviderJournal("", stdout=False)
+        journal = self._journal or Journal("", stdout=False)
         context = journal.timed(
             finished="tool_finished", failed="tool_failed", source="agent", tool=str(name)
         )
@@ -135,7 +135,7 @@ class _ToolActivity(AsyncCallbackHandler):
 class LangGraphResponder:
     agent: Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
     thread_id: str
-    journal: ProviderJournal | None = None
+    journal: Journal | None = None
     on_tool_result: ToolResultCallback | None = None
 
     async def respond(
@@ -211,7 +211,7 @@ class ConversationLoop:
         language: str = DEFAULTS.speech.language,
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,
-        journal: ProviderJournal | None = None,
+        journal: Journal | None = None,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")

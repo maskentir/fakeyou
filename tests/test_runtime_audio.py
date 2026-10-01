@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.runtime as runtime
 from fakeyou.audio import MeetingAudioError
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.meet import CallObservation, JoinResult, LeaveResult
 from fakeyou.session import SessionConfig
 from tests.fakes import FakeAudio, FakeClock, FakeConversation
@@ -372,7 +372,7 @@ def _faulty_reporter():
     from fakeyou.faults import FaultReporter
     from fakeyou.provider_faults import ProviderFault
 
-    reporter = FaultReporter(journal=ProviderJournal("meeting"))
+    reporter = FaultReporter(journal=Journal("meeting"))
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
     return reporter

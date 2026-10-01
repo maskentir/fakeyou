@@ -15,16 +15,10 @@ from langchain_core.tools import tool
 from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
-from fakeyou.cli import (
-    create_chat_model,
-    create_fallback_chat_model,
-    memory_config,
-    tts_api_key,
-)
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import ingest_meeting
-from fakeyou.journal import ProviderJournal
+from fakeyou.journal import Journal
 from fakeyou.memory import (
     create_graphiti_memory,
     create_memory_tools,
@@ -33,7 +27,8 @@ from fakeyou.memory import (
     remember_owner_note,
 )
 from fakeyou.persona import PersonaProfile
-from fakeyou.record import MeetingRecord, meeting_record_path, read_meeting_record
+from fakeyou.providers import create_chat_model, create_fallback_chat_model, memory_config
+from fakeyou.record import MeetingRecord, load_meeting_record, meeting_record_path
 from fakeyou.settings import CompatibleReply, MemorySettings, Settings, require_secret
 from fakeyou.voice import create_speech_synthesizer
 
@@ -102,7 +97,7 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
 async def test_configured_tts_streams_pcm_audio() -> None:
     settings = Settings()
     try:
-        tts_api_key(settings)
+        require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
     except ValueError as error:
         pytest.skip(str(error))
     synthesizer = create_speech_synthesizer(
@@ -299,12 +294,12 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                 "meeting_id": meeting_id,
                 "twin_name": profile.display_name,
                 "vocabulary": profile.vocabulary,
-                "journal": ProviderJournal(meeting_id, emit=lines.append),
+                "journal": Journal(meeting_id, emit=lines.append),
             }
             options["faults"] = FaultReporter(journal=options["journal"])
-            first = await ingest_meeting(memory, read_meeting_record(record_path), **options)
+            first = await ingest_meeting(memory, load_meeting_record(record_path), **options)
             ingested = True
-            again = await ingest_meeting(memory, read_meeting_record(record_path), **options)
+            again = await ingest_meeting(memory, load_meeting_record(record_path), **options)
             await memory.close()
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
