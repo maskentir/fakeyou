@@ -5,8 +5,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import Any
-from uuid import uuid4
+from typing import Any, Literal
 
 from anthropic import AsyncAnthropic
 from anthropic.resources.messages import AsyncMessages
@@ -18,7 +17,6 @@ from graphiti_core.edges import EntityEdge, create_entity_edge_embeddings
 from graphiti_core.embedder.client import EMBEDDING_DIM
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
 from graphiti_core.errors import GroupsEdgesNotFoundError, NodeNotFoundError
-from graphiti_core.graphiti import AddEpisodeResults
 from graphiti_core.llm_client.anthropic_client import AnthropicClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
@@ -38,6 +36,13 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fakeyou.faults import FaultReporter
+from fakeyou.owner_notes import (
+    OWNER_NOTE_SOURCE,
+    ensure_note_indexes,
+    forget_owner_note,
+    read_note_states,
+)
+from fakeyou.provenance import FactEvidence, SourceEvidence, render_evidence
 from fakeyou.provider_faults import classify_exception
 from fakeyou.settings import (
     DEFAULTS,
@@ -51,7 +56,6 @@ from fakeyou.settings import (
 
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 RECALL_UNAVAILABLE_RESULT = "Meeting memory is unavailable right now; treat the answer as unknown."
-OWNER_NOTE_SOURCE = "owner note"
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
 CURRENT_FACTS_FILTER = SearchFilters(
@@ -209,6 +213,7 @@ async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti
 
 async def ensure_indexes(memory: Graphiti) -> None:
     await memory.build_indices_and_constraints()
+    await ensure_note_indexes(memory)
 
 
 async def verify_memory_connection(memory: Graphiti) -> None:
@@ -254,17 +259,36 @@ def create_memory_tools(
                 num_results=recall.search_limit,
                 search_filter=CURRENT_FACTS_FILTER,
             )
-            first_by_fact: dict[str, EntityEdge] = {}
-            for edge in results:
-                first_by_fact.setdefault(edge.fact, edge)
-            if not first_by_fact:
-                return RECALL_EMPTY_RESULT
-            return await describe_facts(memory, list(first_by_fact.values())[: recall.result_limit])
+            return await describe_facts(
+                memory, list(results), group_id=group_id, result_limit=recall.result_limit
+            )
 
     return [remember_meeting_fact, recall_meeting_context]
 
 
-async def describe_facts(memory: Graphiti, edges: list[EntityEdge]) -> str:
+def _evidence_kind(source_description: str) -> Literal["owner_note", "meeting_transcript", "other"]:
+    if source_description == OWNER_NOTE_SOURCE:
+        return "owner_note"
+    if source_description.startswith("Google Meet ") and source_description.endswith("transcript"):
+        return "meeting_transcript"
+    return "other"
+
+
+def _source_evidence(episode: EpisodicNode) -> SourceEvidence:
+    kind = _evidence_kind(episode.source_description)
+    return SourceEvidence(
+        episode_id=episode.uuid,
+        kind=kind,
+        label=episode.source_description,
+        source_at=episode.valid_at,
+        recorded_at=episode.created_at,
+        time_granularity="episode_window" if kind == "meeting_transcript" else "document",
+    )
+
+
+async def describe_facts(
+    memory: Graphiti, edges: list[EntityEdge], *, group_id: str, result_limit: int
+) -> str:
     episode_uuids = sorted({uuid for edge in edges for uuid in edge.episodes})
     episodes = (
         {
@@ -274,29 +298,46 @@ async def describe_facts(memory: Graphiti, edges: list[EntityEdge]) -> str:
         if episode_uuids
         else {}
     )
-    lines = []
-    for edge in edges:
-        sources = [episodes[uuid] for uuid in edge.episodes if uuid in episodes]
-        if not sources:
-            lines.append(f"From an unknown source: {edge.fact}")
-            continue
-        labels = "; ".join(sorted({source.source_description for source in sources}))
-        first_seen = min(source.valid_at for source in sources).astimezone(UTC)
-        lines.append(f"From {labels} on {first_seen:%Y-%m-%d %H:%M} UTC: {edge.fact}")
-    return "\n".join(lines)
-
-
-async def remember_owner_note(memory: Graphiti, *, group_id: str, text: str) -> AddEpisodeResults:
-    if not text.strip():
-        raise ValueError("owner note must not be blank")
-    return await memory.add_episode(
-        name=f"owner-note:{uuid4()}",
-        episode_body=text.strip(),
-        source=EpisodeType.text,
-        source_description=OWNER_NOTE_SOURCE,
-        reference_time=datetime.now(UTC),
-        group_id=group_id,
+    owned = sorted(
+        uuid
+        for uuid, episode in episodes.items()
+        if episode.group_id == group_id and episode.source_description == OWNER_NOTE_SOURCE
     )
+    states = await read_note_states(memory, group_id=group_id, episode_uuids=owned) if owned else {}
+    facts: list[FactEvidence] = []
+    excluded = {"pending": 0, "superseded": 0, "missing_source": 0}
+    for edge in edges:
+        if edge.group_id != group_id:
+            excluded["missing_source"] += 1
+            continue
+        present = [
+            episodes[uuid]
+            for uuid in edge.episodes
+            if uuid in episodes and episodes[uuid].group_id == group_id
+        ]
+        notes = [episode for episode in present if episode.source_description == OWNER_NOTE_SOURCE]
+        if any(states.get(note.uuid) == "pending" for note in notes):
+            excluded["pending"] += 1
+            continue
+        superseded = [note for note in notes if states.get(note.uuid) == "superseded"]
+        active_notes = [note for note in notes if states.get(note.uuid) in (None, "active")]
+        if superseded and not active_notes:
+            excluded["superseded"] += 1
+            continue
+        usable = [episode for episode in present if states.get(episode.uuid) in (None, "active")]
+        if not usable:
+            excluded["missing_source"] += 1
+            continue
+        facts.append(
+            FactEvidence(
+                fact_ids=(edge.uuid,),
+                text=edge.fact,
+                sources=tuple(_source_evidence(episode) for episode in usable),
+            )
+        )
+    if not facts:
+        return RECALL_EMPTY_RESULT
+    return render_evidence(facts, result_limit=result_limit, excluded=excluded)
 
 
 async def meeting_episodes(
@@ -373,4 +414,7 @@ async def forget_episode(memory: Graphiti, *, group_id: str, episode_uuid: str) 
         episode = None
     if episode is None or episode.group_id != group_id:
         raise ValueError("episode is not in this persona's memory")
+    if episode.source_description == OWNER_NOTE_SOURCE:
+        await forget_owner_note(memory, group_id=group_id, episode_uuid=episode_uuid)
+        return
     await memory.remove_episode(episode_uuid)

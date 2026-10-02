@@ -2,10 +2,14 @@ import inspect
 
 from graphiti_core import Graphiti
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from graphiti_core.edges import EntityEdge
 from graphiti_core.errors import NodeNotFoundError
+from graphiti_core.nodes import EpisodicNode
 from graphiti_core.search.search_filters import ComparisonOperator, date_filter_query_constructor
 from langchain.agents.middleware import ToolErrorMiddleware
 from langchain.chat_models import init_chat_model
+from neo4j.exceptions import ConstraintError
+from neo4j.time import DateTime as Neo4jDateTime
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
 
@@ -132,3 +136,15 @@ def test_env_settings_source_exposes_mutable_env_vars(monkeypatch) -> None:
     assert source.env_vars["fakeyou_reply__model"] == "contract-model"
     source.env_vars = {}
     assert source.env_vars == {}
+
+
+def test_owner_note_memory_contracts_cover_correction_path() -> None:
+    assert callable(EpisodicNode.save)
+    assert callable(EpisodicNode.get_by_uuid)
+    assert callable(EpisodicNode.get_by_uuids)
+    assert callable(EntityEdge.get_by_uuids)
+    assert callable(Neo4jDriver.transaction)
+    assert callable(Neo4jDriver.execute_query)
+    assert issubclass(ConstraintError, Exception)
+    assert callable(Neo4jDateTime.from_native)
+    assert callable(Neo4jDateTime.to_native)

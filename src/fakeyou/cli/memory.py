@@ -5,8 +5,10 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 from graphiti_core import Graphiti
 from pydantic import TypeAdapter
@@ -28,8 +30,8 @@ from fakeyou.memory import (
     forget_meeting,
     open_graphiti_memory,
     reembed_group,
-    remember_owner_note,
 )
+from fakeyou.owner_notes import NoteConflictError, OwnerNoteResult, remember_owner_note
 from fakeyou.persona import PersonaProfile, load_persona
 from fakeyou.providers import memory_config, open_persona_memory
 from fakeyou.record import load_meeting_record, meeting_record_path
@@ -66,6 +68,31 @@ async def open_operator_memory(
         yield profile, memory
 
 
+def _require_usable_source(source_at: datetime | None) -> None:
+    if source_at is None:
+        return
+    if source_at.tzinfo is None or source_at.utcoffset() is None:
+        raise CliError("--source-at must carry a timezone")
+    if source_at > datetime.now(UTC):
+        raise CliError("--source-at must not be in the future")
+
+
+def _print_note_result(result: OwnerNoteResult) -> None:
+    print(
+        json.dumps(
+            {
+                "episode_uuid": result.episode_uuid,
+                "facts": list(result.facts),
+                "source_at": result.source_at.isoformat(),
+                "recorded_at": result.recorded_at.isoformat(),
+                "supersedes": result.supersedes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 async def add_owner_note(
     text: str,
     *,
@@ -73,30 +100,69 @@ async def add_owner_note(
     owner_id: str | None,
     twin_id: str | None,
     settings: Settings,
+    source_at: datetime | None = None,
+    note_id: UUID | None = None,
 ) -> None:
     if not text.strip():
         raise CliError("note text must not be blank")
+    _require_usable_source(source_at)
     async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
         profile,
         memory,
     ):
-        result = await remember_owner_note(memory, group_id=profile.memory_group, text=text)
-    print(
-        json.dumps(
-            {
-                "episode_uuid": result.episode.uuid,
-                "facts": [edge.fact for edge in result.edges],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
-    if not result.edges:
-        print(
-            "fakeyou: warning: no facts were extracted, so recall cannot find this note; "
-            "rephrase it with the named people, projects, or dates it relates to",
-            file=sys.stderr,
-        )
+        operation = note_id if note_id is not None else uuid4()
+        if note_id is None:
+            print(f"fakeyou: note-id {operation}", file=sys.stderr)
+        try:
+            result = await remember_owner_note(
+                memory,
+                group_id=profile.memory_group,
+                text=text,
+                source_at=source_at,
+                note_id=operation,
+            )
+        except NoteConflictError as error:
+            raise CliError(str(error)) from None
+    _print_note_result(result)
+
+
+async def correct_owner_note(
+    text: str,
+    *,
+    episode_uuid: str,
+    source_at: datetime,
+    note_id: UUID | None,
+    persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
+    settings: Settings,
+) -> None:
+    if not text.strip():
+        raise CliError("note text must not be blank")
+    try:
+        target = UUID(episode_uuid)
+    except ValueError:
+        raise CliError("--episode must be a UUID") from None
+    _require_usable_source(source_at)
+    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+        profile,
+        memory,
+    ):
+        operation = note_id if note_id is not None else uuid4()
+        if note_id is None:
+            print(f"fakeyou: note-id {operation}", file=sys.stderr)
+        try:
+            result = await remember_owner_note(
+                memory,
+                group_id=profile.memory_group,
+                text=text,
+                source_at=source_at,
+                note_id=operation,
+                supersedes=target,
+            )
+        except NoteConflictError as error:
+            raise CliError(str(error)) from None
+    _print_note_result(result)
 
 
 async def ingest_until_stopped(

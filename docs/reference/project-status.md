@@ -12,6 +12,8 @@ Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup dan rencana te
 
 Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan visual, mengingat, berbicara, serta memakai UI atas nama pemilik dengan kewenangan yang jelas.
 
+Milestone memori tepercaya berjalan di branch `feat/trustworthy-memory` (belum digabung). Fondasi kontrak selesai: modul bukti `memory_evidence/v1`, owner note dengan koreksi idempoten, recall terfilter status, CLI `memory-add`/`memory-correct`, aturan persona baru, korpus 24 kasus, dan runbook acceptance. Gate offline hijau (1.703 tes; Ruff, format, mypy bersih) dan dua tes roundtrip live lulus dengan residu nol, sehingga klaim diagnosis awal soal protokol UUID terbukti keliru. Kualitas trust, fungsi live Meet, dan performa masih belum terbukti: replay contract-only, kunci judge belum divalidasi, dan nol sesi Meet. Bukti: [acceptance memori tepercaya](../reports/2026-10-02-trust-acceptance.md).
+
 ## Yang sudah ada dan batasnya
 
 | Bagian | Bukti saat ini | Yang belum selesai |

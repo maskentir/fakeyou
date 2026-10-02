@@ -234,6 +234,29 @@ def test_build_persona_explains_recalled_source_labels() -> None:
     assert "most recent source" in prompt
 
 
+def test_build_persona_describes_memory_evidence_schema() -> None:
+    prompt = build_system_prompt(profile())
+
+    assert "memory evidence" in prompt
+    assert "JSON" in prompt
+    assert "dated sources" in prompt
+    assert "starts with its source" not in prompt
+
+
+def test_build_persona_separates_source_date_from_event_date() -> None:
+    prompt = build_system_prompt(profile())
+
+    assert "never the date of the event itself" in prompt
+    assert "only the fact text can set the event date" in prompt
+
+
+def test_build_persona_guards_greeting_unknown_names() -> None:
+    prompt = build_system_prompt(profile())
+
+    assert "Never greet a person by name unless a source identifies them" in prompt
+    assert "never proof of who you are talking to" in prompt
+
+
 def test_build_persona_lists_vocabulary_in_the_profile_json() -> None:
     prompt = build_system_prompt(profile(vocabulary=["Orchid", "Budi"]))
 

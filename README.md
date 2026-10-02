@@ -126,6 +126,10 @@ docker compose run --rm meeting-worker fakeyou memory-ingest --meeting MEETING_I
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
+docker compose run --rm meeting-worker fakeyou memory-correct "Koreksi dari Rani: demo Orchid pindah ke hari Senin." \
+  --episode 123e4567-e89b-12d3-a456-426614174000 --persona examples/persona.example.json \
+  --owner-id demo_owner --twin-id demo_twin --source-at 2026-10-01T06:40:00+00:00 \
+  --note-id 223e4567-e89b-12d3-a456-426614174002
 docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID --keep-record \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID \
@@ -134,7 +138,9 @@ docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_U
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/persona-memory.md), [ingestion memori](docs/plans/memory-ingestion.md), dan [rencana jangka panjang](docs/plans/long-term.md).
+Koreksi mengganti seluruh isi satu owner note: `memory-correct` membutuhkan `--episode` note lama, `--source-at` baru yang lebih muda dari target, dan `--persona`; tanpa `--note-id`, CLI mencetak ID operasi ke stderr untuk dipakai ulang saat retry. Retry memakai ID dan payload yang sama; ID sama dengan payload berbeda ditolak sebagai konflik. Hapus note dalam rantai koreksi ditolak sampai milestone retensi tersedia.
+
+Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/persona-memory.md), [ingestion memori](docs/plans/memory-ingestion.md), [memori tepercaya](docs/plans/trustworthy-memory.md), [acceptance memori tepercaya](docs/runbooks/trust-acceptance.md), dan [rencana jangka panjang](docs/plans/long-term.md).
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 

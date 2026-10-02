@@ -14,6 +14,8 @@
 
 **Kajian lanjutan:** [pelajaran latensi dari Vexa dan Amazon LMA](../reports/2026-10-02-latency-lessons.md) memisahkan waktu model dan permulaan TTS, membandingkan mekanisme streaming, serta mengusulkan eksperimen sebelum desain streaming per kalimat. Kajian belum mengubah alur atau membuktikan kelulusan milestone.
 
+**Prioritas berikutnya yang disetujui:** [memori yang dapat dipercaya](trustworthy-memory.md): provenance per sumber, waktu owner note, koreksi eksplisit, serta evaluasi ketidakpastian dan kewenangan. Rencana memuat pembagian swarm dan prompt Muse CLI; gate performa yang belum lulus tetap dilaporkan terpisah.
+
 ## Dasar keputusan
 
 Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup sesudahnya berada di `feat/legacy-config-cleanup`: `8a06fee`, `cdf0038`, dan `ff60109`; ketiganya masih lokal ketika rencana ini disusun. Baseline terakhir pada `ff60109`: 1.403 tes non-live dan non-container lulus, termasuk browser lokal; Ruff, format, dan mypy bersih. Angka ini bukti regresi lokal, bukan pengukuran performa baru.

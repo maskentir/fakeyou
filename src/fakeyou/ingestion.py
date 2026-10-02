@@ -23,6 +23,21 @@ class Utterance:
     speaker: str
     text: str
     at: datetime
+    spoken_at: datetime | None = None
+
+    @property
+    def source_at(self) -> datetime:
+        return self.spoken_at if self.spoken_at is not None else self.at
+
+
+def _spoken_moment(value: str) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        return None
+    return moment
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +88,13 @@ def meeting_windows(
             speaker = (
                 UNIDENTIFIED_PARTICIPANT if entry.participant == "unknown" else entry.participant
             )
+            spoken = _spoken_moment(entry.spoken_at)
         elif isinstance(entry, TwinSpeechEntry):
             speaker = TWIN_SPEAKER
+            spoken = None
         else:
             continue
-        utterance = Utterance(speaker, " ".join(entry.text.split()), entry.at)
+        utterance = Utterance(speaker, " ".join(entry.text.split()), entry.at, spoken)
         current = windows[-1] if windows else None
         if (
             current is None
@@ -134,7 +151,7 @@ async def ingest_meeting(
                         name=episode_name(meeting_id, index),
                         episode_body="\n".join(f"{u.speaker}: {u.text}" for u in window),
                         source_description=f"Google Meet {meeting_id} transcript",
-                        reference_time=window[0].at,
+                        reference_time=window[0].source_at,
                         source=EpisodeType.message,
                         group_id=group_id,
                         saga=meeting_saga(meeting_id),

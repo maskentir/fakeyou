@@ -143,6 +143,55 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
     assert (finished["windows"], finished["ingested"], finished["completed"]) == (2, 2, True)
 
 
+async def test_ingest_uses_spoken_time_as_the_window_source_time() -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
+    spoken = datetime(2026, 9, 30, 8, 58, 30, tzinfo=UTC)
+    entries = [
+        TranscriptEntry(
+            at=START,
+            id="late-record",
+            spoken_at=spoken.isoformat(),
+            participant="Speaker A",
+            source="meeting_audio",
+            text="The launch stays on Friday.",
+        )
+    ]
+
+    result, _rows = await run(memory, entries)
+
+    assert result.completed
+    [episode] = memory.added
+    assert episode["reference_time"] == spoken
+
+
+async def test_ingest_falls_back_to_record_time_for_invalid_spoken_time() -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
+    entries = [
+        TranscriptEntry(
+            at=START,
+            id="bad-clock",
+            spoken_at="not-a-timestamp",
+            participant="Speaker A",
+            source="meeting_audio",
+            text="The launch stays on Friday.",
+        ),
+        TranscriptEntry(
+            at=START,
+            id="naive-clock",
+            spoken_at="2026-09-30T09:00:00",
+            participant="Speaker A",
+            source="meeting_audio",
+            text="The venue stays Hall A.",
+        ),
+    ]
+
+    result, _rows = await run(memory, entries)
+
+    assert result.completed
+    [episode] = memory.added
+    assert episode["reference_time"] == START
+
+
 async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() -> None:
     entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
     memory = make_graphiti(

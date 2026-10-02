@@ -2,7 +2,11 @@ import argparse
 import asyncio
 import inspect
 import sys
+from datetime import datetime
 from pathlib import Path
+from uuid import UUID
+
+from pydantic import AwareDatetime, TypeAdapter
 
 from fakeyou.cli.chat import chat
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
@@ -10,6 +14,7 @@ from fakeyou.cli.errors import FAILURE_EXIT_CODES
 from fakeyou.cli.join import join_meeting
 from fakeyou.cli.memory import (
     add_owner_note,
+    correct_owner_note,
     forget_memory,
     ingest_recorded_meeting,
     initialize_memory,
@@ -19,6 +24,19 @@ from fakeyou.provider_faults import ProviderFault
 from fakeyou.settings import (
     Settings,
 )
+
+_SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
+
+
+def _source_at_argument(value: str) -> datetime:
+    return _SOURCE_AT_ARGUMENT.validate_python(value)
+
+
+def _note_id_argument(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError:
+        raise ValueError(f"--note-id must be a UUID: {value}") from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,7 +59,27 @@ def build_parser() -> argparse.ArgumentParser:
         "memory-add", help="Store an owner note in the persona's memory", allow_abbrev=False
     )
     memory_add_parser.add_argument("text")
+    memory_add_parser.add_argument(
+        "--source-at", dest="source_at", type=_source_at_argument, default=None
+    )
+    memory_add_parser.add_argument(
+        "--note-id", dest="note_id", type=_note_id_argument, default=None
+    )
     memory_add_parser.set_defaults(handler=add_owner_note)
+    memory_correct_parser = commands.add_parser(
+        "memory-correct",
+        help="Replace one owner note with a corrected note in the persona's memory",
+        allow_abbrev=False,
+    )
+    memory_correct_parser.add_argument("text")
+    memory_correct_parser.add_argument("--episode", dest="episode_uuid", required=True)
+    memory_correct_parser.add_argument(
+        "--source-at", dest="source_at", type=_source_at_argument, required=True
+    )
+    memory_correct_parser.add_argument(
+        "--note-id", dest="note_id", type=_note_id_argument, default=None
+    )
+    memory_correct_parser.set_defaults(handler=correct_owner_note)
     memory_forget_parser = commands.add_parser(
         "memory-forget",
         help="Delete one meeting or one episode from the persona's memory",
@@ -80,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.set_defaults(handler=show_session_report)
     for operator_parser in (
         memory_add_parser,
+        memory_correct_parser,
         memory_forget_parser,
         memory_ingest_parser,
         memory_reembed_parser,

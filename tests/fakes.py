@@ -264,6 +264,7 @@ def make_graphiti(
     *,
     facts: Sequence[str] = (),
     episodes: dict[str, list[str]] | None = None,
+    fact_groups: dict[str, str] | None = None,
     existing: Sequence[Any] = (),
     saga_episodes: dict[str, list[str]] | None = None,
     connect_error: BaseException | None = None,
@@ -282,6 +283,7 @@ def make_graphiti(
     memory.removed = []
     memory.facts = list(facts)
     memory.fact_episodes = episodes or {}
+    memory.fact_groups = fact_groups or {}
     memory.saga_episodes = list(existing)
     memory.errors = {}
     memory.gate = None
@@ -317,9 +319,15 @@ def make_graphiti(
                 raise
         if search_error is not None:
             raise search_error
+        fallback = (kwargs.get("group_ids") or ["team_alpha"])[0]
         return [
-            SimpleNamespace(fact=fact, episodes=memory.fact_episodes.get(fact, []))
-            for fact in memory.facts
+            SimpleNamespace(
+                uuid=f"edge-{index}",
+                fact=fact,
+                episodes=memory.fact_episodes.get(fact, []),
+                group_id=memory.fact_groups.get(fact, fallback),
+            )
+            for index, fact in enumerate(memory.facts)
         ]
 
     async def add_episode(**kwargs: Any) -> Any:

@@ -4,9 +4,11 @@ import signal
 import sys
 import threading
 from contextlib import asynccontextmanager, nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 from langchain.agents.middleware import ToolErrorMiddleware
@@ -24,6 +26,7 @@ import fakeyou.cli.main as cli_main
 import fakeyou.cli.memory as cli_memory
 import fakeyou.memory as memory_module
 import fakeyou.providers as providers
+from fakeyou import owner_notes
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.invariants import (
@@ -34,6 +37,7 @@ from fakeyou.invariants import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
+from fakeyou.owner_notes import NoteConflictError, OwnerNoteResult
 from fakeyou.persona import PersonaProfile, build_system_prompt
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import load_meeting_record, meeting_record_path
@@ -1114,8 +1118,23 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
 async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    graphiti = make_graphiti(facts=("Orchid beta launch is planned for 14 October 2026",))
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    fact = "Orchid beta launch is planned for 14 October 2026"
+    graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
     model = recall_then_reply("Orchid launches on 14 October.")
+    episode = SimpleNamespace(
+        uuid="meet-1",
+        group_id=profile.memory_group,
+        source_description="Google Meet meeting-9 transcript",
+        valid_at=datetime(2026, 9, 30, 9, tzinfo=UTC),
+        created_at=datetime(2026, 9, 30, 9, tzinfo=UTC),
+    )
+
+    async def get_by_uuids(driver, uuids):
+        assert driver is graphiti.driver
+        return [episode for uuid in uuids if uuid == "meet-1"]
+
+    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
 
     created, audio, outcome = await _join_persona_conversation(
         tmp_path,
@@ -1127,7 +1146,6 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         join=join,
     )
 
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
     assert [type(item) for item in created["middleware"]] == [ToolErrorMiddleware]
     assert graphiti.searched == [
@@ -1140,9 +1158,11 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     ]
     assert profile.memory_group != settings.memory.store.group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
-    assert [m.content for m in tool_results] == [
-        f"From an unknown source: {fact}" for fact in graphiti.facts
-    ]
+    [content] = [m.content for m in tool_results]
+    payload = json.loads(content)
+    assert payload["schema"] == "memory_evidence/v1"
+    assert [item["text"] for item in payload["facts"]] == [fact]
+    assert payload["facts"][0]["sources"][0]["episode_id"] == "meet-1"
     assert graphiti.added == []
     assert audio.spoken == ["Orchid launches on 14 October."]
     assert outcome["phase"] == "listening"
@@ -1389,6 +1409,23 @@ async def test_memory_add_stores_owner_note_in_persona_group(
 ) -> None:
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
+    calls: list[dict] = []
+    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
+    note_id = UUID("b322d326-37b5-482a-904c-ef982f4dc510")
+
+    async def remember(memory, **kwargs):
+        calls.append({"memory": memory, **kwargs})
+        return OwnerNoteResult(
+            episode_uuid=str(note_id),
+            facts=("The Orchid demo moves to Friday.",),
+            source_at=source_at,
+            recorded_at=recorded_at,
+            supersedes=None,
+        )
+
+    assert cli_memory.remember_owner_note is owner_notes.remember_owner_note
+    monkeypatch.setattr(cli_memory, "remember_owner_note", remember)
 
     await cli_memory.add_owner_note(
         "The Orchid demo moves to Friday.",
@@ -1396,16 +1433,238 @@ async def test_memory_add_stores_owner_note_in_persona_group(
         owner_id=None,
         twin_id=None,
         settings=settings,
+        source_at=source_at,
+        note_id=note_id,
     )
 
     profile = PersonaProfile.model_validate(PERSONA_DATA)
-    [note] = graphiti.added
-    assert note["group_id"] == profile.memory_group
-    assert note["source_description"] == memory_module.OWNER_NOTE_SOURCE
+    assert calls == [
+        {
+            "memory": graphiti,
+            "group_id": profile.memory_group,
+            "text": "The Orchid demo moves to Friday.",
+            "source_at": source_at,
+            "note_id": note_id,
+        }
+    ]
     assert opened == ["open", "close"]
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == {"episode_uuid": "episode-1", "facts": []}
-    assert "no facts were extracted" in captured.err
+    assert json.loads(captured.out) == {
+        "episode_uuid": str(note_id),
+        "facts": ["The Orchid demo moves to Friday."],
+        "source_at": source_at.isoformat(),
+        "recorded_at": recorded_at.isoformat(),
+        "supersedes": None,
+    }
+    assert captured.err == ""
+
+
+async def test_memory_add_generates_and_reports_note_id_before_extraction(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    seen: list[dict] = []
+
+    async def remember(memory, **kwargs):
+        seen.append(kwargs)
+        return OwnerNoteResult(
+            episode_uuid=str(kwargs["note_id"]),
+            facts=("A note.",),
+            source_at=datetime(2026, 9, 30, 6, 40, tzinfo=UTC),
+            recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
+            supersedes=None,
+        )
+
+    monkeypatch.setattr(cli_memory, "remember_owner_note", remember)
+
+    await cli_memory.add_owner_note(
+        "A note.",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        settings=settings,
+    )
+
+    [call] = seen
+    assert UUID(str(call["note_id"])) == call["note_id"]
+    assert f"note-id {call['note_id']}" in capsys.readouterr().err
+
+
+async def test_memory_add_rejects_future_source_before_opening_memory(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    with pytest.raises(ValueError, match="future"):
+        await cli_memory.add_owner_note(
+            "A note.",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            settings=settings,
+            source_at=datetime(2999, 1, 1, tzinfo=UTC),
+        )
+    assert opened == []
+
+
+async def test_memory_add_maps_note_conflict_to_cli_error(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_persona_memory(monkeypatch, make_graphiti())
+
+    async def conflicting(_memory, **_kwargs):
+        raise NoteConflictError("note id already in use with different payload")
+
+    monkeypatch.setattr(cli_memory, "remember_owner_note", conflicting)
+
+    with pytest.raises(cli_errors.CliError, match="already in use"):
+        await cli_memory.add_owner_note(
+            "A note.",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            settings=settings,
+        )
+
+
+async def test_memory_correct_supersedes_target_note(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graphiti = make_graphiti()
+    opened = fake_persona_memory(monkeypatch, graphiti)
+    calls: list[dict] = []
+    target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
+    note_id = UUID("a1b2c3d4-0000-4000-8000-000000000002")
+    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
+
+    async def remember(memory, **kwargs):
+        calls.append({"memory": memory, **kwargs})
+        return OwnerNoteResult(
+            episode_uuid=str(note_id),
+            facts=("The Orchid demo moves to Friday.",),
+            source_at=source_at,
+            recorded_at=recorded_at,
+            supersedes=str(target),
+        )
+
+    monkeypatch.setattr(cli_memory, "remember_owner_note", remember)
+
+    await cli_memory.correct_owner_note(
+        "The Orchid demo moves to Friday.",
+        episode_uuid=str(target),
+        source_at=source_at,
+        note_id=note_id,
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        settings=settings,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    assert calls == [
+        {
+            "memory": graphiti,
+            "group_id": profile.memory_group,
+            "text": "The Orchid demo moves to Friday.",
+            "source_at": source_at,
+            "note_id": note_id,
+            "supersedes": target,
+        }
+    ]
+    assert opened == ["open", "close"]
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "episode_uuid": str(note_id),
+        "facts": ["The Orchid demo moves to Friday."],
+        "source_at": source_at.isoformat(),
+        "recorded_at": recorded_at.isoformat(),
+        "supersedes": str(target),
+    }
+    assert captured.err == ""
+
+
+async def test_memory_correct_generates_note_id_when_missing(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_persona_memory(monkeypatch, make_graphiti())
+    seen: list[dict] = []
+    target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
+    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+
+    async def remember(memory, **kwargs):
+        seen.append(kwargs)
+        return OwnerNoteResult(
+            episode_uuid=str(kwargs["note_id"]),
+            facts=("Fixed.",),
+            source_at=source_at,
+            recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
+            supersedes=str(target),
+        )
+
+    monkeypatch.setattr(cli_memory, "remember_owner_note", remember)
+
+    await cli_memory.correct_owner_note(
+        "Fixed.",
+        episode_uuid=str(target),
+        source_at=source_at,
+        note_id=None,
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        settings=settings,
+    )
+
+    [call] = seen
+    assert call["supersedes"] == target
+    assert f"note-id {call['note_id']}" in capsys.readouterr().err
+
+
+_CORRECT_TARGET = "a1b2c3d4-0000-4000-8000-000000000001"
+_CORRECT_SOURCE = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "text,episode_uuid,source_at,identity,match",
+    [
+        ("  ", _CORRECT_TARGET, _CORRECT_SOURCE, {}, "blank"),
+        ("Fixed.", "not-a-uuid", _CORRECT_SOURCE, {}, "UUID"),
+        ("Fixed.", _CORRECT_TARGET, datetime(2999, 1, 1, tzinfo=UTC), {}, "future"),
+        ("Fixed.", _CORRECT_TARGET, datetime(2026, 9, 30, 6, 40), {}, "timezone"),
+        (
+            "Fixed.",
+            _CORRECT_TARGET,
+            _CORRECT_SOURCE,
+            {"owner_id": "other-owner"},
+            "owner_id and twin_id",
+        ),
+    ],
+)
+async def test_memory_correct_validates_before_opening_memory(
+    settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    episode_uuid: str,
+    source_at: datetime,
+    identity: dict,
+    match: str,
+) -> None:
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    with pytest.raises(ValueError, match=match):
+        await cli_memory.correct_owner_note(
+            text,
+            episode_uuid=episode_uuid,
+            source_at=source_at,
+            note_id=None,
+            persona_path=write_persona(tmp_path),
+            owner_id=identity.get("owner_id"),
+            twin_id=None,
+            settings=settings,
+        )
+    assert opened == []
 
 
 @pytest.mark.parametrize(
@@ -1638,6 +1897,115 @@ def test_memory_operator_commands_parse_arguments(
     cli_main.main()
 
     assert {key: captured[key] for key in expected} == expected
+
+
+def test_memory_add_parses_optional_source_and_note_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def fake_command(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fakeyou",
+            "memory-add",
+            "A note.",
+            "--persona",
+            "p.json",
+            "--source-at",
+            "2026-09-30T06:40:00+00:00",
+            "--note-id",
+            "b322d326-37b5-482a-904c-ef982f4dc510",
+        ],
+    )
+    cli_main.main()
+
+    assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    assert captured["note_id"] == UUID("b322d326-37b5-482a-904c-ef982f4dc510")
+
+
+def test_memory_add_defaults_source_and_note_id_to_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def fake_command(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "A note.", "--persona", "p.json"])
+    cli_main.main()
+
+    assert captured["source_at"] is None
+    assert captured["note_id"] is None
+
+
+def test_memory_correct_parses_target_source_and_note_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def fake_command(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli_main, "correct_owner_note", fake_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fakeyou",
+            "memory-correct",
+            "Fixed note.",
+            "--episode",
+            "a1b2c3d4-0000-4000-8000-000000000001",
+            "--persona",
+            "p.json",
+            "--source-at",
+            "2026-09-30T06:40:00+00:00",
+            "--note-id",
+            "a1b2c3d4-0000-4000-8000-000000000002",
+        ],
+    )
+    cli_main.main()
+
+    assert captured["text"] == "Fixed note."
+    assert captured["episode_uuid"] == "a1b2c3d4-0000-4000-8000-000000000001"
+    assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    assert captured["note_id"] == UUID("a1b2c3d4-0000-4000-8000-000000000002")
+    assert captured["persona_path"] == Path("p.json")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["memory-add", "A note.", "--persona", "p.json", "--source-at", "2026-09-30T06:40:00"],
+        ["memory-add", "A note.", "--persona", "p.json", "--source-at", "not-a-timestamp"],
+        ["memory-add", "A note.", "--persona", "p.json", "--note-id", "not-a-uuid"],
+        [
+            "memory-correct",
+            "Fixed.",
+            "--episode",
+            "a1b2c3d4-0000-4000-8000-000000000001",
+            "--persona",
+            "p.json",
+            "--source-at",
+            "2026-09-30T06:40:00",
+        ],
+    ],
+)
+def test_memory_commands_reject_invalid_source_or_note_id_at_parse_time(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == 2
 
 
 def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
