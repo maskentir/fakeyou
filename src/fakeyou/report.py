@@ -89,6 +89,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     faults = Counter[tuple[str, str]]()
     result: dict[str, Any] | None = None
     milestones: dict[str, dict[str, Any]] = {}
+    cancel_requested = 0
+    cancel_completed = 0
+    ingest_runs: list[tuple[bool | None, bool]] = []
+    ingest_fault_pending = False
     for row in rows:
         event = row.get("event")
         try:
@@ -169,9 +173,13 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 replying["reply_at"] = at
                 replying["outcome"] = "silent"
         elif event in ("agent_cancelled", "agent_failed"):
+            if event == "agent_cancelled":
+                cancel_completed += 1
             turn = _turn_for(turns, row)
             if turn is not None:
                 turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
+        elif event == "agent_cancel_requested":
+            cancel_requested += 1
         elif event == "answer_text_emitted":
             turn = _transcript_turn(turns, row, excluded)
             if turn is not None:
@@ -244,8 +252,19 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             replying = None
         elif event in ("memory_episode_ingested", "memory_episode_failed"):
             episodes.append(row)
+        elif event == "memory_ingest_finished":
+            raw_completed = row.get("completed")
+            ingest_runs.append(
+                (
+                    bool(raw_completed) if isinstance(raw_completed, bool) else None,
+                    ingest_fault_pending,
+                )
+            )
+            ingest_fault_pending = False
         elif event == "fault_recorded":
             faults[(str(row.get("source")), str(row.get("kind")))] += 1
+            if row.get("source") == "memory_ingest":
+                ingest_fault_pending = True
         elif event == "session_finished":
             result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
     for transcript_id in pending.values():
@@ -256,8 +275,31 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             excluded["missing_transcript"] += 1
     turn_reports = [_turn_report(turn, excluded) for turn in turns.values()]
+    if result is None:
+        session_outcome = "unknown"
+    elif result.get("exit_code") is None:
+        session_outcome = "unknown"
+    elif result.get("exit_code") == 0:
+        session_outcome = "completed"
+    else:
+        session_outcome = "failed"
+    if not ingest_runs:
+        ingestion_outcome = "unknown"
+    else:
+        run_completed, run_faulted = ingest_runs[-1]
+        if run_completed is None:
+            ingestion_outcome = "unknown"
+        elif run_completed:
+            ingestion_outcome = "completed"
+        elif run_faulted:
+            ingestion_outcome = "failed"
+        else:
+            ingestion_outcome = "interrupted"
     return {
         "startup": _startup_report(milestones),
+        "session_outcome": session_outcome,
+        "ingestion_outcome": ingestion_outcome,
+        "cancellation": {"requested": cancel_requested, "completed": cancel_completed},
         "turns": turn_reports,
         "latency": {
             stage: summarize([turn[stage] for turn in turn_reports if turn[stage] is not None])

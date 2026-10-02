@@ -25,6 +25,7 @@ from fakeyou.conversation import (
     conversation_thread_id,
 )
 from fakeyou.faults import FaultReporter
+from fakeyou.greetings import create_greeting_middleware
 from fakeyou.journal import Journal
 from fakeyou.memory import (
     create_memory_tools,
@@ -80,6 +81,8 @@ async def open_conversation(
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []
+        greeting_language = profile.language if profile is not None else settings.speech.language
+        middleware.append(create_greeting_middleware(greeting_language))
         fallback = create_fallback_chat_model(settings)
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))

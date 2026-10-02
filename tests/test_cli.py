@@ -29,6 +29,7 @@ import fakeyou.providers as providers
 from fakeyou import owner_notes
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.greetings import create_greeting_middleware
 from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
@@ -570,7 +571,9 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     assert created["tools"] == []
     assert created["checkpointer"] is not None
     assert created["persona"] == DEFAULT_PERSONA
-    assert created["middleware"] == []
+    assert [type(item) for item in created["middleware"]] == [
+        type(create_greeting_middleware("id"))
+    ]
     assert loop._responder.journal is not None
 
 
@@ -1111,7 +1114,9 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
 
     assert created["persona"] == build_system_prompt(PersonaProfile.model_validate(PERSONA_DATA))
     assert created["tools"] == []
-    assert created["middleware"] == []
+    assert [type(item) for item in created["middleware"]] == [
+        type(create_greeting_middleware("id"))
+    ]
     assert audio.spoken == ["Hello."]
 
 
@@ -1147,7 +1152,11 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     )
 
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
-    assert [type(item) for item in created["middleware"]] == [ToolErrorMiddleware]
+    greeting_type = type(create_greeting_middleware("id"))
+    assert [type(item) for item in created["middleware"]] == [
+        greeting_type,
+        ToolErrorMiddleware,
+    ]
     assert graphiti.searched == [
         {
             "query": "Orchid launch",
@@ -1388,7 +1397,9 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     )
 
     assert created["tools"] == []
-    assert created["middleware"] == []
+    assert [type(item) for item in created["middleware"]] == [
+        type(create_greeting_middleware("id"))
+    ]
     assert graphiti.added == []
     assert "recall" not in created["persona"].casefold()
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
@@ -2479,7 +2490,11 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
         pass
 
-    assert [type(item) for item in created["middleware"]] == [ModelFallbackMiddleware]
+    greeting_type = type(create_greeting_middleware("id"))
+    assert [type(item) for item in created["middleware"]] == [
+        greeting_type,
+        ModelFallbackMiddleware,
+    ]
 
 
 async def test_open_conversation_wires_sentence_streaming_flag(
