@@ -1318,9 +1318,11 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured["memory"] is True
 
 
-async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
+async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
     graphiti = make_graphiti()
     model = ToolCallingFakeModel(responses=[AIMessage(content="The demo moves to Thursday.")])
 
@@ -1338,6 +1340,24 @@ async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
 
     profile = PersonaProfile.model_validate({**PERSONA_DATA, "ingest_transcripts": True})
     assert audio.spoken == ["The demo moves to Thursday."]
+    assert graphiti.added == []
+    assert graphiti.events == ["verify", "close"]
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.status == "pending"
+    assert status.record_sha256 is not None
+
+    fake_persona_memory(monkeypatch, graphiti)
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path, ingest_transcripts=True),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
     [episode] = graphiti.added
     assert episode["episode_body"] == (
         "Unidentified participant: When is the Orchid demo now?\n"
@@ -1347,12 +1367,13 @@ async def test_join_ingests_participant_transcripts_and_finished_twin_speech(
     assert episode["group_id"] == profile.memory_group
     assert episode["saga"] == "meeting:meeting-9"
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
-    assert graphiti.events == ["verify", "close"]
 
 
-async def test_join_ingest_only_persona_opens_memory_without_recall_tool(
+async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
     graphiti = make_graphiti()
 
     created, _audio, _outcome = await _join_persona_conversation(
@@ -1368,8 +1389,24 @@ async def test_join_ingest_only_persona_opens_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert created["middleware"] == []
-    assert len(graphiti.added) == 1
+    assert graphiti.added == []
     assert "recall" not in created["persona"].casefold()
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.status == "pending"
+
+    fake_persona_memory(monkeypatch, graphiti)
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path, ingest_transcripts=True, allowed_tools=[]),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    assert len(graphiti.added) == 1
 
 
 async def test_join_without_ingest_permission_never_writes_memory(
@@ -2566,3 +2603,612 @@ async def test_join_rejects_persona_language_mismatch_before_resources(
     with pytest.raises(cli_errors.CliError, match="persona language"):
         await join(MEET_LINK, audio_enabled=True, conversation_enabled=True, persona_path=persona)
     assert not settings.paths.journal_dir.exists()
+
+
+def printed_join_summary(capsys) -> dict:
+    out = capsys.readouterr().out
+    return json.loads(out[out.rindex('{\n  "meeting_id"') :])
+
+
+def write_ingest_windows(settings, meeting_id: str, count: int) -> None:
+    from datetime import timedelta
+
+    from fakeyou.conversation import TranscriptEvent
+    from fakeyou.record import MeetingRecord
+
+    start = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+    moments = iter(start + timedelta(seconds=61 * index) for index in range(count))
+    record = MeetingRecord(
+        meeting_record_path(settings.paths.record_dir, meeting_id), now=lambda: next(moments)
+    )
+    for index in range(count):
+        moment = start + timedelta(seconds=61 * index)
+        record.add_transcript(
+            TranscriptEvent(
+                id=f"window-{index}",
+                timestamp=moment.isoformat(),
+                source="meeting_audio",
+                text=f"Decision {index} is final.",
+                finalized=True,
+            )
+        )
+    record.close()
+
+
+async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    import hashlib
+
+    from fakeyou.ingestion_status import lock_path, read_status, status_path
+
+    graphiti = make_graphiti()
+    model = ToolCallingFakeModel(responses=[AIMessage(content="The demo moves to Thursday.")])
+
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        graphiti=graphiti,
+        memory=True,
+        transcripts=("When is the Orchid demo now?",),
+        persona_overrides={"ingest_transcripts": True},
+        settings=settings,
+        join=join,
+    )
+
+    assert graphiti.added == []
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    status = read_status(status_path(record_path))
+    profile = PersonaProfile.model_validate({**PERSONA_DATA, "ingest_transcripts": True})
+    assert status is not None
+    assert status.status == "pending"
+    assert status.group_id == profile.memory_group
+    assert status.meeting_id == "meeting-9"
+    assert status.record_sha256 == hashlib.sha256(record_path.read_bytes()).hexdigest()
+    assert status.windows == 1
+    assert not lock_path(record_path).exists()
+    printed = printed_join_summary(capsys)
+    assert printed["session_outcome"] == "completed"
+    assert printed["ingestion_outcome"] == "pending"
+    assert printed["record_error"] is None
+    assert "memory-ingest --meeting meeting-9 --persona" in printed["resume_command"]
+    assert "persona.json" in printed["resume_command"]
+
+
+async def test_join_with_hanging_graphiti_leaves_without_ingesting(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = make_graphiti()
+    graphiti.gate = asyncio.Event()
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Noted.")])
+
+    await asyncio.wait_for(
+        _join_persona_conversation(
+            tmp_path,
+            monkeypatch,
+            model=model,
+            graphiti=graphiti,
+            memory=True,
+            transcripts=("When is the Orchid demo now?",),
+            persona_overrides={"ingest_transcripts": True},
+            settings=settings,
+            join=join,
+        ),
+        timeout=20,
+    )
+
+    assert graphiti.added == []
+
+
+async def test_join_without_ingest_intent_writes_not_requested(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    graphiti = make_graphiti()
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Okay.")])
+
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        graphiti=graphiti,
+        memory=True,
+        settings=settings,
+        join=join,
+    )
+
+    status = read_status(status_path(meeting_record_path(settings.paths.record_dir, "meeting-9")))
+    assert status is not None
+    assert status.status == "not_requested"
+    assert status.record_sha256 is None
+    printed = printed_join_summary(capsys)
+    assert printed["ingestion_outcome"] == "not_requested"
+    assert printed["resume_command"] is None
+
+
+async def test_join_without_persona_writes_no_status(
+    session_run, join, settings, tmp_path: Path, capsys
+) -> None:
+    from fakeyou.ingestion_status import status_path
+
+    await join(MEET_LINK)
+
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-1")
+    assert not status_path(record_path).exists()
+    printed = printed_join_summary(capsys)
+    assert printed["session_outcome"] == "completed"
+    assert printed["ingestion_outcome"] == "not_requested"
+    assert printed["record_error"] is None
+    assert printed["resume_command"] is None
+
+
+async def test_join_record_finalize_failure_is_visible_and_exits_1(
+    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    import os
+
+    calls = 0
+
+    def fail_after_lock_fsync(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise OSError("disk unavailable")
+
+    monkeypatch.setattr(os, "fsync", fail_after_lock_fsync)
+
+    with pytest.raises(SystemExit) as caught:
+        await join(MEET_LINK)
+    assert caught.value.code == 1
+
+    printed = printed_join_summary(capsys)
+    assert printed["session_outcome"] == "completed"
+    assert printed["ingestion_outcome"] == "not_requested"
+    assert "record" in printed["record_error"]
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "journals" / "meeting-1.jsonl").read_text().splitlines()
+    ]
+    finished = [row for row in rows if row["event"] == "session_finished"]
+    exited = [row for row in rows if row["event"] == "cli_exited"]
+    assert [row["exit_code"] for row in finished] == [0]
+    assert [row["exit_code"] for row in exited] == [1]
+
+
+async def test_join_ingest_requested_but_finalize_failed_reports_unknown(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    import os
+
+    calls = 0
+
+    def fail_at_record_close(fd: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 3:
+            raise OSError("disk unavailable")
+
+    monkeypatch.setattr(os, "fsync", fail_at_record_close)
+    graphiti = make_graphiti()
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Okay.")])
+
+    with pytest.raises(SystemExit) as caught:
+        await _join_persona_conversation(
+            tmp_path,
+            monkeypatch,
+            model=model,
+            graphiti=graphiti,
+            memory=True,
+            persona_overrides={"ingest_transcripts": True},
+            settings=settings,
+            join=join,
+        )
+    assert caught.value.code == 1
+
+    printed = printed_join_summary(capsys)
+    assert printed["ingestion_outcome"] == "unknown"
+    assert "record" in printed["record_error"]
+    assert printed["resume_command"] is None
+
+
+async def test_memory_ingest_recovers_pending_without_hash_after_crash(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    import hashlib
+
+    from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
+
+    write_record(settings, "meeting-9")
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    path = status_path(record_path)
+    write_status(
+        path,
+        IngestionStatus.model_validate(
+            {
+                "meeting_id": "meeting-9",
+                "group_id": profile.memory_group,
+                "status": "pending",
+                "windows": 0,
+                "resumed_from": 0,
+                "ingested": 0,
+                "record_sha256": None,
+                "updated_at": datetime(2026, 10, 3, 8, tzinfo=UTC).isoformat(),
+                "reason": None,
+            }
+        ),
+    )
+
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
+    status = read_status(path)
+    assert status is not None
+    assert status.status == "completed"
+    assert status.record_sha256 == hashlib.sha256(record_path.read_bytes()).hexdigest()
+    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert (summary["ingested"], summary["completed"]) == (1, True)
+
+
+async def test_memory_ingest_failure_then_resumes_from_native_progress(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    write_ingest_windows(settings, "meeting-9", 3)
+    graphiti = make_graphiti(episode_prefix="uuid-")
+    graphiti.errors[1] = RuntimeError("graph down")
+    fake_persona_memory(monkeypatch, graphiti)
+    arguments = {
+        "meeting_id": "meeting-9",
+        "persona_path": write_persona(tmp_path),
+        "owner_id": None,
+        "twin_id": None,
+        "twin_name": None,
+        "settings": settings,
+    }
+
+    with pytest.raises(SystemExit) as first:
+        await cli_memory.ingest_recorded_meeting(**arguments)
+    assert first.value.code == 1
+    path = status_path(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    failed = read_status(path)
+    assert failed is not None and failed.status == "failed"
+
+    await cli_memory.ingest_recorded_meeting(**arguments)
+
+    assert [episode["name"] for episode in graphiti.added] == [
+        "meeting-9:w00000",
+        "meeting-9:w00001",
+        "meeting-9:w00002",
+    ]
+    resumed = read_status(path)
+    assert resumed is not None
+    assert (resumed.status, resumed.windows, resumed.resumed_from, resumed.ingested) == (
+        "completed",
+        3,
+        1,
+        2,
+    )
+    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert (summary["ingested"], summary["completed"]) == (2, True)
+
+
+async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_record(settings, "meeting-9")
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    arguments = {
+        "meeting_id": "meeting-9",
+        "persona_path": write_persona(tmp_path),
+        "owner_id": None,
+        "twin_id": None,
+        "twin_name": None,
+        "settings": settings,
+    }
+
+    await cli_memory.ingest_recorded_meeting(**arguments)
+    await cli_memory.ingest_recorded_meeting(**arguments)
+
+    assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
+
+
+async def test_memory_ingest_refuses_an_active_writer_lock(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import record_lock
+
+    write_record(settings, "meeting-9")
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+
+    with record_lock(record_path, purpose="meeting"):
+        with pytest.raises(cli_errors.CliError, match="locked"):
+            await cli_memory.ingest_recorded_meeting(
+                meeting_id="meeting-9",
+                persona_path=write_persona(tmp_path),
+                owner_id=None,
+                twin_id=None,
+                twin_name=None,
+                settings=settings,
+            )
+    assert opened == []
+    assert record_path.exists()
+
+
+async def test_memory_ingest_rejects_a_changed_record_hash(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.conversation import TranscriptEvent
+    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.record import MeetingRecord
+
+    write_record(settings, "meeting-9")
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    arguments = {
+        "meeting_id": "meeting-9",
+        "persona_path": write_persona(tmp_path),
+        "owner_id": None,
+        "twin_id": None,
+        "twin_name": None,
+        "settings": settings,
+    }
+    await cli_memory.ingest_recorded_meeting(**arguments)
+
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record = MeetingRecord(record_path)
+    record.add_transcript(
+        TranscriptEvent(
+            id="late",
+            timestamp="2026-09-30T11:00:00+00:00",
+            source="meeting_audio",
+            text="A late change.",
+            finalized=True,
+        )
+    )
+    record.close()
+
+    with pytest.raises(SystemExit) as caught:
+        await cli_memory.ingest_recorded_meeting(**arguments)
+    assert caught.value.code == 1
+    assert len(graphiti.added) == 1
+    status = read_status(status_path(record_path))
+    assert status is not None and status.status == "failed"
+
+
+async def test_memory_ingest_rejects_a_foreign_group_status(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
+
+    write_record(settings, "meeting-9")
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+    path = status_path(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    write_status(
+        path,
+        IngestionStatus.model_validate(
+            {
+                "meeting_id": "meeting-9",
+                "group_id": "twin_other",
+                "status": "pending",
+                "windows": 1,
+                "resumed_from": 0,
+                "ingested": 0,
+                "record_sha256": None,
+                "updated_at": datetime(2026, 10, 3, 8, tzinfo=UTC).isoformat(),
+                "reason": None,
+            }
+        ),
+    )
+
+    with pytest.raises(cli_errors.CliError, match="group"):
+        await cli_memory.ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            settings=settings,
+        )
+    assert opened == []
+    status = read_status(path)
+    assert status is not None
+    assert (status.status, status.group_id) == ("pending", "twin_other")
+
+
+async def test_memory_ingest_corrupt_status_starts_fresh(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    write_record(settings, "meeting-9")
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    path = status_path(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{corrupt", encoding="utf-8")
+
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    assert len(graphiti.added) == 1
+    status = read_status(path)
+    assert status is not None and status.status == "completed"
+
+
+async def test_memory_ingest_partial_record_is_not_completed(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    write_record(settings, "meeting-9")
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write("{partial\n")
+
+    with pytest.raises(SystemExit) as caught:
+        await cli_memory.ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            settings=settings,
+        )
+    assert caught.value.code == 1
+    assert opened == []
+    status = read_status(status_path(record_path))
+    assert status is not None and status.status == "failed"
+
+
+async def test_memory_ingest_empty_record_reports_zero_windows(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.record import MeetingRecord
+
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    MeetingRecord(record_path).close()
+    fake_persona_memory(monkeypatch, make_graphiti())
+
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert (summary["windows"], summary["ingested"], summary["completed"]) == (0, 0, True)
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert (status.status, status.windows) == ("completed", 0)
+
+
+async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    write_record(settings, "meeting-9")
+    graphiti = make_graphiti()
+    fake_persona_memory(monkeypatch, graphiti)
+    real_ingest = cli_memory.ingest_until_stopped
+
+    async def stop_first(*args, **kwargs):
+        kwargs["stop"].set()
+        return await real_ingest(*args, **kwargs)
+
+    monkeypatch.setattr(cli_memory, "ingest_until_stopped", stop_first)
+
+    with pytest.raises(SystemExit) as caught:
+        await cli_memory.ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            settings=settings,
+        )
+    assert caught.value.code == 1
+    assert graphiti.added == []
+    status = read_status(status_path(meeting_record_path(settings.paths.record_dir, "meeting-9")))
+    assert status is not None and status.status == "interrupted"
+
+
+async def test_ingest_until_stopped_uses_the_caller_stop_event(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.faults import FaultReporter
+    from tests.fakes import RecordingJournal
+
+    write_record(settings, "meeting-9")
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+    before = signal.getsignal(signal.SIGINT)
+
+    stopped = await cli_memory.ingest_until_stopped(
+        make_graphiti(),
+        record_path,
+        profile=profile,
+        meeting_id="meeting-9",
+        twin_name="Rani Twin",
+        journal=journal,
+        faults=faults,
+        settings=settings,
+        stop=asyncio.Event(),
+    )
+    assert (stopped.ingested, stopped.completed) == (1, True)
+
+    halted = asyncio.Event()
+    halted.set()
+    early = await cli_memory.ingest_until_stopped(
+        make_graphiti(),
+        record_path,
+        profile=profile,
+        meeting_id="meeting-9",
+        twin_name="Rani Twin",
+        journal=journal,
+        faults=faults,
+        settings=settings,
+        stop=halted,
+    )
+    assert (early.ingested, early.completed) == (0, False)
+    assert signal.getsignal(signal.SIGINT) == before
+    journal.close()
+
+
+@pytest.mark.parametrize("keep_record", [False, True])
+async def test_memory_forget_meeting_refuses_an_active_lock(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool
+) -> None:
+    from fakeyou.ingestion_status import record_lock
+
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text("{}\n", encoding="utf-8")
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    async def forget(memory, **kwargs):
+        pytest.fail("provider must stay closed while the record is locked")
+
+    monkeypatch.setattr(cli_memory, "forget_meeting", forget)
+
+    with record_lock(record_path, purpose="meeting"):
+        with pytest.raises(cli_errors.CliError, match="locked"):
+            await cli_memory.forget_memory(
+                persona_path=write_persona(tmp_path),
+                owner_id=None,
+                twin_id=None,
+                meeting_id="meeting-9",
+                episode_uuid=None,
+                settings=settings,
+                keep_record=keep_record,
+            )
+    assert opened == []
+    assert record_path.exists()

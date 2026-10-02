@@ -115,3 +115,30 @@ def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         load_meeting_record(path)
+
+
+def test_record_close_finalizes_and_second_close_is_safe(tmp_path: Path) -> None:
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(0))
+
+    record.close()
+    record.close()
+
+    assert len(load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))) == 1
+
+
+def test_record_close_fsync_failure_propagates_and_second_close_is_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(0))
+
+    def reject_fsync(fd: int) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(os, "fsync", reject_fsync)
+    with pytest.raises(OSError, match="disk unavailable"):
+        record.close()
+    record.close()

@@ -27,24 +27,38 @@ def event(id, text="hello", finalized=True):
     return TranscriptEvent(id, datetime.now(UTC).isoformat(), "meeting_audio", text, finalized)
 
 
-async def test_serializes_turns_and_preserves_every_new_utterance():
-    gate = asyncio.Event()
-    responder, audio = FakeResponder(gate), FakeReplyAudio()
-    loop = ConversationLoop(responder)
+async def test_new_final_cancels_waiting_model_and_answers_newest_once(journal):
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
     loop.bind(audio)
-    await loop.handle_transcript(event("one", "first"))
-    await responder.started.wait()
-    await loop.handle_transcript(event("two", "second"))
-    await loop.handle_transcript(event("three", "third"))
-    assert len(responder.calls) == 1
-    gate.set()
-    await loop.wait_idle()
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    await loop.handle_transcript(event("t2", "second"))
+    assert responder.cancelled.is_set()
+    await asyncio.wait_for(loop.wait_idle(), 2)
     assert responder.max_active == 1
     assert [[item.text for item in call] for call in responder.calls] == [
         ["first"],
-        ["second", "third"],
+        ["second"],
     ]
-    assert audio.spoken == ["second/third"]
+    assert audio.spoken == ["second"]
+    [requested] = journal.events("agent_cancel_requested")
+    assert (
+        requested["request_id"],
+        requested["transcript_id"],
+        requested["generation"],
+        requested["reason"],
+    ) == ("t1:1", "t1", 1, "new_final")
+    assert requested["duration_ms"] >= 0
+    cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
+    assert len(cancelled) == 1
+    assert (
+        cancelled[0]["transcript_id"],
+        cancelled[0]["generation"],
+        cancelled[0]["reason"],
+    ) == ("t1", 1, "new_final")
+    assert cancelled[0]["duration_ms"] >= 0
+    assert journal.events("agent_failed") == []
     await loop.close()
 
 
@@ -1190,3 +1204,313 @@ async def test_streamed_speak_passes_transcript_id_to_session(journal):
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.transcripts == ["t1", "t1"]
     await loop.close()
+
+
+class GatedAudio(FakeReplyAudio):
+    def __init__(self, gate):
+        super().__init__()
+        self.gate = gate
+        self.entered = asyncio.Event()
+        self.attempts = 0
+
+    async def speak(self, text, *, sentence_index=None, transcript_id=None):
+        self.attempts += 1
+        self.entered.set()
+        await self.gate.wait()
+        await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+
+
+async def test_interim_cancels_pre_pcm_child_without_answering(journal):
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
+    loop = ConversationLoop(responder, barge_in=True, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    await loop.handle_interim("hold on")
+    assert not responder.cancelled.is_set()
+    await loop.handle_interim("please hold on a moment")
+    assert responder.cancelled.is_set()
+    assert len(responder.calls) == 1
+    assert audio.spoken == []
+    [requested] = journal.events("agent_cancel_requested")
+    assert requested["reason"] == "interim"
+    assert (requested["request_id"], requested["transcript_id"]) == ("t1:1", "t1")
+    assert journal.events("barge_in_detected") != []
+    await loop.handle_transcript(event("t2", "second"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert audio.spoken == ["second"]
+    assert journal.events("agent_failed") == []
+    await loop.close()
+
+
+async def test_duplicate_final_and_interim_do_not_reschedule(journal):
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
+    loop = ConversationLoop(responder, barge_in=True, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    await loop.handle_transcript(event("t1", "first"))
+    assert not responder.cancelled.is_set()
+    assert len(responder.calls) == 1
+    await loop.handle_interim("please hold on a moment")
+    assert responder.cancelled.is_set()
+    await loop.handle_interim("please hold on a moment")
+    [requested] = journal.events("agent_cancel_requested")
+    assert requested["reason"] == "interim"
+    assert len(responder.calls) == 1
+    await loop.handle_transcript(event("t2", "second"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert audio.spoken == ["second"]
+    assert [[item.text for item in call] for call in responder.calls] == [
+        ["first"],
+        ["second"],
+    ]
+    await loop.close()
+
+
+async def test_close_cancels_active_turn_and_never_reschedules(journal):
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    await loop.close()
+    assert responder.cancelled.is_set()
+    assert audio.spoken == []
+    assert loop.phase == "closed"
+    await loop.close()
+    await loop.handle_transcript(event("t2", "second"))
+    assert len(responder.calls) == 1
+    [requested] = journal.events("agent_cancel_requested")
+    assert (
+        requested["request_id"],
+        requested["transcript_id"],
+        requested["generation"],
+        requested["reason"],
+    ) == ("t1:1", "t1", 1, "close")
+    cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
+    assert len(cancelled) == 1
+    assert cancelled[0]["reason"] == "close"
+    assert journal.events("agent_failed") == []
+
+
+async def test_new_final_during_tts_drops_stale_audio(journal):
+    gate = asyncio.Event()
+    responder, audio = FakeResponder(), GatedAudio(gate)
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(audio.entered.wait(), 2)
+    await loop.handle_transcript(event("t2", "second"))
+    gate.set()
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert audio.attempts == 2
+    assert audio.spoken == ["second"]
+    assert loop.phase == "listening"
+    [requested] = journal.events("agent_cancel_requested")
+    assert requested["reason"] == "new_final"
+    assert journal.events("agent_failed") == []
+    await loop.close()
+
+
+async def test_close_during_tts_speak_drops_audio_and_stays_closed(journal):
+    gate = asyncio.Event()
+    responder, audio = FakeResponder(), GatedAudio(gate)
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(audio.entered.wait(), 2)
+    await loop.close()
+    gate.set()
+    assert audio.spoken == []
+    assert loop.phase == "closed"
+    await loop.close()
+    [requested] = journal.events("agent_cancel_requested")
+    assert requested["reason"] == "close"
+    assert journal.events("agent_failed") == []
+
+
+async def test_cancelled_request_ids_do_not_attach_to_next_transcript(journal):
+    responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    await loop.handle_transcript(event("t2", "second"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    started = [row["request_id"] for row in journal.events("agent_started")]
+    assert started == ["t1:1", "t2:2"]
+    finished = [row["request_id"] for row in journal.events("agent_finished")]
+    assert finished == ["t2:2"]
+    [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
+    assert (cancelled["transcript_id"], cancelled["generation"]) == ("t1", 1)
+    body = "\n".join(journal.lines)
+    assert "first" not in body
+    assert "second" not in body
+    await loop.close()
+
+
+async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(journal):
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from langchain_core.tools import tool
+
+    fast_calls: list[str] = []
+    hanging_calls: list[str] = []
+    hanging_begun = asyncio.Event()
+    hanging_gate = asyncio.Event()
+
+    @tool(description="Fast lookup.")
+    async def fast_lookup(query: str) -> str:
+        fast_calls.append(query)
+        return "fast result"
+
+    @tool(description="Hanging lookup.")
+    async def hanging_lookup(query: str) -> str:
+        hanging_calls.append(query)
+        hanging_begun.set()
+        await hanging_gate.wait()
+        return "late result"
+
+    def named_call(name, call_id):
+        calls = [{"name": name, "args": {"query": "demo"}, "id": call_id, "type": "tool_call"}]
+        return AIMessage(content="", tool_calls=calls)
+
+    agent = create_meeting_agent(
+        ToolCallingFakeModel(
+            responses=[
+                named_call("fast_lookup", "call-1"),
+                named_call("hanging_lookup", "call-2"),
+                AIMessage(content="second turn answer"),
+            ]
+        ),
+        tools=[fast_lookup, hanging_lookup],
+        checkpointer=InMemorySaver(),
+    )
+    responder = LangGraphResponder(agent, "checkpoint-cancel-thread", journal=journal)
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first question"))
+    assert await asyncio.wait_for(hanging_begun.wait(), 2)
+    assert fast_calls == ["demo"]
+    await loop.handle_transcript(event("t2", "second question"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert audio.spoken == ["second turn answer"]
+    assert fast_calls == ["demo"]
+    assert hanging_calls == ["demo"]
+    state = await agent.aget_state({"configurable": {"thread_id": "checkpoint-cancel-thread"}})
+    answered = {
+        message.tool_call_id
+        for message in state.values["messages"]
+        if isinstance(message, ToolMessage)
+    }
+    orphans = [
+        call["id"]
+        for message in state.values["messages"]
+        if isinstance(message, AIMessage) and message.tool_calls
+        for call in message.tool_calls
+        if call["id"] not in answered
+    ]
+    assert orphans == []
+    assert [
+        message.content for message in state.values["messages"] if isinstance(message, HumanMessage)
+    ] == ["first question", "second question"]
+    assert journal.events("agent_failed") == []
+    [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
+    assert cancelled["reason"] == "new_final"
+    await loop.close()
+
+
+async def test_cancelled_model_request_does_not_use_fallback(journal):
+    from langchain.agents.middleware import ModelFallbackMiddleware
+
+    entered = asyncio.Event()
+    attempts: list[int] = []
+    fallback_calls: list[int] = []
+
+    class HangingModel(ToolCallingFakeModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                entered.set()
+                await asyncio.Event().wait()
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    class CountingModel(ToolCallingFakeModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            fallback_calls.append(1)
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    agent = create_meeting_agent(
+        HangingModel(responses=[AIMessage(content="primary answer")]),
+        checkpointer=InMemorySaver(),
+        middleware=[ModelFallbackMiddleware(CountingModel(responses=[AIMessage(content="x")]))],
+    )
+    responder = LangGraphResponder(agent, "fallback-cancel-thread", journal=journal)
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "first"))
+    assert await asyncio.wait_for(entered.wait(), 2)
+    await loop.handle_transcript(event("t2", "second"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert audio.spoken == ["primary answer"]
+    assert fallback_calls == []
+    assert journal.events("agent_failed") == []
+    [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
+    assert cancelled["reason"] == "new_final"
+    await loop.close()
+
+
+async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
+    from langchain_openai import ChatOpenAI
+
+    arrived = asyncio.Event()
+    disconnected = asyncio.Event()
+    connections = 0
+
+    async def hold(reader, writer):
+        nonlocal connections
+        connections += 1
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            arrived.set()
+            await reader.read()
+            disconnected.set()
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ConnectionResetError):
+            arrived.set()
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(hold, "127.0.0.1", 0)
+    sockets = server.sockets or []
+    port = sockets[0].getsockname()[1]
+    model = ChatOpenAI(
+        model="loopback-dummy",
+        api_key="test-key",
+        base_url=f"http://127.0.0.1:{port}/v1",
+        request_timeout=30,
+        max_retries=0,
+    )
+    agent = create_meeting_agent(model, checkpointer=InMemorySaver())
+    loop = ConversationLoop(
+        LangGraphResponder(agent, "loopback-thread", journal=journal), journal=journal
+    )
+    audio = FakeReplyAudio()
+    loop.bind(audio)
+    try:
+        await loop.handle_transcript(event("t1", "hello"))
+        assert await asyncio.wait_for(arrived.wait(), 2)
+        assert connections == 1
+        await loop.close()
+        assert await asyncio.wait_for(disconnected.wait(), 2)
+        assert connections == 1
+        assert audio.spoken == []
+        assert journal.events("agent_failed") == []
+        [requested] = journal.events("agent_cancel_requested")
+        assert requested["reason"] == "close"
+        [cancelled] = journal.events("agent_cancelled")
+        assert cancelled["reason"] == "close"
+    finally:
+        server.close()
+        await server.wait_closed()

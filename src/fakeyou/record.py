@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -70,6 +71,7 @@ class MeetingRecord:
         self._faults = faults
         self._now = now
         self._seen: set[str] = set()
+        self._closed = False
 
     def add_transcript(self, event: TranscriptEvent) -> None:
         if not event.finalized or not event.text.strip() or event.id in self._seen:
@@ -96,7 +98,14 @@ class MeetingRecord:
         )
 
     def close(self) -> None:
-        self._file.close()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._file.flush()
+            os.fsync(self._file.fileno())
+        finally:
+            self._file.close()
 
     def _append(self, entry: RecordEntry) -> None:
         try:

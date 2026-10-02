@@ -13,7 +13,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.callbacks import AsyncCallbackHandler
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import Runnable
 from pipecat.frames.frames import TranscriptionFrame
@@ -239,6 +239,9 @@ class LangGraphResponder:
                     ],
                 },
             )
+        except asyncio.CancelledError:
+            await self._reconcile_cancelled_tools()
+            raise
         except Exception as error:
             fault = classify_exception("agent", error)
             raise fault from error
@@ -248,6 +251,43 @@ class LangGraphResponder:
         else:
             reply = output[-1].text.strip()
         return reply
+
+    async def _reconcile_cancelled_tools(self) -> None:
+        get_state = getattr(self.agent, "aget_state", None)
+        update_state = getattr(self.agent, "aupdate_state", None)
+        if not callable(get_state) or not callable(update_state):
+            return
+        config = {"configurable": {"thread_id": self.thread_id}}
+        try:
+            state = await get_state(config)
+        except Exception:
+            return
+        messages = state.values.get("messages", [])
+        answered = {
+            message.tool_call_id for message in messages if isinstance(message, ToolMessage)
+        }
+        pending_calls = [
+            call["id"]
+            for message in messages
+            if isinstance(message, AIMessage) and message.tool_calls
+            for call in message.tool_calls
+            if call["id"] not in answered
+        ]
+        if not pending_calls:
+            return
+        try:
+            await update_state(
+                config,
+                {
+                    "messages": [
+                        ToolMessage(content="Tool execution was cancelled.", tool_call_id=call_id)
+                        for call_id in pending_calls
+                    ]
+                },
+                as_node="tools",
+            )
+        except Exception:
+            return
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,9 +524,15 @@ class ConversationLoop:
         self._seen: set[str] = set()
         self._generation = 0
         self._task: asyncio.Task[None] | None = None
+        self._active_turn: asyncio.Task[None] | None = None
+        self._active_request_id = ""
+        self._active_transcript_id = ""
+        self._active_generation = 0
+        self._active_started = 0.0
         self._failure: ConversationError | None = None
         self._closed = False
         self._interrupted = False
+        self._last_interim: str | None = None
 
     @property
     def is_busy(self) -> bool:
@@ -530,6 +576,7 @@ class ConversationLoop:
         self._generation += 1
         if self._task is not None and not self._task.done():
             self._move("interrupted", event.id)
+        await self._cancel_active_turn("new_final")
         if self._session is not None and self._barge_in and self._session.is_speaking:
             self._record("barge_in_detected", trigger="final", words=len(event.text.split()))
         if self._session is not None and (
@@ -548,17 +595,26 @@ class ConversationLoop:
             or self._failure is not None
             or not self._barge_in
             or session is None
-            or not session.is_speaking
             or self._wake_phrases
             and self._clock() >= self._active_until
         ):
             return
         words = len(text.split())
-        if words >= self._barge_in_min_words and not self._interrupted:
+        if words < self._barge_in_min_words:
+            return
+        child = self._active_turn
+        if not session.is_speaking and (child is None or child.done()):
+            return
+        if text == self._last_interim:
+            return
+        self._last_interim = text
+        if not self._interrupted:
             self._interrupted = True
             self._record("barge_in_detected", trigger="interim", words=words)
-            await session.stop_playback()
-            self._stream_stops += 1
+            if session.is_speaking:
+                await session.stop_playback()
+                self._stream_stops += 1
+        await self._cancel_active_turn("interim")
 
     def _addressed(self, event: TranscriptEvent) -> bool:
         now = self._clock()
@@ -577,10 +633,38 @@ class ConversationLoop:
         self._generation += 1
         self._pending.clear()
         self._session = None
+        await self._cancel_active_turn("close")
         if self._task is not None and not self._task.done():
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
         self._phase = "closed"
+
+    async def _cancel_active_turn(self, reason: str) -> None:
+        child = self._active_turn
+        if child is None or child.done():
+            return
+        request_id = self._active_request_id
+        transcript_id = self._active_transcript_id
+        generation = self._active_generation
+        started = self._active_started
+        self._record(
+            "agent_cancel_requested",
+            request_id=request_id,
+            transcript_id=transcript_id,
+            generation=generation,
+            reason=reason,
+            duration_ms=(self._clock() - started) * 1000,
+        )
+        child.cancel()
+        await asyncio.gather(child, return_exceptions=True)
+        self._record(
+            "agent_cancelled",
+            request_id=request_id,
+            transcript_id=transcript_id,
+            generation=generation,
+            reason=reason,
+            duration_ms=(self._clock() - started) * 1000,
+        )
 
     def _start_pending(self) -> None:
         if self._closed or self._failure is not None or self._session is None or not self._pending:
@@ -641,10 +725,13 @@ class ConversationLoop:
                         ):
                             if self._closed:
                                 detail = "closed"
+                                reason = "close"
                             elif generation != self._generation:
                                 detail = "stale_generation"
+                                reason = "new_final"
                             else:
                                 detail = "stopped"
+                                reason = "interim"
                             self._record(
                                 "sentence_dropped",
                                 request_id=request_id,
@@ -655,6 +742,9 @@ class ConversationLoop:
                             self._record(
                                 "agent_cancelled",
                                 request_id=request_id,
+                                transcript_id=event_id,
+                                generation=generation,
+                                reason=reason,
                                 duration_ms=(self._clock() - started) * 1000,
                             )
                             return
@@ -670,6 +760,9 @@ class ConversationLoop:
                             self._record(
                                 "agent_cancelled",
                                 request_id=request_id,
+                                transcript_id=event_id,
+                                generation=generation,
+                                reason="close",
                                 duration_ms=(self._clock() - started) * 1000,
                             )
                             return
@@ -677,6 +770,7 @@ class ConversationLoop:
                             self._move("queued", event_id)
                         self.raise_if_failed()
                         self._interrupted = False
+                        self._last_interim = None
                         await session.speak(sentence, sentence_index=spoken, transcript_id=event_id)
                         spoken += 1
                 finally:
@@ -684,9 +778,25 @@ class ConversationLoop:
                     if close is not None:
                         with suppress(Exception):
                             await close()
-        except BaseException as error:
+        except asyncio.CancelledError:
+            if spoken:
+                if self._closed:
+                    detail = "closed"
+                elif generation != self._generation:
+                    detail = "stale_generation"
+                else:
+                    detail = "stopped"
+                self._record(
+                    "sentence_dropped",
+                    request_id=request_id,
+                    transcript_id=event_id,
+                    sentence_index=spoken,
+                    detail=detail,
+                )
+            raise
+        except BaseException:
             self._record(
-                "agent_cancelled" if isinstance(error, asyncio.CancelledError) else "agent_failed",
+                "agent_failed",
                 request_id=request_id,
                 duration_ms=(self._clock() - started) * 1000,
             )
@@ -705,6 +815,59 @@ class ConversationLoop:
         else:
             self._move("listening", event_id)
 
+    async def _run_turn(
+        self,
+        events: tuple[TranscriptEvent, ...],
+        generation: int,
+        event_id: str,
+        request_id: str,
+        started: float,
+    ) -> None:
+        responder = self._responder
+        if self._sentence_streaming and isinstance(responder, StreamingConversationResponder):
+            await self._speak_streamed(responder, events, generation, event_id, request_id, started)
+            return
+        try:
+            async with asyncio.timeout(self._response_timeout):
+                reply = await self._responder.respond(
+                    events, partial(self._tool_started, generation, event_id)
+                )
+        except Exception:
+            self._record(
+                "agent_failed",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+            raise
+        else:
+            self._record(
+                "agent_finished",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+        self.raise_if_failed()
+        if generation != self._generation or self._closed:
+            return
+        session = self._session
+        if not reply.strip() or session is None:
+            self._move("waiting", event_id)
+            return
+        spoken = cap_spoken_reply(reply, self._max_spoken_sentences, self._language)
+        if spoken != reply.strip():
+            self._record(
+                "reply_capped",
+                request_id=request_id,
+                chars_in=len(reply),
+                chars_out=len(spoken),
+            )
+        self._move("queued", event_id)
+        self.raise_if_failed()
+        self._interrupted = False
+        self._last_interim = None
+        await session.speak(spoken)
+        if generation == self._generation and not self._closed:
+            self._move("listening", event_id)
+
     async def _respond_pending(self) -> None:
         try:
             while self._pending and not self._closed:
@@ -717,55 +880,24 @@ class ConversationLoop:
                 started = self._clock()
                 request_id = f"{event_id}:{generation}"
                 self._record("agent_started", request_id=request_id)
-                responder = self._responder
-                if self._sentence_streaming and isinstance(
-                    responder, StreamingConversationResponder
-                ):
-                    await self._speak_streamed(
-                        responder, events, generation, event_id, request_id, started
-                    )
-                    continue
-                try:
-                    async with asyncio.timeout(self._response_timeout):
-                        reply = await self._responder.respond(
-                            events, partial(self._tool_started, generation, event_id)
-                        )
-                except BaseException as error:
-                    self._record(
-                        "agent_cancelled"
-                        if isinstance(error, asyncio.CancelledError)
-                        else "agent_failed",
-                        request_id=request_id,
-                        duration_ms=(self._clock() - started) * 1000,
-                    )
-                    raise
-                else:
-                    self._record(
-                        "agent_finished",
-                        request_id=request_id,
-                        duration_ms=(self._clock() - started) * 1000,
-                    )
-                self.raise_if_failed()
-                if generation != self._generation or self._closed:
-                    continue
-                session = self._session
-                if not reply.strip() or session is None:
-                    self._move("waiting", event_id)
-                    continue
-                spoken = cap_spoken_reply(reply, self._max_spoken_sentences, self._language)
-                if spoken != reply.strip():
-                    self._record(
-                        "reply_capped",
-                        request_id=request_id,
-                        chars_in=len(reply),
-                        chars_out=len(spoken),
-                    )
-                self._move("queued", event_id)
-                self.raise_if_failed()
                 self._interrupted = False
-                await session.speak(spoken)
-                if generation == self._generation:
-                    self._move("listening", event_id)
+                child = asyncio.create_task(
+                    self._run_turn(events, generation, event_id, request_id, started)
+                )
+                self._active_turn = child
+                self._active_request_id = request_id
+                self._active_transcript_id = event_id
+                self._active_generation = generation
+                self._active_started = started
+                try:
+                    await child
+                except asyncio.CancelledError:
+                    if self._closed:
+                        raise
+                    self.raise_if_failed()
+                finally:
+                    if self._active_turn is child:
+                        self._active_turn = None
         except asyncio.CancelledError:
             raise
         except Exception as error:

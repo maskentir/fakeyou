@@ -21,6 +21,16 @@ from fakeyou.conversation import (
 )
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import IngestResult, ingest_meeting
+from fakeyou.ingestion_status import (
+    IngestionState,
+    IngestionStatus,
+    RecordLockError,
+    hash_meeting_record,
+    read_status,
+    record_lock,
+    status_path,
+    write_status,
+)
 from fakeyou.invariants import SessionId
 from fakeyou.journal import Journal, journal_files, journal_path
 from fakeyou.lifecycle import meeting_thread_id
@@ -33,6 +43,7 @@ from fakeyou.memory import (
 )
 from fakeyou.owner_notes import NoteConflictError, OwnerNoteResult, remember_owner_note
 from fakeyou.persona import PersonaProfile, load_persona
+from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.providers import memory_config, open_persona_memory
 from fakeyou.record import load_meeting_record, meeting_record_path
 from fakeyou.settings import (
@@ -175,9 +186,10 @@ async def ingest_until_stopped(
     journal: Journal,
     faults: FaultReporter,
     settings: Settings,
+    stop: asyncio.Event | None = None,
 ) -> IngestResult:
-    stop = asyncio.Event()
-    with stop_signal_handlers(stop):
+    resolved = stop if stop is not None else asyncio.Event()
+    with stop_signal_handlers(resolved):
         return await ingest_meeting(
             memory,
             load_meeting_record(record_path),
@@ -187,11 +199,61 @@ async def ingest_until_stopped(
             vocabulary=profile.vocabulary,
             journal=journal,
             faults=faults,
-            stop=stop,
+            stop=resolved,
             window_utterances=settings.memory.ingestion.window_utterances,
             window_seconds=settings.memory.ingestion.window_seconds,
             episode_timeout_seconds=settings.memory.ingestion.episode_timeout_seconds,
         )
+
+
+def _finish_ingest(
+    status_file: Path,
+    *,
+    meeting_id: str,
+    group_id: str,
+    state: IngestionState,
+    windows: int,
+    resumed_from: int,
+    ingested: int,
+    facts: int,
+    completed: bool,
+    record_sha256: str | None,
+    reason: str | None,
+    faults: FaultReporter,
+) -> bool:
+    stored = True
+    try:
+        write_status(
+            status_file,
+            IngestionStatus(
+                meeting_id=meeting_id,
+                group_id=group_id,
+                status=state,
+                windows=windows,
+                resumed_from=resumed_from,
+                ingested=ingested,
+                record_sha256=record_sha256,
+                updated_at=datetime.now(UTC),
+                reason=reason,
+            ),
+        )
+    except OSError as error:
+        faults.record(classify_exception("memory_ingest", error))
+        stored = False
+    print(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "windows": windows,
+                "resumed_from": resumed_from,
+                "ingested": ingested,
+                "facts": facts,
+                "completed": completed,
+                "status": state,
+            }
+        )
+    )
+    return completed and stored
 
 
 async def ingest_recorded_meeting(
@@ -208,26 +270,168 @@ async def ingest_recorded_meeting(
     if not record_path.exists():
         raise CliError(f"no meeting record for {meeting_id} at {record_path}")
     journal = Journal(meeting_id, path=journal_path(settings.paths.journal_dir, meeting_id))
+    faults = FaultReporter(journal=journal)
     try:
-        async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
-            profile,
-            memory,
-        ):
-            result = await ingest_until_stopped(
-                memory,
-                record_path,
-                profile=profile,
-                meeting_id=meeting_id,
-                twin_name=twin_name or profile.display_name,
-                journal=journal,
-                faults=FaultReporter(journal=journal),
-                settings=settings,
-            )
+        try:
+            with record_lock(record_path, purpose="ingestion"):
+                status_file = status_path(record_path)
+                profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+                existing = read_status(status_file)
+                if existing is not None and existing.group_id != profile.memory_group:
+                    raise CliError("persona group does not match the ingestion status group")
+                try:
+                    current_hash = hash_meeting_record(record_path)
+                    load_meeting_record(record_path)
+                except (OSError, ValueError) as error:
+                    faults.record(classify_exception("memory_ingest", error))
+                    _finish_ingest(
+                        status_file,
+                        meeting_id=meeting_id,
+                        group_id=profile.memory_group,
+                        state="failed",
+                        windows=existing.windows if existing is not None else 0,
+                        resumed_from=existing.resumed_from if existing is not None else 0,
+                        ingested=existing.ingested if existing is not None else 0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=existing.record_sha256 if existing is not None else None,
+                        reason="record_unreadable",
+                        faults=faults,
+                    )
+                    raise SystemExit(1) from None
+                if (
+                    existing is not None
+                    and existing.record_sha256 is not None
+                    and existing.record_sha256 != current_hash
+                ):
+                    _finish_ingest(
+                        status_file,
+                        meeting_id=meeting_id,
+                        group_id=profile.memory_group,
+                        state="failed",
+                        windows=existing.windows,
+                        resumed_from=existing.resumed_from,
+                        ingested=existing.ingested,
+                        facts=0,
+                        completed=False,
+                        record_sha256=existing.record_sha256,
+                        reason="record_changed",
+                        faults=faults,
+                    )
+                    raise SystemExit(1) from None
+                stop = asyncio.Event()
+                try:
+                    async with open_persona_memory(settings) as memory:
+                        try:
+                            result = await ingest_until_stopped(
+                                memory,
+                                record_path,
+                                profile=profile,
+                                meeting_id=meeting_id,
+                                twin_name=twin_name or profile.display_name,
+                                journal=journal,
+                                faults=faults,
+                                settings=settings,
+                                stop=stop,
+                            )
+                        except ValueError as error:
+                            faults.record(classify_exception("memory_ingest", error))
+                            _finish_ingest(
+                                status_file,
+                                meeting_id=meeting_id,
+                                group_id=profile.memory_group,
+                                state="failed",
+                                windows=0,
+                                resumed_from=0,
+                                ingested=0,
+                                facts=0,
+                                completed=False,
+                                record_sha256=current_hash,
+                                reason="episode_name_invalid",
+                                faults=faults,
+                            )
+                            raise SystemExit(1) from None
+                except ProviderFault as error:
+                    faults.record(error)
+                    _finish_ingest(
+                        status_file,
+                        meeting_id=meeting_id,
+                        group_id=profile.memory_group,
+                        state="failed",
+                        windows=0,
+                        resumed_from=0,
+                        ingested=0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=current_hash,
+                        reason=f"provider_{error.kind}",
+                        faults=faults,
+                    )
+                    raise SystemExit(1) from None
+                except asyncio.CancelledError:
+                    _finish_ingest(
+                        status_file,
+                        meeting_id=meeting_id,
+                        group_id=profile.memory_group,
+                        state="interrupted",
+                        windows=0,
+                        resumed_from=0,
+                        ingested=0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=current_hash,
+                        reason="stop_requested",
+                        faults=faults,
+                    )
+                    raise
+                if result.completed:
+                    state: IngestionState = "completed"
+                    reason: str | None = None
+                elif stop.is_set():
+                    state = "interrupted"
+                    reason = "stop_requested"
+                else:
+                    state = "failed"
+                    reason = "episode_failed"
+                if not _finish_ingest(
+                    status_file,
+                    meeting_id=meeting_id,
+                    group_id=profile.memory_group,
+                    state=state,
+                    windows=result.windows,
+                    resumed_from=result.resumed_from,
+                    ingested=result.ingested,
+                    facts=result.facts,
+                    completed=result.completed,
+                    record_sha256=current_hash,
+                    reason=reason,
+                    faults=faults,
+                ):
+                    raise SystemExit(1) from None
+        except RecordLockError as error:
+            raise CliError(f"meeting record is locked: {error}") from None
     finally:
         journal.close()
-    print(json.dumps({"meeting_id": meeting_id, **asdict(result)}))
-    if not result.completed:
-        raise SystemExit(1)
+
+
+async def _forget_meeting_memory(
+    *,
+    persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
+    meeting_id: str,
+    settings: Settings,
+    keep_record: bool,
+) -> None:
+    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+        profile,
+        memory,
+    ):
+        removed = await forget_meeting(memory, group_id=profile.memory_group, meeting_id=meeting_id)
+    summary: dict[str, Any] = {"removed_episodes": removed}
+    if not keep_record:
+        summary |= await forget_meeting_files(settings, profile, meeting_id)
+    print(json.dumps(summary))
 
 
 async def forget_memory(
@@ -246,20 +450,30 @@ async def forget_memory(
         raise CliError("--keep-record only applies to --meeting")
     if meeting_id is not None:
         TypeAdapter(SessionId).validate_python(meeting_id)
+        try:
+            with record_lock(
+                meeting_record_path(settings.paths.record_dir, meeting_id), purpose="forget"
+            ):
+                await _forget_meeting_memory(
+                    persona_path=persona_path,
+                    owner_id=owner_id,
+                    twin_id=twin_id,
+                    meeting_id=meeting_id,
+                    settings=settings,
+                    keep_record=keep_record,
+                )
+        except RecordLockError as error:
+            raise CliError(f"meeting record is locked: {error}") from None
+        return
+    if episode_uuid is None:
+        raise CliError("memory-forget requires exactly one of --meeting or --episode")
     async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
         profile,
         memory,
     ):
-        if meeting_id is not None:
-            removed = await forget_meeting(
-                memory, group_id=profile.memory_group, meeting_id=meeting_id
-            )
-        elif episode_uuid is not None:
-            await forget_episode(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
-            removed = 1
+        await forget_episode(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
+        removed = 1
     summary: dict[str, Any] = {"removed_episodes": removed}
-    if meeting_id is not None and not keep_record:
-        summary |= await forget_meeting_files(settings, profile, meeting_id)
     print(json.dumps(summary))
 
 
