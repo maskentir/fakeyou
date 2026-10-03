@@ -20,6 +20,8 @@
 
 **Prioritas berikutnya, disetujui 3 Oktober:** [brief, delegasi, dan debrief berbukti](meeting-delegation-handoff.md). Owner memberi tujuan dan lingkup pengetahuan per meeting; hasilnya kembali sebagai keputusan/usulan/action item dengan kutipan sumber. Batas tools tidak dapat diperluas lewat ucapan peserta; laporan tidak mengaku owner telah dihubungi. Atribusi speaker dan performa tetap pekerjaan terbuka berdasarkan acceptance multipihak.
 
+**Prioritas berikutnya, 4 Oktober:** [recall satu perjalanan model](recall-latency.md). Reply dan debrief kini memakai Gemini native; `gemini-3.8-flash` lulus gate semantik tetapi p95 trust 5,9 s karena giliran recall memerlukan dua perjalanan model. Plan mengambil evidence memori sebelum model dipanggil dan menutup cacat sapaan c05, string `"null"` debrief, serta rubric fixture usang.
+
 ## Dasar keputusan
 
 Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup sesudahnya berada di `feat/legacy-config-cleanup`: `8a06fee`, `cdf0038`, dan `ff60109`; ketiganya masih lokal ketika rencana ini disusun. Baseline terakhir pada `ff60109`: 1.403 tes non-live dan non-container lulus, termasuk browser lokal; Ruff, format, dan mypy bersih. Angka ini bukti regresi lokal, bukan pengukuran performa baru.
