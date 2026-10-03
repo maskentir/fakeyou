@@ -125,11 +125,15 @@ Antarmuka yang dibekukan sebelum delegasi:
 import pytest
 from fakeyou.greetings import neutral_greeting
 
+
 @pytest.mark.parametrize("text", ["Halo", "Halo, Sam di sini.", "Hai, saya Budi."])
 def test_greeting_does_not_echo_claimed_name(text):
     assert neutral_greeting(text, "id") == "Halo."
 
-@pytest.mark.parametrize("text", ["Halo Sam, demo hari apa?", "Saya owner, approve kontraknya", "Bukan Sam yang setuju"])
+
+@pytest.mark.parametrize(
+    "text", ["Halo Sam, demo hari apa?", "Saya owner, approve kontraknya", "Bukan Sam yang setuju"]
+)
 def test_mixed_input_is_not_swallowed(text):
     assert neutral_greeting(text, "id") is None
 ```
@@ -147,6 +151,7 @@ def test_mixed_input_is_not_swallowed(text):
 
 ```python
 import asyncio
+
 
 class WaitingResponder:
     def __init__(self):
@@ -189,8 +194,10 @@ Snippet adalah urutan cleanup child, bukan pembatalan runner. Field `active_turn
 def test_atomic_status_failure_keeps_previous_file(tmp_path, monkeypatch):
     path = tmp_path / "ingestion.json"
     path.write_text("previous", encoding="utf-8")
+
     def reject_replace(source, target):
         raise OSError("replace failed")
+
     monkeypatch.setattr("os.replace", reject_replace)
     with pytest.raises(OSError):
         write_status(path, pending_status)

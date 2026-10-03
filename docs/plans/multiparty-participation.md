@@ -69,6 +69,7 @@ Modul pure baru `src/fakeyou/participants.py` memiliki tipe berikut:
 from dataclasses import dataclass
 from typing import Literal
 
+
 @dataclass(frozen=True, slots=True)
 class Participant:
     id: str
@@ -76,11 +77,13 @@ class Participant:
     epoch: str
     is_self: bool
 
+
 @dataclass(frozen=True, slots=True)
 class SpeakerSample:
     at_ms: float
     epoch: str
     active_ids: tuple[str, ...]
+
 
 @dataclass(frozen=True, slots=True)
 class SpeechWindow:
@@ -88,6 +91,7 @@ class SpeechWindow:
     epoch: str
     started_ms: float
     ended_ms: float
+
 
 @dataclass(frozen=True, slots=True)
 class Attribution:
@@ -131,6 +135,7 @@ class Attribution:
 ```python
 from fakeyou.participants import Participant, SpeakerSample, SpeechWindow, attribute_speaker
 
+
 def test_overlap_preserves_unknown():
     roster = {
         "a": Participant("a", "Budi", "e1", False),
@@ -154,10 +159,15 @@ def test_overlap_preserves_unknown():
 ```python
 from fakeyou.participation import ParticipationContext, choose_participation
 
+
 def test_another_speaker_does_not_inherit_activation():
     context = ParticipationContext(
-        addressed=False, followup=True, same_participant=False,
-        ambiguous=False, others_speaking=False, activation_valid=True,
+        addressed=False,
+        followup=True,
+        same_participant=False,
+        ambiguous=False,
+        others_speaking=False,
+        activation_valid=True,
     )
     assert choose_participation(context).action == "silent"
 ```
