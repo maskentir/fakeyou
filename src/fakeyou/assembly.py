@@ -14,6 +14,7 @@ from fakeyou.agent import (
     SPOKEN_LANGUAGE_GUIDANCE,
     create_meeting_agent,
 )
+from fakeyou.brief import MeetingBrief
 from fakeyou.checkpoint import open_checkpointer
 from fakeyou.conversation import (
     ConversationLoop,
@@ -31,7 +32,7 @@ from fakeyou.memory import (
     create_memory_tools,
     create_recall_error_middleware,
 )
-from fakeyou.persona import PersonaProfile, build_system_prompt
+from fakeyou.persona import PersonaProfile, PersonaTool, build_system_prompt, meeting_tool_names
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.session import SessionConfig
 from fakeyou.settings import (
@@ -73,7 +74,18 @@ async def open_conversation(
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
     on_tool_result: ToolResultCallback | None = None,
+    brief: MeetingBrief | None = None,
 ) -> AsyncIterator[ConversationLoop]:
+    tool_names: frozenset[PersonaTool] = frozenset()
+    if profile is None:
+        if brief is not None:
+            raise ValueError("a meeting brief requires a persona profile")
+        persona = default_persona(settings)
+    else:
+        tool_names = meeting_tool_names(profile, brief, memory_requested=graphiti is not None)
+        persona = build_system_prompt(
+            profile.model_copy(update={"allowed_tools": tool_names}), brief=brief
+        )
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
@@ -86,22 +98,20 @@ async def open_conversation(
         fallback = create_fallback_chat_model(settings)
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))
-        if graphiti is not None and profile is not None and profile.allowed_tools:
+        if graphiti is not None and profile is not None and tool_names:
             tools.extend(
                 tool
                 for tool in create_memory_tools(
                     graphiti, group_id=profile.memory_group, recall=settings.memory.recall
                 )
-                if tool.name in profile.allowed_tools
+                if tool.name in tool_names
             )
             middleware.append(create_recall_error_middleware(faults))
         agent = create_meeting_agent(
             model,
             tools=tools,
             checkpointer=checkpointer,
-            persona=build_system_prompt(profile)
-            if profile is not None
-            else default_persona(settings),
+            persona=persona,
             middleware=middleware,
         )
         thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)

@@ -165,6 +165,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Owner persona JSON profile; requires --converse",
     )
     join_parser.add_argument(
+        "--brief",
+        dest="brief_path",
+        type=Path,
+        default=None,
+        help="Per-meeting brief JSON; requires --converse, --persona, and --meeting-id",
+    )
+    join_parser.add_argument(
         "--memory",
         action="store_true",
         help="Enable persona-scoped Graphiti recall; requires --converse and --persona",

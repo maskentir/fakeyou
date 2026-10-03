@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import uuid
 from contextlib import AsyncExitStack
@@ -14,14 +15,26 @@ from urllib.parse import urlparse
 
 from graphiti_core import Graphiti
 from pipecat.frames.frames import TranscriptionFrame
+from pydantic import ValidationError
 
 from fakeyou.assembly import open_conversation, stop_signal_handlers
 from fakeyou.audio import open_meeting_audio
+from fakeyou.brief import (
+    MeetingBrief,
+    MeetingContext,
+    brief_digest,
+    context_path,
+    load_meeting_brief,
+    read_meeting_context,
+    write_meeting_context,
+)
+from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cli.errors import FAILURE_EXIT_CODES, CliError
 from fakeyou.cli.memory import load_operator_persona
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
+    conversation_thread_id,
     transcript_event,
 )
 from fakeyou.faults import FaultReporter
@@ -37,7 +50,7 @@ from fakeyou.ingestion_status import (
 from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 from fakeyou.journal import Journal, journal_path
 from fakeyou.participant_observer import EVIDENCE_FILE_NAME
-from fakeyou.persona import PersonaProfile, speech_keywords
+from fakeyou.persona import PersonaProfile, meeting_tool_names, persona_digest, speech_keywords
 from fakeyou.playback import PlaybackEvent
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.providers import memory_config, open_persona_memory, preflight_hosts
@@ -68,6 +81,7 @@ async def join_meeting(
     wake_phrase: str | None = None,
     barge_in: bool = False,
     persona_path: Path | None = None,
+    brief_path: Path | None = None,
 ) -> None:
     audio_enabled = audio_enabled or settings.worker.audio
     parsed_link = urlparse(link)
@@ -91,6 +105,12 @@ async def join_meeting(
         raise CliError("--persona requires --converse")
     if memory and persona_path is None:
         raise CliError("--memory requires --persona")
+    if brief_path is not None and not conversation_enabled:
+        raise CliError("--brief requires --converse")
+    if brief_path is not None and persona_path is None:
+        raise CliError("--brief requires --persona")
+    if brief_path is not None and not meeting_id:
+        raise CliError("--brief requires an explicit --meeting-id")
     if wake_phrase and not conversation_enabled:
         raise CliError("--wake-phrase requires --converse")
     if settings.conversation.participant_policy_enabled and not (wake_phrase or "").strip():
@@ -146,6 +166,8 @@ async def join_meeting(
         checkpoint_path=settings.paths.checkpoint_path,
     )
     profile: PersonaProfile | None = None
+    brief: MeetingBrief | None = None
+    meeting_context: MeetingContext | None = None
     if persona_path is not None:
         profile = await load_operator_persona(
             persona_path, config.owner_id, config.twin_id, settings
@@ -156,12 +178,20 @@ async def join_meeting(
             raise CliError(
                 "--memory requires recall_meeting_context or ingest_transcripts in the persona"
             )
+        if brief_path is not None:
+            brief = await _load_brief(brief_path, config)
+            try:
+                meeting_tool_names(profile, brief, memory_requested=memory)
+            except ValueError:
+                raise CliError("--memory is not allowed with a brief_only meeting brief") from None
+            meeting_context = MeetingContext(
+                schema_version="meeting_context/v1",
+                brief=brief,
+                brief_sha256=brief_digest(brief),
+                persona_sha256=persona_digest(profile),
+            )
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
-    journal = Journal(
-        resolved_meeting_id, path=journal_path(settings.paths.journal_dir, resolved_meeting_id)
-    )
-    faults = FaultReporter(journal=journal)
     record_path = meeting_record_path(settings.paths.record_dir, resolved_meeting_id)
     config = replace(
         config,
@@ -176,29 +206,40 @@ async def join_meeting(
     final_exit = 1
     try:
         with record_lock(record_path, purpose="meeting"):
-            if profile is not None:
-                try:
-                    write_status(
-                        status_path(record_path),
-                        IngestionStatus(
-                            meeting_id=resolved_meeting_id,
-                            group_id=profile.memory_group,
-                            status="pending" if ingest_requested else "not_requested",
-                            updated_at=datetime.now(UTC),
-                        ),
-                    )
-                except OSError as error:
-                    faults.record(classify_exception("meeting_record", error))
-                    record_error = f"ingestion status not written: {type(error).__name__}"
-                    ingestion_outcome = "unknown"
-            record = MeetingRecord(record_path, faults=faults)
-
+            context_reused = await _settle_meeting_context(record_path, config, meeting_context)
             conversation: ConversationLoop | None = None
             graphiti: Graphiti | None = None
             session_result: SessionResult | None = None
             async with AsyncExitStack() as resources:
+                journal = Journal(
+                    resolved_meeting_id,
+                    path=journal_path(settings.paths.journal_dir, resolved_meeting_id),
+                )
                 resources.callback(journal.close)
+                faults = FaultReporter(journal=journal)
+                if profile is not None:
+                    try:
+                        write_status(
+                            status_path(record_path),
+                            IngestionStatus(
+                                meeting_id=resolved_meeting_id,
+                                group_id=profile.memory_group,
+                                status="pending" if ingest_requested else "not_requested",
+                                updated_at=datetime.now(UTC),
+                            ),
+                        )
+                    except OSError as error:
+                        faults.record(classify_exception("meeting_record", error))
+                        record_error = f"ingestion status not written: {type(error).__name__}"
+                        ingestion_outcome = "unknown"
+                record = MeetingRecord(record_path, faults=faults)
                 resources.callback(record.close)
+                if meeting_context is not None:
+                    journal.record(
+                        "brief_recorded",
+                        source="cli",
+                        **_brief_metadata(meeting_context, reused=context_reused),
+                    )
                 if memory and profile is not None:
                     try:
                         graphiti = await resources.enter_async_context(
@@ -249,6 +290,7 @@ async def join_meeting(
                             barge_in=barge_in,
                             faults=faults,
                             journal=journal,
+                            brief=brief,
                         )
                     )
 
@@ -388,9 +430,108 @@ async def join_meeting(
                 "ingestion_outcome": ingestion_outcome,
                 "record_error": record_error,
                 "resume_command": resume_command,
+                "brief_sha256": meeting_context.brief_sha256
+                if meeting_context is not None
+                else None,
+                "context_path": str(context_path(record_path))
+                if meeting_context is not None
+                else None,
             },
             indent=2,
         )
     )
     if final_exit != 0:
         raise SystemExit(final_exit)
+
+
+async def _load_brief(path: Path, config: SessionConfig) -> MeetingBrief:
+    try:
+        return await asyncio.to_thread(
+            load_meeting_brief,
+            path,
+            owner_id=config.owner_id,
+            twin_id=config.twin_id,
+            meeting_id=config.meeting_id,
+        )
+    except OSError as error:
+        raise CliError(f"--brief cannot be read: {error.strerror}") from None
+    except ValidationError as error:
+        kinds = sorted(
+            {item["type"] for item in error.errors(include_url=False, include_input=False)}
+        )
+        raise CliError(
+            f"--brief is invalid: {error.error_count()} validation error(s): {', '.join(kinds)}"
+        ) from None
+    except ValueError as error:
+        raise CliError(f"--brief is invalid: {error}") from None
+
+
+def _brief_metadata(context: MeetingContext, *, reused: bool) -> dict[str, Any]:
+    brief = context.brief
+    return {
+        "brief_sha256": context.brief_sha256,
+        "persona_sha256": context.persona_sha256,
+        "knowledge_scope": brief.knowledge_scope,
+        "permissions": sorted(brief.permissions),
+        "agenda_count": len(brief.agenda),
+        "objective_count": len(brief.objectives),
+        "approved_fact_count": len(brief.approved_facts),
+        "question_count": len(brief.questions),
+        "objective_ids": [item.id for item in brief.objectives],
+        "question_ids": [item.id for item in brief.questions],
+        "reused": reused,
+    }
+
+
+async def _settle_meeting_context(
+    record_path: Path, config: SessionConfig, context: MeetingContext | None
+) -> bool:
+    path = context_path(record_path)
+    try:
+        existing = read_meeting_context(path)
+    except (OSError, ValueError):
+        raise CliError(
+            f"meeting context is unreadable or corrupt at {path}; use a new meeting ID"
+        ) from None
+    if context is None:
+        if existing is not None:
+            raise CliError(
+                f"meeting {config.meeting_id} was started with --brief; "
+                "rejoin with the same --brief and --persona"
+            )
+        return False
+    if existing is not None:
+        if existing != context:
+            raise CliError(
+                "meeting context differs from --brief or --persona; use a new meeting ID"
+            )
+        return True
+    thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
+    if await _has_conversation(record_path, config.checkpoint_path, thread_id):
+        raise CliError(
+            f"meeting {config.meeting_id} already has conversation data without a meeting "
+            "context; use a new meeting ID for --brief"
+        )
+    try:
+        write_meeting_context(path, context)
+    except (OSError, ValueError) as error:
+        raise CliError(f"meeting context not written: {type(error).__name__}") from None
+    return False
+
+
+async def _has_conversation(record_path: Path, checkpoint_path: Path, thread_id: str) -> bool:
+    if await asyncio.to_thread(_has_entries, record_path):
+        return True
+    try:
+        if not await asyncio.to_thread(checkpoint_path.exists):
+            return False
+        async with open_checkpointer(checkpoint_path) as saver:
+            return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
+    except (sqlite3.Error, OSError) as error:
+        raise CliError(
+            f"conversation checkpoint cannot be checked: {type(error).__name__}"
+        ) from None
+
+
+def _has_entries(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0

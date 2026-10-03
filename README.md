@@ -144,6 +144,10 @@ Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/person
 
 Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
 
+## Brief meeting
+
+`join --brief PATH` memberi twin satu brief untuk satu meeting: agenda, tujuan, fakta yang boleh disampaikan, pertanyaan, izin percakapan, dan lingkup pengetahuan (`brief_only` atau `persona_memory`). Flag ini memerlukan `--converse`, `--persona`, serta `--meeting-id` eksplisit; brief divalidasi sebelum resource dibuka lalu dibekukan sebagai `meeting-context.json` di direktori record. `--memory` ditolak untuk `brief_only`, dan meeting ID yang sudah memiliki percakapan tanpa snapshot memerlukan ID baru. Brief membatasi konteks serta tools, bukan memberi kewenangan keputusan. Prosedur lengkap ada di [runbook brief meeting](docs/runbooks/meeting-brief.md); mulai dari [contoh brief sintetis](examples/meeting-brief.example.json).
+
 ## Model dan laporan sesi
 
 Konfigurasi menggunakan bagian bertipe dan nested env dengan pemisah `__`. `fakeyou check` mencetak seluruh `settings.model_dump(mode="json")`, termasuk default dan secret tersamarkan:
@@ -224,3 +228,4 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/ru
 - [Ingestion memori dengan provenance](docs/plans/memory-ingestion.md)
 - [Acceptance Meet 30 September dan rencana perbaikan](docs/reports/2026-09-30-acceptance.md)
 - [Rencana jangka panjang memori, suara, dan bukti kualitas](docs/plans/long-term.md)
+- [Runbook brief meeting](docs/runbooks/meeting-brief.md)

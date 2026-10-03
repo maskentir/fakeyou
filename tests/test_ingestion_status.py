@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from fakeyou.brief import context_path
 from fakeyou.ingestion_status import (
     IngestionStatus,
     RecordLockError,
@@ -113,6 +114,15 @@ def test_hash_meeting_record_matches_sha256(tmp_path: Path) -> None:
     assert hash_meeting_record(record) == hashlib.sha256(b'{"kind":"transcript"}\n').hexdigest()
     with pytest.raises(OSError):
         hash_meeting_record(tmp_path / "absent.jsonl")
+
+
+def test_meeting_context_shares_the_record_directory_while_the_lock_stays_outside(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "meetings" / "meeting-9" / "record.jsonl"
+
+    assert context_path(record).parent == status_path(record).parent == record.parent
+    assert record.parent not in lock_path(record).parents
 
 
 def test_record_lock_releases_its_own_token(tmp_path: Path) -> None:

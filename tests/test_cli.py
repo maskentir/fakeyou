@@ -28,6 +28,15 @@ import fakeyou.memory as memory_module
 import fakeyou.providers as providers
 from fakeyou import owner_notes
 from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
+from fakeyou.brief import (
+    MAX_BRIEF_BYTES,
+    MeetingBrief,
+    MeetingContext,
+    brief_digest,
+    context_path,
+    read_meeting_context,
+    write_meeting_context,
+)
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.invariants import (
@@ -38,8 +47,9 @@ from fakeyou.invariants import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
+from fakeyou.journal import journal_path
 from fakeyou.owner_notes import NoteConflictError, OwnerNoteResult
-from fakeyou.persona import PersonaProfile, build_system_prompt
+from fakeyou.persona import PersonaProfile, build_system_prompt, persona_digest
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import load_meeting_record, meeting_record_path
 from fakeyou.session import SessionResult
@@ -922,6 +932,87 @@ def recall_then_reply(reply: str) -> ToolCallingFakeModel:
     )
 
 
+BRIEF_FACT = "The synthetic Orchid demo is booked for Friday."
+BRIEF_DATA = {
+    "schema_version": "meeting_brief/v1",
+    "owner_id": "settings-owner",
+    "twin_id": "settings-twin",
+    "meeting_id": "meeting-9",
+    "agenda": ["Synthetic Orchid kickoff agenda item"],
+    "objectives": [{"id": "blockers", "text": "Find the synthetic kickoff blocker."}],
+    "approved_facts": [{"id": "demo-date", "text": BRIEF_FACT}],
+    "questions": [{"id": "vendor-needs", "text": "Which synthetic vendor input is missing?"}],
+    "permissions": ["explain_facts", "ask_brief_questions"],
+    "knowledge_scope": "brief_only",
+}
+BRIEF_TEXTS = (
+    "Synthetic Orchid kickoff agenda item",
+    "Find the synthetic kickoff blocker.",
+    BRIEF_FACT,
+    "Which synthetic vendor input is missing?",
+)
+PRIVATE_MARKER = "PRIVATE-BRIEF-MARKER-5c1e"
+
+
+def write_brief(tmp_path: Path, name: str = "brief.json", **overrides: object) -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps({**BRIEF_DATA, **overrides}), encoding="utf-8")
+    return path
+
+
+def meeting_brief(**overrides: object) -> MeetingBrief:
+    return MeetingBrief.model_validate_json(json.dumps({**BRIEF_DATA, **overrides}))
+
+
+def expected_context(brief: MeetingBrief, profile: PersonaProfile) -> MeetingContext:
+    return MeetingContext(
+        schema_version="meeting_context/v1",
+        brief=brief,
+        brief_sha256=brief_digest(brief),
+        persona_sha256=persona_digest(profile),
+    )
+
+
+def meeting_context_file(settings: Settings, meeting_id: str = "meeting-9") -> Path:
+    return context_path(meeting_record_path(settings.paths.record_dir, meeting_id))
+
+
+def meeting_files(settings: Settings) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for root in (settings.paths.record_dir, settings.paths.journal_dir)
+        if root.exists()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def journal_rows(settings: Settings, meeting_id: str = "meeting-9") -> list[dict]:
+    path = journal_path(settings.paths.journal_dir, meeting_id)
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def prepare_brief_join(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings.stt.api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    forbid_resources(monkeypatch)
+
+
+async def seed_conversation_thread(settings: Settings, meeting_id: str) -> str:
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    thread_id = conversation_thread_id("settings-owner", "settings-twin", meeting_id)
+    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
+        agent = create_meeting_agent(
+            FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
+        )
+        await agent.ainvoke(
+            {"messages": [{"role": "user", "content": "hello"}]},
+            {"configurable": {"thread_id": thread_id}},
+        )
+    return thread_id
+
+
 async def _join_persona_conversation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -933,6 +1024,9 @@ async def _join_persona_conversation(
     transcripts: tuple[str, ...] = ("When does Orchid launch?",),
     settle=None,
     persona_overrides: dict | None = None,
+    audio: FakeReplyAudio | None = None,
+    on_start=None,
+    native_checkpointer: bool = False,
     **overrides,
 ) -> tuple[dict, FakeReplyAudio, dict]:
     settings.stt.api_key = SecretStr("muse-key")
@@ -943,7 +1037,8 @@ async def _join_persona_conversation(
     async def memory_saver(_value):
         yield InMemorySaver()
 
-    monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
+    if not native_checkpointer:
+        monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
     if graphiti is not None:
         monkeypatch.setattr(
             memory_module, "create_graphiti_memory", lambda _config, **_kwargs: graphiti
@@ -961,10 +1056,12 @@ async def _join_persona_conversation(
         return create_meeting_agent(agent_model, **kwargs)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", recording_agent)
-    audio = FakeReplyAudio()
+    audio = audio if audio is not None else FakeReplyAudio()
     outcome: dict = {}
 
     async def run(config, **kwargs):
+        if on_start is not None:
+            on_start()
         loop = kwargs["conversation"]
         outcome["config"] = config
         outcome["conversation"] = loop
@@ -1113,7 +1210,11 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
         join=join,
     )
 
-    assert created["persona"] == build_system_prompt(PersonaProfile.model_validate(PERSONA_DATA))
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    assert created["persona"] == build_system_prompt(
+        profile.model_copy(update={"allowed_tools": frozenset()})
+    )
+    assert "recall_meeting_context" not in created["persona"]
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id"))
@@ -1326,6 +1427,37 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert captured["persona_path"] == Path("p.json")
     assert captured["memory"] is True
+    assert captured["brief_path"] is None
+
+
+def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    async def fake_join(link, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fakeyou",
+            "join",
+            MEET_LINK,
+            "--audio",
+            "--converse",
+            "--persona",
+            "p.json",
+            "--meeting-id",
+            "meeting-9",
+            "--brief",
+            "b.json",
+        ],
+    )
+    cli_main.main()
+
+    assert captured["brief_path"] == Path("b.json")
+    assert captured["meeting_id"] == "meeting-9"
 
 
 async def test_join_defers_ingest_then_memory_ingest_writes_episode(
@@ -1437,6 +1569,631 @@ async def test_join_without_ingest_permission_never_writes_memory(
     )
 
     assert graphiti.added == []
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        (
+            {"audio_enabled": False, "conversation_enabled": False, "persona_path": None},
+            "--brief requires --converse",
+        ),
+        ({"persona_path": None}, "--brief requires --persona"),
+        ({"meeting_id": None}, "--brief requires an explicit --meeting-id"),
+        ({"meeting_id": ""}, "--brief requires an explicit --meeting-id"),
+    ],
+)
+async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict, match: str
+) -> None:
+    forbid_resources(monkeypatch)
+    arguments = persona_join_arguments(
+        tmp_path, settings, persona_path=write_persona(tmp_path), brief_path=write_brief(tmp_path)
+    )
+    arguments.update(overrides)
+
+    with pytest.raises(cli_errors.CliError, match=match):
+        await join(MEET_LINK, **arguments)
+    assert not settings.paths.journal_dir.exists()
+    assert not settings.paths.record_dir.exists()
+
+
+async def test_join_brief_only_refuses_memory_before_resources(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_brief_join(settings, monkeypatch)
+
+    with pytest.raises(cli_errors.CliError, match="--memory.*brief_only"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                memory=True,
+                persona_path=write_persona(tmp_path),
+                brief_path=write_brief(tmp_path),
+            ),
+        )
+    assert not settings.paths.journal_dir.exists()
+    assert not settings.paths.record_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "content,match",
+    [
+        (None, "--brief cannot be read"),
+        ("oversize", "--brief is invalid: meeting brief must be at most"),
+        ({"owner_id": "other-owner"}, "--brief is invalid: .*must match the session"),
+        ({"twin_id": "other-twin"}, "--brief is invalid: .*must match the session"),
+        ({"meeting_id": "meeting-10"}, "--brief is invalid: .*must match the session"),
+        (
+            {"approved_facts": [{"id": "secret", "text": PRIVATE_MARKER * 40}]},
+            "--brief is invalid",
+        ),
+        ({"permissions": [f"approve_{PRIVATE_MARKER}"]}, "--brief is invalid"),
+        (
+            {PRIVATE_MARKER: "unknown key"},
+            r"--brief is invalid: 1 validation error\(s\): extra_forbidden$",
+        ),
+    ],
+)
+async def test_join_rejects_an_unusable_brief_before_resources(
+    join,
+    settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: dict | str | None,
+    match: str,
+) -> None:
+    prepare_brief_join(settings, monkeypatch)
+    if content is None:
+        brief_path = tmp_path / "missing-brief.json"
+    elif content == "oversize":
+        brief_path = tmp_path / "oversize-brief.json"
+        brief_path.write_text(
+            json.dumps(BRIEF_DATA) + " " * MAX_BRIEF_BYTES + PRIVATE_MARKER, encoding="utf-8"
+        )
+    else:
+        assert isinstance(content, dict)
+        brief_path = write_brief(tmp_path, **content)
+
+    with pytest.raises(cli_errors.CliError, match=match) as caught:
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path, settings, persona_path=write_persona(tmp_path), brief_path=brief_path
+            ),
+        )
+    assert PRIVATE_MARKER not in str(caught.value)
+    assert all(text not in str(caught.value) for text in BRIEF_TEXTS)
+    assert not settings.paths.journal_dir.exists()
+    assert not settings.paths.record_dir.exists()
+
+
+async def test_join_brief_only_snapshots_context_before_the_agent_runs(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    context_file = meeting_context_file(settings)
+    observed: list[bool] = []
+
+    class SnapshotObservingModel(ToolCallingFakeModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            observed.append(context_file.exists())
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    model = SnapshotObservingModel(responses=[AIMessage(content="Hello.")])
+    created, audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        brief_path=write_brief(tmp_path),
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    brief = meeting_brief()
+    assert observed == [True]
+    assert created["tools"] == []
+    assert [type(item) for item in created["middleware"]] == [
+        type(create_greeting_middleware("id"))
+    ]
+    assert created["persona"] == build_system_prompt(profile, brief=brief)
+    assert model.seen[0][0].content == created["persona"]
+    assert audio.spoken == ["Hello."]
+    assert read_meeting_context(context_file) == expected_context(brief, profile)
+    assert not settings.paths.checkpoint_path.exists()
+    printed = printed_join_summary(capsys)
+    assert printed["brief_sha256"] == brief_digest(brief)
+    assert printed["context_path"] == str(context_file)
+    assert printed["session_outcome"] == "completed"
+
+
+async def test_join_persona_memory_brief_exposes_only_profile_scoped_recall(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graphiti = make_graphiti()
+
+    created, audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Okay.")]),
+        graphiti=graphiti,
+        memory=True,
+        brief_path=write_brief(tmp_path, knowledge_scope="persona_memory"),
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    brief = meeting_brief(knowledge_scope="persona_memory")
+    assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
+    assert created["persona"] == build_system_prompt(profile, brief=brief)
+    assert "recall_meeting_context" in created["persona"]
+    assert audio.spoken == ["Okay."]
+    assert graphiti.events == ["verify", "close"]
+    assert read_meeting_context(meeting_context_file(settings)) == expected_context(brief, profile)
+
+
+async def test_join_persona_memory_brief_without_memory_omits_recall_rules(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created, _audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Okay.")]),
+        brief_path=write_brief(tmp_path, knowledge_scope="persona_memory"),
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    brief = meeting_brief(knowledge_scope="persona_memory")
+    assert created["tools"] == []
+    assert created["persona"] == build_system_prompt(
+        profile.model_copy(update={"allowed_tools": frozenset()}), brief=brief
+    )
+    assert "recall_meeting_context" not in created["persona"]
+    assert read_meeting_context(meeting_context_file(settings)) == expected_context(brief, profile)
+
+
+@pytest.mark.parametrize("reformatted", [False, True])
+async def test_join_brief_resume_reuses_the_matching_context_unchanged(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reformatted: bool
+) -> None:
+    brief_path = write_brief(tmp_path)
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Hello.")]),
+        brief_path=brief_path,
+        settings=settings,
+        join=join,
+    )
+    context_file = meeting_context_file(settings)
+    recorded = context_file.read_bytes()
+    if reformatted:
+        reordered = dict(reversed(list(BRIEF_DATA.items())))
+        reordered["permissions"] = list(reversed(BRIEF_DATA["permissions"]))
+        brief_path.write_text(json.dumps(reordered, indent=4), encoding="utf-8")
+
+    _created, audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Again.")]),
+        brief_path=brief_path,
+        settings=settings,
+        join=join,
+    )
+
+    assert audio.spoken == ["Again."]
+    assert context_file.read_bytes() == recorded
+    reused = [row["reused"] for row in journal_rows(settings) if row["event"] == "brief_recorded"]
+    assert reused == [False, True]
+
+
+@pytest.mark.parametrize(
+    "change,match",
+    [
+        ("persona", "meeting context differs.*new meeting ID"),
+        ("brief", "meeting context differs.*new meeting ID"),
+        ("without_brief", "meeting-9 was started with --brief"),
+    ],
+)
+async def test_join_rejects_a_changed_context_without_touching_meeting_files(
+    join,
+    settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+    match: str,
+) -> None:
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Hello.")]),
+        brief_path=write_brief(tmp_path),
+        persona_overrides={"ingest_transcripts": True},
+        settings=settings,
+        join=join,
+    )
+    before = meeting_files(settings)
+    forbid_resources(monkeypatch)
+    arguments = persona_join_arguments(
+        tmp_path,
+        settings,
+        persona_path=write_persona(tmp_path, ingest_transcripts=True),
+        brief_path=write_brief(tmp_path),
+    )
+    if change == "persona":
+        arguments["persona_path"] = write_persona(
+            tmp_path, ingest_transcripts=True, speaking_style="Formal and slow"
+        )
+    elif change == "brief":
+        arguments["brief_path"] = write_brief(tmp_path, "other-brief.json", questions=[])
+    else:
+        arguments["brief_path"] = None
+
+    with pytest.raises(cli_errors.CliError, match=match):
+        await join(MEET_LINK, **arguments)
+    assert meeting_files(settings) == before
+
+
+async def test_join_keeps_the_snapshot_when_the_source_brief_changes(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    brief_path = write_brief(tmp_path)
+    edited = [{"id": "demo-date", "text": "EDITED-FACT-MARKER"}]
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Hello.")])
+
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=model,
+        brief_path=brief_path,
+        on_start=lambda: write_brief(tmp_path, approved_facts=edited),
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    original = meeting_brief()
+    assert "EDITED-FACT-MARKER" in brief_path.read_text(encoding="utf-8")
+    assert model.seen[0][0].content == build_system_prompt(profile, brief=original)
+    assert "EDITED-FACT-MARKER" not in model.seen[0][0].content
+    assert read_meeting_context(meeting_context_file(settings)) == expected_context(
+        original, profile
+    )
+    forbid_resources(monkeypatch)
+    with pytest.raises(cli_errors.CliError, match="meeting context differs"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path, settings, persona_path=write_persona(tmp_path), brief_path=brief_path
+            ),
+        )
+
+
+async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_ingest_windows(settings, "meeting-9", 1)
+    before = meeting_files(settings)
+    prepare_brief_join(settings, monkeypatch)
+
+    with pytest.raises(cli_errors.CliError, match="conversation data.*new meeting ID"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                persona_path=write_persona(tmp_path, ingest_transcripts=True),
+                brief_path=write_brief(tmp_path),
+            ),
+        )
+    assert meeting_files(settings) == before
+    assert not meeting_context_file(settings).exists()
+
+
+async def test_join_brief_refuses_a_checkpoint_thread_without_context(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thread_id = await seed_conversation_thread(settings, "meeting-9")
+    other_thread = await seed_conversation_thread(settings, "meeting-10")
+    prepare_brief_join(settings, monkeypatch)
+
+    with pytest.raises(cli_errors.CliError, match="conversation data.*new meeting ID"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                persona_path=write_persona(tmp_path, ingest_transcripts=True),
+                brief_path=write_brief(tmp_path),
+            ),
+        )
+    assert await _thread_exists(settings, thread_id)
+    assert await _thread_exists(settings, other_thread)
+    assert meeting_files(settings) == {}
+    assert not settings.paths.journal_dir.exists()
+
+
+@pytest.mark.parametrize("with_brief", [True, False])
+async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_brief: bool
+) -> None:
+    context_file = meeting_context_file(settings)
+    context_file.parent.mkdir(parents=True)
+    context_file.write_text("{corrupt", encoding="utf-8")
+    prepare_brief_join(settings, monkeypatch)
+
+    with pytest.raises(cli_errors.CliError, match="meeting context .*corrupt"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                persona_path=write_persona(tmp_path, ingest_transcripts=True),
+                brief_path=write_brief(tmp_path) if with_brief else None,
+            ),
+        )
+    assert meeting_files(settings) == {"meeting-9/meeting-context.json": b"{corrupt"}
+    assert not settings.paths.journal_dir.exists()
+
+
+async def test_join_brief_refuses_an_unreadable_checkpoint_before_resources(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    garbage = b"not a sqlite database" * 64
+    settings.paths.checkpoint_path.write_bytes(garbage)
+    prepare_brief_join(settings, monkeypatch)
+
+    with pytest.raises(
+        cli_errors.CliError, match="conversation checkpoint cannot be checked: DatabaseError"
+    ):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                persona_path=write_persona(tmp_path, ingest_transcripts=True),
+                brief_path=write_brief(tmp_path),
+            ),
+        )
+    assert settings.paths.checkpoint_path.read_bytes() == garbage
+    assert meeting_files(settings) == {}
+    assert not settings.paths.journal_dir.exists()
+
+
+async def test_join_brief_snapshot_write_failure_starts_nothing(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    prepare_brief_join(settings, monkeypatch)
+
+    def reject_replace(source, target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", reject_replace)
+
+    with pytest.raises(cli_errors.CliError, match="meeting context not written"):
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                persona_path=write_persona(tmp_path, ingest_transcripts=True),
+                brief_path=write_brief(tmp_path),
+            ),
+        )
+    assert meeting_files(settings) == {}
+    assert not settings.paths.journal_dir.exists()
+
+
+async def test_join_journals_brief_metadata_without_brief_text(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="Hello.")]),
+        brief_path=write_brief(tmp_path),
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    brief = meeting_brief()
+    rows = journal_rows(settings)
+    [row] = [row for row in rows if row["event"] == "brief_recorded"]
+    assert {key: value for key, value in row.items() if key != "at"} == {
+        "event": "brief_recorded",
+        "meeting_id": "meeting-9",
+        "source": "cli",
+        "brief_sha256": brief_digest(brief),
+        "persona_sha256": persona_digest(profile),
+        "knowledge_scope": "brief_only",
+        "permissions": ["ask_brief_questions", "explain_facts"],
+        "agenda_count": 1,
+        "objective_count": 1,
+        "approved_fact_count": 1,
+        "question_count": 1,
+        "objective_ids": ["blockers"],
+        "question_ids": ["vendor-needs"],
+        "reused": False,
+    }
+    journal_text = (settings.paths.journal_dir / "meeting-9.jsonl").read_text(encoding="utf-8")
+    printed = capsys.readouterr().out
+    for text in BRIEF_TEXTS:
+        assert text not in journal_text
+        assert text not in printed
+
+
+async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpointer(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second_fact = "The synthetic vendor budget stays fixed."
+    second = {
+        "meeting_id": "meeting-10",
+        "approved_facts": [{"id": "vendor-budget", "text": second_fact}],
+    }
+    first_model = ToolCallingFakeModel(responses=[AIMessage(content="First.")])
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=first_model,
+        brief_path=write_brief(tmp_path),
+        transcripts=("First meeting question?",),
+        native_checkpointer=True,
+        settings=settings,
+        join=join,
+    )
+    second_model = ToolCallingFakeModel(responses=[AIMessage(content="Second.")])
+    await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=second_model,
+        meeting_id="meeting-10",
+        brief_path=write_brief(tmp_path, "second-brief.json", **second),
+        transcripts=("Second meeting question?",),
+        native_checkpointer=True,
+        settings=settings,
+        join=join,
+    )
+
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    second_prompt = second_model.seen[0][0].content
+    assert second_prompt == build_system_prompt(profile, brief=meeting_brief(**second))
+    assert BRIEF_FACT not in second_prompt
+    assert second_fact not in first_model.seen[0][0].content
+    second_history = " ".join(str(message.content) for message in second_model.seen[0])
+    assert "First meeting question?" not in second_history
+    assert read_meeting_context(meeting_context_file(settings)) == expected_context(
+        meeting_brief(), profile
+    )
+    assert read_meeting_context(meeting_context_file(settings, "meeting-10")) == (
+        expected_context(meeting_brief(**second), profile)
+    )
+
+    retry_model = ToolCallingFakeModel(responses=[AIMessage(content="Retry.")])
+    _created, audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=retry_model,
+        brief_path=write_brief(tmp_path),
+        transcripts=("Retry question?",),
+        native_checkpointer=True,
+        settings=settings,
+        join=join,
+    )
+
+    assert audio.spoken == ["Retry."]
+    retry_history = " ".join(str(message.content) for message in retry_model.seen[0])
+    assert "First meeting question?" in retry_history
+    assert "Second meeting question?" not in retry_history
+    assert retry_model.seen[0][0].content == build_system_prompt(profile, brief=meeting_brief())
+
+
+async def test_join_brief_stop_before_pcm_cancels_the_model_turn(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+
+    class HangingModel(ToolCallingFakeModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            started.set()
+            await asyncio.Event().wait()
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    _created, audio, outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=HangingModel(responses=[AIMessage(content="A late answer.")]),
+        brief_path=write_brief(tmp_path),
+        settle=started.wait,
+        settings=settings,
+        join=join,
+    )
+
+    assert audio.spoken == []
+    assert outcome["conversation"].phase == "closed"
+    rows = journal_rows(settings)
+    assert [row["reason"] for row in rows if row["event"] == "agent_cancelled"] == ["close"]
+    assert not [row for row in rows if row["event"] == "playback_finished"]
+    entries = load_meeting_record(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    assert [entry.kind for entry in entries] == ["transcript"]
+    assert read_meeting_context(meeting_context_file(settings)) is not None
+
+
+async def test_join_brief_stop_during_playback_records_no_twin_speech(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class BlockingAudio(FakeReplyAudio):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+
+        async def speak(self, text, *, sentence_index=None, transcript_id=None):
+            self.speaking = True
+            self.on_playback_event(PlaybackEvent("playback_started", text))
+            self.entered.set()
+            await asyncio.Event().wait()
+
+    blocking = BlockingAudio()
+    _created, audio, outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=ToolCallingFakeModel(responses=[AIMessage(content="A long answer.")]),
+        brief_path=write_brief(tmp_path),
+        audio=blocking,
+        settle=blocking.entered.wait,
+        settings=settings,
+        join=join,
+    )
+
+    assert audio is blocking
+    assert audio.spoken == []
+    assert outcome["conversation"].phase == "closed"
+    playback = [row["event"] for row in journal_rows(settings) if row["source"] == "playback"]
+    assert playback == ["playback_started"]
+    entries = load_meeting_record(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    assert [entry.kind for entry in entries] == ["transcript"]
+    assert read_meeting_context(meeting_context_file(settings)) is not None
+
+
+@pytest.mark.parametrize(
+    "profile_data,with_graphiti,match",
+    [
+        (None, False, "requires a persona profile"),
+        (PERSONA_DATA, True, "brief_only"),
+    ],
+)
+async def test_open_conversation_rejects_an_unusable_brief_before_resources(
+    settings,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_data: dict | None,
+    with_graphiti: bool,
+    match: str,
+) -> None:
+    monkeypatch.setattr(
+        providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
+    )
+    monkeypatch.setattr(
+        assembly, "open_checkpointer", lambda *_a, **_k: pytest.fail("saver must stay closed")
+    )
+    config = SimpleNamespace(owner_id="settings-owner", twin_id="settings-twin", meeting_id="m")
+
+    with pytest.raises(ValueError, match=match):
+        async with assembly.open_conversation(
+            settings,
+            config,
+            profile=PersonaProfile.model_validate(profile_data) if profile_data else None,
+            graphiti=make_graphiti() if with_graphiti else None,
+            brief=meeting_brief(),
+            on_transition=lambda *_args: None,
+        ):
+            pytest.fail("conversation must not open")
 
 
 def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list[str]:
@@ -1782,20 +2539,12 @@ async def _forget_meeting_with_local_files(
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
     record_path.write_text("{}\n")
+    write_meeting_context(context_path(record_path), expected_context(meeting_brief(), profile))
     settings.paths.journal_dir.mkdir()
     for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
         (settings.paths.journal_dir / name).write_text("{}\n")
-    thread_id = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-9")
-    other_thread = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
-    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
-        agent = create_meeting_agent(
-            FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
-        )
-        for thread in (thread_id, other_thread):
-            await agent.ainvoke(
-                {"messages": [{"role": "user", "content": "hello"}]},
-                {"configurable": {"thread_id": thread}},
-            )
+    thread_id = await seed_conversation_thread(settings, "meeting-9")
+    await seed_conversation_thread(settings, "meeting-10")
     from fakeyou.lifecycle import MeetingLifecycle
 
     async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
@@ -1861,6 +2610,24 @@ async def test_memory_forget_meeting_keep_record_only_removes_episodes(
     assert meeting_record_path(settings.paths.record_dir, "meeting-9").exists()
     assert (settings.paths.journal_dir / "meeting-9.jsonl").exists()
     assert await _thread_exists(settings, thread_id)
+
+
+@pytest.mark.parametrize("keep_record", [False, True])
+async def test_memory_forget_keeps_the_meeting_context_only_with_the_record(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool
+) -> None:
+    profile = PersonaProfile.model_validate(PERSONA_DATA)
+    context_file = meeting_context_file(settings)
+
+    await _forget_meeting_with_local_files(
+        tmp_path, monkeypatch, keep_record=keep_record, settings=settings
+    )
+
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    assert record_path.exists() is keep_record
+    assert context_file.exists() is keep_record
+    if keep_record:
+        assert read_meeting_context(context_file) == expected_context(meeting_brief(), profile)
 
 
 async def test_memory_forget_episode_uses_persona_group(
@@ -3214,6 +3981,8 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
     record_path.write_text("{}\n", encoding="utf-8")
+    context = expected_context(meeting_brief(), PersonaProfile.model_validate(PERSONA_DATA))
+    write_meeting_context(context_path(record_path), context)
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
     async def forget(memory, **kwargs):
@@ -3234,6 +4003,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
             )
     assert opened == []
     assert record_path.exists()
+    assert read_meeting_context(context_path(record_path)) == context
 
 
 async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
