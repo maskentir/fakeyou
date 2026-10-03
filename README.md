@@ -35,8 +35,8 @@ uv run fakeyou check
 Isi key masing-masing peran aktif: `FAKEYOU_REPLY__API_KEY`, `FAKEYOU_TTS__API_KEY`, `FAKEYOU_STT__API_KEY`, `FAKEYOU_MEMORY__LLM__API_KEY`, dan `FAKEYOU_MEMORY__EMBEDDER__API_KEY`. Tidak ada peminjaman key antarperan. `check`, help, browser, dan laporan dapat digunakan tanpa kredensial provider. `.env` diabaikan Git; `check` menyamarkan secret.
 
 ```sh
-uv run --env-file .env fakeyou chat "Kita menyiapkan digital twin meeting." --thread demo
-uv run --env-file .env fakeyou chat "Apa konteks percakapan kita?" --thread demo
+uv run fakeyou chat "Kita menyiapkan digital twin meeting." --thread demo
+uv run fakeyou chat "Apa konteks percakapan kita?" --thread demo
 ```
 
 `--thread` mengidentifikasi percakapan checkpoint. Gunakan ID berbeda untuk konteks yang harus terpisah. Model awal `gpt-4.1-mini` dapat diganti lewat `FAKEYOU_REPLY__MODEL`; pilih provider secara eksplisit lewat `FAKEYOU_REPLY__PROVIDER`. Nama model tidak memakai prefix provider. `chat` memakai persona default; profil pemilik tersedia untuk `join` lewat `--persona`.
@@ -44,8 +44,8 @@ uv run --env-file .env fakeyou chat "Apa konteks percakapan kita?" --thread demo
 ## Browser
 
 ```sh
-uv run --env-file .env fakeyou browser-tools
-uv run --env-file .env fakeyou chat "Buka https://example.com lalu baca judulnya." --thread browser-demo --browser
+uv run fakeyou browser-tools
+uv run fakeyou chat "Buka https://example.com lalu baca judulnya." --thread browser-demo --browser
 ```
 
 Command pertama membuka browser, mencetak tool, lalu menutup sesi. Command kedua memberikan agent akses tindakan browser. Default headed; `FAKEYOU_BROWSER__HEADLESS=true` tersedia untuk smoke test. Setiap invocation menggunakan profile sementara terisolasi. Untuk meeting panjang, pertahankan context `open_browser_tools` sepanjang sesi; CLI satu turn bukan daemon meeting.
@@ -57,7 +57,7 @@ Guest admission tetap mengikuti host. Worker Meet memakai halaman CloakBrowser h
 ## Sesi Meet
 
 ```sh
-uv run --env-file .env fakeyou join https://meet.google.com/xxx-yyyy-zzz --twin-name "Fakeyou Twin"
+uv run fakeyou join https://meet.google.com/xxx-yyyy-zzz --twin-name "Fakeyou Twin"
 ```
 
 Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_IDENTITY__OWNER_ID`, `FAKEYOU_IDENTITY__TWIN_ID`, `FAKEYOU_IDENTITY__TWIN_NAME`, `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_MEETING__SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/plans/meeting-runtime.md).
@@ -68,8 +68,8 @@ ID sesi menerima 1–128 huruf, angka, `_`, atau `-`, dimulai dengan huruf/angka
 
 ```sh
 docker compose up -d --wait neo4j
-uv run --env-file .env fakeyou memory-init
-uv run --env-file .env fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --thread memory-demo --memory
+uv run fakeyou memory-init
+uv run fakeyou chat "Ingat bahwa proyek ini bernama Fakeyou." --thread memory-demo --memory
 ```
 
 `FAKEYOU_MEMORY__STORE__GROUP` membatasi ruang pengetahuan `chat --memory`. Sesi `join --memory` tidak memakai setting itu: grupnya diturunkan dari `owner_id` dan `twin_id` profil persona. Keduanya pemisahan data lokal, bukan autentikasi multi-tenant. `remember_meeting_fact` adalah tool fakta manual yang hanya tersedia di `chat`. Ingestion transkrip meeting, catatan pemilik, dan penghapusan manual dijelaskan di bagian persona.
@@ -80,13 +80,13 @@ Model Graphiti dipilih per peran. Default memakai OpenAI (`FAKEYOU_MEMORY__LLM__
 
 ```sh
 docker compose --profile embeddings up -d --wait embeddings
-uv run --env-file .env fakeyou memory-reembed --persona examples/persona.example.json \
+uv run fakeyou memory-reembed --persona examples/persona.example.json \
   --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-reembed \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Setel `FAKEYOU_MEMORY__EMBEDDER__BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY__EMBEDDER__API_KEY=local`, dan `FAKEYOU_MEMORY__EMBEDDER__DIM=384`. Tambahkan `EMBEDDING_DIM=384` dalam `.env`, lalu jalankan dengan `uv run --env-file .env` supaya Graphiti membaca dimensi sebelum import. Worker Compose mengekspor dimensi yang sama. Perubahan dimensi setelah Graphiti di-import ditolak saat memori dibuka. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
+Setel `FAKEYOU_MEMORY__EMBEDDER__BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY__EMBEDDER__API_KEY=local`, dan `FAKEYOU_MEMORY__EMBEDDER__DIM=384`. Tambahkan `EMBEDDING_DIM=384` dalam `.env`; command `fakeyou` memuatnya sebelum Graphiti di-import. Worker Compose mengekspor dimensi yang sama. Perubahan dimensi setelah Graphiti di-import ditolak saat memori dibuka. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
 
 ```sh
 docker compose --profile production up -d --wait postgres
@@ -164,12 +164,13 @@ Konfigurasi menggunakan bagian bertipe dan nested env dengan pemisah `__`. `fake
 | --- | --- | --- |
 | Jawaban lisan | `FAKEYOU_REPLY__MODEL`, `FAKEYOU_REPLY__BASE_URL`, `FAKEYOU_REPLY__API_KEY`, `FAKEYOU_REPLY__REASONING_EFFORT` | `gpt-4.1-mini`, provider `openai`, key peran sendiri |
 | Cadangan jawaban lisan | `FAKEYOU_REPLY_FALLBACK__MODEL`, `FAKEYOU_REPLY_FALLBACK__BASE_URL`, `FAKEYOU_REPLY_FALLBACK__API_KEY`, `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT` | Tidak aktif |
+| Debrief | `FAKEYOU_DEBRIEF__PROVIDER`, `FAKEYOU_DEBRIEF__MODEL`, `FAKEYOU_DEBRIEF__BASE_URL`, `FAKEYOU_DEBRIEF__API_KEY` | Tidak aktif; memakai peran jawaban lisan |
 | Memori Graphiti | `FAKEYOU_MEMORY__LLM__MODEL`, `FAKEYOU_MEMORY__LLM__SMALL_MODEL`, `FAKEYOU_MEMORY__EMBEDDER__MODEL` | `gpt-5.5`, `gpt-4.1-nano`, `text-embedding-3-small` |
 | STT | `FAKEYOU_STT__MODEL` | `muse-voice-transcribe-1.0` |
 
 Anggaran waktu diperiksa saat konfigurasi dibaca: jumlah `timeout_seconds × (max_retries + 1)` untuk jawaban utama dan cadangan, ditambah timeout recall, harus muat dalam `FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`. Default utama 15 detik × 3 percobaan dan recall 15 detik, total 60 detik. Retry utama dan cadangan selalu berasal dari konfigurasi; bila mengaktifkan cadangan, kurangi retry atau sesuaikan deadline secara eksplisit. Cadangan memakai API key sendiri. Preflight memeriksa URL peran aktif, termasuk cadangan dan memori, dengan skema dan port utuh.
 
-Provider jawaban adalah `openai`, `openai_compatible`, atau `anthropic`. Contoh MiniMax: `FAKEYOU_REPLY__PROVIDER=openai_compatible`, `FAKEYOU_REPLY__MODEL=MiniMax-M3`, dan `FAKEYOU_REPLY__BASE_URL=https://api.minimax.io/v1`. `openai_compatible` wajib memiliki URL. Field khusus provider hanya tersedia pada variannya; `extra_body` hanya untuk `openai_compatible`. Kutip JSON agar dibaca konsisten oleh dotenv dan `uv --env-file`: `FAKEYOU_REPLY__EXTRA_BODY='{"reasoning_split": true}'`.
+Provider jawaban adalah `openai`, `openai_compatible`, `anthropic`, atau `google`. `google` memakai integrasi native Gemini (`langchain-google-genai`) dengan default `gemini-3.8-flash`; endpoint OpenAI-compatible Gemini tidak dipakai karena function calling Gemini 3 memerlukan thought signature yang dibuang klien OpenAI. Contoh MiniMax: `FAKEYOU_REPLY__PROVIDER=openai_compatible`, `FAKEYOU_REPLY__MODEL=MiniMax-M3`, dan `FAKEYOU_REPLY__BASE_URL=https://api.minimax.io/v1`. `openai_compatible` wajib memiliki URL. Field khusus provider hanya tersedia pada variannya; `extra_body` hanya untuk `openai_compatible`. Kutip JSON agar dibaca konsisten oleh dotenv dan `uv --env-file`: `FAKEYOU_REPLY__EXTRA_BODY='{"reasoning_split": true}'`.
 
 TTS memiliki `provider`, `model`, `voice`, `api_key`, `base_url`, dan `sample_rate` yang terlihat di `check`. Pilih `FAKEYOU_TTS__PROVIDER=minimax` untuk default `speech-2.8-turbo` dan `Indonesian_CalmWoman`. Voice OpenAI divalidasi terhadap daftar library. Format audio tetap PCM s16le mono, capture 16 kHz, playback 24 kHz; sample rate TTS selain 24 kHz ditolak.
 
@@ -177,7 +178,7 @@ TTS memiliki `provider`, `model`, `voice`, `api_key`, `base_url`, dan `sample_ra
 
 ### Validasi konfigurasi
 
-Key `FAKEYOU_*` yang tidak dikenal ditolak dengan `Unknown configuration key`, termasuk typo bernilai kosong dalam dotenv maupun environment proses, tanpa membedakan kapitalisasi. Hanya `FAKEYOU_COMPOSE_*` yang dikecualikan untuk interpolasi Compose. Variabel library seperti `EMBEDDING_DIM` dan `LANGSMITH_*` tetap diperbolehkan. Gunakan nama key aktif dalam `.env.example`; setiap peran memakai konfigurasi dan key sendiri. Flag CLI harus ditulis lengkap, termasuk `--owner-id`; alias `--owner` dan singkatan flag tidak diterima. Endpoint preflight wajib menyebut skema, misalnya `https://` atau `bolt://`.
+Key `FAKEYOU_*` yang tidak dikenal ditolak dengan `Unknown configuration key`, termasuk typo bernilai kosong dalam dotenv maupun environment proses, tanpa membedakan kapitalisasi. Hanya `FAKEYOU_COMPOSE_*` yang dikecualikan untuk interpolasi Compose. Variabel library seperti `EMBEDDING_DIM` dan `LANGSMITH_*` tetap diperbolehkan. Command `fakeyou` memuat `.env` dari direktori kerja ke environment proses sebelum modul lain diimpor, sehingga `EMBEDDING_DIM`, telemetry, dan variabel library lain berlaku tanpa `--env-file`; nilai environment proses tetap menang, jadi `uv run --env-file` atau `env_file` Compose dapat menimpanya. Import `fakeyou` sebagai library menyetel `PYTHON_DOTENV_DISABLED=1` bila belum diset agar library seperti Graphiti tidak memuat `.env` diam-diam; `Settings` tetap membaca key `FAKEYOU_*` dari `.env`. Gunakan nama key aktif dalam `.env.example`; setiap peran memakai konfigurasi dan key sendiri. Flag CLI harus ditulis lengkap, termasuk `--owner-id`; alias `--owner` dan singkatan flag tidak diterima. Endpoint preflight wajib menyebut skema, misalnya `https://` atau `bolt://`.
 
 Setiap `join` menulis dua berkas:
 

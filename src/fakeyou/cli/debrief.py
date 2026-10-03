@@ -30,7 +30,7 @@ from fakeyou.ingestion_status import (
 from fakeyou.invariants import SessionId
 from fakeyou.journal import Journal, journal_path
 from fakeyou.persona import PersonaProfile
-from fakeyou.providers import create_chat_model, create_fallback_chat_model
+from fakeyou.providers import create_debrief_chat_model, create_fallback_chat_model
 from fakeyou.record import meeting_record_path
 from fakeyou.settings import Settings
 
@@ -130,7 +130,7 @@ async def _debrief_locked(
             rebuild_debrief_markdown(record_path)
             _print_result(record_path, cached=True)
             return
-        model = create_chat_model(settings)
+        model = create_debrief_chat_model(settings)
         fallback = create_fallback_chat_model(settings)
         stop = asyncio.Event()
         journal.record(
@@ -189,8 +189,8 @@ async def _debrief_locked(
             record_sha256=record_digest,
             context_sha256=context_digest,
             generated_at=datetime.now(UTC),
-            provider=settings.reply.provider,
-            model=settings.reply.model,
+            provider=settings.debrief_role.provider,
+            model=settings.debrief_role.model,
             source_count=len(snapshot.sources),
             chunk_count=len(chunks),
             status="completed",

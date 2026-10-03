@@ -778,7 +778,7 @@ def _provider_metadata(settings: Settings) -> dict[str, Any]:
         }
 
     return dict(
-        primary=role(settings.reply),
+        primary=role(settings.debrief_role),
         fallback=role(settings.reply_fallback),
         response_timeout_seconds=settings.conversation.response_timeout_seconds,
     )
@@ -816,12 +816,14 @@ async def replay_debriefs(
                             raise AssertionError("invalid source reached provider construction")
 
                         stack.enter_context(
-                            patch.object(cli_debrief, "create_chat_model", refused_provider)
+                            patch.object(cli_debrief, "create_debrief_chat_model", refused_provider)
                         )
                     else:
                         model = model_factory(case)
                         stack.enter_context(
-                            patch.object(cli_debrief, "create_chat_model", return_value=model)
+                            patch.object(
+                                cli_debrief, "create_debrief_chat_model", return_value=model
+                            )
                         )
                     stack.enter_context(
                         patch.object(cli_debrief, "create_fallback_chat_model", return_value=None)
@@ -998,7 +1000,7 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
         pytest.fail("invalid source reached provider construction")
 
     with (
-        patch.object(cli_debrief, "create_chat_model", provider_forbidden),
+        patch.object(cli_debrief, "create_debrief_chat_model", provider_forbidden),
         patch.object(cli_debrief, "create_fallback_chat_model", provider_forbidden),
         record_lock(record, purpose="meeting") if invalid == "lock" else nullcontext(),
         pytest.raises(CliError),

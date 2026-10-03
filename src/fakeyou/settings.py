@@ -83,8 +83,15 @@ class AnthropicReply(ReplyBase):
     base_url: OptionalURL = "https://api.anthropic.com"
 
 
+class GoogleReply(ReplyBase):
+    langchain_provider: ClassVar[str] = "google_genai"
+    provider: Literal["google"] = "google"
+    model: str = "gemini-3.8-flash"
+    base_url: OptionalURL = "https://generativelanguage.googleapis.com"
+
+
 ReplySettings = Annotated[
-    OpenAIReply | CompatibleReply | AnthropicReply, Field(discriminator="provider")
+    OpenAIReply | CompatibleReply | AnthropicReply | GoogleReply, Field(discriminator="provider")
 ]
 
 
@@ -241,6 +248,7 @@ class Configuration(Section):
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None
+    debrief: ReplySettings | None = None
     tts: TTSSettings = Field(default_factory=OpenAITTS)
     stt: STTSettings = Field(default_factory=STTSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
@@ -261,6 +269,10 @@ class Configuration(Section):
                 "reply retries, fallback and recall exceed conversation response budget"
             )
         return self
+
+    @property
+    def debrief_role(self) -> ReplySettings:
+        return self.debrief or self.reply
 
     def require_roles(self, *roles: str) -> None:
         for role in roles:

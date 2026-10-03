@@ -1,6 +1,6 @@
 # Debrief meeting untuk review owner
 
-Debrief membaca catatan meeting yang sudah selesai dan membuat laporan lokal beserta kutipan sumber. Jalankan command ini terpisah dari join dan ingestion. Model memakai peran jawaban utama serta cadangan yang dikonfigurasi; Graphiti, embedding, browser, STT, dan TTS tidak diperlukan.
+Debrief membaca catatan meeting yang sudah selesai dan membuat laporan lokal beserta kutipan sumber. Jalankan command ini terpisah dari join dan ingestion. Model memakai peran `debrief` bila `FAKEYOU_DEBRIEF__*` diset, misalnya Gemini yang lebih kuat untuk ekstraksi sementara jawaban live memakai model cepat; tanpa itu debrief memakai peran jawaban utama. Cadangan tetap `FAKEYOU_REPLY_FALLBACK__*`. Graphiti, embedding, browser, STT, dan TTS tidak diperlukan.
 
 ```sh
 uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json

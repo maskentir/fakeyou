@@ -85,6 +85,9 @@ def test_inspection_does_not_require_credentials(capsys):
         {"provider": "openai", "model": "openai:gpt-4.1-mini"},
         {"provider": "anthropic", "extra_body": {}},
         {"provider": "anthropic", "reasoning_effort": "minimal"},
+        {"provider": "google", "extra_body": {}},
+        {"provider": "google", "reasoning_effort": "minimal"},
+        {"provider": "google", "model": "google_genai:gemini-3.8-flash"},
         {"provider": "ollama"},
     ],
 )
@@ -346,6 +349,44 @@ def test_blank_reply_endpoint_ignores_library_destination_environment(
     assert str(client.base_url).rstrip("/") == expected
     assert client.api_key == "reply-role-key"
     assert expected in preflight_hosts(settings)
+
+
+def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(monkeypatch):
+    from fakeyou.providers import create_chat_model, preflight_hosts
+
+    monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", "https://unconfigured.example.invalid")
+    monkeypatch.setenv("GOOGLE_API_KEY", "unconfigured-key")
+    settings = Settings(
+        _env_file=None,
+        reply={"provider": "google", "base_url": "", "api_key": "reply-role-key", "max_retries": 0},
+    )
+    model = create_chat_model(settings)
+    client = model.client._api_client
+
+    assert (model.model, model.timeout, model.max_retries) == ("gemini-3.8-flash", 15.0, 0)
+    assert client._http_options.base_url.rstrip("/") == "https://generativelanguage.googleapis.com"
+    assert client.api_key == "reply-role-key"
+    assert "https://generativelanguage.googleapis.com" in preflight_hosts(settings)
+
+
+def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key():
+    from fakeyou.providers import create_debrief_chat_model
+
+    reply = {"provider": "google", "model": "gemini-3.5-flash-lite", "api_key": "reply-key"}
+    shared = Settings(_env_file=None, reply=reply)
+    assert shared.debrief_role is shared.reply
+    assert create_debrief_chat_model(shared).model == "gemini-3.5-flash-lite"
+
+    debrief = {"provider": "google", "model": "gemini-3.8-flash", "api_key": "debrief-key"}
+    model = create_debrief_chat_model(Settings(_env_file=None, reply=reply, debrief=debrief))
+    assert (model.model, model.google_api_key.get_secret_value()) == (
+        "gemini-3.8-flash",
+        "debrief-key",
+    )
+    with pytest.raises(ValueError, match="FAKEYOU_DEBRIEF__API_KEY"):
+        create_debrief_chat_model(
+            Settings(_env_file=None, reply=reply, debrief={"provider": "anthropic"})
+        )
 
 
 @pytest.mark.parametrize(

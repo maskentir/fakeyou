@@ -10,6 +10,7 @@ dependencies = [
     "httpx2==2.13.1",
     "langchain==1.4.2",
     "langchain-anthropic>=1,<2",
+    "langchain-google-genai>=4,<5",
     "langchain-mcp-adapters>=0.2,<0.3",
     "langchain-openai>=1,<2",
     "langgraph==1.2.12",
@@ -18,6 +19,7 @@ dependencies = [
     "openai==3.19.2",
     "pipecat-ai[silero,webrtc]==1.12.0",
     "pydantic-settings>=2.10,<3",
+    "python-dotenv>=1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +39,7 @@ production = [
 ]
 
 [project.scripts]
-fakeyou = "fakeyou.cli.main:main"
+fakeyou = "fakeyou.cli.entry:main"
 
 [build-system]
 requires = ["hatchling"]

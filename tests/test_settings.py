@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,3 +75,54 @@ def test_conversation_sentence_streaming_defaults_off():
 def test_conversation_sentence_streaming_reads_environment(monkeypatch):
     monkeypatch.setenv("FAKEYOU_CONVERSATION__SENTENCE_STREAMING", "true")
     assert Settings().conversation.sentence_streaming is True
+
+
+def test_importing_fakeyou_disables_implicit_dotenv_loading(tmp_path):
+    env_file = tmp_path / "leak.env"
+    env_file.write_text("FAKEYOU_LEAK_PROBE=leaked\n")
+    script = (
+        "import os\n"
+        "import fakeyou.memory\n"
+        "from dotenv import load_dotenv\n"
+        f"load_dotenv({str(env_file)!r})\n"
+        "print(os.environ.get('FAKEYOU_LEAK_PROBE'))\n"
+    )
+    environment = {
+        key: value for key, value in os.environ.items() if key != "PYTHON_DOTENV_DISABLED"
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script], env=environment, capture_output=True, text=True, check=True
+    )
+    assert result.stdout.splitlines()[-1] == "None"
+
+
+@pytest.mark.parametrize("process_value,expected", [(None, "384"), ("512", "512")])
+def test_cli_entry_exports_dotenv_before_graphiti_loads(tmp_path, process_value, expected):
+    (tmp_path / ".env").write_text("EMBEDDING_DIM=384\n")
+    script = (
+        "import sys\n"
+        "from fakeyou.cli.entry import main\n"
+        "sys.argv = ['fakeyou', '--help']\n"
+        "try:\n"
+        "    main()\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "from graphiti_core.embedder.client import EMBEDDING_DIM\n"
+        "print(EMBEDDING_DIM)\n"
+    )
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"EMBEDDING_DIM", "PYTHON_DOTENV_DISABLED"} and not key.startswith("FAKEYOU_")
+    }
+    if process_value is not None:
+        environment["EMBEDDING_DIM"] = process_value
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines()[-1] == expected

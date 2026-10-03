@@ -62,6 +62,13 @@ def create_chat_model(settings: Settings) -> BaseChatModel:
     return _init_chat_model(settings.reply, "FAKEYOU_REPLY__API_KEY")
 
 
+def create_debrief_chat_model(settings: Settings) -> BaseChatModel:
+    if settings.debrief is None:
+        return create_chat_model(settings)
+    settings.require_roles("debrief", "reply_fallback")
+    return _init_chat_model(settings.debrief, "FAKEYOU_DEBRIEF__API_KEY")
+
+
 def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
     if settings.reply_fallback is None:
         return None
