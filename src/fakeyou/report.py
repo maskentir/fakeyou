@@ -93,6 +93,12 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     cancel_completed = 0
     ingest_runs: list[tuple[bool | None, bool]] = []
     ingest_fault_pending = False
+    utterances = 0
+    attributed = 0
+    unknown_reasons = Counter[str]()
+    policy_actions = Counter[str]()
+    policy_reasons = Counter[str]()
+    observer_methods = Counter[str]()
     for row in rows:
         event = row.get("event")
         try:
@@ -108,6 +114,14 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         elif event == "barge_in_detected":
             barge_in_triggers[str(row.get("trigger"))] += 1
         elif event == "transcript_finalized":
+            utterances += 1
+            speaker_id = row.get("participant_id")
+            if isinstance(speaker_id, str) and speaker_id != "unknown":
+                attributed += 1
+            elif row.get("speaker_evidence_id") is None:
+                unknown_reasons["no_evidence"] += 1
+            else:
+                unknown_reasons["evidence_unmatched"] += 1
             transcript_id = str(row.get("transcript_id"))
             turns[transcript_id] = {
                 "transcript_id": transcript_id,
@@ -267,6 +281,11 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 ingest_fault_pending = True
         elif event == "session_finished":
             result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
+        elif event == "policy_decided":
+            policy_actions[str(row.get("action"))] += 1
+            policy_reasons[str(row.get("reason"))] += 1
+        elif event == "participant_observer_started":
+            observer_methods[str(row.get("method"))] += 1
     for transcript_id in pending.values():
         if isinstance(transcript_id, str) and transcript_id in turns:
             turns[transcript_id]["incomplete"] += 1
@@ -300,6 +319,16 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "session_outcome": session_outcome,
         "ingestion_outcome": ingestion_outcome,
         "cancellation": {"requested": cancel_requested, "completed": cancel_completed},
+        "participation": {
+            "utterances_recorded": utterances,
+            "attributed_utterances": attributed,
+            "attribution_coverage": round(attributed / utterances, 3) if utterances else None,
+            "unknown_reasons": dict(unknown_reasons),
+            "answers": sum(1 for turn in turn_reports if turn["llm_count"] > 0),
+            "policy": dict(policy_actions),
+            "policy_reasons": dict(policy_reasons),
+            "observer_methods": dict(observer_methods),
+        },
         "turns": turn_reports,
         "latency": {
             stage: summarize([turn[stage] for turn in turn_reports if turn[stage] is not None])

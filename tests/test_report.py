@@ -17,7 +17,15 @@ def row(seconds: float, event: str, **fields) -> dict:
     }
 
 
-def answered_turn(offset: float, transcript_id: str, reply: str, *, recall: bool = False) -> list:
+def answered_turn(
+    offset: float,
+    transcript_id: str,
+    reply: str,
+    *,
+    recall: bool = False,
+    participant_id: str = "unknown",
+    speaker_evidence_id: str | None = None,
+) -> list:
     rows = [
         row(offset, "speech_stopped", source="audio"),
         row(
@@ -25,6 +33,8 @@ def answered_turn(offset: float, transcript_id: str, reply: str, *, recall: bool
             "transcript_finalized",
             transcript_id=transcript_id,
             text="When is the demo?",
+            participant_id=participant_id,
+            speaker_evidence_id=speaker_evidence_id,
         ),
         row(offset + 0.4, "agent_started", request_id=f"{transcript_id}:1"),
     ]
@@ -1225,3 +1235,64 @@ def test_diagnostics_report_surfaces_both_outcomes(tmp_path: Path, settings, cap
     assert printed["session_outcome"] == "completed"
     assert printed["ingestion_outcome"] == "completed"
     assert printed["cancellation"] == {"requested": 1, "completed": 0}
+
+
+def test_report_summarizes_participation_and_policy() -> None:
+    rows = (
+        answered_turn(
+            0,
+            "t1",
+            "The demo is on Friday.",
+            participant_id="spaces/x/devices/1",
+            speaker_evidence_id="e1",
+        )
+        + [
+            row(
+                1.2,
+                "request_finished",
+                source="llm",
+                request_id="t1:1",
+                transcript_id="t1",
+                duration_ms=800,
+            ),
+        ]
+        + [
+            row(1.0, "policy_decided", transcript_id="t1", action="reply", reason="addressed"),
+            row(
+                2.0,
+                "transcript_finalized",
+                transcript_id="t2",
+                text="Budi, when is the demo?",
+                participant_id="unknown",
+                speaker_evidence_id="e9",
+            ),
+            row(2.0, "policy_decided", transcript_id="t2", action="silent", reason="not_addressed"),
+            row(
+                3.0,
+                "transcript_finalized",
+                transcript_id="t3",
+                text="I agree with Budi.",
+                participant_id="unknown",
+                speaker_evidence_id=None,
+            ),
+            row(3.0, "policy_decided", transcript_id="t3", action="silent", reason="not_addressed"),
+            row(0.5, "participant_observer_started", source="runtime", method="dom_mining"),
+        ]
+    )
+
+    report = build_session_report(rows)
+
+    assert report["participation"]["utterances_recorded"] == 3
+    assert report["participation"]["attributed_utterances"] == 1
+    assert report["participation"]["attribution_coverage"] == 0.333
+    assert report["participation"]["unknown_reasons"] == {
+        "evidence_unmatched": 1,
+        "no_evidence": 1,
+    }
+    assert report["participation"]["answers"] == 1
+    assert report["participation"]["policy"] == {"reply": 1, "silent": 2}
+    assert report["participation"]["policy_reasons"] == {
+        "addressed": 1,
+        "not_addressed": 2,
+    }
+    assert report["participation"]["observer_methods"] == {"dom_mining": 1}

@@ -249,6 +249,8 @@ async def replay_trust(
                         source="meeting_audio",
                         text=str(turn["say"]),
                         finalized=True,
+                        participant_id="unknown",
+                        speaker_evidence_id=None,
                     )
                     started = time.monotonic()
                     try:

@@ -24,7 +24,8 @@ def tagged_event(text: str, message_id: str) -> HumanMessage:
             "meeting_event": {
                 "timestamp": "2026-10-03T00:00:00+00:00",
                 "source": "meeting_audio",
-                "participant": "unknown",
+                "participant_id": "unknown",
+                "speaker_evidence_id": None,
             }
         },
     )

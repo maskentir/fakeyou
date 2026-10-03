@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.lifecycle import create_lifecycle_graph, initial_lifecycle_state
+from fakeyou.lifecycle import MeetingLifecycle, create_lifecycle_graph, initial_lifecycle_state
+from fakeyou.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.participant_observer import OBSERVE_JS
-from fakeyou.runtime import run_meeting_session
+from fakeyou.runtime import _MeetingWorker, run_meeting_session
 from fakeyou.session import SessionConfig
 from tests.fakes import (
     ASK_SELECTOR,
@@ -22,6 +23,7 @@ from tests.fakes import (
     NAME_SELECTOR,
     NO_CAPTCHA,
     REMOVED,
+    FakeAudio,
     FakeClock,
     FakePageSession,
     FakeSaverSession,
@@ -579,3 +581,41 @@ async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path) -> Non
     assert result.phase == "ended"
     assert OBSERVE_JS not in page.evaluate_calls
     assert not evidence.exists()
+
+
+async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path) -> None:
+    evidence = tmp_path / "meeting-1" / "participants.jsonl"
+    stop = asyncio.Event()
+    clock = FakeClock()
+    page = meet_page([], evaluates=[_mining_payload() for _ in range(10)])
+    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
+    await lifecycle.initialize()
+    worker = _MeetingWorker(
+        _config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        lifecycle,
+        page,
+        stop,
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+    )
+    worker.audio = FakeAudio([])
+
+    await worker.start_participant_observer()
+    assert worker.observer is not None
+    await asyncio.sleep(0.6)
+    assert evidence.exists()
+    assert len(evidence.read_text(encoding="utf-8").splitlines()) >= 2
+
+    stop.set()
+    detail = await worker.monitor(clock.monotonic())
+
+    assert detail == "owner requested stop"
+    assert worker.observer is None
+    assert worker.audio.events == ["audio_stopped"]
+    lines_before = evidence.read_text(encoding="utf-8").splitlines()
+    polls_before = len(page.evaluate_calls)
+    await asyncio.sleep(0.6)
+    assert evidence.read_text(encoding="utf-8").splitlines() == lines_before
+    assert len(page.evaluate_calls) == polls_before
+    assert worker.audio.events == ["audio_stopped"]

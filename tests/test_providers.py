@@ -289,6 +289,8 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                 source="meeting_audio",
                 text=template.format(project=project),
                 finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
             )
         )
     record.close()
@@ -537,6 +539,8 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                     source="meeting_audio",
                     text=f"Customer demo of project {project} is planned this week.",
                     finalized=True,
+                    participant_id="unknown",
+                    speaker_evidence_id=None,
                 )
             )
             record.close()

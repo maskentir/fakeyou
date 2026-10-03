@@ -86,7 +86,9 @@ def meeting_windows(
     for entry in entries:
         if isinstance(entry, TranscriptEntry):
             speaker = (
-                UNIDENTIFIED_PARTICIPANT if entry.participant == "unknown" else entry.participant
+                UNIDENTIFIED_PARTICIPANT
+                if entry.participant_id == "unknown"
+                else entry.participant_id
             )
             spoken = _spoken_moment(entry.spoken_at)
         elif isinstance(entry, TwinSpeechEntry):

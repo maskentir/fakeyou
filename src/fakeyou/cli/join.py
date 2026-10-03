@@ -93,6 +93,8 @@ async def join_meeting(
         raise CliError("--memory requires --persona")
     if wake_phrase and not conversation_enabled:
         raise CliError("--wake-phrase requires --converse")
+    if settings.conversation.participant_policy_enabled and not (wake_phrase or "").strip():
+        raise CliError("participant policy requires --wake-phrase aliases")
     if barge_in and not conversation_enabled:
         raise CliError("--barge-in requires --converse")
     if conversation_enabled:
@@ -251,13 +253,14 @@ async def join_meeting(
                     )
 
                 async def transcript(frame: TranscriptionFrame) -> None:
-                    event = transcript_event(frame)
+                    event = transcript_event(frame, "unknown", None)
                     journal.record(
                         "transcript_finalized",
                         source="stt",
                         origin=event.source,
                         transcript_id=event.id,
-                        participant=event.participant,
+                        participant_id=event.participant_id,
+                        speaker_evidence_id=event.speaker_evidence_id,
                         spoken_at=event.timestamp,
                         finalized=event.finalized,
                     )

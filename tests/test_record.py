@@ -25,6 +25,8 @@ def transcript(index: int, text: str = "Hello.", **overrides) -> TranscriptEvent
         "source": "meeting_audio",
         "text": text,
         "finalized": True,
+        "participant_id": "unknown",
+        "speaker_evidence_id": None,
     }
     fields.update(overrides)
     return TranscriptEvent(**fields)
@@ -41,7 +43,7 @@ def test_record_path_is_one_directory_per_meeting(tmp_path: Path) -> None:
 def test_record_roundtrips_transcripts_twin_speech_and_tool_results(tmp_path: Path) -> None:
     record = open_record(tmp_path)
 
-    record.add_transcript(transcript(0, "When is the Orchid demo?", participant="Speaker A"))
+    record.add_transcript(transcript(0, "When is the Orchid demo?", participant_id="Speaker A"))
     record.add_twin_speech("The demo is Friday at two in the afternoon.")
     record.add_tool_result(
         "recall_meeting_context",
@@ -55,9 +57,10 @@ def test_record_roundtrips_transcripts_twin_speech_and_tool_results(tmp_path: Pa
             at=NOW,
             id="event-0",
             spoken_at="2026-09-30T10:00:00+00:00",
-            participant="Speaker A",
             source="meeting_audio",
             text="When is the Orchid demo?",
+            participant_id="Speaker A",
+            speaker_evidence_id=None,
         ),
         TwinSpeechEntry(at=NOW, text="The demo is Friday at two in the afternoon."),
         ToolResultEntry(
@@ -142,3 +145,29 @@ def test_record_close_fsync_failure_propagates_and_second_close_is_safe(
     with pytest.raises(OSError, match="disk unavailable"):
         record.close()
     record.close()
+
+
+def test_record_carries_speaker_identity_and_rejects_legacy_lines(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(0, participant_id="a", speaker_evidence_id="e1"))
+    record.close()
+    [entry] = load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))
+    assert isinstance(entry, TranscriptEntry)
+    assert entry.participant_id == "a"
+    assert entry.speaker_evidence_id == "e1"
+    legacy = {
+        "kind": "transcript",
+        "at": NOW.isoformat(),
+        "id": "event-9",
+        "spoken_at": "2026-09-30T10:00:09+00:00",
+        "participant": "unknown",
+        "source": "meeting_audio",
+        "text": "Legacy.",
+    }
+    path = meeting_record_path(tmp_path, "meeting-1")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(legacy) + "\n")
+    with pytest.raises(ValidationError):
+        load_meeting_record(path)

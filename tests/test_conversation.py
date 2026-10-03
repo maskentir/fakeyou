@@ -14,6 +14,7 @@ from fakeyou.conversation import (
     LangGraphResponder,
     StreamingLangGraphResponder,
     TranscriptEvent,
+    _request_messages,
     cap_spoken_reply,
     conversation_thread_id,
     transcript_event,
@@ -23,8 +24,16 @@ from fakeyou.session import ConversationError
 from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
 
 
-def event(id, text="hello", finalized=True):
-    return TranscriptEvent(id, datetime.now(UTC).isoformat(), "meeting_audio", text, finalized)
+def event(id, text="hello", finalized=True, participant_id="unknown", speaker_evidence_id=None):
+    return TranscriptEvent(
+        id,
+        datetime.now(UTC).isoformat(),
+        "meeting_audio",
+        text,
+        finalized,
+        participant_id=participant_id,
+        speaker_evidence_id=speaker_evidence_id,
+    )
 
 
 async def test_new_final_cancels_waiting_model_and_answers_newest_once(journal):
@@ -146,9 +155,13 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
     replay = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
     next_utterance = TranscriptionFrame("hello", "", "2026-09-28T00:00:01Z", finalized=True)
     assert first.id != replay.id
-    assert transcript_event(first).id == transcript_event(replay).id
-    assert transcript_event(first).id != transcript_event(next_utterance).id
-    assert transcript_event(first).participant == "unknown"
+    assert transcript_event(first, "unknown", None).id == transcript_event(replay, "p1", "e1").id
+    assert (
+        transcript_event(first, "unknown", None).id
+        != transcript_event(next_utterance, "unknown", None).id
+    )
+    assert transcript_event(first, "unknown", None).participant_id == "unknown"
+    assert transcript_event(first, "p1", "e1").speaker_evidence_id == "e1"
 
 
 def test_conversation_threads_include_all_session_identities():
@@ -1514,3 +1527,218 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_policy_requires_configured_aliases():
+    responder = FakeResponder()
+    with pytest.raises(ValueError, match="twin aliases"):
+        ConversationLoop(responder, participant_policy_enabled=True)
+    with pytest.raises(ValueError, match="twin aliases"):
+        ConversationLoop(responder, wake_phrases=["  "], participant_policy_enabled=True)
+
+
+async def test_policy_silent_makes_zero_responder_calls(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, wake_phrases=["Rani Twin"], participant_policy_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "Budi, when is the demo?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert responder.calls == []
+    assert audio.spoken == []
+    [decision] = journal.events("policy_decided")
+    assert (decision["transcript_id"], decision["action"], decision["reason"]) == (
+        "t1",
+        "silent",
+        "not_addressed",
+    )
+    await loop.close()
+
+
+async def test_policy_keeps_barge_in_on_speech_onset(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        wake_phrases=["Rani Twin"],
+        participant_policy_enabled=True,
+        barge_in=True,
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t0", "Rani Twin, when is the demo?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    audio.speaking = True
+    await loop.handle_interim("wait just a moment please")
+    assert audio.stops == 1
+    await loop.handle_transcript(event("t1", "Budi, when is the demo?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    await loop.close()
+
+
+async def test_policy_answers_vocative_and_ignores_quote_mention(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, wake_phrases=["Rani Twin"], participant_policy_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "Rani Twin, when is the demo?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    await loop.handle_transcript(
+        event("t2", "He said Rani Twin agrees", participant_id="spaces/x/devices/9")
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    assert audio.spoken == ["Rani Twin, when is the demo?"]
+    actions = [row["action"] for row in journal.events("policy_decided")]
+    assert actions == ["reply", "silent"]
+    await loop.close()
+
+
+async def test_policy_unknown_followup_does_not_inherit_activation(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    clock = FakeClock()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        wake_phrases=["Rani Twin"],
+        participant_policy_enabled=True,
+        clock=clock.monotonic,
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(
+        event(
+            "t1",
+            "Rani Twin, when is the demo?",
+            participant_id="spaces/x/devices/1",
+            speaker_evidence_id="e1",
+        )
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    clock.now += 5.0
+    await loop.handle_transcript(event("t2", "What time exactly?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    reasons = [row["reason"] for row in journal.events("policy_decided")]
+    assert reasons == ["addressed", "not_addressed"]
+    await loop.close()
+
+
+async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    clock = FakeClock()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        wake_phrases=["Rani Twin"],
+        participant_policy_enabled=True,
+        clock=clock.monotonic,
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "Rani Twin, when is the demo?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    clock.now += 5.0
+    await loop.handle_transcript(event("t2", "What time exactly?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    reasons = [row["reason"] for row in journal.events("policy_decided")]
+    assert reasons == ["addressed", "not_addressed"]
+    await loop.close()
+
+
+async def test_policy_other_known_speaker_followup_stays_silent(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    clock = FakeClock()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        wake_phrases=["Rani Twin"],
+        participant_policy_enabled=True,
+        clock=clock.monotonic,
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(
+        event(
+            "t1",
+            "Rani Twin, when is the demo?",
+            participant_id="spaces/x/devices/1",
+            speaker_evidence_id="e1",
+        )
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    clock.now += 5.0
+    await loop.handle_transcript(
+        event(
+            "t2",
+            "Move it to Thursday?",
+            participant_id="spaces/x/devices/2",
+            speaker_evidence_id="e2",
+        )
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    reasons = [row["reason"] for row in journal.events("policy_decided")]
+    assert reasons == ["addressed", "not_addressed"]
+    await loop.close()
+
+
+async def test_policy_same_speaker_followup_replies(journal):
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    clock = FakeClock()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        wake_phrases=["Rani Twin"],
+        participant_policy_enabled=True,
+        clock=clock.monotonic,
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(
+        event(
+            "t1",
+            "Rani Twin, when is the demo?",
+            participant_id="spaces/x/devices/1",
+            speaker_evidence_id="e1",
+        )
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    clock.now += 5.0
+    await loop.handle_transcript(
+        event(
+            "t2",
+            "What time exactly?",
+            participant_id="spaces/x/devices/1",
+            speaker_evidence_id="e2",
+        )
+    )
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert [call[0].text for call in responder.calls] == [
+        "Rani Twin, when is the demo?",
+        "What time exactly?",
+    ]
+    reasons = [row["reason"] for row in journal.events("policy_decided")]
+    assert reasons == ["addressed", "followup_same_speaker"]
+    await loop.close()
+
+
+def test_request_messages_carry_speaker_identity_without_owner_data():
+    addressed = TranscriptEvent(
+        "t1",
+        datetime.now(UTC).isoformat(),
+        "meeting_audio",
+        "Rani Twin, hello",
+        True,
+        participant_id="spaces/x/devices/1",
+        speaker_evidence_id="e1",
+    )
+    (known,) = _request_messages([addressed])
+    assert known.additional_kwargs["meeting_event"] == {
+        "timestamp": addressed.timestamp,
+        "source": "meeting_audio",
+        "participant_id": "spaces/x/devices/1",
+        "speaker_evidence_id": "e1",
+        "speaker_status": "observed",
+    }
+    (anonymous,) = _request_messages([event("t2", "Hello")])
+    assert anonymous.additional_kwargs["meeting_event"]["speaker_status"] == "unknown"

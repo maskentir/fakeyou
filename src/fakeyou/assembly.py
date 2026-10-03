@@ -135,6 +135,7 @@ async def open_conversation(
             sentence_streaming=settings.conversation.sentence_streaming,
             faults=faults,
             journal=journal,
+            participant_policy_enabled=settings.conversation.participant_policy_enabled,
         )
         resources.push_async_callback(conversation.close)
         yield conversation

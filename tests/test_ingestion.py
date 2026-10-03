@@ -24,14 +24,15 @@ from tests.fakes import make_graphiti
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 
 
-def said(seconds: float, text: str, participant: str = "unknown") -> TranscriptEntry:
+def said(seconds: float, text: str, participant_id: str = "unknown") -> TranscriptEntry:
     return TranscriptEntry(
         at=START + timedelta(seconds=seconds),
         id=f"t{seconds}",
         spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
-        participant=participant,
         source="meeting_audio",
         text=text,
+        participant_id=participant_id,
+        speaker_evidence_id=None,
     )
 
 
@@ -59,7 +60,7 @@ def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
         twin(0, "How about moving the demo to Thursday?"),
         said(2, "Okay,\n agreed."),
         ToolResultEntry(at=START, tool="recall_meeting_context", output="x", duration_ms=1),
-        said(3, "The budget is fine.", participant="Speaker A"),
+        said(3, "The budget is fine.", participant_id="Speaker A"),
     ]
 
     [window] = meeting_windows(entries)
@@ -151,9 +152,10 @@ async def test_ingest_uses_spoken_time_as_the_window_source_time() -> None:
             at=START,
             id="late-record",
             spoken_at=spoken.isoformat(),
-            participant="Speaker A",
             source="meeting_audio",
             text="The launch stays on Friday.",
+            participant_id="Speaker A",
+            speaker_evidence_id=None,
         )
     ]
 
@@ -171,17 +173,19 @@ async def test_ingest_falls_back_to_record_time_for_invalid_spoken_time() -> Non
             at=START,
             id="bad-clock",
             spoken_at="not-a-timestamp",
-            participant="Speaker A",
             source="meeting_audio",
             text="The launch stays on Friday.",
+            participant_id="Speaker A",
+            speaker_evidence_id=None,
         ),
         TranscriptEntry(
             at=START,
             id="naive-clock",
             spoken_at="2026-09-30T09:00:00",
-            participant="Speaker A",
             source="meeting_audio",
             text="The venue stays Hall A.",
+            participant_id="Speaker A",
+            speaker_evidence_id=None,
         ),
     ]
 

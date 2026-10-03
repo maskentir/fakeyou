@@ -21,6 +21,12 @@ from pipecat.utils.string import match_endofsentence
 
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal, JournalTiming
+from fakeyou.participation import (
+    ParticipationContext,
+    choose_participation,
+    is_vocative,
+    same_observed_speaker,
+)
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError, MeetingAudio
 from fakeyou.settings import DEFAULTS
@@ -37,10 +43,13 @@ class TranscriptEvent:
     source: str
     text: str
     finalized: bool
-    participant: str = "unknown"
+    participant_id: str
+    speaker_evidence_id: str | None
 
 
-def transcript_event(frame: TranscriptionFrame) -> TranscriptEvent:
+def transcript_event(
+    frame: TranscriptionFrame, participant_id: str, speaker_evidence_id: str | None
+) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
     identity = json.dumps([source, frame.timestamp or frame.id, frame.text], ensure_ascii=False)
@@ -50,6 +59,8 @@ def transcript_event(frame: TranscriptionFrame) -> TranscriptEvent:
         source=source,
         text=frame.text,
         finalized=bool(frame.finalized),
+        participant_id=participant_id,
+        speaker_evidence_id=speaker_evidence_id,
     )
 
 
@@ -204,7 +215,11 @@ def _request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
                 "meeting_event": {
                     "timestamp": event.timestamp,
                     "source": event.source,
-                    "participant": event.participant,
+                    "participant_id": event.participant_id,
+                    "speaker_evidence_id": event.speaker_evidence_id,
+                    "speaker_status": "observed"
+                    if event.participant_id != "unknown"
+                    else "unknown",
                 }
             },
         )
@@ -495,6 +510,7 @@ class ConversationLoop:
         clock: Callable[[], float] = time.monotonic,
         faults: FaultReporter | None = None,
         journal: Journal | None = None,
+        participant_policy_enabled: bool = False,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")
@@ -508,6 +524,10 @@ class ConversationLoop:
         self._wake_phrases = tuple(
             phrase.strip().casefold() for phrase in wake_phrases if phrase.strip()
         )
+        if participant_policy_enabled and not self._wake_phrases:
+            raise ValueError("participant policy requires configured twin aliases")
+        self._participant_policy_enabled = participant_policy_enabled
+        self._last_speaker_id: str | None = None
         self._activation_seconds = activation_seconds
         self._barge_in_min_words = barge_in_min_words
         self._max_spoken_sentences = max_spoken_sentences
@@ -570,7 +590,10 @@ class ConversationLoop:
             return
         self._seen.add(event.id)
         self._events.append(event)
-        if self._wake_phrases and not self._addressed(event):
+        if self._participant_policy_enabled:
+            if not self._policy_allows(event):
+                return
+        elif self._wake_phrases and not self._addressed(event):
             return
         self._pending.append(event)
         self._generation += 1
@@ -622,6 +645,33 @@ class ConversationLoop:
             self._active_until = now + self._activation_seconds
             return True
         return now < self._active_until
+
+    def _policy_allows(self, event: TranscriptEvent) -> bool:
+        now = self._clock()
+        addressed = is_vocative(event.text, self._wake_phrases)
+        if addressed:
+            self._active_until = now + self._activation_seconds
+        activation_valid = now < self._active_until
+        context = ParticipationContext(
+            addressed=addressed,
+            followup=not addressed and activation_valid,
+            same_participant=same_observed_speaker(self._last_speaker_id, event.participant_id),
+            ambiguous=False,
+            others_speaking=False,
+            activation_valid=activation_valid,
+        )
+        decision = choose_participation(context)
+        self._record(
+            "policy_decided",
+            transcript_id=event.id,
+            action=decision.action,
+            reason=decision.reason,
+        )
+        if decision.action == "silent":
+            return False
+        if event.participant_id != "unknown":
+            self._last_speaker_id = event.participant_id
+        return True
 
     async def wait_idle(self) -> None:
         if self._task is not None:

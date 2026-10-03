@@ -127,6 +127,8 @@ async def replay(model_factory, fixture: dict[str, Any], runs: int) -> ReplaySco
                     source="meeting_audio",
                     text=turn["say"],
                     finalized=True,
+                    participant_id="unknown",
+                    speaker_evidence_id=None,
                 )
                 started = time.monotonic()
                 try:

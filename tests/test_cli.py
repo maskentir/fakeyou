@@ -634,7 +634,8 @@ async def test_join_audio_transcript_reaches_conversation(
     assert all(row["at"] for row in transitions)
     [final] = [row for row in rows if row["event"] == "transcript_finalized"]
     assert "text" not in final
-    assert (final["participant"], final["meeting_id"]) == ("unknown", "meeting-9")
+    assert (final["participant_id"], final["meeting_id"]) == ("unknown", "meeting-9")
+    assert final["speaker_evidence_id"] is None
     assert final["at"]
     entries = load_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
     assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Hello.")]
@@ -2327,6 +2328,8 @@ def write_record(settings: Settings, meeting_id: str) -> None:
             source="meeting_audio",
             text="The Orchid vendor kickoff is on Tuesday.",
             finalized=True,
+            participant_id="unknown",
+            speaker_evidence_id=None,
         )
     )
     record.add_twin_speech("Got it, Tuesday.")
@@ -2645,6 +2648,8 @@ def write_ingest_windows(settings, meeting_id: str, count: int) -> None:
                 source="meeting_audio",
                 text=f"Decision {index} is final.",
                 finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
             )
         )
     record.close()
@@ -2993,6 +2998,8 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
             source="meeting_audio",
             text="A late change.",
             finalized=True,
+            participant_id="unknown",
+            speaker_evidence_id=None,
         )
     )
     record.close()
@@ -3227,3 +3234,9 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
             )
     assert opened == []
     assert record_path.exists()
+
+
+async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
+    settings.conversation.participant_policy_enabled = True
+    with pytest.raises(cli_errors.CliError, match="wake-phrase"):
+        await join("https://meet.google.com/abc-defg-hij", meeting_id=None)

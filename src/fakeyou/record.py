@@ -23,9 +23,10 @@ class TranscriptEntry(_Entry):
     kind: Literal["transcript"] = "transcript"
     id: str
     spoken_at: str
-    participant: str
     source: str
     text: str
+    participant_id: str
+    speaker_evidence_id: str | None
 
 
 class TwinSpeechEntry(_Entry):
@@ -82,9 +83,10 @@ class MeetingRecord:
                 at=self._now(),
                 id=event.id,
                 spoken_at=event.timestamp,
-                participant=event.participant,
                 source=event.source,
                 text=event.text,
+                participant_id=event.participant_id,
+                speaker_evidence_id=event.speaker_evidence_id,
             )
         )
 
