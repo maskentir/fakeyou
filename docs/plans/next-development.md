@@ -18,6 +18,8 @@
 
 **Kelanjutan setelah trust:** [handoff hardening dan partisipasi multipihak](meeting-next-handoff.md) memuat dua plan terpisah dan prompt Muse swarm. Tutup cancellation/stop, sapaan netral, serta resume ingestion sebelum pilot multipihak; penamaan speaker tetap membutuhkan bukti korelasi audio. Laporan acceptance lama dan gate performa tetap berlaku.
 
+**Prioritas berikutnya, disetujui 3 Oktober:** [brief, delegasi, dan debrief berbukti](meeting-delegation-handoff.md). Owner memberi tujuan dan lingkup pengetahuan per meeting; hasilnya kembali sebagai keputusan/usulan/action item dengan kutipan sumber. Batas tools tidak dapat diperluas lewat ucapan peserta; laporan tidak mengaku owner telah dihubungi. Atribusi speaker dan performa tetap pekerjaan terbuka berdasarkan acceptance multipihak.
+
 ## Dasar keputusan
 
 Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup sesudahnya berada di `feat/legacy-config-cleanup`: `8a06fee`, `cdf0038`, dan `ff60109`; ketiganya masih lokal ketika rencana ini disusun. Baseline terakhir pada `ff60109`: 1.403 tes non-live dan non-container lulus, termasuk browser lokal; Ruff, format, dan mypy bersih. Angka ini bukti regresi lokal, bukan pengukuran performa baru.
