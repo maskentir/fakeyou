@@ -58,11 +58,15 @@ def read_status(path: Path) -> IngestionStatus | None:
 
 
 def write_status(path: Path, status: IngestionStatus) -> None:
+    write_atomically(path, status.model_dump_json().encode("utf-8"))
+
+
+def write_atomically(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         with tmp.open("wb") as handle:
-            handle.write(status.model_dump_json().encode("utf-8"))
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
