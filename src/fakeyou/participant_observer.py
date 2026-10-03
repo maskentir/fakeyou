@@ -36,6 +36,7 @@ def append_participant_evidence(
         "tiles": raw.get("tiles", []),
         "people": raw.get("people", []),
         "self_seen": bool(raw.get("selfSeen", False)),
+        "page_speaking": raw.get("pageSpeaking", []),
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -44,10 +45,10 @@ def append_participant_evidence(
 OBSERVE_JS = """() => {
   const tiles = [];
   const seen = new Set();
-  const push = (key, label, self, speaking) => {
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    tiles.push({key, label, self, speaking});
+  const push = (tile) => {
+    if (!tile.key || seen.has(tile.key)) return;
+    seen.add(tile.key);
+    tiles.push(tile);
   };
   try {
     const hinted = document.querySelectorAll(
@@ -55,15 +56,24 @@ OBSERVE_JS = """() => {
     for (const el of hinted) {
       const key = el.getAttribute('data-participant-id')
         || el.getAttribute('data-participant') || '';
-      const label = (el.getAttribute('aria-label') || el.innerText || '')
-        .slice(0, 120);
-      const self = el.getAttribute('data-self') === 'true'
-        || /\\bYou\\b/.test(label);
+      const label = (el.getAttribute('aria-label') || '').slice(0, 120);
+      const text = (el.innerText || '').slice(0, 200);
+      const self = el.getAttribute('data-self') === 'true';
       const rawCls = el.className && el.className.baseVal !== undefined
         ? '' : el.className || '';
-      const cls = String(rawCls);
-      const speaking = /speaking/i.test(cls) || /speaking/i.test(label);
-      push(key || ('tile#' + tiles.length), label, self, speaking);
+      const cls = String(rawCls).slice(0, 400);
+      const kids = [];
+      try {
+        const labelled = el.querySelectorAll('[aria-label]');
+        for (const kid of labelled) {
+          kids.push((kid.getAttribute('aria-label') || '').slice(0, 120));
+          if (kids.length >= 12) break;
+        }
+      } catch (e) {}
+      const html = (el.outerHTML || '').slice(0, 3000);
+      const speaking = /speaking/i.test(cls + ' ' + label + ' ' + kids.join(' '));
+      push({key: key || ('tile#' + tiles.length), label, text,
+        self, speaking, cls, kids, html});
     }
   } catch (e) {}
   let people = [];
@@ -76,7 +86,16 @@ OBSERVE_JS = """() => {
   try {
     selfSeen = !!document.querySelector('[data-self="true"]');
   } catch (e) {}
-  return {tiles, people, selfSeen};
+  let pageSpeaking = [];
+  try {
+    const all = document.querySelectorAll('[aria-label]');
+    for (const el of all) {
+      const label = el.getAttribute('aria-label') || '';
+      if (/speak/i.test(label)) pageSpeaking.push(label.slice(0, 160));
+      if (pageSpeaking.length >= 20) break;
+    }
+  } catch (e) {}
+  return {tiles, people, selfSeen, pageSpeaking};
 }"""
 
 
