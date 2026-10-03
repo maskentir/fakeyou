@@ -104,19 +104,23 @@ ditulis; verdict fungsi live di bawah belum mencakupnya.
 ## Command dan artefak
 
 ```sh
-docker compose run --rm meeting-worker fakeyou join <link> \
+docker compose run --rm meeting-worker fakeyou join https://meet.google.com/xxx-yyyy-zzz \
   --owner-id hard_owner --twin-id hard_twin --meeting-id hard-s1b \
   --audio --converse --persona .runtime/persona.json --memory \
-  --barge-in --lobby-timeout 600 --duration 1500   # exit 0
-# sesi 2: meeting-id hard-s2, exit 0; sesi 3: hard-s3b, exit 0
+  --barge-in --lobby-timeout 600 --duration 1500
 docker compose run --rm -T meeting-worker fakeyou memory-ingest \
   --meeting hard-s1b --persona .runtime/persona.json \
-  --owner-id hard_owner --twin-id hard_twin         # exit 0/1/0
+  --owner-id hard_owner --twin-id hard_twin
 docker compose run --rm -T meeting-worker fakeyou memory-forget \
-  --meeting hard-s1b --keep-record ...              # removed_episodes=3
+  --meeting hard-s1b --keep-record --persona .runtime/persona.json \
+  --owner-id hard_owner --twin-id hard_twin
 docker compose run --rm -T meeting-worker fakeyou report \
-  --meeting hard-s1b                                # exit 0
+  --meeting hard-s1b
 ```
+
+Exit code teramati: join 0 pada ketiga sesi; memory-ingest 0/1/0
+pada tiga run sesi 1; memory-forget 0 (`removed_episodes=3`);
+report 0.
 
 Artefak: `.runtime/audio/meetings/{hard-s1b,hard-s2,hard-s3b}/
 {record.jsonl,ingestion.json}`, `.runtime/audio/journals/

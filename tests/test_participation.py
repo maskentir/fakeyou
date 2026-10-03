@@ -189,8 +189,9 @@ def test_context_is_immutable():
         others_speaking=False,
         activation_valid=False,
     )
+    field = "addressed"
     try:
-        context.addressed = False  # type: ignore[misc]
+        setattr(context, field, False)
     except AttributeError:
         pass
     else:

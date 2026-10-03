@@ -1,8 +1,14 @@
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
-from fakeyou.participant_observer import ParticipantObserver
+from fakeyou.participant_observer import (
+    ParticipantObserver,
+    append_participant_evidence,
+    observer_epoch,
+)
 
 
 class FakePage:
@@ -159,6 +165,25 @@ def test_epoch_reset_clears_timeline_and_roster():
         await observer.close()
 
     asyncio.run(run())
+
+
+def test_evidence_appends_mining_record(tmp_path):
+    path = Path(tmp_path) / "m1" / "participants.jsonl"
+    append_participant_evidence(
+        path,
+        {"tiles": [{"key": "a", "label": "Budi"}], "people": [], "selfSeen": True},
+        1500.0,
+        epoch=observer_epoch("m1"),
+    )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["epoch"] == "m1:e1"
+    assert record["method"] == "dom_mining"
+    assert record["mono_ms"] == 1500.0
+    assert record["tiles"] == [{"key": "a", "label": "Budi"}]
+    assert record["self_seen"] is True
+    assert observer_epoch("m1", 2) == "m1:e2"
 
 
 def test_snapshot_is_immutable():

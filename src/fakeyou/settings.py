@@ -204,6 +204,7 @@ class ConversationSettings(Section):
     max_spoken_sentences: int = Field(default=2, gt=0)
     activation_seconds: PositiveSeconds = 30.0
     sentence_streaming: bool = False
+    participant_policy_enabled: bool = False
 
 
 class MeetingSettings(Section):

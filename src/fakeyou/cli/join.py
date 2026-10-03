@@ -36,6 +36,7 @@ from fakeyou.ingestion_status import (
 )
 from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 from fakeyou.journal import Journal, journal_path
+from fakeyou.participant_observer import EVIDENCE_FILE_NAME
 from fakeyou.persona import PersonaProfile, speech_keywords
 from fakeyou.playback import PlaybackEvent
 from fakeyou.provider_faults import ProviderFault, classify_exception
@@ -160,6 +161,11 @@ async def join_meeting(
     )
     faults = FaultReporter(journal=journal)
     record_path = meeting_record_path(settings.paths.record_dir, resolved_meeting_id)
+    config = replace(
+        config,
+        participant_policy_enabled=settings.conversation.participant_policy_enabled,
+        participant_evidence_path=record_path.parent / EVIDENCE_FILE_NAME,
+    )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"
     record_error: str | None = None

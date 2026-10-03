@@ -33,6 +33,12 @@ from fakeyou.meet import (
     observe_call_state,
     request_guest_join,
 )
+from fakeyou.participant_observer import (
+    QUERY_METHOD_MINING,
+    ParticipantObserver,
+    append_participant_evidence,
+    observer_epoch,
+)
 from fakeyou.preflight import ProbeResult, run_preflight
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.session import (
@@ -119,6 +125,7 @@ class _MeetingWorker:
     audio: MeetingAudio | None = None
     faults: FaultReporter | None = None
     journal: Journal | None = None
+    observer: ParticipantObserver | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -246,7 +253,58 @@ class _MeetingWorker:
         await self.lifecycle.send(kind, attribution, result.detail)
         return result.detail
 
+    async def start_participant_observer(self) -> None:
+        if self.observer is not None:
+            return
+        if not self.config.participant_policy_enabled:
+            return
+        evidence_path = self.config.participant_evidence_path
+        if evidence_path is None:
+            return
+        epoch = observer_epoch(self.config.meeting_id)
+        faults = self.faults
+
+        def persist(raw: Any, mono_ms: float) -> None:
+            try:
+                append_participant_evidence(
+                    evidence_path, raw, mono_ms, epoch=epoch, method=QUERY_METHOD_MINING
+                )
+            except Exception as error:
+                if faults is not None:
+                    faults.record(
+                        classify_exception("browser", error, operation="participant_evidence")
+                    )
+
+        self.observer = ParticipantObserver(
+            self.page, epoch=epoch, monotonic=self.monotonic, on_poll=persist
+        )
+        await self.observer.start()
+        self.record(
+            "participant_observer_started",
+            source="runtime",
+            method=QUERY_METHOD_MINING,
+            epoch=epoch,
+        )
+
+    async def close_participant_observer(self) -> None:
+        if self.observer is not None:
+            await close_safely(self.observer.close, source="browser", faults=self.faults)
+            self.observer = None
+
     async def monitor(self, admitted_at: float) -> str:
+        try:
+            try:
+                await self.start_participant_observer()
+            except Exception as error:
+                if self.faults is not None:
+                    self.faults.record(
+                        classify_exception("browser", error, operation="participant_observer")
+                    )
+            return await self._monitor_loop(admitted_at)
+        finally:
+            await self.close_participant_observer()
+
+    async def _monitor_loop(self, admitted_at: float) -> str:
         deadline = admitted_at + self.config.session_duration_seconds
         watchdog = UIWatchdog(
             self.page, signals=self.signals, observe=observe_call_state, monotonic=self.monotonic
@@ -374,6 +432,7 @@ class _MeetingWorker:
         self, kind: LifecycleEventKind, attribution: LifecycleAttribution, detail: str
     ) -> str:
         await self.lifecycle.send(kind, attribution, detail)
+        await self.close_participant_observer()
         if self.conversation is not None:
             await close_safely(self.conversation.close, source="agent", faults=self.faults)
         if self.audio is not None:

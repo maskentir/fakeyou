@@ -7,6 +7,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.lifecycle import create_lifecycle_graph, initial_lifecycle_state
+from fakeyou.participant_observer import OBSERVE_JS
 from fakeyou.runtime import run_meeting_session
 from fakeyou.session import SessionConfig
 from tests.fakes import (
@@ -24,6 +25,7 @@ from tests.fakes import (
     FakeClock,
     FakePageSession,
     FakeSaverSession,
+    RecordingJournal,
     meet_page,
 )
 
@@ -520,3 +522,60 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert result.terminal_reason == expected
     assert detail in result.detail
     assert browser.closed == 1
+
+
+def _mining_payload():
+    return {
+        "tiles": [{"key": "a", "label": "Budi", "self": False, "speaking": True}],
+        "people": [],
+        "selfSeen": False,
+    }
+
+
+async def test_run_meeting_session_collects_participant_evidence(tmp_path) -> None:
+    evidence = tmp_path / "meeting-1" / "participants.jsonl"
+    page = meet_page(
+        [IN_CALL, IN_CALL, IN_CALL, IN_CALL, ENDED],
+        evaluates=[_mining_payload() for _ in range(20)],
+    )
+    browser = FakePageSession(page)
+    journal = RecordingJournal()
+    clock = FakeClock()
+
+    result = await run_meeting_session(
+        _config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        open_page=browser.open,
+        saver_factory=FakeSaverSession().factory,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        journal=journal,
+    )
+
+    assert result.phase == "ended"
+    assert OBSERVE_JS in page.evaluate_calls
+    lines = evidence.read_text(encoding="utf-8").splitlines()
+    assert len(lines) >= 1
+    record = json.loads(lines[0])
+    assert record["method"] == "dom_mining"
+    assert record["epoch"] == "meeting-1:e1"
+    assert record["tiles"][0]["key"] == "a"
+    started = journal.events("participant_observer_started")
+    assert len(started) == 1
+    assert "Budi" not in json.dumps(started)
+    calls_after_finish = len(page.evaluate_calls)
+    await asyncio.sleep(0.6)
+    assert len(page.evaluate_calls) == calls_after_finish
+
+
+async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path) -> None:
+    evidence = tmp_path / "meeting-1" / "participants.jsonl"
+    page = meet_page([IN_CALL, IN_CALL, ENDED])
+    browser = FakePageSession(page)
+
+    result = await _run(
+        _config(participant_evidence_path=evidence), browser, FakeSaverSession(), FakeClock()
+    )
+
+    assert result.phase == "ended"
+    assert OBSERVE_JS not in page.evaluate_calls
+    assert not evidence.exists()

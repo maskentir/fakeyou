@@ -1,6 +1,9 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -9,6 +12,34 @@ from fakeyou.participants import Participant, SpeakerSample
 POLL_INTERVAL_SECONDS = 0.25
 TIMELINE_RETENTION_SECONDS = 120.0
 QUERY_METHOD_MINING = "dom_mining"
+EVIDENCE_FILE_NAME = "participants.jsonl"
+
+
+def observer_epoch(meeting_id: str, generation: int = 1) -> str:
+    return f"{meeting_id}:e{generation}"
+
+
+def append_participant_evidence(
+    path: Path,
+    raw: Mapping[str, Any],
+    mono_ms: float,
+    *,
+    epoch: str,
+    method: str = QUERY_METHOD_MINING,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "wall": datetime.now(UTC).isoformat(),
+        "mono_ms": mono_ms,
+        "epoch": epoch,
+        "method": method,
+        "tiles": raw.get("tiles", []),
+        "people": raw.get("people", []),
+        "self_seen": bool(raw.get("selfSeen", False)),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
 
 OBSERVE_JS = """() => {
   const tiles = [];
@@ -57,11 +88,13 @@ class ParticipantObserver:
         epoch: str,
         monotonic: Callable[[], float] = time.monotonic,
         on_poll: Callable[[Mapping[str, Any], float], None] | None = None,
+        poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
     ) -> None:
         self._page = page
         self._epoch = epoch
         self._monotonic = monotonic
         self._on_poll = on_poll
+        self._poll_interval = poll_interval_seconds
         self._samples: list[SpeakerSample] = []
         self._roster: dict[str, Participant] = {}
         self._task: asyncio.Task[None] | None = None
@@ -105,7 +138,7 @@ class ParticipantObserver:
             except Exception:
                 pass
             elapsed = self._monotonic() - started
-            await asyncio.sleep(max(0.0, POLL_INTERVAL_SECONDS - elapsed))
+            await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
 
     def _ingest(self, raw: Any, at_seconds: float) -> None:
         if not isinstance(raw, dict):
