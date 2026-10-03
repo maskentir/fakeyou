@@ -22,6 +22,7 @@ Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 CONTEXT_FILE_NAME = "meeting-context.json"
 MAX_BRIEF_BYTES = 64 * 1024
+MAX_CONTEXT_BYTES = 1024 * 1024
 
 
 class BriefItem(BaseModel):
@@ -106,9 +107,12 @@ def context_path(record_path: Path) -> Path:
 
 def read_meeting_context(path: Path) -> MeetingContext | None:
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_CONTEXT_BYTES + 1)
     except FileNotFoundError:
         return None
+    if len(raw) > MAX_CONTEXT_BYTES:
+        raise ValueError(f"meeting context must be at most {MAX_CONTEXT_BYTES} bytes")
     return MeetingContext.model_validate_json(raw)
 
 

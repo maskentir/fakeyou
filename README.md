@@ -148,6 +148,14 @@ Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersinte
 
 `join --brief PATH` memberi twin satu brief untuk satu meeting: agenda, tujuan, fakta yang boleh disampaikan, pertanyaan, izin percakapan, dan lingkup pengetahuan (`brief_only` atau `persona_memory`). Flag ini memerlukan `--converse`, `--persona`, serta `--meeting-id` eksplisit; brief divalidasi sebelum resource dibuka lalu dibekukan sebagai `meeting-context.json` di direktori record. `--memory` ditolak untuk `brief_only`, dan meeting ID yang sudah memiliki percakapan tanpa snapshot memerlukan ID baru. Brief membatasi konteks serta tools, bukan memberi kewenangan keputusan. Prosedur lengkap ada di [runbook brief meeting](docs/runbooks/meeting-brief.md); mulai dari [contoh brief sintetis](examples/meeting-brief.example.json).
 
+## Debrief meeting
+
+`debrief --meeting ID --persona PATH` membuat laporan lokal dari record meeting dengan kutipan asli, scope historis, dan status `unreviewed`. JSON menjadi sumber canonical untuk tampilan Markdown; cache yang cocok dipakai tanpa model, sedangkan `--force` menjalankan percobaan baru. Command tidak membuka memori atau menghubungi owner. Lihat [runbook debrief](docs/runbooks/meeting-debrief.md) untuk scope, batas sumber, review owner, serta pemulihan kegagalan.
+
+```sh
+uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json
+```
+
 ## Model dan laporan sesi
 
 Konfigurasi menggunakan bagian bertipe dan nested env dengan pemisah `__`. `fakeyou check` mencetak seluruh `settings.model_dump(mode="json")`, termasuk default dan secret tersamarkan:
@@ -180,7 +188,7 @@ Setiap `join` menulis dua berkas:
 uv run fakeyou report --meeting MEETING_ID --journal-dir .runtime/audio/journals
 ```
 
-Laporan berisi startup (lama membuka audio, lama di lobby, admission → mikrofon dan → conversation aktif, audio siap saat admission), latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi.
+Laporan berisi startup (lama membuka audio, lama di lobby, admission → mikrofon dan → conversation aktif, audio siap saat admission), latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi. Status debrief `available`, `stale`, `missing`, atau `invalid` ditampilkan terpisah dari hasil sesi dan ingestion.
 
 Dengan `--barge-in`, transkrip interim minimal tiga kata menghentikan twin yang sedang berbicara tanpa menunggu transkrip final; transkrip final yang lebih pendek tetap memotong playback.
 

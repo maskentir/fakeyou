@@ -1,0 +1,329 @@
+import asyncio
+import json
+from datetime import UTC, datetime
+from functools import partial
+from pathlib import Path
+
+import pytest
+from langchain_core.messages import AIMessage
+
+import fakeyou.cli.debrief as cli_debrief
+import fakeyou.cli.diagnostics as cli_diagnostics
+import fakeyou.cli.main as cli_main
+from fakeyou.brief import (
+    MeetingBrief,
+    MeetingContext,
+    brief_digest,
+    context_path,
+    write_meeting_context,
+)
+from fakeyou.cli.errors import CliError
+from fakeyou.cli.main import build_parser
+from fakeyou.debrief_schema import DebriefDraft
+from fakeyou.ingestion_status import IngestionStatus, record_lock, status_path, write_status
+from fakeyou.journal import Journal, journal_path
+from fakeyou.persona import PersonaProfile, persona_digest
+from fakeyou.record import TranscriptEntry, meeting_record_path
+from tests.fakes import ToolCallingFakeModel
+
+
+async def test_debrief_cancellation_exits_nonzero_without_traceback(monkeypatch, capsys):
+    async def cancel(**kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "sys.argv", ["fakeyou", "debrief", "--meeting", "m1", "--persona", "p.json"]
+    )
+    monkeypatch.setattr(cli_main, "debrief_meeting", cancel)
+    with pytest.raises(SystemExit) as error:
+        await asyncio.to_thread(cli_main.main)
+    assert error.value.code == 1
+    assert "interrupted" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("outcome", ["available", "stale", "missing", "invalid"])
+def test_session_report_has_independent_debrief_status(settings, monkeypatch, capsys, outcome):
+    journal = Journal(
+        "debrief-test", path=journal_path(settings.paths.journal_dir, "debrief-test"), stdout=False
+    )
+    journal.record(
+        "session_finished", source="cli", terminal_reason="stopped_by_owner", exit_code=0
+    )
+    journal.close()
+    monkeypatch.setattr(cli_diagnostics, "debrief_report_status", lambda path: outcome)
+    cli_diagnostics.show_session_report("debrief-test", None, settings)
+    report = json.loads(capsys.readouterr().out)
+    assert report["debrief"] == {"status": outcome}
+    assert report["result"]["terminal_reason"] == "stopped_by_owner"
+
+
+@pytest.fixture
+def debrief_run(settings, tmp_path):
+    profile = PersonaProfile(
+        owner_id=settings.identity.owner_id,
+        twin_id=settings.identity.twin_id,
+        display_name="Demo Twin",
+        role="Project coordinator",
+    )
+    persona_path = tmp_path / "persona.json"
+    persona_path.write_text(profile.model_dump_json())
+    record_path = meeting_record_path(settings.paths.record_dir, "debrief-test")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        TranscriptEntry(
+            at=datetime(2026, 10, 3, tzinfo=UTC),
+            id="t1",
+            spoken_at="2026-10-03T00:00:00+00:00",
+            source="meeting_audio",
+            text="The owner must decide whether to move the deadline to Monday.",
+            participant_id="unknown",
+            speaker_evidence_id=None,
+        ).model_dump_json()
+        + "\n"
+    )
+    write_status(
+        status_path(record_path),
+        IngestionStatus(
+            meeting_id="debrief-test", group_id=profile.memory_group, status="not_requested"
+        ),
+    )
+    return (
+        partial(
+            cli_debrief.debrief_meeting,
+            meeting_id="debrief-test",
+            persona_path=persona_path,
+            owner_id=None,
+            twin_id=None,
+            force=False,
+            settings=settings,
+        ),
+        record_path,
+        profile,
+    )
+
+
+def debrief_model():
+    return ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "DebriefDraft",
+                        "id": "draft-1",
+                        "args": {
+                            "items": [
+                                {
+                                    "kind": "owner_decision",
+                                    "status": "needs_owner",
+                                    "text": "The owner needs to decide about the new deadline.",
+                                    "evidence": [
+                                        {
+                                            "entry_id": "transcript:t1",
+                                            "quote": "move the deadline to Monday",
+                                        }
+                                    ],
+                                }
+                            ],
+                            "findings": [],
+                        },
+                    }
+                ],
+            )
+        ]
+    )
+
+
+async def test_debrief_creates_reviewable_report_and_cache_without_new_call(
+    debrief_run, monkeypatch, capsys
+):
+    run, path, profile = debrief_run
+    model = debrief_model()
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: model)
+    await run()
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "completed"
+    report = json.loads((path.parent / "debrief.json").read_text())
+    assert report["review_status"] == "unreviewed"
+    assert report["owner_id"] == profile.owner_id
+    assert report["items"][0]["status"] == "needs_owner"
+    assert report["evidence_sources"][0]["participant_id"] == "unknown"
+    assert (path.parent / "debrief.md").exists()
+    monkeypatch.setattr(
+        cli_debrief,
+        "create_chat_model",
+        lambda settings: pytest.fail("cache must not call a provider"),
+    )
+    await run()
+    assert json.loads(capsys.readouterr().out)["cached"] is True
+
+
+async def test_debrief_refuses_cross_scope_before_model(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    write_status(
+        status_path(path),
+        IngestionStatus(meeting_id="debrief-test", group_id="other-owner", status="pending"),
+    )
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: pytest.fail("scope"))
+    with pytest.raises(CliError):
+        await run()
+    assert not (path.parent / "debrief.json").exists()
+
+
+async def test_debrief_refuses_unscoped_record_before_model(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    status_path(path).unlink()
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: pytest.fail("scope"))
+    with pytest.raises(CliError):
+        await run()
+
+
+async def test_debrief_pending_recovery_refuses_provider(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    path.with_name("debrief.json.recover.rollback").write_text("previous successful report")
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: pytest.fail("recovery"))
+    with pytest.raises(CliError, match="recovery"):
+        await run()
+
+
+async def test_debrief_refuses_live_writer_and_releases_after_failure(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+    with record_lock(path, purpose="meeting"):
+        with pytest.raises(CliError):
+            await run()
+    await run()
+    assert (path.parent / "debrief.json").exists()
+
+
+async def test_force_failure_preserves_existing_canonical_report(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+    await run()
+    previous = (path.parent / "debrief.json").read_bytes()
+
+    async def fail(*args, **kwargs):
+        raise ValueError("provider failed")
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", fail)
+    with pytest.raises(CliError):
+        await run(force=True)
+    assert (path.parent / "debrief.json").read_bytes() == previous
+    assert json.loads((path.parent / "debrief-attempt.json").read_text())["status"] == "failed"
+    with record_lock(path, purpose="debrief"):
+        pass
+
+
+async def test_attempt_write_failure_preserves_cancellation(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+
+    async def cancel(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    def fail_write(*args, **kwargs):
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", cancel)
+    monkeypatch.setattr(cli_debrief, "write_atomically", fail_write)
+    with pytest.raises(asyncio.CancelledError):
+        await run()
+    assert not (path.parent / "debrief.json").exists()
+    with record_lock(path, purpose="debrief"):
+        pass
+
+
+async def test_debrief_corrupt_context_refuses_provider(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    context_path(path).write_text("{broken")
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: pytest.fail("context"))
+    with pytest.raises(CliError):
+        await run()
+    assert not (path.parent / "debrief.json").exists()
+
+
+async def test_debrief_enforces_total_response_deadline(debrief_run, settings, monkeypatch):
+    run, path, profile = debrief_run
+    settings.conversation.response_timeout_seconds = 0.01
+    cancelled = asyncio.Event()
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+
+    async def slow(*args, **kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", slow)
+    with pytest.raises(CliError, match="TimeoutError"):
+        await run()
+    assert cancelled.is_set()
+    assert not (path.parent / "debrief.json").exists()
+    with record_lock(path, purpose="debrief"):
+        pass
+
+
+async def test_model_cannot_publish_after_record_changes(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+
+    async def mutate(*args, **kwargs):
+        path.write_text(path.read_text() + "\n")
+        return DebriefDraft(items=(), findings=())
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", mutate)
+    with pytest.raises(CliError):
+        await run()
+    assert not (path.parent / "debrief.json").exists()
+
+
+async def test_debrief_uses_historical_brief_not_changed_persona(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    brief = MeetingBrief(
+        schema_version="meeting_brief/v1",
+        owner_id=profile.owner_id,
+        twin_id=profile.twin_id,
+        meeting_id="debrief-test",
+    )
+    write_meeting_context(
+        context_path(path),
+        MeetingContext(
+            schema_version="meeting_context/v1",
+            brief=brief,
+            brief_sha256=brief_digest(brief),
+            persona_sha256=persona_digest(profile.model_copy(update={"role": "Previous role"})),
+        ),
+    )
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+    await run()
+    assert json.loads((path.parent / "debrief.json").read_text())["context_sha256"] is not None
+
+
+async def test_debrief_cancellation_keeps_previous_result_and_lock(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+    monkeypatch.setattr(cli_debrief, "create_chat_model", lambda settings: debrief_model())
+    started = asyncio.Event()
+
+    async def wait(*args, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", wait)
+    task = asyncio.create_task(run())
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not (path.parent / "debrief.json").exists()
+    assert json.loads((path.parent / "debrief-attempt.json").read_text())["status"] == "interrupted"
+    with record_lock(path, purpose="debrief"):
+        pass
+
+
+def test_debrief_parser_uses_operator_scope_and_force():
+    parsed = build_parser().parse_args(
+        ["debrief", "--meeting", "m1", "--persona", "persona.json", "--force"]
+    )
+    assert parsed.meeting_id == "m1"
+    assert parsed.force is True
+    assert parsed.persona_path == Path("persona.json")

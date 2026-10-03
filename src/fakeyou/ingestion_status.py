@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 IngestionState = Literal["not_requested", "pending", "completed", "interrupted", "failed"]
-LockPurpose = Literal["meeting", "ingestion", "forget"]
+LockPurpose = Literal["meeting", "ingestion", "forget", "debrief"]
 
 INGESTION_FILE_NAME = "ingestion.json"
 
@@ -99,7 +99,7 @@ def _lock_owner(path: Path) -> dict[str, Any] | None:
     token = data.get("token")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
-    if purpose not in ("meeting", "ingestion", "forget"):
+    if purpose not in ("meeting", "ingestion", "forget", "debrief"):
         return None
     if not isinstance(token, str) or not token:
         return None

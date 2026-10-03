@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, TypeAdapter
 
 from fakeyou.cli.chat import chat
+from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
 from fakeyou.cli.errors import FAILURE_EXIT_CODES
 from fakeyou.cli.join import join_meeting
@@ -116,6 +117,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--meeting", dest="meeting_id", required=True)
     report_parser.add_argument("--journal-dir", type=Path, default=None)
     report_parser.set_defaults(handler=show_session_report)
+    debrief_parser = commands.add_parser(
+        "debrief",
+        help="Generate a source-backed meeting debrief for operator review",
+        allow_abbrev=False,
+    )
+    debrief_parser.add_argument("--meeting", dest="meeting_id", required=True)
+    debrief_parser.add_argument("--persona", dest="persona_path", type=Path, required=True)
+    debrief_parser.add_argument("--owner-id", default=None)
+    debrief_parser.add_argument("--twin-id", default=None)
+    debrief_parser.add_argument("--force", action="store_true")
+    debrief_parser.set_defaults(handler=debrief_meeting)
     for operator_parser in (
         memory_add_parser,
         memory_correct_parser,
@@ -209,6 +221,9 @@ def main() -> None:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):
             asyncio.run(outcome)
+    except asyncio.CancelledError:
+        print("fakeyou: error: operation interrupted", file=sys.stderr)
+        raise SystemExit(1) from None
     except ValueError as error:
         print(f"fakeyou: error: {error}", file=sys.stderr)
         raise SystemExit(1) from None

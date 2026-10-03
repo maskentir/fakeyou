@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from fakeyou.brief import (
     CONTEXT_FILE_NAME,
     MAX_BRIEF_BYTES,
+    MAX_CONTEXT_BYTES,
     MeetingBrief,
     MeetingContext,
     brief_digest,
@@ -27,6 +28,13 @@ SCOPE = {"owner_id": "demo_owner", "twin_id": "demo_twin", "meeting_id": "brief-
 PERSONA_SHA256 = hashlib.sha256(b"synthetic persona").hexdigest()
 PRIVATE_MARKER = "PRIVATE-MARKER-7f3a"
 EXAMPLE_DIGEST = "71c10c101633d82d64ececefd02618147b7a9e326e60e37345260457e67a7f23"
+
+
+def test_context_snapshot_rejects_oversize_before_validation(tmp_path: Path) -> None:
+    path = tmp_path / "meeting-context.json"
+    path.write_bytes(b" " * (MAX_CONTEXT_BYTES + 1))
+    with pytest.raises(ValueError, match="at most"):
+        read_meeting_context(path)
 
 
 def brief_data(**overrides: Any) -> dict[str, Any]:

@@ -2539,6 +2539,8 @@ async def _forget_meeting_with_local_files(
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
     record_path.write_text("{}\n")
+    for artifact in ("debrief.json", "debrief.md", "debrief-attempt.json"):
+        record_path.with_name(artifact).write_text("synthetic artifact")
     write_meeting_context(context_path(record_path), expected_context(meeting_brief(), profile))
     settings.paths.journal_dir.mkdir()
     for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
@@ -2610,6 +2612,10 @@ async def test_memory_forget_meeting_keep_record_only_removes_episodes(
     assert meeting_record_path(settings.paths.record_dir, "meeting-9").exists()
     assert (settings.paths.journal_dir / "meeting-9.jsonl").exists()
     assert await _thread_exists(settings, thread_id)
+    for artifact in ("debrief.json", "debrief.md", "debrief-attempt.json"):
+        assert (
+            meeting_record_path(settings.paths.record_dir, "meeting-9").with_name(artifact).exists()
+        )
 
 
 @pytest.mark.parametrize("keep_record", [False, True])
@@ -3972,9 +3978,10 @@ async def test_ingest_until_stopped_uses_the_caller_stop_event(
     journal.close()
 
 
+@pytest.mark.parametrize("lock_purpose", ["meeting", "ingestion", "debrief"])
 @pytest.mark.parametrize("keep_record", [False, True])
 async def test_memory_forget_meeting_refuses_an_active_lock(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool, lock_purpose: str
 ) -> None:
     from fakeyou.ingestion_status import record_lock
 
@@ -3990,7 +3997,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
 
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
 
-    with record_lock(record_path, purpose="meeting"):
+    with record_lock(record_path, purpose=lock_purpose):
         with pytest.raises(cli_errors.CliError, match="locked"):
             await cli_memory.forget_memory(
                 persona_path=write_persona(tmp_path),
