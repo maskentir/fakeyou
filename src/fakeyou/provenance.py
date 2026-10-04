@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from typing import Literal
 
 EVIDENCE_SCHEMA = "memory_evidence/v1"
+OWNER_SPEAKER_IDENTITY = "owner"
+UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +17,7 @@ class SourceEvidence:
     recorded_at: datetime
     time_granularity: Literal["document", "episode_window"]
     speaker_verified: bool = False
+    speaker_identity: str = UNVERIFIED_SPEAKER_IDENTITY
 
     def __post_init__(self) -> None:
         if not self.episode_id.strip():
@@ -29,6 +32,8 @@ class SourceEvidence:
         granularity_value: str = self.time_granularity
         if granularity_value not in ("document", "episode_window"):
             raise ValueError("time_granularity must be document or episode_window")
+        if not self.speaker_identity.strip():
+            raise ValueError("speaker_identity must not be blank")
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +118,7 @@ def render_evidence(
                     "recorded_at": source.recorded_at.astimezone(UTC).isoformat(),
                     "time_granularity": source.time_granularity,
                     "speaker_verified": source.speaker_verified,
+                    "speaker_identity": source.speaker_identity,
                 }
             )
         rendered_facts.append(

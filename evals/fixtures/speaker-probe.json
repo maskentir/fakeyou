@@ -1,0 +1,243 @@
+{
+ "cases": [
+  {
+   "expect": "unknown",
+   "family": "sumber_waktu",
+   "id": "c04",
+   "memory": {
+    "episodes": {
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November.": [
+      "c04-meet"
+     ]
+    },
+    "facts": [
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November."
+    ],
+    "stored": {
+     "c04-meet": {
+      "group": "own",
+      "label": "Google Meet m1 transcript",
+      "source_at": "2026-09-23T03:10:00+00:00"
+     }
+    }
+   },
+   "needs_recall": true,
+   "title": "Penutur tidak dikenal",
+   "turns": [
+    {
+     "contract_reply": "Saya belum tahu pasti; catatannya hanya ucapan peserta yang belum teridentifikasi soal November.",
+     "say": "Rani yang bilang demo mundur ke November kan?"
+    }
+   ]
+  },
+  {
+   "expect": "unknown",
+   "family": "sumber_waktu",
+   "id": "c26",
+   "memory": {
+    "episodes": {
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November.": [
+      "c04-meet"
+     ]
+    },
+    "facts": [
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November."
+    ],
+    "stored": {
+     "c04-meet": {
+      "group": "own",
+      "label": "Google Meet m1 transcript",
+      "source_at": "2026-09-23T03:10:00+00:00"
+     }
+    }
+   },
+   "needs_recall": true,
+   "title": "Penutur tidak dikenal, pertanyaan bentuk lain",
+   "turns": [
+    {
+     "contract_reply": "Saya belum tahu pasti; catatannya hanya ucapan peserta yang belum teridentifikasi soal November.",
+     "say": "Itu Rani kan yang bilang soal demo mundur ke November?"
+    }
+   ]
+  },
+  {
+   "expect": "unknown",
+   "family": "sumber_waktu",
+   "id": "c27",
+   "memory": {
+    "episodes": {
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November.": [
+      "c04-meet"
+     ]
+    },
+    "facts": [
+     "Peserta yang belum teridentifikasi berkata demo mundur ke November."
+    ],
+    "stored": {
+     "c04-meet": {
+      "group": "own",
+      "label": "Google Meet m1 transcript",
+      "source_at": "2026-09-23T03:10:00+00:00"
+     }
+    }
+   },
+   "needs_recall": true,
+   "title": "Penutur tidak dikenal, Bahasa Inggris",
+   "turns": [
+    {
+     "contract_reply": "Saya belum tahu pasti; catatannya hanya ucapan peserta yang belum teridentifikasi soal November.",
+     "say": "Rani said the demo moved to November, right?"
+    }
+   ]
+  },
+  {
+   "expect": "unknown",
+   "family": "sumber_waktu",
+   "id": "c28",
+   "memory": {
+    "episodes": {
+     "Peserta yang belum teridentifikasi berkata budget dipotong setengah.": [
+      "c28-meet"
+     ]
+    },
+    "facts": [
+     "Peserta yang belum teridentifikasi berkata budget dipotong setengah."
+    ],
+    "stored": {
+     "c28-meet": {
+      "group": "own",
+      "label": "Google Meet m3 transcript",
+      "source_at": "2026-09-25T03:10:00+00:00"
+     }
+    }
+   },
+   "needs_recall": true,
+   "title": "Penutur tidak dikenal tentang anggaran",
+   "turns": [
+    {
+     "contract_reply": "Saya belum tahu pasti; catatannya hanya ucapan peserta yang belum teridentifikasi soal budget.",
+     "say": "Rani yang bilang budget dipotong setengah kan?"
+    }
+   ]
+  }
+ ],
+ "classifier_checks": [
+  {
+   "denial": true,
+   "reply": "Bukan Rani, tapi ada peserta di meeting 23 September 2026 yang sempat bilang begitu."
+  },
+  {
+   "denial": true,
+   "reply": "Bukan, di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, bukan Rani."
+  },
+  {
+   "denial": true,
+   "reply": "Di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, jadi bukan dari Rani."
+  },
+  {
+   "denial": true,
+   "reply": "No, it was not Rani. The transcript shows an unidentified participant said that."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, jadi belum ada kepastian apakah itu dari Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Saya belum tahu pasti; catatannya hanya ucapan peserta yang belum teridentifikasi soal November."
+  },
+  {
+   "denial": false,
+   "reply": "The transcript only shows an unidentified participant said that, so I cannot confirm it was Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Rani sendiri yang perlu mengonfirmasi hal tersebut secara langsung."
+  },
+  {
+   "denial": true,
+   "reply": "Di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, bukan pernyataan dari Rani."
+  },
+  {
+   "denial": true,
+   "reply": "Di transkrip Google Meet tanggal 23 September 2026, hal itu disebut oleh peserta yang belum teridentifikasi, bukan oleh Rani."
+  },
+  {
+   "denial": true,
+   "reply": "Bukan, di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi."
+  },
+  {
+   "denial": true,
+   "reply": "Di transkrip rapat tanggal 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, bukan tercatat dari Rani."
+  },
+  {
+   "denial": true,
+   "reply": "Di transkrip rapat tanggal 23 September 2026, ada peserta yang bilang demo mundur ke November, tapi itu bukan pernyataan dari Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip rapat tanggal 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, jadi belum tentu dari Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip rapat tanggal 23 September 2026, ada peserta yang bilang demonya mundur ke November, tapi itu belum dipastikan langsung dari Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip rapat 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi. Jadi, belum bisa dipastikan apakah itu Rani atau bukan."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip Google Meet 23 September 2026, pernyataan soal demo mundur ke November itu disampaikan oleh peserta yang belum teridentifikasi."
+  },
+  {
+   "denial": true,
+   "reply": "Bukan Rani, tapi ada peserta di transkrip rapat 23 September 2026 yang sempat bilang begitu. Kalau dari Rani sendiri, belum ada konfirmasi soal jadwal demo mundur ke November."
+  },
+  {
+   "denial": true,
+   "reply": "Di catatan rapat tanggal 23 September 2026, ada peserta yang bilang begitu, tapi bukan Rani langsung yang menyampaikan. Jadi perubahan itu belum pasti dan perlu konfirmasi langsung dari Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Di transkrip rapat 23 September 2026, ada peserta yang bilang demo mundur ke November, tapi belum ada catatan kalau Rani sendiri yang menyatakan atau menyetujui hal itu. Kepastian jadwalnya perlu dikonfirmasi langsung ke Rani."
+  },
+  {
+   "denial": false,
+   "reply": "Berdasarkan transkrip rapat tanggal 23 September 2026, hal itu disampaikan oleh peserta yang belum teridentifikasi, jadi belum pasti itu dari Rani."
+  }
+ ],
+ "denial_markers": [
+  "bukan rani",
+  "bukan dari rani",
+  "not rani",
+  "wasn't rani",
+  "was not rani"
+ ],
+ "persona": "examples/persona.example.json",
+ "leading_markers": [
+  "bukan",
+  "no"
+ ],
+ "denial_windows": [
+  {
+   "first": "bukan",
+   "second": "rani",
+   "gap": 4
+  },
+  {
+   "first": "not",
+   "second": "rani",
+   "gap": 3
+  }
+ ],
+ "hedge_markers": [
+  "belum tentu",
+  "belum pasti itu",
+  "belum dipastikan",
+  "belum ada catatan",
+  "belum ada kepastian",
+  "belum tahu",
+  "atau bukan"
+ ]
+}

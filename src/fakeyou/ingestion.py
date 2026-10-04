@@ -14,7 +14,7 @@ from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 from fakeyou.settings import DEFAULTS
 
-UNIDENTIFIED_PARTICIPANT = "Unidentified participant"
+UNIDENTIFIED_PARTICIPANT = "Speaker with unverified identity"
 TWIN_SPEAKER = "Digital twin"
 
 
@@ -55,7 +55,8 @@ def extraction_instructions(twin_name: str, vocabulary: Sequence[str]) -> str:
         f"participants call it '{twin_name}', and that name means the same entity. "
         "It is never the owner. "
         f"Speaker '{UNIDENTIFIED_PARTICIPANT}' stands for any meeting participant whose identity "
-        "is unknown; lines with that label may come from different people, so never merge it "
+        "is unknown; that speaker may be the owner or any named person, and lines with that "
+        "label may come from different people, so never merge it "
         "with a named person. Every fact must keep its speaker as the subject, for example "
         f"'{TWIN_SPEAKER} said that ...' or '{UNIDENTIFIED_PARTICIPANT} decided that ...'. "
         "Never restate what a speaker said as a plain fact without the speaker. "

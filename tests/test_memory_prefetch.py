@@ -142,6 +142,26 @@ async def test_prefetch_puts_shared_recall_evidence_after_the_speech_in_one_mode
     assert memory.searched[0]["search_filter"] == CURRENT_FACTS_FILTER
 
 
+async def test_found_evidence_header_states_unverified_speaker_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(
+        monkeypatch,
+        facts=["Demo Orchid moved to Friday"],
+        episodes={"Demo Orchid moved to Friday": ["e1"]},
+    )
+    agent, model = prefetch_agent(memory, [AIMessage(content="Friday.")])
+
+    await turn(agent, participant("When is the Orchid demo?", "t1"))
+
+    [evidence] = evidence_messages(model_calls(model)[0])
+    assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "found"
+    assert (
+        "A speaker with unverified identity may or may not be the owner or any named "
+        "person" in evidence.text
+    )
+
+
 async def test_prefetch_keeps_the_system_prompt_static_and_evidence_out_of_the_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

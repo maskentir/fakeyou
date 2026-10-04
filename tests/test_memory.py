@@ -62,6 +62,18 @@ async def test_query_sensitive_fake_memory_matches_facts_by_query_tokens() -> No
     assert await memory.search("What is the budget status?") == []
 
 
+async def test_match_all_fake_memory_returns_case_facts_for_any_query() -> None:
+    memory = make_graphiti(
+        facts=["Bridge repaint starts June."],
+        query_sensitive=True,
+        match_all=True,
+    )
+
+    edges = await memory.search("What is the budget status?")
+
+    assert [edge.fact for edge in edges] == ["Bridge repaint starts June."]
+
+
 def _config() -> MemorySettings:
     return MemorySettings.model_validate(
         {
@@ -301,6 +313,7 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
             "recorded_at": "2026-10-01T01:05:00+00:00",
             "time_granularity": "episode_window",
             "speaker_verified": False,
+            "speaker_identity": "unverified: may or may not be the owner or any named person",
         },
         {
             "episode_id": "e1",
@@ -310,6 +323,7 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
             "recorded_at": "2026-09-23T10:00:00+00:00",
             "time_granularity": "episode_window",
             "speaker_verified": False,
+            "speaker_identity": "unverified: may or may not be the owner or any named person",
         },
     ]
     assert payload["excluded"] == {"pending": 0, "superseded": 0, "missing_source": 1}
@@ -351,6 +365,10 @@ async def test_recall_keeps_owner_note_source_when_text_matches_transcript(
         "meet-a",
     ]
     assert payload["facts"][0]["sources"][0]["kind"] == "owner_note"
+    assert [source["speaker_identity"] for source in payload["facts"][0]["sources"]] == [
+        "owner",
+        "unverified: may or may not be the owner or any named person",
+    ]
     assert {source["source_at"] for source in payload["facts"][0]["sources"]} == {
         older.isoformat(),
         newer.isoformat(),

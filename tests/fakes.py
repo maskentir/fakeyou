@@ -274,6 +274,7 @@ def make_graphiti(
     episodes: dict[str, list[str]] | None = None,
     fact_groups: dict[str, str] | None = None,
     query_sensitive: bool = False,
+    match_all: bool = False,
     existing: Sequence[Any] = (),
     saga_episodes: dict[str, list[str]] | None = None,
     connect_error: BaseException | None = None,
@@ -329,7 +330,7 @@ def make_graphiti(
         if search_error is not None:
             raise search_error
         fallback = (kwargs.get("group_ids") or ["team_alpha"])[0]
-        if query_sensitive:
+        if query_sensitive and not match_all:
             wanted = _query_tokens(query)
             selected = [fact for fact in memory.facts if wanted & _query_tokens(fact)]
         else:

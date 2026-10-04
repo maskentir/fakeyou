@@ -1512,7 +1512,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
 
     [episode] = graphiti.added
     assert episode["episode_body"] == (
-        "Unidentified participant: When is the Orchid demo now?\n"
+        "Speaker with unverified identity: When is the Orchid demo now?\n"
         "Digital twin: The demo moves to Thursday."
     )
     assert episode["name"] == "meeting-9:w00000"

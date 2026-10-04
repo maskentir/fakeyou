@@ -49,9 +49,9 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "trust-scenarios.json"
 TRUST_RUNS = 3
 USEFULNESS_THRESHOLD = 0.9
-MIN_USEFUL_PAIRS = 68
+MIN_USEFUL_PAIRS = 79
 JUDGE_MODEL = "gpt-4.1-mini"
-EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 26))
+EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
     "answered",
@@ -175,7 +175,11 @@ def build_case_memory(
     }
     fact_groups = {str(fact): str(group) for fact, group in spec.get("fact_groups", {}).items()}
     memory = make_graphiti(
-        facts=facts, episodes=episodes, fact_groups=fact_groups, query_sensitive=True
+        facts=facts,
+        episodes=episodes,
+        fact_groups=fact_groups,
+        query_sensitive=True,
+        match_all=spec.get("match") == "any",
     )
     stored: dict[str, Any] = {}
     for uuid, item in spec.get("stored", {}).items():
@@ -609,10 +613,10 @@ def test_missing_single_review_fails_gate():
     assert not trust_gate(reviews[1:], expected_case_ids=case_ids, runs=3)
 
 
-def test_trust_corpus_defines_25_rated_cases():
+def test_trust_corpus_defines_29_rated_cases():
     fixture = load_trust_fixture()
     cases = fixture["cases"]
-    assert [case["id"] for case in cases] == [f"c{i:02d}" for i in range(1, 26)]
+    assert [case["id"] for case in cases] == [f"c{i:02d}" for i in range(1, 30)]
     families: dict[str, int] = {}
     for case in cases:
         families[case["family"]] = families.get(case["family"], 0) + 1
@@ -624,7 +628,7 @@ def test_trust_corpus_defines_25_rated_cases():
             assert turn["say"].strip()
             assert turn["contract_reply"].strip()
             assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
-    assert families == {"sumber_waktu": 8, "koreksi_gagal": 8, "otoritas_guna": 9}
+    assert families == {"sumber_waktu": 11, "koreksi_gagal": 8, "otoritas_guna": 10}
 
 
 async def recall_output_for(case: dict[str, Any], group_id: str) -> str:
@@ -632,6 +636,36 @@ async def recall_output_for(case: dict[str, Any], group_id: str) -> str:
     with case_storage(memory, stored, states):
         _remember, production = create_memory_tools(memory, group_id=group_id)
         return str(await production.ainvoke({"query": str(case["turns"][0]["say"])}))
+
+
+async def test_case_memory_match_any_returns_facts_without_lexical_overlap() -> None:
+    stored = {
+        "m1": {
+            "group": "own",
+            "label": "Google Meet m1 transcript",
+            "source_at": "2026-09-23T03:10:00+00:00",
+        }
+    }
+    turns = [{"say": "What is the budget status?", "contract_reply": "Bridge repaint starts June."}]
+    matched = {
+        "memory": {
+            "facts": ["Bridge repaint starts June."],
+            "episodes": {"Bridge repaint starts June.": ["m1"]},
+            "stored": stored,
+            "match": "any",
+        },
+        "turns": turns,
+    }
+    assert "Bridge repaint starts June." in await recall_output_for(matched, "team_alpha")
+    sensitive = {
+        "memory": {
+            "facts": ["Bridge repaint starts June."],
+            "episodes": {"Bridge repaint starts June.": ["m1"]},
+            "stored": stored,
+        },
+        "turns": turns,
+    }
+    assert await recall_output_for(sensitive, "team_alpha") == RECALL_EMPTY_RESULT
 
 
 async def test_contract_recall_uses_production_evidence_schema() -> None:
@@ -656,7 +690,7 @@ async def test_contract_recall_uses_production_evidence_schema() -> None:
     assert json.loads(corrected)["excluded"]["superseded"] == 1
 
 
-async def test_contract_replay_captures_75_rated_pairs_and_writes_artifacts(
+async def test_contract_replay_captures_87_rated_pairs_and_writes_artifacts(
     tmp_path: Path,
 ) -> None:
     fixture = load_trust_fixture()
@@ -675,8 +709,8 @@ async def test_contract_replay_captures_75_rated_pairs_and_writes_artifacts(
         mode="contract",
         model_name="ToolCallingFakeModel(contract-scripted)",
     )
-    assert len(score.turns) == 81
-    assert len(score.rated_turns()) == 75
+    assert len(score.turns) == 93
+    assert len(score.rated_turns()) == 87
     assert rated_pairs(score) == {
         (case_id, run) for case_id in EXPECTED_CASE_IDS for run in range(TRUST_RUNS)
     }
@@ -690,9 +724,9 @@ async def test_contract_replay_captures_75_rated_pairs_and_writes_artifacts(
         assert all(turn["aids"][name] for name in AID_CHECKS)
     manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["mode"] == "contract"
-    assert manifest["cases"] == 25
-    assert manifest["turns"] == 81
-    assert manifest["rated_pairs"] == 75
+    assert manifest["cases"] == 29
+    assert manifest["turns"] == 93
+    assert manifest["rated_pairs"] == 87
     assert manifest["sentence_streaming"] is False
     assert manifest["thresholds"] == {
         "usefulness_min": USEFULNESS_THRESHOLD,
@@ -702,7 +736,7 @@ async def test_contract_replay_captures_75_rated_pairs_and_writes_artifacts(
     assert manifest["judge"]["available"] == judge_available()
     assert manifest["fixture_sha256"] == hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     recorded = json.loads((target / "turns.json").read_text(encoding="utf-8"))
-    assert len(recorded) == 81
+    assert len(recorded) == 93
 
 
 def test_trust_artifacts_sanitize_credentials(tmp_path: Path) -> None:
@@ -1195,7 +1229,7 @@ async def test_candidate_change_preserves_raw_turns_but_invalidates_gate(
 
 
 @pytest.mark.live
-async def test_live_trust_replay_captures_75_rated_pairs(tmp_path: Path) -> None:
+async def test_live_trust_replay_captures_87_rated_pairs(tmp_path: Path) -> None:
     settings = Settings()
     try:
         model = create_chat_model(settings)

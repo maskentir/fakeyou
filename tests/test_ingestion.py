@@ -99,6 +99,14 @@ def test_extraction_instructions_require_attribution_and_vocabulary() -> None:
     assert "language the speakers used" in instructions
 
 
+def test_unidentified_speaker_label_leaves_owner_identity_open() -> None:
+    assert UNIDENTIFIED_PARTICIPANT == "Speaker with unverified identity"
+    instructions = extraction_instructions("Rani Twin", ())
+
+    assert "may be the owner or any named person" in instructions
+    assert "never merge it" in instructions
+
+
 def test_extraction_instructions_without_vocabulary_do_not_list_terms() -> None:
     assert "Known names" not in extraction_instructions("Rani Twin", ())
 
