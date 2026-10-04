@@ -194,3 +194,7 @@ def validate_draft(
             raise DebriefValidationError("finding does not belong to the meeting brief")
         if finding.evidence or finding.status == "addressed":
             validate_evidence(finding.evidence, sources)
+        if finding.status == "addressed" and not any(
+            sources[reference.entry_id].kind == "participant" for reference in finding.evidence
+        ):
+            raise DebriefValidationError("addressed finding needs participant evidence")

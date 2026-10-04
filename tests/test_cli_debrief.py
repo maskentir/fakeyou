@@ -260,9 +260,40 @@ async def test_debrief_corrupt_context_refuses_provider(debrief_run, monkeypatch
     assert not (path.parent / "debrief.json").exists()
 
 
-async def test_debrief_enforces_total_response_deadline(debrief_run, settings, monkeypatch):
+def test_debrief_total_budget_comes_from_the_debrief_role_and_fallback(settings):
+    settings.debrief = GoogleReply(timeout_seconds=60.0, max_retries=2)
+    settings.reply_fallback = None
+
+    assert cli_debrief.debrief_total_budget(settings, 2) == 360.0
+
+    settings.reply_fallback = GoogleReply(timeout_seconds=15.0, max_retries=1)
+
+    assert cli_debrief.debrief_total_budget(settings, 2) == 420.0
+
+
+async def test_debrief_total_deadline_ignores_the_conversation_budget(
+    debrief_run, settings, monkeypatch
+):
     run, path, profile = debrief_run
     settings.conversation.response_timeout_seconds = 0.01
+    settings.debrief = GoogleReply(timeout_seconds=5.0, max_retries=0)
+    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
+
+    async def quick(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return DebriefDraft(items=(), findings=())
+
+    monkeypatch.setattr(cli_debrief, "generate_debrief", quick)
+
+    await run()
+
+    assert (path.parent / "debrief.json").exists()
+
+
+async def test_debrief_enforces_total_response_deadline(debrief_run, settings, monkeypatch):
+    run, path, profile = debrief_run
+    settings.conversation.response_timeout_seconds = 60.0
+    settings.debrief = GoogleReply(timeout_seconds=0.01, max_retries=0)
     cancelled = asyncio.Event()
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
 

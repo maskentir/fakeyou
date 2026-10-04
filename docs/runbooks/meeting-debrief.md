@@ -36,7 +36,7 @@ Penulisan Markdown dilakukan sebelum JSON atomik. Bila filesystem juga menggagal
 
 Record harus memiliki sumber ucapan yang valid. Transkrip dengan ID sama tetapi metadata atau teks berbeda ditolak. Setiap chunk dibatasi 40 sumber dan 16.000 karakter, overlap maksimal empat sumber, dan maksimal 20 chunk. Satu sumber terlalu panjang atau record yang melewati batas ditolak sebelum provider. Snapshot context dibatasi 1 MiB. Hasil gabungan maksimal 100 item, 40 tujuan/pertanyaan, dan 10 kutipan per item/finding; overflow ditolak tanpa membuang bukti diam-diam.
 
-Anggaran total ekstraksi memakai `FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS` dikali jumlah chunk. Timeout dan retry client mengikuti peran jawaban yang ada. Latency ekstraksi dilaporkan terpisah dari latency jawaban meeting; konfigurasi streaming pilot tetap mati.
+Anggaran total ekstraksi memakai `timeout_seconds × (max_retries + 1)` peran debrief, ditambah peran cadangan bila ada, dikali jumlah chunk. Timeout dan retry client mengikuti peran debrief yang ada. Latency ekstraksi dilaporkan terpisah dari latency jawaban meeting; konfigurasi streaming pilot tetap mati.
 
 Record lock yang sama dipakai oleh join, ingestion, forget, dan debrief. Operasi aktif menolak akses debrief/forget lain. `memory-forget --keep-record` mempertahankan record, snapshot, dan artefak debrief. Forget tanpa flag itu menghapus semuanya bersama direktori record. Stop pada jalur meeting tidak otomatis memanggil debrief.
 

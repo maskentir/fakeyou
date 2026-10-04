@@ -457,6 +457,49 @@ def test_draft_accepts_namespaced_objectives_and_questions(brief: MeetingBrief) 
     validate_draft(draft, sources={entry.id: entry}, brief=brief)
 
 
+def test_addressed_finding_rejects_twin_only_evidence(brief: MeetingBrief) -> None:
+    twin = SourceEntry(
+        id="twin_speech:2",
+        text="I will move the deadline to Monday.",
+        kind="twin",
+        participant_id="twin",
+        at=AT,
+    )
+    draft = DebriefDraft(
+        items=(),
+        findings=(
+            ObjectiveFinding(
+                objective_id="objective:shared",
+                status="addressed",
+                evidence=(EvidenceRef(entry_id=twin.id, quote="move the deadline"),),
+            ),
+        ),
+    )
+
+    with pytest.raises(DebriefValidationError):
+        validate_draft(draft, sources={twin.id: twin}, brief=brief)
+
+
+def test_addressed_finding_accepts_participant_evidence(brief: MeetingBrief) -> None:
+    entry = source()
+    twin = SourceEntry(id="twin_speech:2", text="Noted.", kind="twin", participant_id="twin", at=AT)
+    draft = DebriefDraft(
+        items=(),
+        findings=(
+            ObjectiveFinding(
+                objective_id="objective:shared",
+                status="addressed",
+                evidence=(
+                    EvidenceRef(entry_id=entry.id, quote="Please ask"),
+                    EvidenceRef(entry_id=twin.id, quote="Noted"),
+                ),
+            ),
+        ),
+    )
+
+    validate_draft(draft, sources={entry.id: entry, twin.id: twin}, brief=brief)
+
+
 @pytest.mark.parametrize("finding_id", ["objective:missing", "question:missing", "objective:fact"])
 def test_draft_rejects_non_brief_finding_ids(brief: MeetingBrief, finding_id: str) -> None:
     draft = DebriefDraft(

@@ -35,6 +35,13 @@ from fakeyou.record import meeting_record_path
 from fakeyou.settings import Settings
 
 
+def debrief_total_budget(settings: Settings, chunk_count: int) -> float:
+    roles = [settings.debrief_role]
+    if settings.reply_fallback is not None:
+        roles.append(settings.reply_fallback)
+    return sum(role.timeout_seconds * (role.max_retries + 1) for role in roles) * chunk_count
+
+
 def _validate_scope(
     record_path: Path, context: MeetingContext | None, profile: PersonaProfile, meeting_id: str
 ) -> None:
@@ -142,9 +149,7 @@ async def _debrief_locked(
             chunk_count=len(chunks),
         )
         with stop_signal_handlers(stop):
-            async with asyncio.timeout(
-                settings.conversation.response_timeout_seconds * len(chunks)
-            ):
+            async with asyncio.timeout(debrief_total_budget(settings, len(chunks))):
                 draft = await generate_debrief(
                     model,
                     snapshot,
