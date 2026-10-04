@@ -189,7 +189,7 @@ class ModelCallCounter(AsyncCallbackHandler):
 
     async def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:
         self.calls += 1
-        recorded = {entry["id"] for entry in self.prefetch}
+        recorded: set[Any] = set()
         for batch in messages:
             for message in batch:
                 details = (message.additional_kwargs or {}).get("memory_prefetch")

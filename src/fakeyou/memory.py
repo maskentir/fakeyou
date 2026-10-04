@@ -77,6 +77,13 @@ PREFETCH_UNAVAILABLE_EVIDENCE = (
     "Memory evidence: memory search was unavailable for the participant message above. Treat any "
     "detail that depends on memory as unknown; do not guess."
 )
+PREFETCH_ADDITIONAL_EMPTY_EVIDENCE = (
+    "Memory evidence: memory holds no additional matches for the participant message above. "
+    "Earlier evidence in this conversation still stands; use it when it answers the question, "
+    "otherwise say the detail is not in your notes; do not guess."
+)
+PREFETCH_QUERY_MAX_CHARS = 2000
+PREFETCH_RETAINED_EVIDENCE = 3
 PREFETCH_TOOL_NAME = "recall_meeting_context"
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
@@ -306,6 +313,25 @@ def _current_speech(messages: Sequence[AnyMessage]) -> tuple[int, list[HumanMess
     return end, speech
 
 
+def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanMessage]) -> str:
+    current = "\n".join(message.text for message in speech).strip()
+    current_ids = {message.id for message in speech}
+    prior: list[str] = []
+    for message in messages:
+        if message.id in current_ids:
+            continue
+        if isinstance(message, HumanMessage):
+            if "meeting_event" in (message.additional_kwargs or {}) and message.text.strip():
+                prior.append(message.text)
+        elif isinstance(message, AIMessage) and message.text.strip():
+            prior.append(message.text)
+    parts = [*prior, current] if current else prior
+    query = "\n".join(parts)
+    if len(query) > PREFETCH_QUERY_MAX_CHARS:
+        query = query[-PREFETCH_QUERY_MAX_CHARS:]
+    return query
+
+
 class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
     def __init__(
         self,
@@ -322,7 +348,25 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         self._faults = faults
         self._journal = journal or Journal("", stdout=False)
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
+        self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
         self._sequence = 0
+
+    def _retained_pairs(
+        self, messages: Sequence[AnyMessage], *, exclude: str | None
+    ) -> dict[str, tuple[AIMessage, ToolMessage]]:
+        ids = [
+            message.id
+            for message in messages
+            if isinstance(message, HumanMessage)
+            and "meeting_event" in (message.additional_kwargs or {})
+            and message.id is not None
+            and message.id != exclude
+            and message.id in self._retained
+        ]
+        return {
+            speech_id: self._retained[speech_id]
+            for speech_id in ids[-(PREFETCH_RETAINED_EVIDENCE - 1) :]
+        }
 
     async def awrap_model_call(
         self,
@@ -333,20 +377,34 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         if not speech:
             return await handler(request)
         key = speech[-1].id
+        kept = self._retained_pairs(request.messages, exclude=key)
         if key is None or self._latest is None or self._latest[0] != key:
-            call, evidence = await self._evidence(speech)
+            call, evidence = await self._evidence(request.messages, speech, prior=bool(kept))
             self._latest = (key or "", call, evidence)
+            if key is not None:
+                self._retained[key] = (call, evidence)
+                while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
+                    self._retained.pop(next(iter(self._retained)))
         _, call, evidence = self._latest
-        messages = [
-            *request.messages[:position],
-            call,
-            evidence,
-            *request.messages[position:],
-        ]
-        return await handler(request.override(messages=messages))
+        assembled: list[AnyMessage] = []
+        for index, message in enumerate(request.messages):
+            assembled.append(message)
+            if index == position - 1:
+                assembled.extend([call, evidence])
+            elif (
+                isinstance(message, HumanMessage) and message.id is not None and message.id in kept
+            ):
+                assembled.extend(kept[message.id])
+        return await handler(request.override(messages=assembled))
 
-    async def _evidence(self, speech: list[HumanMessage]) -> tuple[AIMessage, ToolMessage]:
-        query = "\n".join(message.text for message in speech).strip()
+    async def _evidence(
+        self,
+        messages: Sequence[AnyMessage],
+        speech: list[HumanMessage],
+        *,
+        prior: bool,
+    ) -> tuple[AIMessage, ToolMessage]:
+        query = build_prefetch_query(messages, speech)
         transcript_id = speech[-1].id
         request_id = self._journal.request_started(
             source="memory", operation="prefetch", transcript_id=transcript_id
@@ -373,7 +431,10 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             outcome, content = "unavailable", PREFETCH_UNAVAILABLE_EVIDENCE
         else:
             if found == RECALL_EMPTY_RESULT:
-                outcome, content = "empty", PREFETCH_EMPTY_EVIDENCE
+                if prior:
+                    outcome, content = "empty", PREFETCH_ADDITIONAL_EMPTY_EVIDENCE
+                else:
+                    outcome, content = "empty", PREFETCH_EMPTY_EVIDENCE
             else:
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + found
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)

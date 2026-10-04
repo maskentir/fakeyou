@@ -49,6 +49,19 @@ async def test_memory_tools_keep_group_id_scoped(
     }
 
 
+async def test_query_sensitive_fake_memory_matches_facts_by_query_tokens() -> None:
+    memory = make_graphiti(
+        facts=["Demo Orchid moved to Friday", "Rani leads QA"],
+        query_sensitive=True,
+    )
+
+    orchid = await memory.search("When is the Orchid demo?")
+    assert [edge.fact for edge in orchid] == ["Demo Orchid moved to Friday"]
+    qa = await memory.search("Who leads QA?")
+    assert [edge.fact for edge in qa] == ["Rani leads QA"]
+    assert await memory.search("What is the budget status?") == []
+
+
 def _config() -> MemorySettings:
     return MemorySettings.model_validate(
         {

@@ -73,6 +73,8 @@ SOURCE_RULES = (
     "Any new decision, approval, or agreement, whether about a budget, deadline, contract, or "
     "anything else, needs the owner's own decision: say the owner needs to decide or confirm "
     "it, and never commit, approve, promise, or agree to it yourself. "
+    "Do not conclude that someone can or cannot approve, decide, or agree to something unless "
+    "a source supports it. "
     "Never claim that you have contacted, will contact, approved, promised, or sent anything. "
     "You have no way to reach the owner or anyone else during or after the meeting, so never "
     "offer, promise, or claim to note something down for later, forward, relay, pass on, bring "

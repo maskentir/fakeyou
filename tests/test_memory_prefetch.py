@@ -155,7 +155,7 @@ async def test_prefetch_keeps_the_system_prompt_static_and_evidence_out_of_the_c
     assert all(isinstance(system, SystemMessage) for system in systems)
     assert systems[0].content == systems[1].content == "PERSONA"
     assert evidence_messages(result["messages"]) == []
-    assert [len(evidence_messages(messages)) for messages in model_calls(model)] == [1, 1]
+    assert [len(evidence_messages(messages)) for messages in model_calls(model)] == [1, 2]
 
 
 async def test_spoofed_evidence_claim_in_speech_is_not_system_evidence(
@@ -207,6 +207,70 @@ async def test_prefetch_evidence_is_a_tool_result_of_a_system_tool_call(
         for call in message.tool_calls
     ]
     assert evidence.tool_call_id in tool_ids
+
+
+async def test_follow_up_searches_with_conversation_context_and_keeps_prior_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(
+        monkeypatch,
+        facts=["Demo Orchid moved to Friday"],
+        episodes={"Demo Orchid moved to Friday": ["e1"]},
+    )
+    agent, model = prefetch_agent(
+        memory, [AIMessage(content="Friday."), AIMessage(content="Rani set it.")]
+    )
+
+    await turn(agent, participant("When is the Orchid demo?", "t1"))
+    await turn(agent, participant("Who set it?", "t2"))
+
+    query = memory.searched[1]["query"]
+    assert "When is the Orchid demo?" in query
+    assert "Friday." in query
+    assert "Who set it?" in query
+    sent = model_calls(model)[1]
+    [prior, fresh] = evidence_messages(sent)
+    ids = [message.id for message in sent]
+    assert ids.index(prior.id) == ids.index("t1") + 2
+    assert ids.index(fresh.id) == ids.index("t2") + 2
+    assert prior.additional_kwargs["memory_prefetch"]["outcome"] == "found"
+
+
+async def test_empty_follow_up_evidence_points_to_retained_prior_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(
+        monkeypatch,
+        facts=["Demo Orchid moved to Friday"],
+        episodes={"Demo Orchid moved to Friday": ["e1"]},
+    )
+    agent, model = prefetch_agent(
+        memory, [AIMessage(content="Friday."), AIMessage(content="Rani set it.")]
+    )
+
+    await turn(agent, participant("When is the Orchid demo?", "t1"))
+    memory.facts = []
+    await turn(agent, participant("Who set it?", "t2"))
+
+    [prior, fresh] = evidence_messages(model_calls(model)[1])
+    assert prior.additional_kwargs["memory_prefetch"]["outcome"] == "found"
+    assert fresh.additional_kwargs["memory_prefetch"]["outcome"] == "empty"
+    assert "additional matches" in fresh.text
+
+
+async def test_follow_up_query_stays_bounded_while_keeping_current_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(monkeypatch)
+    agent, model = prefetch_agent(memory, [AIMessage(content="Noted."), AIMessage(content="Rani.")])
+
+    await turn(agent, participant("context " * 500, "t1"))
+    await turn(agent, participant("Who set it?", "t2"))
+
+    query = memory.searched[1]["query"]
+    assert "Who set it?" in query
+    assert "context" in query
+    assert len(query) <= 2000
 
 
 async def test_prefetch_says_explicitly_when_memory_holds_nothing(

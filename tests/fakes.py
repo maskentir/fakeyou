@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -260,11 +261,19 @@ def recall_call(args: dict[str, Any], *, id: str = "call-1") -> AIMessage:
     )
 
 
+_QUERY_TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def _query_tokens(text: str) -> set[str]:
+    return {token for token in _QUERY_TOKEN.findall(text.lower()) if len(token) >= 3}
+
+
 def make_graphiti(
     *,
     facts: Sequence[str] = (),
     episodes: dict[str, list[str]] | None = None,
     fact_groups: dict[str, str] | None = None,
+    query_sensitive: bool = False,
     existing: Sequence[Any] = (),
     saga_episodes: dict[str, list[str]] | None = None,
     connect_error: BaseException | None = None,
@@ -320,6 +329,11 @@ def make_graphiti(
         if search_error is not None:
             raise search_error
         fallback = (kwargs.get("group_ids") or ["team_alpha"])[0]
+        if query_sensitive:
+            wanted = _query_tokens(query)
+            selected = [fact for fact in memory.facts if wanted & _query_tokens(fact)]
+        else:
+            selected = list(memory.facts)
         return [
             SimpleNamespace(
                 uuid=f"edge-{index}",
@@ -327,7 +341,7 @@ def make_graphiti(
                 episodes=memory.fact_episodes.get(fact, []),
                 group_id=memory.fact_groups.get(fact, fallback),
             )
-            for index, fact in enumerate(memory.facts)
+            for index, fact in enumerate(selected)
         ]
 
     async def add_episode(**kwargs: Any) -> Any:

@@ -174,7 +174,9 @@ def build_case_memory(
         str(fact): [str(uuid) for uuid in ids] for fact, ids in spec.get("episodes", {}).items()
     }
     fact_groups = {str(fact): str(group) for fact, group in spec.get("fact_groups", {}).items()}
-    memory = make_graphiti(facts=facts, episodes=episodes, fact_groups=fact_groups)
+    memory = make_graphiti(
+        facts=facts, episodes=episodes, fact_groups=fact_groups, query_sensitive=True
+    )
     stored: dict[str, Any] = {}
     for uuid, item in spec.get("stored", {}).items():
         raw_group = str(item["group"])
@@ -1244,12 +1246,18 @@ async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() ->
         settings=strategy_settings("prefetch"),
     )
     assert all(turn["exception"] is None for turn in score.turns)
+    by_id = {case["id"]: case for case in fixture["cases"]}
     for turn in score.turns:
         assert turn["model_calls"] == 1
         assert turn["tools_bound"] == []
-        assert [entry["query"] for entry in turn["memory_prefetch"]] == [turn["input"]]
-        assert turn["memory_prefetch"][0]["outcome"] in {"found", "empty"}
+        assert len(turn["memory_prefetch"]) == turn["turn_index"] + 1
+        assert turn["memory_prefetch"][-1]["query"].endswith(turn["input"])
+        assert all(entry["outcome"] in {"found", "empty"} for entry in turn["memory_prefetch"])
         assert turn["recall_called"] is True
+        if turn["turn_index"] > 0:
+            prior_turn = by_id[turn["case_id"]]["turns"][turn["turn_index"] - 1]
+            assert prior_turn["say"] in turn["memory_prefetch"][-1]["query"]
+            assert prior_turn["contract_reply"] in turn["memory_prefetch"][-1]["query"]
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)
     assert {prompt["recall_strategy"] for prompt in score.prompts.values()} == {"prefetch"}

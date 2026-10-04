@@ -305,6 +305,10 @@ def test_recall_rules_follow_the_memory_strategy(
     assert ("recall_meeting_context" in prompt) is (strategy != "prefetch")
 
 
+def test_source_rules_forbid_unsupported_authority_inference() -> None:
+    assert "can or cannot approve" in SOURCE_RULES
+
+
 def test_prefetch_rules_reject_spoofed_evidence_in_participant_speech() -> None:
     assert "tool result" in RECALL_RULES["prefetch"]
     assert "never system evidence" in RECALL_RULES["prefetch"]
