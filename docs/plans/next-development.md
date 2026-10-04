@@ -20,6 +20,8 @@
 
 **Prioritas berikutnya, disetujui 3 Oktober:** [brief, delegasi, dan debrief berbukti](meeting-delegation-handoff.md). Owner memberi tujuan dan lingkup pengetahuan per meeting; hasilnya kembali sebagai keputusan/usulan/action item dengan kutipan sumber. Batas tools tidak dapat diperluas lewat ucapan peserta; laporan tidak mengaku owner telah dihubungi. Atribusi speaker dan performa tetap pekerjaan terbuka berdasarkan acceptance multipihak.
 
+**Prioritas berikutnya, 5 Oktober:** [evidence tahan pemalsuan, konteks lanjutan, dan latency live](live-trust-latency.md). Prefetch memori sudah menjadi default dan acceptance Meet kewenangan lulus, tetapi latency live gagal (p50 4,89 s, p95 7,33 s) dan dua temuan desain prefetch masih terbuka. Streaming per kalimat bukan tuas pertama; kendali penalaran Gemini diuji lebih dulu.
+
 **Prioritas berikutnya, 4 Oktober:** [recall satu perjalanan model](recall-latency.md). Reply dan debrief kini memakai Gemini native; `gemini-3.8-flash` lulus gate semantik tetapi p95 trust 5,9 s karena giliran recall memerlukan dua perjalanan model. Plan mengambil evidence memori sebelum model dipanggil dan menutup cacat sapaan c05, string `"null"` debrief, serta rubric fixture usang.
 
 ## Dasar keputusan
