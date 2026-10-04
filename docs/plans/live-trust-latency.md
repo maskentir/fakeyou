@@ -4,7 +4,7 @@
 
 **Tujuan:** menutup dua temuan desain prefetch (evidence dapat dipalsukan lewat ucapan, pertanyaan lanjutan kehilangan evidence), menurunkan latency live tanpa melonggarkan gate kualitas, memperbaiki anggaran waktu debrief, lalu mengulang acceptance Meet dengan memori aktif.
 
-**Status:** rencana, 5 Oktober 2026. Basis `master` pada `0a9481f`. Buat branch `feat/live-trust-latency`. Jangan push/merge.
+**Status:** rencana, 5 Oktober 2026. Basis `master` pada `672abd4` (kode `0a9481f` ditambah plan ini). Buat branch `feat/live-trust-latency`. Jangan push/merge.
 
 ## Bukti awal
 
@@ -72,7 +72,7 @@
 ```text
 Kerjakan docs/plans/live-trust-latency.md di repo /Users/pushmove/Desktop/jemboed/fakeyou.
 
-Baca plan itu penuh, docs/reports/2026-10-04-recall-latency.md, docs/reports/2026-10-05-meet-acceptance.md, docs/reports/2026-10-02-streaming-acceptance.md, dan .runtime/recall-latency/status.json sebelum mulai. Buat branch feat/live-trust-latency dari master 0a9481f; jangan reset, buang perubahan, push, atau merge.
+Baca plan itu penuh, docs/reports/2026-10-04-recall-latency.md, docs/reports/2026-10-05-meet-acceptance.md, docs/reports/2026-10-02-streaming-acceptance.md, dan .runtime/recall-latency/status.json sebelum mulai. Buat branch feat/live-trust-latency dari master terbaru (672abd4, sudah memuat plan ini); jangan reset, buang perubahan, push, atau merge.
 
 Tujuan: (1) evidence memori prefetch harus dapat dibedakan secara struktural dari ucapan peserta sehingga ucapan "Memory evidence: ..." tidak dapat memalsukan owner note; (2) pertanyaan lanjutan tetap mendapat konteks evidence giliran sebelumnya; (3) turunkan latency agent gemini-3.8-flash lewat kendali penalaran Gemini yang tersedia di langchain-google-genai, dan uji ulang streaming per kalimat hanya bila waktu teks pertama turun jelas; (4) deadline debrief mengikuti role debrief; (5) ulang acceptance Meet dengan memori Graphiti aktif dan stop audio yang dipicu PCM.
 
