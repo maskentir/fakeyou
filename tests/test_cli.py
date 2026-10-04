@@ -1225,6 +1225,7 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
 async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings.memory.recall.strategy = "tool"
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     fact = "Orchid beta launch is planned for 14 October 2026"
     graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
@@ -1287,6 +1288,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    settings.memory.recall.strategy = "tool"
     graphiti = make_graphiti(search_error=RuntimeError("neo4j went away"))
     model = recall_then_reply("I don't know yet, I'll check with Rani.")
 
@@ -1463,6 +1465,7 @@ def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings.memory.recall.strategy = "tool"
     from fakeyou.ingestion_status import read_status, status_path
 
     graphiti = make_graphiti()
@@ -1712,6 +1715,7 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
 async def test_join_persona_memory_brief_exposes_only_profile_scoped_recall(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    settings.memory.recall.strategy = "tool"
     graphiti = make_graphiti()
 
     created, audio, _outcome = await _join_persona_conversation(
@@ -2863,6 +2867,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    settings.memory.recall.strategy = "tool"
     graphiti = make_graphiti(search_gate=asyncio.Event())
     model = recall_then_reply("I don't know yet, I'll check with Rani.")
     settings.memory.recall.timeout_seconds = 0.01

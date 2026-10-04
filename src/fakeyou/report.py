@@ -143,7 +143,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if active is not None:
                 active["agent_at"] = at
         elif event == "request_started":
-            if row.get("source") == "llm":
+            if row.get("source") == "llm" or _is_prefetch(row):
                 request_id = row.get("request_id")
                 if isinstance(request_id, str):
                     pending[request_id] = row.get("transcript_id")
@@ -156,6 +156,14 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 if turn is not None:
                     turn["llm_count"] += 1
                     _add_duration(turn, "llm_ms", row.get("duration_ms"), excluded)
+            elif _is_prefetch(row):
+                request_id = row.get("request_id")
+                if isinstance(request_id, str):
+                    pending.pop(request_id, None)
+                turn = _transcript_turn(turns, row, excluded)
+                if turn is not None:
+                    turn["recall_count"] += 1
+                    _add_duration(turn, "recall_ms", row.get("duration_ms"), excluded)
         elif event == "tool_started":
             request_id = row.get("request_id")
             if isinstance(request_id, str):
@@ -385,6 +393,10 @@ def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
 def _turn_for(turns: dict[str, dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
     transcript_id = str(row.get("request_id", "")).rpartition(":")[0]
     return turns.get(transcript_id)
+
+
+def _is_prefetch(row: dict[str, Any]) -> bool:
+    return row.get("source") == "memory" and row.get("operation") == "prefetch"
 
 
 def _transcript_turn(

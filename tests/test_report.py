@@ -1296,3 +1296,35 @@ def test_report_summarizes_participation_and_policy() -> None:
         "not_addressed": 2,
     }
     assert report["participation"]["observer_methods"] == {"dom_mining": 1}
+
+
+def test_report_counts_memory_prefetch_as_recall_for_its_transcript():
+    rows = [
+        row(0, "speech_stopped", source="audio"),
+        row(0.4, "transcript_finalized", transcript_id="t1", text="First"),
+        row(0.4, "agent_started", request_id="t1:1"),
+        row(
+            0.5,
+            "request_started",
+            source="memory",
+            request_id="m1",
+            operation="prefetch",
+            transcript_id="t1",
+        ),
+        row(
+            0.8,
+            "request_finished",
+            source="memory",
+            request_id="m1",
+            operation="prefetch",
+            transcript_id="t1",
+            outcome="found",
+            duration_ms=300,
+        ),
+        row(1.6, "agent_finished", request_id="t1:1", duration_ms=1200),
+    ]
+
+    turn = build_session_report(rows)["turns"][0]
+
+    assert (turn["recall_count"], turn["recall_duration_seconds"]) == (1, 0.3)
+    assert turn["llm_count"] == 0

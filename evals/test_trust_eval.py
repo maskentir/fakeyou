@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,7 +34,13 @@ from evals.runtime_evidence import (
 from evals.test_replay_eval import _sanitized_role
 from fakeyou.conversation import TranscriptEvent, cap_spoken_reply
 from fakeyou.memory import RECALL_EMPTY_RESULT, create_memory_tools
-from fakeyou.persona import PersonaProfile, build_system_prompt, meeting_tool_names, persona_digest
+from fakeyou.persona import (
+    PersonaProfile,
+    build_system_prompt,
+    meeting_tool_names,
+    memory_wiring,
+    persona_digest,
+)
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.settings import CompatibleReply, OpenAIReply, Settings
 from tests.fakes import ToolCallingFakeModel, make_graphiti, recall_call
@@ -218,10 +225,10 @@ def score_aids(case: dict[str, Any], reply: str, recalled: bool) -> dict[str, bo
     }
 
 
-def contract_model(case: dict[str, Any]) -> ToolCallingFakeModel:
+def contract_model(case: dict[str, Any], *, recall_tool: bool = True) -> ToolCallingFakeModel:
     responses: list[AIMessage] = []
     for turn in case["turns"]:
-        if case.get("needs_recall", False):
+        if recall_tool and case.get("needs_recall", False):
             responses.append(recall_call({"query": str(turn["say"])}))
         responses.append(AIMessage(content=str(turn["contract_reply"])))
     return ToolCallingFakeModel(responses=responses)
@@ -244,7 +251,11 @@ async def replay_trust(
         json.dumps(fixture, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     names = meeting_tool_names(profile, None, memory_requested=True)
-    persona = build_system_prompt(profile.model_copy(update={"allowed_tools": names}))
+    strategy = settings.memory.recall.strategy
+    bound, prefetch = memory_wiring(names, strategy)
+    persona = build_system_prompt(
+        profile.model_copy(update={"allowed_tools": names}), recall_strategy=strategy
+    )
     group_id = profile.memory_group
     score = TrustScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
@@ -253,7 +264,9 @@ async def replay_trust(
             score.prompts[case["id"]] = {
                 "system_prompt": persona,
                 "prompt_sha256": hashlib.sha256(persona.encode("utf-8")).hexdigest(),
-                "tools_bound": sorted(names),
+                "tools_bound": sorted(bound),
+                "recall_strategy": strategy,
+                "memory_prefetch": prefetch,
             }
             for run in range(runs):
                 trajectory: list[dict[str, Any]] = []
@@ -272,6 +285,7 @@ async def replay_trust(
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
                         seen_results = len(counter.tool_results)
+                        seen_prefetch = len(counter.prefetch)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
                             id=f"{case['id']}-{run}-{index}",
@@ -311,15 +325,20 @@ async def replay_trust(
                                     settings.conversation.max_spoken_sentences,
                                     settings.speech.language,
                                 ),
-                                "tools_bound": sorted(names),
+                                "tools_bound": sorted(bound),
                                 "tool_trajectory": calls,
                                 "tool_results": counter.tool_results[seen_results:],
+                                "memory_prefetch": counter.prefetch[seen_prefetch:],
                                 "model_calls": counter.calls - seen_calls,
-                                "recall_called": bool(evidence),
+                                "recall_called": bool(evidence or counter.prefetch[seen_prefetch:]),
                                 "recall_evidence": evidence,
                                 "latency_seconds": latency,
                                 "exception": error,
-                                "aids": score_aids(case, reply, bool(evidence)) if rated else {},
+                                "aids": score_aids(
+                                    case, reply, bool(evidence or counter.prefetch[seen_prefetch:])
+                                )
+                                if rated
+                                else {},
                             }
                         )
     score.candidate = finish_candidate(candidate)
@@ -639,8 +658,8 @@ async def test_contract_replay_captures_72_rated_pairs_and_writes_artifacts(
     fixture = load_trust_fixture()
     raw_target = os.environ.get("TRUST_ARTIFACT_DIR", "")
     target = Path(raw_target) if raw_target else tmp_path
-    score = await replay_trust(contract_model, fixture, TRUST_RUNS)
-    settings = Settings()
+    settings = strategy_settings("tool")
+    score = await replay_trust(contract_model, fixture, TRUST_RUNS, settings=settings)
     assert settings.conversation.sentence_streaming is False
     write_trust_artifacts(
         target,
@@ -943,7 +962,9 @@ async def test_trust_native_recall_failure_becomes_unavailable_evidence(
         return memory, stored, states
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", failing_memory)
-    score = await replay_trust(contract_model, {**fixture, "cases": [case]}, 1)
+    score = await replay_trust(
+        contract_model, {**fixture, "cases": [case]}, 1, settings=strategy_settings("tool")
+    )
     turn = score.turns[0]
     assert turn["exception"] is None
     assert turn["recall_called"] is True
@@ -965,7 +986,7 @@ async def test_trust_recall_deadline_records_cancelled_attempt_as_unavailable(
         return memory, stored, states
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", blocked_memory)
-    settings = Settings()
+    settings = strategy_settings("tool")
     settings = settings.model_copy(
         update={
             "memory": settings.memory.model_copy(
@@ -1010,7 +1031,9 @@ async def test_failed_recall_after_success_records_current_middleware_result(
         return memory, stored, states
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", second_search_fails)
-    score = await replay_trust(contract_model, {**fixture, "cases": [case]}, 1)
+    score = await replay_trust(
+        contract_model, {**fixture, "cases": [case]}, 1, settings=strategy_settings("tool")
+    )
     assert '"facts"' in score.turns[0]["tool_trajectory"][0]["output"]
     assert "unavailable" in score.turns[1]["tool_trajectory"][0]["output"]
 
@@ -1202,3 +1225,32 @@ async def test_live_trust_replay_captures_72_rated_pairs(tmp_path: Path) -> None
     }
     assert sum(1 for turn in score.turns if turn.get("exception")) == 0
     assert score.candidate["unchanged"] is True, score.candidate["changed_files"]
+
+
+def strategy_settings(strategy: str) -> Settings:
+    settings = Settings()
+    recall = settings.memory.recall.model_copy(update={"strategy": strategy})
+    return settings.model_copy(
+        update={"memory": settings.memory.model_copy(update={"recall": recall})}
+    )
+
+
+async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() -> None:
+    fixture = load_trust_fixture()
+    score = await replay_trust(
+        partial(contract_model, recall_tool=False),
+        fixture,
+        1,
+        settings=strategy_settings("prefetch"),
+    )
+    assert all(turn["exception"] is None for turn in score.turns)
+    for turn in score.turns:
+        assert turn["model_calls"] == 1
+        assert turn["tools_bound"] == []
+        assert [entry["query"] for entry in turn["memory_prefetch"]] == [turn["input"]]
+        assert turn["memory_prefetch"][0]["outcome"] in {"found", "empty"}
+        assert turn["recall_called"] is True
+    for turn in score.rated_turns():
+        assert all(turn["aids"][name] for name in AID_CHECKS)
+    assert {prompt["recall_strategy"] for prompt in score.prompts.values()} == {"prefetch"}
+    assert {prompt["memory_prefetch"] for prompt in score.prompts.values()} == {True}

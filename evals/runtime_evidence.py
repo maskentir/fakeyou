@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.assembly as assembly
@@ -184,10 +184,18 @@ class ModelCallCounter(AsyncCallbackHandler):
         self.calls = 0
         self.trajectory: list[dict[str, Any]] = []
         self.tool_results: list[dict[str, Any]] = []
+        self.prefetch: list[dict[str, Any]] = []
         self.running: dict[Any, tuple[dict[str, Any], float]] = {}
 
     async def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:
         self.calls += 1
+        recorded = {entry["id"] for entry in self.prefetch}
+        for batch in messages:
+            for message in batch:
+                details = (message.additional_kwargs or {}).get("memory_prefetch")
+                if isinstance(message, HumanMessage) and details and message.id not in recorded:
+                    recorded.add(message.id)
+                    self.prefetch.append({**details, "id": message.id, "output": message.text})
         latest = {
             message.tool_call_id: message
             for batch in messages

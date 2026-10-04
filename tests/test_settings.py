@@ -126,3 +126,9 @@ def test_cli_entry_exports_dotenv_before_graphiti_loads(tmp_path, process_value,
         check=True,
     )
     assert result.stdout.splitlines()[-1] == expected
+
+
+def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values():
+    assert Settings(_env_file=None).memory.recall.strategy == "prefetch"
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, memory={"recall": {"strategy": "hybrid"}})

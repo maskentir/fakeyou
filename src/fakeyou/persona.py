@@ -11,6 +11,7 @@ from fakeyou.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANC
 from fakeyou.brief import KnowledgeScope, MeetingBrief
 from fakeyou.ingestion import TWIN_SPEAKER
 from fakeyou.invariants import SessionId, TwinName
+from fakeyou.settings import RecallStrategy
 
 PersonaTool = Literal["recall_meeting_context"]
 PersonaLanguage = Literal["id", "en"]
@@ -138,11 +139,20 @@ NATURAL_SPEECH_RULE = (
     "adding an invitation or a help question. Never offer to record, save, or note anything "
     "for later, including an offer phrased as a question; no such action is available."
 )
-RECALL_RULES = (
+TOOL_RECALL_LEAD = (
     "When the known facts do not answer a question, call recall_meeting_context before saying "
     "you do not know, especially for earlier meetings, decisions, schedules, or people. "
     "Search before claiming that there is no update, or that an earlier statement lacks "
     "owner approval; declining a new decision does not remove this evidence requirement. "
+)
+PREFETCH_RECALL_LEAD = (
+    "Each participant message you answer is followed by a system-provided message that starts "
+    "with 'Memory evidence'. Read it before saying you do not know, especially for earlier "
+    "meetings, decisions, schedules, or people, and before claiming that there is no update or "
+    "that an earlier statement lacks owner approval. When it says that memory holds nothing or "
+    "is unavailable, say the detail is not in your notes instead of guessing. "
+)
+MEMORY_EVIDENCE_RULES = (
     "Recall returns memory evidence as JSON: each fact carries its text plus dated sources, "
     "and each source carries a kind such as owner note or transcript. "
     "Its excluded counts only say how many sources were filtered out; they are not facts, "
@@ -157,12 +167,24 @@ RECALL_RULES = (
     "Present conflicting claims with their source attribution instead of silently selecting "
     "one. A newer source alone does not prove that an earlier claim was explicitly corrected. "
     "An 'owner note' source was given by the owner and counts like verified_facts. "
+)
+TOOL_NAME_CHECK = (
     "The greeting rule limits only greetings, never recall: check an uncertain name with "
     "recall_meeting_context before answering unknown. "
+)
+PREFETCH_NAME_CHECK = (
+    "The greeting rule limits only greetings, never memory: check an uncertain name against the "
+    "memory evidence before answering unknown. "
+)
+TWIN_FACT_RULE = (
     f"Any fact about '{TWIN_SPEAKER}' is something you yourself said in an earlier meeting; "
     "when you mention it, say that you said it, never that the owner said or agreed to it. "
     "It is never an owner fact and never a reason to commit to anything."
 )
+RECALL_RULES: dict[RecallStrategy, str] = {
+    "tool": TOOL_RECALL_LEAD + MEMORY_EVIDENCE_RULES + TOOL_NAME_CHECK + TWIN_FACT_RULE,
+    "prefetch": PREFETCH_RECALL_LEAD + MEMORY_EVIDENCE_RULES + PREFETCH_NAME_CHECK + TWIN_FACT_RULE,
+}
 
 
 class PersonaProfile(BaseModel):
@@ -195,7 +217,12 @@ async def load_persona(path: Path, *, owner_id: str, twin_id: str) -> PersonaPro
     return profile
 
 
-def build_system_prompt(profile: PersonaProfile, *, brief: MeetingBrief | None = None) -> str:
+def build_system_prompt(
+    profile: PersonaProfile,
+    *,
+    brief: MeetingBrief | None = None,
+    recall_strategy: RecallStrategy = "tool",
+) -> str:
     scope = brief.knowledge_scope if brief is not None else None
     persona_knowledge = scope != "brief_only"
     recall = persona_knowledge and "recall_meeting_context" in profile.allowed_tools
@@ -208,7 +235,7 @@ def build_system_prompt(profile: PersonaProfile, *, brief: MeetingBrief | None =
     if persona_knowledge:
         sections.append(GOALS_RULE)
     if recall:
-        sections.append(RECALL_RULES)
+        sections.append(RECALL_RULES[recall_strategy])
     sections.append(
         "Owner profile JSON:\n" + profile.model_dump_json(include=profile_fields, indent=2)
     )
@@ -230,6 +257,14 @@ def meeting_tool_names(
     if memory_requested and brief is not None and brief.knowledge_scope == "brief_only":
         raise ValueError("memory recall is not allowed with the brief_only knowledge scope")
     return profile.allowed_tools if memory_requested else frozenset()
+
+
+def memory_wiring(
+    tool_names: frozenset[PersonaTool], strategy: RecallStrategy
+) -> tuple[frozenset[PersonaTool], bool]:
+    if not tool_names or strategy == "tool":
+        return tool_names, False
+    return frozenset(), True
 
 
 def persona_digest(profile: PersonaProfile) -> str:

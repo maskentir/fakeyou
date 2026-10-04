@@ -29,10 +29,17 @@ from fakeyou.faults import FaultReporter
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.journal import Journal
 from fakeyou.memory import (
+    create_memory_prefetch_middleware,
     create_memory_tools,
     create_recall_error_middleware,
 )
-from fakeyou.persona import PersonaProfile, PersonaTool, build_system_prompt, meeting_tool_names
+from fakeyou.persona import (
+    PersonaProfile,
+    PersonaTool,
+    build_system_prompt,
+    meeting_tool_names,
+    memory_wiring,
+)
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.session import SessionConfig
 from fakeyou.settings import (
@@ -84,7 +91,9 @@ async def open_conversation(
     else:
         tool_names = meeting_tool_names(profile, brief, memory_requested=graphiti is not None)
         persona = build_system_prompt(
-            profile.model_copy(update={"allowed_tools": tool_names}), brief=brief
+            profile.model_copy(update={"allowed_tools": tool_names}),
+            brief=brief,
+            recall_strategy=settings.memory.recall.strategy,
         )
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
@@ -99,14 +108,26 @@ async def open_conversation(
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))
         if graphiti is not None and profile is not None and tool_names:
-            tools.extend(
-                tool
-                for tool in create_memory_tools(
-                    graphiti, group_id=profile.memory_group, recall=settings.memory.recall
+            bound, prefetch = memory_wiring(tool_names, settings.memory.recall.strategy)
+            if prefetch:
+                middleware.append(
+                    create_memory_prefetch_middleware(
+                        graphiti,
+                        group_id=profile.memory_group,
+                        recall=settings.memory.recall,
+                        faults=faults,
+                        journal=journal,
+                    )
                 )
-                if tool.name in tool_names
-            )
-            middleware.append(create_recall_error_middleware(faults))
+            if bound:
+                tools.extend(
+                    tool
+                    for tool in create_memory_tools(
+                        graphiti, group_id=profile.memory_group, recall=settings.memory.recall
+                    )
+                    if tool.name in bound
+                )
+                middleware.append(create_recall_error_middleware(faults))
         agent = create_meeting_agent(
             model,
             tools=tools,

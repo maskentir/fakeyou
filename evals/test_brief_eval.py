@@ -6,6 +6,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from evals.test_trust_eval import (
     load_trust_fixture,
     passing_trust_reviews,
     rated_pairs,
+    strategy_settings,
     token_present,
     trust_gate,
     write_trust_summary,
@@ -46,6 +48,7 @@ from fakeyou.persona import (
     PersonaProfile,
     build_system_prompt,
     meeting_tool_names,
+    memory_wiring,
     persona_digest,
 )
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
@@ -189,20 +192,26 @@ async def replay_briefs(
     for case in fixture["cases"]:
         brief = case_brief(fixture, case)
         names = meeting_tool_names(profile, brief, memory_requested=case["memory_requested"])
+        strategy = settings.memory.recall.strategy
+        bound, prefetch = memory_wiring(names, strategy)
         persona = build_system_prompt(
-            profile.model_copy(update={"allowed_tools": names}), brief=brief
+            profile.model_copy(update={"allowed_tools": names}),
+            brief=brief,
+            recall_strategy=strategy,
         )
         with ExitStack() as storage:
             memory = None
             if case["memory_requested"]:
                 memory, stored, states = build_case_memory(case, group_id)
                 storage.enter_context(case_storage(memory, stored, states))
-            tools_bound = sorted(names)
+            tools_bound = sorted(bound)
             score.prompts[case["id"]] = {
                 "knowledge_scope": brief.knowledge_scope,
                 "permissions": sorted(brief.permissions),
                 "memory_requested": case["memory_requested"],
                 "tools_bound": tools_bound,
+                "recall_strategy": strategy,
+                "memory_prefetch": prefetch,
                 "brief_sha256": brief_digest(brief),
                 "system_prompt": persona,
                 "prompt_sha256": hashlib.sha256(persona.encode("utf-8")).hexdigest(),
@@ -224,6 +233,7 @@ async def replay_briefs(
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
                         seen_results = len(counter.tool_results)
+                        seen_prefetch = len(counter.prefetch)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
                             id=f"{case['id']}-{run}-{index}",
@@ -263,6 +273,7 @@ async def replay_briefs(
                                 "tools_bound": tools_bound,
                                 "tool_trajectory": calls,
                                 "tool_results": counter.tool_results[seen_results:],
+                                "memory_prefetch": counter.prefetch[seen_prefetch:],
                                 "model_calls": counter.calls - seen_calls,
                                 "latency_seconds": latency,
                                 "exception": error,
@@ -581,8 +592,8 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
     fixture = load_brief_fixture()
     profile = fixture_profile(fixture)
     target = brief_artifact_dir(tmp_path)
-    score = await replay_briefs(contract_model, fixture, BRIEF_RUNS)
-    settings = Settings()
+    settings = strategy_settings("tool")
+    score = await replay_briefs(contract_model, fixture, BRIEF_RUNS, settings=settings)
     assert settings.conversation.sentence_streaming is False
     write_brief_artifacts(
         target,
@@ -785,7 +796,7 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
     memory_case = load_trust_fixture()["cases"][0]
     case = next(case for case in fixture["cases"] if case["needs_recall"])
     case = {**case, "memory": memory_case["memory"]}
-    settings = Settings()
+    settings = strategy_settings("tool")
     settings = settings.model_copy(
         update={
             "memory": settings.memory.model_copy(
@@ -891,3 +902,29 @@ async def test_live_brief_replay_captures_36_rated_pairs(tmp_path: Path) -> None
     }
     assert sum(1 for turn in score.turns if turn.get("exception")) == 0
     assert score.candidate["unchanged"] is True, score.candidate["changed_files"]
+
+
+async def test_contract_brief_prefetch_follows_scope() -> None:
+    fixture = load_brief_fixture()
+    score = await replay_briefs(
+        partial(contract_model, recall_tool=False),
+        fixture,
+        1,
+        settings=strategy_settings("prefetch"),
+    )
+    by_id = {case["id"]: case for case in fixture["cases"]}
+    briefs = {case["id"]: case_brief(fixture, case) for case in fixture["cases"]}
+    assert all(turn["exception"] is None for turn in score.turns)
+    for turn in score.turns:
+        case = by_id[turn["case_id"]]
+        memory = briefs[turn["case_id"]].knowledge_scope != "brief_only" and bool(
+            case["memory_requested"]
+        )
+        assert turn["model_calls"] == 1
+        assert turn["tools_bound"] == []
+        assert bool(turn["memory_prefetch"]) is memory
+        if not memory:
+            assert turn["tools_bound"] == []
+            assert turn["tool_trajectory"] == []
+    for turn in score.rated_turns():
+        assert all(turn["aids"][name] for name in AID_CHECKS)

@@ -290,6 +290,32 @@ def test_build_persona_says_excluded_counts_are_not_evidence() -> None:
     )
 
 
+@pytest.mark.parametrize("scope", [None, "persona_memory"])
+@pytest.mark.parametrize("strategy", ["tool", "prefetch"])
+def test_recall_rules_follow_the_memory_strategy(
+    brief: MeetingBrief, scope: str | None, strategy: str
+) -> None:
+    meeting = None if scope is None else revised(brief, knowledge_scope=scope)
+    prompt = build_system_prompt(profile(), brief=meeting, recall_strategy=strategy)
+
+    assert RECALL_RULES[strategy] in prompt
+    assert PROVENANCE_RULE in prompt
+    assert "never the date of the event itself" in prompt
+    assert ("Memory evidence" in RECALL_RULES[strategy]) is (strategy != "tool")
+    assert ("recall_meeting_context" in prompt) is (strategy != "prefetch")
+
+
+@pytest.mark.parametrize("strategy", ["tool", "prefetch"])
+def test_brief_only_prompt_has_no_recall_rules_for_any_strategy(
+    brief: MeetingBrief, strategy: str
+) -> None:
+    prompt = build_system_prompt(profile(), brief=brief, recall_strategy=strategy)
+
+    assert brief.knowledge_scope == "brief_only"
+    assert "recall" not in prompt.casefold()
+    assert "memory evidence" not in prompt.casefold()
+
+
 def test_build_persona_describes_memory_evidence_schema() -> None:
     prompt = build_system_prompt(profile())
 
@@ -385,7 +411,7 @@ def test_brief_only_prompt_hides_persona_knowledge_and_recall(
     for hidden in ("PERSONA_GOAL_MARKER", "PERSONA_FACT_MARKER", '"goals"', "verified_facts"):
         assert hidden not in prompt
     assert "recall" not in prompt.casefold()
-    assert RECALL_RULES not in prompt
+    assert all(rules not in prompt for rules in RECALL_RULES.values())
     assert PROVENANCE_RULE not in prompt
     assert '"display_name": "Rani Twin"' in prompt
     assert '"speaking_style": "Brief and friendly"' in prompt
@@ -453,7 +479,7 @@ def test_persona_memory_prompt_adds_persona_knowledge_to_the_brief(
     assert json.dumps(PERSONA_GOAL) in prompt
     assert json.dumps(PERSONA_FACT) in prompt
     assert json.dumps(brief.approved_facts[0].text, ensure_ascii=False) in prompt
-    assert RECALL_RULES in prompt
+    assert RECALL_RULES["tool"] in prompt
     assert PROVENANCE_RULE in prompt
 
 
@@ -464,7 +490,7 @@ def test_prompt_without_the_recall_tool_has_no_recall_rules(
     prompt = scoped_prompt(revised(demo_profile, allowed_tools=[]), brief, scope)
 
     assert json.dumps(PERSONA_FACT) in prompt
-    assert RECALL_RULES not in prompt
+    assert all(rules not in prompt for rules in RECALL_RULES.values())
     assert PROVENANCE_RULE not in prompt
     assert "recall" not in prompt.casefold()
 
