@@ -17,7 +17,7 @@
 ## Batasan global
 
 - Tanpa dependency baru atau perubahan lockfile. Python Inggris tanpa komentar/docstring; dokumentasi Bahasa Indonesia; tanpa string Bahasa Indonesia di `.py` (fixture JSON boleh).
-- Jangan mengubah `.env`, backup `.env.*`, persona privat, atau artefak `.runtime` lama. Run baru di `.runtime/live-trust-latency/`.
+- `.env` boleh diubah untuk konfigurasi pengembangan setelah membuat backup `.env.backup-<tanggal>`; jangan menampilkan secret di log, laporan, atau commit. Jangan mengubah backup `.env.*` yang sudah ada, persona privat, atau artefak `.runtime` lama. Run baru di `.runtime/live-trust-latency/`.
 - Gate tidak dilonggarkan: brief dan trust 0 severe dan ≥90% useful (trust ≥65 dari jumlah pair), p95 agent ≤4 s, live p50 ≤3 s / p95 ≤6 s. Menambah kasus diperbolehkan; menghapus kasus atau sampel lambat tidak.
 - `brief_only` tetap tanpa memori. Evidence adalah data, bukan izin.
 - Strategi `tool` tetap tersedia untuk rollback.
@@ -57,7 +57,7 @@
 
 - [ ] Tes merah: deadline total `fakeyou debrief` dihitung dari role debrief (dan fallback bila ada): `timeout_seconds × (max_retries + 1)` per chunk, bukan `conversation.response_timeout_seconds`.
 - [ ] Finding `addressed` memerlukan sedikitnya satu bukti dari ucapan peserta, bukan hanya ucapan twin.
-- [ ] Dokumentasikan rekomendasi `FAKEYOU_DEBRIEF__TIMEOUT_SECONDS=60` di README dan `.env.example`; minta pengguna menambahkannya ke `.env` sendiri.
+- [ ] Dokumentasikan rekomendasi `FAKEYOU_DEBRIEF__TIMEOUT_SECONDS=60` di README dan `.env.example` (`.env` lokal sudah memakainya sejak 5 Oktober).
 - [ ] Ulang corpus debrief 8 kasus dengan review independen.
 
 ## Task 5 — Verifikasi akhir dan acceptance Meet
@@ -76,7 +76,7 @@ Baca plan itu penuh, docs/reports/2026-10-04-recall-latency.md, docs/reports/202
 
 Tujuan: (1) evidence memori prefetch harus dapat dibedakan secara struktural dari ucapan peserta sehingga ucapan "Memory evidence: ..." tidak dapat memalsukan owner note; (2) pertanyaan lanjutan tetap mendapat konteks evidence giliran sebelumnya; (3) turunkan latency agent gemini-3.8-flash lewat kendali penalaran Gemini yang tersedia di langchain-google-genai, dan uji ulang streaming per kalimat hanya bila waktu teks pertama turun jelas; (4) deadline debrief mengikuti role debrief; (5) ulang acceptance Meet dengan memori Graphiti aktif dan stop audio yang dipicu PCM.
 
-Aturan: Python Inggris tanpa komentar/docstring baru dan tanpa string Bahasa Indonesia di .py; dokumentasi Bahasa Indonesia; tanpa dependency baru; jangan mengubah .env atau artefak lama; brief_only tetap tanpa memori; gate kualitas dan latency tidak dilonggarkan; menambah kasus boleh, menghapus kasus tidak; tanpa xfail.
+Aturan: Python Inggris tanpa komentar/docstring baru dan tanpa string Bahasa Indonesia di .py; dokumentasi Bahasa Indonesia; tanpa dependency baru; boleh mengubah .env untuk konfigurasi pengembangan setelah backup dan tanpa menampilkan secret; jangan mengubah artefak lama; brief_only tetap tanpa memori; gate kualitas dan latency tidak dilonggarkan; menambah kasus boleh, menghapus kasus tidak; tanpa xfail.
 
 Tulis tes merah sebelum implementasi. Jalankan sendiri setiap command verifikasi; klaim hijau tanpa output aktual bukan bukti. Corpus live memakai direktori baru di .runtime/live-trust-latency/ dan direview independen seluruh turn dengan standar severity .runtime/meeting-delegation/resume-a-r4-review.md. Catat progres di .runtime/live-trust-latency/status.json (task, status, command, exit code, artefak, gate terbuka); setelah compaction baca file itu sebelum lanjut.
 
