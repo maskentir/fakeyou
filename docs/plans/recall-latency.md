@@ -19,7 +19,7 @@ Kesimpulan: biaya ada pada perjalanan model kedua, bukan pada recall. [Pelajaran
 
 ## Pendekatan
 
-Ambil evidence memori **sebelum** model dipanggil, lalu masukkan sebagai konteks giliran, sehingga jawaban cukup satu perjalanan model dan model tidak bisa melewati recall. Ini menerapkan pola LMA "siapkan resource sebelum jawaban diperlukan" (pre-connect pada frasa parsial, `nova-agent.ts:1860–1885`) ke retrieval. System prompt tetap statis agar cache prompt provider tidak pecah; evidence per giliran masuk sebagai pesan konteks terpisah.
+Ambil evidence memori **sebelum** model dipanggil, lalu masukkan sebagai konteks giliran, sehingga jawaban cukup satu perjalanan model dan model tidak bisa melewati recall. Vexa memindahkan retrieval dari loop tool ke kode sebelum panggilan model dua kali karena alasan yang sama ([pelajaran 4 Oktober](../reports/2026-10-04-knowledge-latency-lessons.md)); LMA menyiapkan resource sebelum jawaban diperlukan (pre-connect pada frasa parsial, `nova-agent.ts:1860–1885`). System prompt tetap statis agar cache prompt provider tidak pecah; evidence per giliran masuk sebagai pesan konteks terpisah.
 
 Bukan bagian plan ini: streaming per kalimat ([plan tersendiri](sentence-streaming.md)), speech-to-speech, filler "sebentar saya cek" (tidak diperlukan bila tidak ada perjalanan kedua), dan model router tambahan.
 
@@ -42,13 +42,15 @@ Bukan bagian plan ini: streaming per kalimat ([plan tersendiri](sentence-streami
 **File:** `memory.py`, `assembly.py`, `persona.py`, modul giliran, tes terkait.
 
 - [ ] Tes merah: (a) giliran dengan memori menghasilkan tepat satu panggilan model dan evidence muncul sebagai pesan konteks dengan format `render_evidence` yang sama; (b) system prompt byte-identik antar giliran; (c) timeout/kegagalan search → giliran tetap berjalan dengan evidence "unavailable", tercatat di journal, tanpa mengarang; (d) `brief_only` tidak memanggil search; (e) namespace/group dan filter pending/superseded/missing-source sama dengan tool recall; (f) cancellation giliran membatalkan search yang sedang berjalan.
+- [ ] Jaga klien Graphiti/embedding tetap hangat sepanjang sesi dan jangan menambah efek samping sinkron di jalur panas (pelajaran LMA).
 - [ ] Ekstrak fungsi search yang sekarang ada di dalam tool menjadi fungsi bersama, sehingga tool dan prefetch memakai satu jalur filter/render. Query prefetch = ucapan final peserta ditambah konteks giliran sebelumnya secukupnya; tentukan dan uji batasnya.
 - [ ] Timeout prefetch memakai `memory.recall.timeout_seconds` yang ada kecuali Task 0 membuktikan perlu batas terpisah; bila menambah key, dokumentasikan dan tambahkan ke `.env.example`.
+- [ ] Kode memilih cabang konteks: evidence tersedia → instruksi menjawab dari evidence itu; evidence kosong atau search gagal → instruksi eksplisit bahwa catatan tidak ditemukan dan jawaban harus menyatakan tidak diketahui tanpa mengarang. Tes kedua cabang.
 - [ ] Sesuaikan `RECALL_RULES`/`PROVENANCE_RULE` agar merujuk evidence yang disediakan untuk giliran ini, tanpa melemahkan aturan atribusi, tanggal sumber, konflik, dan "tidak diketahui".
 
 ## Task 2 — Tool recall: pertahankan atau lepas
 
-- [ ] Varian A: prefetch tanpa tool recall. Varian B: prefetch dengan tool recall tetap terpasang untuk pencarian lanjutan. Keduanya dibangun dari kode yang sama lewat konfigurasi atau parameter assembly yang teruji; jangan menduplikasi jalur.
+- [ ] Varian A: prefetch tanpa tool recall. Varian B (hybrid, pola LMA): prefetch default, tool recall tetap terpasang tetapi prompt hanya mengizinkannya sebagai hop kedua ketika evidence prefetch kosong atau tidak menjawab; ukur seberapa sering hop kedua terjadi. Keduanya dibangun dari kode yang sama lewat konfigurasi atau parameter assembly yang teruji; jangan menduplikasi jalur.
 - [ ] Pilih varian berdasarkan Task 3: B hanya dipertahankan bila p95 tetap ≤4 s dan kualitas lebih baik.
 
 ## Task 3 — Eval harness dan corpus baru
@@ -56,7 +58,7 @@ Bukan bagian plan ini: streaming per kalimat ([plan tersendiri](sentence-streami
 - [ ] Perbarui harness trust/brief agar evidence prefetch tercatat per giliran (query, hasil, durasi, error) di `turns.json`, dan rubric "recall wajib" dinilai dari evidence yang benar-benar tersedia bagi model, bukan dari ada/tidaknya tool call. Jangan melonggarkan kriteria; tambahkan tes bahwa giliran tanpa evidence padahal recall wajib tetap gagal.
 - [ ] Jalankan corpus brief 12×3 dan trust 24×3 untuk `gemini-3.8-flash` dan `gemini-3.5-flash-lite`, varian A dan B, ke direktori baru `.runtime/recall-latency/<run>/`. Provenance kandidat dan runtime snapshot harus valid.
 - [ ] Review semantik independen seluruh turn untuk setiap run yang lulus latency, dengan standar severity review `resume-a-r4-review.md` (contoh severe: "bukan Rani" untuk speaker tak dikenal, tanggal `recorded_at` sebagai tanggal event, tambahan "pagi", janji owner akan konfirmasi nanti).
-- [ ] Laporkan tabel model × varian: severe, useful, p50/p95 giliran 1-call dan giliran ber-memori, jumlah panggilan model per giliran.
+- [ ] Laporkan tabel model × varian: severe, useful, p50/p95 giliran 1-call dan giliran ber-memori, jumlah panggilan model per giliran. Bandingkan latency antar model hanya pada giliran yang grounded di kedua arm; giliran yang melewati evidence wajib dilaporkan terpisah.
 
 ## Task 4 — Prefetch pada transkrip interim (opsional, berdasar Task 0)
 
