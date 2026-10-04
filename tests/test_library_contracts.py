@@ -96,6 +96,17 @@ def test_init_chat_model_forwards_openai_compatible_provider_options() -> None:
     assert model.reasoning_effort == "minimal"
 
 
+def test_init_chat_model_forwards_google_reasoning_effort() -> None:
+    model = init_chat_model(
+        "gemini-3.8-flash",
+        model_provider="google_genai",
+        api_key="key",
+        reasoning_effort="low",
+    )
+
+    assert model.reasoning_effort == "low"
+
+
 def test_init_chat_model_sends_extra_body_fields_in_the_request() -> None:
     model = init_chat_model(
         "openai:MiniMax-M2.7-highspeed",

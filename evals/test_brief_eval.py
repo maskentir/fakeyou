@@ -234,6 +234,7 @@ async def replay_briefs(
                         seen_tools = len(trajectory)
                         seen_results = len(counter.tool_results)
                         seen_prefetch = len(counter.prefetch)
+                        seen_usage = len(counter.usage)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
                             id=f"{case['id']}-{run}-{index}",
@@ -274,6 +275,7 @@ async def replay_briefs(
                                 "tool_trajectory": calls,
                                 "tool_results": counter.tool_results[seen_results:],
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
+                                "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,
                                 "latency_seconds": latency,
                                 "exception": error,

@@ -288,6 +288,7 @@ async def replay_trust(
                         seen_tools = len(trajectory)
                         seen_results = len(counter.tool_results)
                         seen_prefetch = len(counter.prefetch)
+                        seen_usage = len(counter.usage)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
                             id=f"{case['id']}-{run}-{index}",
@@ -331,6 +332,7 @@ async def replay_trust(
                                 "tool_trajectory": calls,
                                 "tool_results": counter.tool_results[seen_results:],
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
+                                "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,
                                 "recall_called": bool(evidence or counter.prefetch[seen_prefetch:]),
                                 "recall_evidence": evidence,
@@ -1235,6 +1237,17 @@ def strategy_settings(strategy: str) -> Settings:
     return settings.model_copy(
         update={"memory": settings.memory.model_copy(update={"recall": recall})}
     )
+
+
+async def test_contract_turns_record_token_usage_per_model_call() -> None:
+    fixture = load_trust_fixture()
+    score = await replay_trust(
+        contract_model,
+        {**fixture, "cases": fixture["cases"][:1]},
+        1,
+        settings=strategy_settings("tool"),
+    )
+    assert len(score.turns[0]["token_usage"]) == score.turns[0]["model_calls"]
 
 
 async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() -> None:

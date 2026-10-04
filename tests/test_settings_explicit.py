@@ -86,7 +86,7 @@ def test_inspection_does_not_require_credentials(capsys):
         {"provider": "anthropic", "extra_body": {}},
         {"provider": "anthropic", "reasoning_effort": "minimal"},
         {"provider": "google", "extra_body": {}},
-        {"provider": "google", "reasoning_effort": "minimal"},
+        {"provider": "google", "reasoning_effort": "unlimited"},
         {"provider": "google", "model": "google_genai:gemini-3.8-flash"},
         {"provider": "ollama"},
     ],
@@ -94,6 +94,13 @@ def test_inspection_does_not_require_credentials(capsys):
 def test_invalid_provider_configuration_is_rejected(reply):
     with pytest.raises(ValueError):
         Settings(_env_file=None, reply=reply)
+
+
+def test_google_reply_accepts_reasoning_effort_with_unchanged_default():
+    from fakeyou.settings import GoogleReply
+
+    assert GoogleReply().reasoning_effort is None
+    assert GoogleReply(reasoning_effort="low").reasoning_effort == "low"
 
 
 @pytest.mark.parametrize(

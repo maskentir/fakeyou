@@ -14,6 +14,7 @@ from fakeyou.memory import (
 from fakeyou.provider_faults import classify_exception
 from fakeyou.settings import (
     CompatibleReply,
+    GoogleReply,
     MemorySettings,
     OpenAIReply,
     ReplySettings,
@@ -44,7 +45,10 @@ def preflight_hosts(
 def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
     options: dict[str, Any] = {"timeout": role.timeout_seconds, "max_retries": role.max_retries}
     options["base_url"] = role.resolved_base_url
-    if isinstance(role, (OpenAIReply, CompatibleReply)) and role.reasoning_effort is not None:
+    if (
+        isinstance(role, (OpenAIReply, CompatibleReply, GoogleReply))
+        and role.reasoning_effort is not None
+    ):
         options["reasoning_effort"] = role.reasoning_effort
     if isinstance(role, CompatibleReply) and role.extra_body is not None:
         options["extra_body"] = role.extra_body

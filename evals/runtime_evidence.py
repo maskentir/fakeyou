@@ -160,7 +160,7 @@ def runtime_metadata(settings: Settings) -> dict[str, Any]:
         "sentence_streaming": settings.conversation.sentence_streaming,
         "deadline_enforced": True,
         "model_token_budget_enforced": False,
-        "token_usage_collected": False,
+        "token_usage_collected": True,
         "unproven": [
             "activation",
             "participation",
@@ -185,6 +185,7 @@ class ModelCallCounter(AsyncCallbackHandler):
         self.trajectory: list[dict[str, Any]] = []
         self.tool_results: list[dict[str, Any]] = []
         self.prefetch: list[dict[str, Any]] = []
+        self.usage: list[dict[str, Any] | None] = []
         self.running: dict[Any, tuple[dict[str, Any], float]] = {}
 
     async def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:
@@ -242,6 +243,16 @@ class ModelCallCounter(AsyncCallbackHandler):
         entry, started = self.running.pop(run_id)
         entry["exception"] = f"{type(error).__name__}: {error}"
         entry["duration_ms"] = (time.monotonic() - started) * 1000
+
+    async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        message = None
+        for batch in getattr(response, "generations", None) or []:
+            for generation in batch:
+                candidate = getattr(generation, "message", None)
+                if candidate is not None:
+                    message = candidate
+        meta = getattr(message, "usage_metadata", None) if message is not None else None
+        self.usage.append(dict(meta) if meta else None)
 
 
 def record_tool_results(trajectory: list[dict[str, Any]]) -> ToolResultCallback:

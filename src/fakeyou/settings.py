@@ -88,6 +88,7 @@ class GoogleReply(ReplyBase):
     provider: Literal["google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = "https://generativelanguage.googleapis.com"
+    reasoning_effort: ReasoningEffort | None = None
 
 
 ReplySettings = Annotated[

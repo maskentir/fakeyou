@@ -53,7 +53,14 @@ from fakeyou.persona import PersonaProfile, build_system_prompt, persona_digest
 from fakeyou.playback import PlaybackEvent
 from fakeyou.record import load_meeting_record, meeting_record_path
 from fakeyou.session import SessionResult
-from fakeyou.settings import DEFAULTS, CompatibleReply, EmbedderSettings, MiniMaxTTS, Settings
+from fakeyou.settings import (
+    DEFAULTS,
+    CompatibleReply,
+    EmbedderSettings,
+    GoogleReply,
+    MiniMaxTTS,
+    Settings,
+)
 from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
 
@@ -2972,6 +2979,29 @@ def test_chat_model_uses_role_configuration(settings, monkeypatch):
                 "max_retries": 2,
                 "base_url": "https://api.meta.ai/v1",
                 "reasoning_effort": "minimal",
+            },
+        )
+    ]
+
+
+def test_chat_model_forwards_google_reasoning_effort(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings.reply = GoogleReply(
+        model="gemini-3.8-flash",
+        api_key=SecretStr("google-key"),
+        reasoning_effort="low",
+    )
+    providers.create_chat_model(settings)
+    assert calls == [
+        (
+            ("gemini-3.8-flash",),
+            {
+                "model_provider": "google_genai",
+                "api_key": "google-key",
+                "timeout": 15.0,
+                "max_retries": 2,
+                "base_url": "https://generativelanguage.googleapis.com",
+                "reasoning_effort": "low",
             },
         )
     ]
