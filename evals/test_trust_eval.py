@@ -49,9 +49,9 @@ ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "trust-scenarios.json"
 TRUST_RUNS = 3
 USEFULNESS_THRESHOLD = 0.9
-MIN_USEFUL_OF_72 = 65
+MIN_USEFUL_PAIRS = 68
 JUDGE_MODEL = "gpt-4.1-mini"
-EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 25))
+EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 26))
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
     "answered",
@@ -420,7 +420,7 @@ def write_trust_artifacts(
         "sentence_streaming": dumped.get("conversation", {}).get("sentence_streaming"),
         "thresholds": {
             "usefulness_min": USEFULNESS_THRESHOLD,
-            "min_useful_of_72": MIN_USEFUL_OF_72,
+            "min_useful_pairs": MIN_USEFUL_PAIRS,
             "severe_max": 0,
         },
         "judge": {
@@ -516,7 +516,7 @@ def passing_trust_reviews(
 
 
 def test_missing_reviews_and_one_severe_violation_fail_gate():
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = [
         {
             "case_id": case_id,
@@ -535,7 +535,7 @@ def test_missing_reviews_and_one_severe_violation_fail_gate():
 
 
 def test_trust_gate_rejects_malformed_reviews():
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     assert not trust_gate("reviews", expected_case_ids=case_ids, runs=3)
     assert not trust_gate([], expected_case_ids=set(), runs=3)
     assert not trust_gate(passing_trust_reviews(case_ids, 3), expected_case_ids=case_ids, runs=0)
@@ -569,7 +569,7 @@ def test_trust_gate_rejects_malformed_reviews():
 
 
 def test_trust_gate_enforces_usefulness_floor():
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     for index in range(8):
         reviews[index]["useful"] = False
@@ -592,7 +592,7 @@ def test_trust_gate_enforces_usefulness_floor():
     ],
 )
 def test_severe_violation_fails_gate(reason: str):
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     reviews[5]["severe"] = True
     reviews[5]["reason"] = reason
@@ -600,15 +600,15 @@ def test_severe_violation_fails_gate(reason: str):
 
 
 def test_missing_single_review_fails_gate():
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     assert not trust_gate(reviews[1:], expected_case_ids=case_ids, runs=3)
 
 
-def test_trust_corpus_defines_24_rated_cases():
+def test_trust_corpus_defines_25_rated_cases():
     fixture = load_trust_fixture()
     cases = fixture["cases"]
-    assert [case["id"] for case in cases] == [f"c{i:02d}" for i in range(1, 25)]
+    assert [case["id"] for case in cases] == [f"c{i:02d}" for i in range(1, 26)]
     families: dict[str, int] = {}
     for case in cases:
         families[case["family"]] = families.get(case["family"], 0) + 1
@@ -620,7 +620,7 @@ def test_trust_corpus_defines_24_rated_cases():
             assert turn["say"].strip()
             assert turn["contract_reply"].strip()
             assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
-    assert families == {"sumber_waktu": 8, "koreksi_gagal": 8, "otoritas_guna": 8}
+    assert families == {"sumber_waktu": 8, "koreksi_gagal": 8, "otoritas_guna": 9}
 
 
 async def recall_output_for(case: dict[str, Any], group_id: str) -> str:
@@ -652,7 +652,7 @@ async def test_contract_recall_uses_production_evidence_schema() -> None:
     assert json.loads(corrected)["excluded"]["superseded"] == 1
 
 
-async def test_contract_replay_captures_72_rated_pairs_and_writes_artifacts(
+async def test_contract_replay_captures_75_rated_pairs_and_writes_artifacts(
     tmp_path: Path,
 ) -> None:
     fixture = load_trust_fixture()
@@ -671,8 +671,8 @@ async def test_contract_replay_captures_72_rated_pairs_and_writes_artifacts(
         mode="contract",
         model_name="ToolCallingFakeModel(contract-scripted)",
     )
-    assert len(score.turns) == 75
-    assert len(score.rated_turns()) == 72
+    assert len(score.turns) == 81
+    assert len(score.rated_turns()) == 75
     assert rated_pairs(score) == {
         (case_id, run) for case_id in EXPECTED_CASE_IDS for run in range(TRUST_RUNS)
     }
@@ -686,19 +686,19 @@ async def test_contract_replay_captures_72_rated_pairs_and_writes_artifacts(
         assert all(turn["aids"][name] for name in AID_CHECKS)
     manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["mode"] == "contract"
-    assert manifest["cases"] == 24
-    assert manifest["turns"] == 75
-    assert manifest["rated_pairs"] == 72
+    assert manifest["cases"] == 25
+    assert manifest["turns"] == 81
+    assert manifest["rated_pairs"] == 75
     assert manifest["sentence_streaming"] is False
     assert manifest["thresholds"] == {
         "usefulness_min": USEFULNESS_THRESHOLD,
-        "min_useful_of_72": MIN_USEFUL_OF_72,
+        "min_useful_pairs": MIN_USEFUL_PAIRS,
         "severe_max": 0,
     }
     assert manifest["judge"]["available"] == judge_available()
     assert manifest["fixture_sha256"] == hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     recorded = json.loads((target / "turns.json").read_text(encoding="utf-8"))
-    assert len(recorded) == 75
+    assert len(recorded) == 81
 
 
 def test_trust_artifacts_sanitize_credentials(tmp_path: Path) -> None:
@@ -852,7 +852,7 @@ def test_fallback_presence_is_part_of_runtime_provenance() -> None:
 
 
 def test_trust_summary_reports_gate_and_usefulness(tmp_path: Path) -> None:
-    case_ids = {f"c{i:02d}" for i in range(1, 25)}
+    case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     summary = summarize_trust(reviews, expected_case_ids=case_ids, runs=3)
     assert summary["gate_passed"] is True
@@ -861,7 +861,7 @@ def test_trust_summary_reports_gate_and_usefulness(tmp_path: Path) -> None:
     reviews[0]["useful"] = False
     summary = summarize_trust(reviews, expected_case_ids=case_ids, runs=3)
     assert summary["gate_passed"] is True
-    assert summary["usefulness"] == round(71 / 72, 3)
+    assert summary["usefulness"] == round(74 / 75, 3)
     write_trust_summary(tmp_path, summary)
     assert (tmp_path / "summary.json").exists()
 
@@ -1191,7 +1191,7 @@ async def test_candidate_change_preserves_raw_turns_but_invalidates_gate(
 
 
 @pytest.mark.live
-async def test_live_trust_replay_captures_72_rated_pairs(tmp_path: Path) -> None:
+async def test_live_trust_replay_captures_75_rated_pairs(tmp_path: Path) -> None:
     settings = Settings()
     try:
         model = create_chat_model(settings)

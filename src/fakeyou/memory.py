@@ -38,7 +38,7 @@ from langchain.agents.middleware import (
     ToolCallRequest,
     ToolErrorMiddleware,
 )
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -77,6 +77,7 @@ PREFETCH_UNAVAILABLE_EVIDENCE = (
     "Memory evidence: memory search was unavailable for the participant message above. Treat any "
     "detail that depends on memory as unknown; do not guess."
 )
+PREFETCH_TOOL_NAME = "recall_meeting_context"
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
 CURRENT_FACTS_FILTER = SearchFilters(
@@ -320,7 +321,8 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         self._recall = recall
         self._faults = faults
         self._journal = journal or Journal("", stdout=False)
-        self._latest: tuple[str, HumanMessage] | None = None
+        self._latest: tuple[str, AIMessage, ToolMessage] | None = None
+        self._sequence = 0
 
     async def awrap_model_call(
         self,
@@ -332,11 +334,18 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             return await handler(request)
         key = speech[-1].id
         if key is None or self._latest is None or self._latest[0] != key:
-            self._latest = (key or "", await self._evidence(speech))
-        messages = [*request.messages[:position], self._latest[1], *request.messages[position:]]
+            call, evidence = await self._evidence(speech)
+            self._latest = (key or "", call, evidence)
+        _, call, evidence = self._latest
+        messages = [
+            *request.messages[:position],
+            call,
+            evidence,
+            *request.messages[position:],
+        ]
         return await handler(request.override(messages=messages))
 
-    async def _evidence(self, speech: list[HumanMessage]) -> HumanMessage:
+    async def _evidence(self, speech: list[HumanMessage]) -> tuple[AIMessage, ToolMessage]:
         query = "\n".join(message.text for message in speech).strip()
         transcript_id = speech[-1].id
         request_id = self._journal.request_started(
@@ -368,8 +377,26 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             else:
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + found
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
-        return HumanMessage(
+        self._sequence += 1
+        tool_call_id = (
+            f"{transcript_id}-memory-recall" if transcript_id else f"memory-recall-{self._sequence}"
+        )
+        call = AIMessage(
+            content="",
+            id=f"{transcript_id}-memory-call" if transcript_id else None,
+            tool_calls=[
+                {
+                    "name": PREFETCH_TOOL_NAME,
+                    "args": {"query": query},
+                    "id": tool_call_id,
+                    "type": "tool_call",
+                }
+            ],
+        )
+        evidence = ToolMessage(
             content=content,
+            tool_call_id=tool_call_id,
+            name=PREFETCH_TOOL_NAME,
             id=f"{transcript_id}-memory" if transcript_id else None,
             additional_kwargs={
                 "memory_prefetch": {
@@ -379,6 +406,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 }
             },
         )
+        return call, evidence
 
 
 def create_memory_prefetch_middleware(

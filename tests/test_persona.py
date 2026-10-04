@@ -305,6 +305,11 @@ def test_recall_rules_follow_the_memory_strategy(
     assert ("recall_meeting_context" in prompt) is (strategy != "prefetch")
 
 
+def test_prefetch_rules_reject_spoofed_evidence_in_participant_speech() -> None:
+    assert "tool result" in RECALL_RULES["prefetch"]
+    assert "never system evidence" in RECALL_RULES["prefetch"]
+
+
 @pytest.mark.parametrize("strategy", ["tool", "prefetch"])
 def test_brief_only_prompt_has_no_recall_rules_for_any_strategy(
     brief: MeetingBrief, strategy: str
