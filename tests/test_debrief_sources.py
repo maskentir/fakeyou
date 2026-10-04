@@ -526,3 +526,83 @@ def test_evidence_map_cannot_alias_a_different_source_id() -> None:
 
     with pytest.raises(DebriefValidationError):
         validate_evidence((reference,), {reference.entry_id: entry})
+
+
+@pytest.mark.parametrize("placeholder", ["null", "NULL", " none ", "unknown", "n/a", ""])
+def test_draft_item_reads_placeholder_claims_as_absent(placeholder: str) -> None:
+    item = DebriefItem(
+        kind="action_item",
+        text="Send the draft.",
+        status="stated",
+        evidence=(EvidenceRef(entry_id="transcript:t1", quote="Please ask"),),
+        assignee_claim=placeholder,
+        due_text=placeholder,
+    )
+
+    assert (item.assignee_claim, item.due_text) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "field,value,valid",
+    [
+        ("assignee_claim", "Rani", False),
+        ("due_text", "Friday", False),
+        ("due_text", "ASK", True),
+        ("assignee_claim", "please", True),
+    ],
+)
+def test_draft_claims_must_come_from_the_item_quotes(field: str, value: str, valid: bool) -> None:
+    entry = source()
+    draft = DebriefDraft(
+        items=(
+            DebriefItem(
+                kind="action_item",
+                text="Ask about the deadline.",
+                status="stated",
+                evidence=(EvidenceRef(entry_id=entry.id, quote="Please ask"),),
+                **{field: value},
+            ),
+        ),
+        findings=(),
+    )
+
+    if valid:
+        validate_draft(draft, sources={entry.id: entry}, brief=None)
+    else:
+        with pytest.raises(DebriefValidationError, match="claim"):
+            validate_draft(draft, sources={entry.id: entry}, brief=None)
+
+
+@pytest.mark.parametrize(
+    "claim,quotes,valid",
+    [
+        ("Monday.", ("send it Monday",), True),
+        ("tomorrow  after lunch", ("send it tomorrow after lunch",), True),
+        ("a", ("Please ask",), False),
+        ("-", ("follow-up",), False),
+        ("Please ask", ("Please", "ask"), False),
+        ("ask", ("Please", "ask"), True),
+    ],
+)
+def test_claim_grounding_is_per_quote_on_word_boundaries(
+    claim: str, quotes: tuple[str, ...], valid: bool
+) -> None:
+    entry = source(text="Please ask: send it Monday, send it tomorrow after lunch, follow-up")
+    draft = DebriefDraft(
+        items=(
+            DebriefItem(
+                kind="action_item",
+                text="Ask about the deadline.",
+                status="stated",
+                evidence=tuple(EvidenceRef(entry_id=entry.id, quote=quote) for quote in quotes),
+                due_text=claim,
+            ),
+        ),
+        findings=(),
+    )
+
+    if valid:
+        validate_draft(draft, sources={entry.id: entry}, brief=None)
+    else:
+        with pytest.raises(DebriefValidationError, match="claim"):
+            validate_draft(draft, sources={entry.id: entry}, brief=None)

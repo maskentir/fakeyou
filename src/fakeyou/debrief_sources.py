@@ -1,4 +1,5 @@
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -158,6 +159,17 @@ def validate_evidence(evidence: Sequence[EvidenceRef], sources: Mapping[str, Sou
             raise DebriefValidationError("invalid evidence reference")
 
 
+CLAIM_EDGE_PUNCTUATION = ".,!?;:\"'“”‘’()[]{}-–—… "
+
+
+def _claim_in_quotes(claim: str, quotes: Sequence[str]) -> bool:
+    words = claim.strip(CLAIM_EDGE_PUNCTUATION).split()
+    if not words:
+        return False
+    pattern = r"(?<!\w)" + r"\s+".join(map(re.escape, words)) + r"(?!\w)"
+    return any(re.search(pattern, quote, re.IGNORECASE) for quote in quotes)
+
+
 def validate_draft(
     draft: DebriefDraft, *, sources: Mapping[str, SourceEntry], brief: MeetingBrief | None
 ) -> None:
@@ -167,6 +179,10 @@ def validate_draft(
         raise DebriefValidationError("invalid debrief draft") from None
     for item in draft.items:
         validate_evidence(item.evidence, sources)
+        quotes = [reference.quote for reference in item.evidence]
+        for claim in (item.assignee_claim, item.due_text):
+            if claim is not None and not _claim_in_quotes(claim, quotes):
+                raise DebriefValidationError("item claim is not in its evidence quotes")
     valid_ids = (
         {f"objective:{item.id}" for item in brief.objectives}
         | {f"question:{item.id}" for item in brief.questions}

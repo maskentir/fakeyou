@@ -1,8 +1,27 @@
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from fakeyou.invariants import SessionId
+
+ABSENT_CLAIMS = frozenset({"", "null", "none", "unknown", "n/a"})
+
+
+def _absent_as_none(value: object) -> object:
+    if isinstance(value, str) and value.strip().casefold() in ABSENT_CLAIMS:
+        return None
+    return value
+
+
+ClaimText = Annotated[str | None, BeforeValidator(_absent_as_none)]
 
 
 class EvidenceRef(BaseModel):
@@ -19,8 +38,8 @@ class DebriefItem(BaseModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
     status: Literal["stated", "proposed", "needs_owner", "uncertain"]
     evidence: Annotated[tuple[EvidenceRef, ...], Field(min_length=1, max_length=10)]
-    assignee_claim: str | None = None
-    due_text: str | None = None
+    assignee_claim: ClaimText = None
+    due_text: ClaimText = None
 
     @model_validator(mode="after")
     def kind_matches_status(self) -> Self:
