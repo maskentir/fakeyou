@@ -1,9 +1,10 @@
 import asyncio
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
+from itertools import count
 from math import isfinite
 from operator import itemgetter
 from string import ascii_uppercase
@@ -15,6 +16,7 @@ VOICE_ACTIVITY_DRAIN_JS = (
 )
 VOICE_PARTICIPANT_PREFIX = "speaker-"
 PIPELINE_LAG_MS = 200.0
+FRAME_LAG_MS = 300.0
 ACTIVE_LEVEL = 0.01
 DOMINANT_MARGIN = 0.5
 MEET_AUDIO_SLOTS = 3
@@ -25,6 +27,9 @@ POLL_INTERVAL_SECONDS = 0.25
 
 VoiceReason = Literal[
     "dominant_slot",
+    "dominant_csrc",
+    "no_identity",
+    "csrc_conflict",
     "no_speech",
     "stale",
     "no_source",
@@ -67,11 +72,15 @@ class Tenure:
     device: str | None = None
 
 
+def voice_labels() -> Iterator[str]:
+    return map(voice_label, count())
+
+
 class SlotBinder:
-    def __init__(self) -> None:
+    def __init__(self, labels: Iterator[str] | None = None) -> None:
         self._tenures: dict[int, Tenure] = {}
         self._present: frozenset[str] = frozenset()
-        self._issued = 0
+        self._labels = labels if labels is not None else voice_labels()
 
     def update_roster(self, devices: Iterable[str]) -> None:
         present = frozenset(devices)
@@ -97,8 +106,7 @@ class SlotBinder:
             return "self_overlap"
         if len(self._unbound_tenures()) >= len(self._unbound_devices()):
             return "slot_conflict"
-        tenure = Tenure(voice_label(self._issued))
-        self._issued += 1
+        tenure = Tenure(next(self._labels))
         self._tenures[slot] = tenure
         self._bind()
         return tenure
@@ -135,6 +143,7 @@ class VoiceAttribution:
     slot: int | None = None
     bound: bool = False
     levels: tuple[tuple[int, float], ...] = ()
+    csrc: tuple[int, ...] = ()
 
     def journal_fields(self) -> dict[str, Any]:
         return {
@@ -142,6 +151,7 @@ class VoiceAttribution:
             "speaker_slot": self.slot,
             "speaker_bound": self.bound,
             "speaker_levels": {str(slot): round(level, 4) for slot, level in self.levels},
+            "speaker_csrc": list(self.csrc),
         }
 
 
@@ -189,11 +199,16 @@ class VoiceActivityTracker:
         twin_name: str,
         monotonic: Callable[[], float] = time.monotonic,
         lag_ms: float = PIPELINE_LAG_MS,
+        frame_lag_ms: float = FRAME_LAG_MS,
     ) -> None:
         self._twin_name = twin_name.strip().casefold()
         self._monotonic = monotonic
         self._lag_ms = lag_ms
+        self._frame_lag_ms = frame_lag_ms
         self._levels: deque[tuple[float, int, float]] = deque()
+        self._frames: deque[tuple[float, int, float, frozenset[int]]] = deque()
+        self._partners: dict[int, set[int]] = {}
+        self._csrc_labels: dict[int, str] = {}
         self._anchors: deque[tuple[float, float]] = deque(maxlen=CLOCK_ANCHORS)
         self._speech = _Intervals()
         self._self_speech = _Intervals()
@@ -203,7 +218,8 @@ class VoiceActivityTracker:
         self._instance: Any = None
         self._cursor_ms = 0.0
         self._attempts = 0
-        self._binder = SlotBinder()
+        self._labels = voice_labels()
+        self._binder = SlotBinder(self._labels)
 
     def now_ms(self) -> float:
         return self._monotonic() * 1000.0
@@ -225,6 +241,7 @@ class VoiceActivityTracker:
             if self._instance is not None:
                 self._binder.reset()
                 self._levels.clear()
+                self._frames.clear()
             self._anchors.clear()
             self._instance = instance
         self._anchors.append((received_ms - sent_ms, (sent_ms + received_ms) / 2.0 - page_ms))
@@ -236,6 +253,8 @@ class VoiceActivityTracker:
             if at is None or slot is None or level is None or not slot.is_integer():
                 continue
             self._levels.append((at, int(slot), level))
+        for entry in batch.get("frames") or ():
+            self._observe_frame(entry)
         local = batch.get("local")
         if isinstance(local, list):
             self._local_slots = frozenset(int(slot) for slot in local if _number(slot) is not None)
@@ -252,6 +271,8 @@ class VoiceActivityTracker:
         evidence_id = f"voice-{self._attempts}"
         if not spans:
             return VoiceAttribution("unknown", "no_speech", evidence_id)
+        if self._partners:
+            return self._attribute_csrc(spans, evidence_id)
         offset = self._offset()
         windows = [(start - self._lag_ms, end - self._lag_ms) for start, end in spans]
         if (
@@ -290,6 +311,75 @@ class VoiceActivityTracker:
             levels,
         )
 
+    def _attribute_csrc(
+        self, spans: Sequence[tuple[float, float]], evidence_id: str
+    ) -> VoiceAttribution:
+        offset = self._offset()
+        windows = [(start - self._frame_lag_ms, end - self._frame_lag_ms) for start, end in spans]
+        if (
+            offset is None
+            or self._sampled_page_ms is None
+            or self._sampled_page_ms + offset < windows[0][0]
+        ):
+            return VoiceAttribution("unknown", "stale", evidence_id)
+        peaks: dict[int, float] = {}
+        identities: dict[int, set[int]] = {}
+        for at, slot, level, csrcs in self._frames:
+            mono = at + offset
+            if any(lo <= mono <= hi for lo, hi in windows):
+                peaks[slot] = max(peaks.get(slot, 0.0), level)
+                identities.setdefault(slot, set()).update(csrcs)
+        levels = tuple(sorted(peaks.items()))
+        loud = {slot: peak for slot, peak in peaks.items() if peak >= ACTIVE_LEVEL}
+        if not loud:
+            covered = self._sampled_page_ms + offset >= windows[-1][1]
+            reason: VoiceReason = "no_source" if covered else "stale"
+            return VoiceAttribution("unknown", reason, evidence_id, levels=levels)
+        ceiling = max(loud.values()) * DOMINANT_MARGIN
+        dominant = sorted(slot for slot, peak in loud.items() if peak >= ceiling)
+        if len(dominant) > 1:
+            return VoiceAttribution("unknown", "overlap", evidence_id, levels=levels)
+        slot = dominant[0]
+        markers = {csrc for csrc, partners in self._partners.items() if len(partners) > 1}
+        identity = tuple(sorted(identities[slot] - markers))
+        if not identity:
+            return VoiceAttribution("unknown", "no_identity", evidence_id, slot, levels=levels)
+        labeled = [csrc for csrc in identity if csrc in self._csrc_labels]
+        known = {self._csrc_labels[csrc] for csrc in labeled}
+        if len(known) > 1 or (labeled and len(labeled) < len(identity)):
+            return VoiceAttribution(
+                "unknown", "csrc_conflict", evidence_id, slot, levels=levels, csrc=identity
+            )
+        label = known.pop() if known else next(self._labels)
+        for csrc in identity:
+            self._csrc_labels.setdefault(csrc, label)
+        return VoiceAttribution(
+            voice_participant_id(label),
+            "dominant_csrc",
+            evidence_id,
+            slot,
+            levels=levels,
+            csrc=identity,
+        )
+
+    def _observe_frame(self, entry: Any) -> None:
+        if not isinstance(entry, Sequence) or len(entry) != 4:
+            return
+        at, slot, level = (_number(value) for value in entry[:3])
+        sources = entry[3]
+        if at is None or slot is None or level is None or not slot.is_integer():
+            return
+        if not isinstance(sources, Sequence):
+            return
+        csrcs = frozenset(
+            int(value)
+            for value in sources
+            if (number := _number(value)) is not None and number.is_integer()
+        )
+        self._frames.append((at, int(slot), level, csrcs))
+        for csrc in csrcs:
+            self._partners.setdefault(csrc, set()).update(csrcs - {csrc})
+
     def _offset(self) -> float | None:
         if not self._anchors:
             return None
@@ -322,6 +412,8 @@ class VoiceActivityTracker:
             return
         while self._levels and self._levels[0][0] + offset < cutoff:
             self._levels.popleft()
+        while self._frames and self._frames[0][0] + offset < cutoff:
+            self._frames.popleft()
 
 
 class VoiceActivityLoop:

@@ -97,11 +97,55 @@ salah. Overlap tinggi konsisten dengan bocoran antar-mic di satu ruangan.
     jawaban twin jalan), tetapi belum diuji lama.
   - Pembungkus prototype bisa terdeteksi.
   - Makna CSRC `42` belum diketahui.
-- Langkah berikut:
-  1. Sesi live yang merekam `audioLevel` frame, dua orang di ruangan
-     berbeda.
-  2. Replay aturan dominan per slot dengan pemetaan slot ke CSRC.
-  3. Bila stabilitas per peserta ≥0,95, ganti sumber label suara ke CSRC.
+- Langkah berikut yang direncanakan kini sudah dijalankan; lihat
+  [label CSRC live](#label-csrc-live-csrc-live-3).
+
+## Label CSRC live (csrc-live-3)
+
+Sumber label suara kini memakai CSRC. Setelah frame ber-CSRC terlihat,
+tracker berpindah ke mode CSRC:
+
+- `voice_activity.js` merekam per jendela 50 ms per slot receiver: level
+  maksimum dan daftar CSRC dari metadata frame.
+- Pembicara adalah CSRC dari slot yang dominan menurut level frame. Aturan
+  margin 0,5 dan ambang 0,01 sama dengan mode slot.
+- CSRC yang muncul bersama dua CSRC lain atau lebih (seperti `42`)
+  dianggap penanda dan diabaikan.
+- Label diikat ke CSRC, jadi tetap sama bila Meet memindah slot, dan
+  bertahan saat halaman reload.
+- Dua CSRC berlabel berbeda, atau campuran CSRC berlabel dan baru dalam satu
+  jendela, menjadi `unknown(csrc_conflict)`.
+- Mode slot WebAudio tetap dipakai bila Meet tidak membawa CSRC.
+
+Sesi live dengan dua orang di ruangan berbeda menghasilkan:
+
+| Metrik | Live | Replay (`test_csrc_label_replay_gate_on_live_session`) |
+| --- | --- | --- |
+| Transkrip solo berlabel benar | 13/13 (giliran 3 terpecah dua) | 11/11 giliran selaras |
+| Stabilitas per orang | 1,0 | 1,0 |
+| Purity | 1,0 | 1,0 |
+| Overlap menjadi `unknown` | 2/2 | 2/2 |
+| Label per orang | A satu, B satu | `{"A": ["speaker-a"], "B": ["speaker-b"]}` |
+| Label dari suara twin | 0 | — |
+
+- CSRC A sama dengan sesi sebelumnya karena A tidak keluar meeting. CSRC B
+  berganti karena B join ulang. Jadi CSRC stabil per join.
+- Lag frame terhadap VAD: lead onset median 130 ms (p25 54, p75 519), dan
+  puncak kesesuaian sekitar 700 ms dengan plato 550–800 ms.
+- Replay memberi hasil identik untuk lag 200–800 ms. `FRAME_LAG_MS = 300`
+  dipertahankan sebagai nilai yang tervalidasi live di tengah rentang itu.
+- Fixture `tests/fixtures/voice-labels-csrc-live-3.json` berisi nama
+  disamarkan (Host/Guest/Twin), device id dinomori ulang, obrolan di luar
+  script dikosongkan, dan tanpa level WebAudio.
+
+Temuan sampingan dari sesi ini:
+
+- Tahap "Getting ready…" (verifikasi bot) Meet kini makan ±8–10 detik.
+- Alur join hanya menunggu kolom nama ±9 detik, sehingga dua join gagal
+  (`clicking 'name field' failed`). Anggaran tunggu kolom nama dinaikkan
+  menjadi 10 percobaan (±30 detik); join berikutnya masuk dalam 28,8 detik.
+- `join_finished` di journal kini membawa `detail`. Sebelumnya alasan gagal
+  hanya tersimpan di checkpoint.
 
 ## Verifikasi kode
 
@@ -109,3 +153,5 @@ salah. Overlap tinggi konsisten dengan bocoran antar-mic di satu ruangan.
   - `test_probe_counts_entries_of_a_real_stats_report`;
   - `test_probe_reads_identity_and_level_from_encoded_audio_frames`.
 - `pytest -m browser tests/test_attribution_probe.py`: 7 lolos.
+- Tes browser `test_voice_script_reads_level_and_csrc_from_encoded_frames`
+  memastikan script produksi membaca level dari frame terenkode.

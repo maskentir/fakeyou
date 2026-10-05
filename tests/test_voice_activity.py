@@ -13,6 +13,7 @@ from fakeyou.probe_replay import (
     LABEL_STABILITY_GATE,
     OVERLAP_UNKNOWN_GATE,
     replay_voice_labels,
+    voice_fixture_from_probe,
 )
 from fakeyou.record import TranscriptEntry
 from fakeyou.report import build_session_report
@@ -40,6 +41,7 @@ from tests.fakes import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "voice-labels-probe-attr-8.json"
+CSRC_FIXTURE = Path(__file__).parent / "fixtures" / "voice-labels-csrc-live-3.json"
 
 
 def batch(
@@ -493,3 +495,244 @@ async def test_voice_script_taps_remote_audio_and_skips_local_microphone() -> No
         assert {int(slot) for _, slot, level in levels if level > 0.1} == {0}
         assert drained["participants"] == [{"id": "devices/1", "name": "Rani"}]
         assert isinstance(drained["instance"], str) and drained["instance"]
+
+
+def frames_batch(page_ms: float, frames: list[list[Any]], **extra: Any) -> dict[str, Any]:
+    return {**batch(page_ms, [], **extra), "frames": frames}
+
+
+def test_csrc_mode_labels_the_participant_on_the_dominant_slot() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(
+            11_000.0,
+            [[10_300.0, 0, 0.05, [42, 111]], [10_300.0, 1, 0.4, [42, 222]]],
+        ),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    attribution = tracker.attribute()
+    assert (attribution.participant_id, attribution.reason, attribution.slot) == (
+        "speaker-a",
+        "dominant_csrc",
+        1,
+    )
+    assert attribution.journal_fields()["speaker_csrc"] == [222]
+
+
+def test_csrc_label_follows_the_participant_across_slots() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[10_300.0, 0, 0.4, [42, 111]], [10_350.0, 1, 0.02, [42, 222]]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        frames_batch(13_000.0, [[12_300.0, 2, 0.4, [42, 111]], [12_300.0, 1, 0.02, [42, 222]]]),
+        sent_ms=13_000.0,
+        received_ms=13_000.0,
+    )
+    moved = tracker.attribute()
+    assert (moved.participant_id, moved.slot) == ("speaker-a", 2)
+
+
+def test_csrc_label_survives_the_marker_being_learned_later() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[10_300.0, 0, 0.4, [42, 111]]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        frames_batch(13_000.0, [[12_300.0, 1, 0.4, [42, 222]]]),
+        sent_ms=13_000.0,
+        received_ms=13_000.0,
+    )
+    second = tracker.attribute()
+    assert (second.participant_id, second.journal_fields()["speaker_csrc"]) == (
+        "speaker-b",
+        [222],
+    )
+    speak(tracker, clock, 14.0, 15.0)
+    tracker.observe_batch(
+        frames_batch(15_000.0, [[14_300.0, 0, 0.4, [42, 111]]]),
+        sent_ms=15_000.0,
+        received_ms=15_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+
+
+def test_csrc_mode_reports_overlap_and_conflict_as_unknown() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[10_300.0, 0, 0.3, [42, 111]], [10_300.0, 1, 0.25, [42, 222]]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    assert tracker.attribute().reason == "overlap"
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        frames_batch(13_000.0, [[12_200.0, 0, 0.4, [42, 111]], [12_250.0, 1, 0.01, [42, 222]]]),
+        sent_ms=13_000.0,
+        received_ms=13_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+    speak(tracker, clock, 14.0, 15.0)
+    tracker.observe_batch(
+        frames_batch(15_000.0, [[14_200.0, 1, 0.4, [42, 222]]]),
+        sent_ms=15_000.0,
+        received_ms=15_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-b"
+    speak(tracker, clock, 16.0, 17.0)
+    tracker.observe_batch(
+        frames_batch(17_000.0, [[16_200.0, 0, 0.4, [42, 111]], [16_500.0, 0, 0.4, [42, 222]]]),
+        sent_ms=17_000.0,
+        received_ms=17_000.0,
+    )
+    assert tracker.attribute().reason == "csrc_conflict"
+
+
+def test_csrc_mode_ignores_webaudio_taps_and_twin_playback() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    tracker.observe_self_speech(True)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_self_speech(False)
+    tracker.observe_batch(
+        {
+            **frames_batch(11_000.0, [[10_300.0, 0, 0.3, [42, 111]]]),
+            "levels": [[10_300.0, 5, 0.9]],
+        },
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    attribution = tracker.attribute()
+    assert (attribution.participant_id, attribution.slot) == ("speaker-a", 0)
+
+
+def test_csrc_mode_shifts_frames_by_their_own_lag() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic, frame_lag_ms=500.0)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[9_600.0, 0, 0.3, [111]], [10_800.0, 1, 0.3, [222]]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    assert tracker.attribute().slot == 0
+
+
+def test_csrc_mode_keeps_labels_across_page_reload() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[10_300.0, 0, 0.3, [111]]]), sent_ms=11_000.0, received_ms=11_000.0
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        {**frames_batch(500.0, [[-200.0, 0, 0.3, [111]]]), "instance": "i2"},
+        sent_ms=13_000.0,
+        received_ms=13_000.0,
+    )
+    assert tracker.attribute().participant_id == "speaker-a"
+
+
+@pytest.mark.browser
+async def test_voice_script_reads_level_and_csrc_from_encoded_frames() -> None:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True, args=["--autoplay-policy=no-user-gesture-required"]
+        )
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(load_voice_activity_script())
+            await page.goto("about:blank")
+            await page.evaluate(
+                "async () => {"
+                " const ctx = new AudioContext(); await ctx.resume();"
+                " const tone = ctx.createOscillator();"
+                " const out = ctx.createMediaStreamDestination();"
+                " tone.connect(out); tone.start();"
+                " const a = new RTCPeerConnection();"
+                " const b = new RTCPeerConnection({encodedInsertableStreams: true});"
+                " a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);"
+                " b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);"
+                " b.ontrack = (e) => {"
+                "  const streams = e.receiver.createEncodedStreams();"
+                "  streams.readable.pipeTo(streams.writable); };"
+                " a.addTrack(out.stream.getAudioTracks()[0], out.stream);"
+                " await a.setLocalDescription(await a.createOffer());"
+                " await b.setRemoteDescription(a.localDescription);"
+                " await b.setLocalDescription(await b.createAnswer());"
+                " await a.setRemoteDescription(b.localDescription);"
+                "}"
+            )
+            frames: list[list[Any]] = []
+            deadline = asyncio.get_running_loop().time() + 15.0
+            while len(frames) < 10 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.3)
+                frames += (await page.evaluate(VOICE_ACTIVITY_DRAIN_JS))["frames"]
+            assert len(frames) >= 10
+            assert {frame[1] for frame in frames} == {0}
+            assert max(frame[2] for frame in frames) > 0.1
+            assert all(frame[3] == [] for frame in frames)
+        finally:
+            await browser.close()
+
+
+def test_voice_fixture_carries_encoded_frames(tmp_path: Path) -> None:
+    probe = tmp_path / "probe.jsonl"
+    probe.write_text(
+        json.dumps(
+            {
+                "kind": "page",
+                "page_ms": 1000.0,
+                "mono_ms": 5000.0,
+                "wall": "2026-10-05T10:00:00+00:00",
+                "levels": [],
+                "frames": [
+                    {"page_ms": 900.0, "receiver": 1, "level": 0.4, "csrc": [42, 7]},
+                    {"page_ms": 950.0, "receiver": 1},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    record = tmp_path / "record.jsonl"
+    record.write_text("", encoding="utf-8")
+    truth = tmp_path / "truth.json"
+    truth.write_text("[]", encoding="utf-8")
+    fixture = voice_fixture_from_probe(
+        probe, record, truth, twin_name="Twin", aliases={}, persons={}
+    )
+    assert fixture["events"][0]["batch"]["frames"] == [[900.0, 1, 0.4, [42, 7]]]
+
+
+def test_csrc_label_replay_gate_on_live_session() -> None:
+    fixture = json.loads(CSRC_FIXTURE.read_text(encoding="utf-8"))
+    summary = replay_voice_labels(fixture)
+    assert summary["solo_turns"] == 11
+    assert summary["coverage"] >= 0.9
+    assert summary["label_stability"] >= LABEL_STABILITY_GATE
+    assert summary["purity"] >= LABEL_STABILITY_GATE
+    assert summary["overlap_unknown_rate"] >= OVERLAP_UNKNOWN_GATE
+    assert summary["person_labels"] == {"A": ["speaker-a"], "B": ["speaker-b"]}
+    assert set(summary["reasons"]) == {"dominant_csrc"}

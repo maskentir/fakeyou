@@ -1,6 +1,7 @@
 (() => {
   if (window.__fakeyouVoiceActivity) return;
   const SAMPLE_MS = 50;
+  const FRAME_WINDOW_MS = 50;
   const FFT_SIZE = 2048;
   const SILENCE_FLOOR = 0.001;
   const MAX_BUFFERED = 6000;
@@ -12,6 +13,9 @@
   const localTracks = new Set();
   const levels = [];
   const buffer = new Float32Array(FFT_SIZE);
+  const frames = [];
+  const frameSlots = new Map();
+  const openFrames = new Map();
 
   function pageNow() {
     try {
@@ -118,6 +122,64 @@
     }
   }
 
+  function frameSlotFor(key) {
+    if (!frameSlots.has(key)) frameSlots.set(key, frameSlots.size);
+    return frameSlots.get(key);
+  }
+
+  function noteFrame(slot, frame) {
+    const meta = frame.getMetadata();
+    const bucket = Math.floor(pageNow() / FRAME_WINDOW_MS) * FRAME_WINDOW_MS;
+    let entry = openFrames.get(slot);
+    if (!entry || entry[0] !== bucket) {
+      entry = [bucket, slot, 0, []];
+      openFrames.set(slot, entry);
+      frames.push(entry);
+      if (frames.length > MAX_BUFFERED) frames.splice(0, frames.length - MAX_BUFFERED);
+    }
+    const level = Number(meta.audioLevel);
+    if (Number.isFinite(level) && level > entry[2]) entry[2] = level;
+    for (const source of meta.contributingSources || []) {
+      const csrc = Number(source);
+      if (Number.isFinite(csrc) && !entry[3].includes(csrc)) entry[3].push(csrc);
+    }
+  }
+
+  function wrapEncodedStreams() {
+    try {
+      const proto = window.RTCRtpReceiver && window.RTCRtpReceiver.prototype;
+      if (!proto || typeof proto.createEncodedStreams !== "function") return;
+      const original = proto.createEncodedStreams;
+      proto.createEncodedStreams = function (...args) {
+        const streams = original.apply(this, args);
+        try {
+          if (!this.track || this.track.kind !== "audio") return streams;
+          const slot = frameSlotFor(String(this.track.id));
+          const tap = new TransformStream({
+            transform(frame, controller) {
+              try {
+                noteFrame(slot, frame);
+              } catch {
+                /* metadata is optional */
+              }
+              controller.enqueue(frame);
+            },
+          });
+          return { readable: streams.readable.pipeThrough(tap), writable: streams.writable };
+        } catch {
+          return streams;
+        }
+      };
+    } catch {
+      /* page locked receivers */
+    }
+  }
+
+  function drainFrames() {
+    openFrames.clear();
+    return frames.splice(0, frames.length);
+  }
+
   function sample() {
     const stamp = pageNow();
     for (const tap of taps) {
@@ -157,6 +219,7 @@
   }
 
   wrapGetUserMedia();
+  wrapEncodedStreams();
   wrapTrackClone();
   wrapAudioContext("AudioContext");
   wrapAudioContext("webkitAudioContext");
@@ -174,6 +237,7 @@
         instance,
         page_ms: pageNow(),
         levels: levels.splice(0, levels.length),
+        frames: drainFrames(),
         local: [],
       };
       try {

@@ -10,6 +10,11 @@ flag mati, perilaku sama persis dengan sebelumnya.
 Stabilitas lintas rejoin tidak tercapai dan memang tidak bisa dicapai
 dari bukti ini; lihat [Batas](#batas).
 
+**Pembaruan:** bila Meet membawa CSRC di metadata frame terenkode, label
+diikat ke CSRC peserta, bukan ke slot. Hasil live 13/13 solo benar dan
+overlap 2/2 `unknown` ([riset CSRC](2026-10-05-csrc-research.md#label-csrc-live-csrc-live-3)).
+Mode slot di bawah ini menjadi fallback.
+
 ## Yang dipasang
 
 - `assets/voice_activity.js`: init script minimal.

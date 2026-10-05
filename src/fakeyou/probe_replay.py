@@ -622,6 +622,14 @@ def voice_fixture_from_probe(
                 if source["audioLevel"] >= 0.001
             ],
         }
+        frame_windows = row.get("frames")
+        if isinstance(frame_windows, list):
+            batch["frames"] = [
+                [window["page_ms"], window["receiver"], window["level"], window["csrc"]]
+                for window in frame_windows
+                if isinstance(window, Mapping)
+                and {"page_ms", "receiver", "level", "csrc"} <= window.keys()
+            ]
         roster = row.get("roster")
         if isinstance(roster, list) and roster and isinstance(roster[-1], Mapping):
             tiles = roster[-1].get("tiles")
