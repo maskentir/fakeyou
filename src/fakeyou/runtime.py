@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from playwright.async_api import Page
 
+from fakeyou.attribution_probe import AttributionProbe, ProbeDrainLoop, load_probe_script
 from fakeyou.audio import MeetingAudioError
 from fakeyou.browser import open_direct_page, stable_fingerprint_seed
 from fakeyou.checkpoint import open_checkpointer
@@ -126,6 +127,7 @@ class _MeetingWorker:
     faults: FaultReporter | None = None
     journal: Journal | None = None
     observer: ParticipantObserver | None = None
+    probe_drain: ProbeDrainLoop | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -234,9 +236,18 @@ class _MeetingWorker:
             lobby_timeout_seconds=self.config.lobby_timeout_seconds,
             poll_interval_seconds=self.config.join_poll_interval_seconds,
         )
+        probe_scripts = (
+            (load_probe_script(),) if self.config.attribution_probe_path is not None else ()
+        )
         result = await _until_stopped(
             request_guest_join(
-                self.page, request, self.signals, self.sleep, self.monotonic, self.stop.is_set
+                self.page,
+                request,
+                self.signals,
+                self.sleep,
+                self.monotonic,
+                self.stop.is_set,
+                probe_scripts,
             ),
             self.stop,
         )
@@ -291,6 +302,22 @@ class _MeetingWorker:
             await close_safely(self.observer.close, source="browser", faults=self.faults)
             self.observer = None
 
+    async def start_probe_drain(self) -> None:
+        if self.probe_drain is not None:
+            return
+        probe_path = self.config.attribution_probe_path
+        if probe_path is None:
+            return
+        probe = AttributionProbe(probe_path, monotonic=self.monotonic)
+        self.probe_drain = ProbeDrainLoop(self.page, probe)
+        await self.probe_drain.start()
+        self.record("attribution_probe_started", source="runtime")
+
+    async def close_probe_drain(self) -> None:
+        if self.probe_drain is not None:
+            await close_safely(self.probe_drain.close, source="browser", faults=self.faults)
+            self.probe_drain = None
+
     async def monitor(self, admitted_at: float) -> str:
         try:
             try:
@@ -300,8 +327,16 @@ class _MeetingWorker:
                     self.faults.record(
                         classify_exception("browser", error, operation="participant_observer")
                     )
+            try:
+                await self.start_probe_drain()
+            except Exception as error:
+                if self.faults is not None:
+                    self.faults.record(
+                        classify_exception("browser", error, operation="attribution_probe")
+                    )
             return await self._monitor_loop(admitted_at)
         finally:
+            await self.close_probe_drain()
             await self.close_participant_observer()
 
     async def _monitor_loop(self, admitted_at: float) -> str:

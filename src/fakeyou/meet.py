@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal
@@ -147,8 +147,10 @@ async def _has_live_captcha(page: Page) -> bool:
         return False
 
 
-async def _open_meeting_page(page: Page, link: str) -> str | None:
+async def _open_meeting_page(page: Page, link: str, init_scripts: Sequence[str] = ()) -> str | None:
     target = with_pinned_meet_locale(link)
+    for script in init_scripts:
+        await page.add_init_script(script)
     try:
         response = await page.goto(target, wait_until="domcontentloaded", timeout=60000)
     except Exception:
@@ -273,8 +275,9 @@ async def request_guest_join(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     abort: Callable[[], bool] | None = None,
+    init_scripts: Sequence[str] = (),
 ) -> JoinResult:
-    failure = await _open_meeting_page(page, request.link)
+    failure = await _open_meeting_page(page, request.link, init_scripts)
     if failure is not None:
         return JoinResult(status="failed", detail=failure)
     failure = await _dismiss_media_dialog(page, signals, sleep)

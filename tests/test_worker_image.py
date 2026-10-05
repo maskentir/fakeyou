@@ -28,6 +28,31 @@ def _worker_image_available() -> bool:
 
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
+def test_worker_image_ships_the_attribution_probe_asset() -> None:
+    probe = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "run",
+            "-T",
+            "--rm",
+            "--no-deps",
+            "meeting-worker",
+            "python",
+            "-c",
+            "from fakeyou.attribution_probe import load_probe_script;"
+            "script = load_probe_script();"
+            "assert '__fakeyouAttributionProbe' in script;"
+            "print('probe-asset-ok')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "probe-asset-ok" in probe.stdout, probe.stdout + probe.stderr
+
+
+@pytest.mark.container
+@pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
 def test_worker_image_waits_for_graceful_shutdown_after_sigint() -> None:
     name = f"fakeyou-signal-{uuid4().hex[:8]}"
     worker = subprocess.Popen(

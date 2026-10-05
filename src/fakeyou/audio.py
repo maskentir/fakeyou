@@ -30,6 +30,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 
+from fakeyou.attribution_probe import AttributionProbe
 from fakeyou.deaf import (
     CaptureActivity,
     DeafMonitor,
@@ -127,10 +128,16 @@ async def run_stt_reconnect(stt: object) -> None:
 
 
 class _CaptureObserver(FrameProcessor):
-    def __init__(self, activity: CaptureActivity, journal: Journal | None = None) -> None:
+    def __init__(
+        self,
+        activity: CaptureActivity,
+        journal: Journal | None = None,
+        probe: AttributionProbe | None = None,
+    ) -> None:
         super().__init__()
         self._activity = activity
         self._journal = journal
+        self._probe = probe
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -142,18 +149,31 @@ class _CaptureObserver(FrameProcessor):
                         len(frame.audio), frame.sample_rate, frame.num_channels
                     ),
                 )
+                if self._probe is not None:
+                    channels = max(frame.num_channels, 1)
+                    self._probe.observe_pcm(len(frame.audio) // 2 // channels)
             elif isinstance(frame, (VADUserStartedSpeakingFrame, UserSpeakingFrame)):
                 self._activity.observe_speech(True)
                 if isinstance(frame, VADUserStartedSpeakingFrame):
                     self._record("speech_started")
+                    self._observe_vad(True)
             elif isinstance(frame, VADUserStoppedSpeakingFrame):
                 self._activity.observe_speech(False)
                 self._record("speech_stopped")
+                self._observe_vad(False)
         await self.push_frame(frame, direction)
 
     def _record(self, event: str) -> None:
         if self._journal is not None:
             self._journal.record(event, source="audio")
+
+    def _observe_vad(self, active: bool) -> None:
+        if self._probe is None:
+            return
+        try:
+            self._probe.observe_vad(active)
+        except Exception:
+            pass
 
 
 class _TranscriptObserver(FrameProcessor):
@@ -504,6 +524,7 @@ async def open_meeting_audio(
     stt_keywords: Sequence[str] | None = None,
     tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
+    probe: AttributionProbe | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -543,7 +564,7 @@ async def open_meeting_audio(
                         VADProcessor(
                             vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
                         ),
-                        _CaptureObserver(activity, journal),
+                        _CaptureObserver(activity, journal, probe),
                         stt,
                         _TranscriptObserver(
                             on_transcript, activity, faults, on_interim, journal=journal

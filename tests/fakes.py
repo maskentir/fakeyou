@@ -145,11 +145,15 @@ class FakePage:
         self.type_failures = set(type_failures)
         self._goto_failures = goto_failures
         self.visited: list[str] = []
+        self.init_scripts: list[str] = []
         self.clicked: list[str] = []
         self.typed: list[str] = []
         self.waited: list[str] = []
         self.evaluate_calls: list[str] = []
         self.keyboard = FakeKeyboard(self)
+
+    async def add_init_script(self, script: str) -> None:
+        self.init_scripts.append(script)
 
     async def goto(self, url: str, **kwargs: Any) -> None:
         self.visited.append(url)

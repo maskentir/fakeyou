@@ -1,0 +1,507 @@
+import json
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from math import ceil
+from pathlib import Path
+from typing import Any
+
+SOURCE_ACTIVE_THRESHOLD = 0.01
+CSRC_LEAD_WINDOW_MS = 1000.0
+NAME_PRECISION_GATE = 0.98
+OVERLAP_UNKNOWN_GATE = 0.95
+LABEL_STABILITY_GATE = 0.95
+
+
+def align_turns(
+    transcripts: Sequence[Mapping[str, Any]], turns: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    aligned: list[dict[str, Any]] = []
+    cursor = 0
+    for turn in turns:
+        fragment = str(turn.get("fragment", "")).casefold().strip()
+        if not fragment:
+            continue
+        while cursor < len(transcripts):
+            transcript = transcripts[cursor]
+            cursor += 1
+            if fragment in str(transcript.get("text", "")).casefold():
+                aligned.append(
+                    {
+                        "turn": turn.get("turn"),
+                        "speaker": turn.get("speaker"),
+                        "kind": turn.get("kind", "solo"),
+                        "wall": transcript.get("wall"),
+                    }
+                )
+                break
+    return aligned
+
+
+def page_to_mono(page_ms: float, anchors: Sequence[tuple[float, float]]) -> float:
+    ordered = sorted(anchors)
+    if not ordered:
+        raise ValueError("page clock mapping needs at least one anchor")
+    chosen = ordered[0]
+    for anchor in ordered:
+        if anchor[0] <= page_ms:
+            chosen = anchor
+        else:
+            break
+    return chosen[1] + (page_ms - chosen[0])
+
+
+def _active_sources(
+    sample: Mapping[str, Any], threshold: float = SOURCE_ACTIVE_THRESHOLD
+) -> set[int]:
+    sources = sample.get("sources")
+    if not isinstance(sources, list):
+        return set()
+    active: set[int] = set()
+    for entry in sources:
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            level = float(entry.get("audioLevel", 0.0))
+            source = int(entry.get("source", 0))
+        except (TypeError, ValueError):
+            continue
+        if level >= threshold:
+            active.add(source)
+    return active
+
+
+def csrc_lag_ms(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    *,
+    vad_start_mono_ms: float,
+    threshold: float = SOURCE_ACTIVE_THRESHOLD,
+) -> float | None:
+    for sample in samples:
+        try:
+            page_ms = float(sample["page_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if _active_sources(sample, threshold):
+            return page_to_mono(page_ms, anchors) - vad_start_mono_ms
+    return None
+
+
+def active_sources_in_window(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    start_mono_ms: float,
+    end_mono_ms: float,
+    threshold: float = SOURCE_ACTIVE_THRESHOLD,
+) -> set[int]:
+    active: set[int] = set()
+    for sample in samples:
+        try:
+            page_ms = float(sample["page_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        at_mono = page_to_mono(page_ms, anchors)
+        if start_mono_ms <= at_mono <= end_mono_ms:
+            active |= _active_sources(sample, threshold)
+    return active
+
+
+def source_sets_by_speaker(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    windows: Sequence[Mapping[str, Any]],
+    threshold: float = SOURCE_ACTIVE_THRESHOLD,
+) -> dict[str, tuple[int, ...]]:
+    sets: dict[str, set[int]] = {}
+    for window in windows:
+        speaker = str(window.get("speaker", ""))
+        if not speaker:
+            continue
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+            threshold,
+        )
+        sets.setdefault(speaker, set()).update(active)
+    return {speaker: tuple(sorted(sources)) for speaker, sources in sets.items()}
+
+
+def reference_precision(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    windows: Sequence[Mapping[str, Any]],
+    threshold: float = SOURCE_ACTIVE_THRESHOLD,
+) -> dict[str, float | None]:
+    solo = [window for window in windows if window.get("kind", "solo") == "solo"]
+    overlap = [window for window in windows if window.get("kind") == "overlap"]
+    votes: dict[int, dict[str, int]] = {}
+    for window in solo:
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+            threshold,
+        )
+        if len(active) != 1:
+            continue
+        source = next(iter(active))
+        tally = votes.setdefault(source, {})
+        speaker = str(window.get("speaker", ""))
+        tally[speaker] = tally.get(speaker, 0) + 1
+    mapping = {
+        source: max(tally.items(), key=lambda item: (item[1], item[0]))[0]
+        for source, tally in votes.items()
+    }
+    correct = 0
+    for window in solo:
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+            threshold,
+        )
+        predicted = mapping.get(next(iter(active))) if len(active) == 1 else None
+        if predicted is not None and predicted == str(window.get("speaker", "")):
+            correct += 1
+    unknown = 0
+    for window in overlap:
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+            threshold,
+        )
+        if len(active) != 1:
+            unknown += 1
+    return {
+        "precision": (correct / len(solo)) if solo else None,
+        "overlap_unknown_rate": (unknown / len(overlap)) if overlap else None,
+    }
+
+
+def _parse_wall(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _percentile(values: Sequence[float], rank: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, ceil(rank * len(ordered)) - 1))
+    return ordered[index]
+
+
+def _median(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _vad_windows(edges: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    stamped: list[tuple[Mapping[str, Any], datetime, float]] = []
+    for edge in edges:
+        wall = _parse_wall(edge.get("wall"))
+        try:
+            mono_ms = float(edge["mono_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if wall is not None:
+            stamped.append((edge, wall, mono_ms))
+    ordered = sorted(stamped, key=lambda item: item[2])
+    windows: list[dict[str, Any]] = []
+    start: tuple[Mapping[str, Any], datetime, float] | None = None
+    for edge, wall, mono_ms in ordered:
+        if edge.get("active"):
+            start = (edge, wall, mono_ms)
+        elif start is not None:
+            if mono_ms > start[2]:
+                windows.append(
+                    {
+                        "start_wall": start[1],
+                        "end_wall": wall,
+                        "start_mono_ms": start[2],
+                        "end_mono_ms": mono_ms,
+                    }
+                )
+            start = None
+    return windows
+
+
+def _window_for_transcript(
+    windows: Sequence[Mapping[str, Any]], wall: datetime | None
+) -> Mapping[str, Any] | None:
+    if wall is None:
+        return None
+    chosen: Mapping[str, Any] | None = None
+    for window in windows:
+        end = window.get("end_wall")
+        if isinstance(end, datetime) and end <= wall:
+            chosen = window
+    return chosen
+
+
+def _snapshots_in_window(
+    snapshots: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    start_mono_ms: float,
+    end_mono_ms: float,
+) -> list[Mapping[str, Any]]:
+    selected: list[Mapping[str, Any]] = []
+    for snapshot in snapshots:
+        try:
+            page_ms = float(snapshot["page_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        at_mono = page_to_mono(page_ms, anchors)
+        if start_mono_ms <= at_mono <= end_mono_ms:
+            selected.append(snapshot)
+    return selected
+
+
+def _lit_names(snapshot: Mapping[str, Any], candidate: str) -> set[str]:
+    tiles = snapshot.get("tiles")
+    if not isinstance(tiles, list):
+        return set()
+    lit: set[str] = set()
+    for tile in tiles:
+        if not isinstance(tile, Mapping) or tile.get("self"):
+            continue
+        name = tile.get("name")
+        speaking = tile.get("speaking")
+        if (
+            isinstance(name, str)
+            and name
+            and isinstance(speaking, Mapping)
+            and speaking.get(candidate)
+        ):
+            lit.add(name)
+    return lit
+
+
+def _unmuted_names(snapshot: Mapping[str, Any]) -> set[str]:
+    tiles = snapshot.get("tiles")
+    if not isinstance(tiles, list):
+        return set()
+    names: set[str] = set()
+    for tile in tiles:
+        if not isinstance(tile, Mapping) or tile.get("self"):
+            continue
+        name = tile.get("name")
+        if isinstance(name, str) and name and not tile.get("muted"):
+            names.add(name)
+    return names
+
+
+def summarize_probe_session(
+    probe_path: Path, record_path: Path, truth_path: Path
+) -> dict[str, Any]:
+    vad_edges: list[Mapping[str, Any]] = []
+    samples: list[Mapping[str, Any]] = []
+    snapshots: list[Mapping[str, Any]] = []
+    anchors: list[tuple[float, float]] = []
+    skipped_probe = 0
+    for line in probe_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            skipped_probe += 1
+            continue
+        if not isinstance(row, Mapping):
+            skipped_probe += 1
+            continue
+        if row.get("kind") == "vad":
+            vad_edges.append(row)
+        elif row.get("kind") == "page":
+            try:
+                anchors.append((float(row["page_ms"]), float(row["mono_ms"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+            batch_samples = row.get("samples")
+            if isinstance(batch_samples, list):
+                samples.extend(entry for entry in batch_samples if isinstance(entry, Mapping))
+            batch_roster = row.get("roster")
+            if isinstance(batch_roster, list):
+                snapshots.extend(entry for entry in batch_roster if isinstance(entry, Mapping))
+    transcripts: list[dict[str, Any]] = []
+    skipped_record = 0
+    for line in record_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            skipped_record += 1
+            continue
+        if not isinstance(row, Mapping):
+            skipped_record += 1
+            continue
+        if row.get("kind") == "transcript":
+            transcripts.append({"text": row.get("text", ""), "wall": row.get("spoken_at")})
+    turns = json.loads(truth_path.read_text(encoding="utf-8"))
+    aligned = align_turns(transcripts, turns)
+    windows = _vad_windows(vad_edges)
+    replay_windows: list[dict[str, Any]] = []
+    lags: list[float] = []
+    for entry in aligned:
+        window = _window_for_transcript(windows, _parse_wall(entry.get("wall")))
+        if window is None:
+            continue
+        replay_windows.append(
+            {
+                "speaker": entry.get("speaker"),
+                "kind": entry.get("kind", "solo"),
+                "start_mono_ms": window["start_mono_ms"],
+                "end_mono_ms": window["end_mono_ms"],
+            }
+        )
+    for window in replay_windows:
+        if window["kind"] != "solo":
+            continue
+        scoped = [
+            sample
+            for sample in samples
+            if _in_scope(sample, anchors, window["start_mono_ms"], window["end_mono_ms"])
+        ]
+        lag = csrc_lag_ms(scoped, anchors, vad_start_mono_ms=window["start_mono_ms"])
+        if lag is not None:
+            lags.append(lag)
+    reference = reference_precision(samples, anchors, replay_windows)
+    source_sets = source_sets_by_speaker(samples, anchors, replay_windows)
+    markers: dict[str, dict[str, Any]] = {}
+    for candidate in ("es310d", "knownClass"):
+        correct = 0
+        denominator = 0
+        for window in replay_windows:
+            if window["kind"] != "solo":
+                continue
+            scoped = _snapshots_in_window(
+                snapshots, anchors, window["start_mono_ms"], window["end_mono_ms"]
+            )
+            if not scoped:
+                continue
+            denominator += 1
+            lit: set[str] = set()
+            for snapshot in scoped:
+                lit |= _lit_names(snapshot, candidate)
+            if lit == {str(window["speaker"])}:
+                correct += 1
+        markers[candidate] = {
+            "accuracy": (correct / denominator) if denominator else None,
+            "denominator": denominator,
+        }
+    keeps = 0
+    unique = 0
+    mute_denominator = 0
+    for window in replay_windows:
+        if window["kind"] != "solo":
+            continue
+        scoped = _snapshots_in_window(
+            snapshots, anchors, window["start_mono_ms"], window["end_mono_ms"]
+        )
+        if not scoped:
+            continue
+        mute_denominator += 1
+        speaker = str(window["speaker"])
+        if any(speaker in _unmuted_names(snapshot) for snapshot in scoped):
+            keeps += 1
+        if all(_unmuted_names(snapshot) == {speaker} for snapshot in scoped):
+            unique += 1
+    stability = _label_stability(samples, anchors, replay_windows)
+    precision = reference["precision"]
+    overlap_rate = reference["overlap_unknown_rate"]
+    return {
+        "turns": len(turns),
+        "aligned": len(aligned),
+        "skipped_lines": {"probe": skipped_probe, "record": skipped_record},
+        "lag_ms": {
+            "median": _median(lags),
+            "p95": _percentile(lags, 0.95),
+            "samples": len(lags),
+        },
+        "source_sets": {speaker: list(sources) for speaker, sources in source_sets.items()},
+        "label_stability": stability,
+        "reference": reference,
+        "markers": markers,
+        "mute": {
+            "keeps_speaker": (keeps / mute_denominator) if mute_denominator else None,
+            "unique": (unique / mute_denominator) if mute_denominator else None,
+            "denominator": mute_denominator,
+        },
+        "gates": {
+            "name_precision": (precision is not None and precision >= NAME_PRECISION_GATE),
+            "overlap_unknown": (
+                None if overlap_rate is None else overlap_rate >= OVERLAP_UNKNOWN_GATE
+            ),
+            "label_stability": (None if stability is None else stability >= LABEL_STABILITY_GATE),
+        },
+    }
+
+
+def _in_scope(
+    sample: Mapping[str, Any],
+    anchors: Sequence[tuple[float, float]],
+    start_mono_ms: float,
+    end_mono_ms: float,
+) -> bool:
+    try:
+        page_ms = float(sample["page_ms"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    at_mono = page_to_mono(page_ms, anchors)
+    return start_mono_ms - CSRC_LEAD_WINDOW_MS <= at_mono <= end_mono_ms
+
+
+def _label_stability(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    windows: Sequence[Mapping[str, Any]],
+) -> float | None:
+    solo = [window for window in windows if window.get("kind", "solo") == "solo"]
+    dominant: dict[str, int] = {}
+    tallies: dict[str, dict[int, int]] = {}
+    for window in solo:
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+        )
+        if len(active) != 1:
+            continue
+        source = next(iter(active))
+        speaker = str(window.get("speaker", ""))
+        tally = tallies.setdefault(speaker, {})
+        tally[source] = tally.get(source, 0) + 1
+    for speaker, tally in tallies.items():
+        dominant[speaker] = max(tally.items(), key=lambda item: (item[1], item[0]))[0]
+    stable = 0
+    denominator = 0
+    for window in solo:
+        active = active_sources_in_window(
+            samples,
+            anchors,
+            float(window["start_mono_ms"]),
+            float(window["end_mono_ms"]),
+        )
+        if not active:
+            continue
+        denominator += 1
+        if active == {dominant.get(str(window.get("speaker", "")))}:
+            stable += 1
+    return (stable / denominator) if denominator else None

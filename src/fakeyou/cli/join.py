@@ -19,6 +19,7 @@ from psycopg import Error as PsycopgError
 from pydantic import ValidationError
 
 from fakeyou.assembly import open_conversation, stop_signal_handlers
+from fakeyou.attribution_probe import PROBE_FILE_NAME, AttributionProbe
 from fakeyou.audio import open_meeting_audio
 from fakeyou.brief import (
     MeetingBrief,
@@ -200,10 +201,16 @@ async def join_meeting(
         if not twin_name:
             config = replace(config, twin_name=profile.display_name)
     record_path = meeting_record_path(settings.paths.record_dir, resolved_meeting_id)
+    probe_path = (
+        record_path.parent / PROBE_FILE_NAME
+        if settings.conversation.attribution_probe_enabled
+        else None
+    )
     config = replace(
         config,
         participant_policy_enabled=settings.conversation.participant_policy_enabled,
         participant_evidence_path=record_path.parent / EVIDENCE_FILE_NAME,
+        attribution_probe_path=probe_path,
     )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"
@@ -345,8 +352,14 @@ async def join_meeting(
                             await conversation.handle_interim(frame.text)
 
                     if audio_enabled:
+                        audio_probe = (
+                            AttributionProbe(config.attribution_probe_path)
+                            if config.attribution_probe_path is not None
+                            else None
+                        )
                         audio_factory = partial(
                             open_meeting_audio,
+                            probe=audio_probe,
                             tts_settings=settings.tts,
                             speech_language=settings.speech.language,
                             stt_settings=settings.stt,

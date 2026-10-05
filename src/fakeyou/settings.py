@@ -221,6 +221,7 @@ class ConversationSettings(Section):
     activation_seconds: PositiveSeconds = 30.0
     sentence_streaming: bool = False
     participant_policy_enabled: bool = False
+    attribution_probe_enabled: bool = False
 
 
 class MeetingSettings(Section):
