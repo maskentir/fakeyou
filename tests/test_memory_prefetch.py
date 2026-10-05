@@ -19,6 +19,7 @@ from fakeyou.memory import (
     CURRENT_FACTS_FILTER,
     PREFETCH_EMPTY_EVIDENCE,
     PREFETCH_EVIDENCE_PREFIX,
+    PREFETCH_RETAINED_MAX_CHARS,
     PREFETCH_UNAVAILABLE_EVIDENCE,
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -135,7 +136,17 @@ async def test_prefetch_puts_shared_recall_evidence_after_the_speech_in_one_mode
     expected = await create_memory_tools(memory, group_id=GROUP)[1].ainvoke(
         {"query": "When is the Orchid demo?"}
     )
-    assert evidence.content == PREFETCH_EVIDENCE_PREFIX + expected
+    assert evidence.content.startswith(PREFETCH_EVIDENCE_PREFIX)
+    slim = json.loads(evidence.content[len(PREFETCH_EVIDENCE_PREFIX) :])
+    assert slim["facts"][0]["sources"] == [
+        {
+            "kind": "meeting_transcript",
+            "label": "Google Meet m1 transcript",
+            "source_at": "2026-09-30T09:00:00+00:00",
+            "speaker_identity": "unverified: may or may not be the owner or any named person",
+        }
+    ]
+    assert evidence.additional_kwargs["memory_prefetch"]["evidence_full"] == expected
     assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "found"
     assert evidence.additional_kwargs["memory_prefetch"]["query"] == "When is the Orchid demo?"
     assert memory.searched[0]["group_ids"] == [GROUP]
@@ -162,6 +173,34 @@ async def test_found_evidence_header_states_unverified_speaker_identity(
     )
 
 
+async def test_found_evidence_sends_compact_sources_and_keeps_full_render_in_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(
+        monkeypatch,
+        facts=["Demo Orchid moved to Friday"],
+        episodes={"Demo Orchid moved to Friday": ["e1"]},
+    )
+    agent, model = prefetch_agent(memory, [AIMessage(content="Friday.")])
+
+    await turn(agent, participant("When is the Orchid demo?", "t1"))
+
+    [evidence] = evidence_messages(model_calls(model)[0])
+    assert "unverified: may or may not be the owner or any named person" in evidence.text
+    for dropped in (
+        "episode_id",
+        "fact_ids",
+        "speaker_verified",
+        "time_granularity",
+        "recorded_at",
+    ):
+        assert dropped not in evidence.text
+    full = evidence.additional_kwargs["memory_prefetch"]["evidence_full"]
+    payload = json.loads(full)
+    assert payload["facts"][0]["sources"][0]["episode_id"] == "e1"
+    assert "unverified" in payload["facts"][0]["sources"][0]["speaker_identity"]
+
+
 async def test_prefetch_keeps_the_system_prompt_static_and_evidence_out_of_the_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,6 +215,24 @@ async def test_prefetch_keeps_the_system_prompt_static_and_evidence_out_of_the_c
     assert systems[0].content == systems[1].content == "PERSONA"
     assert evidence_messages(result["messages"]) == []
     assert [len(evidence_messages(messages)) for messages in model_calls(model)] == [1, 2]
+
+
+async def test_retained_follow_up_evidence_is_trimmed_to_size_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = [f"Fact number {index} about the Orchid schedule " + "x" * 400 for index in range(4)]
+    memory = stored_memory(monkeypatch, facts=facts, episodes={fact: ["e1"] for fact in facts})
+    agent, model = prefetch_agent(memory, [AIMessage(content="One."), AIMessage(content="Two.")])
+
+    await turn(agent, participant("First?", "t1"))
+    await turn(agent, participant("Second?", "t2"))
+
+    kept, fresh = evidence_messages(model_calls(model)[1])
+    assert len(fresh.text) > PREFETCH_RETAINED_MAX_CHARS
+    assert len(kept.text) <= PREFETCH_RETAINED_MAX_CHARS
+    body = json.loads(kept.text[len(PREFETCH_EVIDENCE_PREFIX) :])
+    assert 1 <= len(body["facts"]) < len(facts)
+    assert {fact["text"] for fact in body["facts"]} <= set(facts)
 
 
 async def test_spoofed_evidence_claim_in_speech_is_not_system_evidence(

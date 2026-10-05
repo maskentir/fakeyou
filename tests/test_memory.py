@@ -229,6 +229,67 @@ async def test_recall_caps_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert memory.searched[0]["num_results"] == DEFAULTS.memory.recall.search_limit
 
 
+async def test_recall_orders_facts_by_search_rank_and_pins_top_owner_fact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored = {
+        f"e{index}": _episode(
+            f"e{index}",
+            "team_alpha",
+            "Google Meet m1 transcript",
+            datetime(2026, 9, 30, 9, index, tzinfo=UTC),
+        )
+        for index in range(6)
+    }
+    stored["owner"] = _episode(
+        "owner", "team_alpha", "owner note", datetime(2026, 9, 29, 9, tzinfo=UTC)
+    )
+    facts = [f"meeting-{index}" for index in range(6)] + ["owner-fact"]
+    episodes = {fact: [f"e{index}"] for index, fact in enumerate(facts) if fact != "owner-fact"}
+    episodes["owner-fact"] = ["owner"]
+    memory = make_graphiti(facts=facts, episodes=episodes)
+    recall = _recall(monkeypatch, memory, stored)
+
+    payload = json.loads(await recall.ainvoke({"query": "agenda"}))
+
+    assert [fact["text"] for fact in payload["facts"]] == [
+        "meeting-0",
+        "meeting-1",
+        "meeting-2",
+        "meeting-3",
+        "owner-fact",
+    ]
+
+
+async def test_recall_keeps_search_order_when_owner_fact_already_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored = {
+        "owner": _episode(
+            "owner", "team_alpha", "owner note", datetime(2026, 9, 29, 9, tzinfo=UTC)
+        ),
+        "e1": _episode(
+            "e1", "team_alpha", "Google Meet m1 transcript", datetime(2026, 9, 30, 9, tzinfo=UTC)
+        ),
+        "e2": _episode(
+            "e2", "team_alpha", "Google Meet m1 transcript", datetime(2026, 9, 30, 10, tzinfo=UTC)
+        ),
+    }
+    memory = make_graphiti(
+        facts=["meeting-old", "owner-fact", "meeting-new"],
+        episodes={"owner-fact": ["owner"], "meeting-new": ["e2"], "meeting-old": ["e1"]},
+    )
+    recall = _recall(monkeypatch, memory, stored)
+
+    payload = json.loads(await recall.ainvoke({"query": "agenda"}))
+
+    assert [fact["text"] for fact in payload["facts"]] == [
+        "meeting-old",
+        "owner-fact",
+        "meeting-new",
+    ]
+
+
 async def test_recall_merges_identical_facts_before_applying_the_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

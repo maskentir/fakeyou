@@ -51,8 +51,25 @@ class FactEvidence:
             raise ValueError("text must not be blank")
 
 
+def _rendered_source_compact(source: SourceEvidence) -> dict[str, str | bool]:
+    rendered: dict[str, str | bool] = {
+        "kind": source.kind,
+        "label": source.label,
+        "source_at": source.source_at.astimezone(UTC).isoformat(),
+    }
+    if source.recorded_at != source.source_at:
+        rendered["recorded_at"] = source.recorded_at.astimezone(UTC).isoformat()
+    rendered["speaker_identity"] = source.speaker_identity
+    return rendered
+
+
 def render_evidence(
-    facts: list[FactEvidence], *, result_limit: int, excluded: dict[str, int]
+    facts: list[FactEvidence],
+    *,
+    result_limit: int,
+    excluded: dict[str, int],
+    compact: bool = False,
+    search_rank: dict[str, int] | None = None,
 ) -> str:
     if result_limit < 1:
         raise ValueError("result_limit must be at least 1")
@@ -100,8 +117,24 @@ def render_evidence(
             owner_rank = 1
             time_rank = float("inf")
         ordered.append((owner_rank, time_rank, fact_ids[0], key, fact_ids, ranked))
-    ordered.sort(key=lambda entry: (entry[0], entry[1], entry[2], entry[3]))
-    trimmed = ordered[:result_limit]
+    if search_rank is None:
+        ordered.sort(key=lambda entry: (entry[0], entry[1], entry[2], entry[3]))
+        trimmed = ordered[:result_limit]
+    else:
+        ordered.sort(
+            key=lambda entry: (
+                search_rank.get(entry[3], len(search_rank)),
+                entry[0],
+                entry[1],
+                entry[2],
+                entry[3],
+            )
+        )
+        trimmed = ordered[:result_limit]
+        if trimmed and not any(entry[0] == 0 for entry in trimmed):
+            pinned = next((entry for entry in ordered if entry[0] == 0), None)
+            if pinned is not None:
+                trimmed = [*trimmed[:-1], pinned]
     rendered_facts: list[dict[str, object]] = []
     for entry in trimmed:
         text = entry[3]
@@ -109,6 +142,9 @@ def render_evidence(
         ranked = entry[5]
         rendered_sources: list[dict[str, str | bool]] = []
         for source in ranked:
+            if compact:
+                rendered_sources.append(_rendered_source_compact(source))
+                continue
             rendered_sources.append(
                 {
                     "episode_id": source.episode_id,
@@ -121,9 +157,12 @@ def render_evidence(
                     "speaker_identity": source.speaker_identity,
                 }
             )
-        rendered_facts.append(
-            {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
-        )
+        if compact:
+            rendered_facts.append({"text": text, "sources": rendered_sources})
+        else:
+            rendered_facts.append(
+                {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
+            )
     payload = {
         "schema": EVIDENCE_SCHEMA,
         "facts": rendered_facts,

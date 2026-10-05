@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -91,6 +92,7 @@ PREFETCH_ADDITIONAL_EMPTY_EVIDENCE = (
 )
 PREFETCH_QUERY_MAX_CHARS = 2000
 PREFETCH_RETAINED_EVIDENCE = 3
+PREFETCH_RETAINED_MAX_CHARS = 1200
 PREFETCH_TOOL_NAME = "recall_meeting_context"
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
@@ -293,9 +295,9 @@ def create_memory_tools(
     return [remember_meeting_fact, recall_meeting_context]
 
 
-async def search_memory_evidence(
+async def _search_edges(
     memory: Graphiti, query: str, *, group_id: str, recall: RecallSettings
-) -> str:
+) -> list[EntityEdge]:
     async with asyncio.timeout(recall.timeout_seconds):
         results = await memory.search(
             query,
@@ -303,9 +305,25 @@ async def search_memory_evidence(
             num_results=recall.search_limit,
             search_filter=CURRENT_FACTS_FILTER,
         )
-        return await describe_facts(
-            memory, list(results), group_id=group_id, result_limit=recall.result_limit
-        )
+        return list(results)
+
+
+async def search_memory_evidence(
+    memory: Graphiti, query: str, *, group_id: str, recall: RecallSettings
+) -> str:
+    edges = await _search_edges(memory, query, group_id=group_id, recall=recall)
+    return await describe_facts(memory, edges, group_id=group_id, result_limit=recall.result_limit)
+
+
+async def search_memory_evidence_pair(
+    memory: Graphiti, query: str, *, group_id: str, recall: RecallSettings
+) -> tuple[str, str]:
+    edges = await _search_edges(memory, query, group_id=group_id, recall=recall)
+    slim = await describe_facts(
+        memory, edges, group_id=group_id, result_limit=recall.result_limit, compact=True
+    )
+    full = await describe_facts(memory, edges, group_id=group_id, result_limit=recall.result_limit)
+    return slim, full
 
 
 def _current_speech(messages: Sequence[AnyMessage]) -> tuple[int, list[HumanMessage]]:
@@ -318,6 +336,28 @@ def _current_speech(messages: Sequence[AnyMessage]) -> tuple[int, list[HumanMess
             speech.append(message)
             end = index + 1
     return end, speech
+
+
+def _trim_retained_evidence(evidence: ToolMessage) -> ToolMessage:
+    content = evidence.text if isinstance(evidence.content, str) else ""
+    if len(content) <= PREFETCH_RETAINED_MAX_CHARS or not content.startswith(
+        PREFETCH_EVIDENCE_PREFIX
+    ):
+        return evidence
+    try:
+        payload = json.loads(content[len(PREFETCH_EVIDENCE_PREFIX) :])
+    except ValueError:
+        return evidence.model_copy(update={"content": content[:PREFETCH_RETAINED_MAX_CHARS]})
+    facts = list(payload.get("facts", []))
+    if not facts:
+        return evidence.model_copy(update={"content": content[:PREFETCH_RETAINED_MAX_CHARS]})
+    trimmed = content
+    while len(facts) > 1 and len(trimmed) > PREFETCH_RETAINED_MAX_CHARS:
+        facts = facts[:-1]
+        trimmed = PREFETCH_EVIDENCE_PREFIX + json.dumps(
+            {**payload, "facts": facts}, ensure_ascii=False
+        )
+    return evidence.model_copy(update={"content": trimmed})
 
 
 def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanMessage]) -> str:
@@ -401,7 +441,8 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             elif (
                 isinstance(message, HumanMessage) and message.id is not None and message.id in kept
             ):
-                assembled.extend(kept[message.id])
+                kept_call, kept_evidence = kept[message.id]
+                assembled.extend([kept_call, _trim_retained_evidence(kept_evidence)])
         return await handler(request.override(messages=assembled))
 
     async def _evidence(
@@ -418,7 +459,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         )
         started = time.monotonic()
         try:
-            found = await search_memory_evidence(
+            slim, full = await search_memory_evidence_pair(
                 self._memory, query, group_id=self._group_id, recall=self._recall
             )
         except asyncio.CancelledError:
@@ -435,15 +476,17 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 outcome="unavailable",
                 error=type(error).__name__,
             )
-            outcome, content = "unavailable", PREFETCH_UNAVAILABLE_EVIDENCE
+            outcome, content, evidence_full = "unavailable", PREFETCH_UNAVAILABLE_EVIDENCE, ""
         else:
-            if found == RECALL_EMPTY_RESULT:
+            if slim == RECALL_EMPTY_RESULT:
                 if prior:
                     outcome, content = "empty", PREFETCH_ADDITIONAL_EMPTY_EVIDENCE
                 else:
                     outcome, content = "empty", PREFETCH_EMPTY_EVIDENCE
+                evidence_full = ""
             else:
-                outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + found
+                outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + slim
+                evidence_full = full
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
         self._sequence += 1
         tool_call_id = (
@@ -471,6 +514,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                     "query": query,
                     "outcome": outcome,
                     "duration_ms": (time.monotonic() - started) * 1000,
+                    "evidence_full": evidence_full,
                 }
             },
         )
@@ -514,7 +558,12 @@ def _source_evidence(episode: EpisodicNode) -> SourceEvidence:
 
 
 async def describe_facts(
-    memory: Graphiti, edges: list[EntityEdge], *, group_id: str, result_limit: int
+    memory: Graphiti,
+    edges: list[EntityEdge],
+    *,
+    group_id: str,
+    result_limit: int,
+    compact: bool = False,
 ) -> str:
     episode_uuids = sorted({uuid for edge in edges for uuid in edge.episodes})
     episodes = (
@@ -533,7 +582,11 @@ async def describe_facts(
     states = await read_note_states(memory, group_id=group_id, episode_uuids=owned) if owned else {}
     facts: list[FactEvidence] = []
     excluded = {"pending": 0, "superseded": 0, "missing_source": 0}
-    for edge in edges:
+    search_rank: dict[str, int] = {}
+    for position, edge in enumerate(edges):
+        key = " ".join(edge.fact.split())
+        if key not in search_rank:
+            search_rank[key] = position
         if edge.group_id != group_id:
             excluded["missing_source"] += 1
             continue
@@ -564,7 +617,13 @@ async def describe_facts(
         )
     if not facts:
         return RECALL_EMPTY_RESULT
-    return render_evidence(facts, result_limit=result_limit, excluded=excluded)
+    return render_evidence(
+        facts,
+        result_limit=result_limit,
+        excluded=excluded,
+        compact=compact,
+        search_rank=search_rank,
+    )
 
 
 async def meeting_episodes(

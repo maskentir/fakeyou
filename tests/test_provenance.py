@@ -69,6 +69,36 @@ def test_rendered_sources_default_to_unverified_speaker_identity() -> None:
     )
 
 
+def test_compact_render_drops_metadata_but_keeps_identity_longhand() -> None:
+    at = datetime(2026, 9, 30, 3, 10, tzinfo=UTC)
+    recorded = datetime(2026, 10, 2, 8, tzinfo=UTC)
+    meeting = SourceEvidence(
+        "e1", "meeting_transcript", "Google Meet m1 transcript", at, at, "episode_window"
+    )
+    owner = SourceEvidence(
+        "e2", "owner_note", "owner note", at, recorded, "document", speaker_identity="owner"
+    )
+    facts = [FactEvidence(("a",), "Orchid demo moves to Friday.", (meeting, owner))]
+    payload = json.loads(render_evidence(facts, result_limit=5, excluded={}, compact=True))
+    assert payload["schema"] == "memory_evidence/v1"
+    assert payload["facts"][0]["text"] == "Orchid demo moves to Friday."
+    assert "fact_ids" not in payload["facts"][0]
+    sources = payload["facts"][0]["sources"]
+    assert sources[0] == {
+        "kind": "owner_note",
+        "label": "owner note",
+        "source_at": at.astimezone(UTC).isoformat(),
+        "recorded_at": recorded.astimezone(UTC).isoformat(),
+        "speaker_identity": "owner",
+    }
+    assert sources[1] == {
+        "kind": "meeting_transcript",
+        "label": "Google Meet m1 transcript",
+        "source_at": at.astimezone(UTC).isoformat(),
+        "speaker_identity": "unverified: may or may not be the owner or any named person",
+    }
+
+
 def test_negation_stays_split() -> None:
     base = datetime(2026, 9, 30, 3, 10, tzinfo=UTC)
     recorded = datetime(2026, 10, 2, 8, tzinfo=UTC)
