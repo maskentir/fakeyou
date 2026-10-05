@@ -136,7 +136,8 @@ Aturannya:
 ## Ingestion sebagai job
 
 ```sh
-fakeyou worker ingest OPC-1 --persona .runtime/audio/persona.json
+fakeyou worker ingest OPC-1 --persona .runtime/audio/persona.json \
+  --owner-id wops_owner --twin-id wops_twin
 ```
 
 Perintah ini foreground sampai job selesai: menjalankan
@@ -144,6 +145,9 @@ Perintah ini foreground sampai job selesai: menjalankan
 (`role=ingest`, `--rm`). Syarat jalan: sesi sudah finished, tidak
 ada worker atau job ingest lain untuk meeting itu, dan lock record
 tidak live atau corrupt. Persona harus terlihat di dalam container.
+Bila identitas persona beda dari identitas di `.env`, teruskan
+`--owner-id`/`--twin-id`; tanpa itu container memakai identitas
+`.env` dan ingestion ditolak karena tidak cocok.
 
 Hasil job dibaca dari file status ingestion di host. JSON berisi
 `meeting_id` dan `status`; CLI exit 1 bila status bukan

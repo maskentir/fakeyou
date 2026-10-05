@@ -190,12 +190,22 @@ def test_worker_ingest_prints_the_job_status(
     worker_ingest(
         meeting_id="meeting-9",
         persona_path=Path("persona.json"),
+        owner_id=None,
+        twin_id=None,
         settings=settings,
         backend=backend,
     )
 
     assert backend.calls == [
-        ("ingest", {"meeting_id": "meeting-9", "persona_path": Path("persona.json")})
+        (
+            "ingest",
+            {
+                "meeting_id": "meeting-9",
+                "persona_path": Path("persona.json"),
+                "owner_id": None,
+                "twin_id": None,
+            },
+        )
     ]
     assert json.loads(capsys.readouterr().out) == {
         "meeting_id": "meeting-9",
@@ -220,6 +230,8 @@ def test_worker_ingest_exits_nonzero_unless_completed(
         worker_ingest(
             meeting_id="meeting-9",
             persona_path=Path("persona.json"),
+            owner_id=None,
+            twin_id=None,
             settings=settings,
             backend=backend,
         )
@@ -238,3 +250,22 @@ def test_worker_ingest_parses_meeting_and_persona() -> None:
     assert options.handler is worker_ingest
     assert options.meeting_id == "meeting-9"
     assert options.persona_path == Path("p.json")
+    assert options.owner_id is None
+    assert options.twin_id is None
+
+    options = parser.parse_args(
+        [
+            "worker",
+            "ingest",
+            "meeting-9",
+            "--persona",
+            "p.json",
+            "--owner-id",
+            "o1",
+            "--twin-id",
+            "t1",
+        ]
+    )
+
+    assert options.owner_id == "o1"
+    assert options.twin_id == "t1"

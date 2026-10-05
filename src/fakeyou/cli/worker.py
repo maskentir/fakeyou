@@ -99,11 +99,15 @@ def worker_ingest(
     meeting_id: str,
     *,
     persona_path: Path,
+    owner_id: str | None,
+    twin_id: str | None,
     settings: Settings,
     backend: WorkerBackend | None = None,
 ) -> None:
     try:
-        ingested = _backend(settings, backend).ingest(meeting_id, persona_path=persona_path)
+        ingested = _backend(settings, backend).ingest(
+            meeting_id, persona_path=persona_path, owner_id=owner_id, twin_id=twin_id
+        )
     except WorkerError as error:
         raise CliError(str(error)) from None
     print(json.dumps(dataclasses.asdict(ingested), indent=2))

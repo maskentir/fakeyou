@@ -140,7 +140,9 @@ class WorkerBackend(Protocol):
     def status(self, meeting_id: str) -> WorkerState: ...
     def status_all(self) -> list[WorkerState]: ...
     def stop(self, meeting_id: str, *, timeout_seconds: float) -> WorkerStopped: ...
-    def ingest(self, meeting_id: str, *, persona_path: Path) -> WorkerIngest: ...
+    def ingest(
+        self, meeting_id: str, *, persona_path: Path, owner_id: str | None, twin_id: str | None
+    ) -> WorkerIngest: ...
 
 
 def compose_override(meeting_id: str, *, role: str) -> str:
@@ -324,7 +326,14 @@ class DockerWorkerBackend:
             escalated=False,
         )
 
-    def ingest(self, meeting_id: str, *, persona_path: Path) -> WorkerIngest:
+    def ingest(
+        self,
+        meeting_id: str,
+        *,
+        persona_path: Path,
+        owner_id: str | None = None,
+        twin_id: str | None = None,
+    ) -> WorkerIngest:
         checked_meeting_id(meeting_id)
         if self._running_container(meeting_id) is not None:
             raise WorkerError(f"worker for meeting {meeting_id} is still running")
@@ -347,6 +356,10 @@ class DockerWorkerBackend:
             "--persona",
             self._container_path(persona_path),
         ]
+        if owner_id is not None:
+            ingest_args += ["--owner-id", owner_id]
+        if twin_id is not None:
+            ingest_args += ["--twin-id", twin_id]
         name = f"{INGEST_CONTAINER_PREFIX}{meeting_id}"
         status_file = status_path(record)
         before = self._status_fingerprint(status_file)

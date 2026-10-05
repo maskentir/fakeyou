@@ -891,6 +891,51 @@ def test_ingest_runs_memory_ingest_in_a_foreground_container(tmp_path: Path) -> 
     ]
 
 
+def test_ingest_forwards_owner_and_twin_identity(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.expect(" run ", "abc123\n")
+    backend = ingest_backend(tmp_path, runner)
+    write_journal(tmp_path / "journals" / "meeting-9.jsonl", FINISHED_ROWS)
+    runtime = tmp_path / ".runtime" / "audio"
+    runtime.mkdir(parents=True)
+    persona = runtime / "persona.json"
+    persona.write_text("{}", encoding="utf-8")
+
+    backend.ingest("meeting-9", persona_path=persona, owner_id="wops_owner", twin_id="wops_twin")
+
+    run = next(command for command in runner.commands if "run" in command)
+    tail = run[run.index("fakeyou") + 1 :]
+    assert tail == [
+        "memory-ingest",
+        "--meeting",
+        "meeting-9",
+        "--persona",
+        ".runtime/persona.json",
+        "--owner-id",
+        "wops_owner",
+        "--twin-id",
+        "wops_twin",
+    ]
+
+
+def test_ingest_omits_identity_flags_when_unset(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.expect(" run ", "abc123\n")
+    backend = ingest_backend(tmp_path, runner)
+    write_journal(tmp_path / "journals" / "meeting-9.jsonl", FINISHED_ROWS)
+    runtime = tmp_path / ".runtime" / "audio"
+    runtime.mkdir(parents=True)
+    persona = runtime / "persona.json"
+    persona.write_text("{}", encoding="utf-8")
+
+    backend.ingest("meeting-9", persona_path=persona)
+
+    run = next(command for command in runner.commands if "run" in command)
+    tail = run[run.index("fakeyou") + 1 :]
+    assert "--owner-id" not in tail
+    assert "--twin-id" not in tail
+
+
 def test_ingest_labels_the_job_container_with_the_ingest_role(tmp_path: Path) -> None:
     seen: dict[str, str] = {}
 

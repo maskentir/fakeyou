@@ -257,6 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker_ingest_parser.add_argument("meeting_id")
     worker_ingest_parser.add_argument("--persona", dest="persona_path", type=Path, required=True)
+    worker_ingest_parser.add_argument("--owner-id", dest="owner_id", default=None)
+    worker_ingest_parser.add_argument("--twin-id", default=None)
     worker_ingest_parser.set_defaults(handler=worker_ingest)
     return parser
 
