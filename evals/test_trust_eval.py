@@ -1060,9 +1060,10 @@ async def test_failed_recall_after_success_records_current_middleware_result(
 
         async def search_once(*args: Any, **kwargs: Any) -> Any:
             nonlocal attempted
-            if attempted:
-                raise RuntimeError("second recall failed")
-            attempted = True
+            if kwargs.get("search_filter") is not None:
+                if attempted:
+                    raise RuntimeError("second recall failed")
+                attempted = True
             return await search(*args, **kwargs)
 
         memory.search.side_effect = search_once

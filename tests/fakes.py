@@ -7,7 +7,7 @@ import re
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, create_autospec
@@ -262,6 +262,7 @@ def recall_call(args: dict[str, Any], *, id: str = "call-1") -> AIMessage:
 
 
 _QUERY_TOKEN = re.compile(r"[a-z0-9]+")
+INVALIDATED_AT = datetime(2026, 10, 5, tzinfo=UTC)
 
 
 def _query_tokens(text: str) -> set[str]:
@@ -275,6 +276,7 @@ def make_graphiti(
     fact_groups: dict[str, str] | None = None,
     query_sensitive: bool = False,
     match_all: bool = False,
+    invalidated: Sequence[str] = (),
     existing: Sequence[Any] = (),
     saga_episodes: dict[str, list[str]] | None = None,
     connect_error: BaseException | None = None,
@@ -335,14 +337,18 @@ def make_graphiti(
             selected = [fact for fact in memory.facts if wanted & _query_tokens(fact)]
         else:
             selected = list(memory.facts)
+        if kwargs.get("search_filter") is not None:
+            selected = [fact for fact in selected if fact not in invalidated]
         return [
             SimpleNamespace(
-                uuid=f"edge-{index}",
+                uuid=f"edge-{memory.facts.index(fact)}",
                 fact=fact,
                 episodes=memory.fact_episodes.get(fact, []),
                 group_id=memory.fact_groups.get(fact, fallback),
+                invalid_at=INVALIDATED_AT if fact in invalidated else None,
+                expired_at=INVALIDATED_AT if fact in invalidated else None,
             )
-            for index, fact in enumerate(selected)
+            for fact in selected
         ]
 
     async def add_episode(**kwargs: Any) -> Any:

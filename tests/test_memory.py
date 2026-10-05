@@ -598,7 +598,10 @@ async def test_recall_batches_episode_and_status_lookups(
 
     await recall.ainvoke({"query": "fact"})
 
-    assert len(memory.searched) == 1
+    assert [entry.get("search_filter") for entry in memory.searched] == [
+        memory_module.CURRENT_FACTS_FILTER,
+        None,
+    ]
     assert episode_calls == [["meet-a", "note-a"]]
     assert state_calls == [["note-a"]]
 
@@ -1096,3 +1099,71 @@ async def test_memory_context_finishes_disposal_after_repeated_cancellation(monk
         await asyncio.gather(opening, return_exceptions=True)
         for client in clients:
             await original_close(client)
+
+
+def _owner_rumor_memory(
+    monkeypatch: pytest.MonkeyPatch, *, owner_state: str, invalidated: tuple[str, ...]
+) -> Any:
+    moment = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    stored = {
+        "note": _episode("note", "team_alpha", owner_notes.OWNER_NOTE_SOURCE, moment),
+        "meet": _episode("meet", "team_alpha", "Google Meet m3 transcript", moment),
+    }
+
+    async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
+        return [stored[uuid] for uuid in uuids if uuid in stored]
+
+    async def scripted_states(
+        _memory: Any, *, group_id: str, episode_uuids: list[str]
+    ) -> dict[str, str]:
+        return {uuid: owner_state for uuid in episode_uuids}
+
+    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(memory_module, "read_note_states", scripted_states)
+    return make_graphiti(
+        facts=[
+            "Owner moved the demo to Friday.",
+            "Unverified speaker said the demo moves to November.",
+        ],
+        episodes={
+            "Owner moved the demo to Friday.": ["note"],
+            "Unverified speaker said the demo moves to November.": ["meet"],
+        },
+        invalidated=invalidated,
+    )
+
+
+async def test_participant_claim_cannot_invalidate_an_active_owner_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = _owner_rumor_memory(
+        monkeypatch, owner_state="active", invalidated=("Owner moved the demo to Friday.",)
+    )
+    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+
+    payload = json.loads(await recall.ainvoke({"query": "demo"}))
+
+    assert [fact["text"] for fact in payload["facts"]] == [
+        "Unverified speaker said the demo moves to November.",
+        "Owner moved the demo to Friday.",
+    ]
+    assert [entry.get("search_filter") for entry in memory.searched] == [
+        memory_module.CURRENT_FACTS_FILTER,
+        None,
+    ]
+
+
+async def test_invalidated_facts_without_an_active_owner_note_stay_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = _owner_rumor_memory(
+        monkeypatch,
+        owner_state="superseded",
+        invalidated=(
+            "Owner moved the demo to Friday.",
+            "Unverified speaker said the demo moves to November.",
+        ),
+    )
+    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+
+    assert await recall.ainvoke({"query": "demo"}) == memory_module.RECALL_EMPTY_RESULT

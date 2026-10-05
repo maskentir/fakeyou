@@ -1273,7 +1273,12 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
             "group_ids": [profile.memory_group],
             "num_results": DEFAULTS.memory.recall.search_limit,
             "search_filter": memory_module.CURRENT_FACTS_FILTER,
-        }
+        },
+        {
+            "query": "Orchid launch",
+            "group_ids": [profile.memory_group],
+            "num_results": DEFAULTS.memory.recall.search_limit,
+        },
     ]
     assert profile.memory_group != settings.memory.store.group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]

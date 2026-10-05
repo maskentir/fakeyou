@@ -299,13 +299,24 @@ async def _search_edges(
     memory: Graphiti, query: str, *, group_id: str, recall: RecallSettings
 ) -> list[EntityEdge]:
     async with asyncio.timeout(recall.timeout_seconds):
-        results = await memory.search(
-            query,
-            group_ids=[group_id],
-            num_results=recall.search_limit,
-            search_filter=CURRENT_FACTS_FILTER,
+        current, everything = await asyncio.gather(
+            memory.search(
+                query,
+                group_ids=[group_id],
+                num_results=recall.search_limit,
+                search_filter=CURRENT_FACTS_FILTER,
+            ),
+            memory.search(query, group_ids=[group_id], num_results=recall.search_limit),
         )
-        return list(results)
+    seen = {edge.uuid for edge in current}
+    return [
+        *current,
+        *(edge for edge in everything if edge.uuid not in seen and _invalidated(edge)),
+    ]
+
+
+def _invalidated(edge: EntityEdge) -> bool:
+    return edge.invalid_at is not None or edge.expired_at is not None
 
 
 async def search_memory_evidence(
@@ -601,7 +612,7 @@ async def describe_facts(
             continue
         superseded = [note for note in notes if states.get(note.uuid) == "superseded"]
         active_notes = [note for note in notes if states.get(note.uuid) in (None, "active")]
-        if superseded and not active_notes:
+        if (superseded or _invalidated(edge)) and not active_notes:
             excluded["superseded"] += 1
             continue
         usable = [episode for episode in present if states.get(episode.uuid) in (None, "active")]

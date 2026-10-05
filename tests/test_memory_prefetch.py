@@ -301,7 +301,7 @@ async def test_follow_up_searches_with_conversation_context_and_keeps_prior_evid
     await turn(agent, participant("When is the Orchid demo?", "t1"))
     await turn(agent, participant("Who set it?", "t2"))
 
-    query = memory.searched[1]["query"]
+    query = memory.searched[2]["query"]
     assert "When is the Orchid demo?" in query
     assert "Friday." in query
     assert "Who set it?" in query
@@ -344,7 +344,7 @@ async def test_follow_up_query_stays_bounded_while_keeping_current_speech(
     await turn(agent, participant("context " * 500, "t1"))
     await turn(agent, participant("Who set it?", "t2"))
 
-    query = memory.searched[1]["query"]
+    query = memory.searched[2]["query"]
     assert "Who set it?" in query
     assert "context" in query
     assert len(query) <= 2000
@@ -441,7 +441,7 @@ async def test_fallback_retry_reuses_the_prefetched_evidence_of_the_turn(
 
     await turn(agent, participant("Who leads QA?", "t1"))
 
-    assert [entry["query"] for entry in memory.searched] == ["Who leads QA?"]
+    assert [entry["query"] for entry in memory.searched] == ["Who leads QA?", "Who leads QA?"]
     [primary_sent] = primary.seen
     [evidence] = evidence_messages(model_calls(fallback)[0])
     assert evidence_messages(primary_sent) == [evidence]
