@@ -6,6 +6,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.lifecycle import (
+    MeetingLifecycle,
     create_lifecycle_graph,
     initial_lifecycle_state,
     meeting_thread_id,
@@ -213,3 +214,51 @@ def test_lifecycle_state_survives_sqlite_reopen(tmp_path) -> None:
 
 def test_meeting_thread_id_is_deterministic() -> None:
     assert meeting_thread_id("twin-1", "meeting-1") == "twin-1:meeting-1"
+
+
+async def test_lifecycle_resume_restarts_a_crashed_thread_in_place() -> None:
+    saver = InMemorySaver()
+    first = MeetingLifecycle("owner-1", "twin-1", "meeting-1", saver)
+    await first.initialize()
+    await first.send("join_requested", "owner_action", "test")
+    await first.send("admitted", "host_action", "test")
+    assert first.state["phase"] == "admitted"
+
+    resumed = MeetingLifecycle("owner-1", "twin-1", "meeting-1", saver)
+    with pytest.raises(ValueError, match="cannot resume meeting"):
+        await resumed.initialize()
+
+    await resumed.initialize(resume=True)
+
+    assert resumed.state["phase"] == "preparing"
+    assert resumed.state["pending_reason"] is None
+    assert resumed.state["terminal_reason"] is None
+    assert [row["event"] for row in resumed.state["evidence"]] == [
+        "join_requested",
+        "admitted",
+    ]
+    assert resumed.state["external_effects"] == ["join_requested"]
+    assert resumed.state["owner_id"] == "owner-1"
+    saved = await saver.aget_tuple(
+        {"configurable": {"thread_id": meeting_thread_id("twin-1", "meeting-1")}}
+    )
+    assert saved is not None
+    assert saved.checkpoint["channel_values"]["phase"] == "preparing"
+    assert saved.checkpoint["channel_values"]["evidence"] == resumed.state["evidence"]
+    assert (
+        saved.checkpoint["channel_values"]["external_effects"] == resumed.state["external_effects"]
+    )
+
+    await resumed.send("join_requested", "owner_action", "retry")
+    assert resumed.state["phase"] == "lobby"
+
+
+async def test_lifecycle_resume_still_rejects_an_identity_mismatch() -> None:
+    saver = InMemorySaver()
+    first = MeetingLifecycle("owner-1", "twin-1", "meeting-1", saver)
+    await first.initialize()
+    await first.send("join_requested", "owner_action", "test")
+
+    resumed = MeetingLifecycle("owner-2", "twin-1", "meeting-1", saver)
+    with pytest.raises(ValueError, match="checkpoint identity does not match"):
+        await resumed.initialize(resume=True)

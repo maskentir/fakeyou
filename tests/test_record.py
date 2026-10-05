@@ -120,6 +120,18 @@ def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:
         load_meeting_record(path)
 
 
+def test_record_roundtrips_a_resume_marker(tmp_path: Path) -> None:
+    from fakeyou.record import ResumeEntry
+
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(0))
+    record.add_resume(attempt=2)
+    record.close()
+
+    entries = load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))
+    assert entries[-1] == ResumeEntry(at=NOW, attempt=2)
+
+
 def test_record_close_finalizes_and_second_close_is_safe(tmp_path: Path) -> None:
     record = open_record(tmp_path)
     record.add_transcript(transcript(0))

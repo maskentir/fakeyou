@@ -51,12 +51,14 @@ from fakeyou.ingestion_status import (
 )
 from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 from fakeyou.journal import Journal, journal_path
+from fakeyou.lifecycle import meeting_thread_id
 from fakeyou.participant_observer import EVIDENCE_FILE_NAME
 from fakeyou.persona import PersonaProfile, meeting_tool_names, persona_digest, speech_keywords
 from fakeyou.playback import PlaybackEvent
 from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.providers import memory_config, open_persona_memory, preflight_hosts
-from fakeyou.record import MeetingRecord, load_meeting_record, meeting_record_path
+from fakeyou.record import MeetingRecord, ResumeEntry, load_meeting_record, meeting_record_path
+from fakeyou.report import describe_session
 from fakeyou.runtime import run_meeting_session
 from fakeyou.session import SessionConfig, SessionResult
 from fakeyou.settings import (
@@ -84,6 +86,7 @@ async def join_meeting(
     barge_in: bool = False,
     persona_path: Path | None = None,
     brief_path: Path | None = None,
+    resume: bool = False,
 ) -> None:
     audio_enabled = audio_enabled or settings.worker.audio
     parsed_link = urlparse(link)
@@ -167,6 +170,7 @@ async def join_meeting(
         else None,
         checkpoint_path=settings.paths.checkpoint_path,
         checkpoint_dsn=checkpoint_dsn(settings),
+        resume=resume,
     )
     profile: PersonaProfile | None = None
     brief: MeetingBrief | None = None
@@ -215,6 +219,19 @@ async def join_meeting(
                 except ProfileInUseError as error:
                     raise CliError(str(error)) from None
             with record_lock(record_path, purpose="meeting"):
+                session_state = describe_session(settings.paths.journal_dir, resolved_meeting_id)
+                if session_state == "unfinished" and not resume:
+                    raise CliError(
+                        f"meeting {resolved_meeting_id} has an unfinished session; "
+                        "rejoin with --resume"
+                    )
+                if session_state == "finished" and resume:
+                    raise CliError(
+                        f"meeting {resolved_meeting_id} already ended; use a new meeting ID"
+                    )
+                resuming = resume and (
+                    session_state == "unfinished" or await _has_live_thread(config)
+                )
                 context_reused = await _settle_meeting_context(record_path, config, meeting_context)
                 conversation: ConversationLoop | None = None
                 graphiti: Graphiti | None = None
@@ -243,6 +260,10 @@ async def join_meeting(
                             ingestion_outcome = "unknown"
                     record = MeetingRecord(record_path, faults=faults)
                     resources.callback(record.close)
+                    if resuming:
+                        attempt = _resume_attempt(record_path)
+                        journal.record("session_resumed", source="cli", attempt=attempt)
+                        record.add_resume(attempt=attempt)
                     if meeting_context is not None:
                         journal.record(
                             "brief_recorded",
@@ -548,3 +569,28 @@ async def _has_conversation(
 
 def _has_entries(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
+
+
+async def _has_live_thread(config: SessionConfig) -> bool:
+    if config.checkpoint_dsn is None and not await asyncio.to_thread(config.checkpoint_path.exists):
+        return False
+    try:
+        async with open_checkpointer(config.checkpoint_path, dsn=config.checkpoint_dsn) as saver:
+            saved = await saver.aget_tuple(
+                {
+                    "configurable": {
+                        "thread_id": meeting_thread_id(config.twin_id, config.meeting_id)
+                    }
+                }
+            )
+    except (sqlite3.Error, OSError, PsycopgError) as error:
+        raise CliError(f"lifecycle checkpoint cannot be checked: {type(error).__name__}") from None
+    return saved is not None and saved.checkpoint["channel_values"].get("phase") != "ended"
+
+
+def _resume_attempt(record_path: Path) -> int:
+    try:
+        entries = load_meeting_record(record_path)
+    except (OSError, ValueError):
+        return 2
+    return sum(isinstance(entry, ResumeEntry) for entry in entries) + 2

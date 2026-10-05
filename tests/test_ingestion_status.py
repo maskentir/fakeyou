@@ -370,6 +370,47 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
     assert not lock_path(record).exists()
 
 
+def test_describe_lease_reports_absent_live_stale_and_corrupt(tmp_path: Path) -> None:
+    from fakeyou.ingestion_status import describe_lease
+
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+
+    assert describe_lease(path) == "absent"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 42,
+                "purpose": "meeting",
+                "token": "live",
+                "heartbeat": datetime.now(UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert describe_lease(path, stale_after_seconds=60.0) == "live"
+
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 42,
+                "purpose": "meeting",
+                "token": "stale",
+                "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert describe_lease(path, stale_after_seconds=60.0) == "stale"
+
+    path.write_text("{corrupt", encoding="utf-8")
+    assert describe_lease(path, stale_after_seconds=60.0) == "corrupt"
+
+
 def test_record_lock_refuses_a_corrupt_lock_file(tmp_path: Path) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
     path = lock_path(record)

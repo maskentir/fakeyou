@@ -4,9 +4,9 @@ import statistics
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fakeyou.journal import JOURNAL_BACKUP_COUNT
+from fakeyou.journal import JOURNAL_BACKUP_COUNT, journal_path
 
 LATENCY_STAGES = (
     "speech_stopped_to_final_seconds",
@@ -39,6 +39,18 @@ STARTUP_MILESTONES = (
     "microphone_enabled",
     "conversation_bound",
 )
+
+
+SessionState = Literal["fresh", "unfinished", "finished"]
+
+
+def describe_session(journal_dir: Path, meeting_id: str) -> SessionState:
+    rows = read_journal(journal_path(journal_dir, meeting_id))
+    if not rows:
+        return "fresh"
+    if any(row.get("event") == "session_finished" for row in rows):
+        return "finished"
+    return "unfinished"
 
 
 def read_journal(path: Path) -> list[dict[str, Any]]:

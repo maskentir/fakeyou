@@ -497,7 +497,7 @@ async def run_meeting_session(
             else open_checkpointer(config.checkpoint_path, dsn=config.checkpoint_dsn)
         )
         lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
-        await lifecycle.initialize()
+        await lifecycle.initialize(resume=config.resume)
         detail = "session already ended"
         if lifecycle.state["phase"] != "ended":
             try:

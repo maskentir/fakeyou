@@ -251,7 +251,7 @@ class MeetingLifecycle:
         }
         self.state = initial_lifecycle_state(owner_id, twin_id, meeting_id)
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, resume: bool = False) -> None:
         saved = await self._graph.aget_state(self._config)
         if not saved.values:
             await self._graph.ainvoke(self.state, self._config)
@@ -262,7 +262,29 @@ class MeetingLifecycle:
         self.state = cast(MeetingLifecycleState, saved.values)
         phase = self.state["phase"]
         if phase != "ended" and (phase != "preparing" or self.state["external_effects"]):
-            raise ValueError(f"cannot resume meeting {self.state['meeting_id']} in phase {phase}")
+            if not resume:
+                raise ValueError(
+                    f"cannot resume meeting {self.state['meeting_id']} in phase {phase}"
+                )
+            self.state = {
+                **initial_lifecycle_state(
+                    self.state["owner_id"], self.state["twin_id"], self.state["meeting_id"]
+                ),
+                "evidence": list(self.state["evidence"]),
+                "external_effects": list(self.state["external_effects"]),
+            }
+            await self._graph.aupdate_state(
+                self._config,
+                {
+                    "owner_id": self.state["owner_id"],
+                    "twin_id": self.state["twin_id"],
+                    "meeting_id": self.state["meeting_id"],
+                    "phase": "preparing",
+                    "previous_phase": None,
+                    "pending_reason": None,
+                    "terminal_reason": None,
+                },
+            )
 
     async def send(
         self, kind: LifecycleEventKind, attribution: LifecycleAttribution, detail: str

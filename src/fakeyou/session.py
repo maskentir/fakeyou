@@ -82,6 +82,7 @@ class SessionConfig:
     license_key: str | None = field(default=None, repr=False)
     participant_policy_enabled: bool = False
     participant_evidence_path: Path | None = None
+    resume: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

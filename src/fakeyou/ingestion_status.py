@@ -128,6 +128,22 @@ def _lock_owner(path: Path) -> dict[str, Any] | None:
     return {"host": host, "pid": pid, "purpose": purpose, "token": token, "heartbeat": heartbeat}
 
 
+LeaseState = Literal["absent", "live", "stale", "corrupt"]
+
+
+def describe_lease(
+    path: Path, *, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
+) -> LeaseState:
+    if not path.exists():
+        return "absent"
+    owner = _lock_owner(path)
+    if owner is None:
+        return "corrupt"
+    if _owner_recoverable(owner, stale_after_seconds):
+        return "stale"
+    return "live"
+
+
 def _process_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)

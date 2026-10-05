@@ -1811,6 +1811,58 @@ async def test_join_brief_resume_reuses_the_matching_context_unchanged(
     assert reused == [False, True]
 
 
+async def test_join_resume_reuses_history_without_replaying_answers(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    brief_path = write_brief(tmp_path)
+    first_model = ToolCallingFakeModel(responses=[AIMessage(content="Hello.")])
+    _created, first_audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=first_model,
+        transcripts=("When does Orchid launch?",),
+        brief_path=brief_path,
+        native_checkpointer=True,
+        settings=settings,
+        join=join,
+    )
+    assert first_audio.spoken == ["Hello."]
+    journal_file = journal_path(settings.paths.journal_dir, "meeting-9")
+    journal_file.write_text(
+        "".join(
+            line
+            for line in journal_file.read_text(encoding="utf-8").splitlines(keepends=True)
+            if '"session_finished"' not in line and '"cli_exited"' not in line
+        ),
+        encoding="utf-8",
+    )
+    second_model = ToolCallingFakeModel(responses=[AIMessage(content="Again.")])
+    _created, second_audio, _outcome = await _join_persona_conversation(
+        tmp_path,
+        monkeypatch,
+        model=second_model,
+        transcripts=("Anything else?",),
+        brief_path=brief_path,
+        native_checkpointer=True,
+        settings=settings,
+        join=join,
+        resume=True,
+    )
+
+    assert second_audio.spoken == ["Again."]
+    first_turn = " ".join(str(message.content) for message in first_model.seen[0])
+    second_turn = " ".join(str(message.content) for message in second_model.seen[0])
+    assert "When does Orchid launch?" in first_turn
+    assert "When does Orchid launch?" in second_turn
+    assert len(second_model.seen[0]) > len(first_model.seen[0])
+    entries = load_meeting_record(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    assert [entry.text for entry in entries if entry.kind == "twin_speech"] == [
+        "Hello.",
+        "Again.",
+    ]
+    assert [entry.kind for entry in entries].count("resume") == 1
+
+
 @pytest.mark.parametrize(
     "change,match",
     [

@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 
 from fakeyou.invariants import SessionId
 from fakeyou.journal import journal_path
-from fakeyou.report import read_journal
+from fakeyou.report import describe_session, read_journal
 
 WORKER_SERVICE = "meeting-worker"
 MANAGED_LABEL = "fakeyou.managed"
@@ -151,7 +151,7 @@ def summarize_session(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
         event = row.get("event")
         if event == "audio_opened":
             phase = "preparing"
-        elif event == "join_requested":
+        elif event in ("join_requested", "session_resumed"):
             phase = "join"
         elif event == "join_finished":
             phase = "admitted" if row.get("status") == "admitted" else "ended"
@@ -190,6 +190,8 @@ class DockerWorkerBackend:
         if self._running_container(request.meeting_id) is not None:
             raise WorkerError(f"worker for meeting {request.meeting_id} is already running")
         join_args = self._join_args(request)
+        if describe_session(self._host_journal_dir(), request.meeting_id) == "unfinished":
+            join_args.append("--resume")
         name = f"{CONTAINER_PREFIX}{request.meeting_id}"
         override: str | None = None
         try:

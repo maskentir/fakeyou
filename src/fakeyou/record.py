@@ -41,8 +41,14 @@ class ToolResultEntry(_Entry):
     duration_ms: float
 
 
+class ResumeEntry(_Entry):
+    kind: Literal["resume"] = "resume"
+    attempt: int
+
+
 RecordEntry = Annotated[
-    TranscriptEntry | TwinSpeechEntry | ToolResultEntry, Field(discriminator="kind")
+    TranscriptEntry | TwinSpeechEntry | ToolResultEntry | ResumeEntry,
+    Field(discriminator="kind"),
 ]
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 
@@ -98,6 +104,9 @@ class MeetingRecord:
         self._append(
             ToolResultEntry(at=self._now(), tool=tool, output=output, duration_ms=duration_ms)
         )
+
+    def add_resume(self, *, attempt: int) -> None:
+        self._append(ResumeEntry(at=self._now(), attempt=attempt))
 
     def close(self) -> None:
         if self._closed:

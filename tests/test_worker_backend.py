@@ -140,6 +140,81 @@ def test_start_applies_a_label_override_and_queries_by_label(tmp_path: Path) -> 
     assert "label=fakeyou.meeting-id=meeting-9" in " ".join(ps)
 
 
+def test_start_resumes_an_unfinished_session_with_the_same_meeting_id(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner()
+    runner.expect(" run ", "abc123\n")
+    journal_dir = tmp_path / "journals"
+    backend = DockerWorkerBackend(runner=runner, journal_dir=journal_dir, project_dir=tmp_path)
+    runtime = tmp_path / ".runtime" / "audio"
+    runtime.mkdir(parents=True)
+    write_journal(
+        journal_dir / "meeting-9.jsonl",
+        [
+            {
+                "event": "join_requested",
+                "meeting_id": "meeting-9",
+                "at": "2026-10-05T02:00:00+00:00",
+                "source": "runtime",
+            }
+        ],
+    )
+
+    backend.start(start_request(runtime))
+
+    run = next(command for command in runner.commands if "run" in command)
+    join = run[run.index("join") :]
+    assert "--resume" in join
+
+
+def test_start_detects_the_unfinished_session_through_the_host_mount(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner()
+    runner.expect(" run ", "abc123\n")
+    backend = DockerWorkerBackend(
+        runner=runner,
+        journal_dir=tmp_path / ".runtime" / "journals",
+        project_dir=tmp_path,
+    )
+    runtime = tmp_path / ".runtime" / "audio"
+    runtime.mkdir(parents=True)
+    write_journal(
+        runtime / "journals" / "meeting-9.jsonl",
+        [
+            {
+                "event": "join_requested",
+                "meeting_id": "meeting-9",
+                "at": "2026-10-05T02:00:00+00:00",
+                "source": "runtime",
+            }
+        ],
+    )
+
+    backend.start(start_request(runtime))
+
+    run = next(command for command in runner.commands if "run" in command)
+    join = run[run.index("join") :]
+    assert "--resume" in join
+
+
+def test_start_runs_a_fresh_meeting_without_resume(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.expect(" run ", "abc123\n")
+    backend = DockerWorkerBackend(
+        runner=runner, journal_dir=tmp_path / "journals", project_dir=tmp_path
+    )
+    runtime = tmp_path / ".runtime" / "audio"
+    runtime.mkdir(parents=True)
+
+    backend.start(start_request(runtime))
+
+    run = next(command for command in runner.commands if "run" in command)
+    join = run[run.index("join") :]
+    assert "--resume" not in join
+
+
 def test_start_refuses_a_meeting_that_is_already_running(tmp_path: Path) -> None:
     runner = FakeRunner()
     runner.expect("docker ps", running_container("abc123", "fakeyou-worker-meeting-9"))
@@ -612,3 +687,17 @@ def test_session_finished_without_a_reason_keeps_the_earlier_reason(tmp_path: Pa
     )
 
     assert summary["terminal_reason"] == "stopped_by_owner"
+
+
+def test_summarize_session_maps_a_resume_marker_to_the_join_phase() -> None:
+    from fakeyou.worker_backend import summarize_session
+
+    summary = summarize_session(
+        [
+            {"event": "join_requested"},
+            {"event": "conversation_bound"},
+            {"event": "session_resumed", "attempt": 2},
+        ]
+    )
+
+    assert summary["phase"] == "join"

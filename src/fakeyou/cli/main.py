@@ -199,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Let new speech interrupt playback; requires --converse",
     )
+    join_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an unfinished session for the same meeting ID",
+    )
     chat_parser = commands.add_parser(
         "chat", help="Run one agent turn with a persistent checkpoint", allow_abbrev=False
     )
