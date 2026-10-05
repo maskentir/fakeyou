@@ -20,6 +20,8 @@
 
 **Prioritas berikutnya, disetujui 3 Oktober:** [brief, delegasi, dan debrief berbukti](meeting-delegation-handoff.md). Owner memberi tujuan dan lingkup pengetahuan per meeting; hasilnya kembali sebagai keputusan/usulan/action item dengan kutipan sumber. Batas tools tidak dapat diperluas lewat ucapan peserta; laporan tidak mengaku owner telah dihubungi. Atribusi speaker dan performa tetap pekerjaan terbuka berdasarkan acceptance multipihak.
 
+**Prioritas berikutnya, 5 Oktober (operasi worker):** [kontrol, isolasi, pemulihan, dan ingestion worker](worker-operations.md). Dipilih pengguna sebagai milestone berikutnya: backend Docker lokal lebih dulu dengan antarmuka yang nanti dapat diganti Kubernetes, dan checkpoint Postgres untuk worker paralel. Latency live tetap gate terbuka; adu model ditunda atas keputusan pengguna.
+
 **Prioritas berikutnya, 5 Oktober (pemulihan latency):** [pemulihan latency live tanpa mengorbankan c04](latency-recovery.md). Semua gate semantik kini lulus pada penalaran default dan penyangkalan c04 turun ke 3,3%, tetapi latency live mundur (p50 5,18 s, p95 7,43 s) karena agent lebih lambat setelah evidence memuat identitas penutur.
 
 **Prioritas berikutnya, 5 Oktober (lanjutan):** [penutur tak dikenal, cakupan injeksi, dan penalaran rendah](unknown-speaker-low-latency.md). Evidence tahan pemalsuan, konteks lanjutan, kendali penalaran, dan anggaran debrief sudah digabung; satu-satunya severe yang tersisa adalah c04 (twin menyangkal penutur tak dikenal sebagai owner), dan p50 live 3,39 s masih di atas 3 s.
