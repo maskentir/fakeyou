@@ -759,6 +759,76 @@ async def test_probe_reports_media_element_census() -> None:
         assert topology["pc_stats_entries"] >= 1
 
 
+@pytest.mark.browser
+async def test_probe_counts_entries_of_a_real_stats_report() -> None:
+    async with open_direct_page(headless=True) as real_page:
+        await real_page.add_init_script(load_probe_script())
+        await real_page.route(
+            "https://probe.fakeyou.test/stats",
+            lambda route: route.fulfill(
+                body="<audio></audio><script>window.__peer = new RTCPeerConnection();"
+                "window.__ctx = new AudioContext();</script>",
+                content_type="text/html",
+            ),
+        )
+        await real_page.goto("https://probe.fakeyou.test/stats", wait_until="domcontentloaded")
+        await wait_for_audio_topology(real_page)
+        drained = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+        topology = drained["audio_topology"]
+        assert topology["pc_stats_entries"] >= 1
+        assert "peer-connection" in topology["pc_stats_types"]
+
+
+LOOPBACK_ENCODED_RECEIVER = (
+    "async () => {"
+    " const ctx = new AudioContext(); await ctx.resume();"
+    " const tone = ctx.createOscillator(); const out = ctx.createMediaStreamDestination();"
+    " tone.connect(out); tone.start();"
+    " const a = new RTCPeerConnection();"
+    " const b = new RTCPeerConnection({encodedInsertableStreams: true});"
+    " a.onicecandidate = (e) => e.candidate && b.addIceCandidate(e.candidate);"
+    " b.onicecandidate = (e) => e.candidate && a.addIceCandidate(e.candidate);"
+    " b.ontrack = (e) => {"
+    "  const streams = e.receiver.createEncodedStreams();"
+    "  streams.readable.pipeTo(streams.writable);"
+    "  ctx.createMediaStreamSource(e.streams[0]).connect(ctx.destination); };"
+    " a.addTrack(out.stream.getAudioTracks()[0], out.stream);"
+    " await a.setLocalDescription(await a.createOffer());"
+    " await b.setRemoteDescription(a.localDescription);"
+    " await b.setLocalDescription(await b.createAnswer());"
+    " await a.setRemoteDescription(b.localDescription);"
+    "}"
+)
+
+
+@pytest.mark.browser
+async def test_probe_reads_identity_and_level_from_encoded_audio_frames() -> None:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True, args=["--autoplay-policy=no-user-gesture-required"]
+        )
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(load_probe_script())
+            await page.goto("about:blank")
+            await page.evaluate(LOOPBACK_ENCODED_RECEIVER)
+            deadline = asyncio.get_running_loop().time() + 15.0
+            windows: list[dict] = []
+            while len(windows) < 5 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.3)
+                drained = await page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+                windows += drained["frames"]
+            assert len(windows) >= 5
+            assert drained["pipeline"]["encoded_streams"] == 1
+            assert all(len(window["ssrc"]) == 1 for window in windows)
+            assert max(window["level"] for window in windows) > 0.1
+            assert windows[0]["track"]
+        finally:
+            await browser.close()
+
+
 async def wait_for_census(page: object, timeout_seconds: float = 15.0) -> None:
     from playwright.async_api import Page
 

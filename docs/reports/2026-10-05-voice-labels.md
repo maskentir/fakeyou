@@ -107,10 +107,11 @@ di bawah gate nama 0,98. Nama tetap mati.
 ## Batas
 
 - Label hanya sah dalam satu join. Orang yang keluar lalu masuk
-  lagi mendapat label baru, karena slot Meet bukan identitas dan
-  CSRC terblokir CloakBrowser. Menyatukan label lintas rejoin butuh
-  sinyal identitas suara (embedding speaker) atau CSRC dari browser
-  lain; keduanya milestone sendiri.
+  lagi mendapat label baru, karena slot Meet bukan identitas. CSRC
+  ternyata tersedia lewat metadata frame terenkode
+  ([riset CSRC](2026-10-05-csrc-research.md)) dan dapat menggantikan
+  binder slot. Menyatukan label lintas rejoin tetap butuh pengikatan
+  ke roster atau identitas suara, karena CSRC berganti per join.
 - Lebih dari 3 peserta remote berarti semua `unknown`
   (`slot_contention`), karena Meet hanya punya 3 slot audio dan
   menggilirnya.

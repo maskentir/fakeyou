@@ -1,6 +1,7 @@
 (() => {
   if (window.__fakeyouAttributionProbe) return;
   const SAMPLE_MS = 50;
+  const FRAME_WINDOW_MS = 100;
   const ROSTER_MS = 250;
   const LEVELS_MS = 250;
   const STATS_TIMEOUT_MS = 5000;
@@ -73,6 +74,13 @@
         const track = readTrack(receiver);
         if (track.kind !== "" && track.kind !== "audio") return;
         audioCount += 1;
+        try {
+          const transform = receiver.transform;
+          const kind = transform && transform.constructor ? String(transform.constructor.name) : "none";
+          if (!pipeline.receiver_transforms.includes(kind)) pipeline.receiver_transforms.push(kind);
+        } catch {
+          /* diagnostics only */
+        }
         samples.push({
           page_ms: stamp,
           peer: index,
@@ -110,7 +118,11 @@
 
   function statEntries(report) {
     try {
-      if (report instanceof Map) return Array.from(report.values());
+      if (report && typeof report.forEach === "function") {
+        const entries = [];
+        report.forEach((entry) => entries.push(entry));
+        return entries;
+      }
       if (report && typeof report === "object") return Object.values(report);
     } catch {
       /* fall through */
@@ -266,6 +278,12 @@
               audioSources.push({
                 tracks: tracks.map((track) => String(track.id || "").slice(0, 16)),
               });
+              for (const track of tracks) {
+                const kind = track && track.constructor ? String(track.constructor.name) : "";
+                if (!pipeline.source_track_types.includes(kind)) {
+                  pipeline.source_track_types.push(kind);
+                }
+              }
               if (audioSources.length > 16) audioSources.splice(0, 1);
               const analyser = ctx.createAnalyser();
               analyser.fftSize = 2048;
@@ -482,11 +500,113 @@
     trim(roster);
   }
 
+  const pipeline = {
+    insertable_configs: 0,
+    encoded_streams: 0,
+    script_transforms: 0,
+    track_generators: 0,
+    track_processors: 0,
+    audio_decoders: 0,
+    worklet_nodes: 0,
+    receiver_transforms: [],
+    source_track_types: [],
+  };
+
+  function countConstructor(name, key) {
+    const Original = window[name];
+    if (typeof Original !== "function") return;
+    function Counted(...args) {
+      pipeline[key] += 1;
+      return new Original(...args);
+    }
+    Counted.prototype = Original.prototype;
+    Object.setPrototypeOf(Counted, Original);
+    try {
+      window[name] = Counted;
+    } catch {
+      /* page locked the constructor */
+    }
+  }
+
+  const frameWindows = new Map();
+  const frames = [];
+  let encodedReceivers = 0;
+
+  function noteFrame(receiverIndex, trackId, frame) {
+    const meta = frame.getMetadata();
+    const bucket = Math.floor(pageNow() / FRAME_WINDOW_MS) * FRAME_WINDOW_MS;
+    const key = receiverIndex + ":" + bucket;
+    let entry = frameWindows.get(key);
+    if (!entry) {
+      entry = {
+        page_ms: bucket,
+        receiver: receiverIndex,
+        track: trackId,
+        ssrc: [],
+        csrc: [],
+        frames: 0,
+        level: 0,
+      };
+      frameWindows.set(key, entry);
+      frames.push(entry);
+      trim(frames);
+      if (frameWindows.size > MAX_BUFFERED) frameWindows.clear();
+    }
+    entry.frames += 1;
+    const level = Number(meta.audioLevel);
+    if (Number.isFinite(level) && level > entry.level) entry.level = level;
+    const ssrc = Number(meta.synchronizationSource);
+    if (Number.isFinite(ssrc) && !entry.ssrc.includes(ssrc)) entry.ssrc.push(ssrc);
+    for (const source of meta.contributingSources || []) {
+      const csrc = Number(source);
+      if (Number.isFinite(csrc) && !entry.csrc.includes(csrc)) entry.csrc.push(csrc);
+    }
+  }
+
+  function drainFrames() {
+    frameWindows.clear();
+    return frames.splice(0, frames.length);
+  }
+
+  function countEncodedStreams() {
+    try {
+      const proto = window.RTCRtpReceiver && window.RTCRtpReceiver.prototype;
+      if (!proto || typeof proto.createEncodedStreams !== "function") return;
+      const original = proto.createEncodedStreams;
+      proto.createEncodedStreams = function (...args) {
+        pipeline.encoded_streams += 1;
+        const streams = original.apply(this, args);
+        try {
+          if (!this.track || this.track.kind !== "audio") return streams;
+          const receiverIndex = encodedReceivers;
+          const trackId = String(this.track.id || "").slice(0, 16);
+          encodedReceivers += 1;
+          const tap = new TransformStream({
+            transform(frame, controller) {
+              try {
+                noteFrame(receiverIndex, trackId, frame);
+              } catch {
+                /* metadata is optional */
+              }
+              controller.enqueue(frame);
+            },
+          });
+          return { readable: streams.readable.pipeThrough(tap), writable: streams.writable };
+        } catch {
+          return streams;
+        }
+      };
+    } catch {
+      /* diagnostics only */
+    }
+  }
+
   if (OriginalPeerConnection) {
     function WrappedPeerConnection(...args) {
       const peer = new OriginalPeerConnection(...args);
       try {
         peers.push(peer);
+        if (args[0] && args[0].encodedInsertableStreams) pipeline.insertable_configs += 1;
       } catch {
         /* never break page construction */
       }
@@ -511,6 +631,12 @@
     };
   }
 
+  countConstructor("RTCRtpScriptTransform", "script_transforms");
+  countConstructor("MediaStreamTrackGenerator", "track_generators");
+  countConstructor("MediaStreamTrackProcessor", "track_processors");
+  countConstructor("AudioDecoder", "audio_decoders");
+  countConstructor("AudioWorkletNode", "worklet_nodes");
+  countEncodedStreams();
   wrapAudioContext("AudioContext");
   wrapAudioContext("webkitAudioContext");
   wrapAudioContext("OfflineAudioContext");
@@ -562,6 +688,8 @@
           samples: samples.splice(0, samples.length),
           levels: levels.splice(0, levels.length),
           stats_diag: Array.from(statsDiag.values()).slice(0, 16),
+          pipeline,
+          frames: drainFrames(),
           media_census: mediaCensus || [],
           audio_topology: audioTopology || {
             contexts: 0,

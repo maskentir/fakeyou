@@ -35,8 +35,9 @@ tersimpan di `.runtime/participant-attribution/`.
 - **CSRC/SSRC/getStats lumpuh total.** `getContributingSources`,
   `getSynchronizationSources`, `receiver.getStats()`, dan
   `peer.getStats()` semuanya kosong sementara media mengalir normal
-  (STT bekerja). Penyebabnya patch WebRTC di binary CloakBrowser,
-  bukan Meet; lihat [addendum riset](#addendum-riset-perisai-webrtc-cloakbrowser).
+  (STT bekerja). (Dikoreksi: stats kosong karena bug pembaca probe;
+  sources kosong karena jalur insertable streams Meet. Lihat
+  [riset CSRC](2026-10-05-csrc-research.md).)
 - **Tidak ada elemen media.** Meet merutekan audio lewat WebAudio
   (2 AudioContext, 6 MediaStreamSource per sesi), bukan elemen
   `<audio>` per peserta. Pola capture per elemen Vexa tidak
@@ -121,44 +122,16 @@ nama, dan gate dinyatakan gagal.
 
 ## Addendum riset perisai WebRTC CloakBrowser
 
-Attendee dan Vexa bisa membaca CSRC karena berjalan di
-Chrome/Chromium biasa. Pertanyaannya: apakah CloakBrowser punya
-switch untuk mematikan perisainya? Jawabannya tidak.
+Addendum versi awal menyimpulkan CloakBrowser memasang perisai stats
+tanpa syarat. Kesimpulan itu salah:
 
-Eksperimen loopback lokal: dua `RTCPeerConnection` di satu
-halaman, oscillator dikirim lewat track audio, lalu receiver
-dibaca setelah 3 detik.
+- Loopback-nya gagal karena policy ICE CloakBrowser (0 candidate, koneksi
+  tak pernah terbentuk). `--webrtc-ip-handling-policy=default`
+  memulihkannya.
+- "getStats kosong" di Meet adalah bug pembaca probe.
+- CSRC per peserta ternyata tersedia lewat metadata frame terenkode.
 
-| Browser | SSRC | `inbound-rtp` |
-| --- | --- | --- |
-| Chromium Playwright biasa | 1 sumber, `audioLevel` 0,708 | 1 entri, 150 paket |
-| CloakBrowser 0.5.11 default | kosong | kosong |
-| CloakBrowser `stealth_args=False` | kosong | kosong |
-| CloakBrowser `--fingerprint-noise=false` | kosong | kosong |
-| CloakBrowser keduanya dimatikan | kosong | kosong |
-
-- README resmi hanya mendokumentasikan `--fingerprint-webrtc-ip`
-  (IP palsu) dan `--fingerprint-noise=false` (noise canvas,
-  WebGL, audio, client rects). Tidak satu pun membuka statistik
-  RTP.
-- Pindaian string binary Chromium 145.0.7632.109.2 (Mac) hanya
-  memunculkan switch `fingerprint-*` untuk brand, memori,
-  GPU, platform, layar, lokasi, dan timezone, ditambah
-  `webrtc-ip-handling-policy` bawaan Chromium. Tidak ada switch
-  statistik WebRTC.
-- Kesimpulan: perisai stats dikompilasi di binary dan aktif tanpa
-  syarat, termasuk di image worker Linux (sesi probe-attr-1..7).
-  Pada stack CloakBrowser, CSRC tidak dapat dipakai.
-- Jalan memperoleh CSRC hanyalah mengganti browser meeting ke
-  Chromium/Chrome biasa dengan resep anti-blokir Vexa (headed di
-  Xvfb, flag bersih, stealth init script, input humanized). Repo
-  ini belum punya bukti bahwa jalur itu diblokir Meet, tetapi juga
-  belum mengujinya. Itu eksperimen admission tersendiri dengan
-  risiko pada keandalan join.
-- Nilai CSRC bagi kita: identitas sumber per join yang tidak
-  bergantung pada slot, sehingga lebih dari tiga pembicara tetap
-  terpisah. Nama tetap tidak tersedia tanpa protokol privat Meet,
-  yang memang tidak kita pakai.
+Rinciannya ada di [laporan riset CSRC](2026-10-05-csrc-research.md).
 
 ## Koreksi atas temuan awal
 
