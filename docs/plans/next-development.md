@@ -20,6 +20,8 @@
 
 **Prioritas berikutnya, disetujui 3 Oktober:** [brief, delegasi, dan debrief berbukti](meeting-delegation-handoff.md). Owner memberi tujuan dan lingkup pengetahuan per meeting; hasilnya kembali sebagai keputusan/usulan/action item dengan kutipan sumber. Batas tools tidak dapat diperluas lewat ucapan peserta; laporan tidak mengaku owner telah dihubungi. Atribusi speaker dan performa tetap pekerjaan terbuka berdasarkan acceptance multipihak.
 
+**Prioritas berikutnya, 5 Oktober (atribusi participant):** [bukti berlapis di satu jam](participant-attribution.md). Operasi worker sudah digabung. Atribusi dibangun dari pelajaran Attendee, Vexa, dan LMA tanpa Meet Media API dan tanpa protokol privat Meet: aktivitas per sumber dari API WebRTC standar, nama dari DOM berlapis, dan jendela ucapan pada jam audio, dimulai dengan gate probe.
+
 **Prioritas berikutnya, 5 Oktober (operasi worker):** [kontrol, isolasi, pemulihan, dan ingestion worker](worker-operations.md). Dipilih pengguna sebagai milestone berikutnya: backend Docker lokal lebih dulu dengan antarmuka yang nanti dapat diganti Kubernetes, dan checkpoint Postgres untuk worker paralel. Latency live tetap gate terbuka; adu model ditunda atas keputusan pengguna.
 
 **Prioritas berikutnya, 5 Oktober (pemulihan latency):** [pemulihan latency live tanpa mengorbankan c04](latency-recovery.md). Semua gate semantik kini lulus pada penalaran default dan penyangkalan c04 turun ke 3,3%, tetapi latency live mundur (p50 5,18 s, p95 7,43 s) karena agent lebih lambat setelah evidence memuat identitas penutur.
