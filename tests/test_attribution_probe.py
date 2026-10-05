@@ -20,6 +20,7 @@ from fakeyou.probe_replay import (
     _vad_windows,
     align_turns,
     csrc_lag_ms,
+    merge_levels,
     page_to_mono,
     reference_precision,
     source_sets_by_speaker,
@@ -50,6 +51,20 @@ async def wait_for_pending(page: object, key: str, timeout_seconds: float = 15.0
                 return
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError(f"probe never recorded {key}: {pending!r}")
+        await asyncio.sleep(0.1)
+
+
+async def wait_for_levels(page: object, timeout_seconds: float = 15.0) -> None:
+    from playwright.async_api import Page
+
+    assert isinstance(page, Page)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        pending = await page.evaluate("() => window.__fakeyouAttributionProbe.pending()")
+        if pending["levels"]:
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"probe never recorded levels: {pending!r}")
         await asyncio.sleep(0.1)
 
 
@@ -114,9 +129,17 @@ async def test_probe_captures_peer_connections_and_samples_sources() -> None:
         await real_page.goto("https://probe.fakeyou.test/call", wait_until="load")
         await real_page.evaluate(
             "() => { RTCPeerConnection.prototype.getReceivers = () => [{"
-            " track: {kind: 'audio'},"
+            " track: {kind: 'audio', id: 'track-abc', muted: false, readyState: 'live'},"
             " getContributingSources: () => [{source: 11, audioLevel: 0.5, timestamp: 7}],"
             " getSynchronizationSources: () => [{source: 11, audioLevel: 0.5, timestamp: 7}],"
+            " getStats: async () => new Map([['r1', {type: 'inbound-rtp', kind: 'audio',"
+            " trackIdentifier: 'track-abc', audioLevel: 0.7}]]),"
+            "}, {"
+            " track: {kind: 'audio', id: 'track-def', muted: false, readyState: 'live'},"
+            " getContributingSources: () => [],"
+            " getSynchronizationSources: () => [],"
+            " getStats: async () => ({r2: {type: 'inbound-rtp', kind: 'audio',"
+            " trackIdentifier: 'track-def', audioLevel: 0.3}}),"
             "}]; }"
         )
         await wait_for_pending(real_page, "samples")
@@ -132,6 +155,18 @@ async def test_probe_captures_peer_connections_and_samples_sources() -> None:
         assert all(level == 0.5 for level in levels)
         stamps = [sample["page_ms"] for sample in drained["samples"]]
         assert stamps == sorted(stamps)
+        assert drained["samples"][0]["track"]["id"] == "track-abc"
+        await wait_for_levels(real_page)
+        leveled = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+        assert leveled["levels"], "probe recorded no per-track levels"
+        first = {entry["source"]: entry["audioLevel"] for entry in leveled["levels"]}
+        assert sorted(first.values()) == [0.3, 0.7]
+        assert all(isinstance(source, int) for source in first)
+        assert leveled["receiver_count"] == 2
+        await wait_for_levels(real_page)
+        releveled = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+        second = {entry["source"]: entry["audioLevel"] for entry in releveled["levels"]}
+        assert second == first
         again = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
         assert again["page_ms"] >= drained["page_ms"]
         assert all(sample["page_ms"] >= stamps[-1] for sample in again["samples"])
@@ -531,6 +566,95 @@ def test_summarize_skips_corrupt_lines_with_counts(tmp_path: Path) -> None:
     report = summarize_probe_session(probe_path, record_path, truth_path)
     assert report["turns"] == 0
     assert report["skipped_lines"] == {"probe": 1, "record": 1}
+
+
+def test_summarize_merges_per_track_levels_as_sources(tmp_path: Path) -> None:
+    probe_path = tmp_path / "probe.jsonl"
+    probe_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "kind": "vad",
+                        "active": True,
+                        "audio_ms": 100.0,
+                        "mono_ms": 7400.0,
+                        "wall": "2026-10-05T10:00:00+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "kind": "vad",
+                        "active": False,
+                        "audio_ms": 1100.0,
+                        "mono_ms": 7700.0,
+                        "wall": "2026-10-05T10:00:01+00:00",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "kind": "page",
+                        "mono_ms": 8000.0,
+                        "wall": "2026-10-05T10:00:03+00:00",
+                        "page_ms": 2000.0,
+                        "peer_connections": 1,
+                        "receiver_count": 1,
+                        "samples": [],
+                        "levels": [
+                            {"page_ms": 1500.0, "source": 0, "audioLevel": 0.7},
+                            {"page_ms": 1600.0, "source": 0, "audioLevel": 0.8},
+                        ],
+                        "roster": [],
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    record_path = tmp_path / "record.jsonl"
+    record_path.write_text(
+        json.dumps(
+            {
+                "kind": "transcript",
+                "at": "2026-10-05T10:00:02+00:00",
+                "id": "t1",
+                "spoken_at": "2026-10-05T10:00:02+00:00",
+                "source": "meeting_audio",
+                "text": "good morning all",
+                "participant_id": "unknown",
+                "speaker_evidence_id": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    truth_path = tmp_path / "truth.json"
+    truth_path.write_text(
+        json.dumps([{"turn": 1, "speaker": "Rani", "kind": "solo", "fragment": "morning"}]),
+        encoding="utf-8",
+    )
+    report = summarize_probe_session(probe_path, record_path, truth_path)
+    assert report["aligned"] == 1
+    assert report["lag_ms"]["median"] == 100.0
+    assert report["source_sets"] == {"Rani": [0]}
+    assert report["reference"]["precision"] == 1.0
+
+
+def test_merge_levels_drops_malformed_entries() -> None:
+    merged = merge_levels(
+        [
+            {"page_ms": 1500.0, "source": -1, "audioLevel": 0.9},
+            {"page_ms": 1500.0, "source": 0, "audioLevel": float("nan")},
+            {"page_ms": 1500.0, "source": 5},
+            "broken",
+            {"page_ms": 1500.0, "source": 2, "audioLevel": 0.6},
+        ]
+    )
+    assert merged == [
+        {
+            "page_ms": 1500.0,
+            "sources": [{"source": 2, "audioLevel": 0.6}],
+        }
+    ]
 
 
 def test_page_to_mono_rejects_empty_anchors() -> None:

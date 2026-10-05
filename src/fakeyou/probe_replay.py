@@ -1,7 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 from typing import Any
 
@@ -306,6 +306,28 @@ def _unmuted_names(snapshot: Mapping[str, Any]) -> set[str]:
     return names
 
 
+def merge_levels(entries: Sequence[Any]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        try:
+            page_ms = float(entry["page_ms"])
+            source = int(entry["source"])
+            level = float(entry["audioLevel"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if source < 0 or not isfinite(page_ms) or not isfinite(level):
+            continue
+        merged.append(
+            {
+                "page_ms": page_ms,
+                "sources": [{"source": source, "audioLevel": level}],
+            }
+        )
+    return merged
+
+
 def summarize_probe_session(
     probe_path: Path, record_path: Path, truth_path: Path
 ) -> dict[str, Any]:
@@ -335,6 +357,9 @@ def summarize_probe_session(
             batch_samples = row.get("samples")
             if isinstance(batch_samples, list):
                 samples.extend(entry for entry in batch_samples if isinstance(entry, Mapping))
+            batch_levels = row.get("levels")
+            if isinstance(batch_levels, list):
+                samples.extend(merge_levels(batch_levels))
             batch_roster = row.get("roster")
             if isinstance(batch_roster, list):
                 snapshots.extend(entry for entry in batch_roster if isinstance(entry, Mapping))

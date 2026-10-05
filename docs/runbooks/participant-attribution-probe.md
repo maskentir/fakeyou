@@ -24,8 +24,10 @@ persis seperti sebelumnya.
 Satu direktori record menghasilkan berkas berikut:
 
 - `attribution-probe.jsonl`: sampel CSRC/SSRC per receiver audio,
-  potret roster DOM beserta kandidat penanda bicara/bisu, tepi VAD
-  beserta jam sampel audio, dan jangkar jam halaman lawan jam Python.
+  level audio per track dari `getStats`, potret roster DOM beserta
+  kandidat penanda bicara/bisu, tepi VAD beserta jam sampel audio,
+  dan jangkar jam halaman lawan jam Python. Bila CSRC/SSRC kosong
+  (teramati pada Meet saat ini), level per track menjadi sinyal utama.
 - Record meeting: transkrip final beserta teks dan cap waktu.
 - Jurnal: `transcript_finalized` dan tepi audio.
 

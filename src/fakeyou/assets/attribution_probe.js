@@ -2,10 +2,16 @@
   if (window.__fakeyouAttributionProbe) return;
   const SAMPLE_MS = 50;
   const ROSTER_MS = 250;
+  const LEVELS_MS = 250;
+  const STATS_TIMEOUT_MS = 5000;
   const MAX_BUFFERED = 20000;
   const peers = [];
   const samples = [];
   const roster = [];
+  const levels = [];
+  const trackIds = new Map();
+  let seenReceivers = 0;
+  let levelsRunning = false;
   const OriginalPeerConnection =
     typeof window.RTCPeerConnection === "function"
       ? window.RTCPeerConnection
@@ -54,24 +60,113 @@
       } catch {
         receivers = [];
       }
+      let audioCount = 0;
       receivers.forEach((receiver, receiverIndex) => {
-        let kind = "";
-        try {
-          kind = receiver && receiver.track ? String(receiver.track.kind || "") : "";
-        } catch {
-          kind = "";
-        }
-        if (kind !== "" && kind !== "audio") return;
+        const track = readTrack(receiver);
+        if (track.kind !== "" && track.kind !== "audio") return;
+        audioCount += 1;
         samples.push({
           page_ms: stamp,
           peer: index,
           receiver: receiverIndex,
+          track,
           sources: readSources(receiver, "getContributingSources"),
           sync: readSources(receiver, "getSynchronizationSources"),
         });
       });
+      if (audioCount > seenReceivers) seenReceivers = audioCount;
     }
     trim(samples);
+  }
+
+  function readTrack(receiver) {
+    const track = { id: "", kind: "", muted: false, readyState: "" };
+    try {
+      const source = receiver ? receiver.track : null;
+      if (!source) return track;
+      track.id = String(source.id || "").slice(0, 64);
+      track.kind = String(source.kind || "");
+      track.muted = !!source.muted;
+      track.readyState = String(source.readyState || "");
+    } catch {
+      /* keep defaults */
+    }
+    return track;
+  }
+
+  function trackSource(trackId) {
+    if (!trackId) return -1;
+    if (!trackIds.has(trackId)) trackIds.set(trackId, trackIds.size);
+    return trackIds.get(trackId);
+  }
+
+  function statEntries(report) {
+    try {
+      if (report instanceof Map) return Array.from(report.values());
+      if (report && typeof report === "object") return Object.values(report);
+    } catch {
+      /* fall through */
+    }
+    return [];
+  }
+
+  async function statsWithTimeout(receiver, ms) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        receiver.getStats(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("stats timeout")), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async function sampleLevels() {
+    if (levelsRunning) return;
+    levelsRunning = true;
+    try {
+      const stamp = pageNow();
+      for (const peer of peers) {
+        let receivers = [];
+        try {
+          const got = peer.getReceivers ? peer.getReceivers() : [];
+          receivers = Array.isArray(got) ? got : [];
+        } catch {
+          receivers = [];
+        }
+        for (const receiver of receivers) {
+          if (!receiver || typeof receiver.getStats !== "function") continue;
+          let report = null;
+          try {
+            report = await statsWithTimeout(receiver, STATS_TIMEOUT_MS);
+          } catch {
+            continue;
+          }
+          for (const entry of statEntries(report)) {
+            try {
+              if (!entry || entry.type !== "inbound-rtp") continue;
+              if (entry.kind && entry.kind !== "audio") continue;
+              const level = Number(entry.audioLevel);
+              const trackId = String(entry.trackIdentifier || "");
+              if (!Number.isFinite(level) || !trackId) continue;
+              levels.push({
+                page_ms: stamp,
+                source: trackSource(trackId),
+                audioLevel: level,
+              });
+            } catch {
+              continue;
+            }
+          }
+        }
+      }
+      trim(levels);
+    } finally {
+      levelsRunning = false;
+    }
   }
 
   function tileName(tile) {
@@ -198,6 +293,9 @@
 
   setInterval(guarded(sampleSources), SAMPLE_MS);
   setInterval(guarded(sampleRoster), ROSTER_MS);
+  setInterval(guarded(() => {
+    sampleLevels().catch(() => {});
+  }), LEVELS_MS);
 
   window.__fakeyouAttributionProbe = {
     pending() {
@@ -205,10 +303,12 @@
         return {
           samples: samples.length,
           roster: roster.length,
+          levels: levels.length,
           peer_connections: peers.length,
+          receiver_count: seenReceivers,
         };
       } catch {
-        return { samples: 0, roster: 0, peer_connections: 0 };
+        return { samples: 0, roster: 0, levels: 0, peer_connections: 0, receiver_count: 0 };
       }
     },
     drain() {
@@ -216,11 +316,20 @@
         return {
           page_ms: pageNow(),
           peer_connections: peers.length,
+          receiver_count: seenReceivers,
           samples: samples.splice(0, samples.length),
+          levels: levels.splice(0, levels.length),
           roster: roster.splice(0, roster.length),
         };
       } catch {
-        return { page_ms: pageNow(), peer_connections: 0, samples: [], roster: [] };
+        return {
+          page_ms: pageNow(),
+          peer_connections: 0,
+          receiver_count: 0,
+          samples: [],
+          levels: [],
+          roster: [],
+        };
       }
     },
   };
