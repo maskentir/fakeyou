@@ -2,7 +2,7 @@
 
 Fondasi AI Digital Twin untuk menjadi peserta meeting online, dimulai dari Google Meet: mendengar, melihat, mengingat konteks dan persona, berbicara, serta berinteraksi lewat UI.
 
-Fondasi SDK, worker guest Google Meet, audio dua arah, loop percakapan, profil persona, dan recall Graphiti per owner/twin sudah tersedia. [Acceptance 1 Oktober](docs/reports/2026-10-01-refactor-acceptance.md) lulus untuk fungsi utama; latency jawaban masih di atas target.
+Fondasi SDK, worker guest Google Meet, audio dua arah, loop percakapan, profil persona, dan recall Graphiti per owner/twin sudah tersedia. [Acceptance 1 Oktober](docs/reports/2026-10-01-refactor-acceptance.md) lulus untuk fungsi utama; milestone lanjutan (brief/delegasi/debrief, memori tepercaya, prefetch, operasi worker) tercatat di [status proyek](docs/reference/project-status.md). Latency jawaban masih di atas target.
 
 Lihat [rencana pengembangan berikutnya](docs/plans/next-development.md), [status proyek](docs/reference/project-status.md), dan [rencana refactor beserta hasilnya](docs/plans/refactor.md) untuk prioritas, bukti kemampuan, dan batas implementasi.
 
@@ -11,7 +11,7 @@ Lihat [rencana pengembangan berikutnya](docs/plans/next-development.md), [status
 | Peran | Library | Status fondasi |
 | --- | --- | --- |
 | Penalaran | LangChain 1.4.2 | Native `create_agent`, injeksi model/tools/persona |
-| State percakapan | LangGraph 1.2.12 | Checkpoint SQLite; dependency PostgreSQL tersedia |
+| State percakapan | LangGraph 1.2.12 | Checkpoint SQLite default; PostgreSQL bila `FAKEYOU_CHECKPOINT__URL` diset |
 | Tangan dan mata | CloakBrowser 0.5.11 + Playwright MCP 0.0.82 | Satu sesi untuk navigasi, DOM, screenshot, input |
 | Telinga | Pipecat 1.12.0 `MetaSTTService` | Muse Voice Transcribe resmi, default Bahasa Indonesia |
 | Mulut | `OpenAISpeechSynthesizer` / `MiniMaxSpeechSynthesizer` + `PlaybackEngine` | TTS streaming PCM + `paplay` serial; model/voice dapat diganti |
@@ -62,7 +62,7 @@ uv run fakeyou join https://meet.google.com/xxx-yyyy-zzz --twin-name "Fakeyou Tw
 
 Command berjalan foreground sampai sesi berakhir: masuk sebagai guest, menunggu admission, memantau panggilan, lalu leave dan cleanup. Ctrl+C menghentikan startup/lobby atau meminta leave saat sudah admitted. Kegagalan leave menghasilkan `browser_failure`. Hasil akhir dicetak sebagai JSON berisi `meeting_id`, `phase`, `terminal_reason`, dan `detail`. Identitas dan batas default diambil dari `.env` (`FAKEYOU_IDENTITY__OWNER_ID`, `FAKEYOU_IDENTITY__TWIN_ID`, `FAKEYOU_IDENTITY__TWIN_NAME`, `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS`, `FAKEYOU_MEETING__SESSION_DURATION_SECONDS`) dan dapat dioverride per flag. Detail desain dan uji live ada di [rencana runtime sesi](docs/plans/meeting-runtime.md).
 
-ID sesi menerima 1–128 huruf, angka, `_`, atau `-`, dimulai dengan huruf/angka. Semua batas waktu harus positif dan finite. Checkpoint sesi yang sudah selesai dapat dibaca kembali tanpa membuka browser; checkpoint sesi aktif setelah process crash ditolak agar join tidak diulang tanpa mengetahui keadaan panggilan.
+ID sesi menerima 1–128 huruf, angka, `_`, atau `-`, dimulai dengan huruf/angka. Semua batas waktu harus positif dan finite. Checkpoint sesi yang sudah selesai dapat dibaca kembali tanpa membuka browser; sesi aktif yang crash dilanjutkan pada meeting ID yang sama dengan `join --resume` atau `worker start`, sedangkan join ulang tanpa flag ditolak agar operator sadar keadaan panggilan.
 
 ## Graphiti
 
@@ -92,7 +92,7 @@ Setel `FAKEYOU_MEMORY__EMBEDDER__BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_CO
 docker compose --profile production up -d --wait postgres
 ```
 
-PostgreSQL disediakan untuk worker deployment. CLI tetap memakai SQLite untuk penggunaan lokal dengan satu proses penulis; jangan berbagi satu file checkpoint di banyak proses meeting. Migrasi memakai `AsyncPostgresSaver` dan `setup()` resmi.
+PostgreSQL dipakai untuk checkpoint bila `FAKEYOU_CHECKPOINT__URL` diset (lihat `.env.example`); CLI tetap memakai SQLite untuk satu worker lokal, dan satu file SQLite tidak untuk banyak proses meeting. Worker Compose meneruskan URL lewat `FAKEYOU_COMPOSE_WORKER_CHECKPOINT_URL`. Service `postgres` ada di profil `production` dengan healthcheck; worker sengaja tanpa `depends_on` agar default SQLite tetap jalan, jadi nyalakan Postgres dulu bila URL diset. Migrasi memakai `AsyncPostgresSaver` dan `setup()` resmi.
 
 ## Suara dan partisipasi
 
@@ -140,11 +140,11 @@ docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_U
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Koreksi mengganti seluruh isi satu owner note: `memory-correct` membutuhkan `--episode` note lama, `--source-at` baru yang lebih muda dari target, dan `--persona`; tanpa `--note-id`, CLI mencetak ID operasi ke stderr untuk dipakai ulang saat retry. Retry memakai ID dan payload yang sama; ID sama dengan payload berbeda ditolak sebagai konflik. Hapus note dalam rantai koreksi ditolak sampai milestone retensi tersedia.
+Koreksi mengganti seluruh isi satu owner note: `memory-correct` membutuhkan `--episode` note lama, `--source-at` baru yang lebih muda dari target, dan `--persona`; tanpa `--note-id`, CLI mencetak ID operasi ke stderr untuk dipakai ulang saat retry. Retry memakai ID dan payload yang sama; ID sama dengan payload berbeda ditolak sebagai konflik. Hapus note dalam rantai koreksi ditolak sampai milestone retensi tersedia. Dari host, ingestion untuk meeting finished tersedia sebagai `worker ingest` (meneruskan `--meeting`/`--persona` saja); lihat [runbook operasi worker](docs/runbooks/worker-operations.md).
 
 Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/persona-memory.md), [ingestion memori](docs/plans/memory-ingestion.md), [memori tepercaya](docs/plans/trustworthy-memory.md), [acceptance memori tepercaya](docs/runbooks/trust-acceptance.md), dan [rencana jangka panjang](docs/plans/long-term.md).
 
-Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Pekerjaan berikutnya adalah acceptance persona dan memori di meeting live, lalu speaker/video/participant events, turn-taking, chat, serta raise hand.
+Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersintesis keluar lewat `paplay` ke virtual microphone. Acceptance persona dan memori di meeting live sudah berjalan (recall-latency, live-trust); pekerjaan berikut adalah speaker/video/participant events, turn-taking, chat, serta raise hand.
 
 ## Brief meeting
 
@@ -157,6 +157,20 @@ Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersinte
 ```sh
 uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json
 ```
+
+## Operasi worker
+
+Worker meeting dikontrol dari host tanpa masuk container. `worker start` meluncurkan satu worker detached per meeting ID, `worker status` menampilkan fase plus status ingestion dan debrief, `worker stop` menghentikan worker dengan `stopped_by_owner`, dan `worker ingest` menjalankan ingestion di container terpisah setelah sesi selesai. Dua meeting paralel memakai ID, record, journal, thread checkpoint, dan profil browser yang terpisah; worker yang crash dilanjutkan pada ID yang sama lewat `--resume` otomatis.
+
+```sh
+fakeyou worker start https://meet.google.com/xxx-yyyy-zzz --meeting-id OPC-1 \
+  --audio --converse --persona .runtime/audio/persona.json
+fakeyou worker status OPC-1
+fakeyou worker stop OPC-1 --timeout 30
+fakeyou worker ingest OPC-1 --persona .runtime/audio/persona.json
+```
+
+Backend Docker lokal adalah implementasi pertama dari antarmuka `WorkerBackend`; checkpoint paralel memakai Postgres. Prosedur lengkap ada di [runbook operasi worker](docs/runbooks/worker-operations.md).
 
 ## Model dan laporan sesi
 
@@ -240,3 +254,4 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/ru
 - [Acceptance Meet 30 September dan rencana perbaikan](docs/reports/2026-09-30-acceptance.md)
 - [Rencana jangka panjang memori, suara, dan bukti kualitas](docs/plans/long-term.md)
 - [Runbook brief meeting](docs/runbooks/meeting-brief.md)
+- [Runbook operasi worker](docs/runbooks/worker-operations.md)

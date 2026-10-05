@@ -1,34 +1,40 @@
 # Status fondasi dan pekerjaan berikutnya
 
-Diperbarui: 2 Oktober 2026. Status mencakup refactor yang sudah digabung, cleanup lokal, acceptance ketiga, dan acceptance live kinerja percakapan. Rencana pengembangan berikutnya selesai dilaksanakan; langkah lanjut ada di [rencana tersebut](../plans/next-development.md).
+Diperbarui: 5 Oktober 2026. Status mencakup semua milestone yang sudah digabung sejak 2 Oktober (multiparty, brief/delegasi/debrief, memori tepercaya, prefetch, live-trust-latency, unknown-speaker, latency-recovery) serta milestone operasi worker yang berjalan di branch. Langkah lanjut ada di [rencana pengembangan berikutnya](../plans/next-development.md) dan [rencana operasi worker](../plans/worker-operations.md).
 
 ## Posisi proyek sekarang
 
-Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint, browser tools, layanan suara, client memori, dan perangkat evaluasi. Muse sudah menerima audio sintetis melalui layanan live dan menghasilkan transkrip final yang sesuai.
+Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint SQLite dan Postgres, browser tools, layanan suara, client memori, dan perangkat evaluasi. Muse menerima audio meeting nyata melalui layanan live dan menghasilkan transkrip final.
 
-Worker sudah dapat masuk sebagai guest, menunggu admission, mendengar lewat Muse, menjawab melalui TTS streaming, dan leave. [Acceptance ketiga](../reports/2026-10-01-refactor-acceptance.md) membuktikan startup, recall lintas sesi, konteks kata ganti, interupsi, dan stop tanpa suara terlambat; host mengonfirmasi jawaban terdengar utuh. Performa belum lulus: median akhir ucapan → PCM pertama 5,727 detik dan p95 16,895 detik pada delapan giliran. Atribusi per participant belum terbukti karena sesi ini memakai satu host.
+Worker masuk sebagai guest, menunggu admission, mendengar lewat Muse, menjawab melalui TTS streaming, dan leave. [Acceptance ketiga](../reports/2026-10-01-refactor-acceptance.md) membuktikan startup, recall lintas sesi, konteks kata ganti, interupsi, dan stop tanpa suara terlambat; host mengonfirmasi jawaban terdengar utuh.
 
-Refactor utama sudah digabung ke `master` pada `6926e9b`. Cleanup dan rencana terukur mendarat di `feat/legacy-config-cleanup` (`15faf58`), lalu implementasi kinerja percakapan di `feat/conversation-performance`: bukti PCM pertama antri-interupsi, korelasi model/recall per transkrip, artefak benchmark tersamar, laporan negatif Task 4, dan acceptance live Task 5. Gate lokal hijau (1.463 tes non-live/non-container termasuk browser; Ruff, format, mypy bersih), image terverifikasi cocok dengan source, dan container lulus. Fungsi live lulus pada 4 sesi Meet (recall lintas sesi, kata ganti, 11 interupsi, stop saat model dan audio, tanpa audio susulan); milestone performa belum lulus dengan median 3,243 dtk dan p95 8,319 dtk pada 23 jawaban. Bukti: [acceptance live](../reports/2026-10-02-live-acceptance.md). Branch belum di-push atau digabung.
+Sejak itu digabung berurutan: multiparty (participant observer read-only, resolver speaker konservatif, kebijakan partisipasi, identitas speaker wajib di transkrip), brief meeting tervalidasi dengan snapshot per meeting, delegasi terbatas (prompt hardened, harness eval brief/trust), debrief beralas sumber dengan peran model sendiri dan pemuatan dotenv CLI, provider Gemini native, lalu prefetch memori satu trip. Acceptance live brief/delegasi 4–5 Oktober (tiga sesi Meet nyata) meluluskan perilaku kewenangan — semua permintaan approve budget, deadline, kontrak, tanda tangan, dan kirim pesan ditolak — serta stop saat model bekerja; debrief lolos cek kutipan verbatim di tiga sesi. Bukti: [acceptance Meet](../reports/2026-10-05-meet-acceptance.md).
+
+Memori tepercaya selesai dan digabung: recall terfilter status, koreksi idempoten, 72/72 output korpus lolos review manusia independen, dan acceptance live dua sesi. Prefetch menyusul: evidence sebagai hasil tool sistem anti-spoof, konteks follow-up lintas giliran, lalu evidence compact v2 dengan trim peringkat-relevansi. Identitas penutur tak terverifikasi ditulis eksplisit di evidence dan ingestion, sehingga laju penyangkalan c04 turun ke 3,3% tepat di batas, dengan 0 penyangkalan pada 4 sondase live. Konfigurasi live terpilih adalah `gemini-3.8-flash` + prefetch dengan penalaran default. Bukti: [recall-latency](../reports/2026-10-04-recall-latency.md), [live-trust-latency](../reports/2026-10-05-live-trust-latency.md), [unknown-speaker](../reports/2026-10-05-unknown-speaker.md).
+
+Gate latency live masih gagal di semua acceptance: sesi terakhir `lat-rec-1005` mencatat akhir ucapan → PCM pertama p50 5,05 detik dan p95 8,66 detik (batas ≤3/≤6), dengan agent masih dominan (p50 3,46 detik); STT/TTS stabil. Sesi itu mencatat 0 severe dari 22 jawaban pada review independen dan stop audio pemicu PCM lulus. Bukti: [acceptance latency-recovery](../reports/2026-10-05-meet-acceptance-latency-recovery.md).
+
+Milestone operasi worker berjalan di branch `feat/worker-operations` (belum digabung): lock lease lintas container, profil browser per meeting, checkpoint Postgres opsional, CLI `worker start/status/stop/ingest`, lanjutan crash `--resume`, dan ingestion sebagai job terpisah. Acceptance dua meeting paralel masih menunggu dua link Meet baru.
+
+Refactor utama sudah digabung ke `master` pada `6926e9b`, disusul cleanup `feat/legacy-config-cleanup` dan kinerja percakapan `feat/conversation-performance` (fungsi live lulus pada 4 sesi Meet; performa belum lulus dengan median 3,243 dtk dan p95 8,319 dtk pada 23 jawaban; bukti: [acceptance live](../reports/2026-10-02-live-acceptance.md)). Milestone memori tepercaya yang dulu berjalan di branch kini sudah digabung; bukti tetap: [close-out memori tepercaya](../reports/2026-10-02-trust-closeout.md), [acceptance live](../reports/2026-10-02-trust-live.md).
 
 Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan visual, mengingat, berbicara, serta memakai UI atas nama pemilik dengan kewenangan yang jelas.
-
-Milestone memori tepercaya berjalan di branch `feat/trustworthy-memory` (belum digabung). Fondasi kontrak selesai: modul bukti `memory_evidence/v1`, owner note dengan koreksi idempoten, recall terfilter status, CLI `memory-add`/`memory-correct`, aturan persona baru, korpus 24 kasus, dan runbook acceptance. Gate offline hijau (1.716 tes; Ruff, format, mypy bersih), dua tes roundtrip live lulus dengan residu nol (diulang independen oleh orkestrator), dan 72 output produksi korpus trust lulus review manusia independen (`trust_gate` True). Klaim diagnosis awal soal protokol UUID terbukti keliru. Acceptance live Meet selesai 2 sesi/24 jawaban: fungsi live terbukti (interupsi bersih, koreksi dihormati), tetapi kualitas trust live gagal (1 sapaan "Sam" tanpa sumber) dan performa gagal (p95 agent ±9 detik lawan anggaran 4 detik). Trade-off recall fuzzy pada replay lama terdokumentasi. Bukti: [close-out memori tepercaya](../reports/2026-10-02-trust-closeout.md), [acceptance live](../reports/2026-10-02-trust-live.md).
 
 ## Yang sudah ada dan batasnya
 
 | Bagian | Bukti saat ini | Yang belum selesai |
 | --- | --- | --- |
-| Setup proyek | Python 3.12, dependency terkunci, lint, typing, build, Compose, dan CI GitHub saat merge refactor sudah diperiksa | Operasi worker terjadwal dan deployment untuk beberapa sesi |
-| Otak: LangChain + LangGraph | Agent native dan loop transkrip→agent→sintesis→playback, pemrosesan berurutan, checkpoint per owner/twin/meeting; jawaban dan konteks lanjutan lulus acceptance | Latency, gap kualitas replay, dan kebijakan partisipasi multipihak |
-| Memori percakapan | Isolasi `thread_id` dan pembukaan ulang checkpoint SQLite teruji | Pemulihan sesi meeting beserta resource browser/audio; checkpoint PostgreSQL belum dipakai CLI |
-| Telinga: Muse + Pipecat | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live; capture 16 kHz mono | Identitas speaker, overlap, dedupe reconnect, dan pengukuran latency per tahap |
+| Setup proyek | Python 3.12, dependency terkunci, lint, typing, build, Compose, dan CI GitHub sudah diperiksa tiap merge | Backend Kubernetes; acceptance dua meeting paralel |
+| Otak: LangChain + LangGraph | Agent native dan loop transkrip→agent→sintesis→playback, pemrosesan berurutan, checkpoint per owner/twin/meeting; brief, delegasi terbatas, dan debrief beralas sumber lulus acceptance live | Latency live (p50 5,05 dtk lawan target ≤3), gap kualitas replay |
+| Memori percakapan | Isolasi `thread_id`, pembukaan ulang SQLite, dan Postgres opsional teruji; lanjutan crash `--resume` di branch worker | Acceptance lanjutan crash di dua meeting paralel |
+| Telinga: Muse + Pipecat | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live; capture 16 kHz mono; identitas speaker wajib di transkrip dengan observer dan kebijakan partisipasi | Overlap, dedupe reconnect, dan atribusi nama penuh |
 | Mulut: TTS streaming + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in; host mengonfirmasi jawaban utuh | Waktu PCM pertama dan performa lintas lebih banyak sesi |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
 | Mata | Tool DOM dan screenshot tersedia | Observasi screenshare/kamera berkelanjutan dan pemahaman visual oleh model multimodal |
-| Memori pengetahuan: Graphiti + Neo4j | Isolasi namespace owner/twin, ingestion per saga, catatan pemilik, hapus manual, dan recall `acc2` pada acceptance ketiga teruji; 17 fakta masih berlaku setelah ingestion | Provenance waktu asli, atribusi nama participant, duplikat fakta, dan koreksi/invalidasi yang konsisten |
-| Persona | Profil JSON tervalidasi, batas tool, namespace owner/twin, dan jawaban persona pada acceptance ketiga | Gate kualitas replay model aktif serta kewenangan granular untuk tindakan |
-| Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, dan 5 skenario kualitas persona live (GEval) | Skenario meeting nyata, interupsi, kegagalan media, dan evaluasi memori hasil ingestion |
-| Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan | Kontrol jarak jauh, pemulihan crash, penjadwalan, serta antarmuka pengguna |
+| Memori pengetahuan: Graphiti + Neo4j | Isolasi namespace owner/twin, ingestion per saga yang dapat dilanjutkan, catatan pemilik, hapus manual, recall terfilter status, prefetch satu trip anti-spoof, dan penutur tak terverifikasi eksplisit; c04 di 3,3% | Provenance waktu asli, atribusi nama participant, duplikat fakta |
+| Persona | Profil JSON tervalidasi, batas tool, namespace owner/twin, brief per meeting, delegasi terbatas, dan debrief beralas sumber | Gate kualitas replay model aktif serta kewenangan granular untuk tindakan |
+| Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, 5 skenario kualitas persona live (GEval), harness brief/trust, dan review independen tiap korpus live | Skenario meeting nyata multipihak dan evaluasi memori hasil ingestion |
+| Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan, dan CLI `worker start/status/stop/ingest` dengan lock lease di branch | Backend Kubernetes, penjadwalan, serta antarmuka pengguna |
 
 Sumber implementasi: [agent](../../src/fakeyou/agent.py), [browser](../../src/fakeyou/browser.py), [voice](../../src/fakeyou/voice.py), [memory](../../src/fakeyou/memory.py), dan [CLI](../../src/fakeyou/cli/).
 
@@ -38,6 +44,10 @@ LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan sa
 
 Hasil pengujian terakhir yang tercatat:
 
+- Operasi worker di branch (5 Oktober): 2.961 tes non-live/non-container lulus; Ruff, format, mypy bersih; container terverifikasi pada Task 3 dan akan diulang penuh di Task 7; acceptance dua meeting paralel menunggu link Meet.
+- Acceptance latency-recovery (5 Oktober, `lat-rec-1005`): 22 jawaban, 0 severe pada review independen, stop PCM lulus; gate latency live gagal (p50 5,05 dtk, p95 8,66 dtk). Lihat [laporan acceptance](../reports/2026-10-05-meet-acceptance-latency-recovery.md).
+- Acceptance unknown-speaker (5 Oktober): c04 turun ke 3,3% tepat di batas; 0 penyangkalan live. Lihat [laporan unknown-speaker](../reports/2026-10-05-unknown-speaker.md).
+- Acceptance brief/delegasi (4–5 Oktober): perilaku kewenangan lulus di tiga sesi Meet nyata; debrief lolos cek kutipan. Lihat [laporan acceptance](../reports/2026-10-05-meet-acceptance.md).
 - Acceptance ketiga (1 Oktober): fungsi live lulus; performa belum lulus. Source live `2a56df7` dan verifikasi cleanup sesudahnya dibedakan di [laporan acceptance](../reports/2026-10-01-refactor-acceptance.md).
 - Cleanup lanjutan pada `ff60109`: 1.403 tes non-live/non-container lulus; 16 dilewati dan 20 tidak dipilih. Pengujian ini tidak mengulang provider atau Meet.
 - Acceptance Meet persona + ingestion (30 September): dua sesi `acc-0930-s1`/`acc-0930-s2` berhasil end-to-end, termasuk recall lintas meeting, interupsi, dan stop tanpa jawaban terlambat; kekurangan dan rencana perbaikan di [acceptance 30 September](../reports/2026-09-30-acceptance.md).
@@ -113,7 +123,7 @@ Sambungkan transkrip final ke Graphiti dengan ID sumber, waktu kejadian, provena
 
 **Selesai ketika:** twin mempertahankan persona, mengingat fakta relevan lintas sesi, dapat menunjukkan asal fakta, dan meminta klarifikasi saat informasi atau kewenangannya kurang. Data pemilik lain tidak ikut terambil.
 
-**Kemajuan:** profil, recall per namespace, penolakan konfigurasi sebelum resource, `infra_failure`, serta recall gagal/timeout sudah diuji. Acceptance ketiga memakai owner note dan memori meeting terdahulu dalam jawaban yang terdengar. Ingestion serta hapus manual sudah diuji live; retensi tanpa batas mengikuti keputusan pengguna. Waktu asli owner note yang diinput ulang, konsistensi atribusi, duplikasi, dan koreksi/invalidasi memori masih membutuhkan pengembangan.
+**Kemajuan:** profil, recall per namespace, penolakan konfigurasi sebelum resource, `infra_failure`, serta recall gagal/timeout sudah diuji. Memori tepercaya digabung (recall terfilter status, koreksi idempoten, 72/72 review independen), lalu prefetch satu trip anti-spoof dengan konteks follow-up dan trim relevansi. Ingestion serta hapus manual sudah diuji live; ingestion sebagai job container terpisah ada di branch worker. Waktu asli owner note yang diinput ulang dan duplikasi masih membutuhkan pengembangan.
 
 ### 5. Mata, tangan, dan perilaku percakapan multipihak
 
@@ -127,6 +137,8 @@ Gunakan VAD dan strategi giliran Pipecat sebagai dasar. Tambahkan kebijakan meet
 
 **Selesai ketika:** twin dapat menjawab pertanyaan tentang slide, tidak menebak nama pembicara yang ambigu, berhenti bicara ketika disela, serta membuktikan tindakan UI yang diminta berhasil.
 
+**Kemajuan:** observer read-only, resolver konservatif, kebijakan partisipasi, dan identitas speaker wajib di transkrip sudah digabung; twin tidak menyangkal penutur tak dikenal, dengan 0 penyangkalan pada sondase live. Visual slide dan tindakan UI lanjutan belum dikerjakan.
+
 ### 6. Evaluasi menyeluruh dan kesiapan operasi
 
 Perluas DeepEval dan tes integrasi dengan skenario percakapan, persona, memori, pemilihan tool, speaker ambigu, interupsi, join ditolak, timeout provider, dan koneksi terputus. Bedakan skor kualitas dari pengujian lifecycle dan media.
@@ -136,6 +148,8 @@ Ukur latency ujung ke ujung, tingkat keberhasilan join, kualitas transkripsi, pe
 Hubungkan PostgreSQL checkpointer sebelum menjalankan banyak worker; SQLite CLI saat ini memiliki batas concurrent writer yang tercatat dalam laporan regresi. Tambahkan isolasi browser/audio per meeting, pengelolaan resource, observability, kontrol start/stop/status, serta CI yang dieksekusi. API/dashboard dan kalender dibangun sesuai kebutuhan penggunaan setelah satu sesi stabil.
 
 **Selesai ketika:** skenario utama lulus di meeting terkontrol, sesi panjang dan beberapa worker tidak bercampur data/audio, serta restart tidak menggandakan chat atau suara.
+
+**Kemajuan:** Postgres opsional, isolasi profil browser per meeting, lock lease lintas container, kontrol `worker start/status/stop/ingest`, lanjutan crash `--resume`, dan ingestion sebagai job ada di branch worker; acceptance dua meeting paralel menunggu link Meet.
 
 ### 7. Representasi visual twin
 
@@ -159,6 +173,6 @@ Ketiganya sudah dipelajari sebagai referensi. Modul-modulnya belum menjadi depen
 
 ## Target demonstrasi berikutnya
 
-Percakapan persona dan recall dua sesi dengan 23 jawaban terukur sudah dilaksanakan pada 2 Oktober 2026: median akhir ucapan → PCM pertama 3,243 detik dan p95 8,319 detik, sehingga target 3/6 detik belum tercapai; gate kualitas replay juga belum lulus. Interupsi serta stop lulus (11 pemicu dalam batas pembanding, tanpa audio susulan). Langkah berikut adalah desain streaming teks per kalimat sebelum perubahan alur, lalu atribusi participant, provenance memori, tindakan Meet yang terverifikasi, operasi beberapa sesi, dan konteks visual.
+Acceptance terakhir (`lat-rec-1005`, 5 Oktober 2026) mencatat 22 jawaban dengan 0 severe pada review independen dan stop audio pemicu PCM lulus, tetapi gate latency live gagal: akhir ucapan → PCM pertama p50 5,05 detik dan p95 8,66 detik lawan target ≤3/≤6, dengan agent dominan. Konfigurasi live terpilih tetap `gemini-3.8-flash` + prefetch dengan penalaran default. Langkah berikut adalah acceptance dua meeting paralel untuk operasi worker (menunggu dua link Meet), lalu atribusi nama penuh, provenance waktu asli, tindakan Meet yang terverifikasi, backend Kubernetes, dan konteks visual.
 
-Setelah performa percakapan, lanjutkan atribusi participant, provenance memori, tindakan Meet yang terverifikasi, operasi beberapa sesi, dan konteks visual. Detail task dan batas setiap milestone ada di [rencana pengembangan berikutnya](../plans/next-development.md).
+Detail task dan batas setiap milestone ada di [rencana pengembangan berikutnya](../plans/next-development.md) dan [rencana operasi worker](../plans/worker-operations.md).
