@@ -81,4 +81,4 @@ tidak diubah setelah backup; `.env.example` mendokumentasikan pilihan ini.
 ## Gate yang belum terbukti
 
 - 0 penyangkalan pada seluruh sampel probe (tidak tercapai; dilaporkan apa adanya).
-- Latensi ujung-ke-ujung Meet (di luar gate korpus; diukur pada acceptance).
+- Gate latency live (p50 ≤3 dtk, p95 ≤6 dtk): gagal pada acceptance, p50 5,18 / p95 7,43 dtk; agent lebih lambat ~1,6 dtk dibanding sesi live-trust.

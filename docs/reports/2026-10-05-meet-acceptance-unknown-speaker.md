@@ -25,8 +25,12 @@ Skrip: `.runtime/unknown-speaker/acceptance/host-script.md`.
 Transkrip final → PCM pertama (28 pasang dari journal, dua sesi):
 
 - p50 5,20 dtk, p95 8,17 dtk (satu outlier 16,02 dtk), di atas sesi live-trust
-  (3,39/4,62 dtk). Tidak ada gate ujung-ke-ujung pada plan; angka dilaporkan
-  apa adanya.
+  (3,39/4,62 dtk). Gate live plan (p50 ≤3 dtk, p95 ≤6 dtk) GAGAL. Pemecahan
+  `fakeyou report` sesi `unknown-spk-1005` (akhir ucapan → PCM pertama p50 5,18 /
+  p95 7,43 dtk): agent p50 3,77 / p95 5,93 dtk lawan 2,12 / 3,35 dtk pada sesi
+  `live-trust-1005b`, sedangkan TTS (~1,2 dtk) dan STT (~0,4 dtk) setara. Regresi
+  berada di model, kemungkinan karena evidence lebih panjang dan token penalaran
+  naik setelah perbaikan identitas penutur.
 - Prefetch memori: 28/28 `found`.
 
 ## Temuan dan insiden
