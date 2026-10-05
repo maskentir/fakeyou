@@ -21,6 +21,7 @@ from fakeyou.cli.memory import (
     initialize_memory,
     reembed_memory,
 )
+from fakeyou.cli.worker import worker_start, worker_status, worker_stop
 from fakeyou.provider_faults import ProviderFault
 from fakeyou.settings import (
     Settings,
@@ -210,6 +211,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory", dest="use_memory", action="store_true", help="Enable Graphiti recall and writes"
     )
     chat_parser.set_defaults(handler=chat)
+    worker_parser = commands.add_parser(
+        "worker", help="Start, monitor, and stop meeting workers", allow_abbrev=False
+    )
+    worker_commands = worker_parser.add_subparsers(dest="worker_command", required=True)
+    worker_start_parser = worker_commands.add_parser(
+        "start", help="Start a meeting worker in the background", allow_abbrev=False
+    )
+    worker_start_parser.add_argument("link")
+    worker_start_parser.set_defaults(handler=worker_start)
+    worker_start_parser.add_argument("--twin-name", default=None)
+    worker_start_parser.add_argument("--owner-id", dest="owner_id", default=None)
+    worker_start_parser.add_argument("--twin-id", default=None)
+    worker_start_parser.add_argument("--meeting-id", required=True)
+    worker_start_parser.add_argument("--lobby-timeout", type=float, default=None)
+    worker_start_parser.add_argument("--duration", type=float, default=None)
+    worker_start_parser.add_argument("--profile-dir", default=None)
+    worker_start_parser.add_argument("--headless", action="store_true", default=None)
+    worker_start_parser.add_argument("--audio", dest="audio_enabled", action="store_true")
+    worker_start_parser.add_argument("--speak", dest="initial_speech", default=None)
+    worker_start_parser.add_argument("--converse", dest="conversation_enabled", action="store_true")
+    worker_start_parser.add_argument("--persona", dest="persona_path", type=Path, default=None)
+    worker_start_parser.add_argument("--brief", dest="brief_path", type=Path, default=None)
+    worker_start_parser.add_argument("--memory", action="store_true")
+    worker_start_parser.add_argument("--wake-phrase", default=None)
+    worker_start_parser.add_argument("--barge-in", action="store_true")
+    worker_status_parser = worker_commands.add_parser(
+        "status", help="Show worker status for one meeting or all", allow_abbrev=False
+    )
+    worker_status_parser.add_argument("meeting_id", nargs="?", default=None)
+    worker_status_parser.set_defaults(handler=worker_status)
+    worker_stop_parser = worker_commands.add_parser(
+        "stop", help="Stop a meeting worker gracefully", allow_abbrev=False
+    )
+    worker_stop_parser.add_argument("meeting_id")
+    worker_stop_parser.add_argument("--timeout", type=float, default=60.0)
+    worker_stop_parser.set_defaults(handler=worker_stop)
     return parser
 
 
@@ -217,6 +254,7 @@ def main() -> None:
     options = vars(build_parser().parse_args())
     handler = options.pop("handler")
     del options["command"]
+    options.pop("worker_command", None)
     try:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):

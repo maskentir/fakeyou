@@ -47,7 +47,7 @@ def test_lifecycle_join_and_leave_happy_path() -> None:
     result = _send(graph, thread, "leave_sent")
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "left_by_owner"
+    assert result["terminal_reason"] == "stopped_by_owner"
     assert result["external_effects"] == ["join_requested", "leave_requested"]
     assert len(result["evidence"]) == 4
     assert result["evidence"][1]["attribution"] == "host_action"
@@ -207,7 +207,7 @@ def test_lifecycle_state_survives_sqlite_reopen(tmp_path) -> None:
         result = second.invoke({"event": _event("leave_sent")}, config)
 
     assert result["phase"] == "ended"
-    assert result["terminal_reason"] == "left_by_owner"
+    assert result["terminal_reason"] == "stopped_by_owner"
     assert result["external_effects"] == ["join_requested", "leave_requested"]
 
 

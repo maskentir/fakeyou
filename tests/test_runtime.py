@@ -118,7 +118,7 @@ async def test_run_meeting_session_stops_and_leaves_after_admission() -> None:
     result = await _run(_config(), browser, FakeSaverSession(), FakeClock(), stop)
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
 
 
 async def test_run_meeting_session_enforces_duration_limit() -> None:

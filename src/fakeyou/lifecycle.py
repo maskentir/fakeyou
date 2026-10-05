@@ -76,7 +76,7 @@ _TRANSITIONS: dict[tuple[MeetingPhase, str], _Transition] = {
     ("lobby", "browser_failed"): _Transition("ended", reason="browser_failure"),
     ("lobby", "connection_lost"): _Transition("disconnected"),
     ("admitted", "owner_stopped"): _Transition(
-        "leaving", effect="leave_requested", pending_reason="left_by_owner"
+        "leaving", effect="leave_requested", pending_reason="stopped_by_owner"
     ),
     ("admitted", "duration_reached"): _Transition(
         "leaving", effect="leave_requested", pending_reason="duration_limit_reached"

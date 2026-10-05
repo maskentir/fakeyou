@@ -71,7 +71,7 @@ async def test_audio_is_ready_before_join_and_stops_before_leave(open_audio, ses
         session.config, open_audio=open_audio, initial_speech="Hello", **session.kwargs
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
     assert session.events == [
         "audio_started",
         "admitted",
@@ -228,7 +228,7 @@ async def test_conversation_binds_after_audio_and_closes_before_leave(open_audio
         session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
     assert conversation.bound is not None
     assert session.events == [
         "audio_started",
@@ -251,7 +251,7 @@ async def test_conversation_failure_keeps_listening_until_owner_stop(open_audio,
         session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
     assert "left" in result.detail
     assert session.events == [
         "audio_started",
@@ -290,7 +290,7 @@ async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session)
         timeout=1,
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
     assert conversation.bound is None
     assert session.events == [
         "admitted",
@@ -425,7 +425,7 @@ async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
         session.config, open_audio=open_audio, faults=reporter, **session.kwargs
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
     assert result.detail == "left [stt_degraded: timeoutx2]"
 
 
@@ -592,7 +592,7 @@ async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
         session.config, open_audio=open_audio, **session.kwargs
     )
 
-    assert result.terminal_reason == "left_by_owner"
+    assert result.terminal_reason == "stopped_by_owner"
 
 
 @pytest.mark.parametrize("leave_raises", [False, True])

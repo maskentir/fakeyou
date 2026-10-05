@@ -86,6 +86,49 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
     assert "pg-checkpointer-ok" in probe.stdout, probe.stdout + probe.stderr
 
 
+@pytest.mark.container
+@pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
+def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path) -> None:
+    from fakeyou.worker_backend import DockerWorkerBackend, compose_override
+
+    meeting_id = f"probe-{uuid4().hex[:8]}"
+    override = tmp_path / "override.yml"
+    override.write_text(compose_override(meeting_id, role="worker"), encoding="utf-8")
+    name = f"fakeyou-worker-{meeting_id}"
+    try:
+        started = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                "compose.yaml",
+                "-f",
+                str(override),
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                name,
+                "meeting-worker",
+                "sh",
+                "-c",
+                "sleep 60",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert started.returncode == 0, started.stderr
+        backend = DockerWorkerBackend(journal_dir=tmp_path / "journals")
+        state = backend.status(meeting_id)
+        assert state.container_state == "running"
+        assert state.container_name == name
+        assert state.container_id
+        assert state.phase is None
+    finally:
+        subprocess.run(["docker", "stop", name], check=False, capture_output=True)
+
+
 def _postgres_dsn() -> str:
     password = os.environ.get("POSTGRES_PASSWORD", "fakeyou-local-only")
     return f"postgresql://fakeyou:{password}@127.0.0.1:5432/fakeyou"
