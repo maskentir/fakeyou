@@ -196,7 +196,10 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
     assert config.twin_name == "Settings Twin"
     assert config.owner_id == "settings-owner"
     assert config.twin_id == "settings-twin"
-    assert config.browser_profile_dir == Path(".runtime/profiles/settings-twin")
+    assert (
+        config.browser_profile_dir
+        == Path(".runtime/profiles") / "settings-twin" / config.meeting_id
+    )
     assert config.lobby_timeout_seconds == 300.0
     assert config.session_duration_seconds == 7200.0
     assert len(config.meeting_id) == 12

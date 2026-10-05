@@ -1,5 +1,7 @@
 import json
 import os
+import socket
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,8 +17,14 @@ LockPurpose = Literal["meeting", "ingestion", "forget", "debrief"]
 
 INGESTION_FILE_NAME = "ingestion.json"
 
+LOCK_STALE_AFTER_SECONDS = 60.0
 
-class RecordLockError(Exception):
+
+class LeaseError(Exception):
+    pass
+
+
+class RecordLockError(LeaseError):
     pass
 
 
@@ -103,7 +111,21 @@ def _lock_owner(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(token, str) or not token:
         return None
-    return {"pid": pid, "purpose": purpose, "token": token}
+    host = data.get("host")
+    if host is not None and (not isinstance(host, str) or not host):
+        return None
+    heartbeat: datetime | None = None
+    raw_heartbeat = data.get("heartbeat")
+    if raw_heartbeat is not None:
+        if not isinstance(raw_heartbeat, str):
+            return None
+        try:
+            heartbeat = datetime.fromisoformat(raw_heartbeat)
+        except ValueError:
+            return None
+        if heartbeat.tzinfo is None or heartbeat.utcoffset() is None:
+            return None
+    return {"host": host, "pid": pid, "purpose": purpose, "token": token, "heartbeat": heartbeat}
 
 
 def _process_alive(pid: int) -> bool:
@@ -117,37 +139,99 @@ def _process_alive(pid: int) -> bool:
 
 
 @contextmanager
-def record_lock(record_path: Path, *, purpose: LockPurpose) -> Iterator[str]:
-    path = lock_path(record_path)
+def record_lock(
+    record_path: Path,
+    *,
+    purpose: LockPurpose,
+    stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS,
+) -> Iterator[str]:
+    try:
+        with file_lease(
+            lock_path(record_path), purpose=purpose, stale_after_seconds=stale_after_seconds
+        ) as token:
+            yield token
+    except LeaseError:
+        raise RecordLockError(f"record is locked: {lock_path(record_path)}") from None
+
+
+@contextmanager
+def file_lease(
+    path: Path, *, purpose: LockPurpose, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
+) -> Iterator[str]:
     path.parent.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
-    payload = json.dumps({"pid": os.getpid(), "purpose": purpose, "token": token}).encode()
+    host = socket.gethostname()
+    owner_payload = {"host": host, "pid": os.getpid(), "purpose": purpose, "token": token}
     for _ in range(2):
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             owner = _lock_owner(path)
-            if owner is None or _process_alive(owner["pid"]):
-                raise RecordLockError(f"record is locked: {path}") from None
+            if owner is None or not _owner_recoverable(owner, stale_after_seconds):
+                raise LeaseError(f"locked: {path}") from None
             try:
                 os.unlink(path)
             except FileNotFoundError:
                 pass
             continue
         try:
-            os.write(fd, payload)
+            os.write(fd, _lease_payload(owner_payload))
             os.fsync(fd)
         finally:
             os.close(fd)
         break
     else:
-        raise RecordLockError(f"record is locked: {path}") from None
+        raise LeaseError(f"locked: {path}") from None
+    stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_refresh_lease,
+        args=(path, owner_payload, token, stale_after_seconds, stop),
+        daemon=True,
+    )
+    heartbeat.start()
     try:
         yield token
     finally:
+        stop.set()
+        heartbeat.join(timeout=5.0)
         owner = _lock_owner(path)
         if owner is not None and owner["token"] == token:
             try:
                 os.unlink(path)
             except FileNotFoundError:
                 pass
+
+
+def _lease_payload(owner: dict[str, Any]) -> bytes:
+    return json.dumps({**owner, "heartbeat": datetime.now(UTC).isoformat()}).encode()
+
+
+def _owner_recoverable(owner: dict[str, Any], stale_after_seconds: float) -> bool:
+    if owner["host"] is None:
+        return not _process_alive(owner["pid"])
+    heartbeat: datetime | None = owner["heartbeat"]
+    if heartbeat is None:
+        return True
+    if (datetime.now(UTC) - heartbeat).total_seconds() > stale_after_seconds:
+        return True
+    return owner["host"] == socket.gethostname() and not _process_alive(owner["pid"])
+
+
+def _refresh_lease(
+    path: Path,
+    owner: dict[str, Any],
+    token: str,
+    stale_after_seconds: float,
+    stop: threading.Event,
+) -> None:
+    interval = max(stale_after_seconds / 3, 0.05)
+    while not stop.wait(interval):
+        current = _lock_owner(path)
+        if current is None or current["token"] != token:
+            return
+        if stop.is_set():
+            return
+        try:
+            write_atomically(path, _lease_payload(owner))
+        except Exception:
+            continue

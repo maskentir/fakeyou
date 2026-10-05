@@ -1,5 +1,8 @@
 import json
 import os
+import socket
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -131,7 +134,11 @@ def test_record_lock_releases_its_own_token(tmp_path: Path) -> None:
     with record_lock(record, purpose="meeting") as token:
         assert isinstance(token, str) and token
         owner = json.loads(lock_path(record).read_text(encoding="utf-8"))
-        assert owner == {"pid": os.getpid(), "purpose": "meeting", "token": token}
+        assert owner["pid"] == os.getpid()
+        assert owner["purpose"] == "meeting"
+        assert owner["token"] == token
+        assert owner["host"]
+        assert datetime.fromisoformat(owner["heartbeat"]) <= datetime.now(UTC)
     assert not lock_path(record).exists()
 
 
@@ -176,6 +183,191 @@ def test_record_lock_recovers_only_a_proven_dead_owner(tmp_path: Path) -> None:
         with record_lock(record, purpose="ingestion"):
             pytest.fail("live owner must not be recovered")
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "live"
+
+
+def test_record_lock_refuses_a_foreign_host_with_a_fresh_heartbeat(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 999999999,
+                "purpose": "meeting",
+                "token": "foreign",
+                "heartbeat": datetime.now(UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RecordLockError, match="locked"):
+        with record_lock(record, purpose="ingestion", stale_after_seconds=60.0):
+            pytest.fail("fresh foreign lease must not be taken over")
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "foreign"
+
+
+def test_record_lock_takes_over_a_foreign_host_with_a_stale_heartbeat(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 42,
+                "purpose": "meeting",
+                "token": "stale",
+                "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with record_lock(record, purpose="ingestion", stale_after_seconds=60.0) as token:
+        owner = json.loads(path.read_text(encoding="utf-8"))
+        assert owner["token"] == token
+        assert owner["token"] != "stale"
+    assert not path.exists()
+
+
+def test_record_lock_keeps_its_heartbeat_fresh_while_held(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+
+    with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
+        first = json.loads(lock_path(record).read_text(encoding="utf-8"))
+        assert first["heartbeat"]
+        time.sleep(0.5)
+        second = json.loads(lock_path(record).read_text(encoding="utf-8"))
+        assert second["token"] == first["token"]
+        assert datetime.fromisoformat(second["heartbeat"]) > datetime.fromisoformat(
+            first["heartbeat"]
+        )
+
+    assert not lock_path(record).exists()
+
+
+def test_record_lock_takes_over_a_live_pid_with_a_stale_heartbeat(
+    tmp_path: Path,
+) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": socket.gethostname(),
+                "pid": os.getpid(),
+                "purpose": "meeting",
+                "token": "stale",
+                "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with record_lock(record, purpose="ingestion", stale_after_seconds=60.0) as token:
+        assert json.loads(path.read_text(encoding="utf-8"))["token"] == token
+    assert not path.exists()
+
+
+def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+
+    with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
+        time.sleep(0.6)
+        monkeypatch.setattr(
+            "fakeyou.ingestion_status.socket.gethostname", lambda: "other-container"
+        )
+        with pytest.raises(RecordLockError, match="locked"):
+            with record_lock(record, purpose="ingestion", stale_after_seconds=0.3):
+                pytest.fail("renewed lease must refuse a contender past the deadline")
+
+
+def test_record_lock_takes_over_a_foreign_host_without_a_heartbeat(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"host": "other-container", "pid": 42, "purpose": "meeting", "token": "stale"}),
+        encoding="utf-8",
+    )
+
+    with record_lock(record, purpose="ingestion", stale_after_seconds=60.0) as token:
+        assert json.loads(path.read_text(encoding="utf-8"))["token"] == token
+    assert not path.exists()
+
+
+def test_record_lock_lets_exactly_one_racer_take_a_stale_lease(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 42,
+                "purpose": "meeting",
+                "token": "stale",
+                "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    barrier = threading.Barrier(2)
+    winners: list[str] = []
+    failures: list[str] = []
+
+    def race() -> None:
+        barrier.wait(timeout=10)
+        try:
+            with record_lock(record, purpose="meeting", stale_after_seconds=60.0) as token:
+                winners.append(token)
+                time.sleep(0.2)
+        except RecordLockError:
+            failures.append("locked")
+
+    threads = [threading.Thread(target=race) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert [thread.is_alive() for thread in threads] == [False, False]
+
+    assert len(winners) == 1
+    assert failures == ["locked"]
+    assert not path.exists()
+
+
+def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    real_write = __import__(
+        "fakeyou.ingestion_status", fromlist=["write_atomically"]
+    ).write_atomically
+    calls: list[str] = []
+
+    def fail_once(path, data):
+        calls.append("write")
+        if len(calls) == 1:
+            raise OSError("transient write error")
+        return real_write(path, data)
+
+    with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
+        first = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
+        monkeypatch.setattr("fakeyou.ingestion_status.write_atomically", fail_once)
+        time.sleep(0.6)
+        second = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
+        assert len(calls) >= 2
+        assert datetime.fromisoformat(second) > datetime.fromisoformat(first)
+
+    assert not lock_path(record).exists()
 
 
 def test_record_lock_refuses_a_corrupt_lock_file(tmp_path: Path) -> None:

@@ -3,8 +3,8 @@ import hashlib
 import json
 import os
 import time
-from collections.abc import AsyncIterator, Mapping
-from contextlib import ExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +17,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from playwright.async_api import BrowserContext, Page
 
+from fakeyou.ingestion_status import (
+    LOCK_STALE_AFTER_SECONDS,
+    LeaseError,
+    file_lease,
+)
 from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 
 BROWSER_LAUNCH_ARGS = (
@@ -50,8 +55,32 @@ _DEVTOOLS_PORT_TIMEOUT_SECONDS = 30.0
 _DEVTOOLS_PORT_POLL_SECONDS = 0.25
 
 
+class ProfileInUseError(Exception):
+    pass
+
+
 def profile_is_fresh(profile_dir: str) -> bool:
     return not (Path(profile_dir) / "Default" / "Cookies").is_file()
+
+
+def profile_lock_path(profile_dir: Path) -> Path:
+    resolved = profile_dir.resolve()
+    return resolved.parent / f"{resolved.name}.lock"
+
+
+@contextmanager
+def profile_lock(
+    profile_dir: Path, *, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
+) -> Iterator[str]:
+    try:
+        with file_lease(
+            profile_lock_path(profile_dir),
+            purpose="meeting",
+            stale_after_seconds=stale_after_seconds,
+        ) as token:
+            yield token
+    except LeaseError as error:
+        raise ProfileInUseError(f"browser profile is in use: {error}") from None
 
 
 def apply_browser_audio_policy() -> bool:

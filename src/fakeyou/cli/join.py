@@ -4,7 +4,7 @@ import os
 import sqlite3
 import sys
 import uuid
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
@@ -28,6 +28,7 @@ from fakeyou.brief import (
     read_meeting_context,
     write_meeting_context,
 )
+from fakeyou.browser import ProfileInUseError, profile_lock
 from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cli.errors import FAILURE_EXIT_CODES, CliError
 from fakeyou.cli.memory import load_operator_persona
@@ -145,7 +146,7 @@ async def join_meeting(
         twin_name=twin_name or settings.identity.twin_name,
         browser_profile_dir=Path(profile_dir)
         if profile_dir
-        else settings.paths.browser_profile_dir / resolved_twin_id,
+        else settings.paths.browser_profile_dir / resolved_twin_id / resolved_meeting_id,
         lobby_timeout_seconds=lobby_timeout
         if lobby_timeout is not None
         else settings.meeting.lobby_timeout_seconds,
@@ -205,212 +206,218 @@ async def join_meeting(
     exit_code = 1
     final_exit = 1
     try:
-        with record_lock(record_path, purpose="meeting"):
-            context_reused = await _settle_meeting_context(record_path, config, meeting_context)
-            conversation: ConversationLoop | None = None
-            graphiti: Graphiti | None = None
-            session_result: SessionResult | None = None
-            async with AsyncExitStack() as resources:
-                journal = Journal(
-                    resolved_meeting_id,
-                    path=journal_path(settings.paths.journal_dir, resolved_meeting_id),
-                )
-                resources.callback(journal.close)
-                faults = FaultReporter(journal=journal)
-                if profile is not None:
-                    try:
-                        write_status(
-                            status_path(record_path),
-                            IngestionStatus(
-                                meeting_id=resolved_meeting_id,
-                                group_id=profile.memory_group,
-                                status="pending" if ingest_requested else "not_requested",
-                                updated_at=datetime.now(UTC),
-                            ),
-                        )
-                    except OSError as error:
-                        faults.record(classify_exception("meeting_record", error))
-                        record_error = f"ingestion status not written: {type(error).__name__}"
-                        ingestion_outcome = "unknown"
-                record = MeetingRecord(record_path, faults=faults)
-                resources.callback(record.close)
-                if meeting_context is not None:
-                    journal.record(
-                        "brief_recorded",
-                        source="cli",
-                        **_brief_metadata(meeting_context, reused=context_reused),
-                    )
-                if memory and profile is not None:
-                    try:
-                        graphiti = await resources.enter_async_context(
-                            open_persona_memory(settings)
-                        )
-                    except ProviderFault as fault:
-                        faults.record(fault)
-                        session_result = SessionResult(
-                            "ended",
-                            "infra_failure",
-                            f"memory unavailable: {fault}",
-                            faults.report(),
-                        )
-
-                def log_transition(
-                    from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
-                ) -> None:
-                    journal.record(
-                        "conversation_transitioned",
-                        source="agent",
-                        from_phase=from_phase,
-                        to_phase=to_phase,
-                        detail=detail,
-                    )
-
-                def log_playback(event: PlaybackEvent) -> None:
-                    journal.record(
-                        event.kind,
-                        source="playback",
-                        ends_with_question=event.text.rstrip().endswith("?"),
-                        detail=event.detail,
-                    )
-                    if event.kind == "playback_finished":
-                        record.add_twin_speech(event.text)
-
-                if conversation_enabled and session_result is None:
-                    conversation = await resources.enter_async_context(
-                        open_conversation(
-                            settings,
-                            config,
-                            graphiti=graphiti,
-                            profile=profile,
-                            on_tool_result=record.add_tool_result,
-                            on_transition=log_transition,
-                            wake_phrases=[
-                                phrase.strip() for phrase in (wake_phrase or "").split(",")
-                            ],
-                            barge_in=barge_in,
-                            faults=faults,
-                            journal=journal,
-                            brief=brief,
-                        )
-                    )
-
-                async def transcript(frame: TranscriptionFrame) -> None:
-                    event = transcript_event(frame, "unknown", None)
-                    journal.record(
-                        "transcript_finalized",
-                        source="stt",
-                        origin=event.source,
-                        transcript_id=event.id,
-                        participant_id=event.participant_id,
-                        speaker_evidence_id=event.speaker_evidence_id,
-                        spoken_at=event.timestamp,
-                        finalized=event.finalized,
-                    )
-                    record.add_transcript(event)
-                    if conversation is not None:
-                        await conversation.handle_transcript(event)
-
-                async def interim(frame: TranscriptionFrame) -> None:
-                    if conversation is not None:
-                        await conversation.handle_interim(frame.text)
-
-                if audio_enabled:
-                    audio_factory = partial(
-                        open_meeting_audio,
-                        tts_settings=settings.tts,
-                        speech_language=settings.speech.language,
-                        stt_settings=settings.stt,
-                        alone_leave_seconds=settings.audio_health.alone_leave_seconds,
-                        on_transcript=transcript,
-                        on_interim=interim,
-                        on_playback_event=log_playback,
-                        faults=faults,
-                        journal=journal,
-                        deaf_window_seconds=config.deaf_window_seconds,
-                        deaf_grace_seconds=config.deaf_grace_seconds,
-                        stt_keywords=speech_keywords(profile, config.twin_name)
-                        if profile
-                        else None,
-                    )
-                preflight_kwargs: dict[str, Any] = (
-                    {
-                        "preflight_hosts": preflight_hosts(
-                            settings, reply=conversation_enabled, memory=memory
-                        ),
-                        "preflight_budget_seconds": config.preflight_budget_seconds,
-                    }
-                    if audio_enabled
-                    else {}
-                )
-                if session_result is None:
-                    with stop_signal_handlers(stop):
-                        session_result = await run_meeting_session(
-                            config,
-                            stop=stop,
-                            open_audio=audio_factory,
-                            initial_speech=initial_speech,
-                            conversation=conversation,
-                            faults=faults,
-                            journal=journal,
-                            **preflight_kwargs,
-                        )
-                result = session_result
-                exit_code = (
-                    1
-                    if result.terminal_reason is None
-                    else FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
-                )
-                journal.record(
-                    "session_finished",
-                    source="cli",
-                    phase=result.phase,
-                    terminal_reason=result.terminal_reason,
-                    exit_code=exit_code,
-                )
+        with ExitStack() as guards:
+            if profile_dir:
                 try:
-                    record.close()
-                except OSError as error:
-                    faults.record(classify_exception("meeting_record", error))
-                    if record_error is None:
-                        record_error = f"meeting record not finalized: {type(error).__name__}"
-                if profile is not None and profile.ingest_transcripts and record_error is None:
-                    try:
-                        digest = hash_meeting_record(record_path)
-                        finalized = load_meeting_record(record_path)
-                        window_count = len(
-                            meeting_windows(
-                                finalized,
-                                window_utterances=settings.memory.ingestion.window_utterances,
-                                window_seconds=settings.memory.ingestion.window_seconds,
+                    guards.enter_context(profile_lock(Path(profile_dir)))
+                except ProfileInUseError as error:
+                    raise CliError(str(error)) from None
+            with record_lock(record_path, purpose="meeting"):
+                context_reused = await _settle_meeting_context(record_path, config, meeting_context)
+                conversation: ConversationLoop | None = None
+                graphiti: Graphiti | None = None
+                session_result: SessionResult | None = None
+                async with AsyncExitStack() as resources:
+                    journal = Journal(
+                        resolved_meeting_id,
+                        path=journal_path(settings.paths.journal_dir, resolved_meeting_id),
+                    )
+                    resources.callback(journal.close)
+                    faults = FaultReporter(journal=journal)
+                    if profile is not None:
+                        try:
+                            write_status(
+                                status_path(record_path),
+                                IngestionStatus(
+                                    meeting_id=resolved_meeting_id,
+                                    group_id=profile.memory_group,
+                                    status="pending" if ingest_requested else "not_requested",
+                                    updated_at=datetime.now(UTC),
+                                ),
+                            )
+                        except OSError as error:
+                            faults.record(classify_exception("meeting_record", error))
+                            record_error = f"ingestion status not written: {type(error).__name__}"
+                            ingestion_outcome = "unknown"
+                    record = MeetingRecord(record_path, faults=faults)
+                    resources.callback(record.close)
+                    if meeting_context is not None:
+                        journal.record(
+                            "brief_recorded",
+                            source="cli",
+                            **_brief_metadata(meeting_context, reused=context_reused),
+                        )
+                    if memory and profile is not None:
+                        try:
+                            graphiti = await resources.enter_async_context(
+                                open_persona_memory(settings)
+                            )
+                        except ProviderFault as fault:
+                            faults.record(fault)
+                            session_result = SessionResult(
+                                "ended",
+                                "infra_failure",
+                                f"memory unavailable: {fault}",
+                                faults.report(),
+                            )
+
+                    def log_transition(
+                        from_phase: ConversationPhase, to_phase: ConversationPhase, detail: str
+                    ) -> None:
+                        journal.record(
+                            "conversation_transitioned",
+                            source="agent",
+                            from_phase=from_phase,
+                            to_phase=to_phase,
+                            detail=detail,
+                        )
+
+                    def log_playback(event: PlaybackEvent) -> None:
+                        journal.record(
+                            event.kind,
+                            source="playback",
+                            ends_with_question=event.text.rstrip().endswith("?"),
+                            detail=event.detail,
+                        )
+                        if event.kind == "playback_finished":
+                            record.add_twin_speech(event.text)
+
+                    if conversation_enabled and session_result is None:
+                        conversation = await resources.enter_async_context(
+                            open_conversation(
+                                settings,
+                                config,
+                                graphiti=graphiti,
+                                profile=profile,
+                                on_tool_result=record.add_tool_result,
+                                on_transition=log_transition,
+                                wake_phrases=[
+                                    phrase.strip() for phrase in (wake_phrase or "").split(",")
+                                ],
+                                barge_in=barge_in,
+                                faults=faults,
+                                journal=journal,
+                                brief=brief,
                             )
                         )
-                        write_status(
-                            status_path(record_path),
-                            IngestionStatus(
-                                meeting_id=resolved_meeting_id,
-                                group_id=profile.memory_group,
-                                status="pending",
-                                windows=window_count,
-                                record_sha256=digest,
-                                updated_at=datetime.now(UTC),
-                            ),
+
+                    async def transcript(frame: TranscriptionFrame) -> None:
+                        event = transcript_event(frame, "unknown", None)
+                        journal.record(
+                            "transcript_finalized",
+                            source="stt",
+                            origin=event.source,
+                            transcript_id=event.id,
+                            participant_id=event.participant_id,
+                            speaker_evidence_id=event.speaker_evidence_id,
+                            spoken_at=event.timestamp,
+                            finalized=event.finalized,
                         )
-                    except (OSError, ValueError) as error:
+                        record.add_transcript(event)
+                        if conversation is not None:
+                            await conversation.handle_transcript(event)
+
+                    async def interim(frame: TranscriptionFrame) -> None:
+                        if conversation is not None:
+                            await conversation.handle_interim(frame.text)
+
+                    if audio_enabled:
+                        audio_factory = partial(
+                            open_meeting_audio,
+                            tts_settings=settings.tts,
+                            speech_language=settings.speech.language,
+                            stt_settings=settings.stt,
+                            alone_leave_seconds=settings.audio_health.alone_leave_seconds,
+                            on_transcript=transcript,
+                            on_interim=interim,
+                            on_playback_event=log_playback,
+                            faults=faults,
+                            journal=journal,
+                            deaf_window_seconds=config.deaf_window_seconds,
+                            deaf_grace_seconds=config.deaf_grace_seconds,
+                            stt_keywords=speech_keywords(profile, config.twin_name)
+                            if profile
+                            else None,
+                        )
+                    preflight_kwargs: dict[str, Any] = (
+                        {
+                            "preflight_hosts": preflight_hosts(
+                                settings, reply=conversation_enabled, memory=memory
+                            ),
+                            "preflight_budget_seconds": config.preflight_budget_seconds,
+                        }
+                        if audio_enabled
+                        else {}
+                    )
+                    if session_result is None:
+                        with stop_signal_handlers(stop):
+                            session_result = await run_meeting_session(
+                                config,
+                                stop=stop,
+                                open_audio=audio_factory,
+                                initial_speech=initial_speech,
+                                conversation=conversation,
+                                faults=faults,
+                                journal=journal,
+                                **preflight_kwargs,
+                            )
+                    result = session_result
+                    exit_code = (
+                        1
+                        if result.terminal_reason is None
+                        else FAILURE_EXIT_CODES.get(result.terminal_reason, 0)
+                    )
+                    journal.record(
+                        "session_finished",
+                        source="cli",
+                        phase=result.phase,
+                        terminal_reason=result.terminal_reason,
+                        exit_code=exit_code,
+                    )
+                    try:
+                        record.close()
+                    except OSError as error:
                         faults.record(classify_exception("meeting_record", error))
-                        record_error = f"ingestion status not written: {type(error).__name__}"
-                if ingest_requested:
-                    ingestion_outcome = "pending" if record_error is None else "unknown"
-                elif ingestion_outcome != "unknown":
-                    ingestion_outcome = "not_requested"
-                final_exit = exit_code
-                if record_error is not None and final_exit == 0:
-                    final_exit = 1
-                journal.record(
-                    "cli_exited",
-                    source="cli",
-                    terminal_reason=result.terminal_reason,
-                    exit_code=final_exit,
-                )
+                        if record_error is None:
+                            record_error = f"meeting record not finalized: {type(error).__name__}"
+                    if profile is not None and profile.ingest_transcripts and record_error is None:
+                        try:
+                            digest = hash_meeting_record(record_path)
+                            finalized = load_meeting_record(record_path)
+                            window_count = len(
+                                meeting_windows(
+                                    finalized,
+                                    window_utterances=settings.memory.ingestion.window_utterances,
+                                    window_seconds=settings.memory.ingestion.window_seconds,
+                                )
+                            )
+                            write_status(
+                                status_path(record_path),
+                                IngestionStatus(
+                                    meeting_id=resolved_meeting_id,
+                                    group_id=profile.memory_group,
+                                    status="pending",
+                                    windows=window_count,
+                                    record_sha256=digest,
+                                    updated_at=datetime.now(UTC),
+                                ),
+                            )
+                        except (OSError, ValueError) as error:
+                            faults.record(classify_exception("meeting_record", error))
+                            record_error = f"ingestion status not written: {type(error).__name__}"
+                    if ingest_requested:
+                        ingestion_outcome = "pending" if record_error is None else "unknown"
+                    elif ingestion_outcome != "unknown":
+                        ingestion_outcome = "not_requested"
+                    final_exit = exit_code
+                    if record_error is not None and final_exit == 0:
+                        final_exit = 1
+                    journal.record(
+                        "cli_exited",
+                        source="cli",
+                        terminal_reason=result.terminal_reason,
+                        exit_code=final_exit,
+                    )
     except RecordLockError as error:
         raise CliError(f"meeting record is locked: {error}") from None
     resume_command = (
