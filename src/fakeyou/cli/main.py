@@ -21,7 +21,7 @@ from fakeyou.cli.memory import (
     initialize_memory,
     reembed_memory,
 )
-from fakeyou.cli.worker import worker_start, worker_status, worker_stop
+from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
 from fakeyou.provider_faults import ProviderFault
 from fakeyou.settings import (
     Settings,
@@ -252,6 +252,12 @@ def build_parser() -> argparse.ArgumentParser:
     worker_stop_parser.add_argument("meeting_id")
     worker_stop_parser.add_argument("--timeout", type=float, default=60.0)
     worker_stop_parser.set_defaults(handler=worker_stop)
+    worker_ingest_parser = worker_commands.add_parser(
+        "ingest", help="Ingest a finished meeting in a separate container", allow_abbrev=False
+    )
+    worker_ingest_parser.add_argument("meeting_id")
+    worker_ingest_parser.add_argument("--persona", dest="persona_path", type=Path, required=True)
+    worker_ingest_parser.set_defaults(handler=worker_ingest)
     return parser
 
 

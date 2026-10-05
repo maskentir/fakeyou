@@ -10,8 +10,16 @@ from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
+from fakeyou.debrief import debrief_report_status
+from fakeyou.ingestion_status import (
+    describe_lease,
+    lock_path,
+    read_status,
+    status_path,
+)
 from fakeyou.invariants import SessionId
 from fakeyou.journal import journal_path
+from fakeyou.record import meeting_record_path
 from fakeyou.report import describe_session, read_journal
 
 WORKER_SERVICE = "meeting-worker"
@@ -19,6 +27,7 @@ MANAGED_LABEL = "fakeyou.managed"
 MEETING_LABEL = "fakeyou.meeting-id"
 ROLE_LABEL = "fakeyou.role"
 CONTAINER_PREFIX = "fakeyou-worker-"
+INGEST_CONTAINER_PREFIX = "fakeyou-ingest-"
 STOP_GRACE_SECONDS = 30.0
 STATUS_POLL_SECONDS = 0.5
 
@@ -108,6 +117,8 @@ class WorkerState:
     phase: str | None
     terminal_reason: str | None
     last_fault: dict[str, Any] | None
+    ingestion: str | None = None
+    debrief: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,11 +188,13 @@ class DockerWorkerBackend:
         self,
         *,
         journal_dir: Path,
+        record_dir: Path,
         project_dir: Path | None = None,
         runner: Runner | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._journal_dir = journal_dir
+        self._record_dir = record_dir
         self._project_dir = project_dir or Path.cwd()
         self._run: Runner = runner or subprocess.run
         self._sleep = sleep
@@ -189,6 +202,8 @@ class DockerWorkerBackend:
     def start(self, request: WorkerStartRequest) -> WorkerStarted:
         if self._running_container(request.meeting_id) is not None:
             raise WorkerError(f"worker for meeting {request.meeting_id} is already running")
+        if self._running_container(request.meeting_id, role="ingest") is not None:
+            raise WorkerError(f"ingest job for meeting {request.meeting_id} is still running")
         join_args = self._join_args(request)
         if describe_session(self._host_journal_dir(), request.meeting_id) == "unfinished":
             join_args.append("--resume")
@@ -244,6 +259,8 @@ class DockerWorkerBackend:
                 "-a",
                 "--filter",
                 f"label={MANAGED_LABEL}=true",
+                "--filter",
+                f"label={ROLE_LABEL}=worker",
                 "--format",
                 '{{.ID}}\t{{.State}}\t{{.Names}}\t{{.Label "fakeyou.meeting-id"}}',
             ]
@@ -308,7 +325,84 @@ class DockerWorkerBackend:
         )
 
     def ingest(self, meeting_id: str, *, persona_path: Path) -> WorkerIngest:
-        raise NotImplementedError
+        checked_meeting_id(meeting_id)
+        if self._running_container(meeting_id) is not None:
+            raise WorkerError(f"worker for meeting {meeting_id} is still running")
+        if self._running_container(meeting_id, role="ingest") is not None:
+            raise WorkerError(f"ingest job for meeting {meeting_id} is already running")
+        if describe_session(self._host_journal_dir(), meeting_id) != "finished":
+            raise WorkerError(f"meeting {meeting_id} has no finished session to ingest")
+        record = meeting_record_path(self._host_record_dir(), meeting_id)
+        lease = describe_lease(lock_path(record))
+        if lease == "live":
+            raise WorkerError(f"meeting record is locked: {lock_path(record)}")
+        if lease == "corrupt":
+            raise WorkerError(
+                f"meeting record lock is corrupt: {lock_path(record)}; inspect it first"
+            )
+        ingest_args = [
+            "memory-ingest",
+            "--meeting",
+            meeting_id,
+            "--persona",
+            self._container_path(persona_path),
+        ]
+        name = f"{INGEST_CONTAINER_PREFIX}{meeting_id}"
+        status_file = status_path(record)
+        before = self._status_fingerprint(status_file)
+        override: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".yml", prefix="fakeyou-ingest-", delete=False
+            ) as handle:
+                handle.write(compose_override(meeting_id, role="ingest"))
+                override = handle.name
+            try:
+                completed = self._run(
+                    [
+                        "docker",
+                        "compose",
+                        "-f",
+                        str(self._project_dir / "compose.yaml"),
+                        "-f",
+                        override,
+                        "run",
+                        "--rm",
+                        "--name",
+                        name,
+                        WORKER_SERVICE,
+                        "fakeyou",
+                        *ingest_args,
+                    ]
+                )
+            except KeyboardInterrupt:
+                raise WorkerError(f"ingest interrupted for meeting {meeting_id}") from None
+            except OSError as error:
+                raise WorkerError(f"docker is not available: {error}") from None
+        finally:
+            if override is not None:
+                Path(override).unlink(missing_ok=True)
+        return WorkerIngest(
+            meeting_id=meeting_id,
+            status=self._ingest_outcome(status_file, before, succeeded=completed.returncode == 0),
+        )
+
+    def _ingest_outcome(
+        self, status_file: Path, before: tuple[int, int] | None, *, succeeded: bool
+    ) -> str:
+        if not succeeded and self._status_fingerprint(status_file) == before:
+            return "unknown"
+        existing = read_status(status_file)
+        if existing is None:
+            return "completed" if succeeded else "unknown"
+        return existing.status
+
+    def _status_fingerprint(self, status_file: Path) -> tuple[int, int] | None:
+        try:
+            stat = status_file.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
 
     def _run_docker(self, args: list[str]) -> "subprocess.CompletedProcess[str]":
         try:
@@ -318,6 +412,14 @@ class DockerWorkerBackend:
 
     def _state(self, meeting_id: str, found: tuple[str, str, str] | None) -> WorkerState:
         summary = summarize_session(self._read_session(meeting_id))
+        record = meeting_record_path(self._host_record_dir(), meeting_id)
+        status_file = status_path(record)
+        existing = read_status(status_file)
+        if existing is not None:
+            ingestion: str | None = existing.status
+        else:
+            ingestion = "invalid" if status_file.exists() else None
+        debrief = debrief_report_status(record)
         if found is None:
             return WorkerState(
                 meeting_id=meeting_id,
@@ -327,6 +429,8 @@ class DockerWorkerBackend:
                 phase=summary["phase"],
                 terminal_reason=summary["terminal_reason"],
                 last_fault=summary["last_fault"],
+                ingestion=ingestion,
+                debrief=debrief,
             )
         container_id, state, container_name = found
         return WorkerState(
@@ -337,20 +441,28 @@ class DockerWorkerBackend:
             phase=summary["phase"],
             terminal_reason=summary["terminal_reason"],
             last_fault=summary["last_fault"],
+            ingestion=ingestion,
+            debrief=debrief,
         )
 
     def _read_session(self, meeting_id: str) -> list[dict[str, Any]]:
         return read_journal(journal_path(self._host_journal_dir(), meeting_id))
 
     def _host_journal_dir(self) -> Path:
-        resolved = (self._project_dir / self._journal_dir).resolve()
+        return self._host_mounted(self._journal_dir)
+
+    def _host_record_dir(self) -> Path:
+        return self._host_mounted(self._record_dir)
+
+    def _host_mounted(self, directory: Path) -> Path:
+        resolved = (self._project_dir / directory).resolve()
         runtime_root = (self._project_dir / ".runtime").resolve()
         try:
             relative = resolved.relative_to(runtime_root)
         except ValueError:
-            return self._journal_dir
+            return directory
         if relative.parts and relative.parts[0] == "audio":
-            return self._journal_dir
+            return directory
         return self._project_dir / ".runtime" / "audio" / relative
 
     def _journal_meeting_ids(self) -> list[str]:
@@ -365,13 +477,15 @@ class DockerWorkerBackend:
                 continue
         return meeting_ids
 
-    def _running_container(self, meeting_id: str) -> str | None:
+    def _running_container(self, meeting_id: str, *, role: str = "worker") -> str | None:
         completed = self._run_docker(
             [
                 "docker",
                 "ps",
                 "--filter",
                 f"label={MEETING_LABEL}={meeting_id}",
+                "--filter",
+                f"label={ROLE_LABEL}={role}",
                 "--format",
                 "{{.ID}}",
             ]
@@ -391,6 +505,8 @@ class DockerWorkerBackend:
                 "-a",
                 "--filter",
                 f"label={MEETING_LABEL}={meeting_id}",
+                "--filter",
+                f"label={ROLE_LABEL}=worker",
                 "--format",
                 "{{.ID}}\t{{.State}}\t{{.Names}}",
             ]

@@ -119,7 +119,9 @@ def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path) -> None:
             check=False,
         )
         assert started.returncode == 0, started.stderr
-        backend = DockerWorkerBackend(journal_dir=tmp_path / "journals")
+        backend = DockerWorkerBackend(
+            journal_dir=tmp_path / "journals", record_dir=tmp_path / "meetings"
+        )
         state = backend.status(meeting_id)
         assert state.container_state == "running"
         assert state.container_name == name

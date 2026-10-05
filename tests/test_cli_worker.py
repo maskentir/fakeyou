@@ -50,6 +50,12 @@ class FakeBackend:
             escalated=False,
         )
 
+    def ingest(self, meeting_id: str, **kwargs: Any) -> Any:
+        from fakeyou.worker_backend import WorkerIngest
+
+        self.calls.append(("ingest", {"meeting_id": meeting_id, **kwargs}))
+        return WorkerIngest(meeting_id=meeting_id, status="completed")
+
 
 def start_arguments(**overrides: Any) -> dict[str, Any]:
     values: dict[str, Any] = {
@@ -172,3 +178,63 @@ def test_worker_status_accepts_an_optional_meeting_id() -> None:
     assert parser.parse_args(["worker", "status"]).meeting_id is None
     assert parser.parse_args(["worker", "status", "meeting-9"]).meeting_id == "meeting-9"
     assert parser.parse_args(["worker", "stop", "meeting-9"]).meeting_id == "meeting-9"
+
+
+def test_worker_ingest_prints_the_job_status(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fakeyou.cli.worker import worker_ingest
+
+    backend = FakeBackend()
+
+    worker_ingest(
+        meeting_id="meeting-9",
+        persona_path=Path("persona.json"),
+        settings=settings,
+        backend=backend,
+    )
+
+    assert backend.calls == [
+        ("ingest", {"meeting_id": "meeting-9", "persona_path": Path("persona.json")})
+    ]
+    assert json.loads(capsys.readouterr().out) == {
+        "meeting_id": "meeting-9",
+        "status": "completed",
+    }
+
+
+def test_worker_ingest_exits_nonzero_unless_completed(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fakeyou.cli.worker import worker_ingest
+    from fakeyou.worker_backend import WorkerIngest
+
+    backend = FakeBackend()
+
+    def interrupted(meeting_id: str, **kwargs: Any) -> WorkerIngest:
+        return WorkerIngest(meeting_id=meeting_id, status="interrupted")
+
+    backend.ingest = interrupted
+
+    with pytest.raises(SystemExit) as caught:
+        worker_ingest(
+            meeting_id="meeting-9",
+            persona_path=Path("persona.json"),
+            settings=settings,
+            backend=backend,
+        )
+
+    assert caught.value.code == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "interrupted"
+
+
+def test_worker_ingest_parses_meeting_and_persona() -> None:
+    from fakeyou.cli.worker import worker_ingest
+
+    parser = cli_main.build_parser()
+
+    options = parser.parse_args(["worker", "ingest", "meeting-9", "--persona", "p.json"])
+
+    assert options.handler is worker_ingest
+    assert options.meeting_id == "meeting-9"
+    assert options.persona_path == Path("p.json")

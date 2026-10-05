@@ -16,7 +16,9 @@ def _backend(settings: Settings, backend: WorkerBackend | None) -> WorkerBackend
     return (
         backend
         if backend is not None
-        else DockerWorkerBackend(journal_dir=settings.paths.journal_dir)
+        else DockerWorkerBackend(
+            journal_dir=settings.paths.journal_dir, record_dir=settings.paths.record_dir
+        )
     )
 
 
@@ -91,3 +93,19 @@ def worker_stop(
     except WorkerError as error:
         raise CliError(str(error)) from None
     print(json.dumps(dataclasses.asdict(stopped), indent=2))
+
+
+def worker_ingest(
+    meeting_id: str,
+    *,
+    persona_path: Path,
+    settings: Settings,
+    backend: WorkerBackend | None = None,
+) -> None:
+    try:
+        ingested = _backend(settings, backend).ingest(meeting_id, persona_path=persona_path)
+    except WorkerError as error:
+        raise CliError(str(error)) from None
+    print(json.dumps(dataclasses.asdict(ingested), indent=2))
+    if ingested.status != "completed":
+        raise SystemExit(1)
