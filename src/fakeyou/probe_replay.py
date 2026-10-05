@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 SOURCE_ACTIVE_THRESHOLD = 0.01
+DOMINANT_MARGIN = 0.5
 CSRC_LEAD_WINDOW_MS = 1000.0
 NAME_PRECISION_GATE = 0.98
 OVERLAP_UNKNOWN_GATE = 0.95
@@ -21,9 +22,10 @@ def align_turns(
         fragment = str(turn.get("fragment", "")).casefold().strip()
         if not fragment:
             continue
-        while cursor < len(transcripts):
-            transcript = transcripts[cursor]
-            cursor += 1
+        scan = cursor
+        while scan < len(transcripts):
+            transcript = transcripts[scan]
+            scan += 1
             if fragment in str(transcript.get("text", "")).casefold():
                 aligned.append(
                     {
@@ -33,6 +35,7 @@ def align_turns(
                         "wall": transcript.get("wall"),
                     }
                 )
+                cursor = scan
                 break
     return aligned
 
@@ -106,24 +109,60 @@ def active_sources_in_window(
     return active
 
 
+def dominant_sources_in_window(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    start_mono_ms: float,
+    end_mono_ms: float,
+    threshold: float = SOURCE_ACTIVE_THRESHOLD,
+    margin: float = DOMINANT_MARGIN,
+) -> set[int]:
+    peaks: dict[int, float] = {}
+    for sample in samples:
+        try:
+            page_ms = float(sample["page_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        at_mono = page_to_mono(page_ms, anchors)
+        if not start_mono_ms <= at_mono <= end_mono_ms:
+            continue
+        sources = sample.get("sources")
+        if not isinstance(sources, list):
+            continue
+        for entry in sources:
+            if not isinstance(entry, Mapping):
+                continue
+            try:
+                level = float(entry.get("audioLevel", 0.0))
+                source = int(entry.get("source", 0))
+            except (TypeError, ValueError):
+                continue
+            if level >= threshold:
+                peaks[source] = max(peaks.get(source, 0.0), level)
+    if not peaks:
+        return set()
+    ceiling = max(peaks.values()) * margin
+    return {source for source, peak in peaks.items() if peak >= ceiling}
+
+
 def source_sets_by_speaker(
     samples: Sequence[Mapping[str, Any]],
     anchors: Sequence[tuple[float, float]],
     windows: Sequence[Mapping[str, Any]],
     threshold: float = SOURCE_ACTIVE_THRESHOLD,
+    margin: float | None = None,
 ) -> dict[str, tuple[int, ...]]:
     sets: dict[str, set[int]] = {}
     for window in windows:
         speaker = str(window.get("speaker", ""))
         if not speaker:
             continue
-        active = active_sources_in_window(
-            samples,
-            anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
-            threshold,
-        )
+        start = float(window["start_mono_ms"])
+        end = float(window["end_mono_ms"])
+        if margin is None:
+            active = active_sources_in_window(samples, anchors, start, end, threshold)
+        else:
+            active = dominant_sources_in_window(samples, anchors, start, end, threshold, margin)
         sets.setdefault(speaker, set()).update(active)
     return {speaker: tuple(sorted(sources)) for speaker, sources in sets.items()}
 
@@ -133,18 +172,21 @@ def reference_precision(
     anchors: Sequence[tuple[float, float]],
     windows: Sequence[Mapping[str, Any]],
     threshold: float = SOURCE_ACTIVE_THRESHOLD,
+    margin: float | None = None,
 ) -> dict[str, float | None]:
     solo = [window for window in windows if window.get("kind", "solo") == "solo"]
     overlap = [window for window in windows if window.get("kind") == "overlap"]
+
+    def window_sources(window: Mapping[str, Any]) -> set[int]:
+        start = float(window["start_mono_ms"])
+        end = float(window["end_mono_ms"])
+        if margin is None:
+            return active_sources_in_window(samples, anchors, start, end, threshold)
+        return dominant_sources_in_window(samples, anchors, start, end, threshold, margin)
+
     votes: dict[int, dict[str, int]] = {}
     for window in solo:
-        active = active_sources_in_window(
-            samples,
-            anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
-            threshold,
-        )
+        active = window_sources(window)
         if len(active) != 1:
             continue
         source = next(iter(active))
@@ -157,25 +199,13 @@ def reference_precision(
     }
     correct = 0
     for window in solo:
-        active = active_sources_in_window(
-            samples,
-            anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
-            threshold,
-        )
+        active = window_sources(window)
         predicted = mapping.get(next(iter(active))) if len(active) == 1 else None
         if predicted is not None and predicted == str(window.get("speaker", "")):
             correct += 1
     unknown = 0
     for window in overlap:
-        active = active_sources_in_window(
-            samples,
-            anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
-            threshold,
-        )
+        active = window_sources(window)
         if len(active) != 1:
             unknown += 1
     return {
@@ -406,8 +436,8 @@ def summarize_probe_session(
         lag = csrc_lag_ms(scoped, anchors, vad_start_mono_ms=window["start_mono_ms"])
         if lag is not None:
             lags.append(lag)
-    reference = reference_precision(samples, anchors, replay_windows)
-    source_sets = source_sets_by_speaker(samples, anchors, replay_windows)
+    reference = reference_precision(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
+    source_sets = source_sets_by_speaker(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
     markers: dict[str, dict[str, Any]] = {}
     for candidate in ("es310d", "knownClass"):
         correct = 0
@@ -496,16 +526,19 @@ def _label_stability(
     samples: Sequence[Mapping[str, Any]],
     anchors: Sequence[tuple[float, float]],
     windows: Sequence[Mapping[str, Any]],
+    margin: float = DOMINANT_MARGIN,
 ) -> float | None:
     solo = [window for window in windows if window.get("kind", "solo") == "solo"]
     dominant: dict[str, int] = {}
     tallies: dict[str, dict[int, int]] = {}
     for window in solo:
-        active = active_sources_in_window(
+        active = dominant_sources_in_window(
             samples,
             anchors,
             float(window["start_mono_ms"]),
             float(window["end_mono_ms"]),
+            SOURCE_ACTIVE_THRESHOLD,
+            margin,
         )
         if len(active) != 1:
             continue
@@ -518,11 +551,13 @@ def _label_stability(
     stable = 0
     denominator = 0
     for window in solo:
-        active = active_sources_in_window(
+        active = dominant_sources_in_window(
             samples,
             anchors,
             float(window["start_mono_ms"]),
             float(window["end_mono_ms"]),
+            SOURCE_ACTIVE_THRESHOLD,
+            margin,
         )
         if not active:
             continue

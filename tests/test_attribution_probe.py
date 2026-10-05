@@ -167,6 +167,12 @@ async def test_probe_captures_peer_connections_and_samples_sources() -> None:
         releveled = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
         second = {entry["source"]: entry["audioLevel"] for entry in releveled["levels"]}
         assert second == first
+        diag = {entry["track"]: entry for entry in releveled["stats_diag"]}
+        assert set(diag) == {"track-abc", "track-def"}
+        assert diag["track-abc"]["entries"] == 1
+        assert "inbound-rtp" in diag["track-abc"]["types"]
+        assert diag["track-abc"]["audio"] is True
+        assert diag["track-abc"]["error"] is None
         again = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
         assert again["page_ms"] >= drained["page_ms"]
         assert all(sample["page_ms"] >= stamps[-1] for sample in again["samples"])
@@ -196,6 +202,9 @@ async def test_probe_reports_roster_with_structural_self() -> None:
         assert tiles["spaces/a/devices/1"]["name"] == "Rani Twin"
         assert tiles["spaces/a/devices/2"]["self"] is False
         assert tiles["spaces/a/devices/2"]["name"] == "Host Human"
+        assert "notranslate" in tiles["spaces/a/devices/2"]["html"]
+        assert tiles["spaces/a/devices/2"]["aria"] == ""
+        assert tiles["spaces/a/devices/2"]["cls"] == ""
 
 
 async def test_guest_join_installs_init_scripts_before_navigation() -> None:
@@ -331,6 +340,23 @@ def test_align_turns_matches_fragments_to_transcripts() -> None:
     assert [(entry["turn"], entry["speaker"]) for entry in aligned] == [
         (1, "Rani"),
         (2, "Budi"),
+    ]
+
+
+def test_align_turns_skips_missed_turn_without_consuming() -> None:
+    transcripts = [
+        {"text": "good morning everyone", "wall": "2026-10-05T10:00:01+00:00"},
+        {"text": "orchid demo next week", "wall": "2026-10-05T10:00:05+00:00"},
+    ]
+    turns = [
+        {"turn": 1, "speaker": "Rani", "kind": "solo", "fragment": "morning"},
+        {"turn": 2, "speaker": "Nobody", "kind": "solo", "fragment": "never said"},
+        {"turn": 3, "speaker": "Budi", "kind": "solo", "fragment": "orchid"},
+    ]
+    aligned = align_turns(transcripts, turns)
+    assert [(entry["turn"], entry["speaker"]) for entry in aligned] == [
+        (1, "Rani"),
+        (3, "Budi"),
     ]
 
 
@@ -657,6 +683,37 @@ def test_merge_levels_drops_malformed_entries() -> None:
     ]
 
 
+def test_dominant_sources_ignore_quiet_bleed() -> None:
+    from fakeyou.probe_replay import dominant_sources_in_window
+
+    samples = [
+        {"page_ms": 1000.0, "sources": [{"source": 3, "audioLevel": 0.34}]},
+        {"page_ms": 1050.0, "sources": [{"source": 5, "audioLevel": 0.06}]},
+    ]
+    anchors = [(1000.0, 5000.0)]
+    assert dominant_sources_in_window(samples, anchors, 4900.0, 5200.0) == {3}
+    assert dominant_sources_in_window(samples, anchors, 4900.0, 5200.0, margin=0.1) == {
+        3,
+        5,
+    }
+
+
+def test_reference_precision_uses_dominant_margin() -> None:
+    samples = [
+        {"page_ms": 1000.0, "sources": [{"source": 3, "audioLevel": 0.34}]},
+        {"page_ms": 1050.0, "sources": [{"source": 5, "audioLevel": 0.06}]},
+        {"page_ms": 2000.0, "sources": [{"source": 5, "audioLevel": 0.14}]},
+        {"page_ms": 2050.0, "sources": [{"source": 3, "audioLevel": 0.009}]},
+    ]
+    anchors = [(1000.0, 5000.0)]
+    windows = [
+        {"speaker": "Rani", "kind": "solo", "start_mono_ms": 4900.0, "end_mono_ms": 5200.0},
+        {"speaker": "Budi", "kind": "solo", "start_mono_ms": 5900.0, "end_mono_ms": 6200.0},
+    ]
+    report = reference_precision(samples, anchors, windows, margin=0.5)
+    assert report["precision"] == 1.0
+
+
 def test_page_to_mono_rejects_empty_anchors() -> None:
     with pytest.raises(ValueError):
         page_to_mono(1000.0, [])
@@ -664,6 +721,110 @@ def test_page_to_mono_rejects_empty_anchors() -> None:
 
 def test_percentile_uses_nearest_rank() -> None:
     assert _percentile(list(range(100)), 0.95) == 94
+
+
+@pytest.mark.browser
+async def test_probe_reports_media_element_census() -> None:
+    async with open_direct_page(headless=True) as real_page:
+        await real_page.add_init_script(load_probe_script())
+        await real_page.route(
+            "https://probe.fakeyou.test/media",
+            lambda route: route.fulfill(
+                body="<div data-participant-id='spaces/a/devices/1'>"
+                "<span class='notranslate'>Rani</span>"
+                "<audio id='a1'></audio></div>"
+                "<video id='v1'></video>"
+                "<script>"
+                "document.getElementById('a1').srcObject = new MediaStream();"
+                "</script>",
+                content_type="text/html",
+            ),
+        )
+        await real_page.goto("https://probe.fakeyou.test/media", wait_until="domcontentloaded")
+        await real_page.evaluate(
+            "() => { new RTCPeerConnection().getStats = async () =>"
+            " new Map([['p1', {type: 'peer-connection'}]]);"
+            " window.__ctx = new AudioContext(); }"
+        )
+        await wait_for_audio_topology(real_page)
+        drained = await real_page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+        census = drained["media_census"]
+        assert len(census) == 2
+        audio = next(entry for entry in census if entry["tag"] == "audio")
+        assert audio["hasSrcObject"] is True
+        assert audio["participantId"] == "spaces/a/devices/1"
+        assert audio["tileName"] == "Rani"
+        topology = drained["audio_topology"]
+        assert topology["contexts"] >= 1
+        assert topology["pc_stats_entries"] >= 1
+
+
+async def wait_for_census(page: object, timeout_seconds: float = 15.0) -> None:
+    from playwright.async_api import Page
+
+    assert isinstance(page, Page)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        pending = await page.evaluate("() => window.__fakeyouAttributionProbe.pending()")
+        if pending["census"]:
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"probe never recorded census: {pending!r}")
+        await asyncio.sleep(0.1)
+
+
+async def wait_for_audio_topology(page: object, timeout_seconds: float = 15.0) -> None:
+    from playwright.async_api import Page
+
+    assert isinstance(page, Page)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        pending = await page.evaluate("() => window.__fakeyouAttributionProbe.pending()")
+        if pending["census"] and pending["topology"]:
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"probe never recorded topology: {pending!r}")
+        await asyncio.sleep(0.1)
+
+
+@pytest.mark.browser
+async def test_probe_taps_webaudio_source_energy() -> None:
+    async with open_direct_page(headless=True) as real_page:
+        await real_page.add_init_script(load_probe_script())
+        await real_page.route(
+            "https://probe.fakeyou.test/tone",
+            lambda route: route.fulfill(
+                body="<button>tone</button><script>"
+                "const ctx = new AudioContext();"
+                "const osc = ctx.createOscillator();"
+                "const dest = ctx.createMediaStreamDestination();"
+                "osc.connect(dest);"
+                "osc.start();"
+                "ctx.createMediaStreamSource(dest.stream);"
+                "ctx.resume();"
+                "</script>",
+                content_type="text/html",
+            ),
+        )
+        await real_page.goto("https://probe.fakeyou.test/tone", wait_until="load")
+        drained = await wait_for_loud_levels(real_page)
+        assert any(entry["audioLevel"] > 0.1 for entry in drained["levels"])
+        assert drained["audio_topology"]["contexts"] >= 1
+        assert len(drained["audio_topology"]["sources"]) >= 1
+
+
+async def wait_for_loud_levels(page: object, timeout_seconds: float = 15.0) -> dict:
+    from playwright.async_api import Page
+
+    assert isinstance(page, Page)
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        drained = await page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
+        if any(entry["audioLevel"] > 0.1 for entry in drained["levels"]):
+            return drained
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("probe never recorded loud levels")
+        await asyncio.sleep(0.2)
 
 
 @pytest.mark.browser

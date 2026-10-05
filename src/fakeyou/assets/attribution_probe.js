@@ -10,6 +10,14 @@
   const roster = [];
   const levels = [];
   const trackIds = new Map();
+  const statsDiag = new Map();
+  let mediaCensus = null;
+  let audioTopology = null;
+  let audioContexts = 0;
+  const audioSources = [];
+  const audioTaps = [];
+  const tapBuffer = new Float32Array(2048);
+  let topologyRunning = false;
   let seenReceivers = 0;
   let levelsRunning = false;
   const OriginalPeerConnection =
@@ -138,20 +146,44 @@
           receivers = [];
         }
         for (const receiver of receivers) {
-          if (!receiver || typeof receiver.getStats !== "function") continue;
+          const trackKey = readTrack(receiver).id || "no-track";
+          if (!receiver || typeof receiver.getStats !== "function") {
+            statsDiag.set(trackKey, {
+              track: trackKey,
+              types: [],
+              entries: 0,
+              audio: false,
+              error: "no-getstats",
+            });
+            continue;
+          }
           let report = null;
           try {
             report = await statsWithTimeout(receiver, STATS_TIMEOUT_MS);
-          } catch {
+          } catch (error) {
+            statsDiag.set(trackKey, {
+              track: trackKey,
+              types: [],
+              entries: 0,
+              audio: false,
+              error: String((error && error.message) || error).slice(0, 80),
+            });
             continue;
           }
-          for (const entry of statEntries(report)) {
+          const listed = statEntries(report);
+          const types = [];
+          let audio = false;
+          for (const entry of listed) {
+            let kind = "";
             try {
+              kind = entry && entry.type ? String(entry.type) : "";
+              if (kind && !types.includes(kind)) types.push(kind);
               if (!entry || entry.type !== "inbound-rtp") continue;
               if (entry.kind && entry.kind !== "audio") continue;
               const level = Number(entry.audioLevel);
               const trackId = String(entry.trackIdentifier || "");
               if (!Number.isFinite(level) || !trackId) continue;
+              audio = true;
               levels.push({
                 page_ms: stamp,
                 source: trackSource(trackId),
@@ -161,11 +193,169 @@
               continue;
             }
           }
+          statsDiag.set(trackKey, {
+            track: trackKey,
+            types: types.slice(0, 12),
+            entries: listed.length,
+            audio,
+            error: null,
+          });
         }
       }
       trim(levels);
     } finally {
       levelsRunning = false;
+    }
+  }
+
+  function sampleMediaCensus() {
+    let elements = [];
+    try {
+      elements = Array.from(document.querySelectorAll("audio, video")).slice(0, 16);
+    } catch {
+      elements = [];
+    }
+    mediaCensus = elements.map((el) => {
+      const entry = {
+        tag: "",
+        hasSrcObject: false,
+        audioTracks: 0,
+        trackIds: [],
+        paused: true,
+        muted: true,
+        participantId: null,
+        tileName: null,
+      };
+      try {
+        entry.tag = String(el.tagName || "").toLowerCase();
+        const stream = el.srcObject;
+        entry.hasSrcObject = stream instanceof MediaStream;
+        if (entry.hasSrcObject) {
+          const tracks = stream.getAudioTracks();
+          entry.audioTracks = tracks.length;
+          entry.trackIds = tracks.map((track) => String(track.id || "").slice(0, 16));
+        }
+        entry.paused = !!el.paused;
+        entry.muted = !!el.muted;
+        const tile = el.closest("[data-participant-id]");
+        if (tile) {
+          entry.participantId = tile.getAttribute("data-participant-id") || null;
+          entry.tileName = tileName(tile) || null;
+        }
+      } catch {
+        /* keep defaults */
+      }
+      return entry;
+    });
+  }
+
+  function wrapAudioContext(name) {
+    const Original = window[name];
+    if (typeof Original !== "function" || Original.__fakeyouWrapped) return;
+    function Wrapped(...args) {
+      const ctx = new Original(...args);
+      audioContexts += 1;
+      try {
+        const originalSource = ctx.createMediaStreamSource;
+        if (typeof originalSource === "function") {
+          ctx.createMediaStreamSource = function (stream) {
+            const node = originalSource.call(this, stream);
+            try {
+              const tracks = stream ? stream.getAudioTracks() : [];
+              const key = tapKey(stream, tracks);
+              audioSources.push({
+                tracks: tracks.map((track) => String(track.id || "").slice(0, 16)),
+              });
+              if (audioSources.length > 16) audioSources.splice(0, 1);
+              const analyser = ctx.createAnalyser();
+              analyser.fftSize = 2048;
+              node.connect(analyser);
+              audioTaps.push({ analyser, key });
+              if (audioTaps.length > 16) audioTaps.splice(0, 1);
+            } catch {
+              /* diagnostics only */
+            }
+            return node;
+          };
+        }
+      } catch {
+        /* diagnostics only */
+      }
+      return ctx;
+    }
+    Wrapped.prototype = Original.prototype;
+    Object.setPrototypeOf(Wrapped, Original);
+    Wrapped.__fakeyouWrapped = true;
+    try {
+      window[name] = Wrapped;
+    } catch {
+      /* page locked the constructor */
+    }
+  }
+
+  function tapKey(stream, tracks) {
+    try {
+      if (tracks.length > 0 && tracks[0].id) return String(tracks[0].id);
+      if (stream && stream.id) return String(stream.id);
+    } catch {
+      /* fall through */
+    }
+    return "tap-" + audioTaps.length;
+  }
+
+  function sampleTapEnergy() {
+    const stamp = pageNow();
+    for (const tap of audioTaps) {
+      try {
+        tap.analyser.getFloatTimeDomainData(tapBuffer);
+        let sum = 0;
+        for (let index = 0; index < tapBuffer.length; index += 1) {
+          sum += tapBuffer[index] * tapBuffer[index];
+        }
+        levels.push({
+          page_ms: stamp,
+          source: trackSource(tap.key),
+          audioLevel: Math.sqrt(sum / tapBuffer.length),
+        });
+      } catch {
+        continue;
+      }
+    }
+    trim(levels);
+  }
+
+  async function sampleAudioTopology() {
+    if (topologyRunning) return;
+    topologyRunning = true;
+    try {
+      let entries = 0;
+      const types = [];
+      for (const peer of peers) {
+        if (!peer || typeof peer.getStats !== "function") continue;
+        let report = null;
+        try {
+          report = await statsWithTimeout(peer, STATS_TIMEOUT_MS);
+        } catch {
+          continue;
+        }
+        for (const entry of statEntries(report)) {
+          entries += 1;
+          try {
+            const kind = entry && entry.type ? String(entry.type) : "";
+            if (kind && !types.includes(kind)) types.push(kind);
+          } catch {
+            continue;
+          }
+        }
+      }
+      audioTopology = {
+        contexts: audioContexts,
+        sources: audioSources.slice(-16),
+        pc_stats_entries: entries,
+        pc_stats_types: types.slice(0, 12),
+      };
+    } finally {
+      topologyRunning = false;
     }
   }
 
@@ -217,6 +407,33 @@
     return found;
   }
 
+  function tileAria(tile) {
+    try {
+      return String(tile.getAttribute("aria-label") || "").slice(0, 200);
+    } catch {
+      return "";
+    }
+  }
+
+  function tileCls(tile) {
+    try {
+      const raw = tile.className && tile.className.baseVal !== undefined
+        ? ""
+        : String(tile.className || "");
+      return raw.slice(0, 500);
+    } catch {
+      return "";
+    }
+  }
+
+  function tileHtml(tile) {
+    try {
+      return String(tile.outerHTML || "").slice(0, 800);
+    } catch {
+      return "";
+    }
+  }
+
   function tileMuted(tile) {
     try {
       const muted = tile.querySelector("[data-is-muted]");
@@ -254,6 +471,9 @@
         self: tileSelf(tile, selfId),
         speaking: glowCandidates(tile),
         muted: tileMuted(tile),
+        aria: tileAria(tile),
+        cls: tileCls(tile),
+        html: tileHtml(tile),
       }));
     } catch {
       mapped = [];
@@ -291,8 +511,20 @@
     };
   }
 
+  wrapAudioContext("AudioContext");
+  wrapAudioContext("webkitAudioContext");
+  wrapAudioContext("OfflineAudioContext");
+
   setInterval(guarded(sampleSources), SAMPLE_MS);
   setInterval(guarded(sampleRoster), ROSTER_MS);
+  setInterval(guarded(sampleMediaCensus), ROSTER_MS);
+  setInterval(
+    guarded(() => {
+      sampleAudioTopology().catch(() => {});
+      sampleTapEnergy();
+    }),
+    ROSTER_MS
+  );
   setInterval(guarded(() => {
     sampleLevels().catch(() => {});
   }), LEVELS_MS);
@@ -304,11 +536,21 @@
           samples: samples.length,
           roster: roster.length,
           levels: levels.length,
+          census: mediaCensus ? mediaCensus.length : 0,
+          topology: audioTopology ? 1 : 0,
           peer_connections: peers.length,
           receiver_count: seenReceivers,
         };
       } catch {
-        return { samples: 0, roster: 0, levels: 0, peer_connections: 0, receiver_count: 0 };
+        return {
+          samples: 0,
+          roster: 0,
+          levels: 0,
+          census: 0,
+          topology: 0,
+          peer_connections: 0,
+          receiver_count: 0,
+        };
       }
     },
     drain() {
@@ -319,6 +561,14 @@
           receiver_count: seenReceivers,
           samples: samples.splice(0, samples.length),
           levels: levels.splice(0, levels.length),
+          stats_diag: Array.from(statsDiag.values()).slice(0, 16),
+          media_census: mediaCensus || [],
+          audio_topology: audioTopology || {
+            contexts: 0,
+            sources: [],
+            pc_stats_entries: 0,
+            pc_stats_types: [],
+          },
           roster: roster.splice(0, roster.length),
         };
       } catch {
@@ -328,6 +578,14 @@
           receiver_count: 0,
           samples: [],
           levels: [],
+          stats_diag: [],
+          media_census: [],
+          audio_topology: {
+            contexts: 0,
+            sources: [],
+            pc_stats_entries: 0,
+            pc_stats_types: [],
+          },
           roster: [],
         };
       }
