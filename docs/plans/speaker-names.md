@@ -4,7 +4,7 @@
 
 **Tujuan:** label suara per orang ("Speaker A") yang sudah stabil lewat CSRC diberi nama display dari roster Meet bila buktinya kuat. Nama dipakai sebagai klaim tampilan yang tidak terverifikasi di record, ingestion, dan debrief. Nama yang salah lebih buruk daripada label anonim.
 
-**Status:** rencana, 5 Oktober 2026. Basis `master` pada `92c05e8`. Buat branch `feat/speaker-names`. Jangan push/merge.
+**Status:** gate Task 1 GAGAL pada 6 Oktober 2026 ([laporan](../reports/2026-10-06-speaker-names-gate.md)); berhenti tanpa nama produksi. Basis `master` pada `92c05e8`. Branch `feat/speaker-names`. Jangan push/merge.
 
 **Keputusan pengguna (5 Oktober):** milestone berikutnya adalah nama speaker dari CSRC (dipilih atas latency, tindakan Meet, dan worker Kubernetes).
 
@@ -63,21 +63,21 @@
 
 ## Task 1 — Probe penanda DOM dan bukti roster
 
-- [ ] Tes merah (browser lokal, halaman uji):
+- [x] Tes merah (browser lokal, halaman uji):
   - probe merekam ringkasan seluruh turunan tile: daftar token `class` dan atribut `style` per jalur elemen, dalam bentuk ter-hash dan terbatas ukurannya;
   - probe merekam status mute per tile;
   - probe merekam waktu muncul dan hilangnya device di roster.
-- [ ] Analisis offline `probe_replay`:
+- [x] Analisis offline `probe_replay`:
   - Untuk tiap token turunan per tile, hitung presisi dan recall nyala-bersama terhadap aktivitas CSRC peserta tile itu (level frame ≥0,05). Pemetaan CSRC → peserta diambil dari ground truth sesi.
   - Laporkan token terbaik per sesi dan stabilitasnya lintas tile serta lintas sesi.
-- [ ] Sesi live di container: host dan sedikitnya dua manusia lain di ruangan berbeda. Skrip:
+- [x] Sesi live di container (SPK-1 dan SPK-2): host dan sedikitnya dua manusia lain di ruangan berbeda. Skrip:
   - satu peserta sudah ada sebelum twin masuk, satu join setelah twin;
   - giliran solo bergantian;
   - mute/unmute;
   - satu overlap;
   - satu rejoin dengan nama sama.
   Catat ground truth per giliran.
-- [ ] Gate lanjut ke Task 2: ada penanda dengan presisi ≥0,98 dan recall ≥0,5 terhadap aktivitas CSRC, atau eliminasi join+mute sendiri memberi presisi nama ≥0,98 dengan cakupan yang dilaporkan. Bila gate gagal, laporkan dan berhenti tanpa memasang nama produksi.
+- [x] Gate lanjut ke Task 2: GAGAL. Dua sesi live (SPK-1, SPK-2): penanda terbaik 0,93/0,16; eliminasi cakupan 0 (sinyal mute absen 0/23.556 tile, jeda join→bicara 10–24 dtk). Dilaporkan di [2026-10-06](../reports/2026-10-06-speaker-names-gate.md); Task 2–4 tidak dijalankan.
 
 ## Task 2 — Binder CSRC ↔ device
 
