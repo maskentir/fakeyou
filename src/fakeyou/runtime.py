@@ -264,6 +264,7 @@ class _MeetingWorker:
             "join_finished",
             source="runtime",
             status=result.status,
+            detail=result.detail,
             duration_ms=(self.monotonic() - started) * 1000,
             audio_ready=self.audio is not None,
         )

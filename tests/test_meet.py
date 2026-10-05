@@ -221,6 +221,18 @@ async def test_request_guest_join_fails_without_name_field() -> None:
     assert "name field" in result.detail
 
 
+async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
+    page = meet_page([IN_CALL], wait_flaky={NAME_SELECTOR: 6})
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+    )
+
+    assert result.status == "admitted"
+    assert NAME_SELECTOR in page.waited
+
+
 async def test_request_guest_join_fails_without_join_button() -> None:
     page = meet_page([], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [0]})
     clock = FakeClock()

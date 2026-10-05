@@ -619,3 +619,20 @@ async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path) -> N
     assert evidence.read_text(encoding="utf-8").splitlines() == lines_before
     assert len(page.evaluate_calls) == polls_before
     assert worker.audio.events == ["audio_stopped"]
+
+
+async def test_run_meeting_session_journals_why_the_join_failed() -> None:
+    browser = FakePageSession(meet_page([], counts={NAME_SELECTOR: [0]}))
+    journal = RecordingJournal()
+    clock = FakeClock()
+    await run_meeting_session(
+        _config(),
+        open_page=browser.open,
+        saver_factory=FakeSaverSession().factory,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        journal=journal,
+    )
+    [finished] = journal.events("join_finished")
+    assert finished["status"] == "failed"
+    assert "name field" in finished["detail"]

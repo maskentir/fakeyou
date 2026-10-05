@@ -101,6 +101,10 @@ class FakeLocator:
     async def wait_for(self, **kwargs: Any) -> None:
         if self.selector in self._page.wait_failures:
             raise RuntimeError(f"wait failed: {self.selector}")
+        remaining = self._page.wait_flaky.get(self.selector, 0)
+        if remaining > 0:
+            self._page.wait_flaky[self.selector] = remaining - 1
+            raise RuntimeError(f"not visible yet: {self.selector}")
         self._page.waited.append(self.selector)
 
     async def is_visible(self) -> bool:
@@ -127,6 +131,7 @@ class FakePage:
         counts: dict[str, list[int]] | None = None,
         click_failures: Iterable[str] = (),
         click_flaky: dict[str, int] | None = None,
+        wait_flaky: dict[str, int] | None = None,
         type_failures: Iterable[str] = (),
         goto_failures: int = 0,
         visible: dict[str, bool | Exception] | None = None,
@@ -140,6 +145,7 @@ class FakePage:
         self.counts = {key: list(value) for key, value in (counts or {}).items()}
         self.click_failures = set(click_failures)
         self.click_flaky = dict(click_flaky or {})
+        self.wait_flaky = dict(wait_flaky or {})
         self.visible = dict(visible or {})
         self.wait_failures = set(wait_failures)
         self.type_failures = set(type_failures)

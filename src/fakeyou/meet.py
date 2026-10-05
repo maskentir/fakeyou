@@ -51,6 +51,7 @@ _CAPTCHA_PROBE = """(() => {
 
 _TYPE_DELAY_MS = 90
 _CLICK_ATTEMPTS = 3
+_NAME_FIELD_ATTEMPTS = 10
 _CLICK_TIMEOUT_MS = 5000
 _CLICK_WAIT_MS = 2000
 _CLICK_RETRY_DELAY_SECONDS = 1.0
@@ -228,6 +229,7 @@ async def _enter_twin_name(
         partial(page.get_by_placeholder, signals.name_field),
         "name field",
         sleep,
+        _NAME_FIELD_ATTEMPTS,
     )
     if failure is not None:
         return failure
