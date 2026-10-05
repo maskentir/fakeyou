@@ -42,6 +42,10 @@ class PathSettings(Section):
     browser_profile_dir: Path = Path(".runtime/profiles")
 
 
+class CheckpointSettings(Section):
+    url: SecretStr | None = None
+
+
 class SpeechSettings(Section):
     language: Literal["id", "en"] = "id"
 
@@ -250,6 +254,7 @@ class WorkerSettings(Section):
 class Configuration(Section):
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     paths: PathSettings = Field(default_factory=PathSettings)
+    checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None

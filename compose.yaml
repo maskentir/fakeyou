@@ -18,6 +18,7 @@ services:
     env_file: .env
     environment:
       EMBEDDING_DIM: ${FAKEYOU_MEMORY__EMBEDDER__DIM:-1024}
+      FAKEYOU_CHECKPOINT__URL: ${FAKEYOU_COMPOSE_WORKER_CHECKPOINT_URL:-}
       FAKEYOU_BROWSER__HEADLESS: "false"
       # PULSE defaults follow src/fakeyou/audio.py as source of truth; override via env.
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}

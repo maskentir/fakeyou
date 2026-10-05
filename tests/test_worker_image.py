@@ -1,6 +1,10 @@
+import asyncio
+import os
 import shutil
 import subprocess
 import time
+from contextlib import suppress
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -56,3 +60,93 @@ def test_worker_image_waits_for_graceful_shutdown_after_sigint() -> None:
     assert "graceful-done" in log, log
     assert '"exit_code":0' in log, log
     assert exit_code == 0
+
+
+@pytest.mark.container
+@pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
+def test_worker_image_installs_the_postgres_checkpointer() -> None:
+    probe = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "run",
+            "-T",
+            "--rm",
+            "--no-deps",
+            "meeting-worker",
+            "python",
+            "-c",
+            "from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver;"
+            "from fakeyou.checkpoint import open_checkpointer;"
+            "print('pg-checkpointer-ok')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "pg-checkpointer-ok" in probe.stdout, probe.stdout + probe.stderr
+
+
+def _postgres_dsn() -> str:
+    password = os.environ.get("POSTGRES_PASSWORD", "fakeyou-local-only")
+    return f"postgresql://fakeyou:{password}@127.0.0.1:5432/fakeyou"
+
+
+@pytest.mark.container
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker is required")
+async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
+    from fakeyou.checkpoint import open_checkpointer
+    from fakeyou.lifecycle import MeetingLifecycle, meeting_thread_id
+
+    environment = {
+        **os.environ,
+        "FAKEYOU_MEMORY__STORE__PASSWORD": os.environ.get(
+            "FAKEYOU_MEMORY__STORE__PASSWORD", "probe-only"
+        ),
+    }
+    started = await asyncio.to_thread(
+        subprocess.run,
+        ["docker", "compose", "--profile", "production", "up", "-d", "postgres"],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert started.returncode == 0, started.stderr
+    dsn = _postgres_dsn()
+    deadline = time.monotonic() + 300
+    while True:
+        try:
+            async with open_checkpointer(Path("unused"), dsn=dsn):
+                break
+        except Exception as error:
+            if time.monotonic() >= deadline:
+                pytest.fail(f"postgres did not become ready: {error}")
+            await asyncio.sleep(2)
+    threads = [meeting_thread_id("pg-probe-twin", f"pg-probe-{name}") for name in ("a", "b")]
+    try:
+        async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+            first = MeetingLifecycle("pg-probe-owner", "pg-probe-twin", "pg-probe-a", saver)
+            await first.initialize()
+            await first.send("join_requested", "owner_action", "probe")
+            second = MeetingLifecycle("pg-probe-owner", "pg-probe-twin", "pg-probe-b", saver)
+            await second.initialize()
+            stored = [
+                await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
+                for thread_id in threads
+            ]
+            assert stored[0] is not None and stored[1] is not None
+            assert stored[0].checkpoint["channel_values"]["phase"] == "lobby"
+            assert stored[1].checkpoint["channel_values"]["phase"] == "preparing"
+        async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+            reopened = [
+                await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
+                for thread_id in threads
+            ]
+            assert reopened[0] is not None and reopened[1] is not None
+            assert reopened[0].checkpoint["channel_values"]["phase"] == "lobby"
+            assert reopened[1].checkpoint["channel_values"]["phase"] == "preparing"
+    finally:
+        with suppress(Exception):
+            async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+                for thread_id in threads:
+                    await saver.adelete_thread(thread_id)

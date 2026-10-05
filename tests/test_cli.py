@@ -542,7 +542,7 @@ async def _join_with_audio(
     monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(value):
+    async def fake_saver(value, dsn=None):
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
@@ -1044,7 +1044,7 @@ async def _join_persona_conversation(
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
     @asynccontextmanager
-    async def memory_saver(_value):
+    async def memory_saver(_value, dsn=None):
         yield InMemorySaver()
 
     if not native_checkpointer:
@@ -1401,7 +1401,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
     )
 
     @asynccontextmanager
-    async def tracked_saver(_value):
+    async def tracked_saver(_value, dsn=None):
         saver_events.append("open")
         try:
             yield InMemorySaver()

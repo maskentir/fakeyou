@@ -494,7 +494,7 @@ async def run_meeting_session(
         saver = await resources.enter_async_context(
             saver_factory()
             if saver_factory is not None
-            else open_checkpointer(config.checkpoint_path)
+            else open_checkpointer(config.checkpoint_path, dsn=config.checkpoint_dsn)
         )
         lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
         await lifecycle.initialize()

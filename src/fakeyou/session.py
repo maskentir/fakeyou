@@ -75,6 +75,7 @@ class SessionConfig:
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     checkpoint_path: Path = DEFAULTS.paths.checkpoint_path
+    checkpoint_dsn: str | None = field(default=None, repr=False)
     browser_profile_dir: Path | None = None
     warmup_browser: bool = DEFAULTS.browser.warmup
     headless: bool = DEFAULTS.browser.headless

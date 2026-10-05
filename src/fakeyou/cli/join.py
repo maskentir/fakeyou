@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from graphiti_core import Graphiti
 from pipecat.frames.frames import TranscriptionFrame
+from psycopg import Error as PsycopgError
 from pydantic import ValidationError
 
 from fakeyou.assembly import open_conversation, stop_signal_handlers
@@ -29,7 +30,7 @@ from fakeyou.brief import (
     write_meeting_context,
 )
 from fakeyou.browser import ProfileInUseError, profile_lock
-from fakeyou.checkpoint import open_checkpointer
+from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
 from fakeyou.cli.errors import FAILURE_EXIT_CODES, CliError
 from fakeyou.cli.memory import load_operator_persona
 from fakeyou.conversation import (
@@ -165,6 +166,7 @@ async def join_meeting(
         if settings.browser.license_key
         else None,
         checkpoint_path=settings.paths.checkpoint_path,
+        checkpoint_dsn=checkpoint_dsn(settings),
     )
     profile: PersonaProfile | None = None
     brief: MeetingBrief | None = None
@@ -514,7 +516,9 @@ async def _settle_meeting_context(
             )
         return True
     thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
-    if await _has_conversation(record_path, config.checkpoint_path, thread_id):
+    if await _has_conversation(
+        record_path, config.checkpoint_path, thread_id, dsn=config.checkpoint_dsn
+    ):
         raise CliError(
             f"meeting {config.meeting_id} already has conversation data without a meeting "
             "context; use a new meeting ID for --brief"
@@ -526,15 +530,17 @@ async def _settle_meeting_context(
     return False
 
 
-async def _has_conversation(record_path: Path, checkpoint_path: Path, thread_id: str) -> bool:
+async def _has_conversation(
+    record_path: Path, checkpoint_path: Path, thread_id: str, dsn: str | None = None
+) -> bool:
     if await asyncio.to_thread(_has_entries, record_path):
         return True
     try:
-        if not await asyncio.to_thread(checkpoint_path.exists):
+        if dsn is None and not await asyncio.to_thread(checkpoint_path.exists):
             return False
-        async with open_checkpointer(checkpoint_path) as saver:
+        async with open_checkpointer(checkpoint_path, dsn=dsn) as saver:
             return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
-    except (sqlite3.Error, OSError) as error:
+    except (sqlite3.Error, OSError, PsycopgError) as error:
         raise CliError(
             f"conversation checkpoint cannot be checked: {type(error).__name__}"
         ) from None

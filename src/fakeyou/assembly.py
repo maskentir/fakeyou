@@ -15,7 +15,7 @@ from fakeyou.agent import (
     create_meeting_agent,
 )
 from fakeyou.brief import MeetingBrief
-from fakeyou.checkpoint import open_checkpointer
+from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
@@ -98,7 +98,7 @@ async def open_conversation(
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            open_checkpointer(settings.paths.checkpoint_path)
+            open_checkpointer(settings.paths.checkpoint_path, dsn=checkpoint_dsn(settings))
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []

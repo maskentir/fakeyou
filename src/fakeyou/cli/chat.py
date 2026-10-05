@@ -8,7 +8,7 @@ from fakeyou.agent import (
 )
 from fakeyou.assembly import default_persona
 from fakeyou.browser import open_browser_tools
-from fakeyou.checkpoint import open_checkpointer
+from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
 from fakeyou.cli.errors import CliError
 from fakeyou.memory import (
     create_memory_tools,
@@ -28,7 +28,7 @@ async def chat(
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            open_checkpointer(settings.paths.checkpoint_path)
+            open_checkpointer(settings.paths.checkpoint_path, dsn=checkpoint_dsn(settings))
         )
         tools: list[BaseTool] = []
         if use_memory:

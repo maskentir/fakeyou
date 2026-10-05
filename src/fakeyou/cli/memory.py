@@ -14,7 +14,7 @@ from graphiti_core import Graphiti
 from pydantic import TypeAdapter
 
 from fakeyou.assembly import stop_signal_handlers
-from fakeyou.checkpoint import open_checkpointer
+from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
 from fakeyou.cli.errors import CliError
 from fakeyou.conversation import (
     conversation_thread_id,
@@ -507,9 +507,10 @@ async def forget_meeting_files(
     ]
     for path in removed_journals:
         path.unlink()
-    thread_removed = settings.paths.checkpoint_path.exists()
+    dsn = checkpoint_dsn(settings)
+    thread_removed = dsn is not None or settings.paths.checkpoint_path.exists()
     if thread_removed:
-        async with open_checkpointer(settings.paths.checkpoint_path) as saver:
+        async with open_checkpointer(settings.paths.checkpoint_path, dsn=dsn) as saver:
             await saver.adelete_thread(
                 conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id)
             )
