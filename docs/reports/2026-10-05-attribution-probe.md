@@ -35,8 +35,8 @@ tersimpan di `.runtime/participant-attribution/`.
 - **CSRC/SSRC/getStats lumpuh total.** `getContributingSources`,
   `getSynchronizationSources`, `receiver.getStats()`, dan
   `peer.getStats()` semuanya kosong sementara media mengalir normal
-  (STT bekerja). Pola khas perisai WebRTC pada browser stealth;
-  jalur Attendee tidak dapat dipakai di stack ini.
+  (STT bekerja). Penyebabnya patch WebRTC di binary CloakBrowser,
+  bukan Meet; lihat [addendum riset](#addendum-riset-perisai-webrtc-cloakbrowser).
 - **Tidak ada elemen media.** Meet merutekan audio lewat WebAudio
   (2 AudioContext, 6 MediaStreamSource per sesi), bukan elemen
   `<audio>` per peserta. Pola capture per elemen Vexa tidak
@@ -48,13 +48,12 @@ tersimpan di `.runtime/participant-attribution/`.
   pelan (ruang sama), ditangani aturan dominan bermargin 0,5
   ala resolver Zoom. Meet memakai 2 konteks audio dan 6 sumber
   media per sesi pada pengamatan ini.
-- **Track didaur ulang saat rejoin.** Ucapan B setelah rejoin
-  tiba di tap lama yang sama (indeks 4), kabar baik untuk
-  stabilitas label anonim.
+- **Track didaur ulang saat rejoin.** (Dikoreksi di
+  [addendum](#koreksi-atas-temuan-awal): indeks tap adalah slot
+  audio Meet yang berpindah antar-join, bukan identitas.)
 - **Rename teramati.** B berganti nama display dua kali
-  (`Mela` → `m` → `n`) dalam satu sesi; aturan acuan yang
-  menganggap nama berbeda sebagai pembicara berbeda ikut gagal.
-  Label anonim harus diikat ke sumber, bukan ke nama.
+  (`Mela` → `m` → `n`) dalam satu sesi. (Dikoreksi: ini tiga
+  join tamu terpisah, bukan rename di dalam panggilan.)
 - **Penanda bicara DOM tidak ada.** Kandidat rantai LMA (ES310d)
   0/36, kelas dikenal Vexa 0/36, pindaian `aria-label` kosong,
   dan diff HTML tile (akar + anak awal) antara bicara dan diam
@@ -66,10 +65,9 @@ tersimpan di `.runtime/participant-attribution/`.
   Task 4 tidak dapat mengandalkan penanda ini; sinyal
   pengganti yang tersedia adalah korelasi playback TTS milik
   twin (diketahui dari jurnal).
-- **Lag tap lawan VAD median −781 ms.** Tanda negatif adalah
-  keterlambatan pipa (tepi VAD dicap saat tiba, bukan saat
-  sumber), tepat seperti yang diperkirakan rencana; Task 2
-  (jam sampel) dirancang untuk ini.
+- **Lag tap lawan VAD median −781 ms.** (Dikoreksi di
+  addendum: angka ini artefak metrik onset; lag pipa sebenarnya
+  sekitar 200 ms.)
 - **Enam miss konsistensi sumber, semuanya terjelaskan.**
   Dua jendela VAD serpihan 0,35 detik yang salah petik atau
   kosong energi pada giliran berjarak <2 detik; satu transkrip
@@ -120,3 +118,62 @@ nama, dan gate dinyatakan gagal.
   throttle Meet atas join cepat berulang. Belum diselidiki
   sampai akar karena sesi berikutnya masuk.
 - `.env` sesi dikembalikan dari backup; flag probe mati lagi.
+
+## Addendum riset perisai WebRTC CloakBrowser
+
+Attendee dan Vexa bisa membaca CSRC karena berjalan di
+Chrome/Chromium biasa. Pertanyaannya: apakah CloakBrowser punya
+switch untuk mematikan perisainya? Jawabannya tidak.
+
+Eksperimen loopback lokal: dua `RTCPeerConnection` di satu
+halaman, oscillator dikirim lewat track audio, lalu receiver
+dibaca setelah 3 detik.
+
+| Browser | SSRC | `inbound-rtp` |
+| --- | --- | --- |
+| Chromium Playwright biasa | 1 sumber, `audioLevel` 0,708 | 1 entri, 150 paket |
+| CloakBrowser 0.5.11 default | kosong | kosong |
+| CloakBrowser `stealth_args=False` | kosong | kosong |
+| CloakBrowser `--fingerprint-noise=false` | kosong | kosong |
+| CloakBrowser keduanya dimatikan | kosong | kosong |
+
+- README resmi hanya mendokumentasikan `--fingerprint-webrtc-ip`
+  (IP palsu) dan `--fingerprint-noise=false` (noise canvas,
+  WebGL, audio, client rects). Tidak satu pun membuka statistik
+  RTP.
+- Pindaian string binary Chromium 145.0.7632.109.2 (Mac) hanya
+  memunculkan switch `fingerprint-*` untuk brand, memori,
+  GPU, platform, layar, lokasi, dan timezone, ditambah
+  `webrtc-ip-handling-policy` bawaan Chromium. Tidak ada switch
+  statistik WebRTC.
+- Kesimpulan: perisai stats dikompilasi di binary dan aktif tanpa
+  syarat, termasuk di image worker Linux (sesi probe-attr-1..7).
+  Pada stack CloakBrowser, CSRC tidak dapat dipakai.
+- Jalan memperoleh CSRC hanyalah mengganti browser meeting ke
+  Chromium/Chrome biasa dengan resep anti-blokir Vexa (headed di
+  Xvfb, flag bersih, stealth init script, input humanized). Repo
+  ini belum punya bukti bahwa jalur itu diblokir Meet, tetapi juga
+  belum mengujinya. Itu eksperimen admission tersendiri dengan
+  risiko pada keandalan join.
+- Nilai CSRC bagi kita: identitas sumber per join yang tidak
+  bergantung pada slot, sehingga lebih dari tiga pembicara tetap
+  terpisah. Nama tetap tidak tersedia tanpa protokol privat Meet,
+  yang memang tidak kita pakai.
+
+## Koreksi atas temuan awal
+
+- **Indeks tap = slot audio Meet, bukan orang.** Ada tiga slot
+  remote (indeks 3, 4, 5); indeks 0–2 mendekati nol. Timeline
+  roster menunjukkan B keluar dan masuk lagi sebagai tamu baru
+  dengan device berbeda (`devices/454` Mela → `455` m →
+  `456` n). Slot B berpindah 4 → 5 → 4. Kembalinya B ke slot 4
+  hanya kebetulan daur ulang slot. Label dari slot hanya sah dalam
+  satu join, sesuai pelajaran Vexa bahwa slot bukan identitas.
+- **Lag pipa ≈ 200 ms, bukan 781 ms.** Pemindaian kesesuaian
+  antara aktivitas tap (≥0,01) dan status VAD memberi geseran
+  terbaik 200 ms (kesesuaian 0,882; 150 ms 0,878; 250 ms 0,881),
+  sama dengan `start_secs`/`stop_secs` Silero 0,2 detik. Angka
+  −781 ms berasal dari metrik "sampel aktif pertama dalam
+  [mulai − 1000 ms, akhir]" yang bias ke jendela lead.
+- Implementasi label anonim yang memakai koreksi ini dilaporkan di
+  [laporan label suara](2026-10-05-voice-labels.md).

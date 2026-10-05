@@ -65,6 +65,7 @@ from fakeyou.session import SessionConfig, SessionResult
 from fakeyou.settings import (
     Settings,
 )
+from fakeyou.voice_activity import VoiceActivityTracker
 
 
 async def join_meeting(
@@ -302,7 +303,15 @@ async def join_meeting(
                             detail=detail,
                         )
 
+                    voice_activity = (
+                        VoiceActivityTracker(twin_name=config.twin_name)
+                        if settings.conversation.voice_labels_enabled and audio_enabled
+                        else None
+                    )
+
                     def log_playback(event: PlaybackEvent) -> None:
+                        if voice_activity is not None:
+                            voice_activity.observe_self_speech(event.kind == "playback_started")
                         journal.record(
                             event.kind,
                             source="playback",
@@ -332,7 +341,16 @@ async def join_meeting(
                         )
 
                     async def transcript(frame: TranscriptionFrame) -> None:
-                        event = transcript_event(frame, "unknown", None)
+                        attribution = (
+                            voice_activity.attribute() if voice_activity is not None else None
+                        )
+                        event = (
+                            transcript_event(frame, "unknown", None)
+                            if attribution is None
+                            else transcript_event(
+                                frame, attribution.participant_id, attribution.evidence_id
+                            )
+                        )
                         journal.record(
                             "transcript_finalized",
                             source="stt",
@@ -342,6 +360,7 @@ async def join_meeting(
                             speaker_evidence_id=event.speaker_evidence_id,
                             spoken_at=event.timestamp,
                             finalized=event.finalized,
+                            **(attribution.journal_fields() if attribution is not None else {}),
                         )
                         record.add_transcript(event)
                         if conversation is not None:
@@ -360,6 +379,7 @@ async def join_meeting(
                         audio_factory = partial(
                             open_meeting_audio,
                             probe=audio_probe,
+                            voice_activity=voice_activity,
                             tts_settings=settings.tts,
                             speech_language=settings.speech.language,
                             stt_settings=settings.stt,
@@ -395,6 +415,7 @@ async def join_meeting(
                                 conversation=conversation,
                                 faults=faults,
                                 journal=journal,
+                                voice_activity=voice_activity,
                                 **preflight_kwargs,
                             )
                     result = session_result

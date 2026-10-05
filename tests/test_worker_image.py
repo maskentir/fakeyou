@@ -28,7 +28,7 @@ def _worker_image_available() -> bool:
 
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
-def test_worker_image_ships_the_attribution_probe_asset() -> None:
+def test_worker_image_ships_page_script_assets() -> None:
     probe = subprocess.run(
         [
             "docker",
@@ -41,14 +41,15 @@ def test_worker_image_ships_the_attribution_probe_asset() -> None:
             "python",
             "-c",
             "from fakeyou.attribution_probe import load_probe_script;"
-            "script = load_probe_script();"
-            "assert '__fakeyouAttributionProbe' in script;"
-            "print('probe-asset-ok')",
+            "from fakeyou.voice_activity import load_voice_activity_script;"
+            "assert '__fakeyouAttributionProbe' in load_probe_script();"
+            "assert '__fakeyouVoiceActivity' in load_voice_activity_script();"
+            "print('page-assets-ok')",
         ],
         capture_output=True,
         text=True,
     )
-    assert "probe-asset-ok" in probe.stdout, probe.stdout + probe.stderr
+    assert "page-assets-ok" in probe.stdout, probe.stdout + probe.stderr
 
 
 @pytest.mark.container

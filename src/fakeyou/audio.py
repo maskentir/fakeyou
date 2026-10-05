@@ -55,6 +55,7 @@ from fakeyou.playback import (
 from fakeyou.provider_faults import category_fault, classify_exception
 from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings, require_secret
 from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
+from fakeyou.voice_activity import VoiceActivityTracker
 
 STOP_DEADLINE_SECONDS = 8.0
 
@@ -133,11 +134,13 @@ class _CaptureObserver(FrameProcessor):
         activity: CaptureActivity,
         journal: Journal | None = None,
         probe: AttributionProbe | None = None,
+        voice_activity: VoiceActivityTracker | None = None,
     ) -> None:
         super().__init__()
         self._activity = activity
         self._journal = journal
         self._probe = probe
+        self._voice_activity = voice_activity
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -168,6 +171,8 @@ class _CaptureObserver(FrameProcessor):
             self._journal.record(event, source="audio")
 
     def _observe_vad(self, active: bool) -> None:
+        if self._voice_activity is not None:
+            self._voice_activity.observe_vad(active)
         if self._probe is None:
             return
         try:
@@ -525,6 +530,7 @@ async def open_meeting_audio(
     tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
     probe: AttributionProbe | None = None,
+    voice_activity: VoiceActivityTracker | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -564,7 +570,7 @@ async def open_meeting_audio(
                         VADProcessor(
                             vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
                         ),
-                        _CaptureObserver(activity, journal, probe),
+                        _CaptureObserver(activity, journal, probe, voice_activity),
                         stt,
                         _TranscriptObserver(
                             on_transcript, activity, faults, on_interim, journal=journal

@@ -128,8 +128,11 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         elif event == "transcript_finalized":
             utterances += 1
             speaker_id = row.get("participant_id")
+            speaker_reason = row.get("speaker_reason")
             if isinstance(speaker_id, str) and speaker_id != "unknown":
                 attributed += 1
+            elif isinstance(speaker_reason, str):
+                unknown_reasons[speaker_reason] += 1
             elif row.get("speaker_evidence_id") is None:
                 unknown_reasons["no_evidence"] += 1
             else:

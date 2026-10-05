@@ -22,6 +22,8 @@
 
 **Prioritas berikutnya, 5 Oktober (atribusi participant):** [bukti berlapis di satu jam](participant-attribution.md). Operasi worker sudah digabung. Atribusi dibangun dari pelajaran Attendee, Vexa, dan LMA tanpa Meet Media API dan tanpa protokol privat Meet: aktivitas per sumber dari API WebRTC standar, nama dari DOM berlapis, dan jendela ucapan pada jam audio, dimulai dengan gate probe.
 
+**Hasil atribusi participant, 5 Oktober:** gate nama gagal ([laporan probe](../reports/2026-10-05-attribution-probe.md)); CSRC diblokir patch WebRTC CloakBrowser tanpa switch. Yang dipasang di balik flag default mati adalah label suara anonim per join dari tap WebAudio dengan binder slot ke roster ([laporan](../reports/2026-10-05-voice-labels.md)). Replay: stabilitas per join 0,971 dan overlap menjadi `unknown` 1/1. Acceptance live dan penyatuan label lintas rejoin (embedding suara, atau CSRC lewat browser lain) masih terbuka.
+
 **Prioritas berikutnya, 5 Oktober (operasi worker):** [kontrol, isolasi, pemulihan, dan ingestion worker](worker-operations.md). Dipilih pengguna sebagai milestone berikutnya: backend Docker lokal lebih dulu dengan antarmuka yang nanti dapat diganti Kubernetes, dan checkpoint Postgres untuk worker paralel. Latency live tetap gate terbuka; adu model ditunda atas keputusan pengguna.
 
 **Prioritas berikutnya, 5 Oktober (pemulihan latency):** [pemulihan latency live tanpa mengorbankan c04](latency-recovery.md). Semua gate semantik kini lulus pada penalaran default dan penyangkalan c04 turun ke 3,3%, tetapi latency live mundur (p50 5,18 s, p95 7,43 s) karena agent lebih lambat setelah evidence memuat identitas penutur.

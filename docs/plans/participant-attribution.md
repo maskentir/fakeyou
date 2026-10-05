@@ -6,6 +6,8 @@
 
 **Status:** rencana, 5 Oktober 2026. Basis `master` pada `bf22ec3`. Buat branch `feat/participant-attribution`. Jangan push/merge.
 
+**Pembaruan 5 Oktober:** gate Task 1 gagal untuk penamaan ([laporan probe](../reports/2026-10-05-attribution-probe.md)). CSRC terblokir patch WebRTC CloakBrowser tanpa switch. Milestone dipersempit menjadi label suara anonim per join di balik flag default mati ([laporan label suara](../reports/2026-10-05-voice-labels.md)); Task 2–6 untuk nama tidak dijalankan.
+
 **Keputusan pengguna (5 Oktober):** bangun yang proper untuk jangka panjang dari pelajaran Attendee, Vexa, dan LMA; Meet Media API tidak dapat dipilih. Plan ini tidak memakai protokol privat Meet (data channel `collections`/protobuf) karena rapuh dan tidak terdokumentasi.
 
 ## Pelajaran yang dipakai

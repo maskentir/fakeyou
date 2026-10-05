@@ -222,6 +222,7 @@ class ConversationSettings(Section):
     sentence_streaming: bool = False
     participant_policy_enabled: bool = False
     attribution_probe_enabled: bool = False
+    voice_labels_enabled: bool = False
 
 
 class MeetingSettings(Section):

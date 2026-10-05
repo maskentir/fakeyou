@@ -33,6 +33,7 @@ from fakeyou.persona import PersonaProfile
 from fakeyou.providers import create_debrief_chat_model, create_fallback_chat_model
 from fakeyou.record import meeting_record_path
 from fakeyou.settings import Settings
+from fakeyou.voice_activity import voice_speaker_name
 
 
 def debrief_total_budget(settings: Settings, chunk_count: int) -> float:
@@ -181,6 +182,11 @@ async def _debrief_locked(
         if any(entry.participant_id == "unknown" for entry in snapshot.sources):
             limitations.append(
                 "Unknown participants have not been identified or mapped to the owner."
+            )
+        if any(voice_speaker_name(entry.participant_id) for entry in snapshot.sources):
+            limitations.append(
+                "Speaker labels are anonymous voice labels within this meeting, "
+                "not verified identities."
             )
         if fallback is not None:
             limitations.append(

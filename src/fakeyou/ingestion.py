@@ -13,8 +13,10 @@ from fakeyou.memory import meeting_episodes, meeting_saga
 from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 from fakeyou.settings import DEFAULTS
+from fakeyou.voice_activity import voice_speaker_name
 
 UNIDENTIFIED_PARTICIPANT = "Speaker with unverified identity"
+VOICE_SPEAKER_SUFFIX = " with unverified identity"
 TWIN_SPEAKER = "Digital twin"
 
 
@@ -49,7 +51,9 @@ class IngestResult:
     completed: bool
 
 
-def extraction_instructions(twin_name: str, vocabulary: Sequence[str]) -> str:
+def extraction_instructions(
+    twin_name: str, vocabulary: Sequence[str], *, voice_labels: bool = False
+) -> str:
     instructions = (
         f"Speaker '{TWIN_SPEAKER}' is the owner's digital twin speaking in a Google Meet meeting; "
         f"participants call it '{twin_name}', and that name means the same entity. "
@@ -64,6 +68,13 @@ def extraction_instructions(twin_name: str, vocabulary: Sequence[str]) -> str:
         "only the answer, statement, decision, or commitment is a fact. "
         "Write each fact in the language the speakers used."
     )
+    if voice_labels:
+        instructions += (
+            f" Speakers such as 'Speaker A{VOICE_SPEAKER_SUFFIX}' are anonymous voice labels "
+            "that hold only within this meeting; each may be the owner or any named person, so "
+            "never merge one with a named person, with another label, or with a label from "
+            "another meeting."
+        )
     if vocabulary:
         instructions += (
             " Known names and terms, spelled as the owner spells them; speech recognition may "
@@ -77,6 +88,13 @@ def episode_name(meeting_id: str, index: int) -> str:
     return f"{meeting_id}:w{index:05d}"
 
 
+def _speaker(participant_id: str) -> str:
+    if participant_id == "unknown":
+        return UNIDENTIFIED_PARTICIPANT
+    voice = voice_speaker_name(participant_id)
+    return participant_id if voice is None else voice + VOICE_SPEAKER_SUFFIX
+
+
 def meeting_windows(
     entries: Sequence[RecordEntry],
     *,
@@ -86,11 +104,7 @@ def meeting_windows(
     windows: list[list[Utterance]] = []
     for entry in entries:
         if isinstance(entry, TranscriptEntry):
-            speaker = (
-                UNIDENTIFIED_PARTICIPANT
-                if entry.participant_id == "unknown"
-                else entry.participant_id
-            )
+            speaker = _speaker(entry.participant_id)
             spoken = _spoken_moment(entry.spoken_at)
         elif isinstance(entry, TwinSpeechEntry):
             speaker = TWIN_SPEAKER
@@ -131,7 +145,14 @@ async def ingest_meeting(
     last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
     resumed_from = _next_window(last[-1].name, meeting_id) if last else 0
     previous_uuid = last[-1].uuid if last else None
-    instructions = extraction_instructions(twin_name, vocabulary)
+    instructions = extraction_instructions(
+        twin_name,
+        vocabulary,
+        voice_labels=any(
+            isinstance(entry, TranscriptEntry) and voice_speaker_name(entry.participant_id)
+            for entry in entries
+        ),
+    )
     ingested = facts = 0
     completed = True
     for index in range(resumed_from, len(windows)):

@@ -51,6 +51,11 @@ from fakeyou.session import (
     SupportsAdmission,
     SupportsMaintenance,
 )
+from fakeyou.voice_activity import (
+    VoiceActivityLoop,
+    VoiceActivityTracker,
+    load_voice_activity_script,
+)
 from fakeyou.watchdog import UIWatchdog
 
 
@@ -128,6 +133,8 @@ class _MeetingWorker:
     journal: Journal | None = None
     observer: ParticipantObserver | None = None
     probe_drain: ProbeDrainLoop | None = None
+    voice_activity: VoiceActivityTracker | None = None
+    voice_loop: VoiceActivityLoop | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -238,7 +245,7 @@ class _MeetingWorker:
         )
         probe_scripts = (
             (load_probe_script(),) if self.config.attribution_probe_path is not None else ()
-        )
+        ) + ((load_voice_activity_script(),) if self.voice_activity is not None else ())
         result = await _until_stopped(
             request_guest_join(
                 self.page,
@@ -313,6 +320,18 @@ class _MeetingWorker:
         await self.probe_drain.start()
         self.record("attribution_probe_started", source="runtime")
 
+    async def start_voice_activity(self) -> None:
+        if self.voice_loop is not None or self.voice_activity is None:
+            return
+        self.voice_loop = VoiceActivityLoop(self.page, self.voice_activity)
+        await self.voice_loop.start()
+        self.record("voice_activity_started", source="runtime")
+
+    async def close_voice_activity(self) -> None:
+        if self.voice_loop is not None:
+            await close_safely(self.voice_loop.close, source="browser", faults=self.faults)
+            self.voice_loop = None
+
     async def close_probe_drain(self) -> None:
         if self.probe_drain is not None:
             await close_safely(self.probe_drain.close, source="browser", faults=self.faults)
@@ -334,8 +353,16 @@ class _MeetingWorker:
                     self.faults.record(
                         classify_exception("browser", error, operation="attribution_probe")
                     )
+            try:
+                await self.start_voice_activity()
+            except Exception as error:
+                if self.faults is not None:
+                    self.faults.record(
+                        classify_exception("browser", error, operation="voice_activity")
+                    )
             return await self._monitor_loop(admitted_at)
         finally:
+            await self.close_voice_activity()
             await self.close_probe_drain()
             await self.close_participant_observer()
 
@@ -516,6 +543,7 @@ async def run_meeting_session(
     preflight: Callable[[], Coroutine[Any, Any, list[ProbeResult]]] | None = None,
     preflight_hosts: tuple[str, ...] | None = None,
     preflight_budget_seconds: float | None = None,
+    voice_activity: VoiceActivityTracker | None = None,
 ) -> SessionResult:
     if initial_speech is not None and open_audio is None:
         raise ValueError("initial speech requires meeting audio")
@@ -617,6 +645,7 @@ async def run_meeting_session(
                                 conversation,
                                 faults=faults,
                                 journal=journal,
+                                voice_activity=voice_activity,
                             )
                             detail = await worker.run()
             except asyncio.CancelledError:

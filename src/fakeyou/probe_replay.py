@@ -1,9 +1,12 @@
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from math import ceil, isfinite
 from pathlib import Path
 from typing import Any
+
+from fakeyou.voice_activity import VoiceActivityTracker, VoiceAttribution
 
 SOURCE_ACTIVE_THRESHOLD = 0.01
 DOMINANT_MARGIN = 0.5
@@ -565,3 +568,155 @@ def _label_stability(
         if active == {dominant.get(str(window.get("speaker", "")))}:
             stable += 1
     return (stable / denominator) if denominator else None
+
+
+def _load_rows(path: Path) -> list[Mapping[str, Any]]:
+    rows: list[Mapping[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, Mapping):
+            rows.append(row)
+    return rows
+
+
+def voice_fixture_from_probe(
+    probe_path: Path,
+    record_path: Path,
+    truth_path: Path,
+    *,
+    twin_name: str,
+    aliases: Mapping[str, str],
+    persons: Mapping[str, str],
+) -> dict[str, Any]:
+    probe_rows = _load_rows(probe_path)
+    pages = [row for row in probe_rows if row.get("kind") == "page"]
+    wall_offset = _median(
+        [
+            float(row["mono_ms"]) - wall.timestamp() * 1000.0
+            for row in pages
+            if (wall := _parse_wall(row.get("wall"))) is not None
+        ]
+    )
+    devices: dict[str, str] = {}
+    events: list[dict[str, Any]] = []
+    for row in probe_rows:
+        if row.get("kind") == "vad":
+            events.append(
+                {"kind": "vad", "mono_ms": float(row["mono_ms"]), "active": bool(row["active"])}
+            )
+            continue
+        if row.get("kind") != "page":
+            continue
+        batch: dict[str, Any] = {
+            "instance": "probe",
+            "page_ms": float(row["page_ms"]),
+            "levels": [
+                [entry["page_ms"], source["source"], round(source["audioLevel"], 5)]
+                for entry in merge_levels(row.get("levels") or [])
+                for source in entry["sources"]
+                if source["audioLevel"] >= 0.001
+            ],
+        }
+        roster = row.get("roster")
+        if isinstance(roster, list) and roster and isinstance(roster[-1], Mapping):
+            tiles = roster[-1].get("tiles")
+            batch["participants"] = [
+                {
+                    "id": devices.setdefault(str(tile["id"]), f"devices/{len(devices) + 1}"),
+                    "name": aliases.get(str(tile.get("name", "")), "Participant"),
+                }
+                for tile in tiles or []
+                if isinstance(tile, Mapping) and tile.get("id")
+            ]
+        events.append({"kind": "page", "mono_ms": float(row["mono_ms"]), "batch": batch})
+    if wall_offset is not None:
+        for row in _load_rows(record_path):
+            at = _parse_wall(row.get("at"))
+            if row.get("kind") == "transcript" and at is not None:
+                events.append(
+                    {
+                        "kind": "transcript",
+                        "mono_ms": at.timestamp() * 1000.0 + wall_offset,
+                        "text": str(row.get("text", "")),
+                    }
+                )
+    events.sort(key=lambda event: event["mono_ms"])
+    truth = [
+        {
+            **turn,
+            "speaker": aliases.get(str(turn.get("speaker", "")), "Participant"),
+            "person": persons.get(aliases.get(str(turn.get("speaker", "")), ""), "unknown"),
+        }
+        for turn in json.loads(truth_path.read_text(encoding="utf-8"))
+    ]
+    return {"twin_name": twin_name, "events": events, "truth": truth}
+
+
+def replay_voice_labels(fixture: Mapping[str, Any]) -> dict[str, Any]:
+    clock_ms = [0.0]
+    tracker = VoiceActivityTracker(
+        twin_name=str(fixture.get("twin_name", "")), monotonic=lambda: clock_ms[0] / 1000.0
+    )
+    attributions: list[VoiceAttribution] = []
+    transcripts: list[dict[str, Any]] = []
+    for event in fixture["events"]:
+        clock_ms[0] = float(event["mono_ms"])
+        if event["kind"] == "page":
+            tracker.observe_batch(event["batch"], sent_ms=clock_ms[0], received_ms=clock_ms[0])
+        elif event["kind"] == "vad":
+            tracker.observe_vad(bool(event["active"]))
+        elif event["kind"] == "transcript":
+            transcripts.append({"text": event["text"], "wall": len(attributions)})
+            attributions.append(tracker.attribute())
+    truth = list(fixture["truth"])
+    persons = {turn.get("turn"): turn.get("person") for turn in truth}
+    aligned = align_turns(transcripts, truth)
+    solo = [(entry, attributions[entry["wall"]]) for entry in aligned if entry["kind"] == "solo"]
+    overlap = [attributions[entry["wall"]] for entry in aligned if entry["kind"] == "overlap"]
+    labeled = [(entry, voice) for entry, voice in solo if voice.participant_id != "unknown"]
+    by_join: dict[str, Counter[str]] = {}
+    by_label: dict[str, Counter[str]] = {}
+    by_person: dict[str, set[str]] = {}
+    for entry, voice in labeled:
+        join = str(entry["speaker"])
+        by_join.setdefault(join, Counter())[voice.participant_id] += 1
+        by_label.setdefault(voice.participant_id, Counter())[join] += 1
+        by_person.setdefault(str(persons.get(entry["turn"])), set()).add(voice.participant_id)
+    stable = sum(counts.most_common(1)[0][1] for counts in by_join.values())
+    pure = sum(counts.most_common(1)[0][1] for counts in by_label.values())
+    stability = stable / len(labeled) if labeled else None
+    overlap_rate = (
+        sum(voice.participant_id == "unknown" for voice in overlap) / len(overlap)
+        if overlap
+        else None
+    )
+    return {
+        "transcripts": len(transcripts),
+        "aligned": len(aligned),
+        "solo_turns": len(solo),
+        "labeled": len(labeled),
+        "coverage": len(labeled) / len(solo) if solo else None,
+        "label_stability": stability,
+        "purity": pure / len(labeled) if labeled else None,
+        "overlap_unknown_rate": overlap_rate,
+        "join_labels": {join: counts.most_common(1)[0][0] for join, counts in by_join.items()},
+        "person_labels": {person: sorted(labels) for person, labels in by_person.items()},
+        "reasons": dict(Counter(voice.reason for _, voice in solo)),
+        "misses": [
+            {"turn": entry["turn"], "speaker": entry["speaker"], "reason": voice.reason}
+            for entry, voice in solo
+            if voice.participant_id == "unknown"
+            or voice.participant_id != by_join[str(entry["speaker"])].most_common(1)[0][0]
+        ],
+        "gates": {
+            "label_stability": None if stability is None else stability >= LABEL_STABILITY_GATE,
+            "overlap_unknown": (
+                None if overlap_rate is None else overlap_rate >= OVERLAP_UNKNOWN_GATE
+            ),
+        },
+    }
