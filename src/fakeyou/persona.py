@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from importlib.resources import files
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import NAMESPACE_URL, uuid5
@@ -278,5 +279,16 @@ def persona_digest(profile: PersonaProfile) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+_NUMBER_VOCABULARY: dict[str, list[str]] = json.loads(
+    (files("fakeyou") / "number_vocabulary.json").read_text(encoding="utf-8")
+)
+
+
+def number_keywords(language: str) -> tuple[str, ...]:
+    return tuple(_NUMBER_VOCABULARY.get(language, ()))
+
+
 def speech_keywords(profile: PersonaProfile, twin_name: str) -> tuple[str, ...]:
-    return tuple(dict.fromkeys((twin_name, *profile.vocabulary)))
+    return tuple(
+        dict.fromkeys((twin_name, *profile.vocabulary, *number_keywords(profile.language)))
+    )

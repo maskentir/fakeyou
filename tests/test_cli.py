@@ -3304,7 +3304,14 @@ async def test_join_passes_persona_vocabulary_as_speech_keywords(
         session_run=session_run,
     )
 
-    assert captured["open_audio"].keywords["stt_keywords"] == ("Rani Twin", "Orchid", "Budi")
+    from fakeyou.persona import number_keywords
+
+    assert captured["open_audio"].keywords["stt_keywords"] == (
+        "Rani Twin",
+        "Orchid",
+        "Budi",
+        *number_keywords("id"),
+    )
 
 
 async def test_join_without_persona_has_no_speech_keywords(

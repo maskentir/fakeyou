@@ -21,6 +21,7 @@ from fakeyou.persona import (
     build_system_prompt,
     load_persona,
     meeting_tool_names,
+    number_keywords,
     persona_digest,
     speech_keywords,
 )
@@ -361,7 +362,39 @@ def test_build_persona_lists_vocabulary_in_the_profile_json() -> None:
 def test_speech_keywords_start_with_the_twin_name_without_duplicates() -> None:
     loaded = profile(vocabulary=["Orchid", "Rani Twin", "Budi"])
 
-    assert speech_keywords(loaded, "Rani Twin") == ("Rani Twin", "Orchid", "Budi")
+    assert speech_keywords(loaded, "Rani Twin") == (
+        "Rani Twin",
+        "Orchid",
+        "Budi",
+        *number_keywords("id"),
+    )
+
+
+def test_speech_keywords_append_english_numbers_for_english_profiles() -> None:
+    loaded = profile(language="en", vocabulary=["Orchid"])
+
+    assert speech_keywords(loaded, "Rani Twin") == (
+        "Rani Twin",
+        "Orchid",
+        *number_keywords("en"),
+    )
+
+
+def test_number_keywords_pin_ten_digits_per_language() -> None:
+    assert number_keywords("en") == (
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+    )
+    assert len(number_keywords("id")) == 10
+    assert len(set(number_keywords("id"))) == 10
 
 
 def test_default_persona_keeps_indonesian_guidance() -> None:
