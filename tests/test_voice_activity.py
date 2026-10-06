@@ -967,6 +967,95 @@ def test_binder_refuses_follow_when_shared_label_spans_two_slots() -> None:
         assert outcome.label == "B"
 
 
+def test_binder_emits_move_event_on_csrc_follow() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    binder.observe_stream(0, [777])
+    first = binder.resolve(0)
+    assert not isinstance(first, str)
+    assert binder.drain_binder_events() == []
+    binder.observe_stream(1, [777])
+    moved = binder.resolve(1)
+    assert not isinstance(moved, str)
+    assert moved.label == first.label
+    events = binder.drain_binder_events()
+    assert events == [
+        {
+            "event": "tenure_moved",
+            "label": first.label,
+            "from_slot": 0,
+            "to_slot": 1,
+            "csrcs": [777],
+        }
+    ]
+    assert binder.drain_binder_events() == []
+
+
+def test_binder_emits_release_event_on_departure() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    host = binder.resolve(3)
+    assert not isinstance(host, str)
+    assert binder.drain_binder_events() == []
+    binder.update_roster([])
+    events = binder.drain_binder_events()
+    assert events == [
+        {"event": "tenure_released", "label": "A", "slot": 3, "device": "host", "dormant": True}
+    ]
+
+
+def test_binder_flags_relabel_when_delete_one_releases_present_slot() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["a", "b", "c"])
+    first = binder.resolve(3)
+    assert not isinstance(first, str)
+    assert binder.drain_binder_events() == []
+    binder.update_roster(["a", "b"])
+    release = binder.drain_binder_events()
+    assert release == [
+        {"event": "tenure_released", "label": "A", "slot": 3, "device": None, "dormant": False}
+    ]
+    replaced = binder.resolve(3)
+    assert not isinstance(replaced, str)
+    assert replaced.label == "B"
+    fault = binder.drain_binder_events()
+    assert fault == [{"event": "tenure_relabel", "slot": 3, "old_label": "A", "new_label": "B"}]
+
+
+def test_binder_reset_clears_labels_and_events() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    first = binder.resolve(0)
+    assert not isinstance(first, str)
+    binder.update_roster([])
+    binder.reset()
+    binder.update_roster(["host"])
+    outcome = binder.resolve(0)
+    assert not isinstance(outcome, str)
+    assert binder.drain_binder_events() == []
+
+
+def test_binder_defers_dormant_restore_while_slot_occupied() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    host = binder.resolve(0)
+    assert not isinstance(host, str)
+    assert host.device == "host"
+    binder.update_roster(["host", "guest"])
+    assert binder.drain_binder_events() == []
+    binder.update_roster(["guest"])
+    assert binder.drain_binder_events() != []
+    other = binder.resolve(0)
+    assert not isinstance(other, str)
+    assert other.label != host.label
+    binder.update_roster(["guest", "host"])
+    assert binder.resolve(0) is other
+    binder.update_roster(["host"])
+    restored = binder.resolve(0)
+    assert not isinstance(restored, str)
+    assert restored.label == host.label
+
+
 def test_tracker_binds_two_humans_with_unique_names() -> None:
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)

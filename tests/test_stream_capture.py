@@ -1807,3 +1807,52 @@ async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None
     blob = json.dumps(event)
     assert "Twin" not in blob
     assert "devices/0" not in blob
+
+
+async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    binder.observe_stream(0, [111])
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+    )
+    first = TranscriptionFrame(
+        "Welcome to the call.", "", "2026-10-06T01:00:01+00:00", finalized=True
+    )
+    first.transport_source = "slot-0"
+    await callback(first)
+    binder.observe_stream(1, [111])
+    second = TranscriptionFrame(
+        "Still here on the call.", "", "2026-10-06T01:00:02+00:00", finalized=True
+    )
+    second.transport_source = "slot-1"
+    await callback(second)
+    record.close()
+    journal.close()
+    rows = [json.loads(line) for line in lines]
+    rows = [row for row in rows if row["event"] == "transcript_finalized"]
+    assert len(rows) == 2
+    assert rows[0]["speaker_csrc"] == [111]
+    assert "tenure_events" not in rows[0]
+    assert rows[1]["tenure_events"] == [
+        {"event": "tenure_moved", "label": "A", "from_slot": 0, "to_slot": 1, "csrcs": [111]}
+    ]

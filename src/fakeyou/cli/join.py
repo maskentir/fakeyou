@@ -87,40 +87,47 @@ def attribute_stream_frame(
     slot = stream_slot(stream_id)
     roster_size = binder.roster_size if binder is not None else 0
     if binder is None or slot is None:
-        return (
-            "unknown",
-            None,
-            stream_id,
-            {
-                "speaker_reason": "no_source",
-                "speaker_slot": slot,
-                "speaker_bound": False,
-                "roster_size": roster_size,
-            },
-        )
+        extra: dict[str, Any] = {
+            "speaker_reason": "no_source",
+            "speaker_slot": slot,
+            "speaker_bound": False,
+            "roster_size": roster_size,
+        }
+        if binder is not None:
+            drained = binder.drain_binder_events()
+            if drained:
+                extra["tenure_events"] = drained
+        return ("unknown", None, stream_id, extra)
     outcome = binder.resolve(slot)
+    drained = binder.drain_binder_events()
+    csrcs = list(binder.stream_csrcs(slot))
     if isinstance(outcome, str):
-        return (
-            "unknown",
-            None,
-            stream_id,
-            {
-                "speaker_reason": outcome,
-                "speaker_slot": slot,
-                "speaker_bound": False,
-                "roster_size": roster_size,
-            },
-        )
+        extra = {
+            "speaker_reason": outcome,
+            "speaker_slot": slot,
+            "speaker_bound": False,
+            "roster_size": roster_size,
+        }
+        if csrcs:
+            extra["speaker_csrc"] = csrcs
+        if drained:
+            extra["tenure_events"] = drained
+        return ("unknown", None, stream_id, extra)
+    extra = {
+        "speaker_reason": "stream_slot",
+        "speaker_slot": slot,
+        "speaker_bound": outcome.device is not None,
+        "roster_size": roster_size,
+    }
+    if csrcs:
+        extra["speaker_csrc"] = csrcs
+    if drained:
+        extra["tenure_events"] = drained
     return (
         voice_participant_id(outcome.label),
         f"stream-{slot}",
         stream_id,
-        {
-            "speaker_reason": "stream_slot",
-            "speaker_slot": slot,
-            "speaker_bound": outcome.device is not None,
-            "roster_size": roster_size,
-        },
+        extra,
     )
 
 
