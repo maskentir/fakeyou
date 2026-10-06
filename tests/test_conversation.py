@@ -1,6 +1,8 @@
 import asyncio
+import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -10,10 +12,12 @@ from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.conversation import (
+    BARE_ACK_VOCABULARY,
     ConversationLoop,
     LangGraphResponder,
     StreamingLangGraphResponder,
     TranscriptEvent,
+    _is_bare_ack,
     _request_messages,
     cap_spoken_reply,
     conversation_thread_id,
@@ -1751,3 +1755,150 @@ def test_request_messages_carry_speaker_identity_without_owner_data():
     }
     (anonymous,) = _request_messages([event("t2", "Hello")])
     assert anonymous.additional_kwargs["meeting_event"]["speaker_status"] == "unknown"
+
+
+ACK_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "ack-cases.json").read_text(encoding="utf-8")
+)
+
+
+def test_bare_ack_vocabulary_is_pinned() -> None:
+    assert BARE_ACK_VOCABULARY == frozenset(ACK_CASES["vocabulary"])
+
+
+@pytest.mark.parametrize("text", ACK_CASES["observed_bare"] + ACK_CASES["isolated"])
+def test_observed_single_token_acks_match_exactly(text: str) -> None:
+    assert _is_bare_ack(text)
+
+
+@pytest.mark.parametrize("text", ACK_CASES["replies"] + ACK_CASES["blanks"])
+def test_substantive_text_is_never_a_bare_ack(text: str) -> None:
+    assert not _is_bare_ack(text)
+
+
+@pytest.mark.parametrize("text", ACK_CASES["isolated"])
+async def test_isolated_bare_ack_still_gets_a_reply(text: str) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(responder)
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", text))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [[text]]
+    assert audio.spoken == [text]
+    await loop.close()
+
+
+async def test_bare_ack_run_suppresses_after_first(journal) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    first, second, third = ACK_CASES["run"]
+    await loop.handle_transcript(event("t1", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", second))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t3", third))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [[first]]
+    assert audio.spoken == [first]
+    assert [item.text for item in loop.events] == [first, second, third]
+    await loop.close()
+
+
+async def test_ack_suppression_journals_a_silent_decision(journal) -> None:
+    loop = ConversationLoop(FakeResponder(), journal=journal)
+    loop.bind(FakeReplyAudio())
+    first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
+    await loop.handle_transcript(event("t1", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", second))
+    await loop.wait_idle()
+    [decided] = journal.events("ack_decided")
+    assert (decided["transcript_id"], decided["action"], decided["reason"]) == (
+        "t2",
+        "silent",
+        "bare_ack_run",
+    )
+    await loop.close()
+
+
+@pytest.mark.parametrize("text", ACK_CASES["replies"])
+async def test_substantive_text_replies_inside_ack_runs(journal, text: str) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    first = ACK_CASES["run"][0]
+    await loop.handle_transcript(event("t1", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", text))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [[first], [text]]
+    assert audio.spoken == [first, text]
+    assert journal.events("ack_decided") == []
+    await loop.close()
+
+
+async def test_substantive_text_breaks_the_ack_run(journal) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    first, second, fourth = ACK_CASES["run"]
+    third = ACK_CASES["run_breaker"]
+    await loop.handle_transcript(event("t1", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", second))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t3", third))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t4", fourth))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [
+        [first],
+        [third],
+        [fourth],
+    ]
+    assert audio.spoken == [first, third, fourth]
+    [decided] = journal.events("ack_decided")
+    assert decided["transcript_id"] == "t2"
+    await loop.close()
+
+
+async def test_vocative_text_replies_inside_ack_runs(journal) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal)
+    loop.bind(audio)
+    first = ACK_CASES["run"][0]
+    addressed = ACK_CASES["vocative"]
+    await loop.handle_transcript(event("t1", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", addressed))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [[first], [addressed]]
+    assert audio.spoken == [first, addressed]
+    assert journal.events("ack_decided") == []
+    await loop.close()
+
+
+async def test_addressed_text_replies_inside_wake_window_ack_runs(journal) -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder, wake_phrases=["rani twin"], activation_seconds=30, clock=clock, journal=journal
+    )
+    loop.bind(audio)
+    first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
+    await loop.handle_transcript(event("t1", "rani twin hello"))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t2", first))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t3", second))
+    await loop.wait_idle()
+    await loop.handle_transcript(event("t4", "rani twin, continue now"))
+    await loop.wait_idle()
+    assert [[item.text for item in call] for call in responder.calls] == [
+        ["rani twin hello"],
+        [first],
+        ["rani twin, continue now"],
+    ]
+    [decided] = journal.events("ack_decided")
+    assert decided["transcript_id"] == "t3"
+    await loop.close()

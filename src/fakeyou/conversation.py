@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
+from importlib.resources import files
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -108,6 +109,20 @@ class StreamingConversationResponder(Protocol):
 
 
 ToolResultCallback = Callable[[str, str, float], None]
+
+_ACK_VOCABULARY: dict[str, Any] = json.loads(
+    (files("fakeyou") / "ack_vocabulary.json").read_text(encoding="utf-8")
+)
+BARE_ACK_VOCABULARY: frozenset[str] = frozenset(_ACK_VOCABULARY["bare_acks"])
+_ACK_EDGE_PUNCTUATION = '.,!;:"“”‘’()[]{}-–—…'
+
+
+def _is_bare_ack(text: str) -> bool:
+    if "?" in text:
+        return False
+    words = [word.strip(_ACK_EDGE_PUNCTUATION) for word in text.casefold().split()]
+    words = [word for word in words if word]
+    return len(words) == 1 and words[0] in BARE_ACK_VOCABULARY
 
 
 class _ToolActivity(AsyncCallbackHandler):
@@ -550,6 +565,7 @@ class ConversationLoop:
             raise ValueError("participant policy requires configured twin aliases")
         self._participant_policy_enabled = participant_policy_enabled
         self._last_speaker_id: str | None = None
+        self._previous_inbound_was_bare_ack = False
         self._activation_seconds = activation_seconds
         self._barge_in_min_words = barge_in_min_words
         self._max_spoken_sentences = max_spoken_sentences
@@ -612,11 +628,20 @@ class ConversationLoop:
             return
         self._seen.add(event.id)
         self._events.append(event)
+        bare_ack = _is_bare_ack(event.text)
         if self._participant_policy_enabled:
             if not self._policy_allows(event):
                 return
         elif self._wake_phrases and not self._addressed(event):
             return
+        elif bare_ack and self._previous_inbound_was_bare_ack:
+            self._record(
+                "ack_decided", transcript_id=event.id, action="silent", reason="bare_ack_run"
+            )
+            self._previous_inbound_was_bare_ack = True
+            return
+        if not self._participant_policy_enabled:
+            self._previous_inbound_was_bare_ack = bare_ack
         self._pending.append(event)
         self._generation += 1
         if self._task is not None and not self._task.done():
