@@ -155,13 +155,17 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
     replay = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
     next_utterance = TranscriptionFrame("hello", "", "2026-09-28T00:00:01Z", finalized=True)
     assert first.id != replay.id
-    assert transcript_event(first, "unknown", None).id == transcript_event(replay, "p1", "e1").id
     assert (
-        transcript_event(first, "unknown", None).id
-        != transcript_event(next_utterance, "unknown", None).id
+        transcript_event(first, "unknown", None, "").id
+        == transcript_event(replay, "p1", "e1", "s0").id
     )
-    assert transcript_event(first, "unknown", None).participant_id == "unknown"
-    assert transcript_event(first, "p1", "e1").speaker_evidence_id == "e1"
+    assert (
+        transcript_event(first, "unknown", None, "").id
+        != transcript_event(next_utterance, "unknown", None, "").id
+    )
+    assert transcript_event(first, "unknown", None, "").participant_id == "unknown"
+    assert transcript_event(first, "p1", "e1", "s0").speaker_evidence_id == "e1"
+    assert transcript_event(first, "p1", "e1", "s0").stream_id == "s0"
 
 
 def test_conversation_threads_include_all_session_identities():

@@ -45,10 +45,14 @@ class TranscriptEvent:
     finalized: bool
     participant_id: str
     speaker_evidence_id: str | None
+    stream_id: str = ""
 
 
 def transcript_event(
-    frame: TranscriptionFrame, participant_id: str, speaker_evidence_id: str | None
+    frame: TranscriptionFrame,
+    participant_id: str,
+    speaker_evidence_id: str | None,
+    stream_id: str = "",
 ) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
@@ -61,7 +65,22 @@ def transcript_event(
         finalized=bool(frame.finalized),
         participant_id=participant_id,
         speaker_evidence_id=speaker_evidence_id,
+        stream_id=stream_id,
     )
+
+
+def _merge_stamp(timestamp: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def merge_transcripts(events: Sequence[TranscriptEvent]) -> list[TranscriptEvent]:
+    return sorted(events, key=lambda event: (_merge_stamp(event.timestamp), event.id))
 
 
 def conversation_thread_id(owner_id: str, twin_id: str, meeting_id: str) -> str:

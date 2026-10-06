@@ -79,6 +79,7 @@ def voice_labels() -> Iterator[str]:
 class SlotBinder:
     def __init__(self, labels: Iterator[str] | None = None) -> None:
         self._tenures: dict[int, Tenure] = {}
+        self._stream_csrcs: dict[int, frozenset[int]] = {}
         self._present: frozenset[str] = frozenset()
         self._labels = labels if labels is not None else voice_labels()
 
@@ -93,6 +94,10 @@ class SlotBinder:
 
     def reset(self) -> None:
         self._tenures.clear()
+        self._stream_csrcs.clear()
+
+    def observe_stream(self, slot: int, csrcs: Sequence[int]) -> None:
+        self._stream_csrcs[slot] = frozenset(csrcs)
 
     def resolve(self, slot: int, *, allow_new: bool = True) -> Tenure | BinderRefusal:
         if not self._present:
@@ -102,11 +107,32 @@ class SlotBinder:
         tenure = self._tenures.get(slot)
         if tenure is not None:
             return tenure
+        followed = self._follow_csrc(slot)
+        if followed is not None:
+            return followed
         if not allow_new:
             return "self_overlap"
         if len(self._unbound_tenures()) >= len(self._unbound_devices()):
             return "slot_conflict"
         tenure = Tenure(next(self._labels))
+        self._tenures[slot] = tenure
+        self._bind()
+        return tenure
+
+    def _follow_csrc(self, slot: int) -> Tenure | None:
+        csrcs = self._stream_csrcs.get(slot, frozenset())
+        if not csrcs:
+            return None
+        matches = {
+            other
+            for other in self._tenures
+            if other != slot and self._stream_csrcs.get(other, frozenset()) & csrcs
+        }
+        labels = {self._tenures[other].label for other in matches}
+        if len(labels) != 1:
+            return None
+        [moved] = matches
+        tenure = self._tenures.pop(moved)
         self._tenures[slot] = tenure
         self._bind()
         return tenure

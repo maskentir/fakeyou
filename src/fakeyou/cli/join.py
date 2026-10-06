@@ -345,10 +345,13 @@ async def join_meeting(
                             voice_activity.attribute() if voice_activity is not None else None
                         )
                         event = (
-                            transcript_event(frame, "unknown", None)
+                            transcript_event(frame, "unknown", None, "")
                             if attribution is None
                             else transcript_event(
-                                frame, attribution.participant_id, attribution.evidence_id
+                                frame,
+                                attribution.participant_id,
+                                attribution.evidence_id,
+                                "",
                             )
                         )
                         journal.record(

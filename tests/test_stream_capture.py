@@ -472,3 +472,45 @@ async def test_start_capture_drain_respects_enabled_flag() -> None:
     assert worker.capture_drain is not None
     await worker.close_capture_drain()
     assert worker.capture_drain is None
+
+
+def _frame(text: str, timestamp: str):
+    from pipecat.frames.frames import TranscriptionFrame
+
+    return TranscriptionFrame(text, user_id="", timestamp=timestamp)
+
+
+def test_merge_orders_two_streams_chronologically() -> None:
+    from fakeyou.conversation import merge_transcripts, transcript_event
+
+    first = transcript_event(_frame("hello", "2026-10-06T01:00:02+00:00"), "a", None, "s1")
+    second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
+    assert [event.text for event in merge_transcripts([first, second])] == ["hi", "hello"]
+
+
+def test_merge_keeps_stream_tags_stable_on_id() -> None:
+    from fakeyou.conversation import merge_transcripts, transcript_event
+
+    first = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s1")
+    second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
+    merged = merge_transcripts([second, first])
+    assert [event.id for event in merged] == sorted([first.id, second.id])
+    assert {event.stream_id for event in merged} == {"s0", "s1"}
+
+
+def test_binder_follows_csrc_across_slot_rotation() -> None:
+    from fakeyou.voice_activity import SlotBinder
+
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    binder.observe_stream(0, [111])
+    binder.observe_stream(1, [222])
+    first = binder.resolve(0)
+    second = binder.resolve(1)
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+    assert first.label != second.label
+    binder.observe_stream(2, [111])
+    rotated = binder.resolve(2)
+    assert not isinstance(rotated, str)
+    assert rotated.label == first.label
