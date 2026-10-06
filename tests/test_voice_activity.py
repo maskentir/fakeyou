@@ -93,7 +93,7 @@ def test_binder_binds_lone_device_and_releases_only_its_slot() -> None:
     assert (returning.label, returning.device) == ("C", "returning")
 
 
-def test_binder_releases_every_unbound_slot_when_unbound_device_leaves() -> None:
+def test_binder_departure_retires_oldest_unbound_slot() -> None:
     binder = SlotBinder()
     binder.update_roster(["a", "b", "c"])
     first = binder.resolve(3)
@@ -104,6 +104,9 @@ def test_binder_releases_every_unbound_slot_when_unbound_device_leaves() -> None
     replaced = binder.resolve(3)
     assert not isinstance(replaced, str)
     assert replaced.label == "C"
+    kept = binder.resolve(4)
+    assert not isinstance(kept, str)
+    assert kept.label == "B"
 
 
 def test_binder_refuses_more_slots_than_unbound_devices() -> None:
@@ -113,11 +116,9 @@ def test_binder_refuses_more_slots_than_unbound_devices() -> None:
     assert binder.resolve(4) == "slot_conflict"
 
 
-def test_binder_refuses_labels_without_roster_or_under_contention() -> None:
+def test_binder_refuses_labels_without_roster() -> None:
     binder = SlotBinder()
     assert binder.resolve(3) == "no_roster"
-    binder.update_roster([f"d{index}" for index in range(MEET_AUDIO_SLOTS + 1)])
-    assert binder.resolve(3) == "slot_contention"
 
 
 def test_binder_drops_tenures_while_contended() -> None:
@@ -803,12 +804,19 @@ def test_binder_keeps_active_speakers_when_lurkers_overflow_roster() -> None:
     assert (kept_first.label, kept_second.label) == (first.label, second.label)
 
 
-def test_binder_still_refuses_new_slots_when_contended() -> None:
+def test_binder_allows_new_speakers_while_roster_overflows_capacity() -> None:
     binder = SlotBinder()
     binder.update_roster(["host"])
-    assert not isinstance(binder.resolve(3), str)
-    binder.update_roster([f"remote-{index}" for index in range(MEET_AUDIO_SLOTS + 2)])
-    assert binder.resolve(9) == "slot_contention"
+    first = binder.resolve(3)
+    assert not isinstance(first, str)
+    assert first.label == "A"
+    binder.update_roster(["host"] + [f"lurker-{index}" for index in range(MEET_AUDIO_SLOTS + 1)])
+    outcome = binder.resolve(9)
+    assert not isinstance(outcome, str)
+    assert outcome.label == "B"
+    kept = binder.resolve(3)
+    assert not isinstance(kept, str)
+    assert kept.label == "A"
 
 
 def test_binder_distinct_sync_sources_keep_per_slot_labels_without_follow() -> None:
@@ -833,3 +841,132 @@ def test_binder_distinct_sync_sources_keep_per_slot_labels_without_follow() -> N
     assert kept_first.label == first.label
     assert kept_second.label == second.label
     assert kept_third.label == third.label
+
+
+def test_binder_binds_four_streams_when_five_share_the_roster() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    binder.update_roster([f"devices/{index}" for index in range(5)])
+    for slot in range(4):
+        binder.observe_stream(slot, [111 + slot])
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+    for slot in range(4):
+        repeat = binder.resolve(slot)
+        assert not isinstance(repeat, str)
+        assert repeat.label == labels[slot]
+
+
+def test_binder_never_binds_self_entry_to_a_speaking_slot() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    binder.update_roster(["devices/self"] + [f"devices/{index}" for index in range(4)])
+    for slot in range(4):
+        binder.observe_stream(slot, [111 + slot])
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        assert outcome.device != "devices/self"
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+
+
+def test_binder_binds_speakers_with_lurker_in_roster() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    binder.update_roster([f"devices/{index}" for index in range(5)] + ["devices/lurker"])
+    for slot in range(4):
+        binder.observe_stream(slot, [111 + slot])
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+    for slot in range(4):
+        repeat = binder.resolve(slot)
+        assert not isinstance(repeat, str)
+        assert repeat.label == labels[slot]
+
+
+def test_binder_departure_releases_only_one_tenure() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    binder.update_roster([f"devices/{index}" for index in range(5)])
+    for slot in range(4):
+        binder.observe_stream(slot, [111 + slot])
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+    binder.update_roster([f"devices/{index}" for index in range(4)])
+    kept = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        kept.append(outcome.label)
+    assert kept[1:] == labels[1:]
+    assert kept[0] != labels[0]
+
+
+def test_binder_refuses_new_slot_when_demand_reaches_capacity() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest", "visitor"])
+    for slot in (3, 4, 5):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+    assert binder.resolve(6) == "slot_contention"
+    kept = binder.resolve(3)
+    assert not isinstance(kept, str)
+    assert kept.label == "A"
+
+
+def test_tracker_binds_sequential_slots_when_twin_names_collide() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    roster = [{"id": f"devices/{index}", "name": "Twin"} for index in range(5)]
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        batch(11_000.0, [[10_400.0, 3, 0.3]], roster), sent_ms=11_000.0, received_ms=11_000.0
+    )
+    first = tracker.attribute()
+    assert (first.participant_id, first.slot) == ("speaker-a", 3)
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        batch(13_000.0, [[12_400.0, 4, 0.3]], roster), sent_ms=13_000.0, received_ms=13_000.0
+    )
+    second = tracker.attribute()
+    assert (second.participant_id, second.slot) == ("speaker-b", 4)
+
+
+def test_tracker_binds_two_humans_with_unique_names() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    roster = [
+        {"id": "devices/self", "name": "Twin"},
+        {"id": "devices/1", "name": "Rani"},
+        {"id": "devices/2", "name": "Budi"},
+    ]
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        batch(11_000.0, [[10_400.0, 3, 0.3]], roster), sent_ms=11_000.0, received_ms=11_000.0
+    )
+    first = tracker.attribute()
+    assert (first.participant_id, first.slot) == ("speaker-a", 3)
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        batch(13_000.0, [[12_400.0, 4, 0.3]], roster), sent_ms=13_000.0, received_ms=13_000.0
+    )
+    second = tracker.attribute()
+    assert (second.participant_id, second.slot) == ("speaker-b", 4)

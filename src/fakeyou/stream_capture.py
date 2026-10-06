@@ -137,18 +137,23 @@ def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) ->
     if not isinstance(roster, list):
         return ()
     folded = twin_name.strip().casefold() if isinstance(twin_name, str) else ""
-    names: list[str] = []
+    found: list[tuple[str, Any]] = []
     for entry in roster:
         if not isinstance(entry, Mapping):
             continue
         ident = entry.get("id")
         if not isinstance(ident, str) or not ident:
             continue
-        name = entry.get("name")
-        if folded and isinstance(name, str) and name.strip().casefold() == folded:
-            continue
-        names.append(ident)
-    return tuple(names)
+        found.append((ident, entry.get("name")))
+    if folded:
+        matches = [
+            ident
+            for ident, name in found
+            if isinstance(name, str) and name.strip().casefold() == folded
+        ]
+        if len(matches) == 1:
+            return tuple(ident for ident, _ in found if ident != matches[0])
+    return tuple(ident for ident, _ in found)
 
 
 def _default_input() -> StreamAudioInput:

@@ -119,7 +119,7 @@ class SlotBinder:
         tenure = self._tenures.get(slot)
         if tenure is not None:
             return tenure
-        if self._contended():
+        if self._demand_full():
             return "slot_contention"
         followed = self._follow_csrc(slot)
         if followed is not None:
@@ -154,14 +154,19 @@ class SlotBinder:
     def _contended(self) -> bool:
         return len(self._present) > self._capacity
 
+    def _demand_full(self) -> bool:
+        return len(self._tenures) >= self._capacity
+
     def _release(self, device: str) -> None:
         owned = [slot for slot, tenure in self._tenures.items() if tenure.device == device]
         if owned:
             for slot in owned:
                 self._dormant[device] = (slot, self._tenures.pop(slot))
             return
-        for slot in [slot for slot, tenure in self._tenures.items() if tenure.device is None]:
-            del self._tenures[slot]
+        for slot, tenure in self._tenures.items():
+            if tenure.device is None:
+                del self._tenures[slot]
+                return
 
     def _unbound_devices(self) -> set[str]:
         return set(self._present) - {tenure.device for tenure in self._tenures.values()}
@@ -427,6 +432,15 @@ class VoiceActivityTracker:
         return min(self._anchors, key=itemgetter(0))[1]
 
     def _observe_roster(self, participants: Sequence[Any], received_ms: float) -> None:
+        matches = sum(
+            1
+            for participant in participants
+            if isinstance(participant, Mapping)
+            and isinstance(participant.get("id"), str)
+            and participant.get("id")
+            and isinstance(participant.get("name"), str)
+            and str(participant.get("name")).strip().casefold() == self._twin_name
+        )
         for participant in participants:
             if not isinstance(participant, Mapping):
                 continue
@@ -434,7 +448,12 @@ class VoiceActivityTracker:
             name = participant.get("name")
             if not isinstance(device, str) or not device:
                 continue
-            if isinstance(name, str) and name.strip().casefold() == self._twin_name:
+            if (
+                self._twin_name
+                and matches == 1
+                and isinstance(name, str)
+                and name.strip().casefold() == self._twin_name
+            ):
                 continue
             self._seen[device] = received_ms
         self._seen = {

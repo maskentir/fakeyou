@@ -914,9 +914,11 @@ async def test_registry_observes_streams_and_roster_into_binder() -> None:
     assert kept.label == first.label
     clock.now += 3.0
     registry.update_roster(["host"])
-    rotated = binder.resolve(0)
-    assert not isinstance(rotated, str)
-    assert rotated.label != first.label
+    survivor = binder.resolve(1)
+    assert not isinstance(survivor, str)
+    assert survivor.label == second.label
+    assert survivor.device == "host"
+    assert binder.resolve(0) == "slot_conflict"
 
 
 async def test_capture_drain_poll_updates_binder_roster() -> None:
@@ -1655,3 +1657,153 @@ async def test_stream_capture_drain_reports_roster_tile_count() -> None:
         drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
     assert drained["roster_tiles"] == 3
     assert len(drained["roster"]) == 2
+
+
+def test_parse_roster_keeps_all_entries_when_twin_name_collides() -> None:
+    from fakeyou.stream_capture import parse_roster
+
+    payload = {
+        "roster": [{"id": f"devices/{index}", "name": "Twin"} for index in range(5)],
+    }
+    assert parse_roster(payload, twin_name="Twin") == tuple(
+        f"devices/{index}" for index in range(5)
+    )
+    mixed = {
+        "roster": [{"id": f"devices/{index}", "name": "Twin"} for index in range(4)]
+        + [{"id": "devices/9", "name": "Host"}],
+    }
+    assert parse_roster(mixed, twin_name="Twin") == (
+        tuple(f"devices/{index}" for index in range(4)) + ("devices/9",)
+    )
+
+
+def _collision_payload(names: list[str]) -> dict[str, object]:
+    return {
+        "streams": [
+            {
+                "slot": slot,
+                "csrcs": [111 + slot],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
+            for slot in range(4)
+        ],
+        "roster": [{"id": f"devices/{index}", "name": name} for index, name in enumerate(names)],
+        "dropped": 0,
+    }
+
+
+async def test_capture_drain_binds_four_streams_when_twin_names_collide() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = _collision_payload(["Twin"] * 5)
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Twin")
+    assert await loop.poll() is True
+    assert binder.roster_size == 5
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+    for slot in range(4):
+        repeat = binder.resolve(slot)
+        assert not isinstance(repeat, str)
+        assert repeat.label == labels[slot]
+
+
+async def test_capture_drain_leaves_colliding_self_entry_unbound() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = _collision_payload(["Twin"] * 4 + ["Host"])
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Twin")
+    assert await loop.poll() is True
+    assert binder.roster_size == 5
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        assert outcome.device != "devices/0"
+
+
+async def test_capture_drain_binds_speakers_with_lurker_present() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = _collision_payload(["Twin"] * 4 + ["Host"])
+    roster = list(payload["roster"])
+    roster.append({"id": "devices/lurker", "name": "Lurker"})
+    payload["roster"] = roster
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Twin")
+    assert await loop.poll() is True
+    assert binder.roster_size == 6
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+    for slot in range(4):
+        repeat = binder.resolve(slot)
+        assert not isinstance(repeat, str)
+        assert repeat.label == labels[slot]
+
+
+async def test_capture_drain_binds_four_humans_with_unique_names() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = _collision_payload(["Host", "Guest", "Visitor", "Partner", "Twin"])
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Twin")
+    assert await loop.poll() is True
+    assert binder.roster_size == 4
+    labels = []
+    for slot in range(4):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        assert outcome.device != "devices/4"
+        labels.append(outcome.label)
+    assert len(set(labels)) == 4
+
+
+async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None:
+    from fakeyou.journal import Journal
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [{"id": f"devices/{index}", "name": "Twin"} for index in range(5)],
+        "roster_tiles": 5,
+        "dropped": 0,
+    }
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    page = meet_page([], evaluates=[payload])
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
+    assert await loop.poll() is True
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["event"] == "capture_polled"
+    assert event["roster_tiles"] == 5
+    assert event["roster_pre_filter"] == 5
+    assert event["roster_post_filter"] == 5
+    blob = json.dumps(event)
+    assert "Twin" not in blob
+    assert "devices/0" not in blob
