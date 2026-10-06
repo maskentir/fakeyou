@@ -68,7 +68,7 @@ from fakeyou.session import SessionConfig, SessionResult
 from fakeyou.settings import (
     Settings,
 )
-from fakeyou.stream_capture import open_stream_fleet
+from fakeyou.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
 from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
 
 
@@ -464,6 +464,7 @@ async def join_meeting(
                         if settings.conversation.per_stream_enabled:
                             audio_factory = partial(
                                 open_stream_fleet,
+                                slots=STREAM_FLEET_SLOTS,
                                 binder=stream_binder,
                                 tts_settings=settings.tts,
                                 speech_language=settings.speech.language,

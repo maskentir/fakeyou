@@ -28,6 +28,7 @@ CAPTURE_DRAIN_JS = (
 
 SESSION_SILENCE_SECONDS = 30.0
 EARLY_AUDIO_BYTES = 160000
+STREAM_FLEET_SLOTS = 4
 
 
 def load_capture_script() -> str:

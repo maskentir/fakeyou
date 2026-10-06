@@ -163,6 +163,44 @@ async def test_stream_capture_discovers_loopback_receivers() -> None:
         assert entry["level"] > 0.01
 
 
+@pytest.mark.browser
+async def test_stream_capture_drain_retaps_released_receiver() -> None:
+    from playwright.async_api import async_playwright
+
+    script = load_capture_script()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--autoplay-policy=no-user-gesture-required"],
+            ignore_default_args=["--mute-audio"],
+        )
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(script)
+            await page.goto("about:blank")
+            await page.evaluate(LOOPBACK_TWO_TONES)
+            deadline = asyncio.get_running_loop().time() + 15.0
+            pending = 0
+            while pending < 4 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.3)
+                pending = await page.evaluate("() => window.__fakeyouStreamCapture.pending()")
+            assert pending >= 4
+            track_id = await page.evaluate(
+                "() => window.__fakeyouLoopbackPairs[0].receiver.getReceivers()[0].track.id"
+            )
+            await page.evaluate(
+                f"() => window.__fakeyouStreamCapture.releaseTestTrack({track_id!r})"
+            )
+            await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+            await asyncio.sleep(1.0)
+            drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        finally:
+            await browser.close()
+    assert len(drained["streams"]) == 2
+    for entry in drained["streams"]:
+        assert entry["level"] > 0.01
+
+
 async def test_stream_input_tags_transcripts_with_stream_id() -> None:
     from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -884,6 +922,71 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         )
         await asyncio.wait_for(received.wait(), timeout=10)
     assert sorted(seen) == [("slot-0", "speech-0"), ("slot-1", "speech-1")]
+
+
+async def test_stream_fleet_covers_fourth_slot() -> None:
+    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, StreamChunk, open_stream_fleet
+    from fakeyou.voice_activity import SlotBinder
+
+    class _EchoSTT(FrameProcessor):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self._text = text
+
+        async def process_frame(self, frame, direction: FrameDirection) -> None:
+            await super().process_frame(frame, direction)
+            if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
+                await self.push_frame(
+                    TranscriptionFrame(self._text, "guest", "", finalized=True), direction
+                )
+            await self.push_frame(frame, direction)
+
+    class _Playback:
+        @property
+        def is_speaking(self) -> bool:
+            return False
+
+        async def speak(self, text: str, **extra: object) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    assert STREAM_FLEET_SLOTS == 4
+    seen: list[tuple[str, str]] = []
+    received = asyncio.Event()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        seen.append((frame.transport_source or "", frame.text))
+        if len(seen) == 4:
+            received.set()
+
+    async with open_stream_fleet(
+        slots=STREAM_FLEET_SLOTS,
+        binder=SlotBinder(),
+        on_transcript=on_transcript,
+        stt_factory=lambda slot: _EchoSTT(f"speech-{slot}"),
+        playback_factory=lambda slot: _Playback(),
+    ) as fleet:
+        assert set(fleet.capture_registry.sessions) == {0, 1, 2, 3}
+        for slot in range(4):
+            await fleet.capture_registry.feed(
+                StreamChunk(
+                    slot=slot,
+                    csrcs=(100 + slot,),
+                    level=0.4,
+                    page_ms=1000.0,
+                    pcm=b"\x01\x02" * 160,
+                )
+            )
+        await asyncio.wait_for(received.wait(), timeout=10)
+    assert sorted(seen) == [(f"slot-{slot}", f"speech-{slot}") for slot in range(4)]
 
 
 async def test_start_capture_drain_uses_fleet_registry() -> None:

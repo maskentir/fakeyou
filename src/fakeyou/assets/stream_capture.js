@@ -403,7 +403,33 @@
     }
   }
 
+  function releaseTestTrack(trackId) {
+    try {
+      const key = String(trackId || "");
+      if (!key || !slots.has(key)) return;
+      releaseSlot(slots.get(key), key);
+    } catch {
+      /* test-only helper */
+    }
+  }
+
+  function rescan() {
+    for (const pc of peers) {
+      let receivers = [];
+      try {
+        const got = pc && pc.getReceivers ? pc.getReceivers() : [];
+        receivers = Array.isArray(got) ? got : [];
+      } catch {
+        continue;
+      }
+      for (const receiver of receivers) {
+        attachReceiver(receiver);
+      }
+    }
+  }
+
   function drain() {
+    rescan();
     const batch = windows.splice(0, windows.length);
     const bySlot = new Map();
     for (const entry of batch) {
@@ -440,5 +466,11 @@
 
   wrapPeerConnection();
 
-  window.__fakeyouStreamCapture = { drain, pending, attachTestTones, setTestTone };
+  window.__fakeyouStreamCapture = {
+    drain,
+    pending,
+    attachTestTones,
+    setTestTone,
+    releaseTestTrack,
+  };
 })();
