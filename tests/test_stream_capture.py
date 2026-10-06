@@ -962,6 +962,7 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
                 "page_ms": 1000.0,
                 "pcm_b64": "AAP//w==",
                 "track": "abc123",
+                "engine": "decode",
             },
             {
                 "slot": 1,
@@ -970,6 +971,7 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
                 "page_ms": 1000.0,
                 "pcm_b64": "AAA=",
                 "track": "def456",
+                "engine": "mstp",
             },
         ],
         "roster": [],
@@ -989,8 +991,8 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
     assert event["event"] == "capture_polled"
     assert event["dropped"] == 2
     assert event["fails"] == 0
-    assert event["slots"]["0"] == {"level": 0.4, "bytes": 4, "track": "abc123"}
-    assert event["slots"]["1"] == {"level": 0.0, "bytes": 2, "track": "def456"}
+    assert event["slots"]["0"] == {"level": 0.4, "bytes": 4, "track": "abc123", "engine": "decode"}
+    assert event["slots"]["1"] == {"level": 0.0, "bytes": 2, "track": "def456", "engine": "mstp"}
 
 
 async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Path) -> None:

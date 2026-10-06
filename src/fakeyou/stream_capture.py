@@ -257,6 +257,7 @@ class CaptureDrainLoop:
         if self._polls % self._heartbeat_polls != 0:
             return
         tracks: dict[int, str] = {}
+        engines: dict[int, str] = {}
         raw = batch.get("streams")
         if isinstance(raw, list):
             for entry in raw:
@@ -266,11 +267,15 @@ class CaptureDrainLoop:
                 track = entry.get("track")
                 if isinstance(slot, int) and isinstance(track, str):
                     tracks[slot] = track
+                engine = entry.get("engine")
+                if isinstance(slot, int) and isinstance(engine, str):
+                    engines[slot] = engine
         slots = {
             str(chunk.slot): {
                 "level": chunk.level,
                 "bytes": len(chunk.pcm),
                 "track": tracks.get(chunk.slot, ""),
+                "engine": engines.get(chunk.slot, ""),
             }
             for chunk in chunks
         }

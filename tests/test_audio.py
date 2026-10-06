@@ -926,6 +926,49 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         await session.stop()
 
 
+async def test_transcript_observer_journals_turn_stats(journal) -> None:
+    from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection
+
+    from fakeyou.audio import _TranscriptObserver
+
+    seen = []
+
+    async def callback(frame):
+        seen.append(frame)
+
+    observer = _TranscriptObserver(callback, CaptureActivity(), None, journal=journal)
+
+    async def sink(frame, direction):
+        return None
+
+    observer.push_frame = sink
+    await observer.process_frame(
+        InterimTranscriptionFrame(text="Hel", user_id="", timestamp="2026-10-06T01:00:01+00:00"),
+        FrameDirection.DOWNSTREAM,
+    )
+    await observer.process_frame(
+        InterimTranscriptionFrame(text="Hello", user_id="", timestamp="2026-10-06T01:00:02+00:00"),
+        FrameDirection.DOWNSTREAM,
+    )
+    await observer.process_frame(
+        TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    await observer.process_frame(
+        TranscriptionFrame("Next.", "", "2026-10-06T01:00:04+00:00", finalized=True),
+        FrameDirection.DOWNSTREAM,
+    )
+
+    assert [frame.text for frame in seen] == ["Hello.", "Next."]
+    stats = [row for row in journal.events() if row["event"] == "stt_turn_stats"]
+    assert len(stats) == 2
+    assert stats[0]["interims"] == 2
+    assert stats[0]["first_interim_to_final_ms"] >= 0
+    assert stats[1]["interims"] == 0
+    assert stats[1]["first_interim_to_final_ms"] is None
+
+
 def test_vad_analyzer_maps_settings_to_params() -> None:
     from pipecat.audio.vad.vad_analyzer import VADParams
 

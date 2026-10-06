@@ -645,6 +645,7 @@
           page_ms,
           pcm_b64: encodeBase64(new Uint8Array(pcm.buffer)),
           track,
+          engine: want,
         };
       })
       .filter((entry) => entry !== null);

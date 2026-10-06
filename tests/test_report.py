@@ -1328,3 +1328,30 @@ def test_report_counts_memory_prefetch_as_recall_for_its_transcript():
 
     assert (turn["recall_count"], turn["recall_duration_seconds"]) == (1, 0.3)
     assert turn["llm_count"] == 0
+
+
+def test_report_summarizes_stt_quality_signals() -> None:
+    rows = [
+        row(0, "order_inversion", source="stt", transcript_id="t2"),
+        row(1, "order_inversion", source="stt", transcript_id="t3"),
+        row(2, "stt_turn_stats", source="stt", interims=2, first_interim_to_final_ms=120.0),
+        row(3, "stt_turn_stats", source="stt", interims=0, first_interim_to_final_ms=None),
+        row(
+            4,
+            "capture_polled",
+            source="browser",
+            slots={"0": {"engine": "decode"}, "1": {"engine": "mstp"}},
+        ),
+    ]
+
+    quality = build_session_report(rows)["stt_quality"]
+
+    assert quality["order_inversions"] == 2
+    assert quality["turn_interims"] == {"count": 2, "p50": 1.0, "p95": 1.9, "max": 2}
+    assert quality["first_interim_to_final_ms"] == {
+        "count": 1,
+        "p50": 120.0,
+        "p95": 120.0,
+        "max": 120.0,
+    }
+    assert quality["capture_engines"] == {"decode": 1, "mstp": 1}

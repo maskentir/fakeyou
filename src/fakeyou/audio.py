@@ -256,6 +256,8 @@ class _TranscriptObserver(FrameProcessor):
         self._faults = faults
         self._on_interim = on_interim
         self._journal = journal
+        self._interims = 0
+        self._first_interim_at: float | None = None
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -274,6 +276,25 @@ class _TranscriptObserver(FrameProcessor):
                 )
             )
             self._activity.observe_transcript(transcript.finalized)
+            if transcript.finalized:
+                if self._journal is not None:
+                    first = self._first_interim_at
+                    self._journal.record(
+                        "stt_turn_stats",
+                        source="stt",
+                        interims=self._interims,
+                        first_interim_to_final_ms=(
+                            round((time.monotonic() - first) * 1000.0, 1)
+                            if first is not None
+                            else None
+                        ),
+                    )
+                self._interims = 0
+                self._first_interim_at = None
+            else:
+                if self._first_interim_at is None:
+                    self._first_interim_at = time.monotonic()
+                self._interims += 1
             callback = self._callback if transcript.finalized else self._on_interim
             if callback is not None:
                 try:

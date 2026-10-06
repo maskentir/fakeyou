@@ -111,6 +111,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     policy_actions = Counter[str]()
     policy_reasons = Counter[str]()
     observer_methods = Counter[str]()
+    order_inversions = 0
+    turn_interims: list[float] = []
+    turn_delays: list[float] = []
+    capture_engines = Counter[str]()
     for row in rows:
         event = row.get("event")
         try:
@@ -309,6 +313,25 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             policy_reasons[str(row.get("reason"))] += 1
         elif event == "participant_observer_started":
             observer_methods[str(row.get("method"))] += 1
+        elif event == "order_inversion":
+            order_inversions += 1
+        elif event == "stt_turn_stats":
+            interims = row.get("interims")
+            if isinstance(interims, bool) or not isinstance(interims, (int, float)):
+                continue
+            turn_interims.append(float(interims))
+            delay = row.get("first_interim_to_final_ms")
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)):
+                continue
+            turn_delays.append(float(delay))
+        elif event == "capture_polled":
+            slots = row.get("slots")
+            if not isinstance(slots, dict):
+                continue
+            for slot in slots.values():
+                engine = slot.get("engine") if isinstance(slot, dict) else None
+                if isinstance(engine, str) and engine:
+                    capture_engines[engine] += 1
     for transcript_id in pending.values():
         if isinstance(transcript_id, str) and transcript_id in turns:
             turns[transcript_id]["incomplete"] += 1
@@ -363,6 +386,12 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "interruptions": {
             "triggers": dict(barge_in_triggers),
             "speech_to_stop_seconds": summarize(interruption_seconds),
+        },
+        "stt_quality": {
+            "order_inversions": order_inversions,
+            "turn_interims": summarize(turn_interims),
+            "first_interim_to_final_ms": summarize(turn_delays),
+            "capture_engines": dict(capture_engines),
         },
         "ingestion": {
             "episodes": len(episodes),
