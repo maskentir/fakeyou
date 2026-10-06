@@ -961,7 +961,7 @@ async def test_transcript_observer_journals_turn_stats(journal) -> None:
     )
 
     assert [frame.text for frame in seen] == ["Hello.", "Next."]
-    stats = [row for row in journal.events() if row["event"] == "stt_turn_stats"]
+    stats = [row for row in journal.events() if row["event"] == "stt_turn_recorded"]
     assert len(stats) == 2
     assert stats[0]["interims"] == 2
     assert stats[0]["first_interim_to_final_ms"] >= 0

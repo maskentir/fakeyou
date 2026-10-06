@@ -280,7 +280,7 @@ class _TranscriptObserver(FrameProcessor):
                 if self._journal is not None:
                     first = self._first_interim_at
                     self._journal.record(
-                        "stt_turn_stats",
+                        "stt_turn_recorded",
                         source="stt",
                         interims=self._interims,
                         first_interim_to_final_ms=(

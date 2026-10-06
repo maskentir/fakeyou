@@ -1903,7 +1903,7 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
         "2026-10-06T01:00:02+00:00",
         "2026-10-06T01:00:01+00:00",
     ]
-    inversions = [row for row in rows if row["event"] == "order_inversion"]
+    inversions = [row for row in rows if row["event"] == "order_inversion_detected"]
     assert len(inversions) == 1
     assert inversions[0]["transcript_id"] == finals[1]["transcript_id"]
     assert inversions[0]["spoken_at"] == "2026-10-06T01:00:01+00:00"
@@ -1947,4 +1947,4 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
     journal.close()
     rows = [json.loads(line) for line in lines]
     assert len([row for row in rows if row["event"] == "transcript_finalized"]) == 3
-    assert [row for row in rows if row["event"] == "order_inversion"] == []
+    assert [row for row in rows if row["event"] == "order_inversion_detected"] == []

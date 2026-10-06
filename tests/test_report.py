@@ -1332,10 +1332,10 @@ def test_report_counts_memory_prefetch_as_recall_for_its_transcript():
 
 def test_report_summarizes_stt_quality_signals() -> None:
     rows = [
-        row(0, "order_inversion", source="stt", transcript_id="t2"),
-        row(1, "order_inversion", source="stt", transcript_id="t3"),
-        row(2, "stt_turn_stats", source="stt", interims=2, first_interim_to_final_ms=120.0),
-        row(3, "stt_turn_stats", source="stt", interims=0, first_interim_to_final_ms=None),
+        row(0, "order_inversion_detected", source="stt", transcript_id="t2"),
+        row(1, "order_inversion_detected", source="stt", transcript_id="t3"),
+        row(2, "stt_turn_recorded", source="stt", interims=2, first_interim_to_final_ms=120.0),
+        row(3, "stt_turn_recorded", source="stt", interims=0, first_interim_to_final_ms=None),
         row(
             4,
             "capture_polled",

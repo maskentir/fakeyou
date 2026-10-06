@@ -85,7 +85,7 @@ Meet receivers ──► L0 TAP ──► L1 TRANSPORT ──► L2 STT/stream �
   + tune dari data (I9), ukur biaya CPU N× Silero sebelum tambah slot (I12).
 - **L3 Merge.** Watermark per stream keyed by `capture_ts` + holdback kecil
   yang BESARNYA DITENTUKAN DARI UKURAN (distribusi keterlambatan final di
-  oracle), bukan tebakan; final pasca-watermark → emit + `order_inversion`
+  oracle), bukan tebakan; final pasca-watermark → emit + `order_inversion_detected`
   side-output. Alternatif bila holdback melanggar gate latensi: publish
   segera + repair-on-read di `MeetingRecord` (eventual order). Menutup I3/I2.
 - **L4 Identitas.** Tabel fusi: sinyal (slot, CSRC sync, roster+nama DOM,
@@ -113,7 +113,7 @@ Meet receivers ──► L0 TAP ──► L1 TRANSPORT ──► L2 STT/stream �
 4. Perbaiki dormant-drop: kembalikan ke dormant bila slot asal terisi (I6).
 5. Dokumentasikan `speaker_bound` sebagai "1:1 saja" (I6).
 6. Tes inversi late-arrival (merah → dokumen perilaku kini) + jurnal
-   `order_inversion` nol-ubah-perilaku (I3, observasi dulu).
+   `order_inversion_detected` nol-ubah-perilaku (I3, observasi dulu).
 7. Ekspos `VADParams` ke settings tanpa ubah default (I9, knob dulu).
 8. Vocabulary angka/istilah ke `speech_keywords` (I9).
 9. Metrik endpointing + tap/fallback ke journal/report (observabilitas).

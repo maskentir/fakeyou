@@ -186,7 +186,7 @@ def build_transcript_callback(
                     emitted_max
                 ):
                     journal.record(
-                        "order_inversion",
+                        "order_inversion_detected",
                         source="stt",
                         transcript_id=ordered.id,
                         spoken_at=ordered.timestamp,

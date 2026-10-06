@@ -313,9 +313,9 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             policy_reasons[str(row.get("reason"))] += 1
         elif event == "participant_observer_started":
             observer_methods[str(row.get("method"))] += 1
-        elif event == "order_inversion":
+        elif event == "order_inversion_detected":
             order_inversions += 1
-        elif event == "stt_turn_stats":
+        elif event == "stt_turn_recorded":
             interims = row.get("interims")
             if isinstance(interims, bool) or not isinstance(interims, (int, float)):
                 continue
