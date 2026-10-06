@@ -142,8 +142,7 @@ class SlotBinder:
             for other in self._tenures
             if other != slot and self._stream_csrcs.get(other, frozenset()) & csrcs
         }
-        labels = {self._tenures[other].label for other in matches}
-        if len(labels) != 1:
+        if len(matches) != 1:
             return None
         [moved] = matches
         tenure = self._tenures.pop(moved)

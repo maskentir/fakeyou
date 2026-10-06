@@ -950,6 +950,23 @@ def test_tracker_binds_sequential_slots_when_twin_names_collide() -> None:
     assert (second.participant_id, second.slot) == ("speaker-b", 4)
 
 
+def test_binder_refuses_follow_when_shared_label_spans_two_slots() -> None:
+    binder = SlotBinder(labels=iter(["A", "A", "B", "C"]))
+    binder.update_roster(["d1", "d2", "d3"])
+    first = binder.resolve(0)
+    second = binder.resolve(1)
+    assert not isinstance(first, str) and not isinstance(second, str)
+    assert (first.label, second.label) == ("A", "A")
+    binder.observe_stream(0, [111])
+    binder.observe_stream(1, [111])
+    binder.observe_stream(2, [111])
+    outcome = binder.resolve(2)
+    if isinstance(outcome, str):
+        assert outcome in ("slot_conflict", "slot_contention", "self_overlap")
+    else:
+        assert outcome.label == "B"
+
+
 def test_tracker_binds_two_humans_with_unique_names() -> None:
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)
