@@ -433,3 +433,81 @@ risiko, dan rekomendasi default flag. Bahasa Indonesia.
 git add docs/reports/ tests/fixtures/per-stream-*.json src/fakeyou/
 git commit -m "feat(stream): cutover acceptance on PS-1 and PS-2"
 ```
+
+## Task 7: Mesin encoded-tap plus decode Opus
+
+Konteks: diagnosis Task 6 membuktikan Meet mengkonsumsi
+encoded frames tanpa write-back ke native decode sehingga MSTP
+membaca silence fabrikan (repro offline: consume -> 0.0,
+writeback -> 0.708). Engine primer berpindah ke tap
+encoded-frames plus decode Opus WebCodecs; MSTP menjadi
+fallback. Jalur Python tidak berubah.
+
+**File:**
+- Ubah: `src/fakeyou/assets/stream_capture.js` (wrap
+`RTCRtpReceiver.prototype.createEncodedStreams` yang
+forward-transparan, AudioDecoder Opus per receiver, seleksi
+engine per slot, MSTP sebagai fallback)
+- Uji: `tests/test_stream_capture.py` (browser test setup
+consume)
+
+**Antarmuka:**
+- Konsumsi: bentuk drain Task 1 `{streams, roster, dropped}`
+TETAP (field `track` opsional sudah ada; parser mengabaikan
+field tak dikenal).
+- Produksi: windows PCM per slot dari decode Opus saat
+encoded mengalir; dari MSTP saat tidak. Seleksi otomatis per
+slot berdasar sinyal (encoded diterima <2 dtk terakhir).
+
+- [ ] **Langkah 1: Tulis uji browser yang gagal**
+
+Uji loopback satu tone dengan consumer encoded
+(read-tanpa-write-back, pola `/tmp/consume_probe.py` mode
+consume): drain HARUS memuat `level > 0.01` (jalur decode).
+Kode kini gagal (MSTP = 0.0). Bukti merah wajib.
+
+- [ ] **Langkah 2: Jalankan uji untuk memastikan gagal**
+
+Jalankan: `.venv/bin/python -m pytest
+tests/test_stream_capture.py -q -m browser -k consume`
+Hasil: FAIL asersi level (bukan error API).
+
+- [ ] **Langkah 3: Implementasi tap plus decode**
+
+Wrap prototipe `createEncodedStreams` (chain aman dengan wrap
+milik probe bila ada: selalu panggil original):
+pipeThrough tap yang mencatat frame lalu
+`controller.enqueue` setiap frame (forward-transparan, Meet
+tidak terganggu). Tiap receiver yang ter-tap mendapat satu
+AudioDecoder Opus (codec `opus`, konfigurasi dari parameter
+yang terbukti bekerja di uji loopback; catat pilihan di
+laporan); output AudioData masuk jalur `pushFloat` yang sudah
+ada. Error decoder bersifat toleran (tutup dan buka ulang
+per receiver, tidak menjatuhkan slot lain).
+
+- [ ] **Langkah 4: Seleksi engine dan fallback MSTP**
+
+Per slot: bila encoded diterima <2 dtk terakhir, windows
+berasal dari decode; bila tidak, dari MSTP (kode lama
+dipertahankan utuh). Buktikan kedua rezim: setup consume ->
+decode non-sunyi; setup none -> MSTP non-sunyi (uji lama
+tetap hijau).
+
+- [ ] **Langkah 5: Jalankan suite dan gate**
+
+Jalankan: `.venv/bin/python -m pytest -m 'not live and not
+container and not browser' -q` (TANPA `-n`), lalu browser
+`tests/test_stream_capture.py -q -m browser`, lalu
+`.venv/bin/ruff check && .venv/bin/ruff format --check &&
+.venv/bin/mypy src`. Hasil: semua hijau, tanpa skip baru.
+
+- [ ] **Langkah 6: Commit dan laporan**
+
+Self-review diff PENUH termasuk perubahan tree kotor yang
+sudah ada (rescan, fleet-4, heartbeat, track): pahami tiap
+hunk sebelum commit. Commit lokal per unit logis (fix,
+instrumentasi, engine). Tulis
+`.superpowers/sdd/per-stream-capture-plan/task-7-report.md`
+(ringkasan, file diubah, perintah verifikasi plus hasil
+nyata, bukti merah, concerns) dan perbarui
+`.runtime/per-stream-capture/status.json`. Tanpa push/merge.
