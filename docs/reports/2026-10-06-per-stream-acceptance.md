@@ -99,3 +99,24 @@ lokal tanpa push/merge.
   laporan ini — sesuai Task 6 Langkah 5.
 - Berikutnya: review final seluruh branch (berjalan),
   lalu keputusan cutover.
+
+## Adendum Fase 0 (rencana jangka panjang)
+
+10/10 butir Fase 0 selesai, tiap butir SDD
+(tes merah → implementasi → reviewer terpisah →
+commit lokal): guard `[moved]` (`6f6b3bf`), jurnal
+tenure + CSRC stream + dormant-defer
+(`d046dc3`), observasi inversi
+`order_inversion_detected` (`f53dce3`), knob VAD
+(`832f82c`), vocab angka per bahasa profil
+(`669056a`), metrik `stt_turn_recorded` + engine +
+`stt_quality` (`10ee930`), harness WER
+(`aa34906`), rename taksonomi (`ab465b5`).
+
+Gate pasca-Fase 0 (output aktual):
+suite serial 3182 passed / 40 skipped /
+41 deselected; browser 8 passed;
+`ruff check` + `format` bersih (209 berkas);
+`mypy src` bersih (56 berkas). Flag default
+tetap MATI; checklist merge terpenuhi kecuali
+keputusan push/merge pemilik repo.
