@@ -82,6 +82,10 @@ def _merge_stamp(timestamp: str) -> datetime:
     return parsed
 
 
+def transcript_stamp(event: TranscriptEvent) -> datetime:
+    return _merge_stamp(event.timestamp)
+
+
 def merge_transcripts(events: Sequence[TranscriptEvent]) -> list[TranscriptEvent]:
     return sorted(events, key=lambda event: (_merge_stamp(event.timestamp), event.id))
 

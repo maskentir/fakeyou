@@ -42,6 +42,7 @@ from fakeyou.conversation import (
     conversation_thread_id,
     merge_transcripts,
     transcript_event,
+    transcript_stamp,
 )
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import meeting_windows
@@ -168,8 +169,10 @@ def build_transcript_callback(
     pending: list[TranscriptEvent] = []
     handled: set[str] = set()
     extras: dict[str, dict[str, Any]] = {}
+    emitted_max: TranscriptEvent | None = None
 
     async def transcript(frame: TranscriptionFrame) -> None:
+        nonlocal emitted_max
         if per_stream_enabled:
             participant_id, evidence_id, stream_id, extra = attribute_stream_frame(frame, binder)
             event = transcript_event(frame, participant_id, evidence_id, stream_id)
@@ -179,6 +182,19 @@ def build_transcript_callback(
                 if ordered.id in handled:
                     continue
                 handled.add(ordered.id)
+                if emitted_max is not None and transcript_stamp(ordered) < transcript_stamp(
+                    emitted_max
+                ):
+                    journal.record(
+                        "order_inversion",
+                        source="stt",
+                        transcript_id=ordered.id,
+                        spoken_at=ordered.timestamp,
+                        emitted_max_spoken_at=emitted_max.timestamp,
+                        stream_id=ordered.stream_id,
+                    )
+                if emitted_max is None or transcript_stamp(emitted_max) < transcript_stamp(ordered):
+                    emitted_max = ordered
                 await emit_transcript(
                     ordered,
                     journal=journal,

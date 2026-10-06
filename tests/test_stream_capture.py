@@ -1856,3 +1856,93 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
     assert rows[1]["tenure_events"] == [
         {"event": "tenure_moved", "label": "A", "from_slot": 0, "to_slot": 1, "csrcs": [111]}
     ]
+
+
+async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+    )
+    later = TranscriptionFrame(
+        "Second sentence spoken first.", "", "2026-10-06T01:00:02+00:00", finalized=True
+    )
+    later.transport_source = "slot-0"
+    await callback(later)
+    earlier = TranscriptionFrame(
+        "First sentence arriving late.", "", "2026-10-06T01:00:01+00:00", finalized=True
+    )
+    earlier.transport_source = "slot-1"
+    await callback(earlier)
+    record.close()
+    journal.close()
+    rows = [json.loads(line) for line in lines]
+    finals = [row for row in rows if row["event"] == "transcript_finalized"]
+    assert [row["spoken_at"] for row in finals] == [
+        "2026-10-06T01:00:02+00:00",
+        "2026-10-06T01:00:01+00:00",
+    ]
+    inversions = [row for row in rows if row["event"] == "order_inversion"]
+    assert len(inversions) == 1
+    assert inversions[0]["transcript_id"] == finals[1]["transcript_id"]
+    assert inversions[0]["spoken_at"] == "2026-10-06T01:00:01+00:00"
+    assert inversions[0]["emitted_max_spoken_at"] == "2026-10-06T01:00:02+00:00"
+
+
+async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+    )
+    for stamp, slot, text in [
+        ("2026-10-06T01:00:01+00:00", "slot-0", "First."),
+        ("2026-10-06T01:00:01+00:00", "slot-1", "Same instant."),
+        ("2026-10-06T01:00:02+00:00", "slot-0", "Second."),
+    ]:
+        frame = TranscriptionFrame(text, "", stamp, finalized=True)
+        frame.transport_source = slot
+        await callback(frame)
+    record.close()
+    journal.close()
+    rows = [json.loads(line) for line in lines]
+    assert len([row for row in rows if row["event"] == "transcript_finalized"]) == 3
+    assert [row for row in rows if row["event"] == "order_inversion"] == []
