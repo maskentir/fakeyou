@@ -924,3 +924,41 @@ async def test_start_capture_drain_uses_fleet_registry() -> None:
     assert worker.capture_registry is registry
     await worker.close_capture_drain()
     assert worker.capture_registry is None
+
+
+async def test_fleet_alone_requires_every_slot_alone() -> None:
+    from fakeyou.stream_capture import StreamFleetSession, StreamRegistry
+
+    class _Slot:
+        def __init__(self, verdict: str) -> None:
+            self._verdict = verdict
+
+        def raise_if_failed(self) -> None:
+            pass
+
+        async def maintenance_tick(self, **extra: object) -> str:
+            return self._verdict
+
+    mixed = StreamFleetSession([_Slot("alone"), _Slot("hearing")], StreamRegistry())
+    assert await mixed.maintenance_tick(is_busy=False) == "hearing"
+    unanimous = StreamFleetSession([_Slot("alone"), _Slot("alone")], StreamRegistry())
+    assert await unanimous.maintenance_tick(is_busy=False) == "alone"
+
+
+async def test_fleet_speak_raises_when_every_slot_dead() -> None:
+    from fakeyou.audio import MeetingAudioError
+    from fakeyou.stream_capture import StreamFleetSession, StreamRegistry
+
+    class _DeadSlot:
+        spoken: list[str] = []
+
+        def raise_if_failed(self) -> None:
+            raise MeetingAudioError("slot is dead")
+
+        async def speak(self, text: str, **extra: object) -> None:
+            self.spoken.append(text)
+
+    fleet = StreamFleetSession([_DeadSlot(), _DeadSlot()], StreamRegistry())
+    with pytest.raises(MeetingAudioError):
+        await fleet.speak("hello")
+    assert _DeadSlot.spoken == []

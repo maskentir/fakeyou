@@ -361,6 +361,8 @@ di atas frame fixture yang sama dan assert baris `record.jsonl`
 identik kecuali field `stream_id`/`origin`. Fixture: sesi mixed
 dua giliran yang disamarkan.
 
+Ruling: deviasi Langkah-4 DITERIMA. Keputusan handoff-(c) (stream_id masuk hash identitas) dan handoff-(b) (field stream_id di baris flag-mati) membuat byte-identik HEAD-vs-base tak dapat dipenuhi bersama; bar yang berlaku adalah identik lintas-mode pada HEAD modulo field identitas (id/transcript_id/stream_id/origin). Kode jalur flag-mati tak berubah field-per-field (verifikasi reviewer); id adalah hash konten per-run tanpa garansi stabil lintas versi. Catatan plan Task 5 Langkah 4 diamendemen oleh fix implementer.
+
 - [ ] **Langkah 5: Jalankan suite offline penuh**
 
 Jalankan: `.venv/bin/python -m pytest -m 'not live and not container and not browser' -q`

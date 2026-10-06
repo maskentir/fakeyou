@@ -288,7 +288,8 @@ class StreamFleetSession:
             except MeetingAudioError:
                 continue
             return session
-        return self._sessions[0]
+        self.raise_if_failed()
+        raise MeetingAudioError("stream fleet is exhausted")
 
     async def speak(
         self,
@@ -336,10 +337,12 @@ class StreamFleetSession:
                 )
             except MeetingAudioError:
                 continue
-        if "alone" in verdicts:
-            return "alone"
         if verdicts:
-            return verdicts[0]
+            if all(verdict == "alone" for verdict in verdicts):
+                return "alone"
+            for verdict in verdicts:
+                if verdict != "alone":
+                    return verdict
         self.raise_if_failed()
         raise MeetingAudioError("stream fleet is exhausted")
 
