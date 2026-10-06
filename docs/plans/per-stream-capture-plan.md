@@ -201,9 +201,13 @@ git commit -m "feat(stream): per-stream pipeline with pushed PCM input"
 def test_parse_drain_decodes_pcm_windows() -> None:
     from fakeyou.stream_capture import parse_drain
 
-    payload = {"streams": [{"slot": 0, "csrcs": [111], "level": 0.4,
-                             "page_ms": 1000.0, "pcm_b64": "AAP//w=="}],
-               "roster": [], "dropped": 0}
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [],
+        "dropped": 0,
+    }
     (chunk,) = parse_drain(payload)
     assert chunk.slot == 0 and chunk.csrcs == (111,) and len(chunk.pcm) == 4
 ```
