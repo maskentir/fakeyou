@@ -8,6 +8,10 @@
   const MAX_CARRY_SECONDS = 2;
   const TEST_FREQUENCIES = [440, 880];
   const TEST_PAIR_TIMEOUT_MS = 8000;
+  const ENCODED_FRESH_MS = 2000;
+  const OPUS_SAMPLE_RATE = 48000;
+  const OPUS_CHANNELS = 1;
+  const OPUS_FRAME_US = 20000;
   const slots = new Map();
   const peers = [];
   const windows = [];
@@ -15,6 +19,9 @@
   const receiversBySlot = new Map();
   const resamplers = new Map();
   const readersBySlot = new Map();
+  const decodersByKey = new Map();
+  const decodeStampsByKey = new Map();
+  const encodedAtBySlot = new Map();
   const testGains = [];
   const testPairs = [];
   const testReceivers = new Set();
@@ -70,9 +77,10 @@
     }
   }
 
-  function pushSamples(slot, chunk) {
+  function pushSamples(slot, chunk, source) {
     const acc = pendingSamples.get(slot);
     if (!acc || !chunk || !chunk.length) return;
+    const engine = source || "mstp";
     for (let index = 0; index < chunk.length; index += 1) acc.push(chunk[index]);
     while (acc.length >= WINDOW_SAMPLES) {
       const frame = acc.splice(0, WINDOW_SAMPLES);
@@ -86,6 +94,7 @@
         page_ms: pageNow(),
         pcm: frame,
         track: trackKeyFor(slot),
+        source: engine,
       });
       if (windows.length > MAX_BUFFERED) {
         const overflow = windows.length - MAX_BUFFERED;
@@ -95,7 +104,7 @@
     }
   }
 
-  function pushFloat(slot, frames, rate) {
+  function pushFloat(slot, frames, rate, source) {
     if (!frames || !frames.length || !Number.isFinite(rate) || rate <= 0) return;
     let state = resamplers.get(slot);
     if (!state) {
@@ -122,17 +131,17 @@
       state.carry.splice(0, state.carry.length - 1);
       state.pos = 0;
     }
-    pushSamples(slot, out);
+    pushSamples(slot, out, source);
   }
 
-  function handleAudioData(slot, data) {
+  function handleAudioData(slot, data, source) {
     try {
       if (!data || !data.numberOfFrames) return;
       const rate = Number(data.sampleRate) || 48000;
       const bytes = data.allocationSize({ planeIndex: 0, format: "f32-planar" });
       const plane = new Float32Array(bytes / 4);
       data.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
-      pushFloat(slot, plane, rate);
+      pushFloat(slot, plane, rate, source);
     } catch {
       /* one bad frame must not stop capture */
     }
@@ -157,7 +166,7 @@
         return;
       }
       try {
-        handleAudioData(slot, packet.value);
+        handleAudioData(slot, packet.value, "mstp");
       } finally {
         try {
           packet.value.close();
@@ -181,7 +190,147 @@
     receiversBySlot.delete(slot);
     pendingSamples.delete(slot);
     resamplers.delete(slot);
-    if (trackId) slots.delete(trackId);
+    encodedAtBySlot.delete(slot);
+    if (trackId) {
+      slots.delete(trackId);
+      closeDecoder(trackId);
+      decodeStampsByKey.delete(trackId);
+    }
+  }
+
+  function monoNow() {
+    try {
+      return window.performance.now();
+    } catch {
+      return Date.now();
+    }
+  }
+
+  function decodeFresh(slot) {
+    const at = encodedAtBySlot.get(slot);
+    if (at === undefined) return false;
+    return monoNow() - at < ENCODED_FRESH_MS;
+  }
+
+  function closeDecoder(key) {
+    try {
+      const decoder = decodersByKey.get(key);
+      decodersByKey.delete(key);
+      if (decoder) decoder.close();
+    } catch {
+      /* already closed */
+    }
+  }
+
+  function openDecoder(key) {
+    closeDecoder(key);
+    const decoder = new AudioDecoder({
+      output: (data) => {
+        try {
+          const live = slots.get(key);
+          if (live !== undefined) handleAudioData(live, data, "decode");
+        } finally {
+          try {
+            data.close();
+          } catch {
+            /* already closed */
+          }
+        }
+      },
+      error: () => {
+        closeDecoder(key);
+      },
+    });
+    decoder.configure({
+      codec: "opus",
+      sampleRate: OPUS_SAMPLE_RATE,
+      numberOfChannels: OPUS_CHANNELS,
+    });
+    decodersByKey.set(key, decoder);
+    return decoder;
+  }
+
+  function feedEncoded(key, frame) {
+    if (!frame) return;
+    const slot = slots.get(key);
+    if (slot === undefined) return;
+    encodedAtBySlot.set(slot, monoNow());
+    let bytes = null;
+    try {
+      bytes = frame.data ? frame.data.slice(0) : null;
+    } catch {
+      return;
+    }
+    if (!bytes || !bytes.byteLength) return;
+    let decoder = decodersByKey.get(key);
+    if (!decoder) {
+      try {
+        decoder = openDecoder(key);
+      } catch {
+        return;
+      }
+    }
+    const stamp = decodeStampsByKey.get(key) || 0;
+    decodeStampsByKey.set(key, stamp + OPUS_FRAME_US);
+    try {
+      decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: stamp, data: bytes }));
+    } catch {
+      closeDecoder(key);
+    }
+  }
+
+  function tapEncodedStreams(receiver, streams) {
+    if (!streams || !streams.readable || typeof TransformStream !== "function") return streams;
+    if (typeof AudioDecoder !== "function" || typeof EncodedAudioChunk !== "function") {
+      return streams;
+    }
+    const track = receiver ? receiver.track : null;
+    if (!track || track.kind !== "audio") return streams;
+    try {
+      attachReceiver(receiver);
+    } catch {
+      /* tap continues when the slot already exists */
+    }
+    const key = String(track.id || "");
+    if (!key || slots.get(key) === undefined) return streams;
+    const tap = new TransformStream({
+      transform(frame, controller) {
+        try {
+          feedEncoded(key, frame);
+        } catch {
+          /* decode must never block media */
+        }
+        controller.enqueue(frame);
+      },
+    });
+    let readable = null;
+    try {
+      readable = streams.readable.pipeThrough(tap);
+    } catch {
+      return streams;
+    }
+    return { readable, writable: streams.writable };
+  }
+
+  function wrapEncodedStreams() {
+    try {
+      const proto = window.RTCRtpReceiver && window.RTCRtpReceiver.prototype;
+      if (!proto || typeof proto.createEncodedStreams !== "function") return;
+      if (proto.createEncodedStreams.__fakeyouTapWrapped) return;
+      const original = proto.createEncodedStreams;
+      const tapped = function (...args) {
+        const streams = original.apply(this, args);
+        try {
+          return tapEncodedStreams(this, streams);
+        } catch {
+          return streams;
+        }
+      };
+      tapped.__fakeyouTapWrapped = true;
+      proto.createEncodedStreams = tapped;
+    } catch {
+      /* page locked the prototype */
+    }
   }
 
   function attachReceiver(receiver) {
@@ -451,15 +600,21 @@
     const streams = [...bySlot.entries()]
       .sort((left, right) => left[0] - right[0])
       .map(([slot, list]) => {
+        const want = decodeFresh(slot) ? "decode" : "mstp";
+        const picked = [];
+        for (const entry of list) {
+          if ((entry.source || "mstp") === want) picked.push(entry);
+        }
+        if (!picked.length) return null;
         let total = 0;
-        for (const entry of list) total += entry.pcm.length;
+        for (const entry of picked) total += entry.pcm.length;
         const pcm = new Int16Array(total);
         let offset = 0;
         let level = 0;
         let page_ms = 0;
         let track = "";
         const csrcs = [];
-        for (const entry of list) {
+        for (const entry of picked) {
           pcm.set(entry.pcm, offset);
           offset += entry.pcm.length;
           if (entry.level > level) level = entry.level;
@@ -477,7 +632,8 @@
           pcm_b64: encodeBase64(new Uint8Array(pcm.buffer)),
           track,
         };
-      });
+      })
+      .filter((entry) => entry !== null);
     return { streams, roster: participants(), dropped };
   }
 
@@ -486,6 +642,7 @@
   }
 
   wrapPeerConnection();
+  wrapEncodedStreams();
 
   window.__fakeyouStreamCapture = {
     drain,
