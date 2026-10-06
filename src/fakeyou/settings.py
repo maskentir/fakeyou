@@ -144,6 +144,13 @@ class STTSettings(Section):
     mode: STTMode = "ENDPOINTING"
 
 
+class VADSettings(Section):
+    confidence: float = 0.7
+    start_secs: float = 0.2
+    stop_secs: float = 0.2
+    min_volume: float = 0.6
+
+
 class StoreSettings(Section):
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
@@ -264,6 +271,7 @@ class Configuration(Section):
     debrief: ReplySettings | None = None
     tts: TTSSettings = Field(default_factory=OpenAITTS)
     stt: STTSettings = Field(default_factory=STTSettings)
+    vad: VADSettings = Field(default_factory=VADSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)

@@ -924,3 +924,26 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         assert engine.spoken == ["Hello.", "Legacy reply."]
         assert engine.transcripts == ["t9", None]
         await session.stop()
+
+
+def test_vad_analyzer_maps_settings_to_params() -> None:
+    from pipecat.audio.vad.vad_analyzer import VADParams
+
+    from fakeyou.audio import vad_analyzer
+    from fakeyou.invariants import CAPTURE_SAMPLE_RATE
+    from fakeyou.settings import DEFAULTS, VADSettings
+
+    default = vad_analyzer(CAPTURE_SAMPLE_RATE, DEFAULTS.vad)
+    expected = VADParams()
+    assert default._params.confidence == expected.confidence
+    assert default._params.start_secs == expected.start_secs
+    assert default._params.stop_secs == expected.stop_secs
+    assert default._params.min_volume == expected.min_volume
+    custom = vad_analyzer(
+        CAPTURE_SAMPLE_RATE,
+        VADSettings(confidence=0.5, start_secs=0.1, stop_secs=0.4, min_volume=0.3),
+    )
+    assert custom._params.confidence == 0.5
+    assert custom._params.start_secs == 0.1
+    assert custom._params.stop_secs == 0.4
+    assert custom._params.min_volume == 0.3

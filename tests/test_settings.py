@@ -132,3 +132,24 @@ def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values():
     assert Settings(_env_file=None).memory.recall.strategy == "prefetch"
     with pytest.raises(ValueError):
         Settings(_env_file=None, memory={"recall": {"strategy": "hybrid"}})
+
+
+def test_vad_defaults_mirror_pipecat():
+    from pipecat.audio.vad.vad_analyzer import VADParams
+
+    vad = Settings(_env_file=None).vad
+    expected = VADParams()
+    assert vad.confidence == expected.confidence
+    assert vad.start_secs == expected.start_secs
+    assert vad.stop_secs == expected.stop_secs
+    assert vad.min_volume == expected.min_volume
+
+
+def test_vad_reads_environment(monkeypatch):
+    monkeypatch.setenv("FAKEYOU_VAD__START_SECS", "0.5")
+    monkeypatch.setenv("FAKEYOU_VAD__MIN_VOLUME", "0.4")
+    vad = Settings(_env_file=None).vad
+    assert vad.start_secs == 0.5
+    assert vad.min_volume == 0.4
+    assert vad.confidence == 0.7
+    assert vad.stop_secs == 0.2

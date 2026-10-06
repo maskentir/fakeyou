@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any, cast
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     AudioRawFrame,
     ErrorFrame,
@@ -55,7 +56,7 @@ from fakeyou.playback import (
     create_paplay_stream_runner,
 )
 from fakeyou.provider_faults import category_fault, classify_exception
-from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings, require_secret
+from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings, VADSettings, require_secret
 from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
 from fakeyou.voice_activity import VoiceActivityTracker
 
@@ -559,6 +560,18 @@ class MeetingAudioSession:
             raise
 
 
+def vad_analyzer(sample_rate: int, settings: VADSettings) -> SileroVADAnalyzer:
+    return SileroVADAnalyzer(
+        sample_rate=sample_rate,
+        params=VADParams(
+            confidence=settings.confidence,
+            start_secs=settings.start_secs,
+            stop_secs=settings.stop_secs,
+            min_volume=settings.min_volume,
+        ),
+    )
+
+
 def create_playback_engine(
     *,
     tts_settings: TTSSettings = DEFAULTS.tts,
@@ -600,6 +613,7 @@ async def open_meeting_audio(
     stt_keywords: Sequence[str] | None = None,
     tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
+    vad_settings: VADSettings = DEFAULTS.vad,
     probe: AttributionProbe | None = None,
     voice_activity: VoiceActivityTracker | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
@@ -638,9 +652,7 @@ async def open_meeting_audio(
                 Pipeline(
                     [
                         transport.input(),
-                        VADProcessor(
-                            vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
-                        ),
+                        VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
                         _CaptureObserver(activity, journal, probe, voice_activity),
                         stt,
                         _TranscriptObserver(
@@ -772,6 +784,7 @@ async def open_stream_audio(
     stt_keywords: Sequence[str] | None = None,
     tts_settings: TTSSettings = DEFAULTS.tts,
     speech_language: str = DEFAULTS.speech.language,
+    vad_settings: VADSettings = DEFAULTS.vad,
     probe: AttributionProbe | None = None,
     voice_activity: VoiceActivityTracker | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
@@ -809,9 +822,7 @@ async def open_stream_audio(
                 Pipeline(
                     [
                         input,
-                        VADProcessor(
-                            vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
-                        ),
+                        VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
                         _CaptureObserver(activity, journal, probe, voice_activity),
                         stt,
                         _TranscriptObserver(
