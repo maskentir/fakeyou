@@ -226,24 +226,67 @@ class CaptureDrainLoop:
         registry: StreamRegistry,
         *,
         poll_interval_seconds: float = 0.25,
+        journal: Journal | None = None,
+        heartbeat_polls: int = 40,
     ) -> None:
         self._page = page
         self._registry = registry
         self._poll_interval = poll_interval_seconds
+        self._journal = journal
+        self._heartbeat_polls = heartbeat_polls
+        self._polls = 0
+        self._fails = 0
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+
+    def _heartbeat(self, batch: Mapping[str, Any], chunks: list[StreamChunk]) -> None:
+        if self._journal is None or self._heartbeat_polls <= 0:
+            return
+        if self._polls % self._heartbeat_polls != 0:
+            return
+        tracks: dict[int, str] = {}
+        raw = batch.get("streams")
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, Mapping):
+                    continue
+                slot = entry.get("slot")
+                track = entry.get("track")
+                if isinstance(slot, int) and isinstance(track, str):
+                    tracks[slot] = track
+        slots = {
+            str(chunk.slot): {
+                "level": chunk.level,
+                "bytes": len(chunk.pcm),
+                "track": tracks.get(chunk.slot, ""),
+            }
+            for chunk in chunks
+        }
+        dropped = batch.get("dropped")
+        self._journal.record(
+            "capture_polled",
+            source="browser",
+            slots=slots,
+            dropped=dropped if isinstance(dropped, int) else 0,
+            fails=self._fails,
+        )
 
     async def poll(self) -> bool:
         try:
             batch = await self._page.evaluate(CAPTURE_DRAIN_JS)
             if not isinstance(batch, Mapping):
+                self._fails += 1
                 return False
             self._registry.update_roster(parse_roster(batch))
-            for chunk in parse_drain(batch):
+            chunks = parse_drain(batch)
+            for chunk in chunks:
                 await self._registry.feed(chunk)
             self._registry.prune()
+            self._polls += 1
+            self._heartbeat(batch, chunks)
             return True
         except Exception:
+            self._fails += 1
             return False
 
     async def start(self) -> None:

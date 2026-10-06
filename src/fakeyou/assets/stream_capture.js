@@ -59,6 +59,17 @@
     return found;
   }
 
+  function trackKeyFor(slot) {
+    try {
+      const receiver = receiversBySlot.get(slot);
+      const track = receiver ? receiver.track : null;
+      const id = track ? String(track.id || "") : "";
+      return id.slice(0, 8);
+    } catch {
+      return "";
+    }
+  }
+
   function pushSamples(slot, chunk) {
     const acc = pendingSamples.get(slot);
     if (!acc || !chunk || !chunk.length) return;
@@ -74,6 +85,7 @@
         level,
         page_ms: pageNow(),
         pcm: frame,
+        track: trackKeyFor(slot),
       });
       if (windows.length > MAX_BUFFERED) {
         const overflow = windows.length - MAX_BUFFERED;
@@ -445,17 +457,26 @@
         let offset = 0;
         let level = 0;
         let page_ms = 0;
+        let track = "";
         const csrcs = [];
         for (const entry of list) {
           pcm.set(entry.pcm, offset);
           offset += entry.pcm.length;
           if (entry.level > level) level = entry.level;
           page_ms = entry.page_ms;
+          if (!track && entry.track) track = entry.track;
           for (const csrc of entry.csrcs) {
             if (!csrcs.includes(csrc)) csrcs.push(csrc);
           }
         }
-        return { slot, csrcs, level, page_ms, pcm_b64: encodeBase64(new Uint8Array(pcm.buffer)) };
+        return {
+          slot,
+          csrcs,
+          level,
+          page_ms,
+          pcm_b64: encodeBase64(new Uint8Array(pcm.buffer)),
+          track,
+        };
       });
     return { streams, roster: participants(), dropped };
   }

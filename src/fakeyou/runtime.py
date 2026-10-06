@@ -355,7 +355,9 @@ class _MeetingWorker:
             self.capture_registry = self.audio.capture_registry
         else:
             self.capture_registry = StreamRegistry()
-        self.capture_drain = CaptureDrainLoop(self.page, self.capture_registry)
+        self.capture_drain = CaptureDrainLoop(
+            self.page, self.capture_registry, journal=self.journal
+        )
         await self.capture_drain.start()
         self.record("stream_capture_started", source="runtime")
 

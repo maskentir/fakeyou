@@ -730,6 +730,52 @@ async def test_capture_drain_poll_updates_binder_roster() -> None:
     assert outcome.device == "host"
 
 
+async def test_capture_drain_loop_emits_level_heartbeat() -> None:
+    import json
+
+    from fakeyou.journal import Journal
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {
+                "slot": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+                "track": "abc123",
+            },
+            {
+                "slot": 1,
+                "csrcs": [],
+                "level": 0.0,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAA=",
+                "track": "def456",
+            },
+        ],
+        "roster": [],
+        "dropped": 2,
+    }
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    page = meet_page([], evaluates=[payload, payload, payload])
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=3)
+    assert await loop.poll() is True
+    assert await loop.poll() is True
+    assert lines == []
+    assert await loop.poll() is True
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["event"] == "capture_polled"
+    assert event["dropped"] == 2
+    assert event["fails"] == 0
+    assert event["slots"]["0"] == {"level": 0.4, "bytes": 4, "track": "abc123"}
+    assert event["slots"]["1"] == {"level": 0.0, "bytes": 2, "track": "def456"}
+
+
 async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
