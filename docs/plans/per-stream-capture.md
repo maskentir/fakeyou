@@ -54,9 +54,11 @@ garbage collector menghentikannya.
 ### 1. Capture (JS in-page)
 
 Init script (baru, pola mengikuti `assets/voice_activity.js`):
-membungkus receiver saat `ontrack`, memasang AudioWorklet
-PCM 16 kHz mono per receiver, dan drain per jendela 50 ms
-membawa `{slot, csrcs, level, page_ms, pcm}`. Slot dilacak
+membungkus receiver saat `ontrack`, menangkap PCM 16 kHz
+mono per receiver lewat MediaStreamTrackProcessor (keputusan
+Task 1: terbukti di spike, jalan di semua origin; AudioWorklet
+butuh secure context), dan drain per jendela 50 ms membawa
+`{slot, csrcs, level, page_ms, pcm}`. Slot dilacak
 lintas renegosiasi lewat CSRC yang menumpanginya (satu
 CSRC peserta per slot, stabil per join — terbukti di riset
 CSRC). Kehadiran receiver (aliran/hening) juga menjadi
@@ -140,7 +142,7 @@ di spec ini.
   cakupan, tetapi desain stamp CSRC disiapkan menanganinya
   nanti.
 - Biaya STT naik kelipatan pembicara aktif (disetujui).
-- CPU browser naik (decode + AudioWorklet per receiver);
+- CPU browser naik (decode + sadap per receiver);
   diukur di acceptance, bukan diasumsikan.
 - Renegosiasi tengah sesi me-reset receiver — slot
   diikat ulang lewat CSRC kontinyu.

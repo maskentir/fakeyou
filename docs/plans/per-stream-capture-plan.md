@@ -6,7 +6,7 @@
 
 **Arsitektur:** JS dalam halaman menangkap PCM 16 kHz mono per receiver dengan stamp `{slot, csrcs, level, page_ms}`; satu pipeline pipecat per stream (input dorong, VAD Silero, STT Muse) memancarkan transkrip bertag stream; conversation menggabung menurut jam mono dan me-resolve nama lewat binder yang sudah ada.
 
-**Tech stack:** WebRTC Chromium + AudioWorklet (JS), pipeline pipecat (Python), WebSocket STT Muse, uji browser Playwright.
+**Tech stack:** WebRTC Chromium + MediaStreamTrackProcessor (JS), pipeline pipecat (Python), WebSocket STT Muse, uji browser Playwright.
 
 **Spec:** `docs/plans/per-stream-capture.md` — desain, gate, dan peta file yang disetujui; pelaksana membaca keduanya.
 
