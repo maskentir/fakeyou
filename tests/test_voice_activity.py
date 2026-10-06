@@ -736,3 +736,76 @@ def test_csrc_label_replay_gate_on_live_session() -> None:
     assert summary["overlap_unknown_rate"] >= OVERLAP_UNKNOWN_GATE
     assert summary["person_labels"] == {"A": ["speaker-a"], "B": ["speaker-b"]}
     assert set(summary["reasons"]) == {"dominant_csrc"}
+
+
+def test_binder_fleet_capacity_binds_three_remote_streams_stably() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    binder.update_roster(["remote-a", "remote-b", "remote-c"])
+    binder.observe_stream(0, [111])
+    binder.observe_stream(1, [222])
+    binder.observe_stream(2, [333])
+    labels = []
+    for slot in (0, 1, 2):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 3
+    for slot in (0, 1, 2):
+        repeat = binder.resolve(slot)
+        assert not isinstance(repeat, str)
+        assert repeat.label == labels[slot]
+
+
+def test_binder_three_roster_binds_without_contention() -> None:
+    binder = SlotBinder()
+    binder.update_roster([f"remote-{index}" for index in range(MEET_AUDIO_SLOTS)])
+    binder.observe_stream(0, [111])
+    binder.observe_stream(1, [222])
+    binder.observe_stream(2, [333])
+    labels = []
+    for slot in (0, 1, 2):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == MEET_AUDIO_SLOTS
+
+
+def test_binder_rejoin_preserves_bound_identity_across_slot_move() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    binder.observe_stream(0, [111])
+    first = binder.resolve(0)
+    assert not isinstance(first, str)
+    assert (first.label, first.device) == ("A", "host")
+    binder.update_roster([])
+    binder.update_roster(["host"])
+    binder.observe_stream(1, [111])
+    moved = binder.resolve(1)
+    assert not isinstance(moved, str)
+    assert moved.label == "A"
+
+
+def test_binder_keeps_active_speakers_when_lurkers_overflow_roster() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    first = binder.resolve(3)
+    assert not isinstance(first, str)
+    binder.update_roster(["host", "guest"])
+    second = binder.resolve(4)
+    assert not isinstance(second, str)
+    binder.update_roster(["host", "guest", "lurker-a", "lurker-b", "lurker-c", "lurker-d"])
+    kept_first = binder.resolve(3)
+    kept_second = binder.resolve(4)
+    assert not isinstance(kept_first, str)
+    assert not isinstance(kept_second, str)
+    assert (kept_first.label, kept_second.label) == (first.label, second.label)
+
+
+def test_binder_still_refuses_new_slots_when_contended() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    assert not isinstance(binder.resolve(3), str)
+    binder.update_roster([f"remote-{index}" for index in range(MEET_AUDIO_SLOTS + 2)])
+    assert binder.resolve(9) == "slot_contention"

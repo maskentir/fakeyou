@@ -1060,12 +1060,37 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         {key: value for key, value in entry.items() if key not in ("id", "stream_id")}
         for entry in stream_entries
     ]
-    assert {frozenset(row) for row in mixed_rows} == {frozenset(row) for row in stream_rows}
+    stream_diagnostics = ("speaker_reason", "speaker_slot", "speaker_bound", "roster_size")
+    assert [{key: row[key] for key in stream_diagnostics} for row in stream_rows] == [
+        {
+            "speaker_reason": "no_roster",
+            "speaker_slot": 0,
+            "speaker_bound": False,
+            "roster_size": 0,
+        },
+        {
+            "speaker_reason": "no_roster",
+            "speaker_slot": 1,
+            "speaker_bound": False,
+            "roster_size": 0,
+        },
+    ]
+    assert {
+        frozenset(key for key in row if key not in stream_diagnostics) for row in mixed_rows
+    } == {frozenset(key for key in row if key not in stream_diagnostics) for row in stream_rows}
     assert [
-        {key: value for key, value in row.items() if key not in ("transcript_id", "stream_id")}
+        {
+            key: value
+            for key, value in row.items()
+            if key not in ("transcript_id", "stream_id", *stream_diagnostics)
+        }
         for row in mixed_rows
     ] == [
-        {key: value for key, value in row.items() if key not in ("transcript_id", "stream_id")}
+        {
+            key: value
+            for key, value in row.items()
+            if key not in ("transcript_id", "stream_id", *stream_diagnostics)
+        }
         for row in stream_rows
     ]
 
@@ -1326,3 +1351,136 @@ async def test_fleet_speak_raises_when_every_slot_dead() -> None:
     with pytest.raises(MeetingAudioError):
         await fleet.speak("hello")
     assert _DeadSlot.spoken == []
+
+
+def test_parse_roster_excludes_twin_self() -> None:
+    from fakeyou.stream_capture import parse_roster
+
+    payload = {
+        "roster": [
+            {"id": "devices/1", "name": "Host"},
+            {"id": "devices/2", "name": "Guest"},
+            {"id": "devices/3", "name": "Visitor"},
+            {"id": "devices/9", "name": "Twin"},
+        ]
+    }
+    assert parse_roster(payload, twin_name="Twin") == ("devices/1", "devices/2", "devices/3")
+    assert parse_roster(payload) == ("devices/1", "devices/2", "devices/3", "devices/9")
+
+
+async def test_capture_drain_binds_three_remote_streams_with_self_present() -> None:
+    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = {
+        "streams": [
+            {
+                "slot": slot,
+                "csrcs": [111 + slot],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
+            for slot in range(3)
+        ],
+        "roster": [
+            {"id": "devices/1", "name": "Host"},
+            {"id": "devices/2", "name": "Guest"},
+            {"id": "devices/3", "name": "Visitor"},
+            {"id": "devices/9", "name": "Twin"},
+        ],
+        "dropped": 0,
+    }
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Twin")
+    assert await loop.poll() is True
+    labels = []
+    for slot in range(3):
+        outcome = binder.resolve(slot)
+        assert not isinstance(outcome, str)
+        labels.append(outcome.label)
+    assert len(set(labels)) == 3
+
+
+async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=SlotBinder(),
+        per_stream_enabled=True,
+    )
+    frame = TranscriptionFrame(
+        "Hello from the call.", "", "2026-10-06T01:00:01+00:00", finalized=True
+    )
+    frame.transport_source = "slot-0"
+    await callback(frame)
+    record.close()
+    journal.close()
+    rows = [json.loads(line) for line in lines]
+    rows = [row for row in rows if row["event"] == "transcript_finalized"]
+    assert len(rows) == 1
+    assert rows[0]["participant_id"] == "unknown"
+    assert rows[0]["speaker_reason"] == "no_roster"
+    assert rows[0]["speaker_slot"] == 0
+    assert rows[0]["roster_size"] == 0
+
+
+async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    binder = SlotBinder()
+    binder.update_roster(["host"])
+    binder.observe_stream(0, [111])
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+    )
+    frame = TranscriptionFrame(
+        "Welcome to the call.", "", "2026-10-06T01:00:01+00:00", finalized=True
+    )
+    frame.transport_source = "slot-0"
+    await callback(frame)
+    record.close()
+    journal.close()
+    rows = [json.loads(line) for line in lines]
+    rows = [row for row in rows if row["event"] == "transcript_finalized"]
+    assert len(rows) == 1
+    assert rows[0]["participant_id"] == "speaker-a"
+    assert rows[0]["speaker_reason"] == "stream_slot"
+    assert rows[0]["speaker_slot"] == 0
+    assert rows[0]["speaker_bound"] is True
+    assert rows[0]["roster_size"] == 1

@@ -81,16 +81,47 @@ def stream_slot(stream_id: str) -> int | None:
 
 def attribute_stream_frame(
     frame: TranscriptionFrame, binder: SlotBinder | None
-) -> tuple[str, str | None, str]:
+) -> tuple[str, str | None, str, dict[str, Any]]:
     source = getattr(frame, "transport_source", "") or ""
     stream_id = source if isinstance(source, str) else ""
     slot = stream_slot(stream_id)
+    roster_size = binder.roster_size if binder is not None else 0
     if binder is None or slot is None:
-        return ("unknown", None, stream_id)
+        return (
+            "unknown",
+            None,
+            stream_id,
+            {
+                "speaker_reason": "no_source",
+                "speaker_slot": slot,
+                "speaker_bound": False,
+                "roster_size": roster_size,
+            },
+        )
     outcome = binder.resolve(slot)
     if isinstance(outcome, str):
-        return ("unknown", None, stream_id)
-    return (voice_participant_id(outcome.label), f"stream-{slot}", stream_id)
+        return (
+            "unknown",
+            None,
+            stream_id,
+            {
+                "speaker_reason": outcome,
+                "speaker_slot": slot,
+                "speaker_bound": False,
+                "roster_size": roster_size,
+            },
+        )
+    return (
+        voice_participant_id(outcome.label),
+        f"stream-{slot}",
+        stream_id,
+        {
+            "speaker_reason": "stream_slot",
+            "speaker_slot": slot,
+            "speaker_bound": outcome.device is not None,
+            "roster_size": roster_size,
+        },
+    )
 
 
 async def emit_transcript(
@@ -129,17 +160,24 @@ def build_transcript_callback(
 ) -> Callable[[TranscriptionFrame], Awaitable[None]]:
     pending: list[TranscriptEvent] = []
     handled: set[str] = set()
+    extras: dict[str, dict[str, Any]] = {}
 
     async def transcript(frame: TranscriptionFrame) -> None:
         if per_stream_enabled:
-            participant_id, evidence_id, stream_id = attribute_stream_frame(frame, binder)
-            pending.append(transcript_event(frame, participant_id, evidence_id, stream_id))
+            participant_id, evidence_id, stream_id, extra = attribute_stream_frame(frame, binder)
+            event = transcript_event(frame, participant_id, evidence_id, stream_id)
+            pending.append(event)
+            extras[event.id] = extra
             for ordered in merge_transcripts(pending):
                 if ordered.id in handled:
                     continue
                 handled.add(ordered.id)
                 await emit_transcript(
-                    ordered, journal=journal, record=record, conversation=conversation
+                    ordered,
+                    journal=journal,
+                    record=record,
+                    conversation=conversation,
+                    extra=extras.pop(ordered.id, None),
                 )
             pending[:] = [event for event in pending if event.id not in handled]
         else:
@@ -438,7 +476,7 @@ async def join_meeting(
                             )
                         )
 
-                    stream_binder = SlotBinder()
+                    stream_binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
                     transcript = build_transcript_callback(
                         journal=journal,
                         record=record,

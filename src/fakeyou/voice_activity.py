@@ -77,11 +77,19 @@ def voice_labels() -> Iterator[str]:
 
 
 class SlotBinder:
-    def __init__(self, labels: Iterator[str] | None = None) -> None:
+    def __init__(
+        self, labels: Iterator[str] | None = None, capacity: int = MEET_AUDIO_SLOTS
+    ) -> None:
         self._tenures: dict[int, Tenure] = {}
         self._stream_csrcs: dict[int, frozenset[int]] = {}
         self._present: frozenset[str] = frozenset()
+        self._dormant: dict[str, tuple[int, Tenure]] = {}
         self._labels = labels if labels is not None else voice_labels()
+        self._capacity = capacity
+
+    @property
+    def roster_size(self) -> int:
+        return len(self._present)
 
     def update_roster(self, devices: Iterable[str]) -> None:
         present = frozenset(devices)
@@ -89,12 +97,18 @@ class SlotBinder:
             self._release(device)
         self._present = present
         if self._contended():
-            self._tenures.clear()
+            self._dormant.clear()
+        else:
+            for device in present:
+                saved = self._dormant.pop(device, None)
+                if saved is not None and saved[0] not in self._tenures:
+                    self._tenures[saved[0]] = saved[1]
         self._bind()
 
     def reset(self) -> None:
         self._tenures.clear()
         self._stream_csrcs.clear()
+        self._dormant.clear()
 
     def observe_stream(self, slot: int, csrcs: Sequence[int]) -> None:
         self._stream_csrcs[slot] = frozenset(csrcs)
@@ -102,11 +116,11 @@ class SlotBinder:
     def resolve(self, slot: int, *, allow_new: bool = True) -> Tenure | BinderRefusal:
         if not self._present:
             return "no_roster"
-        if self._contended():
-            return "slot_contention"
         tenure = self._tenures.get(slot)
         if tenure is not None:
             return tenure
+        if self._contended():
+            return "slot_contention"
         followed = self._follow_csrc(slot)
         if followed is not None:
             return followed
@@ -138,14 +152,15 @@ class SlotBinder:
         return tenure
 
     def _contended(self) -> bool:
-        return len(self._present) > MEET_AUDIO_SLOTS
+        return len(self._present) > self._capacity
 
     def _release(self, device: str) -> None:
         owned = [slot for slot, tenure in self._tenures.items() if tenure.device == device]
-        released = owned or [
-            slot for slot, tenure in self._tenures.items() if tenure.device is None
-        ]
-        for slot in released:
+        if owned:
+            for slot in owned:
+                self._dormant[device] = (slot, self._tenures.pop(slot))
+            return
+        for slot in [slot for slot, tenure in self._tenures.items() if tenure.device is None]:
             del self._tenures[slot]
 
     def _unbound_devices(self) -> set[str]:

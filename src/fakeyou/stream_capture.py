@@ -132,17 +132,22 @@ def parse_drain(payload: Mapping[str, Any]) -> list[StreamChunk]:
     return [_parse_entry(entry) for entry in streams]
 
 
-def parse_roster(payload: Mapping[str, Any]) -> tuple[str, ...]:
+def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) -> tuple[str, ...]:
     roster = payload.get("roster")
     if not isinstance(roster, list):
         return ()
+    folded = twin_name.strip().casefold() if isinstance(twin_name, str) else ""
     names: list[str] = []
     for entry in roster:
         if not isinstance(entry, Mapping):
             continue
         ident = entry.get("id")
-        if isinstance(ident, str) and ident:
-            names.append(ident)
+        if not isinstance(ident, str) or not ident:
+            continue
+        name = entry.get("name")
+        if folded and isinstance(name, str) and name.strip().casefold() == folded:
+            continue
+        names.append(ident)
     return tuple(names)
 
 
@@ -228,12 +233,14 @@ class CaptureDrainLoop:
         poll_interval_seconds: float = 0.25,
         journal: Journal | None = None,
         heartbeat_polls: int = 40,
+        twin_name: str | None = None,
     ) -> None:
         self._page = page
         self._registry = registry
         self._poll_interval = poll_interval_seconds
         self._journal = journal
         self._heartbeat_polls = heartbeat_polls
+        self._twin_name = twin_name
         self._polls = 0
         self._fails = 0
         self._task: asyncio.Task[None] | None = None
@@ -277,7 +284,7 @@ class CaptureDrainLoop:
             if not isinstance(batch, Mapping):
                 self._fails += 1
                 return False
-            self._registry.update_roster(parse_roster(batch))
+            self._registry.update_roster(parse_roster(batch, twin_name=self._twin_name))
             chunks = parse_drain(batch)
             for chunk in chunks:
                 await self._registry.feed(chunk)

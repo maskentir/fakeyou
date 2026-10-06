@@ -356,7 +356,10 @@ class _MeetingWorker:
         else:
             self.capture_registry = StreamRegistry()
         self.capture_drain = CaptureDrainLoop(
-            self.page, self.capture_registry, journal=self.journal
+            self.page,
+            self.capture_registry,
+            journal=self.journal,
+            twin_name=self.config.twin_name,
         )
         await self.capture_drain.start()
         self.record("stream_capture_started", source="runtime")
