@@ -51,6 +51,7 @@ from fakeyou.session import (
     SupportsAdmission,
     SupportsMaintenance,
 )
+from fakeyou.stream_capture import CaptureDrainLoop, StreamRegistry
 from fakeyou.voice_activity import (
     VoiceActivityLoop,
     VoiceActivityTracker,
@@ -135,6 +136,8 @@ class _MeetingWorker:
     probe_drain: ProbeDrainLoop | None = None
     voice_activity: VoiceActivityTracker | None = None
     voice_loop: VoiceActivityLoop | None = None
+    capture_drain: CaptureDrainLoop | None = None
+    capture_registry: StreamRegistry | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -338,6 +341,22 @@ class _MeetingWorker:
             await close_safely(self.probe_drain.close, source="browser", faults=self.faults)
             self.probe_drain = None
 
+    async def start_capture_drain(self, enabled: bool = False) -> None:
+        if not enabled:
+            return
+        if self.capture_drain is not None:
+            return
+        self.capture_registry = StreamRegistry()
+        self.capture_drain = CaptureDrainLoop(self.page, self.capture_registry)
+        await self.capture_drain.start()
+        self.record("stream_capture_started", source="runtime")
+
+    async def close_capture_drain(self) -> None:
+        if self.capture_drain is not None:
+            await close_safely(self.capture_drain.close, source="browser", faults=self.faults)
+            self.capture_drain = None
+        self.capture_registry = None
+
     async def monitor(self, admitted_at: float) -> str:
         try:
             try:
@@ -355,6 +374,13 @@ class _MeetingWorker:
                         classify_exception("browser", error, operation="attribution_probe")
                     )
             try:
+                await self.start_capture_drain()
+            except Exception as error:
+                if self.faults is not None:
+                    self.faults.record(
+                        classify_exception("browser", error, operation="stream_capture")
+                    )
+            try:
                 await self.start_voice_activity()
             except Exception as error:
                 if self.faults is not None:
@@ -365,6 +391,7 @@ class _MeetingWorker:
         finally:
             await self.close_voice_activity()
             await self.close_probe_drain()
+            await self.close_capture_drain()
             await self.close_participant_observer()
 
     async def _monitor_loop(self, admitted_at: float) -> str:

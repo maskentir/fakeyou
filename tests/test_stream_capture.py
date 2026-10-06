@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import struct
+from collections.abc import Callable
 
 import pytest
+from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.browser import open_direct_page
-from fakeyou.stream_capture import load_capture_script
+from fakeyou.stream_capture import StreamAudioInput, StreamRegistry, load_capture_script
+from tests.fakes import FakeClock, meet_page
 
 WINDOW_SAMPLES = 800
 
@@ -47,6 +50,28 @@ LOOPBACK_TWO_TONES = (
     " }"
     "}"
 )
+
+
+class _RecordingInput(StreamAudioInput):
+    def __init__(self) -> None:
+        super().__init__(TransportParams(audio_in_enabled=True))
+        self.fed: list[bytes] = []
+
+    async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
+        self.fed.append(audio)
+
+
+def _recording_registry(
+    monotonic: Callable[[], float],
+) -> tuple[StreamRegistry, list[_RecordingInput]]:
+    made: list[_RecordingInput] = []
+
+    def _factory() -> StreamAudioInput:
+        created = _RecordingInput()
+        made.append(created)
+        return created
+
+    return StreamRegistry(monotonic=monotonic, input_factory=_factory), made
 
 
 def test_load_capture_script_exposes_capture_api() -> None:
@@ -211,3 +236,239 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
 
     assert left == [("slot-0", "left speech")]
     assert right == [("slot-1", "right speech")]
+
+
+def test_parse_drain_decodes_pcm_windows() -> None:
+    from fakeyou.stream_capture import parse_drain
+
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [],
+        "dropped": 0,
+    }
+    (chunk,) = parse_drain(payload)
+    assert chunk.slot == 0 and chunk.csrcs == (111,) and len(chunk.pcm) == 4
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"roster": [], "dropped": 0},
+        {"streams": {}, "roster": [], "dropped": 0},
+        {"streams": ["nope"], "roster": [], "dropped": 0},
+        {
+            "streams": [
+                {
+                    "csrcs": [111],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                    "pcm_b64": "AAP//w==",
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+        {
+            "streams": [
+                {
+                    "slot": 0,
+                    "csrcs": [111],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+        {
+            "streams": [
+                {
+                    "slot": 0,
+                    "csrcs": [111],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                    "pcm_b64": "!!!",
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+        {
+            "streams": [
+                {
+                    "slot": 0,
+                    "csrcs": [111],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                    "pcm_b64": "AA==",
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+        {
+            "streams": [
+                {
+                    "slot": "0",
+                    "csrcs": [111],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                    "pcm_b64": "AAP//w==",
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+        {
+            "streams": [
+                {
+                    "slot": 0,
+                    "csrcs": [111.5],
+                    "level": 0.4,
+                    "page_ms": 1000.0,
+                    "pcm_b64": "AAP//w==",
+                }
+            ],
+            "roster": [],
+            "dropped": 0,
+        },
+    ],
+)
+def test_parse_drain_rejects_corrupt_windows(payload: dict[str, object]) -> None:
+    from typing import Any, cast
+
+    from fakeyou.audio import MeetingAudioError
+    from fakeyou.stream_capture import parse_drain
+
+    with pytest.raises(MeetingAudioError):
+        parse_drain(cast(dict[str, Any], payload))
+
+
+async def test_registry_forwards_pcm_to_slot_inputs() -> None:
+    from fakeyou.stream_capture import StreamChunk
+
+    registry, made = _recording_registry(FakeClock().monotonic)
+    await registry.feed(
+        StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+    )
+    await registry.feed(
+        StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
+    )
+    await registry.feed(
+        StreamChunk(slot=0, csrcs=(111,), level=0.6, page_ms=1250.0, pcm=b"\x04\x05")
+    )
+
+    assert len(made) == 2
+    assert made[0].fed == [b"\x00\x01", b"\x04\x05"]
+    assert made[1].fed == [b"\x02\x03"]
+    assert set(registry.sessions) == {0, 1}
+    assert registry.sessions[0].level == 0.6
+    assert registry.sessions[0].page_ms == 1250.0
+
+
+async def test_registry_releases_session_after_silence() -> None:
+    from fakeyou.stream_capture import StreamChunk
+
+    clock = FakeClock(now=1000.0)
+    registry, _ = _recording_registry(clock.monotonic)
+    chunk = StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+    await registry.feed(chunk)
+    assert set(registry.sessions) == {0}
+    clock.now += 29.0
+    registry.prune()
+    assert set(registry.sessions) == {0}
+    clock.now += 2.0
+    registry.prune()
+    assert dict(registry.sessions) == {}
+    await registry.feed(chunk)
+    assert set(registry.sessions) == {0}
+
+
+async def test_drain_throughput_within_budget() -> None:
+    import base64
+    import time
+
+    from fakeyou.stream_capture import parse_drain
+
+    pcm_b64 = base64.b64encode(bytes(8000)).decode("ascii")
+    payload = {
+        "streams": [
+            {
+                "slot": slot,
+                "csrcs": [100 + slot],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": pcm_b64,
+            }
+            for slot in range(4)
+        ],
+        "roster": [],
+        "dropped": 0,
+    }
+    registry, _ = _recording_registry(time.monotonic)
+    started = time.monotonic()
+    for _ in range(240):
+        for chunk in parse_drain(payload):
+            await registry.feed(chunk)
+    assert time.monotonic() - started < 5.0
+
+
+async def test_capture_drain_loop_polls_and_feeds_registry() -> None:
+    from fakeyou.stream_capture import CAPTURE_DRAIN_JS, CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [],
+        "dropped": 0,
+    }
+    page = meet_page([], evaluates=[payload, None])
+    registry, made = _recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry)
+    assert await loop.poll() is True
+    assert await loop.poll() is False
+    assert page.evaluate_calls == [CAPTURE_DRAIN_JS, CAPTURE_DRAIN_JS]
+    assert set(registry.sessions) == {0}
+    assert registry.sessions[0].csrcs == (111,)
+    assert made[0].fed == [b"\x00\x03\xff\xff"]
+
+
+async def test_start_capture_drain_respects_enabled_flag() -> None:
+    import asyncio
+
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from fakeyou.lifecycle import MeetingLifecycle
+    from fakeyou.meet import DEFAULT_MEET_SIGNALS
+    from fakeyou.runtime import _MeetingWorker
+    from fakeyou.session import SessionConfig
+    from tests.fakes import LINK
+
+    clock = FakeClock()
+    page = meet_page([])
+    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
+    await lifecycle.initialize()
+    worker = _MeetingWorker(
+        SessionConfig(
+            owner_id="owner-1",
+            twin_id="twin-1",
+            meeting_id="meeting-1",
+            link=LINK,
+            twin_name="Twin",
+        ),
+        lifecycle,
+        page,
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+    )
+    await worker.start_capture_drain(enabled=False)
+    assert worker.capture_drain is None
+    await worker.start_capture_drain(enabled=True)
+    assert worker.capture_drain is not None
+    await worker.close_capture_drain()
+    assert worker.capture_drain is None
