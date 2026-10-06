@@ -118,5 +118,9 @@ suite serial 3182 passed / 40 skipped /
 41 deselected; browser 8 passed;
 `ruff check` + `format` bersih (209 berkas);
 `mypy src` bersih (56 berkas). Flag default
-tetap MATI; checklist merge terpenuhi kecuali
-keputusan push/merge pemilik repo.
+tetap MATI. Kualifikasi jujur: bukti latensi
+formal pasca-Fase 0 belum diukur ulang live
+(Fase 0 menambah nol kerja blocking di jalur
+agent; pengukuran ulang dijadwalkan sesi live
+Fase 1). checklist merge terpenuhi kecuali
+butir itu dan keputusan push/merge pemilik repo.
