@@ -254,7 +254,6 @@
     if (!frame) return;
     const slot = slots.get(key);
     if (slot === undefined) return;
-    encodedAtBySlot.set(slot, monoNow());
     let bytes = null;
     try {
       bytes = frame.data ? frame.data.slice(0) : null;
@@ -276,7 +275,9 @@
       decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: stamp, data: bytes }));
     } catch {
       closeDecoder(key);
+      return;
     }
+    encodedAtBySlot.set(slot, monoNow());
   }
 
   function tapEncodedStreams(receiver, streams) {
@@ -604,6 +605,11 @@
         const picked = [];
         for (const entry of list) {
           if ((entry.source || "mstp") === want) picked.push(entry);
+        }
+        if (!picked.length) {
+          for (const entry of list) {
+            if ((entry.source || "mstp") !== want) picked.push(entry);
+          }
         }
         if (!picked.length) return null;
         let total = 0;

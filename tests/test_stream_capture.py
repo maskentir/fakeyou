@@ -91,6 +91,56 @@ LOOPBACK_ONE_TONE_CONSUME = (
 )
 
 
+LOOPBACK_ONE_TONE_FORWARD = (
+    "async () => {"
+    " window.__fakeyouForwarded = 0;"
+    " window.__fakeyouForwardError = null;"
+    " const gen = new AudioContext(); await gen.resume();"
+    " const osc = gen.createOscillator(); osc.frequency.value = 440;"
+    " const gain = gen.createGain(); gain.gain.value = 1;"
+    " const dest = gen.createMediaStreamDestination();"
+    " osc.connect(gain); gain.connect(dest); osc.start();"
+    " const sender = new RTCPeerConnection();"
+    " const receiver = new RTCPeerConnection();"
+    " receiver.ontrack = (event) => {"
+    "  try {"
+    "   const streams = event.receiver.createEncodedStreams();"
+    "   (async () => {"
+    "    const reader = streams.readable.getReader();"
+    "    const writer = streams.writable.getWriter();"
+    "    for (;;) {"
+    "     const packet = await reader.read();"
+    "     if (packet.done) return;"
+    "     window.__fakeyouForwarded += 1;"
+    "     await writer.write(packet.value);"
+    "    }"
+    "   })().catch((e) => { window.__fakeyouForwardError = String(e).slice(0, 120); });"
+    "  } catch (e) { window.__fakeyouForwardError = String(e).slice(0, 120); }"
+    " };"
+    " sender.onicecandidate = (e) => e.candidate && receiver.addIceCandidate(e.candidate);"
+    " receiver.onicecandidate = (e) => e.candidate && sender.addIceCandidate(e.candidate);"
+    " sender.addTrack(dest.stream.getAudioTracks()[0], dest.stream);"
+    " await sender.setLocalDescription(await sender.createOffer());"
+    " await receiver.setRemoteDescription(sender.localDescription);"
+    " await receiver.setLocalDescription(await receiver.createAnswer());"
+    " await sender.setRemoteDescription(receiver.localDescription);"
+    " window.__fakeyouForwardPair = {gen, osc, gain, dest, sender, receiver};"
+    "}"
+)
+
+
+FAIL_DECODER_STUB = (
+    "() => {"
+    " window.__fakeyouDecodeCalls = 0;"
+    " window.AudioDecoder = class {"
+    "  configure() {}"
+    "  decode() { window.__fakeyouDecodeCalls += 1; throw new Error('forced failure'); }"
+    "  close() {}"
+    " };"
+    "}"
+)
+
+
 class _RecordingInput(StreamAudioInput):
     def __init__(self) -> None:
         super().__init__(TransportParams(audio_in_enabled=True))
@@ -296,6 +346,72 @@ async def test_stream_capture_consume_setup_decodes_audio() -> None:
         thread.join(timeout=5)
     assert error is None
     assert consumed > 0
+    assert len(drained["streams"]) == 1
+    assert drained["streams"][0]["level"] > 0.01
+
+
+@pytest.mark.browser
+async def test_stream_capture_failing_decoder_still_drains_live_mstp() -> None:
+    import http.server
+    import threading
+
+    from playwright.async_api import async_playwright
+
+    script = load_capture_script()
+
+    class _Quiet(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = b"<!doctype html><title>tap</title>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, kind: str, *args: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Quiet)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=True,
+                args=["--autoplay-policy=no-user-gesture-required"],
+                ignore_default_args=["--mute-audio"],
+            )
+            try:
+                page = await browser.new_page()
+                await page.add_init_script(script)
+                await page.goto(url)
+                await page.evaluate(FAIL_DECODER_STUB)
+                await page.evaluate(LOOPBACK_ONE_TONE_FORWARD)
+                deadline = asyncio.get_running_loop().time() + 15.0
+                state = "?"
+                while asyncio.get_running_loop().time() < deadline:
+                    state = await page.evaluate(
+                        "() => window.__fakeyouForwardPair.receiver.iceConnectionState"
+                    )
+                    if state in ("connected", "completed"):
+                        break
+                    await asyncio.sleep(0.3)
+                assert state in ("connected", "completed")
+                await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+                await asyncio.sleep(3.0)
+                calls = await page.evaluate("() => window.__fakeyouDecodeCalls")
+                forwarded = await page.evaluate("() => window.__fakeyouForwarded")
+                error = await page.evaluate("() => window.__fakeyouForwardError")
+                drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+            finally:
+                await browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert error is None
+    assert calls > 0
+    assert forwarded > 0
     assert len(drained["streams"]) == 1
     assert drained["streams"][0]["level"] > 0.01
 
