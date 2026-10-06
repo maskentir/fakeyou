@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import uuid
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -37,7 +38,9 @@ from fakeyou.cli.memory import load_operator_persona
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
+    TranscriptEvent,
     conversation_thread_id,
+    merge_transcripts,
     transcript_event,
 )
 from fakeyou.faults import FaultReporter
@@ -65,7 +68,101 @@ from fakeyou.session import SessionConfig, SessionResult
 from fakeyou.settings import (
     Settings,
 )
-from fakeyou.voice_activity import VoiceActivityTracker
+from fakeyou.stream_capture import open_stream_fleet
+from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
+
+
+def stream_slot(stream_id: str) -> int | None:
+    raw = stream_id.removeprefix("slot-")
+    if raw == stream_id or not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def attribute_stream_frame(
+    frame: TranscriptionFrame, binder: SlotBinder | None
+) -> tuple[str, str | None, str]:
+    source = getattr(frame, "transport_source", "") or ""
+    stream_id = source if isinstance(source, str) else ""
+    slot = stream_slot(stream_id)
+    if binder is None or slot is None:
+        return ("unknown", None, stream_id)
+    outcome = binder.resolve(slot)
+    if isinstance(outcome, str):
+        return ("unknown", None, stream_id)
+    return (voice_participant_id(outcome.label), f"stream-{slot}", stream_id)
+
+
+async def emit_transcript(
+    event: TranscriptEvent,
+    *,
+    journal: Journal,
+    record: MeetingRecord,
+    conversation: ConversationLoop | None,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    journal.record(
+        "transcript_finalized",
+        source="stt",
+        origin=event.source,
+        transcript_id=event.id,
+        participant_id=event.participant_id,
+        speaker_evidence_id=event.speaker_evidence_id,
+        spoken_at=event.timestamp,
+        finalized=event.finalized,
+        stream_id=event.stream_id,
+        **(extra or {}),
+    )
+    record.add_transcript(event)
+    if conversation is not None:
+        await conversation.handle_transcript(event)
+
+
+def build_transcript_callback(
+    *,
+    journal: Journal,
+    record: MeetingRecord,
+    conversation: ConversationLoop | None,
+    voice_activity: VoiceActivityTracker | None,
+    binder: SlotBinder,
+    per_stream_enabled: bool = False,
+) -> Callable[[TranscriptionFrame], Awaitable[None]]:
+    pending: list[TranscriptEvent] = []
+    handled: set[str] = set()
+
+    async def transcript(frame: TranscriptionFrame) -> None:
+        if per_stream_enabled:
+            participant_id, evidence_id, stream_id = attribute_stream_frame(frame, binder)
+            pending.append(transcript_event(frame, participant_id, evidence_id, stream_id))
+            for ordered in merge_transcripts(pending):
+                if ordered.id in handled:
+                    continue
+                handled.add(ordered.id)
+                await emit_transcript(
+                    ordered, journal=journal, record=record, conversation=conversation
+                )
+            pending[:] = [event for event in pending if event.id not in handled]
+        else:
+            attribution = voice_activity.attribute() if voice_activity is not None else None
+            event = (
+                transcript_event(frame, "unknown", None, "")
+                if attribution is None
+                else transcript_event(
+                    frame,
+                    attribution.participant_id,
+                    attribution.evidence_id,
+                    "",
+                )
+            )
+            await emit_transcript(
+                event,
+                journal=journal,
+                record=record,
+                conversation=conversation,
+                extra=attribution.journal_fields() if attribution is not None else None,
+            )
+
+    return transcript
 
 
 async def join_meeting(
@@ -212,6 +309,7 @@ async def join_meeting(
         participant_policy_enabled=settings.conversation.participant_policy_enabled,
         participant_evidence_path=record_path.parent / EVIDENCE_FILE_NAME,
         attribution_probe_path=probe_path,
+        per_stream_enabled=settings.conversation.per_stream_enabled,
     )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"
@@ -340,34 +438,15 @@ async def join_meeting(
                             )
                         )
 
-                    async def transcript(frame: TranscriptionFrame) -> None:
-                        attribution = (
-                            voice_activity.attribute() if voice_activity is not None else None
-                        )
-                        event = (
-                            transcript_event(frame, "unknown", None, "")
-                            if attribution is None
-                            else transcript_event(
-                                frame,
-                                attribution.participant_id,
-                                attribution.evidence_id,
-                                "",
-                            )
-                        )
-                        journal.record(
-                            "transcript_finalized",
-                            source="stt",
-                            origin=event.source,
-                            transcript_id=event.id,
-                            participant_id=event.participant_id,
-                            speaker_evidence_id=event.speaker_evidence_id,
-                            spoken_at=event.timestamp,
-                            finalized=event.finalized,
-                            **(attribution.journal_fields() if attribution is not None else {}),
-                        )
-                        record.add_transcript(event)
-                        if conversation is not None:
-                            await conversation.handle_transcript(event)
+                    stream_binder = SlotBinder()
+                    transcript = build_transcript_callback(
+                        journal=journal,
+                        record=record,
+                        conversation=conversation,
+                        voice_activity=voice_activity,
+                        binder=stream_binder,
+                        per_stream_enabled=settings.conversation.per_stream_enabled,
+                    )
 
                     async def interim(frame: TranscriptionFrame) -> None:
                         if conversation is not None:
@@ -379,25 +458,44 @@ async def join_meeting(
                             if config.attribution_probe_path is not None
                             else None
                         )
-                        audio_factory = partial(
-                            open_meeting_audio,
-                            probe=audio_probe,
-                            voice_activity=voice_activity,
-                            tts_settings=settings.tts,
-                            speech_language=settings.speech.language,
-                            stt_settings=settings.stt,
-                            alone_leave_seconds=settings.audio_health.alone_leave_seconds,
-                            on_transcript=transcript,
-                            on_interim=interim,
-                            on_playback_event=log_playback,
-                            faults=faults,
-                            journal=journal,
-                            deaf_window_seconds=config.deaf_window_seconds,
-                            deaf_grace_seconds=config.deaf_grace_seconds,
-                            stt_keywords=speech_keywords(profile, config.twin_name)
-                            if profile
-                            else None,
+                        stt_keywords = (
+                            speech_keywords(profile, config.twin_name) if profile else None
                         )
+                        if settings.conversation.per_stream_enabled:
+                            audio_factory = partial(
+                                open_stream_fleet,
+                                binder=stream_binder,
+                                tts_settings=settings.tts,
+                                speech_language=settings.speech.language,
+                                stt_settings=settings.stt,
+                                alone_leave_seconds=settings.audio_health.alone_leave_seconds,
+                                on_transcript=transcript,
+                                on_interim=interim,
+                                on_playback_event=log_playback,
+                                faults=faults,
+                                journal=journal,
+                                deaf_window_seconds=config.deaf_window_seconds,
+                                deaf_grace_seconds=config.deaf_grace_seconds,
+                                stt_keywords=stt_keywords,
+                            )
+                        else:
+                            audio_factory = partial(
+                                open_meeting_audio,
+                                probe=audio_probe,
+                                voice_activity=voice_activity,
+                                tts_settings=settings.tts,
+                                speech_language=settings.speech.language,
+                                stt_settings=settings.stt,
+                                alone_leave_seconds=settings.audio_health.alone_leave_seconds,
+                                on_transcript=transcript,
+                                on_interim=interim,
+                                on_playback_event=log_playback,
+                                faults=faults,
+                                journal=journal,
+                                deaf_window_seconds=config.deaf_window_seconds,
+                                deaf_grace_seconds=config.deaf_grace_seconds,
+                                stt_keywords=stt_keywords,
+                            )
                     preflight_kwargs: dict[str, Any] = (
                         {
                             "preflight_hosts": preflight_hosts(

@@ -83,6 +83,7 @@ class SessionConfig:
     participant_policy_enabled: bool = False
     participant_evidence_path: Path | None = None
     attribution_probe_path: Path | None = None
+    per_stream_enabled: bool = False
     resume: bool = False
 
 

@@ -51,7 +51,12 @@ from fakeyou.session import (
     SupportsAdmission,
     SupportsMaintenance,
 )
-from fakeyou.stream_capture import CaptureDrainLoop, StreamRegistry
+from fakeyou.stream_capture import (
+    CaptureDrainLoop,
+    StreamRegistry,
+    SupportsCaptureRegistry,
+    load_capture_script,
+)
 from fakeyou.voice_activity import (
     VoiceActivityLoop,
     VoiceActivityTracker,
@@ -247,8 +252,10 @@ class _MeetingWorker:
             poll_interval_seconds=self.config.join_poll_interval_seconds,
         )
         probe_scripts = (
-            (load_probe_script(),) if self.config.attribution_probe_path is not None else ()
-        ) + ((load_voice_activity_script(),) if self.voice_activity is not None else ())
+            ((load_probe_script(),) if self.config.attribution_probe_path is not None else ())
+            + ((load_voice_activity_script(),) if self.voice_activity is not None else ())
+            + ((load_capture_script(),) if self.config.per_stream_enabled else ())
+        )
         result = await _until_stopped(
             request_guest_join(
                 self.page,
@@ -342,11 +349,12 @@ class _MeetingWorker:
             self.probe_drain = None
 
     async def start_capture_drain(self, enabled: bool = False) -> None:
-        if not enabled:
+        if not enabled or self.capture_drain is not None:
             return
-        if self.capture_drain is not None:
-            return
-        self.capture_registry = StreamRegistry()
+        if isinstance(self.audio, SupportsCaptureRegistry):
+            self.capture_registry = self.audio.capture_registry
+        else:
+            self.capture_registry = StreamRegistry()
         self.capture_drain = CaptureDrainLoop(self.page, self.capture_registry)
         await self.capture_drain.start()
         self.record("stream_capture_started", source="runtime")
@@ -374,7 +382,7 @@ class _MeetingWorker:
                         classify_exception("browser", error, operation="attribution_probe")
                     )
             try:
-                await self.start_capture_drain()
+                await self.start_capture_drain(enabled=self.config.per_stream_enabled)
             except Exception as error:
                 if self.faults is not None:
                     self.faults.record(

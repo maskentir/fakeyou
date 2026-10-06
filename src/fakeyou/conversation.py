@@ -56,7 +56,9 @@ def transcript_event(
 ) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
-    identity = json.dumps([source, frame.timestamp or frame.id, frame.text], ensure_ascii=False)
+    identity = json.dumps(
+        [source, frame.timestamp or frame.id, frame.text, stream_id], ensure_ascii=False
+    )
     return TranscriptEvent(
         id=hashlib.sha256(identity.encode()).hexdigest(),
         timestamp=timestamp,
@@ -236,6 +238,7 @@ def _request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
                     "source": event.source,
                     "participant_id": event.participant_id,
                     "speaker_evidence_id": event.speaker_evidence_id,
+                    "stream_id": event.stream_id,
                     "speaker_status": "observed"
                     if event.participant_id != "unknown"
                     else "unknown",

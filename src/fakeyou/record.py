@@ -27,6 +27,7 @@ class TranscriptEntry(_Entry):
     text: str
     participant_id: str
     speaker_evidence_id: str | None
+    stream_id: str = ""
 
 
 class TwinSpeechEntry(_Entry):
@@ -93,6 +94,7 @@ class MeetingRecord:
                 text=event.text,
                 participant_id=event.participant_id,
                 speaker_evidence_id=event.speaker_evidence_id,
+                stream_id=event.stream_id,
             )
         )
 

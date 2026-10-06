@@ -2,16 +2,24 @@ import asyncio
 import base64
 import binascii
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from pipecat.frames.frames import InputAudioRawFrame, StartFrame
+from pipecat.frames.frames import InputAudioRawFrame, StartFrame, TranscriptionFrame
+from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_transport import TransportParams
 
-from fakeyou.audio import MeetingAudioError
+from fakeyou.audio import MeetingAudioError, MeetingAudioSession, open_stream_audio
+from fakeyou.deaf import DeafVerdict
+from fakeyou.faults import FaultReporter
+from fakeyou.journal import Journal
+from fakeyou.playback import PlaybackEngine, PlaybackEvent
+from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings
+from fakeyou.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
 
 CAPTURE_DRAIN_JS = (
     "() => { const capture = window.__fakeyouStreamCapture;"
@@ -19,6 +27,7 @@ CAPTURE_DRAIN_JS = (
 )
 
 SESSION_SILENCE_SECONDS = 30.0
+EARLY_AUDIO_BYTES = 160000
 
 
 def load_capture_script() -> str:
@@ -28,15 +37,27 @@ def load_capture_script() -> str:
 class StreamAudioInput(BaseInputTransport):
     def __init__(self, params: TransportParams, **kwargs: Any) -> None:
         super().__init__(params, **kwargs)
+        self._early: list[InputAudioRawFrame] = []
+        self._early_bytes = 0
 
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
         await self.set_transport_ready(frame)
+        early, self._early = self._early, []
+        self._early_bytes = 0
+        for buffered in early:
+            await self.push_audio_frame(buffered)
 
     async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
-        await self.push_audio_frame(
-            InputAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1)
-        )
+        frame = InputAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1)
+        if getattr(self, "_audio_in_queue", None) is None:
+            self._early.append(frame)
+            self._early_bytes += len(audio)
+            while self._early and self._early_bytes > EARLY_AUDIO_BYTES:
+                dropped = self._early.pop(0)
+                self._early_bytes -= len(dropped.audio)
+            return
+        await self.push_audio_frame(frame)
 
 
 @dataclass(frozen=True)
@@ -56,6 +77,7 @@ class StreamSession:
     level: float = 0.0
     page_ms: float = 0.0
     last_seen: float = 0.0
+    pinned: bool = False
 
 
 def _drain_error(detail: str) -> MeetingAudioError:
@@ -109,6 +131,20 @@ def parse_drain(payload: Mapping[str, Any]) -> list[StreamChunk]:
     return [_parse_entry(entry) for entry in streams]
 
 
+def parse_roster(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    roster = payload.get("roster")
+    if not isinstance(roster, list):
+        return ()
+    names: list[str] = []
+    for entry in roster:
+        if not isinstance(entry, Mapping):
+            continue
+        ident = entry.get("id")
+        if isinstance(ident, str) and ident:
+            names.append(ident)
+    return tuple(names)
+
+
 def _default_input() -> StreamAudioInput:
     return StreamAudioInput(TransportParams(audio_in_enabled=True))
 
@@ -120,15 +156,37 @@ class StreamRegistry:
         monotonic: Callable[[], float] = time.monotonic,
         input_factory: Callable[[], StreamAudioInput] | None = None,
         silence_seconds: float = SESSION_SILENCE_SECONDS,
+        binder: SlotBinder | None = None,
     ) -> None:
         self._monotonic = monotonic
         self._input_factory = _default_input if input_factory is None else input_factory
         self._silence_seconds = silence_seconds
+        self._binder = binder
         self._sessions: dict[int, StreamSession] = {}
+        self._roster_seen: dict[str, float] = {}
 
     @property
     def sessions(self) -> Mapping[int, StreamSession]:
         return self._sessions
+
+    @property
+    def binder(self) -> SlotBinder | None:
+        return self._binder
+
+    def register(self, slot: int, audio: StreamAudioInput) -> None:
+        self._sessions[slot] = StreamSession(
+            slot=slot, input=audio, pinned=True, last_seen=self._monotonic()
+        )
+
+    def update_roster(self, devices: Iterable[str]) -> None:
+        now = self._monotonic()
+        for device in devices:
+            self._roster_seen[device] = now
+        grace = DEPARTURE_GRACE_MS / 1000.0
+        for device in [name for name, seen in self._roster_seen.items() if now - seen > grace]:
+            del self._roster_seen[device]
+        if self._binder is not None:
+            self._binder.update_roster(self._roster_seen)
 
     async def feed(self, chunk: StreamChunk) -> None:
         session = self._sessions.get(chunk.slot)
@@ -139,6 +197,8 @@ class StreamRegistry:
         session.level = chunk.level
         session.page_ms = chunk.page_ms
         session.last_seen = self._monotonic()
+        if self._binder is not None:
+            self._binder.observe_stream(chunk.slot, chunk.csrcs)
         await session.input.feed(chunk.pcm)
 
     def prune(self) -> None:
@@ -146,10 +206,16 @@ class StreamRegistry:
         stale = [
             slot
             for slot, session in self._sessions.items()
-            if now - session.last_seen >= self._silence_seconds
+            if not session.pinned and now - session.last_seen >= self._silence_seconds
         ]
         for slot in stale:
             del self._sessions[slot]
+
+
+@runtime_checkable
+class SupportsCaptureRegistry(Protocol):
+    @property
+    def capture_registry(self) -> StreamRegistry: ...
 
 
 class CaptureDrainLoop:
@@ -171,6 +237,7 @@ class CaptureDrainLoop:
             batch = await self._page.evaluate(CAPTURE_DRAIN_JS)
             if not isinstance(batch, Mapping):
                 return False
+            self._registry.update_roster(parse_roster(batch))
             for chunk in parse_drain(batch):
                 await self._registry.feed(chunk)
             self._registry.prune()
@@ -197,3 +264,137 @@ class CaptureDrainLoop:
         while True:
             await self.poll()
             await asyncio.sleep(self._poll_interval)
+
+
+class StreamFleetSession:
+    def __init__(self, sessions: Sequence[MeetingAudioSession], registry: StreamRegistry) -> None:
+        if not sessions:
+            raise ValueError("stream fleet needs at least one session")
+        self._sessions = list(sessions)
+        self._registry = registry
+
+    @property
+    def capture_registry(self) -> StreamRegistry:
+        return self._registry
+
+    @property
+    def is_speaking(self) -> bool:
+        return any(session.is_speaking for session in self._sessions)
+
+    def _voice(self) -> MeetingAudioSession:
+        for session in self._sessions:
+            try:
+                session.raise_if_failed()
+            except MeetingAudioError:
+                continue
+            return session
+        return self._sessions[0]
+
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None:
+        await self._voice().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+
+    async def stop_playback(self) -> None:
+        await asyncio.gather(*(session.stop_playback() for session in self._sessions))
+
+    def raise_if_failed(self) -> None:
+        failures: list[MeetingAudioError] = []
+        for session in self._sessions:
+            try:
+                session.raise_if_failed()
+            except MeetingAudioError as error:
+                failures.append(error)
+            else:
+                return
+        raise failures[0]
+
+    async def wait_failed(self) -> None:
+        await asyncio.gather(
+            *(session.wait_failed() for session in self._sessions), return_exceptions=True
+        )
+        self.raise_if_failed()
+
+    def mark_admitted(self) -> None:
+        for session in self._sessions:
+            session.mark_admitted()
+
+    async def maintenance_tick(
+        self, *, is_busy: bool, remote_participants: int | None = None
+    ) -> DeafVerdict:
+        verdicts: list[DeafVerdict] = []
+        for session in self._sessions:
+            try:
+                verdicts.append(
+                    await session.maintenance_tick(
+                        is_busy=is_busy, remote_participants=remote_participants
+                    )
+                )
+            except MeetingAudioError:
+                continue
+        if "alone" in verdicts:
+            return "alone"
+        if verdicts:
+            return verdicts[0]
+        self.raise_if_failed()
+        raise MeetingAudioError("stream fleet is exhausted")
+
+    async def stop(self) -> None:
+        await asyncio.gather(*(session.stop() for session in self._sessions))
+
+
+@asynccontextmanager
+async def open_stream_fleet(
+    *,
+    slots: int = MEET_AUDIO_SLOTS,
+    binder: SlotBinder,
+    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
+    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
+    stt_factory: Callable[[int], FrameProcessor] | None = None,
+    playback_factory: Callable[[int], PlaybackEngine] | None = None,
+    faults: FaultReporter | None = None,
+    journal: Journal | None = None,
+    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
+    stt_settings: STTSettings = DEFAULTS.stt,
+    stt_keywords: Sequence[str] | None = None,
+    tts_settings: TTSSettings = DEFAULTS.tts,
+    speech_language: str = DEFAULTS.speech.language,
+    on_playback_event: Callable[[PlaybackEvent], None] | None = None,
+) -> AsyncIterator[StreamFleetSession]:
+    if slots <= 0:
+        raise ValueError("stream fleet needs at least one slot")
+    registry = StreamRegistry(binder=binder)
+    async with AsyncExitStack() as stack:
+        sessions: list[MeetingAudioSession] = []
+        for slot in range(slots):
+            streamer = StreamAudioInput(TransportParams(audio_in_enabled=True))
+            registry.register(slot, streamer)
+            sessions.append(
+                await stack.enter_async_context(
+                    open_stream_audio(
+                        stream_id=f"slot-{slot}",
+                        input=streamer,
+                        on_transcript=on_transcript,
+                        on_interim=on_interim,
+                        stt=stt_factory(slot) if stt_factory is not None else None,
+                        playback=playback_factory(slot) if playback_factory is not None else None,
+                        on_playback_event=on_playback_event if slot == 0 else None,
+                        faults=faults,
+                        journal=journal,
+                        deaf_window_seconds=deaf_window_seconds,
+                        deaf_grace_seconds=deaf_grace_seconds,
+                        alone_leave_seconds=alone_leave_seconds,
+                        stt_settings=stt_settings,
+                        stt_keywords=stt_keywords,
+                        tts_settings=tts_settings,
+                        speech_language=speech_language,
+                    )
+                )
+            )
+        yield StreamFleetSession(sessions, registry)

@@ -157,7 +157,11 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
     assert first.id != replay.id
     assert (
         transcript_event(first, "unknown", None, "").id
-        == transcript_event(replay, "p1", "e1", "s0").id
+        == transcript_event(replay, "p1", "e1", "").id
+    )
+    assert (
+        transcript_event(first, "unknown", None, "").id
+        != transcript_event(first, "unknown", None, "s0").id
     )
     assert (
         transcript_event(first, "unknown", None, "").id
@@ -1742,6 +1746,7 @@ def test_request_messages_carry_speaker_identity_without_owner_data():
         "source": "meeting_audio",
         "participant_id": "spaces/x/devices/1",
         "speaker_evidence_id": "e1",
+        "stream_id": "",
         "speaker_status": "observed",
     }
     (anonymous,) = _request_messages([event("t2", "Hello")])

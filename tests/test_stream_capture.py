@@ -1,13 +1,16 @@
 import asyncio
 import base64
+import json
 import struct
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.browser import open_direct_page
 from fakeyou.stream_capture import StreamAudioInput, StreamRegistry, load_capture_script
+from fakeyou.voice_activity import SlotBinder
 from tests.fakes import FakeClock, meet_page
 
 WINDOW_SAMPLES = 800
@@ -63,6 +66,7 @@ class _RecordingInput(StreamAudioInput):
 
 def _recording_registry(
     monotonic: Callable[[], float],
+    binder: SlotBinder | None = None,
 ) -> tuple[StreamRegistry, list[_RecordingInput]]:
     made: list[_RecordingInput] = []
 
@@ -71,7 +75,7 @@ def _recording_registry(
         made.append(created)
         return created
 
-    return StreamRegistry(monotonic=monotonic, input_factory=_factory), made
+    return StreamRegistry(monotonic=monotonic, input_factory=_factory, binder=binder), made
 
 
 def test_load_capture_script_exposes_capture_api() -> None:
@@ -514,3 +518,409 @@ def test_binder_follows_csrc_across_slot_rotation() -> None:
     rotated = binder.resolve(2)
     assert not isinstance(rotated, str)
     assert rotated.label == first.label
+
+
+def test_flag_off_keeps_mixed_path() -> None:
+    from fakeyou.settings import Settings
+
+    assert Settings().conversation.per_stream_enabled is False
+
+
+def test_stream_ids_change_transcript_identity() -> None:
+    from fakeyou.conversation import transcript_event
+
+    left = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s0")
+    replay = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
+    other = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s1")
+    assert left.id == replay.id
+    assert left.id != other.id
+
+
+def test_request_messages_carry_stream_id() -> None:
+    from fakeyou.conversation import _request_messages, transcript_event
+
+    event = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", "e1", "slot-2")
+    (message,) = _request_messages([event])
+    assert message.additional_kwargs["meeting_event"]["stream_id"] == "slot-2"
+
+
+def test_record_stores_stream_id(tmp_path: Path) -> None:
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.conversation import transcript_event
+    from fakeyou.record import (
+        MeetingRecord,
+        TranscriptEntry,
+        load_meeting_record,
+        meeting_record_path,
+    )
+
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path)
+    frame = TranscriptionFrame("hello", "", "2026-10-06T01:00:01+00:00", finalized=True)
+    record.add_transcript(transcript_event(frame, "a", "e1", "slot-1"))
+    record.close()
+    [entry] = load_meeting_record(path)
+    assert isinstance(entry, TranscriptEntry)
+    assert entry.stream_id == "slot-1"
+    legacy = {
+        "kind": "transcript",
+        "at": "2026-10-06T01:00:02+00:00",
+        "id": "event-legacy",
+        "spoken_at": "2026-10-06T01:00:02+00:00",
+        "source": "meeting_audio",
+        "text": "Legacy.",
+        "participant_id": "unknown",
+        "speaker_evidence_id": None,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(legacy) + "\n")
+    entries = load_meeting_record(path)
+    assert isinstance(entries[1], TranscriptEntry)
+    assert entries[1].stream_id == ""
+
+
+async def test_stream_input_buffers_audio_before_start() -> None:
+    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+    from pipecat.transports.base_transport import TransportParams
+
+    from fakeyou.audio import open_stream_audio
+    from fakeyou.stream_capture import StreamAudioInput
+
+    class _EchoSTT(FrameProcessor):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self._text = text
+
+        async def process_frame(self, frame, direction: FrameDirection) -> None:
+            await super().process_frame(frame, direction)
+            if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
+                await self.push_frame(
+                    TranscriptionFrame(self._text, "guest", "", finalized=True), direction
+                )
+            await self.push_frame(frame, direction)
+
+    class _Playback:
+        @property
+        def is_speaking(self) -> bool:
+            return False
+
+        async def speak(self, text: str, **extra: object) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    seen: list[tuple[str, str]] = []
+    ready = asyncio.Event()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        seen.append((frame.transport_source or "", frame.text))
+        ready.set()
+
+    streamer = StreamAudioInput(TransportParams(audio_in_enabled=True))
+    await streamer.feed(b"\x05\x06" * 160)
+    async with open_stream_audio(
+        stream_id="slot-9",
+        input=streamer,
+        on_transcript=on_transcript,
+        stt=_EchoSTT("early speech"),
+        playback=_Playback(),
+    ):
+        await asyncio.wait_for(ready.wait(), timeout=5)
+    assert seen == [("slot-9", "early speech")]
+
+
+async def test_registry_observes_streams_and_roster_into_binder() -> None:
+    from fakeyou.stream_capture import StreamChunk
+    from fakeyou.voice_activity import SlotBinder
+
+    clock = FakeClock()
+    binder = SlotBinder()
+    registry, _ = _recording_registry(clock.monotonic, binder)
+    registry.update_roster(["host", "guest"])
+    await registry.feed(
+        StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+    )
+    await registry.feed(
+        StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
+    )
+    first = binder.resolve(0)
+    second = binder.resolve(1)
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+    assert first.label != second.label
+    clock.now += 1.0
+    registry.update_roster(["host"])
+    kept = binder.resolve(0)
+    assert not isinstance(kept, str)
+    assert kept.label == first.label
+    clock.now += 3.0
+    registry.update_roster(["host"])
+    rotated = binder.resolve(0)
+    assert not isinstance(rotated, str)
+    assert rotated.label != first.label
+
+
+async def test_capture_drain_poll_updates_binder_roster() -> None:
+    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.voice_activity import SlotBinder
+
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [
+            {"id": "host", "name": "Host"},
+            {"id": "", "name": "Ghost"},
+            "broken",
+            {"name": "NoId"},
+        ],
+        "dropped": 0,
+    }
+    page = meet_page([], evaluates=[payload])
+    binder = SlotBinder()
+    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    loop = CaptureDrainLoop(page, registry)
+    assert await loop.poll() is True
+    outcome = binder.resolve(0)
+    assert not isinstance(outcome, str)
+    assert outcome.device == "host"
+
+
+async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    turns = [
+        TranscriptionFrame(
+            "Let us start with the demo.", "", "2026-10-06T01:00:01+00:00", finalized=True
+        ),
+        TranscriptionFrame(
+            "Sounds good, sharing now.", "", "2026-10-06T01:00:02+00:00", finalized=True
+        ),
+    ]
+
+    class _Conversation:
+        def __init__(self) -> None:
+            self.events: list = []
+
+        async def handle_transcript(self, event) -> None:
+            self.events.append(event)
+
+    async def run(per_stream: bool, tag: str):
+        lines: list[str] = []
+        journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+        path = meeting_record_path(tmp_path, tag)
+        record = MeetingRecord(path, now=lambda: now)
+        conversation = _Conversation()
+        callback = build_transcript_callback(
+            journal=journal,
+            record=record,
+            conversation=conversation,
+            voice_activity=None,
+            binder=SlotBinder(),
+            per_stream_enabled=per_stream,
+        )
+        for index, frame in enumerate(turns):
+            if per_stream:
+                frame.transport_source = f"slot-{index}"
+            await callback(frame)
+        record.close()
+        journal.close()
+        rows = [
+            row for line in lines if (row := json.loads(line))["event"] == "transcript_finalized"
+        ]
+        entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        return rows, entries, conversation.events
+
+    mixed_rows, mixed_entries, mixed_events = await run(False, "mixed-9")
+    stream_rows, stream_entries, stream_events = await run(True, "stream-9")
+    assert [event.text for event in mixed_events] == [event.text for event in stream_events]
+    assert [event.text for event in mixed_events] == [
+        "Let us start with the demo.",
+        "Sounds good, sharing now.",
+    ]
+    assert [entry["stream_id"] for entry in mixed_entries] == ["", ""]
+    assert [entry["stream_id"] for entry in stream_entries] == ["slot-0", "slot-1"]
+    assert [
+        {key: value for key, value in entry.items() if key not in ("id", "stream_id")}
+        for entry in mixed_entries
+    ] == [
+        {key: value for key, value in entry.items() if key not in ("id", "stream_id")}
+        for entry in stream_entries
+    ]
+    assert {frozenset(row) for row in mixed_rows} == {frozenset(row) for row in stream_rows}
+    assert [
+        {key: value for key, value in row.items() if key not in ("transcript_id", "stream_id")}
+        for row in mixed_rows
+    ] == [
+        {key: value for key, value in row.items() if key not in ("transcript_id", "stream_id")}
+        for row in stream_rows
+    ]
+
+
+async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import build_transcript_callback
+    from fakeyou.conversation import TranscriptEvent
+    from fakeyou.journal import Journal
+    from fakeyou.record import MeetingRecord, meeting_record_path
+    from fakeyou.voice_activity import SlotBinder
+
+    now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    binder.observe_stream(0, [111])
+    binder.observe_stream(1, [222])
+    frames = [
+        TranscriptionFrame("Welcome to the call.", "", "2026-10-06T01:00:01+00:00", finalized=True),
+        TranscriptionFrame(
+            "Thanks, glad to join.", "", "2026-10-06T01:00:02+00:00", finalized=True
+        ),
+    ]
+    frames[0].transport_source = "slot-0"
+    frames[1].transport_source = "slot-1"
+
+    seen: list[TranscriptEvent] = []
+
+    class _Conversation:
+        async def handle_transcript(self, event: TranscriptEvent) -> None:
+            seen.append(event)
+
+    journal = Journal("meeting-9", emit=lambda line: None, now=lambda: now, stdout=False)
+    path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(path, now=lambda: now)
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=_Conversation(),
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+    )
+    for frame in frames:
+        await callback(frame)
+    record.close()
+    journal.close()
+    assert [event.participant_id for event in seen] == ["speaker-a", "speaker-b"]
+    assert [event.speaker_evidence_id for event in seen] == ["stream-0", "stream-1"]
+    assert [event.stream_id for event in seen] == ["slot-0", "slot-1"]
+    entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [entry["participant_id"] for entry in entries] == ["speaker-a", "speaker-b"]
+    assert [entry["stream_id"] for entry in entries] == ["slot-0", "slot-1"]
+
+
+async def test_stream_fleet_tags_transcripts_per_slot() -> None:
+    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    from fakeyou.stream_capture import StreamChunk, open_stream_fleet
+    from fakeyou.voice_activity import SlotBinder
+
+    class _EchoSTT(FrameProcessor):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self._text = text
+
+        async def process_frame(self, frame, direction: FrameDirection) -> None:
+            await super().process_frame(frame, direction)
+            if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
+                await self.push_frame(
+                    TranscriptionFrame(self._text, "guest", "", finalized=True), direction
+                )
+            await self.push_frame(frame, direction)
+
+    class _Playback:
+        @property
+        def is_speaking(self) -> bool:
+            return False
+
+        async def speak(self, text: str, **extra: object) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    seen: list[tuple[str, str]] = []
+    received = asyncio.Event()
+
+    async def on_transcript(frame: TranscriptionFrame) -> None:
+        seen.append((frame.transport_source or "", frame.text))
+        if len(seen) == 2:
+            received.set()
+
+    async with open_stream_fleet(
+        slots=2,
+        binder=SlotBinder(),
+        on_transcript=on_transcript,
+        stt_factory=lambda slot: _EchoSTT(f"speech-{slot}"),
+        playback_factory=lambda slot: _Playback(),
+    ) as fleet:
+        assert set(fleet.capture_registry.sessions) == {0, 1}
+        assert fleet.capture_registry.sessions[0].pinned is True
+        await fleet.capture_registry.feed(
+            StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x01\x02" * 160)
+        )
+        await fleet.capture_registry.feed(
+            StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x03\x04" * 160)
+        )
+        await asyncio.wait_for(received.wait(), timeout=10)
+    assert sorted(seen) == [("slot-0", "speech-0"), ("slot-1", "speech-1")]
+
+
+async def test_start_capture_drain_uses_fleet_registry() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from fakeyou.lifecycle import MeetingLifecycle
+    from fakeyou.meet import DEFAULT_MEET_SIGNALS
+    from fakeyou.runtime import _MeetingWorker
+    from fakeyou.session import SessionConfig
+    from fakeyou.stream_capture import StreamRegistry
+    from tests.fakes import LINK
+
+    clock = FakeClock()
+    page = meet_page([])
+    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
+    await lifecycle.initialize()
+    worker = _MeetingWorker(
+        SessionConfig(
+            owner_id="owner-1",
+            twin_id="twin-1",
+            meeting_id="meeting-1",
+            link=LINK,
+            twin_name="Twin",
+        ),
+        lifecycle,
+        page,
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+    )
+    registry = StreamRegistry()
+    worker.audio = SimpleNamespace(capture_registry=registry)
+    await worker.start_capture_drain(enabled=True)
+    assert worker.capture_registry is registry
+    await worker.close_capture_drain()
+    assert worker.capture_registry is None
