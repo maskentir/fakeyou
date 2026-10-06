@@ -28,6 +28,7 @@ from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.meta.stt import MetaSTTService
+from pipecat.transports.base_input import BaseInputTransport
 from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.attribution_probe import AttributionProbe
@@ -663,6 +664,178 @@ async def open_meeting_audio(
         finally:
             if native_transport and transport is not None:
                 _terminate_native_audio(transport)
+        for cleanup_error in cleanup_errors:
+            record_consumer_fault(
+                faults, journal, source="audio", detail="audio_cleanup", error=cleanup_error
+            )
+        if cleanup_errors and original_error is None:
+            raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]
+
+
+def _tagged(
+    stream_id: str, callback: Callable[[TranscriptionFrame], Awaitable[None]]
+) -> Callable[[TranscriptionFrame], Awaitable[None]]:
+    async def tagged(frame: TranscriptionFrame) -> None:
+        frame.transport_source = stream_id
+        await callback(frame)
+
+    return tagged
+
+
+@asynccontextmanager
+async def open_stream_audio(
+    *,
+    stream_id: str,
+    input: BaseInputTransport,
+    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
+    stt: FrameProcessor | None = None,
+    playback: PlaybackEngine | None = None,
+    on_playback_event: Callable[[PlaybackEvent], None] | None = None,
+    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
+    activity: CaptureActivity | None = None,
+    faults: FaultReporter | None = None,
+    journal: Journal | None = None,
+    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
+    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
+    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
+    stt_settings: STTSettings = DEFAULTS.stt,
+    stt_keywords: Sequence[str] | None = None,
+    tts_settings: TTSSettings = DEFAULTS.tts,
+    speech_language: str = DEFAULTS.speech.language,
+    probe: AttributionProbe | None = None,
+    voice_activity: VoiceActivityTracker | None = None,
+) -> AsyncIterator[MeetingAudioSession]:
+    activity = activity or CaptureActivity()
+    tagged_interim = _tagged(stream_id, on_interim) if on_interim is not None else None
+    session: MeetingAudioSession | None = None
+    engine = (
+        playback
+        if playback is not None
+        else create_playback_engine(
+            tts_settings=tts_settings,
+            speech_language=speech_language,
+            on_event=on_playback_event,
+            faults=faults,
+            journal=journal,
+        )
+    )
+    try:
+        try:
+            stt = (
+                stt
+                if stt is not None
+                else create_muse_stt(
+                    api_key=require_secret(stt_settings.api_key, "FAKEYOU_STT__API_KEY"),
+                    sample_rate=CAPTURE_SAMPLE_RATE,
+                    model=stt_settings.model,
+                    url=stt_settings.url,
+                    mode=stt_settings.mode,
+                    language=SPEECH_LANGUAGES[speech_language][0],
+                    keywords=stt_keywords,
+                    service_class=ManagedMuseSTT,
+                )
+            )
+            worker = PipelineWorker(
+                Pipeline(
+                    [
+                        input,
+                        VADProcessor(
+                            vad_analyzer=SileroVADAnalyzer(sample_rate=CAPTURE_SAMPLE_RATE)
+                        ),
+                        _CaptureObserver(activity, journal, probe, voice_activity),
+                        stt,
+                        _TranscriptObserver(
+                            _tagged(stream_id, on_transcript),
+                            activity,
+                            faults,
+                            tagged_interim,
+                            journal=journal,
+                        ),
+                    ]
+                ),
+                params=PipelineParams(audio_in_sample_rate=CAPTURE_SAMPLE_RATE),
+                idle_timeout_secs=None,
+            )
+            started = asyncio.Event()
+            runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
+            early_failures: list[BaseException] = []
+
+            async def on_pipeline_started(_: PipelineWorker, __: Any) -> None:
+                activity.mark_ready()
+                started.set()
+
+            async def on_pipeline_error(_: PipelineWorker, frame: ErrorFrame) -> None:
+                detail = category_fault("stt", frame) or classify_exception(
+                    "stt", frame.exception or RuntimeError("provider failure")
+                )
+                if faults is not None:
+                    faults.record(detail)
+                if frame.category is not None and not frame.category.is_permanent:
+                    if session is not None and detail.retryable:
+                        session.request_stt_reconnect("provider_fault")
+                    return
+                if session is not None:
+                    session._fail("meeting audio provider failed", cause=detail)
+                else:
+                    early_failures.append(detail)
+
+            worker.event_handler("on_pipeline_started")(on_pipeline_started)
+            worker.event_handler("on_pipeline_error")(on_pipeline_error)
+            async with asyncio.timeout(25):
+                await runner.add_workers(worker)
+            runner_task = asyncio.create_task(runner.run())
+            session = MeetingAudioSession(
+                worker,
+                runner,
+                runner_task,
+                engine,
+                stt=stt,
+                activity=activity,
+                faults=faults,
+                journal=journal,
+                deaf_window_seconds=deaf_window_seconds,
+                deaf_grace_seconds=deaf_grace_seconds,
+                alone_leave_seconds=alone_leave_seconds,
+            )
+            for cause in early_failures:
+                session._fail("meeting audio provider failed", cause=cause)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            raise MeetingAudioError("meeting audio initialization failed") from error
+
+        try:
+            async with asyncio.timeout(25):
+                started_task = asyncio.create_task(started.wait())
+                failed_task = asyncio.create_task(session._failed.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        {started_task, failed_task, runner_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    session.raise_if_failed()
+                    if runner_task in done and not started.is_set():
+                        raise MeetingAudioError("meeting audio startup failed")
+                finally:
+                    for task in (started_task, failed_task):
+                        task.cancel()
+                    await asyncio.gather(started_task, failed_task, return_exceptions=True)
+        except TimeoutError:
+            raise MeetingAudioError("meeting audio startup timed out") from None
+        session.raise_if_failed()
+        yield session
+    finally:
+        original_error = sys.exc_info()[1]
+        cleanup_errors: list[Exception] = []
+        if session is not None:
+            try:
+                await session.stop()
+            except Exception as error:
+                cleanup_errors.append(error)
+        try:
+            await _bounded_call(engine.close(), STOP_DEADLINE_SECONDS)
+        except Exception as error:
+            cleanup_errors.append(error)
         for cleanup_error in cleanup_errors:
             record_consumer_fault(
                 faults, journal, source="audio", detail="audio_cleanup", error=cleanup_error

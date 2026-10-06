@@ -132,3 +132,82 @@ async def test_stream_capture_discovers_loopback_receivers() -> None:
     for entry in drained["streams"]:
         assert entry["pcm_b64"]
         assert entry["level"] > 0.01
+
+
+async def test_stream_input_tags_transcripts_with_stream_id() -> None:
+    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+    from pipecat.transports.base_transport import TransportParams
+
+    from fakeyou.audio import open_stream_audio
+    from fakeyou.stream_capture import StreamAudioInput
+
+    class _EchoSTT(FrameProcessor):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self._text = text
+
+        async def process_frame(self, frame, direction: FrameDirection) -> None:
+            await super().process_frame(frame, direction)
+            if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
+                await self.push_frame(
+                    TranscriptionFrame(self._text, "guest", "", finalized=True), direction
+                )
+            await self.push_frame(frame, direction)
+
+    class _Playback:
+        def __init__(self) -> None:
+            self.closed = False
+
+        @property
+        def is_speaking(self) -> bool:
+            return False
+
+        async def speak(self, text: str, **extra: object) -> None:
+            pass
+
+        async def stop(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            self.closed = True
+
+    left: list[tuple[str, str]] = []
+    right: list[tuple[str, str]] = []
+    left_ready = asyncio.Event()
+    right_ready = asyncio.Event()
+
+    async def on_left(frame: TranscriptionFrame) -> None:
+        left.append((frame.transport_source or "", frame.text))
+        left_ready.set()
+
+    async def on_right(frame: TranscriptionFrame) -> None:
+        right.append((frame.transport_source or "", frame.text))
+        right_ready.set()
+
+    assert callable(open_stream_audio)
+    assert callable(StreamAudioInput)
+
+    left_input = StreamAudioInput(TransportParams(audio_in_enabled=True))
+    right_input = StreamAudioInput(TransportParams(audio_in_enabled=True))
+    async with open_stream_audio(
+        stream_id="slot-0",
+        input=left_input,
+        on_transcript=on_left,
+        stt=_EchoSTT("left speech"),
+        playback=_Playback(),
+    ):
+        async with open_stream_audio(
+            stream_id="slot-1",
+            input=right_input,
+            on_transcript=on_right,
+            stt=_EchoSTT("right speech"),
+            playback=_Playback(),
+        ):
+            await left_input.feed(b"\x01\x02" * 160)
+            await right_input.feed(b"\x03\x04" * 160)
+            await asyncio.wait_for(left_ready.wait(), timeout=5)
+            await asyncio.wait_for(right_ready.wait(), timeout=5)
+
+    assert left == [("slot-0", "left speech")]
+    assert right == [("slot-1", "right speech")]
