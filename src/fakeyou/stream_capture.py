@@ -270,12 +270,20 @@ class CaptureDrainLoop:
             for chunk in chunks
         }
         dropped = batch.get("dropped")
+        roster = batch.get("roster")
+        pre_filter = len(roster) if isinstance(roster, list) else 0
+        tiles = batch.get("roster_tiles")
+        if isinstance(tiles, bool) or not isinstance(tiles, int) or tiles < 0:
+            tiles = pre_filter
         self._journal.record(
             "capture_polled",
             source="browser",
             slots=slots,
             dropped=dropped if isinstance(dropped, int) else 0,
             fails=self._fails,
+            roster_tiles=tiles,
+            roster_pre_filter=pre_filter,
+            roster_post_filter=len(parse_roster(batch, twin_name=self._twin_name)),
         )
 
     async def poll(self) -> bool:

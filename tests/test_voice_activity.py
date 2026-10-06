@@ -809,3 +809,27 @@ def test_binder_still_refuses_new_slots_when_contended() -> None:
     assert not isinstance(binder.resolve(3), str)
     binder.update_roster([f"remote-{index}" for index in range(MEET_AUDIO_SLOTS + 2)])
     assert binder.resolve(9) == "slot_contention"
+
+
+def test_binder_distinct_sync_sources_keep_per_slot_labels_without_follow() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest", "visitor"])
+    binder.observe_stream(0, [6666])
+    binder.observe_stream(1, [6667])
+    binder.observe_stream(2, [6668])
+    first = binder.resolve(0)
+    second = binder.resolve(1)
+    third = binder.resolve(2)
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+    assert not isinstance(third, str)
+    assert len({first.label, second.label, third.label}) == 3
+    kept_first = binder.resolve(0)
+    kept_second = binder.resolve(1)
+    kept_third = binder.resolve(2)
+    assert not isinstance(kept_first, str)
+    assert not isinstance(kept_second, str)
+    assert not isinstance(kept_third, str)
+    assert kept_first.label == first.label
+    assert kept_second.label == second.label
+    assert kept_third.label == third.label

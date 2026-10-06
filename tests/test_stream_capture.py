@@ -1484,3 +1484,174 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
     assert rows[0]["speaker_slot"] == 0
     assert rows[0]["speaker_bound"] is True
     assert rows[0]["roster_size"] == 1
+
+
+async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
+    from fakeyou.journal import Journal
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [
+            {"id": "devices/1", "name": "Host"},
+            {"id": "devices/2", "name": "Guest"},
+            {"id": "devices/3", "name": "Visitor"},
+            {"id": "devices/9", "name": "Twin"},
+        ],
+        "roster_tiles": 6,
+        "dropped": 0,
+    }
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    page = meet_page([], evaluates=[payload])
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
+    assert await loop.poll() is True
+    assert len(lines) == 1
+    event = json.loads(lines[0])
+    assert event["event"] == "capture_polled"
+    assert event["roster_tiles"] == 6
+    assert event["roster_pre_filter"] == 4
+    assert event["roster_post_filter"] == 3
+    blob = json.dumps(event)
+    assert "Host" not in blob
+    assert "Guest" not in blob
+    assert "Visitor" not in blob
+    assert "devices/1" not in blob
+
+
+async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -> None:
+    from fakeyou.journal import Journal
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    steady = {
+        "streams": [
+            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+        ],
+        "roster": [
+            {"id": "devices/1", "name": "Host"},
+            {"id": "devices/2", "name": "Guest"},
+        ],
+        "dropped": 0,
+    }
+    broken = {
+        "streams": [{"slot": 0, "csrcs": [], "level": 0.0, "page_ms": 1000.0, "pcm_b64": "AAA="}],
+        "roster": "broken",
+        "roster_tiles": "nope",
+        "dropped": 0,
+    }
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    page = meet_page([], evaluates=[steady, broken])
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
+    assert await loop.poll() is True
+    assert await loop.poll() is True
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["roster_tiles"] == 2
+    assert first["roster_pre_filter"] == 2
+    assert first["roster_post_filter"] == 2
+    second = json.loads(lines[1])
+    assert second["roster_tiles"] == 0
+    assert second["roster_pre_filter"] == 0
+    assert second["roster_post_filter"] == 0
+
+
+PATCH_RECEIVER_SOURCES = (
+    "() => {"
+    " const syncs = [6666, 6667];"
+    " const byTrack = new Map();"
+    " let next = 0;"
+    " const syncFor = (id) => {"
+    "  if (!byTrack.has(id)) byTrack.set(id, syncs[next++ % syncs.length]);"
+    "  return byTrack.get(id);"
+    " };"
+    " try {"
+    "  const proto = RTCRtpReceiver.prototype;"
+    "  proto.getContributingSources = function () { return [{source: 3707908267}]; };"
+    "  proto.getSynchronizationSources = function () {"
+    "   const id = this.track ? String(this.track.id) : '';"
+    "   return [{source: syncFor(id)}];"
+    "  };"
+    " } catch (e) { void e; }"
+    " for (const pair of window.__fakeyouLoopbackPairs || []) {"
+    "  const found = pair.receiver.getReceivers ? pair.receiver.getReceivers() : [];"
+    "  for (const receiver of found) {"
+    "   if (!receiver.track || receiver.track.kind !== 'audio') continue;"
+    "   const sync = syncFor(String(receiver.track.id));"
+    "   receiver.getContributingSources = () => [{source: 3707908267}];"
+    "   receiver.getSynchronizationSources = () => [{source: sync}];"
+    "  }"
+    " }"
+    "}"
+)
+
+
+@pytest.mark.browser
+async def test_stream_capture_reports_sync_sources_without_mixer_overlap() -> None:
+    from playwright.async_api import async_playwright
+
+    script = load_capture_script()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
+            headless=True,
+            args=["--autoplay-policy=no-user-gesture-required"],
+            ignore_default_args=["--mute-audio"],
+        )
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(script)
+            await page.goto("about:blank")
+            await page.evaluate(LOOPBACK_TWO_TONES)
+            deadline = asyncio.get_running_loop().time() + 15.0
+            pending = 0
+            while pending < 4 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.3)
+                pending = await page.evaluate("() => window.__fakeyouStreamCapture.pending()")
+            assert pending >= 4
+            await page.evaluate(PATCH_RECEIVER_SOURCES)
+            await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+            await asyncio.sleep(1.0)
+            drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        finally:
+            await browser.close()
+    assert len(drained["streams"]) == 2
+    csrcs = [tuple(entry["csrcs"]) for entry in drained["streams"]]
+    assert all(3707908267 not in found for found in csrcs)
+    assert csrcs[0] and csrcs[1]
+    assert set(csrcs[0]).isdisjoint(csrcs[1])
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    for entry in drained["streams"]:
+        binder.observe_stream(entry["slot"], entry["csrcs"])
+    first = binder.resolve(drained["streams"][0]["slot"])
+    second = binder.resolve(drained["streams"][1]["slot"])
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+    assert first.label != second.label
+    kept = binder.resolve(drained["streams"][0]["slot"])
+    assert not isinstance(kept, str)
+    assert kept.label == first.label
+
+
+@pytest.mark.browser
+async def test_stream_capture_drain_reports_roster_tile_count() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate(
+            "() => {"
+            " document.body.innerHTML = \"<div data-participant-id='a'>\""
+            " + \"<span class='notranslate'>A</span></div>\""
+            " + \"<div data-participant-id=''></div>\""
+            " + \"<div data-participant-id='b'>\""
+            " + \"<span class='notranslate'>B</span></div>\";"
+            "}"
+        )
+        drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    assert drained["roster_tiles"] == 3
+    assert len(drained["roster"]) == 2

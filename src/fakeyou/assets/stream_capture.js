@@ -49,7 +49,7 @@
   function readCsrcs(receiver) {
     const found = [];
     if (!receiver) return found;
-    const methods = ["getContributingSources", "getSynchronizationSources"];
+    const methods = ["getSynchronizationSources"];
     for (const method of methods) {
       try {
         const reader = receiver[method];
@@ -412,11 +412,19 @@
     return btoa(text);
   }
 
-  function participants() {
+  function participantTiles() {
+    try {
+      return document.querySelectorAll("[data-participant-id]");
+    } catch {
+      return [];
+    }
+  }
+
+  function participants(tiles) {
     const roster = [];
     try {
-      const tiles = document.querySelectorAll("[data-participant-id]");
-      for (const tile of tiles) {
+      const found = tiles || participantTiles();
+      for (const tile of found) {
         const id = String(tile.getAttribute("data-participant-id") || "");
         if (!id) continue;
         const label = tile.querySelector("span.notranslate");
@@ -640,7 +648,10 @@
         };
       })
       .filter((entry) => entry !== null);
-    return { streams, roster: participants(), dropped };
+    const tiles = participantTiles();
+    const roster = participants(tiles);
+    const tileCount = tiles && typeof tiles.length === "number" ? tiles.length : 0;
+    return { streams, roster, roster_tiles: tileCount, dropped };
   }
 
   function pending() {
