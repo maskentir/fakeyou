@@ -31,10 +31,11 @@ pasca-Fase 0. Sesi ini observasi murni — tanpa ubah kode.
 ## Analisis
 
 ```sh
-fakeyou report --meeting <MEETING-ID> | jq '{stt_quality, latency}'
+fakeyou report --meeting MEETING_ID
 ```
 
-Yang dibaca:
+Dari JSON laporan, baca kunci `stt_quality` dan `latency`
+(misalnya disaring dengan `jq`). Yang dibaca:
 
 - `stt_quality.order_inversions` — jumlah inversi vs total giliran.
 - `stt_quality.turn_interims` — churn interim (p50/p95).
