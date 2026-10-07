@@ -63,6 +63,7 @@ from fakeyou.voice_activity import VoiceActivityTracker
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_CONTINUITY_BUFFER_SECONDS = 30
+TURN_TAP_MAX_SECONDS = 30.0
 
 
 class MeetingAudioError(RuntimeError):
@@ -335,6 +336,7 @@ class TurnAudioTap(FrameProcessor):
         self._speaking = False
         self._current: list[bytes] = []
         self._clip = b""
+        self._limit_bytes = max(int(CAPTURE_SAMPLE_RATE * 2 * 1 * TURN_TAP_MAX_SECONDS), 0)
 
     def take_clip(self) -> bytes:
         clip, self._clip = self._clip, b""
@@ -349,7 +351,9 @@ class TurnAudioTap(FrameProcessor):
             elif isinstance(frame, VADUserStoppedSpeakingFrame):
                 if self._speaking:
                     self._speaking = False
-                    self._clip = b"".join(self._current)
+                    self._clip = self._clip + b"".join(self._current)
+                    if len(self._clip) > self._limit_bytes:
+                        self._clip = self._clip[len(self._clip) - self._limit_bytes :]
                     self._current = []
             elif isinstance(frame, AudioRawFrame) and self._speaking:
                 self._current.append(frame.audio)
