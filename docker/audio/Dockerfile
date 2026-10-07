@@ -3,7 +3,7 @@ FROM cloakhq/cloakbrowser@sha256:aed89b504a57fdba0173d4e4cd81100206c3426c759acfe
 
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pulseaudio pulseaudio-utils libasound2-plugins portaudio19-dev build-essential \
+    pulseaudio pulseaudio-utils libasound2-plugins portaudio19-dev build-essential curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
 RUN useradd --create-home --uid 1000 twin \
@@ -12,11 +12,15 @@ RUN useradd --create-home --uid 1000 twin \
 
 WORKDIR /workspace
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --extra audio --no-install-project
+RUN uv sync --frozen --no-dev --extra audio --extra voiceprint --no-install-project
 COPY src/ src/
-RUN uv sync --frozen --no-dev --extra audio \
-    && mkdir -p /workspace/.runtime \
-    && chown -R twin:twin /workspace/.runtime
+RUN uv sync --frozen --no-dev --extra audio --extra voiceprint \
+    && mkdir -p /workspace/.runtime /workspace/models \
+    && chown -R twin:twin /workspace/.runtime /workspace/models
+RUN curl -fsSL -o /workspace/models/campplus-voxceleb-16k.onnx \
+    https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx \
+    && echo "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b  /workspace/models/campplus-voxceleb-16k.onnx" | sha256sum -c - \
+    && chown twin:twin /workspace/models/campplus-voxceleb-16k.onnx
 COPY docker/audio/default.pa /etc/fakeyou/default.pa
 COPY docker/audio/daemon.conf /etc/pulse/daemon.conf
 COPY docker/audio/asound.conf /etc/asound.conf
@@ -34,5 +38,5 @@ CMD ["fakeyou", "check"]
 
 FROM runtime AS test
 USER root
-RUN uv sync --frozen --extra audio
+RUN uv sync --frozen --extra audio --extra voiceprint
 USER twin
