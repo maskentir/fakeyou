@@ -224,7 +224,7 @@ class StreamRegistry:
         if session.seq >= 0 and chunk.seq != expected and self._journal is not None:
             if chunk.seq > expected:
                 self._journal.record(
-                    "drain_gap",
+                    "drain_gap_detected",
                     source="transport",
                     slot=chunk.slot,
                     kind="gap",
@@ -234,7 +234,7 @@ class StreamRegistry:
                 )
             else:
                 self._journal.record(
-                    "drain_gap",
+                    "drain_gap_detected",
                     source="transport",
                     slot=chunk.slot,
                     kind="resync",

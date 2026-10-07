@@ -316,7 +316,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             observer_methods[str(row.get("method"))] += 1
         elif event == "order_inversion_detected":
             order_inversions += 1
-        elif event == "drain_gap":
+        elif event == "drain_gap_detected":
             drain_gaps += 1
         elif event == "stt_turn_recorded":
             interims = row.get("interims")

@@ -1359,7 +1359,7 @@ def test_report_summarizes_stt_quality_signals() -> None:
 
 def test_session_report_counts_drain_gaps() -> None:
     rows = [
-        {"event": "drain_gap", "slot": 0, "kind": "gap", "missed": 2},
-        {"event": "drain_gap", "slot": 1, "kind": "resync", "missed": 0},
+        {"event": "drain_gap_detected", "slot": 0, "kind": "gap", "missed": 2},
+        {"event": "drain_gap_detected", "slot": 1, "kind": "resync", "missed": 0},
     ]
     assert build_session_report(rows)["stt_quality"]["drain_gaps"] == 2

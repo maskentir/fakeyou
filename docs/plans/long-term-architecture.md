@@ -75,7 +75,7 @@ Meet receivers ──► L0 TAP ──► L1 TRANSPORT ──► L2 STT/stream �
   supervisor: slot macet sunyi → fault + rescan otomatis (generalisasi
   `15063bc`, menutup I11/I1-regresi).
 - **L1 Transport.** Drain JS menyertakan `(seq, capture_ts)` monoton per slot;
-  Python memvalidasi gap/duplikat (`drain_gap` tercatat); budget throughput
+  Python memvalidasi gap/duplikat (`drain_gap_detected` tercatat); budget throughput
   Task 3 ditegakkan + backpressure tercatat (batas `pending` + kebijakan
   buang). `capture_ts` hanya untuk urutan relatif per slot (waspada skew jam
   halaman vs container).
@@ -121,7 +121,7 @@ Meet receivers ──► L0 TAP ──► L1 TRANSPORT ──► L2 STT/stream �
 
 ### Fase 1 — struktural (cabang lanjutan, desain + harness per butir)
 
-11. Seq + capture clock end-to-end + `drain_gap` (L1).
+11. Seq + capture clock end-to-end + `drain_gap_detected` (L1).
 12. Watermarked merge + holdback terukur, ATAU record-repair — putuskan dari
     angka inversi/keterlambatan Fase 0, dengan bukti nol-tambah-latensi agent
     (L3; gate latensi dipertahankan).

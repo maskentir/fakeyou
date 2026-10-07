@@ -4,11 +4,11 @@
 
 **Goal:** Seq + jam capture mengalir ujung-ke-ujung dari drain JS sampai record, dan bacaan record memperbaiki urutan transkrip dari jam capture tanpa mengubah jalur live.
 
-**Architecture:** Drain JS menomori tiap slot secara monoton; Python memvalidasi gap/duplikat dan mencatat `drain_gap`; jam capture (page_ms) dicap ke frame lalu ke `TranscriptEvent` dan `TranscriptEntry`; live merge tetap publish-segera (nol tambah latensi); `load_meeting_record` memperbaiki urutan saat baca.
+**Architecture:** Drain JS menomori tiap slot secara monoton; Python memvalidasi gap/duplikat dan mencatat `drain_gap_detected`; jam capture (page_ms) dicap ke frame lalu ke `TranscriptEvent` dan `TranscriptEntry`; live merge tetap publish-segera (nol tambah latensi); `load_meeting_record` memperbaiki urutan saat baca.
 
 **Tech Stack:** Python 3.12, JavaScript in-page (WebRTC standar saja), pytest + Playwright, ruff, mypy.
 
-**Spec:** [docs/plans/long-term-architecture.md](docs/plans/long-term-architecture.md) butir 11 (L1) dan 12 (L3); keputusan butir 12 = record-repair tanpa holdback (0/256 inversi, adendum overlap probe di [docs/reports/2026-10-06-per-stream-acceptance.md](docs/reports/2026-10-06-per-stream-acceptance.md)); kontrak global di [docs/plans/per-stream-capture.md](docs/plans/per-stream-capture.md).
+**Spec:** [long-term-architecture.md](long-term-architecture.md) butir 11 (L1) dan 12 (L3); keputusan butir 12 = record-repair tanpa holdback (0/256 inversi, adendum overlap probe di [2026-10-06-per-stream-acceptance.md](../reports/2026-10-06-per-stream-acceptance.md)); kontrak global di [per-stream-capture.md](per-stream-capture.md).
 
 ## Global Constraints
 
@@ -32,7 +32,7 @@ Fase 1 butir 11–16 adalah empat subsistem independen. Plan ini hanya mencakup 
 | File | Tanggung jawab |
 | --- | --- |
 | `src/fakeyou/assets/stream_capture.js` | `drain()` mengemisikan `seq` monoton per slot (Task 1) |
-| `src/fakeyou/stream_capture.py` | `StreamChunk.seq`, validasi seq + jurnal `drain_gap`, `note_capture`/`last_capture`, journal ke registry (Task 2–3) |
+| `src/fakeyou/stream_capture.py` | `StreamChunk.seq`, validasi seq + jurnal `drain_gap_detected`, `note_capture`/`last_capture`, journal ke registry (Task 2–3) |
 | `src/fakeyou/audio.py` | `_tagged` mencap `capture_seq`/`capture_ms` ke frame via provider jam (Task 3) |
 | `src/fakeyou/conversation.py` | `TranscriptEvent.capture_ms` + param `transcript_event` (Task 3) |
 | `src/fakeyou/cli/join.py` | `attribute_stream_frame` 5-tuple + teruskan `capture_ms` (Task 3) |
@@ -125,16 +125,16 @@ git commit -m "feat(l1): emit monotonic per-slot seq from stream drain"
 
 ---
 
-### Task 2: parse + validasi seq, jurnal drain_gap, hitung di report
+### Task 2: parse + validasi seq, jurnal drain_gap_detected, hitung di report
 
 **Files:**
 - Modify: `src/fakeyou/stream_capture.py:64-70` (`StreamChunk.seq`), `:73-81` (`StreamSession.seq`), `:88-123` (`_parse_entry`), `:163-176` (`StreamRegistry.__init__` journal), `:202-213` (`feed` validasi), `:444` (`open_stream_fleet` teruskan journal)
-- Modify: `src/fakeyou/report.py` (init `drain_gaps = 0`, cabang `elif event == "drain_gap"`, output `"drain_gaps": drain_gaps` di `stt_quality`)
+- Modify: `src/fakeyou/report.py` (init `drain_gaps = 0`, cabang `elif event == "drain_gap_detected"`, output `"drain_gaps": drain_gaps` di `stt_quality`)
 - Test: `tests/test_stream_capture.py`, `tests/test_report.py`
 
 **Interfaces:**
 - Consumes: entri drain membawa `seq` (Task 1).
-- Produces: `StreamChunk.seq: int`; `_parse_entry` menolak seq bukan-int/bool/negatif dengan `MeetingAudioError("stream drain window is corrupt: seq is not a valid integer")`; `StreamRegistry.feed` mencatat jurnal `drain_gap` (source `transport`, field `slot`, `kind` = `gap`|`resync`, `expected`, `received`, `missed`) saat seq lompat (`received > expected`, `missed = received - expected`) atau mundur/berulang (epoch baru, diterima); `build_session_report` mengeluarkan `stt_quality.drain_gaps: int`.
+- Produces: `StreamChunk.seq: int`; `_parse_entry` menolak seq bukan-int/bool/negatif dengan `MeetingAudioError("stream drain window is corrupt: seq is not a valid integer")`; `StreamRegistry.feed` mencatat jurnal `drain_gap_detected` (source `transport`, field `slot`, `kind` = `gap`|`resync`, `expected`, `received`, `missed`) saat seq lompat (`received > expected`, `missed = received - expected`) atau mundur/berulang (epoch baru, diterima); `build_session_report` mengeluarkan `stt_quality.drain_gaps: int`.
 
 - [ ] **Step 1: tulis tes merah**
 
@@ -156,14 +156,14 @@ def test_parse_drain_rejects_bad_seq() -> None:
         parse_drain({"streams": [{k: v for k, v in good.items() if k != "seq"}]})
 
 
-async def test_registry_feed_journals_drain_gap_and_resync() -> None:
+async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     journal = Journal()
     registry, _ = _registry(journal=journal)
     chunk = _chunk(slot=0, seq=0)
     await registry.feed(chunk)
     await registry.feed(_chunk(slot=0, seq=2))
     await registry.feed(_chunk(slot=0, seq=0))
-    gaps = [row for row in journal.rows if row["event"] == "drain_gap"]
+    gaps = [row for row in journal.rows if row["event"] == "drain_gap_detected"]
     assert [(row["kind"], row["missed"]) for row in gaps] == [("gap", 1), ("resync", 0)]
 ```
 
@@ -174,16 +174,16 @@ Tes report:
 ```python
 def test_session_report_counts_drain_gaps() -> None:
     rows = [
-        {"event": "drain_gap", "slot": 0, "kind": "gap", "missed": 2},
-        {"event": "drain_gap", "slot": 1, "kind": "resync", "missed": 0},
+        {"event": "drain_gap_detected", "slot": 0, "kind": "gap", "missed": 2},
+        {"event": "drain_gap_detected", "slot": 1, "kind": "resync", "missed": 0},
     ]
     assert build_session_report(rows)["stt_quality"]["drain_gaps"] == 2
 ```
 
 - [ ] **Step 2: jalankan tes, pastikan merah**
 
-Run: `pytest tests/test_stream_capture.py::test_parse_drain_rejects_bad_seq tests/test_stream_capture.py::test_registry_feed_journals_drain_gap_and_resync tests/test_report.py::test_session_report_counts_drain_gaps -v`
-Expected: FAIL (seq belum di-parse; `drain_gap` belum dicatat; kunci `drain_gaps` belum ada)
+Run: `pytest tests/test_stream_capture.py::test_parse_drain_rejects_bad_seq tests/test_stream_capture.py::test_registry_feed_journals_drain_gap_detected_and_resync tests/test_report.py::test_session_report_counts_drain_gaps -v`
+Expected: FAIL (seq belum di-parse; `drain_gap_detected` belum dicatat; kunci `drain_gaps` belum ada)
 
 - [ ] **Step 3: implementasi minimal**
 
@@ -204,7 +204,7 @@ dan teruskan `seq=seq` ke konstruktor `StreamChunk`.
         if session.seq >= 0 and chunk.seq != expected and self._journal is not None:
             if chunk.seq > expected:
                 self._journal.record(
-                    "drain_gap",
+                    "drain_gap_detected",
                     source="transport",
                     slot=chunk.slot,
                     kind="gap",
@@ -214,7 +214,7 @@ dan teruskan `seq=seq` ke konstruktor `StreamChunk`.
                 )
             else:
                 self._journal.record(
-                    "drain_gap",
+                    "drain_gap_detected",
                     source="transport",
                     slot=chunk.slot,
                     kind="resync",
@@ -227,7 +227,7 @@ dan teruskan `seq=seq` ke konstruktor `StreamChunk`.
 
 `open_stream_fleet`: `registry = StreamRegistry(binder=binder, journal=journal)`.
 
-`report.py`: tambah `drain_gaps = 0` di samping `order_inversions = 0`; tambah cabang `elif event == "drain_gap": drain_gaps += 1` di samping cabang inversi; tambah `"drain_gaps": drain_gaps,` di dict `stt_quality` di samping `order_inversions`.
+`report.py`: tambah `drain_gaps = 0` di samping `order_inversions = 0`; tambah cabang `elif event == "drain_gap_detected": drain_gaps += 1` di samping cabang inversi; tambah `"drain_gaps": drain_gaps,` di dict `stt_quality` di samping `order_inversions`.
 
 - [ ] **Step 4: jalankan tes, pastikan hijau**
 
@@ -289,9 +289,14 @@ def test_attribute_stream_frame_returns_capture_ms() -> None:
 
 
 def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
-    event = transcript_event(frame("hi", "2026-10-06T01:00:01+00:00"), "a", None, "s0", capture_ms=55.5)
+    event = transcript_event(
+        frame("hi", "2026-10-06T01:00:01+00:00"), "a", None, "s0", capture_ms=55.5
+    )
     assert event.capture_ms == 55.5
-    assert transcript_event(frame("hi", "2026-10-06T01:00:01+00:00"), "a", None, "s0").capture_ms == 0.0
+    assert (
+        transcript_event(frame("hi", "2026-10-06T01:00:01+00:00"), "a", None, "s0").capture_ms
+        == 0.0
+    )
     record = MeetingRecord(tmp_path / "record.jsonl")
     record.add_transcript(event)
     record.close()
@@ -310,12 +315,13 @@ Expected: FAIL (`note_capture`/`last_capture`/`capture_ms` belum ada)
 `StreamAudioInput.__init__` tambah `self._capture: tuple[int, float] | None = None`; tambah:
 
 ```python
-    def note_capture(self, seq: int, capture_ms: float) -> None:
-        self._capture = (seq, capture_ms)
+def note_capture(self, seq: int, capture_ms: float) -> None:
+    self._capture = (seq, capture_ms)
 
-    @property
-    def last_capture(self) -> tuple[int, float] | None:
-        return self._capture
+
+@property
+def last_capture(self) -> tuple[int, float] | None:
+    return self._capture
 ```
 
 `feed` tambah sebelum `await session.input.feed(chunk.pcm)`:
@@ -361,10 +367,8 @@ def _tagged(
 dan tiap `return` 4-tuple menjadi 5-tuple dengan `capture_ms` di ujung. `join.py:177-178` menjadi:
 
 ```python
-            participant_id, evidence_id, stream_id, extra, capture_ms = attribute_stream_frame(
-                frame, binder
-            )
-            event = transcript_event(frame, participant_id, evidence_id, stream_id, capture_ms=capture_ms)
+participant_id, evidence_id, stream_id, extra, capture_ms = attribute_stream_frame(frame, binder)
+event = transcript_event(frame, participant_id, evidence_id, stream_id, capture_ms=capture_ms)
 ```
 
 `TranscriptEntry` tambah `capture_ms: float = 0.0`; `add_transcript` teruskan `capture_ms=event.capture_ms`.
@@ -398,8 +402,12 @@ git commit -m "feat(l1): stamp capture clock end to end into record"
 ```python
 def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> None:
     record = MeetingRecord(tmp_path / "record.jsonl")
-    late = transcript_event(frame("two", "2026-10-06T01:00:02+00:00"), "b", None, "s1", capture_ms=200.0)
-    early = transcript_event(frame("one", "2026-10-06T01:00:01+00:00"), "a", None, "s0", capture_ms=100.0)
+    late = transcript_event(
+        frame("two", "2026-10-06T01:00:02+00:00"), "b", None, "s1", capture_ms=200.0
+    )
+    early = transcript_event(
+        frame("one", "2026-10-06T01:00:01+00:00"), "a", None, "s0", capture_ms=100.0
+    )
     record.add_transcript(late)
     record.add_twin_speech("ack")
     record.add_transcript(early)
@@ -408,7 +416,12 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
     )
     record.close()
     repaired = load_meeting_record(tmp_path / "record.jsonl")
-    assert [entry.kind for entry in repaired] == ["transcript", "twin_speech", "transcript", "transcript"]
+    assert [entry.kind for entry in repaired] == [
+        "transcript",
+        "twin_speech",
+        "transcript",
+        "transcript",
+    ]
     assert [entry.text for entry in repaired if entry.kind == "transcript"] == ["one", "two", "old"]
     assert repaired[1].text == "ack"
     raw = load_meeting_record(tmp_path / "record.jsonl", repair=False)
@@ -416,8 +429,28 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
 
 
 def test_repaired_order_is_stable_and_pure() -> None:
-    first = TranscriptEntry(at=datetime.now(UTC), id="a", spoken_at="t", source="s", text="x", participant_id="p", speaker_evidence_id=None, stream_id="s0", capture_ms=10.0)
-    second = TranscriptEntry(at=datetime.now(UTC), id="b", spoken_at="t", source="s", text="y", participant_id="p", speaker_evidence_id=None, stream_id="s1", capture_ms=10.0)
+    first = TranscriptEntry(
+        at=datetime.now(UTC),
+        id="a",
+        spoken_at="t",
+        source="s",
+        text="x",
+        participant_id="p",
+        speaker_evidence_id=None,
+        stream_id="s0",
+        capture_ms=10.0,
+    )
+    second = TranscriptEntry(
+        at=datetime.now(UTC),
+        id="b",
+        spoken_at="t",
+        source="s",
+        text="y",
+        participant_id="p",
+        speaker_evidence_id=None,
+        stream_id="s1",
+        capture_ms=10.0,
+    )
     entries = [second, first]
     assert [entry.id for entry in repaired_order(entries)] == ["a", "b"]
     assert [entry.id for entry in entries] == ["b", "a"]
@@ -501,7 +534,7 @@ Expected: bersih semua
 
 - [ ] **Step 3: tulis adendum + status, commit**
 
-Adendum: tabel butir 11+12 (seq, drain_gap, capture_ms end-to-end, repair-on-read), angka gate aktual, penegasan jalur live tak berubah + tripwire tetap. Status: task, status tiap task, command + exit code, artefak, gate terbuka sisa (butir 13–16).
+Adendum: tabel butir 11+12 (seq, drain_gap_detected, capture_ms end-to-end, repair-on-read), angka gate aktual, penegasan jalur live tak berubah + tripwire tetap. Status: task, status tiap task, command + exit code, artefak, gate terbuka sisa (butir 13–16).
 
 ```bash
 git add docs/reports/2026-10-06-per-stream-acceptance.md .runtime/phase-1-ordering/status.json
@@ -512,6 +545,6 @@ git commit -m "docs(phase-1): ordering implementation addendum and status"
 
 ## Self-Review
 
-1. **Cakupan spec:** butir 11 → Task 1 (seq JS) + Task 2 (validasi + `drain_gap`) + Task 3 (jam capture end-to-end); butir 12 → Task 4 (record-repair) + Task 5 (bukti nol-tambah-latensi: live merge tak tersentuh, hanya tambah cap atribut). Observabilitas: `drain_gap` + `drain_gaps` di report + tripwire `order_inversion_detected` yang sudah ada. Nol-tambah-latensi agent: tidak ada holdback/watermark di jalur live; repair hanya di baca-record offline.
+1. **Cakupan spec:** butir 11 → Task 1 (seq JS) + Task 2 (validasi + `drain_gap_detected`) + Task 3 (jam capture end-to-end); butir 12 → Task 4 (record-repair) + Task 5 (bukti nol-tambah-latensi: live merge tak tersentuh, hanya tambah cap atribut). Observabilitas: `drain_gap_detected` + `drain_gaps` di report + tripwire `order_inversion_detected` yang sudah ada. Nol-tambah-latensi agent: tidak ada holdback/watermark di jalur live; repair hanya di baca-record offline.
 2. **Pindai placeholder:** tiap step berisi kode/ perintah aktual; helper tes (`_registry`, `_chunk`, `frame`, akses baris journal) dirujuk ke pola helper yang sudah ada di berkas tes masing-masing, bukan TBD.
 3. **Konsistensi tipe:** `seq: int` JS→`StreamChunk.seq: int`→`StreamSession.seq: int`→`note_capture(seq: int, ...)`→`frame.capture_seq`; `page_ms: float`→`capture_ms: float`→`TranscriptEvent.capture_ms`→`TranscriptEntry.capture_ms`; `attribute_stream_frame` 5-tuple dipakai konsisten di `join.py:177`; `repaired_order` memakai field yang ada di Task 3.

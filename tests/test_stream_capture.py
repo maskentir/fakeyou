@@ -720,7 +720,7 @@ async def test_registry_releases_session_after_silence() -> None:
     assert set(registry.sessions) == {0}
 
 
-async def test_registry_feed_journals_drain_gap_and_resync() -> None:
+async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     lines: list[str] = []
     journal = Journal("meeting-9", emit=lines.append, stdout=False)
     registry, _ = _recording_registry(FakeClock().monotonic, journal=journal)
@@ -728,7 +728,7 @@ async def test_registry_feed_journals_drain_gap_and_resync() -> None:
     await registry.feed(_chunk(slot=0, seq=2))
     await registry.feed(_chunk(slot=0, seq=0))
     journal.close()
-    gaps = [row for line in lines if (row := json.loads(line))["event"] == "drain_gap"]
+    gaps = [row for line in lines if (row := json.loads(line))["event"] == "drain_gap_detected"]
     assert [(row["kind"], row["missed"]) for row in gaps] == [("gap", 1), ("resync", 0)]
 
 
