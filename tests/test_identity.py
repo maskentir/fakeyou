@@ -1,6 +1,7 @@
 from uuid import NAMESPACE_URL, uuid5
 
 from fakeyou.identity import SpeakerRegistry
+from fakeyou.voiceprint_match import VoiceScores
 
 
 def _registry() -> SpeakerRegistry:
@@ -59,3 +60,46 @@ def test_registry_resolve_csrcs_conflicts_on_split_identity() -> None:
     assert first.uuid != second.uuid
     assert registry.resolve_csrcs(frozenset([11, 22])) is None
     assert registry.resolve_csrcs(frozenset([11])) == first
+
+
+def test_registry_snapshot_uses_noted_voice_margin() -> None:
+    registry = _registry()
+    registry.observe_stream(0, [11])
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+
+    registry.note_voice_scores(row.uuid, VoiceScores("alice", 0.75, 0.25, "verified"))
+
+    updated = registry.resolve(0)
+    assert not isinstance(updated, str)
+    assert updated.margin == 0.5
+    assert updated.margin == 0.75 - 0.25
+
+
+def test_registry_snapshot_keeps_unit_margin_without_scores() -> None:
+    registry = _registry()
+    registry.observe_stream(0, [11])
+    registry.observe_stream(1, [22])
+    first = registry.resolve(0)
+    second = registry.resolve(1)
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+
+    registry.note_voice_scores(first.uuid, VoiceScores("alice", 0.75, 0.25, "verified"))
+
+    unscored = registry.resolve(1)
+    assert not isinstance(unscored, str)
+    assert unscored.margin == 1.0
+
+
+def test_registry_ignores_voice_scores_for_unknown_uuid() -> None:
+    registry = _registry()
+    registry.observe_stream(0, [11])
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+
+    registry.note_voice_scores("0" * 32, VoiceScores("alice", 0.75, 0.25, "verified"))
+
+    unchanged = registry.resolve(0)
+    assert not isinstance(unchanged, str)
+    assert unchanged.margin == 1.0

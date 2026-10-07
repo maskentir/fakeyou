@@ -11,6 +11,7 @@ import fakeyou.audio as audio
 from fakeyou.audio import (
     MeetingAudioError,
     MeetingAudioSession,
+    TurnAudioTap,
     _CaptureObserver,
     create_playback_engine,
     open_meeting_audio,
@@ -1036,3 +1037,78 @@ def test_vad_analyzer_maps_settings_to_params() -> None:
     assert custom._params.start_secs == 0.1
     assert custom._params.stop_secs == 0.4
     assert custom._params.min_volume == 0.3
+
+
+async def test_turn_tap_collects_audio_between_speech_boundaries() -> None:
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    tap = TurnAudioTap()
+    pushed: list = []
+
+    async def sink(frame, direction):
+        pushed.append(frame)
+        return None
+
+    tap.push_frame = sink
+    await tap.process_frame(
+        InputAudioRawFrame(audio=b"\x01" * 320, sample_rate=16000, num_channels=1),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        InputAudioRawFrame(audio=b"\x02" * 320, sample_rate=16000, num_channels=1),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(
+        InputAudioRawFrame(audio=b"\x03" * 160, sample_rate=16000, num_channels=1),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert tap.take_clip() == b"\x02" * 320 + b"\x03" * 160
+    assert tap.take_clip() == b""
+    assert [type(frame).__name__ for frame in pushed] == [
+        "InputAudioRawFrame",
+        "VADUserStartedSpeakingFrame",
+        "InputAudioRawFrame",
+        "InputAudioRawFrame",
+        "VADUserStoppedSpeakingFrame",
+    ]
+
+
+async def test_turn_tap_stop_without_start_leaves_no_clip() -> None:
+    from pipecat.frames.frames import VADUserStoppedSpeakingFrame
+
+    tap = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    tap.push_frame = sink
+    await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert tap.take_clip() == b""
+
+
+async def test_turn_tap_restarts_on_repeated_start() -> None:
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    tap = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    tap.push_frame = sink
+    await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        InputAudioRawFrame(audio=b"\x04" * 320, sample_rate=16000, num_channels=1),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        InputAudioRawFrame(audio=b"\x05" * 320, sample_rate=16000, num_channels=1),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert tap.take_clip() == b"\x05" * 320

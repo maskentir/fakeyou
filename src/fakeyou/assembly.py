@@ -1,9 +1,17 @@
 import asyncio
 import signal
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
-from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import (
+    AsyncExitStack,
+    ExitStack,
+    asynccontextmanager,
+    contextmanager,
+    suppress,
+)
+from dataclasses import dataclass, field
 from typing import Any
 
+import psycopg
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
 from langchain_core.tools import BaseTool
@@ -14,8 +22,10 @@ from fakeyou.agent import (
     SPOKEN_LANGUAGE_GUIDANCE,
     create_meeting_agent,
 )
+from fakeyou.audio import TurnAudioTap
 from fakeyou.brief import MeetingBrief
 from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
+from fakeyou.cli.errors import CliError
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
@@ -45,6 +55,88 @@ from fakeyou.session import SessionConfig
 from fakeyou.settings import (
     Settings,
 )
+from fakeyou.voiceprint_embed import SpeakerEmbedder, load_embedder
+from fakeyou.voiceprint_match import VoiceprintMatcher
+from fakeyou.voiceprint_store import VoiceprintStore, ensure_voiceprint_schema
+
+
+@dataclass(slots=True)
+class VoiceprintLive:
+    tap: TurnAudioTap
+    matcher: VoiceprintMatcher
+    embedder: SpeakerEmbedder
+    min_seconds: float
+    owners: Mapping[str, str]
+    slot_taps: dict[str, TurnAudioTap] = field(default_factory=dict)
+    connection: Any = None
+
+    def tap_for(self, stream_id: str) -> TurnAudioTap:
+        if not stream_id:
+            return self.tap
+        tap = self.slot_taps.get(stream_id)
+        if tap is None:
+            tap = TurnAudioTap()
+            self.slot_taps[stream_id] = tap
+        return tap
+
+    def tap_for_slot(self, slot: int) -> TurnAudioTap:
+        return self.tap_for(f"slot-{slot}")
+
+    def close(self) -> None:
+        connection, self.connection = self.connection, None
+        if connection is not None:
+            with suppress(Exception):
+                connection.close()
+
+
+def create_voiceprint_live(
+    settings: Settings,
+    *,
+    connect: Callable[[], Any] | None = None,
+    embedder: SpeakerEmbedder | None = None,
+) -> VoiceprintLive | None:
+    if not settings.identity.voiceprint_enabled:
+        return None
+    if connect is None:
+        dsn = checkpoint_dsn(settings)
+        if dsn is None:
+            raise CliError("Set FAKEYOU_CHECKPOINT__URL in .env before enabling voiceprints.")
+        connection: Any = psycopg.connect(dsn)
+        owned = True
+    else:
+        connection = connect()
+        owned = False
+    try:
+        ensure_voiceprint_schema(connection)
+        resolved = embedder
+        if resolved is None:
+            if not settings.identity.voiceprint_model_path:
+                raise CliError(
+                    "Set FAKEYOU_IDENTITY__VOICEPRINT_MODEL_PATH in .env"
+                    " before enabling voiceprints."
+                )
+            resolved = load_embedder(
+                settings.identity.voiceprint_model_path, settings.identity.voiceprint_model_sha256
+            )
+    except Exception:
+        if owned:
+            failed, connection = connection, None
+            with suppress(Exception):
+                failed.close()
+        raise
+    store = VoiceprintStore(lambda: connection)
+    return VoiceprintLive(
+        tap=TurnAudioTap(),
+        matcher=VoiceprintMatcher(
+            store,
+            threshold=settings.identity.voiceprint_threshold,
+            min_margin=settings.identity.voiceprint_min_margin,
+        ),
+        embedder=resolved,
+        min_seconds=settings.identity.voiceprint_min_seconds,
+        owners={},
+        connection=connection if owned else None,
+    )
 
 
 def default_persona(settings: Settings) -> str:

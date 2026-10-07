@@ -5,6 +5,8 @@ from string import ascii_uppercase
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
+from fakeyou.voiceprint_match import VoiceScores
+
 ResolveRefusal = Literal["no_roster", "slot_contention", "slot_conflict", "self_overlap"]
 
 SPEAKER_EVENT_BUFFER = 128
@@ -64,6 +66,7 @@ class SpeakerRegistry:
         self._capacity = capacity
         self._events: list[dict[str, Any]] = []
         self._slot_labels: dict[int, str] = {}
+        self._voice_scores: dict[str, VoiceScores] = {}
 
     @property
     def roster_size(self) -> int:
@@ -157,6 +160,11 @@ class SpeakerRegistry:
             self._by_csrc.setdefault(csrc, uuid)
         return self._snapshot(uuid)
 
+    def note_voice_scores(self, uuid: str, scores: VoiceScores) -> None:
+        if uuid not in self._rows:
+            return
+        self._voice_scores[uuid] = scores
+
     def _emit(self, event: dict[str, Any]) -> None:
         self._events.append(event)
         while len(self._events) > SPEAKER_EVENT_BUFFER:
@@ -206,13 +214,15 @@ class SpeakerRegistry:
         else:
             csrcs = tuple(sorted(self._stream_csrcs.get(record.slot, frozenset())))
             track, level = self._stream_meta.get(record.slot, ("", 0.0))
+        scores = self._voice_scores.get(uuid)
+        margin = scores.s1 - scores.s2 if scores is not None else 1.0
         return SpeakerRow(
             uuid=uuid,
             label=record.label,
             device=record.device,
             status=status,
             confidence=confidence,
-            margin=1.0,
+            margin=margin,
             slot=record.slot,
             csrcs=csrcs,
             track=track,

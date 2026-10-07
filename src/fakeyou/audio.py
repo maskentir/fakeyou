@@ -329,6 +329,33 @@ class PreRollBuffer(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class TurnAudioTap(FrameProcessor):
+    def __init__(self) -> None:
+        super().__init__()
+        self._speaking = False
+        self._current: list[bytes] = []
+        self._clip = b""
+
+    def take_clip(self) -> bytes:
+        clip, self._clip = self._clip, b""
+        return clip
+
+    async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.DOWNSTREAM:
+            if isinstance(frame, VADUserStartedSpeakingFrame):
+                self._speaking = True
+                self._current = []
+            elif isinstance(frame, VADUserStoppedSpeakingFrame):
+                if self._speaking:
+                    self._speaking = False
+                    self._clip = b"".join(self._current)
+                    self._current = []
+            elif isinstance(frame, AudioRawFrame) and self._speaking:
+                self._current.append(frame.audio)
+        await self.push_frame(frame, direction)
+
+
 class _TranscriptObserver(FrameProcessor):
     def __init__(
         self,
@@ -743,6 +770,7 @@ async def open_meeting_audio(
     vad_settings: VADSettings = DEFAULTS.vad,
     probe: AttributionProbe | None = None,
     voice_activity: VoiceActivityTracker | None = None,
+    turn_tap: TurnAudioTap | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     native_transport = transport is None
@@ -780,6 +808,7 @@ async def open_meeting_audio(
                     [
                         transport.input(),
                         VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
+                        *([turn_tap] if turn_tap is not None else []),
                         _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
                         stt,
                         _TranscriptObserver(
@@ -922,6 +951,7 @@ async def open_stream_audio(
     vad_settings: VADSettings = DEFAULTS.vad,
     probe: AttributionProbe | None = None,
     voice_activity: VoiceActivityTracker | None = None,
+    turn_tap: TurnAudioTap | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
     tagged_interim = (
@@ -962,6 +992,7 @@ async def open_stream_audio(
                     [
                         input,
                         VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
+                        *([turn_tap] if turn_tap is not None else []),
                         _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
                         PreRollBuffer(CAPTURE_SAMPLE_RATE, preroll_ms=stt_settings.preroll_ms),
                         stt,

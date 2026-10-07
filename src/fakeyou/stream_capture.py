@@ -13,7 +13,7 @@ from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_transport import TransportParams
 
-from fakeyou.audio import MeetingAudioError, MeetingAudioSession, open_stream_audio
+from fakeyou.audio import MeetingAudioError, MeetingAudioSession, TurnAudioTap, open_stream_audio
 from fakeyou.deaf import DeafVerdict
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal
@@ -548,6 +548,7 @@ async def open_stream_fleet(
     on_vad: Callable[[bool], Awaitable[None]] | None = None,
     stt_factory: Callable[[int], FrameProcessor] | None = None,
     playback_factory: Callable[[int], PlaybackEngine] | None = None,
+    turn_tap_factory: Callable[[int], TurnAudioTap] | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
@@ -575,6 +576,7 @@ async def open_stream_fleet(
                         on_transcript=on_transcript,
                         on_interim=on_interim,
                         on_vad=on_vad,
+                        turn_tap=turn_tap_factory(slot) if turn_tap_factory is not None else None,
                         stt=stt_factory(slot) if stt_factory is not None else None,
                         playback=playback_factory(slot) if playback_factory is not None else None,
                         on_playback_event=on_playback_event if slot == 0 else None,
