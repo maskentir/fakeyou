@@ -149,3 +149,23 @@ Insiden sesi: brief/persona ID mismatch mematikan worker
 pra-jurnal (tanpa retry — gap infra); repro foreground
 membakar ID ukur-a-3 via guard session-ended. Pelajaran:
 verifikasi status+jurnal segera setiap start.
+
+## Adendum overlap probe (2026-10-07)
+
+Listener A/B + pembicara X/Y (4 twin). 97 giliran, 0 inversi
+(total 0/256 bersama sesi ukur). Final lintas-stream 1-8 dtk
+apart tiba urut — merge arrival-ordered bertahan dalam praktik.
+
+- WER: X→A 0,25 (nama→"Orchid"); Y→A/B kehilangan deret hari
+  ("...Ukur Rabu") — kelas kata-pendek I9, bukan overlap
+  (admit terpaut 8 dtk: simultanitas SEJATI tak tercapai).
+- Temuan bias: vocab "Orchid" mengalahkan nama "Ukur X" di STT.
+- Temuan harness: earliest-in-window memungut transcript
+  sesat "." — butuh saring kosong/tanda-baca.
+- Temuan ordering: `run_admitted` bicara --speak SEBELUM
+  capture nyala — twin tuli saat opener sendiri (bug Fase 1).
+
+Keputusan butir 12: record-repair (publish-segera +
+repair-on-read) + `order_inversion_detected` sebagai tripwire;
+tanpa holdback. Sub-detik belum teruji; alarm produksi
+menjadi pemicu revisit.
