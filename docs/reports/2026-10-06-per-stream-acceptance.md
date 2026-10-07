@@ -431,3 +431,29 @@ mewarisi temuan ini. Temuan bug sesi: tap menimpa
 segmen VAD (stop 0,2 dtk) → diakumulasi + discard-on-final
 (cabang fix merge terpisah, SDD review); pin sherpa
 1.12.38 cocok ORT 1.24.x pipecat.
+
+## Adendum smoke persistensi audio Fase A (twin-only, 2026-10-08)
+
+Sesi twin-only ±11 menit (Daz A + Daz X, per-stream +
+persist on): tiap twin menulis 3 slot WAV 16 kHz mono
+16-bit + `slots.json` skema `slot_audio/v1`, durasi WAV
+(675 dtk / 791 dtk) ≈ durasi sesi, `gaps_filled=0`,
+tepat 1 event `audio_recording_started` + 1
+`audio_recording_finished` per journal. Matematika ukuran
+eksak 32.000 B/dtk = 115,2 MB/jam/slot-aktif.
+Drift jangkar page_ms-vs-mono: −34,0 ms/menit (Daz A)
+dan +165,4 ms/menit (Daz X) — searah beban STT
+berbeda, dalam batas koreksi linear offline.
+Purge kering (`--days 36500`, root eksplisit):
+`removed=[] kept=3`, exit 0.
+
+Catatan sesi (bukan bug): (1) wiring join mensyaratkan
+persist AND per-stream — diputuskan konsisten karena
+mode campuran di luar cakupan Fase A (ruling tercatat
+di ledger). (2) Default root purge (`record_dir`)
+perlu `--root` eksplisit di host karena split path
+host/container — pola sama seperti `report
+--journal-dir`. (3) Start ulang meeting-id yang sudah
+`session_finished` ditolak ("session already ended") —
+dipakai id baru. Artefak WAV dipertahankan sebagai
+deliverable retensi 30 hari.
