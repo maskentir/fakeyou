@@ -584,6 +584,7 @@ class ConversationLoop:
         journal: Journal | None = None,
         participant_policy_enabled: bool = False,
         pre_generate_enabled: bool = DEFAULTS.conversation.pre_generate_enabled,
+        pregen_fuzzy_restart_enabled: bool = DEFAULTS.conversation.pregen_fuzzy_restart_enabled,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")
@@ -629,6 +630,7 @@ class ConversationLoop:
         self._last_interim: str | None = None
         self._last_interim_text: str | None = None
         self._pre_generate_enabled = pre_generate_enabled
+        self._pregen_fuzzy_restart_enabled = pregen_fuzzy_restart_enabled
         self._endpoint = SemanticEndpoint()
         self._pregen: _Pregeneration | None = None
         self._pregen_count = 0
@@ -718,8 +720,9 @@ class ConversationLoop:
                 if fresh:
                     self._begin_pregen(text)
             elif fresh and fresh != pregen.words:
-                await self._discard_pregen("superseded", fresh)
-                self._begin_pregen(text)
+                if not self._maybe_suppress_pregen_restart(pregen, fresh):
+                    await self._discard_pregen("superseded", fresh)
+                    self._begin_pregen(text)
         session = self._session
         if (
             self._closed
@@ -1254,6 +1257,24 @@ class ConversationLoop:
                 self._active_turn = None
         if not self._closed and self._failure is None and self._pending:
             await self._respond_pending()
+
+    def _maybe_suppress_pregen_restart(
+        self, pregen: _Pregeneration, fresh: tuple[str, ...]
+    ) -> bool:
+        if not self._pregen_fuzzy_restart_enabled:
+            return False
+        stats = describe_word_diff(pregen.words, fresh)
+        dist = int(stats["dist"])
+        words_pre = int(stats["words_pre"])
+        words_final = int(stats["words_final"])
+        if not (
+            (stats["diff_class"] == "prefix_extend" and words_final - words_pre <= 2)
+            or (dist <= 1 and max(words_pre, words_final) >= 6)
+        ):
+            return False
+        pregen.words = fresh
+        self._record("pregeneration_restart_suppressed", request_id=pregen.request_id, **stats)
+        return True
 
     async def _discard_pregen(self, reason: str, compared: tuple[str, ...] | None = None) -> None:
         pregen = self._pregen

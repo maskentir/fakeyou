@@ -2350,3 +2350,206 @@ async def test_pregen_journal_diff_values_are_metadata_only(journal) -> None:
             if key in row:
                 assert "can you help" not in str(row[key])
     await loop.close()
+
+
+class _GatedStreamingResponder:
+    def __init__(self) -> None:
+        self.calls: list[list[TranscriptEvent]] = []
+        self.release = asyncio.Event()
+
+    def stream_sentences(self, events, on_tool_start, *, request_id: str):
+        self.calls.append(list(events))
+        return self._generate()
+
+    async def _generate(self):
+        await self.release.wait()
+        yield "Yes I can."
+
+
+async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None:
+    responder = _GatedStreamingResponder()
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        sentence_streaming=True,
+        pre_generate_enabled=True,
+        pregen_fuzzy_restart_enabled=True,
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    before = loop._pregen
+    assert before is not None
+    request_id = before.request_id
+    task = before.task
+    assert task is not None and not task.done()
+    await loop.handle_interim("can you help me today")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    assert len(journal.events("pregeneration_started")) == 1
+    current = loop._pregen
+    assert current is not None
+    assert current.request_id == request_id
+    assert current.task is task
+    assert not task.done()
+    assert current.words == normalize_words("can you help me today")
+    [row] = journal.events("pregeneration_restart_suppressed")
+    assert row["request_id"] == request_id
+    assert row["diff_class"] == "prefix_extend"
+    for key in _DIFF_KEYS:
+        assert key in row
+    assert journal.events("pregeneration_finished") == []
+    responder.release.set()
+    await loop.close()
+
+
+async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        sentence_streaming=True,
+        pre_generate_enabled=True,
+        pregen_fuzzy_restart_enabled=True,
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    assert loop._pregen is not None
+    before_id = loop._pregen.request_id
+    await loop.handle_interim("can you help him")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 2
+    assert loop._pregen is not None
+    assert loop._pregen.request_id != before_id
+    assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
+    assert journal.events("pregeneration_restart_suppressed") == []
+    await loop.close()
+
+
+async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        sentence_streaming=True,
+        pre_generate_enabled=True,
+        pregen_fuzzy_restart_enabled=True,
+    )
+    loop.bind(audio)
+    await loop.handle_interim("see you")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    await loop.handle_interim("see them")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 2
+    assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
+    assert journal.events("pregeneration_restart_suppressed") == []
+    await loop.close()
+
+
+async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        sentence_streaming=True,
+        pre_generate_enabled=True,
+        pregen_fuzzy_restart_enabled=True,
+    )
+    loop.bind(audio)
+    await loop.handle_interim("please can you help me today")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    assert loop._pregen is not None
+    request_id = loop._pregen.request_id
+    await loop.handle_interim("please can you help me tonight")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    assert len(journal.events("pregeneration_started")) == 1
+    current = loop._pregen
+    assert current is not None
+    assert current.request_id == request_id
+    assert current.words == normalize_words("please can you help me tonight")
+    [row] = journal.events("pregeneration_restart_suppressed")
+    assert row["request_id"] == request_id
+    assert row["dist"] == 1
+    for key in _DIFF_KEYS:
+        assert key in row
+    assert journal.events("pregeneration_finished") == []
+    await loop.close()
+
+
+async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    await loop.handle_interim("can you help me today")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 2
+    assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
+    assert journal.events("pregeneration_restart_suppressed") == []
+    await loop.close()
+
+
+async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        journal=journal,
+        sentence_streaming=True,
+        pre_generate_enabled=True,
+        pregen_fuzzy_restart_enabled=True,
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    await loop.handle_interim("can you help me today")
+    await asyncio.sleep(0.05)
+    assert len(journal.events("pregeneration_restart_suppressed")) == 1
+    await loop.handle_transcript(event("f1", "something else entirely", finalized=True))
+    await loop.wait_idle()
+    assert len(responder.calls) == 2
+    [row] = [
+        row for row in journal.events("pregeneration_finished") if row.get("reason") == "mismatched"
+    ]
+    expected = describe_word_diff(
+        normalize_words("can you help me today"), normalize_words("something else entirely")
+    )
+    for key in _DIFF_KEYS:
+        assert row[key] == expected[key]
+    assert not journal_has(journal, "pregeneration_finished", outcome="adopted")
+    await loop.close()
+
+
+def test_pregen_fuzzy_restart_default_follows_settings_flag():
+    import inspect
+
+    from fakeyou.settings import DEFAULTS
+
+    assert DEFAULTS.conversation.pregen_fuzzy_restart_enabled is False
+    params = inspect.signature(ConversationLoop).parameters
+    assert (
+        params["pregen_fuzzy_restart_enabled"].default
+        == DEFAULTS.conversation.pregen_fuzzy_restart_enabled
+    )

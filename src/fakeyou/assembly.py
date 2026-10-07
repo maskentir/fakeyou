@@ -168,6 +168,7 @@ async def open_conversation(
             journal=journal,
             participant_policy_enabled=settings.conversation.participant_policy_enabled,
             pre_generate_enabled=settings.conversation.pre_generate_enabled,
+            pregen_fuzzy_restart_enabled=settings.conversation.pregen_fuzzy_restart_enabled,
         )
         resources.push_async_callback(conversation.close)
         yield conversation
