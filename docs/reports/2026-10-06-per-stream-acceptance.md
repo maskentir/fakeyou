@@ -279,3 +279,40 @@ Fase 2).
 
 Sisa Fase 1: butir 16 (endpointing semantik +
 pra-generate) — plan tersendiri.
+
+## Adendum implementasi butir 16 (2026-10-07)
+
+Cabang `feat/phase-1-endpointing` (basis
+`feat/phase-1-identity`), plan
+[phase-1-endpointing.md](../plans/phase-1-endpointing.md),
+tiap task SDD (tes merah → implementasi → reviewer
+terpisah → commit lokal).
+
+| Butir | Kerja | Commit |
+| --- | --- | --- |
+| 16a | `SemanticEndpoint`: tanda terminal + cukup kata +
+stabil antar-interim, tepi-naik | `03be409` |
+| 16b | Pra-generate saat sepi: buffer/antrean LLM,
+adopsi cocok-persis, buang saat beda; default MATI | `cb3fbc1` |
+
+Gate aktual (output teramati): suite serial 3321 passed /
+41 skipped / 43 deselected, exit 0; browser 26 passed /
+2 skipped; `ruff check` bersih; `ruff format --check`
+bersih (220 berkas); `mypy src` bersih (58 berkas). Flag
+default tetap MATI (termasuk `pre_generate_enabled`).
+
+Nol-tambah-latensi: Task 2 aditif murni (387 tambah,
+0 hapus); flag mati = satu panggilan inert; jalur normal
+tak tersentuh (tes lama hijau tak tersentuh). Adopsi
+konservatif: cocok-persis kata-ternormalisasi, sisanya
+jalur normal. Catatan reviewer: adopsi tanpa
+`agent_started` (hitung via `pregeneration_finished`
+outcome=adopted), buffer-drain di `handle_transcript`
+(kandidat pindah ke worker bila flag dinyalakan).
+
+Fase 1 (butir 11–16) LENGKAP. Peta cabang bertumpuk
+menuju merge berurutan: `feat/phase-1-ordering` →
+`feat/phase-1-robustness` → `feat/phase-1-identity` →
+`feat/phase-1-endpointing`. Sisa: ukur live (adopsi
+pra-generate, rescue tap, inversi pasca-repair) lalu
+Fase 2 (voiceprint, diarization offline, verified_name).
