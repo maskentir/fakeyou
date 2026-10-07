@@ -64,6 +64,7 @@ markers = [
 
 [tool.mypy]
 python_version = "3.12"
+platform = "linux"
 strict = true
 untyped_calls_exclude = ["deepeval.models.base_model.DeepEvalBaseLLM"]
 files = ["src/fakeyou", "tests/fakes.py", "tests/conftest.py"]

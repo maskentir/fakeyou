@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, ExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
@@ -65,7 +65,7 @@ from fakeyou.providers import memory_config, open_persona_memory, preflight_host
 from fakeyou.record import MeetingRecord, ResumeEntry, load_meeting_record, meeting_record_path
 from fakeyou.report import describe_session
 from fakeyou.runtime import run_meeting_session
-from fakeyou.session import SessionConfig, SessionResult
+from fakeyou.session import MeetingAudio, SessionConfig, SessionResult
 from fakeyou.settings import (
     Settings,
 )
@@ -286,7 +286,7 @@ async def join_meeting(
         settings.require_roles("reply", "reply_fallback")
     if memory:
         memory_config(settings)
-    audio_factory = None
+    audio_factory: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
     if audio_enabled:
         if (
             sys.platform != "linux"
