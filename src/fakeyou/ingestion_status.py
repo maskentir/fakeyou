@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import socket
@@ -171,6 +172,25 @@ def record_lock(
 
 
 @contextmanager
+def _acquisition_guard(path: Path) -> Iterator[None]:
+    guard = path.with_name(path.name + ".guard")
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(guard, os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise LeaseError(f"locked: {path}") from None
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+@contextmanager
 def file_lease(
     path: Path, *, purpose: LockPurpose, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
 ) -> Iterator[str]:
@@ -178,26 +198,27 @@ def file_lease(
     token = uuid.uuid4().hex
     host = socket.gethostname()
     owner_payload = {"host": host, "pid": os.getpid(), "purpose": purpose, "token": token}
-    for _ in range(2):
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            owner = _lock_owner(path)
-            if owner is None or not _owner_recoverable(owner, stale_after_seconds):
-                raise LeaseError(f"locked: {path}") from None
+    with _acquisition_guard(path):
+        for _ in range(2):
             try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
-            continue
-        try:
-            os.write(fd, _lease_payload(owner_payload))
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        break
-    else:
-        raise LeaseError(f"locked: {path}") from None
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                owner = _lock_owner(path)
+                if owner is None or not _owner_recoverable(owner, stale_after_seconds):
+                    raise LeaseError(f"locked: {path}") from None
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                continue
+            try:
+                os.write(fd, _lease_payload(owner_payload))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            break
+        else:
+            raise LeaseError(f"locked: {path}") from None
     stop = threading.Event()
     heartbeat = threading.Thread(
         target=_refresh_lease,

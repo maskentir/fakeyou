@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import socket
@@ -342,6 +343,47 @@ def test_record_lock_lets_exactly_one_racer_take_a_stale_lease(tmp_path: Path) -
     assert len(winners) == 1
     assert failures == ["locked"]
     assert not path.exists()
+
+
+def test_stale_takeover_blocks_second_acquirer_until_release(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "host": "other-container",
+                "pid": 42,
+                "purpose": "meeting",
+                "token": "stale",
+                "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
+        with pytest.raises(RecordLockError):
+            with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
+                pass
+    with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
+        assert json.loads(path.read_text(encoding="utf-8"))["token"] != "stale"
+    assert not path.exists()
+
+
+def test_lease_acquisition_fails_while_guard_held(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    guard = lock_path(record).with_name(lock_path(record).name + ".guard")
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(guard, os.O_CREAT | os.O_WRONLY, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        with pytest.raises(RecordLockError):
+            with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
+                pass
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
