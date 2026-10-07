@@ -1273,7 +1273,7 @@ class ConversationLoop:
         ):
             return False
         pregen.words = fresh
-        self._record("pregeneration_restart_suppressed", request_id=pregen.request_id, **stats)
+        self._record("pregeneration_restart_skipped", request_id=pregen.request_id, **stats)
         return True
 
     async def _discard_pregen(self, reason: str, compared: tuple[str, ...] | None = None) -> None:

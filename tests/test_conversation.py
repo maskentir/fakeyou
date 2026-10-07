@@ -2396,7 +2396,7 @@ async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None
     assert current.task is task
     assert not task.done()
     assert current.words == normalize_words("can you help me today")
-    [row] = journal.events("pregeneration_restart_suppressed")
+    [row] = journal.events("pregeneration_restart_skipped")
     assert row["request_id"] == request_id
     assert row["diff_class"] == "prefix_extend"
     for key in _DIFF_KEYS:
@@ -2429,7 +2429,7 @@ async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> 
     assert loop._pregen is not None
     assert loop._pregen.request_id != before_id
     assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
-    assert journal.events("pregeneration_restart_suppressed") == []
+    assert journal.events("pregeneration_restart_skipped") == []
     await loop.close()
 
 
@@ -2452,7 +2452,7 @@ async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) 
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 2
     assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
-    assert journal.events("pregeneration_restart_suppressed") == []
+    assert journal.events("pregeneration_restart_skipped") == []
     await loop.close()
 
 
@@ -2481,7 +2481,7 @@ async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(jou
     assert current is not None
     assert current.request_id == request_id
     assert current.words == normalize_words("please can you help me tonight")
-    [row] = journal.events("pregeneration_restart_suppressed")
+    [row] = journal.events("pregeneration_restart_skipped")
     assert row["request_id"] == request_id
     assert row["dist"] == 1
     for key in _DIFF_KEYS:
@@ -2505,7 +2505,7 @@ async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(jo
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 2
     assert journal_has(journal, "pregeneration_finished", outcome="discarded", reason="superseded")
-    assert journal.events("pregeneration_restart_suppressed") == []
+    assert journal.events("pregeneration_restart_skipped") == []
     await loop.close()
 
 
@@ -2526,7 +2526,7 @@ async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(jour
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me today")
     await asyncio.sleep(0.05)
-    assert len(journal.events("pregeneration_restart_suppressed")) == 1
+    assert len(journal.events("pregeneration_restart_skipped")) == 1
     await loop.handle_transcript(event("f1", "something else entirely", finalized=True))
     await loop.wait_idle()
     assert len(responder.calls) == 2
