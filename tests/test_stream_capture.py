@@ -9,7 +9,13 @@ import pytest
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.browser import open_direct_page
-from fakeyou.stream_capture import StreamAudioInput, StreamRegistry, load_capture_script
+from fakeyou.journal import Journal
+from fakeyou.stream_capture import (
+    StreamAudioInput,
+    StreamChunk,
+    StreamRegistry,
+    load_capture_script,
+)
 from fakeyou.voice_activity import SlotBinder
 from tests.fakes import FakeClock, meet_page
 
@@ -153,6 +159,7 @@ class _RecordingInput(StreamAudioInput):
 def _recording_registry(
     monotonic: Callable[[], float],
     binder: SlotBinder | None = None,
+    journal: Journal | None = None,
 ) -> tuple[StreamRegistry, list[_RecordingInput]]:
     made: list[_RecordingInput] = []
 
@@ -161,7 +168,14 @@ def _recording_registry(
         made.append(created)
         return created
 
-    return StreamRegistry(monotonic=monotonic, input_factory=_factory, binder=binder), made
+    registry = StreamRegistry(
+        monotonic=monotonic, input_factory=_factory, binder=binder, journal=journal
+    )
+    return registry, made
+
+
+def _chunk(slot: int, seq: int) -> StreamChunk:
+    return StreamChunk(slot=slot, seq=seq, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
 
 
 def test_load_capture_script_exposes_capture_api() -> None:
@@ -517,7 +531,14 @@ def test_parse_drain_decodes_pcm_windows() -> None:
 
     payload = {
         "streams": [
-            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [],
         "dropped": 0,
@@ -548,6 +569,7 @@ def test_parse_drain_decodes_pcm_windows() -> None:
             "streams": [
                 {
                     "slot": 0,
+                    "seq": 0,
                     "csrcs": [111],
                     "level": 0.4,
                     "page_ms": 1000.0,
@@ -560,6 +582,7 @@ def test_parse_drain_decodes_pcm_windows() -> None:
             "streams": [
                 {
                     "slot": 0,
+                    "seq": 0,
                     "csrcs": [111],
                     "level": 0.4,
                     "page_ms": 1000.0,
@@ -573,6 +596,7 @@ def test_parse_drain_decodes_pcm_windows() -> None:
             "streams": [
                 {
                     "slot": 0,
+                    "seq": 0,
                     "csrcs": [111],
                     "level": 0.4,
                     "page_ms": 1000.0,
@@ -586,6 +610,7 @@ def test_parse_drain_decodes_pcm_windows() -> None:
             "streams": [
                 {
                     "slot": "0",
+                    "seq": 0,
                     "csrcs": [111],
                     "level": 0.4,
                     "page_ms": 1000.0,
@@ -599,6 +624,7 @@ def test_parse_drain_decodes_pcm_windows() -> None:
             "streams": [
                 {
                     "slot": 0,
+                    "seq": 0,
                     "csrcs": [111.5],
                     "level": 0.4,
                     "page_ms": 1000.0,
@@ -620,18 +646,42 @@ def test_parse_drain_rejects_corrupt_windows(payload: dict[str, object]) -> None
         parse_drain(cast(dict[str, Any], payload))
 
 
+def test_parse_drain_rejects_bad_seq() -> None:
+    from typing import Any, cast
+
+    from fakeyou.audio import MeetingAudioError
+    from fakeyou.stream_capture import parse_drain
+
+    good = {
+        "slot": 0,
+        "seq": 0,
+        "csrcs": [],
+        "level": 0.1,
+        "page_ms": 10.0,
+        "pcm_b64": base64.b64encode(b"\x00\x00").decode(),
+    }
+    assert parse_drain({"streams": [good]})[0].seq == 0
+    for bad in ("1", 1.5, True, -1, None):
+        with pytest.raises(MeetingAudioError, match="seq is not a valid integer"):
+            parse_drain(cast(dict[str, Any], {"streams": [{**good, "seq": bad}]}))
+    with pytest.raises(MeetingAudioError, match="seq is not a valid integer"):
+        parse_drain(
+            cast(dict[str, Any], {"streams": [{k: v for k, v in good.items() if k != "seq"}]})
+        )
+
+
 async def test_registry_forwards_pcm_to_slot_inputs() -> None:
     from fakeyou.stream_capture import StreamChunk
 
     registry, made = _recording_registry(FakeClock().monotonic)
     await registry.feed(
-        StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+        StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
     )
     await registry.feed(
-        StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
+        StreamChunk(slot=1, seq=0, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
     )
     await registry.feed(
-        StreamChunk(slot=0, csrcs=(111,), level=0.6, page_ms=1250.0, pcm=b"\x04\x05")
+        StreamChunk(slot=0, seq=1, csrcs=(111,), level=0.6, page_ms=1250.0, pcm=b"\x04\x05")
     )
 
     assert len(made) == 2
@@ -647,7 +697,7 @@ async def test_registry_releases_session_after_silence() -> None:
 
     clock = FakeClock(now=1000.0)
     registry, _ = _recording_registry(clock.monotonic)
-    chunk = StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+    chunk = StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
     await registry.feed(chunk)
     assert set(registry.sessions) == {0}
     clock.now += 29.0
@@ -658,6 +708,18 @@ async def test_registry_releases_session_after_silence() -> None:
     assert dict(registry.sessions) == {}
     await registry.feed(chunk)
     assert set(registry.sessions) == {0}
+
+
+async def test_registry_feed_journals_drain_gap_and_resync() -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    registry, _ = _recording_registry(FakeClock().monotonic, journal=journal)
+    await registry.feed(_chunk(slot=0, seq=0))
+    await registry.feed(_chunk(slot=0, seq=2))
+    await registry.feed(_chunk(slot=0, seq=0))
+    journal.close()
+    gaps = [row for line in lines if (row := json.loads(line))["event"] == "drain_gap"]
+    assert [(row["kind"], row["missed"]) for row in gaps] == [("gap", 1), ("resync", 0)]
 
 
 async def test_drain_throughput_within_budget() -> None:
@@ -671,6 +733,7 @@ async def test_drain_throughput_within_budget() -> None:
         "streams": [
             {
                 "slot": slot,
+                "seq": 0,
                 "csrcs": [100 + slot],
                 "level": 0.4,
                 "page_ms": 1000.0,
@@ -694,7 +757,14 @@ async def test_capture_drain_loop_polls_and_feeds_registry() -> None:
 
     payload = {
         "streams": [
-            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [],
         "dropped": 0,
@@ -914,10 +984,10 @@ async def test_registry_observes_streams_and_roster_into_binder() -> None:
     registry, _ = _recording_registry(clock.monotonic, binder)
     registry.update_roster(["host", "guest"])
     await registry.feed(
-        StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+        StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
     )
     await registry.feed(
-        StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
+        StreamChunk(slot=1, seq=0, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x02\x03")
     )
     first = binder.resolve(0)
     second = binder.resolve(1)
@@ -944,7 +1014,14 @@ async def test_capture_drain_poll_updates_binder_roster() -> None:
 
     payload = {
         "streams": [
-            {"slot": 0, "csrcs": [111], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [
             {"id": "host", "name": "Host"},
@@ -974,6 +1051,7 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
         "streams": [
             {
                 "slot": 0,
+                "seq": 0,
                 "csrcs": [111],
                 "level": 0.4,
                 "page_ms": 1000.0,
@@ -983,6 +1061,7 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
             },
             {
                 "slot": 1,
+                "seq": 0,
                 "csrcs": [],
                 "level": 0.0,
                 "page_ms": 1000.0,
@@ -1222,10 +1301,14 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         assert set(fleet.capture_registry.sessions) == {0, 1}
         assert fleet.capture_registry.sessions[0].pinned is True
         await fleet.capture_registry.feed(
-            StreamChunk(slot=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x01\x02" * 160)
+            StreamChunk(
+                slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x01\x02" * 160
+            )
         )
         await fleet.capture_registry.feed(
-            StreamChunk(slot=1, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x03\x04" * 160)
+            StreamChunk(
+                slot=1, seq=0, csrcs=(222,), level=0.5, page_ms=1000.0, pcm=b"\x03\x04" * 160
+            )
         )
         await asyncio.wait_for(received.wait(), timeout=10)
     assert sorted(seen) == [("slot-0", "speech-0"), ("slot-1", "speech-1")]
@@ -1286,6 +1369,7 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
             await fleet.capture_registry.feed(
                 StreamChunk(
                     slot=slot,
+                    seq=0,
                     csrcs=(100 + slot,),
                     level=0.4,
                     page_ms=1000.0,
@@ -1397,6 +1481,7 @@ async def test_capture_drain_binds_three_remote_streams_with_self_present() -> N
         "streams": [
             {
                 "slot": slot,
+                "seq": 0,
                 "csrcs": [111 + slot],
                 "level": 0.4,
                 "page_ms": 1000.0,
@@ -1513,7 +1598,14 @@ async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
 
     payload = {
         "streams": [
-            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [6666],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [
             {"id": "devices/1", "name": "Host"},
@@ -1549,7 +1641,14 @@ async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -
 
     steady = {
         "streams": [
-            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [6666],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [
             {"id": "devices/1", "name": "Host"},
@@ -1558,7 +1657,9 @@ async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -
         "dropped": 0,
     }
     broken = {
-        "streams": [{"slot": 0, "csrcs": [], "level": 0.0, "page_ms": 1000.0, "pcm_b64": "AAA="}],
+        "streams": [
+            {"slot": 0, "seq": 0, "csrcs": [], "level": 0.0, "page_ms": 1000.0, "pcm_b64": "AAA="}
+        ],
         "roster": "broken",
         "roster_tiles": "nope",
         "dropped": 0,
@@ -1701,6 +1802,7 @@ def _collision_payload(names: list[str]) -> dict[str, object]:
         "streams": [
             {
                 "slot": slot,
+                "seq": 0,
                 "csrcs": [111 + slot],
                 "level": 0.4,
                 "page_ms": 1000.0,
@@ -1805,7 +1907,14 @@ async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None
 
     payload = {
         "streams": [
-            {"slot": 0, "csrcs": [6666], "level": 0.4, "page_ms": 1000.0, "pcm_b64": "AAP//w=="}
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [6666],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
         ],
         "roster": [{"id": f"devices/{index}", "name": "Twin"} for index in range(5)],
         "roster_tiles": 5,

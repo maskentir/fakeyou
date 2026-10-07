@@ -112,6 +112,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     policy_reasons = Counter[str]()
     observer_methods = Counter[str]()
     order_inversions = 0
+    drain_gaps = 0
     turn_interims: list[float] = []
     turn_delays: list[float] = []
     capture_engines = Counter[str]()
@@ -315,6 +316,8 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             observer_methods[str(row.get("method"))] += 1
         elif event == "order_inversion_detected":
             order_inversions += 1
+        elif event == "drain_gap":
+            drain_gaps += 1
         elif event == "stt_turn_recorded":
             interims = row.get("interims")
             if isinstance(interims, bool) or not isinstance(interims, (int, float)):
@@ -389,6 +392,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "stt_quality": {
             "order_inversions": order_inversions,
+            "drain_gaps": drain_gaps,
             "turn_interims": summarize(turn_interims),
             "first_interim_to_final_ms": summarize(turn_delays),
             "capture_engines": dict(capture_engines),

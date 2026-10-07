@@ -1355,3 +1355,11 @@ def test_report_summarizes_stt_quality_signals() -> None:
         "max": 120.0,
     }
     assert quality["capture_engines"] == {"decode": 1, "mstp": 1}
+
+
+def test_session_report_counts_drain_gaps() -> None:
+    rows = [
+        {"event": "drain_gap", "slot": 0, "kind": "gap", "missed": 2},
+        {"event": "drain_gap", "slot": 1, "kind": "resync", "missed": 0},
+    ]
+    assert build_session_report(rows)["stt_quality"]["drain_gaps"] == 2

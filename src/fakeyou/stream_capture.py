@@ -64,6 +64,7 @@ class StreamAudioInput(BaseInputTransport):
 @dataclass(frozen=True)
 class StreamChunk:
     slot: int
+    seq: int
     csrcs: tuple[int, ...]
     level: float
     page_ms: float
@@ -74,6 +75,7 @@ class StreamChunk:
 class StreamSession:
     slot: int
     input: StreamAudioInput
+    seq: int = -1
     csrcs: tuple[int, ...] = ()
     level: float = 0.0
     page_ms: float = 0.0
@@ -91,6 +93,9 @@ def _parse_entry(entry: Any) -> StreamChunk:
     slot = entry.get("slot")
     if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
         raise _drain_error("slot is not a valid integer")
+    seq = entry.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        raise _drain_error("seq is not a valid integer")
     raw_csrcs = entry.get("csrcs")
     if not isinstance(raw_csrcs, (list, tuple)):
         raise _drain_error("csrcs is not a list")
@@ -116,6 +121,7 @@ def _parse_entry(entry: Any) -> StreamChunk:
         raise _drain_error("pcm length is not int16 aligned")
     return StreamChunk(
         slot=slot,
+        seq=seq,
         csrcs=tuple(csrcs),
         level=float(level),
         page_ms=float(page_ms),
@@ -168,11 +174,13 @@ class StreamRegistry:
         input_factory: Callable[[], StreamAudioInput] | None = None,
         silence_seconds: float = SESSION_SILENCE_SECONDS,
         binder: SlotBinder | None = None,
+        journal: Journal | None = None,
     ) -> None:
         self._monotonic = monotonic
         self._input_factory = _default_input if input_factory is None else input_factory
         self._silence_seconds = silence_seconds
         self._binder = binder
+        self._journal = journal
         self._sessions: dict[int, StreamSession] = {}
         self._roster_seen: dict[str, float] = {}
 
@@ -204,6 +212,29 @@ class StreamRegistry:
         if session is None:
             session = StreamSession(slot=chunk.slot, input=self._input_factory())
             self._sessions[chunk.slot] = session
+        expected = session.seq + 1
+        if session.seq >= 0 and chunk.seq != expected and self._journal is not None:
+            if chunk.seq > expected:
+                self._journal.record(
+                    "drain_gap",
+                    source="transport",
+                    slot=chunk.slot,
+                    kind="gap",
+                    expected=expected,
+                    received=chunk.seq,
+                    missed=chunk.seq - expected,
+                )
+            else:
+                self._journal.record(
+                    "drain_gap",
+                    source="transport",
+                    slot=chunk.slot,
+                    kind="resync",
+                    expected=expected,
+                    received=chunk.seq,
+                    missed=0,
+                )
+        session.seq = chunk.seq
         session.csrcs = chunk.csrcs
         session.level = chunk.level
         session.page_ms = chunk.page_ms
@@ -441,7 +472,7 @@ async def open_stream_fleet(
 ) -> AsyncIterator[StreamFleetSession]:
     if slots <= 0:
         raise ValueError("stream fleet needs at least one slot")
-    registry = StreamRegistry(binder=binder)
+    registry = StreamRegistry(binder=binder, journal=journal)
     async with AsyncExitStack() as stack:
         sessions: list[MeetingAudioSession] = []
         for slot in range(slots):

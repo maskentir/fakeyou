@@ -14,6 +14,7 @@ Subsystem = Literal[
     "meeting_record",
     "preflight",
     "cli",
+    "transport",
 ]
 EventVerb = Literal[
     "bound",
