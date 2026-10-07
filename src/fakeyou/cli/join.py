@@ -532,6 +532,10 @@ async def join_meeting(
                         if conversation is not None:
                             await conversation.handle_interim(frame.text)
 
+                    async def vad(active: bool) -> None:
+                        if conversation is not None:
+                            await conversation.note_vad(active)
+
                     if audio_enabled:
                         audio_probe = (
                             AttributionProbe(config.attribution_probe_path)
@@ -552,6 +556,7 @@ async def join_meeting(
                                 alone_leave_seconds=settings.audio_health.alone_leave_seconds,
                                 on_transcript=transcript,
                                 on_interim=interim,
+                                on_vad=vad,
                                 on_playback_event=log_playback,
                                 faults=faults,
                                 journal=journal,
@@ -570,6 +575,7 @@ async def join_meeting(
                                 alone_leave_seconds=settings.audio_health.alone_leave_seconds,
                                 on_transcript=transcript,
                                 on_interim=interim,
+                                on_vad=vad,
                                 on_playback_event=log_playback,
                                 faults=faults,
                                 journal=journal,

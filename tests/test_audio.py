@@ -846,6 +846,52 @@ async def test_capture_observer_journals_speech_boundaries(
     assert all(row["at"] for row in rows)
 
 
+async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
+    from pipecat.frames.frames import (
+        UserSpeakingFrame,
+        VADUserStartedSpeakingFrame,
+        VADUserStoppedSpeakingFrame,
+    )
+
+    seen: list[bool] = []
+
+    async def on_vad(active: bool) -> None:
+        seen.append(active)
+
+    observer = _CaptureObserver(CaptureActivity(), on_vad=on_vad)
+
+    async def sink(frame, direction):
+        return None
+
+    observer.push_frame = sink
+    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await observer.process_frame(UserSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert seen == [True, False]
+
+
+async def test_capture_observer_contains_on_vad_failure(journal) -> None:
+    from pipecat.frames.frames import VADUserStoppedSpeakingFrame
+
+    async def on_vad(active: bool) -> None:
+        raise RuntimeError("vad consumer down")
+
+    pushed: list = []
+    observer = _CaptureObserver(CaptureActivity(), on_vad=on_vad, journal=journal)
+
+    async def sink(frame, direction):
+        pushed.append(frame)
+        return None
+
+    observer.push_frame = sink
+    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert len(pushed) == 1
+    assert journal.events()[-1]["event"] == "fault_recorded"
+
+
 async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() -> None:
     clock = [100.0]
     activity = CaptureActivity(now=lambda: clock[0])

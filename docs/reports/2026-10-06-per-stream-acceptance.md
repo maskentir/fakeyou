@@ -316,3 +316,46 @@ menuju merge berurutan: `feat/phase-1-ordering` →
 `feat/phase-1-endpointing`. Sisa: ukur live (adopsi
 pra-generate, rescue tap, inversi pasca-repair) lalu
 Fase 2 (voiceprint, diarization offline, verified_name).
+
+## Adendum verifikasi live pasca-Fase 1 (2026-10-07)
+
+Sesi twin-only f1v (3 twin, ±195 giliran) + probe f1p
+(2 twin ping-pong, beberapa ronde). Temuan dan perbaikan:
+
+| Temuan live | Akar | Perbaikan |
+| --- | --- | --- |
+| Slot hantu di-rescue ±200×/twin
+tiap 3 dtk, tak sembuh | Supervisor reattach tanpa
+cek track ended + tanpa batas futility | Cabang
+`fix/supervisor-release-dead-slots`: lepas track
+ended, cap futility 5, `tap_slot_dropped`, semantik
+stalled pra-rescue. Terverifikasi live: rescue
+terbatas 4× lalu drop (73 drop, 0 loop) |
+| Pregen 0 start dari ±60 giliran | Endpoint menuntut
+tanda terminal; provider tak emit di interim | Cabang
+`fix/endpointing-stability-trigger`: stabilitas 3× +
+trigger VAD-stop + interim terakhir |
+| 11 start / 0 adopsi | Interim saat VAD-stop basi
+(provider lag) | Restart saat interim lebih baru
+(reason `superseded`), min 1 kata jalur VAD |
+| 3 twin mati `audio_failure` 3–5 dtk
+pasca-admit | Deadline reconnect 120 dtk dihitung
+sejak antre; lobby ≥150 dtk mati instan tanpa
+pernah coba (bug pre-existing era Task-8, bukan
+kode Fase 1) | Cabang `fix/stt-reconnect-lobby-epoch`
+(basis endpointing): reset epoch saat admit |
+
+Angka adopsi final (f1p-11, 18 final): 40 pregen —
+17 adopted (42%), 23 superseded, 0 mismatched.
+Hemat overlap: p50 0,03 dtk, p95 2,9 dtk.
+Keputusan jujur: mekanisme aman (adopsi cocok-persis,
+nol risiko konten salah) tetapi hemat median kecil
+karena adopsi mengunci ke interim paling segar yang
+tiba sekitar final; pertahankan default MATI sampai
+kerja lanjutan (adopsi fuzzy berambang / pakai-ulang
+prefiks, Fase 2). Inversi tetap 0; `drain_gaps` 0;
+`speaker_uuid` + `capture_ms` mengalir live.
+
+Gate tiap fix: SDD reviewer terpisah (2 Approve,
+2 Approve-with-notes, 1 Reject→perbaiki→Approve),
+suite 3328–3347 hijau, ruff + mypy bersih.
