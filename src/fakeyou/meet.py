@@ -324,6 +324,12 @@ async def request_guest_join(
                 )
             else:
                 detail = f"no admission within {request.lobby_timeout_seconds} seconds"
+            try:
+                rechecked = await page.content()
+            except Exception:
+                return JoinResult(status="timeout", detail=detail)
+            if _is_in_call(rechecked, signals):
+                return JoinResult(status="admitted", detail="guest admitted to the call")
             return JoinResult(status="timeout", detail=detail)
         await sleep(request.poll_interval_seconds)
 

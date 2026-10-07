@@ -318,6 +318,9 @@ async def join_meeting(
         if duration is not None
         else settings.meeting.session_duration_seconds,
         join_poll_interval_seconds=settings.meeting.join_poll_seconds,
+        join_max_attempts=settings.meeting.join_max_attempts,
+        join_retry_base_seconds=settings.meeting.join_retry_base_seconds,
+        join_retry_cap_seconds=settings.meeting.join_retry_cap_seconds,
         monitor_interval_seconds=settings.meeting.monitor_poll_seconds,
         leave_timeout_seconds=settings.meeting.leave_timeout_seconds,
         warmup_browser=settings.browser.warmup,

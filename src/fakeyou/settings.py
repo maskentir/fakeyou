@@ -239,6 +239,9 @@ class MeetingSettings(Section):
     join_poll_seconds: PositiveSeconds = 2.0
     monitor_poll_seconds: PositiveSeconds = 5.0
     leave_timeout_seconds: PositiveSeconds = 30.0
+    join_max_attempts: int = Field(default=3, ge=1)
+    join_retry_base_seconds: PositiveSeconds = 2.0
+    join_retry_cap_seconds: PositiveSeconds = 30.0
 
 
 class BrowserSettings(Section):

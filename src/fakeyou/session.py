@@ -1,9 +1,9 @@
 import dataclasses
 from dataclasses import field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Annotated, Any, Protocol, runtime_checkable
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 from fakeyou.invariants import PositiveSeconds, SessionId, TwinName
@@ -68,6 +68,9 @@ class SessionConfig:
     twin_name: TwinName
     lobby_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.lobby_timeout_seconds
     join_poll_interval_seconds: PositiveSeconds = DEFAULTS.meeting.join_poll_seconds
+    join_max_attempts: Annotated[int, Field(ge=1)] = DEFAULTS.meeting.join_max_attempts
+    join_retry_base_seconds: PositiveSeconds = DEFAULTS.meeting.join_retry_base_seconds
+    join_retry_cap_seconds: PositiveSeconds = DEFAULTS.meeting.join_retry_cap_seconds
     session_duration_seconds: PositiveSeconds = DEFAULTS.meeting.session_duration_seconds
     monitor_interval_seconds: PositiveSeconds = DEFAULTS.meeting.monitor_poll_seconds
     leave_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.leave_timeout_seconds

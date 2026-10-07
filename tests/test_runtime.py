@@ -501,7 +501,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
         ([EXPLICIT_DENIED], [], {}, {}, "denied_by_host", ""),
         ([DENIED], [NO_CAPTCHA], {}, {}, "blocked_by_platform", ""),
         (
-            [LOBBY] * 4,
+            [LOBBY] * 15,
             [],
             {},
             {"lobby_timeout_seconds": 5.0, "join_poll_interval_seconds": 2.0},
@@ -524,6 +524,28 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert result.terminal_reason == expected
     assert detail in result.detail
     assert browser.closed == 1
+
+
+async def test_lobby_timeout_retries_twice_before_terminal(journal) -> None:
+    browser = FakePageSession(meet_page([LOBBY] * 15))
+    clock = FakeClock()
+    config = _config(lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0)
+    result = await run_meeting_session(
+        config,
+        open_page=browser.open,
+        saver_factory=FakeSaverSession().factory,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        journal=journal,
+    )
+
+    assert result.phase == "ended"
+    assert result.terminal_reason == "lobby_timeout_reached"
+    rows = journal.events()
+    assert len([row for row in rows if row["event"] == "join_retried"]) == 2
+    finished = [row for row in rows if row["event"] == "join_finished"]
+    assert len(finished) == 1
+    assert finished[0]["attempts"] == 3
 
 
 def _mining_payload():

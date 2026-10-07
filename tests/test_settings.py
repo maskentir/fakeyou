@@ -153,3 +153,22 @@ def test_vad_reads_environment(monkeypatch):
     assert vad.min_volume == 0.4
     assert vad.confidence == 0.7
     assert vad.stop_secs == 0.2
+
+
+def test_join_retry_settings_default_and_read_environment(monkeypatch):
+    defaults = Settings(_env_file=None).meeting
+    assert defaults.join_max_attempts == 3
+    assert defaults.join_retry_base_seconds == 2.0
+    assert defaults.join_retry_cap_seconds == 30.0
+    monkeypatch.setenv("FAKEYOU_MEETING__JOIN_MAX_ATTEMPTS", "5")
+    monkeypatch.setenv("FAKEYOU_MEETING__JOIN_RETRY_BASE_SECONDS", "1.5")
+    monkeypatch.setenv("FAKEYOU_MEETING__JOIN_RETRY_CAP_SECONDS", "10.0")
+    retry = Settings(_env_file=None).meeting
+    assert retry.join_max_attempts == 5
+    assert retry.join_retry_base_seconds == 1.5
+    assert retry.join_retry_cap_seconds == 10.0
+
+
+def test_join_max_attempts_rejects_zero():
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, meeting={"join_max_attempts": 0})

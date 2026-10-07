@@ -519,3 +519,37 @@ async def test_media_toggle_preserves_state_and_reports_failure(
     else:
         assert await toggle(page, clock.sleep) is True
         assert page.clicked == ([opposite, opposite] if scenario == "transient_click" else [])
+
+
+async def test_request_guest_join_admits_on_deadline_recheck() -> None:
+    reads: list[int] = []
+    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, IN_CALL], on_content=reads.append)
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.status == "admitted"
+    assert len(reads) == 5
+
+
+async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> None:
+    reads: list[int] = []
+    page = meet_page(
+        [LOBBY, LOBBY, LOBBY, LOBBY, RuntimeError("lobby gone")], on_content=reads.append
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.status == "timeout"
+    assert len(reads) == 5

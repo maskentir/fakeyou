@@ -1,4 +1,5 @@
 import asyncio
+import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
@@ -26,6 +27,7 @@ from fakeyou.lifecycle import (
 from fakeyou.meet import (
     DEFAULT_MEET_SIGNALS,
     GuestJoinRequest,
+    JoinResult,
     JoinStatus,
     MeetSignals,
     disable_meeting_camera,
@@ -108,6 +110,46 @@ def _terminal_result(
     return SessionResult(
         phase, terminal_reason, detail + _fault_suffix(faults), _fault_report(faults)
     )
+
+
+_JOIN_RETRYABLE_STATUSES: tuple[JoinStatus, ...] = ("timeout", "failed")
+
+
+async def run_join_with_retry(
+    attempt: Callable[[], Awaitable[JoinResult]],
+    *,
+    max_attempts: int,
+    base_seconds: float,
+    cap_seconds: float,
+    sleep: Callable[[float], Awaitable[None]],
+    record: Callable[..., None],
+    should_stop: Callable[[], bool],
+    rng: Callable[[float, float], float] = random.uniform,
+) -> tuple[JoinResult, int]:
+    attempts = 0
+    while True:
+        result = await attempt()
+        attempts += 1
+        if result.status not in _JOIN_RETRYABLE_STATUSES:
+            return result, attempts
+        if attempts >= max_attempts:
+            return result, attempts
+        if should_stop():
+            stopped = JoinResult(status="aborted", detail="owner stopped before join retry")
+            return stopped, attempts
+        bound = min(cap_seconds, base_seconds * (2.0 ** (attempts - 1)))
+        delay = rng(0.0, bound)
+        record(
+            "join_retried",
+            source="runtime",
+            attempt=attempts,
+            status=result.status,
+            delay_ms=delay * 1000,
+        )
+        await sleep(delay)
+        if should_stop():
+            stopped = JoinResult(status="aborted", detail="owner stopped before join retry")
+            return stopped, attempts
 
 
 async def _until_stopped[T](operation: Coroutine[Any, Any, T], stop: asyncio.Event) -> T | None:
@@ -256,20 +298,36 @@ class _MeetingWorker:
             + ((load_voice_activity_script(),) if self.voice_activity is not None else ())
             + ((load_capture_script(),) if self.config.per_stream_enabled else ())
         )
-        result = await _until_stopped(
-            request_guest_join(
-                self.page,
-                request,
-                self.signals,
-                self.sleep,
-                self.monotonic,
-                self.stop.is_set,
-                probe_scripts,
-            ),
-            self.stop,
+
+        async def attempt() -> JoinResult:
+            outcome = await _until_stopped(
+                request_guest_join(
+                    self.page,
+                    request,
+                    self.signals,
+                    self.sleep,
+                    self.monotonic,
+                    self.stop.is_set,
+                    probe_scripts,
+                ),
+                self.stop,
+            )
+            if outcome is None:
+                return JoinResult(status="aborted", detail="owner stopped guest join")
+            return outcome
+
+        async def backoff_sleep(delay: float) -> None:
+            await self.wait(delay)
+
+        result, attempts = await run_join_with_retry(
+            attempt,
+            max_attempts=self.config.join_max_attempts,
+            base_seconds=self.config.join_retry_base_seconds,
+            cap_seconds=self.config.join_retry_cap_seconds,
+            sleep=backoff_sleep,
+            record=self.record,
+            should_stop=self.stop.is_set,
         )
-        if result is None:
-            return await self.finish("owner_stopped", "owner_action", "owner stopped guest join")
         self.record(
             "join_finished",
             source="runtime",
@@ -277,6 +335,7 @@ class _MeetingWorker:
             detail=result.detail,
             duration_ms=(self.monotonic() - started) * 1000,
             audio_ready=self.audio is not None,
+            attempts=attempts,
         )
         kind, attribution = _JOIN_EVENTS[result.status]
         await self.lifecycle.send(kind, attribution, result.detail)
