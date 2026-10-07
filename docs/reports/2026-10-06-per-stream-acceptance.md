@@ -169,3 +169,41 @@ Keputusan butir 12: record-repair (publish-segera +
 repair-on-read) + `order_inversion_detected` sebagai tripwire;
 tanpa holdback. Sub-detik belum teruji; alarm produksi
 menjadi pemicu revisit.
+
+## Adendum implementasi butir 11+12 (2026-10-07)
+
+Cabang `feat/phase-1-ordering`, plan
+[phase-1-ordering.md](../plans/phase-1-ordering.md), tiap task
+SDD (tes merah → implementasi → reviewer terpisah → commit
+lokal).
+
+| Butir | Kerja | Commit |
+| --- | --- | --- |
+| 11a | `drain()` JS mengemisikan `seq` monoton per slot | `db0714e` |
+| 11b | Parse + validasi seq, jurnal `drain_gap_detected`
+(gap/resync), hitung `drain_gaps` di `stt_quality` | `b848aaf` |
+| 11c | Jam capture end-to-end: registry → `StreamAudioInput`
+→ atribut frame → `TranscriptEvent.capture_ms` →
+`TranscriptEntry.capture_ms` | `0a0e721` |
+| 12 | `repaired_order` murni + `load_meeting_record(repair=True)`;
+transkrip tercap diurut `(capture_ms, spoken_at, id)` di
+posisinya, sisanya tetap | `04593fb` |
+| fixup | Rename `drain_gap` → `drain_gap_detected` (aturan
+taksonomi partisip lampau) + tautan plan | `c6c0c4c` |
+
+Gate aktual (output teramati): suite serial 3231 passed /
+41 skipped / 42 deselected, exit 0; browser 25 passed /
+2 skipped (termasuk tes seq baru); `ruff check` bersih;
+`ruff format --check` bersih (212 berkas); `mypy src`
+bersih (56 berkas). Flag default tetap MATI.
+
+Nol-tambah-latensi: `merge_transcripts` dan loop emit live
+tak tersentuh; yang ditambah hanya cap atribut dan jurnal
+aditif; repair hanya di baca-record offline. Tripwire
+`order_inversion_detected` tetap sebagai alarm produksi.
+Gap plan tercatat: `taxonomy.py` Subsystem `transport`
+(Task 2), nama event taksonomi (fixup).
+
+Sisa Fase 1: butir 13–16 (supervisor tap, pre-roll/keepalive,
+tabel fusi identitas, endpointing semantik) — plan
+tersendiri.
