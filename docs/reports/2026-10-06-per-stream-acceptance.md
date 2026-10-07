@@ -124,3 +124,28 @@ formal pasca-Fase 0 belum diukur ulang live
 agent; pengukuran ulang dijadwalkan sesi live
 Fase 1). checklist merge terpenuhi kecuali
 butir itu dan keputusan push/merge pemilik repo.
+
+## Adendum ukur live Fase 1 (twin-only, 2026-10-07)
+
+Sesi ukur-a-4/ukur-b-3/ukur-c-3, twin-only, 159 giliran total.
+Angka via `fakeyou report`:
+
+- Inversi: 0/159 (chatter sekuensial; tanpa tekanan overlap —
+  keputusan butir 12 BELUM bisa diambil, butuh stres overlap).
+- Churn interim: p50 5,5-7,0, p95 9-10 per giliran.
+- Endpointing stop→final: p50 0,35-0,52 dtk, p95 1,05-2,10 dtk.
+- Latensi agent stop→first-pcm: p50 4,5-5,2 dtk (dominan LLM+TTS).
+- Engine: 600/600 poll `mstp`, 0 `decode` — jalur decode tak
+  pernah fresh (temuan L0 Fase 1).
+- WER opener: A→B 0,0 persis (digit 5/5); C→A 0,333
+  (onset "Ukur C" terpotong VAD, digit 3/3); B→A miss
+  artefak (opener 41 dtk sebelum A admit).
+- I10: ucapan pertama pasca-hening-60d hadir (terpotong onset).
+- Label vs speaker: A 3 label / 2 speaker, C 2 label /
+  1 speaker, hanya 1 `tenure_released`, 0 move/relabel —
+  mint diam saat churn slot (butuh event mint atau tabel fusi).
+
+Insiden sesi: brief/persona ID mismatch mematikan worker
+pra-jurnal (tanpa retry — gap infra); repro foreground
+membakar ID ukur-a-3 via guard session-ended. Pelajaran:
+verifikasi status+jurnal segera setiap start.
