@@ -260,16 +260,13 @@ def build_transcript_callback(
                 )
             pending[:] = [event for event in pending if event.id not in handled]
             speaker_uuid = extra.get("speaker_uuid")
-            if (
-                voiceprint is not None
-                and registry is not None
-                and frame.finalized
-                and isinstance(speaker_uuid, str)
-                and speaker_uuid
-            ):
-                _score_live_turn(
-                    voiceprint, registry, speaker_uuid, stream_id, device, journal, faults
-                )
+            if voiceprint is not None and registry is not None and frame.finalized:
+                if isinstance(speaker_uuid, str) and speaker_uuid:
+                    _score_live_turn(
+                        voiceprint, registry, speaker_uuid, stream_id, device, journal, faults
+                    )
+                else:
+                    voiceprint.tap_for(stream_id).take_clip()
         else:
             attribution = voice_activity.attribute() if voice_activity is not None else None
             event = (
@@ -289,16 +286,13 @@ def build_transcript_callback(
                 conversation=conversation,
                 extra=attribution.journal_fields() if attribution is not None else None,
             )
-            if (
-                voiceprint is not None
-                and registry is not None
-                and frame.finalized
-                and attribution is not None
-                and attribution.speaker_uuid
-            ):
-                _score_live_turn(
-                    voiceprint, registry, attribution.speaker_uuid, "", None, journal, faults
-                )
+            if voiceprint is not None and registry is not None and frame.finalized:
+                if attribution is not None and attribution.speaker_uuid:
+                    _score_live_turn(
+                        voiceprint, registry, attribution.speaker_uuid, "", None, journal, faults
+                    )
+                else:
+                    voiceprint.tap_for("").take_clip()
 
     return transcript
 
