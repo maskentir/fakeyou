@@ -46,6 +46,12 @@ def unpack_embedding(blob: bytes, dim: int) -> tuple[float, ...]:
     return struct.unpack("<" + "f" * dim, bytes(blob))
 
 
+def _stamp_text(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
 class VoiceprintStore:
     def __init__(self, connect: Callable[[], Any]) -> None:
         self._connect = connect
@@ -91,11 +97,11 @@ class VoiceprintStore:
                 embedding=unpack_embedding(row[1], row[2]),
                 dim=row[2],
                 n_utterances=row[3],
-                consent_ts=str(row[4]),
+                consent_ts=_stamp_text(row[4]),
                 policy_version=row[5],
                 is_negative=bool(row[6]),
-                enrolled_at=str(row[7]),
-                last_used_at=str(row[8]),
+                enrolled_at=_stamp_text(row[7]),
+                last_used_at=_stamp_text(row[8]),
             )
             for row in rows
         ]

@@ -8,6 +8,7 @@ from fakeyou.voiceprint_store import (
     VoiceprintRecord,
     VoiceprintStore,
     ensure_voiceprint_schema,
+    pack_embedding,
 )
 
 
@@ -116,6 +117,31 @@ def test_save_load_all_roundtrip_restores_identical_record() -> None:
 
     assert loaded == [record]
     assert loaded[0].embedding == record.embedding
+
+
+def test_load_all_converts_datetime_columns_with_isoformat() -> None:
+    conn = FakeConnection()
+    store = VoiceprintStore(lambda: conn)
+    record = make_record()
+    conn.results.append(
+        [
+            (
+                record.person_id,
+                pack_embedding(record.embedding),
+                record.dim,
+                record.n_utterances,
+                datetime.fromisoformat(record.consent_ts),
+                record.policy_version,
+                record.is_negative,
+                datetime.fromisoformat(record.enrolled_at),
+                datetime.fromisoformat(record.last_used_at),
+            )
+        ]
+    )
+
+    loaded = store.load_all()
+
+    assert loaded == [record]
 
 
 def test_delete_returns_true_when_present_false_when_missing() -> None:

@@ -89,6 +89,8 @@ def _read_clip_frames(path: str) -> tuple[str, bytes, int]:
             _reject(f"unsupported audio format in {label}: need 16 kHz mono 16-bit WAV")
         count = handle.getnframes()
         frames = handle.readframes(count)
+        if len(frames) != count * 2:
+            _reject(f"unsupported audio format in {label}: need 16 kHz mono 16-bit WAV")
     return label, frames, count
 
 
@@ -171,11 +173,11 @@ def voiceprint_verify(
     embedder: SpeakerEmbedder | None = None,
 ) -> None:
     _label, frames, count = _read_clip_frames(clip)
+    utterance = _to_utterance(frames, count)
     with (
         _open_store(settings, store) as owned_store,
         _open_journal(settings, journal) as owned_journal,
     ):
-        probe = _embedder_for(settings, embedder).embed([_to_utterance(frames, count)])
         prints = owned_store.load_all()
         target = next((record for record in prints if record.person_id == name), None)
         if target is None:
@@ -183,6 +185,7 @@ def voiceprint_verify(
             runner_up = -1.0
             outcome = "unknown"
         else:
+            probe = _embedder_for(settings, embedder).embed([utterance])
             score = cosine(probe, target.embedding)
             runner_up = max(
                 [

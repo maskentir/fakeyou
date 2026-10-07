@@ -314,6 +314,33 @@ def test_enroll_with_non_wav_clip_exits_2_mentioning_format(
     assert "format" in capsys.readouterr().err.lower()
 
 
+def test_enroll_with_truncated_clip_exits_2_mentioning_format(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken = write_tone_clip(tmp_path / "clip-2.wav")
+    raw = broken.read_bytes()
+    broken.write_bytes(raw[: len(raw) // 2])
+    clips = [
+        write_tone_clip(tmp_path / "clip-0.wav"),
+        write_tone_clip(tmp_path / "clip-1.wav"),
+        broken,
+    ]
+
+    with pytest.raises(SystemExit) as caught:
+        voiceprint_enroll(
+            "alice",
+            [str(path) for path in clips],
+            False,
+            settings=settings,
+            store=FakeStore(),
+            journal=RecordingJournal(),
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        )
+
+    assert caught.value.code == 2
+    assert "format" in capsys.readouterr().err.lower()
+
+
 def test_verify_high_score_journals_verified_and_touches_print(
     settings: Settings, tmp_path: Path
 ) -> None:
