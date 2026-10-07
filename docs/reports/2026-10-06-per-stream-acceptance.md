@@ -359,3 +359,36 @@ prefiks, Fase 2). Inversi tetap 0; `drain_gaps` 0;
 Gate tiap fix: SDD reviewer terpisah (2 Approve,
 2 Approve-with-notes, 1 Reject→perbaiki→Approve),
 suite 3328–3347 hijau, ruff + mypy bersih.
+
+## Adendum ukur pregen Fase 2 (twin-only, 2026-10-07)
+
+Sesi f2p-base-a2/x2 (D1 mati, 7 final) vs f2p-d1-a/x
+(D1 nyala, 51 final), ping-pong 2 twin, seksi laporan
+`pregeneration` baru terisi otomatis dari jurnal live.
+
+| Metrik | Baseline (D1 mati) | D1 nyala |
+| --- | --- | --- |
+| Start | 16 | 56 |
+| Adopted | 6 (38%) | 51 (91%) |
+| Superseded | 10 (62%) | 5 (9%) |
+| Mismatched | 0 | 0 |
+| Restart-skipped | — | 64 (semua `prefix_extend`) |
+| Hemat overlap p50 | 0,002 dtk | 0,36–0,38 dtk |
+| Hemat overlap p95 | 0,16–0,44 dtk | 0,57–1,04 dtk |
+
+Bacaan: 10/10 superseded baseline adalah `prefix_extend`
+kecil — tepat kelas yang ditekan D1. 5 superseded yang
+tersisa saat D1 nyala semuanya lompatan besar (norm
+≥0,8; mis. 1→10 kata) yang benar di-restart. Gerbang
+final exact menahan nol konten-salah di kedua sesi.
+Kriteria Task 3 (restart turun, adopsi naik, p50 naik,
+nol salah) lolos semua. Rekomendasi: D1 boleh nyala
+kapan pun pregen nyala; default kedua flag tetap MATI
+menunggu keputusan rollout yang lebih luas.
+
+Catatan infra sesi: persona baru wajib `language: id`
+(menyamai speech); volume Postgres lawas (5 Okt)
+memakai password default sehingga URL checkpoint sesi
+ini menunjuk password itu (non-destruktif, `.env`
+direstore setelah sesi); `sentence_streaming` wajib
+nyala agar gate pregen lolos.
