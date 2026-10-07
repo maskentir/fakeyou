@@ -2157,8 +2157,92 @@ async def test_stream_capture_supervisor_rescues_stalled_slot() -> None:
     health = {entry["slot"]: entry for entry in rescued["health"]}
     assert health[0]["rescued"] == 1
     assert health[1]["rescued"] == 0
+    assert health[0]["stalled"] is True
+    assert health[1]["stalled"] is False
     assert {entry["slot"] for entry in recovered["streams"]} == {0, 1}
     assert all(entry["pcm_b64"] for entry in recovered["streams"])
+
+
+@pytest.mark.browser
+async def test_stream_capture_supervisor_releases_ended_track() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
+        await asyncio.sleep(1.5)
+        await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await page.evaluate("() => window.__fakeyouStreamCapture.endTestTrack(0)")
+        await asyncio.sleep(3.5)
+        drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await asyncio.sleep(0.8)
+        later = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    health = {entry["slot"]: entry for entry in drained["health"]}
+    assert 0 not in health
+    assert 1 in health
+    assert 0 in drained["released"]
+    assert health.get(0, {}).get("rescued", 0) == 0
+    later_health = {entry["slot"]: entry for entry in later["health"]}
+    assert 0 not in later_health
+    assert 1 in later_health
+    assert later["released"] == []
+
+
+@pytest.mark.browser
+async def test_stream_capture_supervisor_releases_stale_ended_track_without_rescue() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
+        await asyncio.sleep(1.5)
+        await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await page.evaluate("() => window.__fakeyouStreamCapture.stallTestSlot(0)")
+        await asyncio.sleep(3.5)
+        drained = await page.evaluate(
+            "() => { window.__fakeyouStreamCapture.endTestTrack(0);"
+            " return window.__fakeyouStreamCapture.drain(); }"
+        )
+        await asyncio.sleep(0.8)
+        later = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    health = {entry["slot"]: entry for entry in drained["health"]}
+    assert 0 not in health
+    assert 1 in health
+    assert drained["released"] == [0]
+    later_health = {entry["slot"]: entry for entry in later["health"]}
+    assert 0 not in later_health
+    assert later["released"] == []
+
+
+@pytest.mark.browser
+async def test_stream_capture_supervisor_releases_futile_slot() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
+        await asyncio.sleep(1.5)
+        await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await page.evaluate("() => window.__fakeyouStreamCapture.poisonTestSlot(0)")
+        await page.evaluate("() => window.__fakeyouStreamCapture.stallTestSlot(0)")
+        await asyncio.sleep(3.5)
+        first = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        first_health = {entry["slot"]: entry for entry in first["health"]}
+        assert first_health[0]["stalled"] is True
+        assert first_health[0]["rescued"] == 0
+        assert first["released"] == []
+        drained = first
+        for _ in range(4):
+            drained = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await asyncio.sleep(0.5)
+        later = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    health = {entry["slot"]: entry for entry in drained["health"]}
+    assert 0 not in health
+    assert 1 in health
+    assert drained["released"] == [0]
+    later_health = {entry["slot"]: entry for entry in later["health"]}
+    assert 0 not in later_health
+    assert later["released"] == []
 
 
 def test_parse_health_skips_malformed_entries() -> None:

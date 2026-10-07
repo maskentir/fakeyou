@@ -25,10 +25,17 @@
   const encodedAtBySlot = new Map();
   const lastWindowAtBySlot = new Map();
   const rescuedBySlot = new Map();
+  const futileBySlot = new Map();
+  const lastRescueAtBySlot = new Map();
+  const FUTILE_RELEASE = 5;
   const seqBySlot = new Map();
   const testGains = [];
+  const testTracks = [];
   const testPairs = [];
   const testReceivers = new Set();
+  const slotPoisoned = new Set();
+  const releasedSinceDrain = [];
+  let stalledNow = new Set();
   const keeps = [];
   let dropped = 0;
   let nextSlot = 0;
@@ -101,6 +108,7 @@
         source: engine,
       });
       lastWindowAtBySlot.set(slot, monoNow());
+      futileBySlot.set(slot, 0);
       if (windows.length > MAX_BUFFERED) {
         const overflow = windows.length - MAX_BUFFERED;
         windows.splice(0, overflow);
@@ -180,6 +188,15 @@
         }
       }
     }
+  }
+
+  function noteReleased(slot) {
+    if (!releasedSinceDrain.includes(slot)) releasedSinceDrain.push(slot);
+  }
+
+  function clearRescueState(slot) {
+    futileBySlot.delete(slot);
+    lastRescueAtBySlot.delete(slot);
   }
 
   function releaseSlot(slot, trackId) {
@@ -340,6 +357,7 @@
   }
 
   function openSlot(slot, key, receiver) {
+    if (slotPoisoned.has(slot)) throw new Error("poisoned test slot");
     const track = receiver ? receiver.track : null;
     const el = document.createElement("audio");
     el.muted = true;
@@ -350,13 +368,23 @@
     keeps.push({ el, processor, reader, receiver });
     const played = el.play();
     if (played && typeof played.catch === "function") played.catch(() => {});
-    track.addEventListener("ended", () => releaseSlot(slot, key), { once: true });
+    track.addEventListener(
+      "ended",
+      () => {
+        if (!receiversBySlot.has(slot)) return;
+        releaseSlot(slot, key);
+        clearRescueState(slot);
+        noteReleased(slot);
+      },
+      { once: true }
+    );
     void pumpSlot(slot, reader);
   }
 
   function attachReceiver(receiver) {
     const track = receiver ? receiver.track : null;
     if (!track || track.kind !== "audio") return;
+    if (track.readyState === "ended") return;
     const key = String(track.id || "");
     if (!key || slots.has(key)) return;
     const slot = slotFor(key);
@@ -473,6 +501,7 @@
       osc.start();
       testGains[index] = gain;
       const sendTrack = dest.stream.getAudioTracks()[0];
+      testTracks[index] = sendTrack;
       testPairs.push({ gen, osc, gain, dest, sender, receiver });
       keeps.push({ gen, osc, gain, dest });
       testReceivers.add(receiver);
@@ -603,6 +632,30 @@
     }
   }
 
+  function endTestTrack(index) {
+    try {
+      const send = testTracks[index];
+      if (send) send.stop();
+    } catch {
+      /* test-only helper */
+    }
+    try {
+      const receiver = receiversBySlot.get(index);
+      const track = receiver ? receiver.track : null;
+      if (track) track.stop();
+    } catch {
+      /* test-only helper */
+    }
+  }
+
+  function poisonTestSlot(slot) {
+    try {
+      slotPoisoned.add(Number(slot));
+    } catch {
+      /* test-only helper */
+    }
+  }
+
   function slotKey(slot) {
     for (const [key, found] of slots) {
       if (found === slot) return key;
@@ -612,11 +665,33 @@
 
   function supervise() {
     const now = monoNow();
+    stalledNow = new Set();
     for (const [slot, receiver] of receiversBySlot) {
       const last = lastWindowAtBySlot.get(slot);
       if (last !== undefined && now - last <= STALL_MS) continue;
+      stalledNow.add(slot);
       const key = slotKey(slot);
       if (!key || !receiver) continue;
+      const track = receiver ? receiver.track : null;
+      if (track && track.readyState === "ended") {
+        releaseSlot(slot, key);
+        clearRescueState(slot);
+        noteReleased(slot);
+        continue;
+      }
+      const prevRescue = lastRescueAtBySlot.get(slot);
+      if (prevRescue !== undefined && last !== undefined && last > prevRescue) {
+        futileBySlot.set(slot, 0);
+      } else {
+        futileBySlot.set(slot, (futileBySlot.get(slot) || 0) + 1);
+      }
+      if ((futileBySlot.get(slot) || 0) >= FUTILE_RELEASE) {
+        releaseSlot(slot, key);
+        clearRescueState(slot);
+        noteReleased(slot);
+        continue;
+      }
+      lastRescueAtBySlot.set(slot, now);
       try {
         const reader = readersBySlot.get(slot);
         if (reader) {
@@ -657,6 +732,7 @@
   function drain() {
     rescan();
     supervise();
+    const released = releasedSinceDrain.splice(0, releasedSinceDrain.length);
     const batch = windows.splice(0, windows.length);
     const bySlot = new Map();
     for (const entry of batch) {
@@ -716,12 +792,12 @@
       .sort((left, right) => left - right)
       .map((slot) => ({
         slot,
-        stalled: monoNow() - (lastWindowAtBySlot.get(slot) || 0) > STALL_MS,
+        stalled: stalledNow.has(slot),
         rescued: rescuedBySlot.get(slot) || 0,
         decode_fresh: decodeFresh(slot),
         engine: decodeFresh(slot) ? "decode" : "mstp",
       }));
-    return { streams, roster, roster_tiles: tileCount, dropped, health };
+    return { streams, roster, roster_tiles: tileCount, dropped, health, released };
   }
 
   function pending() {
@@ -738,5 +814,7 @@
     setTestTone,
     releaseTestTrack,
     stallTestSlot,
+    endTestTrack,
+    poisonTestSlot,
   };
 })();
