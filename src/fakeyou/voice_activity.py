@@ -26,7 +26,6 @@ DEPARTURE_GRACE_MS = 3000.0
 RETENTION_MS = 120_000.0
 CLOCK_ANCHORS = 20
 POLL_INTERVAL_SECONDS = 0.25
-BINDER_EVENT_BUFFER = 128
 
 VoiceReason = Literal[
     "dominant_slot",
@@ -133,6 +132,7 @@ class VoiceAttribution:
     bound: bool = False
     levels: tuple[tuple[int, float], ...] = ()
     csrc: tuple[int, ...] = ()
+    speaker_uuid: str = ""
 
     def journal_fields(self) -> dict[str, Any]:
         return {
@@ -141,6 +141,7 @@ class VoiceAttribution:
             "speaker_bound": self.bound,
             "speaker_levels": {str(slot): round(level, 4) for slot, level in self.levels},
             "speaker_csrc": list(self.csrc),
+            "speaker_uuid": self.speaker_uuid,
         }
 
 
@@ -189,6 +190,7 @@ class VoiceActivityTracker:
         monotonic: Callable[[], float] = time.monotonic,
         lag_ms: float = PIPELINE_LAG_MS,
         frame_lag_ms: float = FRAME_LAG_MS,
+        registry: SpeakerRegistry | None = None,
     ) -> None:
         self._twin_name = twin_name.strip().casefold()
         self._monotonic = monotonic
@@ -197,7 +199,6 @@ class VoiceActivityTracker:
         self._levels: deque[tuple[float, int, float]] = deque()
         self._frames: deque[tuple[float, int, float, frozenset[int]]] = deque()
         self._partners: dict[int, set[int]] = {}
-        self._csrc_labels: dict[int, str] = {}
         self._anchors: deque[tuple[float, float]] = deque(maxlen=CLOCK_ANCHORS)
         self._speech = _Intervals()
         self._self_speech = _Intervals()
@@ -208,7 +209,8 @@ class VoiceActivityTracker:
         self._cursor_ms = 0.0
         self._attempts = 0
         self._labels = voice_labels()
-        self._binder = SlotBinder(self._labels)
+        self._registry = registry if registry is not None else SpeakerRegistry(self._labels)
+        self._binder = SlotBinder(self._labels, registry=self._registry)
 
     def now_ms(self) -> float:
         return self._monotonic() * 1000.0
@@ -298,6 +300,7 @@ class VoiceActivityTracker:
             slot,
             outcome.device is not None,
             levels,
+            speaker_uuid=outcome.uuid,
         )
 
     def _attribute_csrc(
@@ -333,22 +336,20 @@ class VoiceActivityTracker:
         identity = tuple(sorted(identities[slot] - markers))
         if not identity:
             return VoiceAttribution("unknown", "no_identity", evidence_id, slot, levels=levels)
-        labeled = [csrc for csrc in identity if csrc in self._csrc_labels]
-        known = {self._csrc_labels[csrc] for csrc in labeled}
-        if len(known) > 1 or (labeled and len(labeled) < len(identity)):
+        identity_set = frozenset(identity)
+        row = self._registry.resolve_csrcs(identity_set)
+        if row is None:
             return VoiceAttribution(
                 "unknown", "csrc_conflict", evidence_id, slot, levels=levels, csrc=identity
             )
-        label = known.pop() if known else next(self._labels)
-        for csrc in identity:
-            self._csrc_labels.setdefault(csrc, label)
         return VoiceAttribution(
-            voice_participant_id(label),
+            voice_participant_id(row.label),
             "dominant_csrc",
             evidence_id,
             slot,
             levels=levels,
             csrc=identity,
+            speaker_uuid=row.uuid,
         )
 
     def _observe_frame(self, entry: Any) -> None:

@@ -45,6 +45,7 @@ from fakeyou.conversation import (
     transcript_stamp,
 )
 from fakeyou.faults import FaultReporter
+from fakeyou.identity import SpeakerRegistry
 from fakeyou.ingestion import meeting_windows
 from fakeyou.ingestion_status import (
     IngestionStatus,
@@ -126,6 +127,7 @@ def attribute_stream_frame(
         "speaker_bound": outcome.device is not None,
         "roster_size": roster_size,
     }
+    extra["speaker_uuid"] = outcome.uuid
     if csrcs:
         extra["speaker_csrc"] = csrcs
     if drained:
@@ -476,8 +478,9 @@ async def join_meeting(
                             detail=detail,
                         )
 
+                    speaker_registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
                     voice_activity = (
-                        VoiceActivityTracker(twin_name=config.twin_name)
+                        VoiceActivityTracker(twin_name=config.twin_name, registry=speaker_registry)
                         if settings.conversation.voice_labels_enabled and audio_enabled
                         else None
                     )
@@ -513,7 +516,9 @@ async def join_meeting(
                             )
                         )
 
-                    stream_binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
+                    stream_binder = SlotBinder(
+                        capacity=STREAM_FLEET_SLOTS, registry=speaker_registry
+                    )
                     transcript = build_transcript_callback(
                         journal=journal,
                         record=record,

@@ -1110,3 +1110,46 @@ def test_binder_adapter_keeps_default_registry_private() -> None:
     second.update_roster(["dev-a"])
     assert first.resolve(0).uuid == second.resolve(0).uuid
     assert first.drain_binder_events() != []
+
+
+def test_tracker_and_binder_share_registry_rows() -> None:
+    from fakeyou.identity import SpeakerRegistry
+
+    registry = SpeakerRegistry()
+    registry.update_roster(["dev-a", "dev-b"])
+    binder = SlotBinder(registry=registry)
+    tracker = VoiceActivityTracker(twin_name="Twin", registry=registry)
+    binder.observe_stream(0, [11])
+    row = binder.resolve(0)
+    same = tracker._registry.resolve_csrcs(frozenset([11]))
+    assert same.uuid == row.uuid
+
+
+def test_csrc_attribution_carries_speaker_uuid() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        frames_batch(11_000.0, [[10_300.0, 0, 0.4, [42, 111]]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    attribution = tracker.attribute()
+    assert attribution.speaker_uuid
+    assert attribution.journal_fields()["speaker_uuid"] == attribution.speaker_uuid
+
+
+def test_dominant_slot_attribution_carries_speaker_uuid() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.2, 11.2)
+    clock.now = 11.4
+    tracker.observe_batch(
+        batch(1000.0 + 11_400.0, [[1000.0 + 10_050.0, 3, 0.3], [1000.0 + 10_100.0, 4, 0.05]]),
+        sent_ms=11_400.0,
+        received_ms=11_400.0,
+    )
+    attribution = tracker.attribute()
+    assert attribution.reason == "dominant_slot"
+    assert attribution.speaker_uuid
+    assert attribution.journal_fields()["speaker_uuid"] == attribution.speaker_uuid
