@@ -2122,3 +2122,24 @@ def test_attribute_stream_frame_returns_capture_ms() -> None:
     plain = TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
     plain.transport_source = "slot-2"
     assert attribute_stream_frame(plain, SlotBinder(capacity=4))[4] == 0.0
+
+
+@pytest.mark.browser
+async def test_stream_capture_supervisor_rescues_stalled_slot() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
+        await asyncio.sleep(1.5)
+        await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await page.evaluate("() => window.__fakeyouStreamCapture.stallTestSlot(0)")
+        await asyncio.sleep(3.5)
+        rescued = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await asyncio.sleep(0.8)
+        recovered = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    health = {entry["slot"]: entry for entry in rescued["health"]}
+    assert health[0]["rescued"] == 1
+    assert health[1]["rescued"] == 0
+    assert {entry["slot"] for entry in recovered["streams"]} == {0, 1}
+    assert all(entry["pcm_b64"] for entry in recovered["streams"])
