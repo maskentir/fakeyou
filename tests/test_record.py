@@ -13,6 +13,7 @@ from fakeyou.record import (
     TwinSpeechEntry,
     load_meeting_record,
     meeting_record_path,
+    repaired_order,
 )
 
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
@@ -183,3 +184,52 @@ def test_record_carries_speaker_identity_and_rejects_legacy_lines(tmp_path: Path
         handle.write(json.dumps(legacy) + "\n")
     with pytest.raises(ValidationError):
         load_meeting_record(path)
+
+
+def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> None:
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(1, "two", capture_ms=200.0))
+    record.add_twin_speech("ack")
+    record.add_transcript(transcript(0, "one", capture_ms=100.0))
+    record.add_transcript(transcript(2, "old"))
+    record.close()
+    path = meeting_record_path(tmp_path, "meeting-1")
+    repaired = load_meeting_record(path)
+    assert [entry.kind for entry in repaired] == [
+        "transcript",
+        "twin_speech",
+        "transcript",
+        "transcript",
+    ]
+    assert [entry.text for entry in repaired if entry.kind == "transcript"] == ["one", "two", "old"]
+    assert repaired[1].text == "ack"
+    raw = load_meeting_record(path, repair=False)
+    assert [entry.text for entry in raw if entry.kind == "transcript"] == ["two", "one", "old"]
+
+
+def test_repaired_order_is_stable_and_pure() -> None:
+    first = TranscriptEntry(
+        at=NOW,
+        id="a",
+        spoken_at="t",
+        source="s",
+        text="x",
+        participant_id="p",
+        speaker_evidence_id=None,
+        stream_id="s0",
+        capture_ms=10.0,
+    )
+    second = TranscriptEntry(
+        at=NOW,
+        id="b",
+        spoken_at="t",
+        source="s",
+        text="y",
+        participant_id="p",
+        speaker_evidence_id=None,
+        stream_id="s1",
+        capture_ms=10.0,
+    )
+    entries = [second, first]
+    assert [entry.id for entry in repaired_order(entries)] == ["a", "b"]
+    assert [entry.id for entry in entries] == ["b", "a"]
