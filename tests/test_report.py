@@ -1379,3 +1379,44 @@ def test_session_report_counts_tap_slot_drops() -> None:
         {"event": "tap_slot_dropped", "slot": 2},
     ]
     assert build_session_report(rows)["stt_quality"]["tap_slot_drops"] == 2
+
+
+def test_session_report_summarizes_pregeneration() -> None:
+    rows = [
+        {"event": "pregeneration_started", "request_id": "a", "words": 4},
+        {
+            "event": "pregeneration_finished",
+            "request_id": "a",
+            "outcome": "discarded",
+            "reason": "superseded",
+            "dist": 1,
+            "words_pre": 4,
+            "words_final": 5,
+            "norm_dist_bucket": 0.2,
+            "diff_class": "prefix_extend",
+        },
+        {"event": "pregeneration_started", "request_id": "b", "words": 5},
+        {
+            "event": "pregeneration_finished",
+            "request_id": "b",
+            "outcome": "adopted",
+            "duration_ms": 3000.0,
+            "dist": 0,
+            "words_pre": 5,
+            "words_final": 5,
+            "norm_dist_bucket": 0.0,
+            "diff_class": "exact",
+        },
+    ]
+    section = build_session_report(rows)["pregeneration"]
+    assert section["starts"] == 2
+    assert section["outcomes"] == {"discarded": 1, "adopted": 1}
+    assert section["reasons"] == {"superseded": 1}
+    assert section["diff_classes"] == {"prefix_extend": 1, "exact": 1}
+    assert section["norm_dist_buckets"] == {"0.2": 1, "0.0": 1}
+    assert section["adopted_overlap_seconds"] == {
+        "count": 1,
+        "p50": 3.0,
+        "p95": 3.0,
+        "max": 3.0,
+    }

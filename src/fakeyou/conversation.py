@@ -32,7 +32,7 @@ from fakeyou.participation import (
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError, MeetingAudio
 from fakeyou.settings import DEFAULTS
-from fakeyou.utterance_quality import normalize_words
+from fakeyou.utterance_quality import describe_word_diff, normalize_words
 
 ConversationPhase = Literal[
     "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
@@ -718,7 +718,7 @@ class ConversationLoop:
                 if fresh:
                     self._begin_pregen(text)
             elif fresh and fresh != pregen.words:
-                await self._discard_pregen("superseded")
+                await self._discard_pregen("superseded", fresh)
                 self._begin_pregen(text)
         session = self._session
         if (
@@ -1053,8 +1053,9 @@ class ConversationLoop:
         if reason is not None:
             await self._discard_pregen(reason)
             return False
-        if normalize_words(event.text) != pregen.words:
-            await self._discard_pregen("mismatched")
+        final_words = normalize_words(event.text)
+        if final_words != pregen.words:
+            await self._discard_pregen("mismatched", final_words)
             return False
         session = self._session
         if session is None:
@@ -1074,6 +1075,7 @@ class ConversationLoop:
             request_id=request_id,
             outcome="adopted",
             duration_ms=(started - pregen.started) * 1000,
+            **describe_word_diff(pregen.words, final_words),
         )
         for index, sentence in enumerate(pregen.buffered):
             await session.speak(sentence, sentence_index=index, transcript_id=event.id)
@@ -1253,7 +1255,7 @@ class ConversationLoop:
         if not self._closed and self._failure is None and self._pending:
             await self._respond_pending()
 
-    async def _discard_pregen(self, reason: str) -> None:
+    async def _discard_pregen(self, reason: str, compared: tuple[str, ...] | None = None) -> None:
         pregen = self._pregen
         if pregen is None:
             return
@@ -1262,11 +1264,15 @@ class ConversationLoop:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        diff: dict[str, float | int | str] = (
+            describe_word_diff(pregen.words, compared) if compared is not None else {}
+        )
         self._record(
             "pregeneration_finished",
             request_id=pregen.request_id,
             outcome="discarded",
             reason=reason,
+            **diff,
         )
 
     async def _run_turn(

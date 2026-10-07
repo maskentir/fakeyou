@@ -30,6 +30,34 @@ def _word_edits(expected: Sequence[str], actual: Sequence[str]) -> int:
     return costs[-1]
 
 
+def describe_word_diff(old: Sequence[str], new: Sequence[str]) -> dict[str, float | int | str]:
+    before = tuple(old)
+    after = tuple(new)
+    if before == after:
+        diff_class = "exact"
+    elif len(after) > len(before) and after[: len(before)] == before:
+        diff_class = "prefix_extend"
+    elif len(before) > len(after) and before[: len(after)] == after:
+        diff_class = "prefix_truncate"
+    elif (
+        len(before) == len(after)
+        and sum(first != second for first, second in zip(before, after, strict=True)) == 1
+    ):
+        diff_class = "single_subst"
+    else:
+        diff_class = "other"
+    dist = _word_edits(before, after)
+    size = max(len(before), len(after))
+    bucket = round(round(dist / size / 0.05) * 0.05, 2) if size else 0.0
+    return {
+        "dist": dist,
+        "words_pre": len(before),
+        "words_final": len(after),
+        "norm_dist_bucket": bucket,
+        "diff_class": diff_class,
+    }
+
+
 def word_error_rate(expected: str, actual: str) -> float:
     expected_words = normalize_words(expected)
     actual_words = normalize_words(actual)
