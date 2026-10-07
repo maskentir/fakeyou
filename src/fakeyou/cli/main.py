@@ -21,6 +21,13 @@ from fakeyou.cli.memory import (
     initialize_memory,
     reembed_memory,
 )
+from fakeyou.cli.voiceprint import (
+    voiceprint_delete,
+    voiceprint_enroll,
+    voiceprint_list,
+    voiceprint_purge_expired,
+    voiceprint_verify,
+)
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
 from fakeyou.provider_faults import ProviderFault
 from fakeyou.settings import (
@@ -260,6 +267,34 @@ def build_parser() -> argparse.ArgumentParser:
     worker_ingest_parser.add_argument("--owner-id", dest="owner_id", default=None)
     worker_ingest_parser.add_argument("--twin-id", default=None)
     worker_ingest_parser.set_defaults(handler=worker_ingest)
+    voiceprint_parser = commands.add_parser(
+        "voiceprint", help="Enroll and verify speaker voiceprints", allow_abbrev=False
+    )
+    voiceprint_commands = voiceprint_parser.add_subparsers(dest="voiceprint_command", required=True)
+    voiceprint_enroll_parser = voiceprint_commands.add_parser(
+        "enroll", help="Enroll a voiceprint from audio clips", allow_abbrev=False
+    )
+    voiceprint_enroll_parser.add_argument("--name", required=True)
+    voiceprint_enroll_parser.add_argument("--clip", action="append", required=True)
+    voiceprint_enroll_parser.add_argument("--negative", action="store_true")
+    voiceprint_enroll_parser.set_defaults(handler=voiceprint_enroll)
+    voiceprint_verify_parser = voiceprint_commands.add_parser(
+        "verify", help="Verify an audio clip against a voiceprint", allow_abbrev=False
+    )
+    voiceprint_verify_parser.add_argument("--name", required=True)
+    voiceprint_verify_parser.add_argument("--clip", required=True)
+    voiceprint_verify_parser.set_defaults(handler=voiceprint_verify)
+    voiceprint_delete_parser = voiceprint_commands.add_parser(
+        "delete", help="Delete one enrolled voiceprint", allow_abbrev=False
+    )
+    voiceprint_delete_parser.add_argument("--name", required=True)
+    voiceprint_delete_parser.set_defaults(handler=voiceprint_delete)
+    voiceprint_commands.add_parser(
+        "list", help="List enrolled voiceprints", allow_abbrev=False
+    ).set_defaults(handler=voiceprint_list)
+    voiceprint_commands.add_parser(
+        "purge-expired", help="Delete voiceprints past retention", allow_abbrev=False
+    ).set_defaults(handler=voiceprint_purge_expired)
     return parser
 
 
@@ -268,6 +303,7 @@ def main() -> None:
     handler = options.pop("handler")
     del options["command"]
     options.pop("worker_command", None)
+    options.pop("voiceprint_command", None)
     try:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):
