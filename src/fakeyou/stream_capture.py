@@ -212,6 +212,20 @@ def parse_health(payload: Mapping[str, Any]) -> dict[int, TapHealth]:
     return found
 
 
+def parse_released(payload: Mapping[str, Any]) -> tuple[int, ...]:
+    if not isinstance(payload, Mapping):
+        return ()
+    raw = payload.get("released")
+    if not isinstance(raw, list):
+        return ()
+    found: list[int] = []
+    for entry in raw:
+        if isinstance(entry, bool) or not isinstance(entry, int) or entry < 0:
+            continue
+        found.append(entry)
+    return tuple(found)
+
+
 def _default_input() -> StreamAudioInput:
     return StreamAudioInput(TransportParams(audio_in_enabled=True))
 
@@ -404,6 +418,13 @@ class CaptureDrainLoop:
                             rescued=health.rescued,
                             stalled=health.stalled,
                         )
+            if self._journal is not None:
+                for slot in parse_released(batch):
+                    self._journal.record(
+                        "tap_slot_dropped",
+                        source="transport",
+                        slot=slot,
+                    )
             self._registry.prune()
             self._polls += 1
             self._heartbeat(batch, chunks)

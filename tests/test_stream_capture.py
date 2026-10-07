@@ -2291,3 +2291,45 @@ async def test_drain_loop_journals_slot_rescue_once() -> None:
     assert await loop.poll() is True
     rescues = [row for line in lines if (row := json.loads(line))["event"] == "tap_slot_rescued"]
     assert [(row["slot"], row["rescued"]) for row in rescues] == [(0, 1), (0, 2)]
+
+
+async def test_drain_loop_journals_released_slots_as_dropped() -> None:
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [],
+        "roster": [],
+        "dropped": 0,
+        "released": [0, 2],
+    }
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    page = meet_page([], evaluates=[payload])
+    loop = CaptureDrainLoop(page, registry, journal=journal)
+    assert await loop.poll() is True
+    drops = [row for line in lines if (row := json.loads(line))["event"] == "tap_slot_dropped"]
+    assert [(row["source"], row["slot"]) for row in drops] == [("transport", 0), ("transport", 2)]
+
+
+async def test_drain_loop_ignores_malformed_released() -> None:
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    def payload(released: object) -> dict:
+        return {"streams": [], "roster": [], "dropped": 0, "released": released}
+
+    cases = [
+        "nope",
+        {"slot": 0},
+        None,
+        [0, "1", True, -1, 1.5, None, {"slot": 2}, 3],
+    ]
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    page = meet_page([], evaluates=[payload(case) for case in cases])
+    loop = CaptureDrainLoop(page, registry, journal=journal)
+    for _ in cases:
+        assert await loop.poll() is True
+    drops = [row for line in lines if (row := json.loads(line))["event"] == "tap_slot_dropped"]
+    assert [row["slot"] for row in drops] == [0, 3]

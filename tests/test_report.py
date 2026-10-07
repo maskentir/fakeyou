@@ -1371,3 +1371,11 @@ def test_session_report_counts_tap_slot_rescues() -> None:
         {"event": "tap_slot_rescued", "slot": 0, "rescued": 2},
     ]
     assert build_session_report(rows)["stt_quality"]["tap_slot_rescues"] == 2
+
+
+def test_session_report_counts_tap_slot_drops() -> None:
+    rows = [
+        {"event": "tap_slot_dropped", "slot": 0},
+        {"event": "tap_slot_dropped", "slot": 2},
+    ]
+    assert build_session_report(rows)["stt_quality"]["tap_slot_drops"] == 2
