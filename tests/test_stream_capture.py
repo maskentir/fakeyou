@@ -1097,8 +1097,24 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
     assert event["event"] == "capture_polled"
     assert event["dropped"] == 2
     assert event["fails"] == 0
-    assert event["slots"]["0"] == {"level": 0.4, "bytes": 4, "track": "abc123", "engine": "decode"}
-    assert event["slots"]["1"] == {"level": 0.0, "bytes": 2, "track": "def456", "engine": "mstp"}
+    assert event["slots"]["0"] == {
+        "level": 0.4,
+        "bytes": 4,
+        "track": "abc123",
+        "engine": "decode",
+        "stalled": False,
+        "rescued": 0,
+        "decode_fresh": False,
+    }
+    assert event["slots"]["1"] == {
+        "level": 0.0,
+        "bytes": 2,
+        "track": "def456",
+        "engine": "mstp",
+        "stalled": False,
+        "rescued": 0,
+        "decode_fresh": False,
+    }
 
 
 async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Path) -> None:
@@ -2143,3 +2159,51 @@ async def test_stream_capture_supervisor_rescues_stalled_slot() -> None:
     assert health[1]["rescued"] == 0
     assert {entry["slot"] for entry in recovered["streams"]} == {0, 1}
     assert all(entry["pcm_b64"] for entry in recovered["streams"])
+
+
+def test_parse_health_skips_malformed_entries() -> None:
+    from fakeyou.stream_capture import TapHealth, parse_health
+
+    payload = {
+        "health": [
+            {"slot": 0, "stalled": False, "rescued": 2, "decode_fresh": True, "engine": "decode"},
+            {"slot": "x", "stalled": False, "rescued": 0, "decode_fresh": False, "engine": "mstp"},
+            {"slot": 1},
+            "junk",
+        ]
+    }
+    assert parse_health(payload) == {
+        0: TapHealth(slot=0, stalled=False, rescued=2, decode_fresh=True, engine="decode")
+    }
+    assert parse_health({}) == {}
+
+
+async def test_drain_loop_journals_slot_rescue_once() -> None:
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    def payload(rescued: int) -> dict:
+        return {
+            "streams": [],
+            "roster": [],
+            "dropped": 0,
+            "health": [
+                {
+                    "slot": 0,
+                    "stalled": True,
+                    "rescued": rescued,
+                    "decode_fresh": False,
+                    "engine": "mstp",
+                }
+            ],
+        }
+
+    lines: list[str] = []
+    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    registry, _ = _recording_registry(FakeClock().monotonic)
+    page = meet_page([], evaluates=[payload(1), payload(1), payload(2)])
+    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
+    assert await loop.poll() is True
+    assert await loop.poll() is True
+    assert await loop.poll() is True
+    rescues = [row for line in lines if (row := json.loads(line))["event"] == "tap_slot_rescued"]
+    assert [(row["slot"], row["rescued"]) for row in rescues] == [(0, 1), (0, 2)]

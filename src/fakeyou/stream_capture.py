@@ -170,6 +170,48 @@ def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) ->
     return tuple(ident for ident, _ in found)
 
 
+@dataclass(frozen=True)
+class TapHealth:
+    slot: int
+    stalled: bool
+    rescued: int
+    decode_fresh: bool
+    engine: str
+
+
+def parse_health(payload: Mapping[str, Any]) -> dict[int, TapHealth]:
+    if not isinstance(payload, Mapping):
+        return {}
+    raw = payload.get("health")
+    if not isinstance(raw, list):
+        return {}
+    found: dict[int, TapHealth] = {}
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            continue
+        slot = entry.get("slot")
+        stalled = entry.get("stalled")
+        rescued = entry.get("rescued")
+        fresh = entry.get("decode_fresh")
+        engine = entry.get("engine")
+        if (
+            isinstance(slot, bool)
+            or not isinstance(slot, int)
+            or slot < 0
+            or not isinstance(stalled, bool)
+            or isinstance(rescued, bool)
+            or not isinstance(rescued, int)
+            or rescued < 0
+            or not isinstance(fresh, bool)
+            or not isinstance(engine, str)
+        ):
+            continue
+        found[slot] = TapHealth(
+            slot=slot, stalled=stalled, rescued=rescued, decode_fresh=fresh, engine=engine
+        )
+    return found
+
+
 def _default_input() -> StreamAudioInput:
     return StreamAudioInput(TransportParams(audio_in_enabled=True))
 
@@ -288,6 +330,7 @@ class CaptureDrainLoop:
         self._twin_name = twin_name
         self._polls = 0
         self._fails = 0
+        self._rescued_seen: dict[int, int] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
 
@@ -310,12 +353,16 @@ class CaptureDrainLoop:
                 engine = entry.get("engine")
                 if isinstance(slot, int) and isinstance(engine, str):
                     engines[slot] = engine
+        health = parse_health(batch)
         slots = {
             str(chunk.slot): {
                 "level": chunk.level,
                 "bytes": len(chunk.pcm),
                 "track": tracks.get(chunk.slot, ""),
                 "engine": engines.get(chunk.slot, ""),
+                "stalled": health[chunk.slot].stalled if chunk.slot in health else False,
+                "rescued": health[chunk.slot].rescued if chunk.slot in health else 0,
+                "decode_fresh": health[chunk.slot].decode_fresh if chunk.slot in health else False,
             }
             for chunk in chunks
         }
@@ -346,6 +393,17 @@ class CaptureDrainLoop:
             chunks = parse_drain(batch)
             for chunk in chunks:
                 await self._registry.feed(chunk)
+            for slot, health in parse_health(batch).items():
+                if health.rescued > self._rescued_seen.get(slot, 0):
+                    self._rescued_seen[slot] = health.rescued
+                    if self._journal is not None:
+                        self._journal.record(
+                            "tap_slot_rescued",
+                            source="transport",
+                            slot=slot,
+                            rescued=health.rescued,
+                            stalled=health.stalled,
+                        )
             self._registry.prune()
             self._polls += 1
             self._heartbeat(batch, chunks)

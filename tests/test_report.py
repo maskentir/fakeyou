@@ -1363,3 +1363,11 @@ def test_session_report_counts_drain_gaps() -> None:
         {"event": "drain_gap_detected", "slot": 1, "kind": "resync", "missed": 0},
     ]
     assert build_session_report(rows)["stt_quality"]["drain_gaps"] == 2
+
+
+def test_session_report_counts_tap_slot_rescues() -> None:
+    rows = [
+        {"event": "tap_slot_rescued", "slot": 0, "rescued": 1},
+        {"event": "tap_slot_rescued", "slot": 0, "rescued": 2},
+    ]
+    assert build_session_report(rows)["stt_quality"]["tap_slot_rescues"] == 2

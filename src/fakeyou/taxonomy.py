@@ -40,6 +40,7 @@ EventVerb = Literal[
     "recorded",
     "requested",
     "required",
+    "rescued",
     "resumed",
     "retried",
     "skipped",
