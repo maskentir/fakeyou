@@ -265,6 +265,11 @@ class BrowserSettings(Section):
     license_key: SecretStr | None = None
 
 
+class AudioSettings(Section):
+    persist_enabled: bool = False
+    retention_days: int = Field(default=30, gt=0)
+
+
 class AudioHealthSettings(Section):
     deaf_window_seconds: PositiveSeconds = 120.0
     deaf_grace_seconds: PositiveSeconds = 120.0
@@ -294,6 +299,7 @@ class Configuration(Section):
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
+    audio: AudioSettings = Field(default_factory=AudioSettings)
     audio_health: AudioHealthSettings = Field(default_factory=AudioHealthSettings)
     preflight: PreflightSettings = Field(default_factory=PreflightSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
