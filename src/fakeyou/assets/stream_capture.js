@@ -22,6 +22,7 @@
   const decodersByKey = new Map();
   const decodeStampsByKey = new Map();
   const encodedAtBySlot = new Map();
+  const seqBySlot = new Map();
   const testGains = [];
   const testPairs = [];
   const testReceivers = new Set();
@@ -638,8 +639,11 @@
             if (!csrcs.includes(csrc)) csrcs.push(csrc);
           }
         }
+        const seq = seqBySlot.has(slot) ? seqBySlot.get(slot) + 1 : 0;
+        seqBySlot.set(slot, seq);
         return {
           slot,
+          seq,
           csrcs,
           level,
           page_ms,

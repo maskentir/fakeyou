@@ -212,6 +212,23 @@ async def test_stream_capture_muting_one_tone_keeps_other_stream() -> None:
 
 
 @pytest.mark.browser
+async def test_stream_capture_drain_emits_monotonic_seq_per_slot() -> None:
+    script = load_capture_script()
+    async with open_direct_page(headless=True) as page:
+        await page.add_init_script(script)
+        await page.goto("about:blank")
+        await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
+        await asyncio.sleep(1.5)
+        first = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+        await asyncio.sleep(0.5)
+        second = await page.evaluate("() => window.__fakeyouStreamCapture.drain()")
+    first_seq = {entry["slot"]: entry["seq"] for entry in first["streams"]}
+    second_seq = {entry["slot"]: entry["seq"] for entry in second["streams"]}
+    assert first_seq == {0: 0, 1: 0}
+    assert second_seq == {0: 1, 1: 1}
+
+
+@pytest.mark.browser
 async def test_stream_capture_discovers_loopback_receivers() -> None:
     from playwright.async_api import async_playwright
 
