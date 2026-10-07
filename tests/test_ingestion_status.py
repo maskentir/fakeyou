@@ -371,11 +371,11 @@ def test_stale_takeover_blocks_second_acquirer_until_release(tmp_path: Path) -> 
     assert not path.exists()
 
 
-def test_lease_acquisition_fails_while_guard_held(tmp_path: Path) -> None:
+def test_lease_acquisition_fails_while_lock_file_held(tmp_path: Path) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
-    guard = lock_path(record).with_name(lock_path(record).name + ".guard")
-    guard.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(guard, os.O_CREAT | os.O_WRONLY, 0o644)
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:
         with pytest.raises(RecordLockError):

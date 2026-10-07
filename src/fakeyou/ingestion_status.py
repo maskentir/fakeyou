@@ -172,17 +172,16 @@ def record_lock(
 
 
 @contextmanager
-def _acquisition_guard(path: Path) -> Iterator[None]:
-    guard = path.with_name(path.name + ".guard")
-    guard.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(guard, os.O_CREAT | os.O_WRONLY, 0o644)
+def _acquisition_guard(path: Path) -> Iterator[int]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    except OSError:
         os.close(fd)
         raise LeaseError(f"locked: {path}") from None
     try:
-        yield
+        yield fd
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -190,34 +189,40 @@ def _acquisition_guard(path: Path) -> Iterator[None]:
             os.close(fd)
 
 
+def _read_fd(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
 @contextmanager
 def file_lease(
     path: Path, *, purpose: LockPurpose, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
 ) -> Iterator[str]:
-    path.parent.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     host = socket.gethostname()
     owner_payload = {"host": host, "pid": os.getpid(), "purpose": purpose, "token": token}
-    with _acquisition_guard(path):
-        for _ in range(2):
-            try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
-                owner = _lock_owner(path)
-                if owner is None or not _owner_recoverable(owner, stale_after_seconds):
-                    raise LeaseError(f"locked: {path}") from None
-                try:
-                    os.unlink(path)
-                except FileNotFoundError:
-                    pass
-                continue
-            try:
-                os.write(fd, _lease_payload(owner_payload))
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            break
-        else:
+    with _acquisition_guard(path) as fd:
+        raw = _read_fd(fd)
+        owner = _lock_owner(path) if raw else None
+        if raw and (owner is None or not _owner_recoverable(owner, stale_after_seconds)):
+            raise LeaseError(f"locked: {path}") from None
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, _lease_payload(owner_payload))
+            os.fsync(fd)
+        except OSError:
+            raise LeaseError(f"locked: {path}") from None
+        try:
+            current = os.stat(path)
+        except FileNotFoundError:
+            raise LeaseError(f"locked: {path}") from None
+        written = os.fstat(fd)
+        if (current.st_ino, current.st_dev) != (written.st_ino, written.st_dev):
             raise LeaseError(f"locked: {path}") from None
     stop = threading.Event()
     heartbeat = threading.Thread(
