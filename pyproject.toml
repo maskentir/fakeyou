@@ -26,7 +26,9 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["pipecat-ai[local]==1.12.0; sys_platform == 'linux'"]
-voiceprint = ["sherpa-onnx==1.13.8"]
+# Pinned to the last sherpa built against onnxruntime 1.24.x (pipecat's pin);
+# newer sherpa needs ORT >= 1.28 and breaks the resolver.
+voiceprint = ["sherpa-onnx==1.12.38"]
 
 [dependency-groups]
 dev = [

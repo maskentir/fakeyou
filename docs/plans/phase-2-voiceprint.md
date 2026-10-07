@@ -14,7 +14,7 @@ ulang DSN checkpoint, tanpa dep baru) + ekstraktor CAM++ via
 `SpeakerRegistry`; ambang θ=0,60, margin-min 0,15, tolak
 segmen <3 dtk (dari spike), unknown-by-default.
 
-**Tech Stack:** Python, psycopg (sudah dep), sherpa-onnx 1.13.8
+**Tech Stack:** Python, psycopg (sudah dep), sherpa-onnx 1.12.38
 (extra baru), pytest serial, ruff, mypy.
 
 **Spec:** [2026-10-07-voiceprint-spike.md](../reports/2026-10-07-voiceprint-spike.md),
@@ -27,9 +27,11 @@ Pelaksana membaca ketiganya plus plan ini.
 
 - Python Inggris tanpa komentar/docstring dan tanpa string Bahasa Indonesia
   di `.py`; dokumentasi Bahasa Indonesia.
-- Dep baru HANYA `sherpa-onnx==1.13.8` sebagai extra `voiceprint`
-  (sudah disetujui pemilik); semua kode impornya opsional dengan
-  pesan error jelas bila extra belum dipasang.
+- Dep baru HANYA `sherpa-onnx==1.12.38` sebagai extra `voiceprint`
+  (sudah disetujui pemilik; 1.12.x terakhir yang cocok onnxruntime
+  1.24.x milik pipecat — sherpa ≥1.13.8 butuh ORT ≥1.28);
+  semua kode impornya opsional dengan pesan error jelas bila
+  extra belum dipasang.
 - Tanpa protokol privat Meet; tanpa teks transkrip di jurnal.
 - Semua flag/perilaku baru default mati; flag-mati = perilaku
   hari ini identik (tes lama hijau tak tersentuh).
@@ -206,7 +208,7 @@ utterance-embedding → normalisasi L2, `cosine` murni).
 Tambah extra di `pyproject.toml`:
 
 ```toml
-voiceprint = ["sherpa-onnx==1.13.8"]
+voiceprint = ["sherpa-onnx==1.12.38"]
 ```
 
 Jalankan `uv lock` dan sertakan `uv.lock` yang

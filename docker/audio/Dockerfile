@@ -21,6 +21,8 @@ RUN curl -fsSL -o /workspace/models/campplus-voxceleb-16k.onnx \
     https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx \
     && echo "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b  /workspace/models/campplus-voxceleb-16k.onnx" | sha256sum -c - \
     && chown twin:twin /workspace/models/campplus-voxceleb-16k.onnx
+RUN .venv/bin/python -c "import onnxruntime, os, glob; libs = glob.glob(os.path.join(os.path.dirname(onnxruntime.__file__), 'capi', 'libonnxruntime.so.*')); assert len(libs) == 1, libs; os.makedirs('/opt/ort', exist_ok=True); os.symlink(libs[0], '/opt/ort/libonnxruntime.so')"
+ENV LD_LIBRARY_PATH="/opt/ort"
 COPY docker/audio/default.pa /etc/fakeyou/default.pa
 COPY docker/audio/daemon.conf /etc/pulse/daemon.conf
 COPY docker/audio/asound.conf /etc/asound.conf

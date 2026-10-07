@@ -25,7 +25,7 @@ live butir 19 tetap wajib sebelum ship.
 
 | Artefak | Nilai |
 | --- | --- |
-| sherpa-onnx (+ core) | 1.13.8 (di `.venv` repo, `pyproject`/`uv.lock` tak tersentuh) |
+| sherpa-onnx (+ core) | 1.13.8 saat spike (versi ship: 1.12.38, cocok ORT 1.24.x pipecat) |
 | Python / numpy / soundfile | 3.12.13 / 2.5.3 / ok |
 | Host ukur | Apple M4 (arm64), macOS; angka waktu = aproksimasi vs worker Linux |
 | Model | `3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx`, dim 512 |
