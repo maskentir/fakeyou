@@ -32,7 +32,7 @@ from fakeyou.participation import (
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError, MeetingAudio
 from fakeyou.settings import DEFAULTS
-from fakeyou.utterance_quality import normalize_words
+from fakeyou.utterance_quality import describe_word_diff, normalize_words
 
 ConversationPhase = Literal[
     "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
@@ -584,6 +584,7 @@ class ConversationLoop:
         journal: Journal | None = None,
         participant_policy_enabled: bool = False,
         pre_generate_enabled: bool = DEFAULTS.conversation.pre_generate_enabled,
+        pregen_fuzzy_restart_enabled: bool = DEFAULTS.conversation.pregen_fuzzy_restart_enabled,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")
@@ -629,6 +630,7 @@ class ConversationLoop:
         self._last_interim: str | None = None
         self._last_interim_text: str | None = None
         self._pre_generate_enabled = pre_generate_enabled
+        self._pregen_fuzzy_restart_enabled = pregen_fuzzy_restart_enabled
         self._endpoint = SemanticEndpoint()
         self._pregen: _Pregeneration | None = None
         self._pregen_count = 0
@@ -718,8 +720,9 @@ class ConversationLoop:
                 if fresh:
                     self._begin_pregen(text)
             elif fresh and fresh != pregen.words:
-                await self._discard_pregen("superseded")
-                self._begin_pregen(text)
+                if not self._maybe_suppress_pregen_restart(pregen, fresh):
+                    await self._discard_pregen("superseded", fresh)
+                    self._begin_pregen(text)
         session = self._session
         if (
             self._closed
@@ -1053,8 +1056,9 @@ class ConversationLoop:
         if reason is not None:
             await self._discard_pregen(reason)
             return False
-        if normalize_words(event.text) != pregen.words:
-            await self._discard_pregen("mismatched")
+        final_words = normalize_words(event.text)
+        if final_words != pregen.words:
+            await self._discard_pregen("mismatched", final_words)
             return False
         session = self._session
         if session is None:
@@ -1074,6 +1078,7 @@ class ConversationLoop:
             request_id=request_id,
             outcome="adopted",
             duration_ms=(started - pregen.started) * 1000,
+            **describe_word_diff(pregen.words, final_words),
         )
         for index, sentence in enumerate(pregen.buffered):
             await session.speak(sentence, sentence_index=index, transcript_id=event.id)
@@ -1253,7 +1258,25 @@ class ConversationLoop:
         if not self._closed and self._failure is None and self._pending:
             await self._respond_pending()
 
-    async def _discard_pregen(self, reason: str) -> None:
+    def _maybe_suppress_pregen_restart(
+        self, pregen: _Pregeneration, fresh: tuple[str, ...]
+    ) -> bool:
+        if not self._pregen_fuzzy_restart_enabled:
+            return False
+        stats = describe_word_diff(pregen.words, fresh)
+        dist = int(stats["dist"])
+        words_pre = int(stats["words_pre"])
+        words_final = int(stats["words_final"])
+        if not (
+            (stats["diff_class"] == "prefix_extend" and words_final - words_pre <= 2)
+            or (dist <= 1 and max(words_pre, words_final) >= 6)
+        ):
+            return False
+        pregen.words = fresh
+        self._record("pregeneration_restart_skipped", request_id=pregen.request_id, **stats)
+        return True
+
+    async def _discard_pregen(self, reason: str, compared: tuple[str, ...] | None = None) -> None:
         pregen = self._pregen
         if pregen is None:
             return
@@ -1262,11 +1285,15 @@ class ConversationLoop:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        diff: dict[str, float | int | str] = (
+            describe_word_diff(pregen.words, compared) if compared is not None else {}
+        )
         self._record(
             "pregeneration_finished",
             request_id=pregen.request_id,
             outcome="discarded",
             reason=reason,
+            **diff,
         )
 
     async def _run_turn(

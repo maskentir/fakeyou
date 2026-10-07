@@ -235,6 +235,7 @@ class ConversationSettings(Section):
     voice_labels_enabled: bool = False
     per_stream_enabled: bool = False
     pre_generate_enabled: bool = False
+    pregen_fuzzy_restart_enabled: bool = False
 
 
 class MeetingSettings(Section):

@@ -91,9 +91,7 @@ Expected: FAIL (`describe_word_diff` belum ada).
 - [ ] **Step 3: implementasi minimal `describe_word_diff`**
 
 ```python
-def describe_word_diff(
-    old: Sequence[str], new: Sequence[str]
-) -> dict[str, float | int | str]:
+def describe_word_diff(old: Sequence[str], new: Sequence[str]) -> dict[str, float | int | str]:
     before = tuple(old)
     after = tuple(new)
     if before == after:
@@ -102,9 +100,10 @@ def describe_word_diff(
         diff_class = "prefix_extend"
     elif len(before) > len(after) and before[: len(after)] == after:
         diff_class = "prefix_truncate"
-    elif len(before) == len(after) and sum(
-        first != second for first, second in zip(before, after)
-    ) == 1:
+    elif (
+        len(before) == len(after)
+        and sum(first != second for first, second in zip(before, after)) == 1
+    ):
         diff_class = "single_subst"
     else:
         diff_class = "other"
@@ -268,7 +267,7 @@ git commit -m "feat(pregen): step-0 diff telemetry and report section"
 - Produces: setting `pregen_fuzzy_restart_enabled: bool = False`
   (env `FAKEYOU_CONVERSATION__PREGEN_FUZZY_RESTART_ENABLED`),
   parameter ctor `Conversation(..., pregen_fuzzy_restart_enabled: bool = DEFAULTS.conversation.pregen_fuzzy_restart_enabled)`,
-  event jurnal `pregeneration_restart_suppressed` dengan kunci
+  event jurnal `pregeneration_restart_skipped` dengan kunci
   `request_id` + lima kunci diff.
 
 Aturan penekanan (terkunci, flag on, `fresh` tak kosong dan beda
@@ -276,7 +275,7 @@ dari `pregen.words`): HITUNG `stats = describe_word_diff(pregen.words, fresh)`;
 TEKAN (tanpa restart) bila (`diff_class == "prefix_extend"` DAN
 `words_final - words_pre <= 2`) ATAU (`dist <= 1` DAN
 `max(words_pre, words_final) >= 6`). Saat menekan:
-`pregen.words = fresh`, jurnal `pregeneration_restart_suppressed`.
+`pregen.words = fresh`, jurnal `pregeneration_restart_skipped`.
 Selain itu: perilaku lama (discard `superseded` + begin baru).
 Flag off: perilaku lama untuk semua drift, tanpa event baru.
 Gerbang adopsi final tetap exact, tak tersentuh task ini.
@@ -286,7 +285,7 @@ Gerbang adopsi final tetap exact, tak tersentuh task ini.
 Kasus (pola fixture pregen yang sama dengan Task 1):
 (a) flag on + interim tumbuh satu kata sufiks → TIDAK restart
 (`request_id` pregen sama, task lama hidup), `pregen.words`
-diperbarui, satu event `pregeneration_restart_suppressed`
+diperbarui, satu event `pregeneration_restart_skipped`
 dengan `diff_class == "prefix_extend"`;
 (b) flag on + substitusi kata-isi (`single_subst`) → restart
 (`request_id` baru, satu `superseded`);
@@ -294,7 +293,7 @@ dengan `diff_class == "prefix_extend"`;
 ekstensi sufiks (mis. satu kata beda pada dua kata) → restart;
 (d) flag on + drift `dist == 1`, `n >= 6` → ditekan;
 (e) flag off + ekstensi satu kata → restart (perilaku lama),
-tanpa event `pregeneration_restart_suppressed`;
+tanpa event `pregeneration_restart_skipped`;
 (f) pregen yang ditekan hanya diadopsi bila final exact
 (final beda → `mismatched`, tanpa adopsi);
 (g) cerminkan `test_sentence_streaming_default_follows_settings_flag`
@@ -364,6 +363,6 @@ menunjukkan volume mismatch yang material.
   berisi kode atau perintah dan nilai harapan eksplisit.
 - Konsistensi tipe: `describe_word_diff` didefinisikan di Task 1
   dengan signature persis yang dikonsumsi Task 2; nama event
-  jurnal (`pregeneration_restart_suppressed`) dan kunci diff
+  jurnal (`pregeneration_restart_skipped`) dan kunci diff
   identik di kedua task; nama setting/flag/parameter ctor
   konsisten (`pregen_fuzzy_restart_enabled`).

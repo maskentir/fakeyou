@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
-from fakeyou.utterance_quality import score_pairs, score_script, word_error_rate
+from fakeyou.utterance_quality import (
+    describe_word_diff,
+    score_pairs,
+    score_script,
+    word_error_rate,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "short-utterances.json"
 
@@ -97,3 +102,22 @@ def test_short_utterance_fixture_covers_digits_and_backchannels() -> None:
     assert {case["language"] for case in cases} == {"id", "en"}
     assert all(case["expected"].strip() == case["expected"] and case["expected"] for case in cases)
     assert sum(len(case["expected"].split()) == 1 for case in cases) == 6
+
+
+def test_describe_word_diff_classes() -> None:
+    assert describe_word_diff(("a", "b"), ("a", "b")) == {
+        "dist": 0,
+        "words_pre": 2,
+        "words_final": 2,
+        "norm_dist_bucket": 0.0,
+        "diff_class": "exact",
+    }
+    extended = describe_word_diff(("a", "b"), ("a", "b", "c"))
+    assert (extended["diff_class"], extended["dist"]) == ("prefix_extend", 1)
+    truncated = describe_word_diff(("a", "b", "c"), ("a", "b"))
+    assert (truncated["diff_class"], truncated["dist"]) == ("prefix_truncate", 1)
+    subst = describe_word_diff(("a", "b"), ("a", "c"))
+    assert (subst["diff_class"], subst["dist"]) == ("single_subst", 1)
+    other = describe_word_diff(("a", "b"), ("c", "d"))
+    assert (other["diff_class"], other["dist"]) == ("other", 2)
+    assert other["norm_dist_bucket"] == 1.0

@@ -118,6 +118,12 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     turn_interims: list[float] = []
     turn_delays: list[float] = []
     capture_engines = Counter[str]()
+    starts = 0
+    outcomes = Counter[str]()
+    reasons = Counter[str]()
+    diff_classes = Counter[str]()
+    norm_dist_buckets = Counter[str]()
+    overlaps: list[float] = []
     for row in rows:
         event = row.get("event")
         try:
@@ -341,6 +347,21 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 engine = slot.get("engine") if isinstance(slot, dict) else None
                 if isinstance(engine, str) and engine:
                     capture_engines[engine] += 1
+        elif event == "pregeneration_started":
+            starts += 1
+        elif event == "pregeneration_finished":
+            outcome = str(row.get("outcome"))
+            outcomes[outcome] += 1
+            if outcome == "discarded":
+                reasons[str(row.get("reason"))] += 1
+            if "diff_class" in row:
+                diff_classes[str(row.get("diff_class"))] += 1
+            if "norm_dist_bucket" in row:
+                norm_dist_buckets[str(row.get("norm_dist_bucket"))] += 1
+            if outcome == "adopted":
+                duration = row.get("duration_ms")
+                if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+                    overlaps.append(float(duration) / 1000)
     for transcript_id in pending.values():
         if isinstance(transcript_id, str) and transcript_id in turns:
             turns[transcript_id]["incomplete"] += 1
@@ -421,6 +442,14 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             {"source": source, "kind": kind, "count": count}
             for (source, kind), count in faults.items()
         ],
+        "pregeneration": {
+            "starts": starts,
+            "outcomes": dict(outcomes),
+            "reasons": dict(reasons),
+            "diff_classes": dict(diff_classes),
+            "norm_dist_buckets": dict(norm_dist_buckets),
+            "adopted_overlap_seconds": summarize(overlaps),
+        },
         "result": result,
     }
 
