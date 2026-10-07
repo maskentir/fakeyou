@@ -207,3 +207,40 @@ Gap plan tercatat: `taxonomy.py` Subsystem `transport`
 Sisa Fase 1: butir 13–16 (supervisor tap, pre-roll/keepalive,
 tabel fusi identitas, endpointing semantik) — plan
 tersendiri.
+
+## Adendum implementasi butir 13+14 (2026-10-07)
+
+Cabang `feat/phase-1-robustness` (basis
+`feat/phase-1-ordering`), plan
+[phase-1-robustness.md](../plans/phase-1-robustness.md), tiap
+task SDD (tes merah → implementasi → reviewer terpisah →
+commit lokal).
+
+| Butir | Kerja | Commit |
+| --- | --- | --- |
+| 13a | Supervisor JS: deteksi macet > 3 dtk, rescue
+membuka ulang slot yang sama, `health` per slot di drain | `aff7aaa` |
+| 13b | Parse `health`, jurnal `tap_slot_rescued`, health di
+heartbeat, hitung `tap_slot_rescues` di `stt_quality` | `2b5bb93` |
+| 14a | `PreRollBuffer`: ring 500 ms disuntik sebelum
+`VADUserStartedSpeakingFrame`; audio idle tetap diteruskan | `4f23186` |
+| 14b | Reconnect proaktif saat sepi + idle (default mati),
+uji kesiapan `stt_session_started/failed` fail-fast | `8685228` |
+
+Gate aktual (output teramati): suite serial 3257 passed /
+41 skipped / 43 deselected, exit 0; browser 26 passed /
+2 skipped (termasuk tes rescue baru); `ruff check` bersih;
+`ruff format --check` bersih (214 berkas); `mypy src`
+bersih (56 berkas). Flag default tetap MATI.
+
+Nol-tambah-latensi: rescue hanya membuka ulang slot yang
+sudah mati; pre-roll menyuntik audio yang sudah diterima
+(tanpa menunda); reconnect proaktif hanya saat sepi dan
+mati default sampai data live; readiness langsung lolos di
+start sehat. Deviasi plan yang disetujui reviewer: replay
+pre-roll memakai `InputAudioRawFrame` (wajib agar STT
+mentranskrip), event readiness `started/failed` (taksonomi
+tanpa `ready`), verb `rescued` di taksonomi.
+
+Sisa Fase 1: butir 15 (tabel fusi identitas) dan 16
+(endpointing semantik + pra-generate) — plan tersendiri.
