@@ -776,10 +776,17 @@ async def open_meeting_audio(
 
 
 def _tagged(
-    stream_id: str, callback: Callable[[TranscriptionFrame], Awaitable[None]]
+    stream_id: str,
+    callback: Callable[[TranscriptionFrame], Awaitable[None]],
+    clock: Callable[[], tuple[int, float] | None] | None = None,
 ) -> Callable[[TranscriptionFrame], Awaitable[None]]:
     async def tagged(frame: TranscriptionFrame) -> None:
         frame.transport_source = stream_id
+        stamped = clock() if clock is not None else None
+        if stamped is not None:
+            mutable = cast(Any, frame)
+            mutable.capture_seq = stamped[0]
+            mutable.capture_ms = stamped[1]
         await callback(frame)
 
     return tagged
@@ -810,7 +817,11 @@ async def open_stream_audio(
     voice_activity: VoiceActivityTracker | None = None,
 ) -> AsyncIterator[MeetingAudioSession]:
     activity = activity or CaptureActivity()
-    tagged_interim = _tagged(stream_id, on_interim) if on_interim is not None else None
+    tagged_interim = (
+        _tagged(stream_id, on_interim, clock=lambda: getattr(input, "last_capture", None))
+        if on_interim is not None
+        else None
+    )
     session: MeetingAudioSession | None = None
     engine = (
         playback
@@ -847,7 +858,11 @@ async def open_stream_audio(
                         _CaptureObserver(activity, journal, probe, voice_activity),
                         stt,
                         _TranscriptObserver(
-                            _tagged(stream_id, on_transcript),
+                            _tagged(
+                                stream_id,
+                                on_transcript,
+                                clock=lambda: getattr(input, "last_capture", None),
+                            ),
                             activity,
                             faults,
                             tagged_interim,

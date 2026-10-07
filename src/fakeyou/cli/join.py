@@ -82,7 +82,13 @@ def stream_slot(stream_id: str) -> int | None:
 
 def attribute_stream_frame(
     frame: TranscriptionFrame, binder: SlotBinder | None
-) -> tuple[str, str | None, str, dict[str, Any]]:
+) -> tuple[str, str | None, str, dict[str, Any], float]:
+    raw_capture = getattr(frame, "capture_ms", 0.0)
+    capture_ms = (
+        float(raw_capture)
+        if isinstance(raw_capture, (int, float)) and not isinstance(raw_capture, bool)
+        else 0.0
+    )
     source = getattr(frame, "transport_source", "") or ""
     stream_id = source if isinstance(source, str) else ""
     slot = stream_slot(stream_id)
@@ -98,7 +104,7 @@ def attribute_stream_frame(
             drained = binder.drain_binder_events()
             if drained:
                 extra["tenure_events"] = drained
-        return ("unknown", None, stream_id, extra)
+        return ("unknown", None, stream_id, extra, capture_ms)
     outcome = binder.resolve(slot)
     drained = binder.drain_binder_events()
     csrcs = list(binder.stream_csrcs(slot))
@@ -113,7 +119,7 @@ def attribute_stream_frame(
             extra["speaker_csrc"] = csrcs
         if drained:
             extra["tenure_events"] = drained
-        return ("unknown", None, stream_id, extra)
+        return ("unknown", None, stream_id, extra, capture_ms)
     extra = {
         "speaker_reason": "stream_slot",
         "speaker_slot": slot,
@@ -129,6 +135,7 @@ def attribute_stream_frame(
         f"stream-{slot}",
         stream_id,
         extra,
+        capture_ms,
     )
 
 
@@ -174,8 +181,12 @@ def build_transcript_callback(
     async def transcript(frame: TranscriptionFrame) -> None:
         nonlocal emitted_max
         if per_stream_enabled:
-            participant_id, evidence_id, stream_id, extra = attribute_stream_frame(frame, binder)
-            event = transcript_event(frame, participant_id, evidence_id, stream_id)
+            participant_id, evidence_id, stream_id, extra, capture_ms = attribute_stream_frame(
+                frame, binder
+            )
+            event = transcript_event(
+                frame, participant_id, evidence_id, stream_id, capture_ms=capture_ms
+            )
             pending.append(event)
             extras[event.id] = extra
             for ordered in merge_transcripts(pending):

@@ -1902,3 +1902,31 @@ async def test_addressed_text_replies_inside_wake_window_ack_runs(journal) -> No
     [decided] = journal.events("ack_decided")
     assert decided["transcript_id"] == "t3"
     await loop.close()
+
+
+def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
+    from fakeyou.record import MeetingRecord, TranscriptEntry, load_meeting_record
+
+    event = transcript_event(
+        TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
+        "a",
+        None,
+        "s0",
+        capture_ms=55.5,
+    )
+    assert event.capture_ms == 55.5
+    assert (
+        transcript_event(
+            TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
+            "a",
+            None,
+            "s0",
+        ).capture_ms
+        == 0.0
+    )
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    record.add_transcript(event)
+    record.close()
+    [entry] = load_meeting_record(tmp_path / "record.jsonl")
+    assert isinstance(entry, TranscriptEntry)
+    assert entry.capture_ms == 55.5

@@ -151,6 +151,14 @@ class _RecordingInput(StreamAudioInput):
     def __init__(self) -> None:
         super().__init__(TransportParams(audio_in_enabled=True))
         self.fed: list[bytes] = []
+        self._capture: tuple[int, float] | None = None
+
+    def note_capture(self, seq: int, capture_ms: float) -> None:
+        self._capture = (seq, capture_ms)
+
+    @property
+    def last_capture(self) -> tuple[int, float] | None:
+        return self._capture
 
     async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
         self.fed.append(audio)
@@ -174,8 +182,10 @@ def _recording_registry(
     return registry, made
 
 
-def _chunk(slot: int, seq: int) -> StreamChunk:
-    return StreamChunk(slot=slot, seq=seq, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
+def _chunk(slot: int, seq: int, page_ms: float = 1000.0) -> StreamChunk:
+    return StreamChunk(
+        slot=slot, seq=seq, csrcs=(111,), level=0.4, page_ms=page_ms, pcm=b"\x00\x01"
+    )
 
 
 def test_load_capture_script_exposes_capture_api() -> None:
@@ -2074,3 +2084,41 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
     rows = [json.loads(line) for line in lines]
     assert len([row for row in rows if row["event"] == "transcript_finalized"]) == 3
     assert [row for row in rows if row["event"] == "order_inversion_detected"] == []
+
+
+async def test_registry_feed_stamps_capture_clock_on_input() -> None:
+    registry, made = _recording_registry(FakeClock().monotonic)
+    await registry.feed(_chunk(slot=0, seq=4, page_ms=1234.5))
+    assert made[0].last_capture == (4, 1234.5)
+
+
+async def test_tagged_callback_stamps_capture_clock() -> None:
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.audio import _tagged
+
+    seen: list[TranscriptionFrame] = []
+
+    async def record(frame: TranscriptionFrame) -> None:
+        seen.append(frame)
+
+    await _tagged("slot-0", record, clock=lambda: (7, 99.5))(
+        TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
+    )
+    assert (seen[0].capture_seq, seen[0].capture_ms) == (7, 99.5)
+    await _tagged("slot-0", record)(TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00"))
+    assert getattr(seen[1], "capture_ms", 0.0) == 0.0
+
+
+def test_attribute_stream_frame_returns_capture_ms() -> None:
+    from pipecat.frames.frames import TranscriptionFrame
+
+    from fakeyou.cli.join import attribute_stream_frame
+
+    stamped = TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
+    stamped.transport_source = "slot-2"
+    stamped.capture_ms = 55.5
+    assert attribute_stream_frame(stamped, SlotBinder(capacity=4))[4] == 55.5
+    plain = TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
+    plain.transport_source = "slot-2"
+    assert attribute_stream_frame(plain, SlotBinder(capacity=4))[4] == 0.0

@@ -40,6 +40,14 @@ class StreamAudioInput(BaseInputTransport):
         super().__init__(params, **kwargs)
         self._early: list[InputAudioRawFrame] = []
         self._early_bytes = 0
+        self._capture: tuple[int, float] | None = None
+
+    def note_capture(self, seq: int, capture_ms: float) -> None:
+        self._capture = (seq, capture_ms)
+
+    @property
+    def last_capture(self) -> tuple[int, float] | None:
+        return self._capture
 
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
@@ -241,6 +249,7 @@ class StreamRegistry:
         session.last_seen = self._monotonic()
         if self._binder is not None:
             self._binder.observe_stream(chunk.slot, chunk.csrcs)
+        session.input.note_capture(chunk.seq, chunk.page_ms)
         await session.input.feed(chunk.pcm)
 
     def prune(self) -> None:
