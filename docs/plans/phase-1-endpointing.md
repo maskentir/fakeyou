@@ -53,7 +53,7 @@ Butir 16 adalah subsistem terakhir Fase 1 (endpointing semantik + pra-generate).
 **Interfaces:**
 
 - Consumes: `normalize_words` dari `fakeyou.utterance_quality` (tanpa siklus: modul itu daun stdlib).
-- Produces: `TERMINAL_MARKS: frozenset[str] = frozenset({".", "?", "!"})`; `class SemanticEndpoint` dengan `__init__(min_words: int = 3)`, `observe(text: str) -> bool` (True hanya pada tepi-naik komplit), `reset() -> None`. Komplit = teks strip berakhir salah satu tanda terminal DAN `len(normalize_words(text)) >= min_words` DAN kata-ternormalisasi sama dengan interim sebelumnya (stabilitas). Tepi-naik: True sekali per run-komplit; observasi tak-komplit mengakhiri run (komplit berikutnya True lagi).
+- Produces: `TERMINAL_MARKS = frozenset({".", "?", "!"})`; `class SemanticEndpoint` dengan `__init__(min_words: int = 3)`, `observe(text: str) -> bool` (True hanya pada tepi-naik komplit), `reset() -> None`. Komplit = teks strip berakhir salah satu tanda terminal DAN `len(normalize_words(text)) >= min_words` DAN kata-ternormalisasi sama dengan interim sebelumnya DAN interim sebelumnya juga bertanda terminal (stabilitas penuh; perlu karena normalisasi mengupas tanda baca). Tepi-naik: True sekali per run-komplit; observasi tak-komplit mengakhiri run (komplit berikutnya True lagi).
 
 - [ ] **Step 1: tulis tes merah**
 
@@ -88,8 +88,6 @@ Expected: FAIL (`endpointing` belum ada)
 - [ ] **Step 3: implementasi minimal**
 
 ```python
-from collections.abc import Sequence
-
 from fakeyou.utterance_quality import normalize_words
 
 TERMINAL_MARKS = frozenset({".", "?", "!"})
@@ -99,21 +97,26 @@ class SemanticEndpoint:
     def __init__(self, min_words: int = 3) -> None:
         self._min_words = min_words
         self._previous: tuple[str, ...] | None = None
+        self._previous_terminal = False
         self._fired = False
 
     def reset(self) -> None:
         self._previous = None
+        self._previous_terminal = False
         self._fired = False
 
     def observe(self, text: str) -> bool:
         words = normalize_words(text)
+        terminal = text.strip().endswith(tuple(TERMINAL_MARKS))
         complete = (
-            text.strip().endswith(tuple(TERMINAL_MARKS))
+            terminal
             and len(words) >= self._min_words
             and self._previous is not None
+            and self._previous_terminal
             and words == self._previous
         )
         self._previous = words
+        self._previous_terminal = terminal
         if not complete:
             self._fired = False
             return False
