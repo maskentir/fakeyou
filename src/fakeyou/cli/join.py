@@ -27,6 +27,7 @@ from fakeyou.assembly import (
 )
 from fakeyou.attribution_probe import PROBE_FILE_NAME, AttributionProbe
 from fakeyou.audio import open_meeting_audio
+from fakeyou.audio_persist import SlotAudioWriter
 from fakeyou.brief import (
     MeetingBrief,
     MeetingContext,
@@ -600,6 +601,12 @@ async def join_meeting(
                         if conversation is not None:
                             await conversation.note_vad(active)
 
+                    audio_recorder: SlotAudioWriter | None = None
+                    if settings.audio.persist_enabled and settings.conversation.per_stream_enabled:
+                        audio_recorder = SlotAudioWriter(
+                            record_path.parent / "audio", journal=journal
+                        )
+                        resources.callback(audio_recorder.close)
                     if audio_enabled:
                         audio_probe = (
                             AttributionProbe(config.attribution_probe_path)
@@ -624,6 +631,7 @@ async def join_meeting(
                                 on_playback_event=log_playback,
                                 faults=faults,
                                 journal=journal,
+                                recorder=audio_recorder,
                                 deaf_window_seconds=config.deaf_window_seconds,
                                 deaf_grace_seconds=config.deaf_grace_seconds,
                                 stt_keywords=stt_keywords,

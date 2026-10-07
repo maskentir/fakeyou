@@ -14,8 +14,9 @@ from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.audio import MeetingAudioError, MeetingAudioSession, TurnAudioTap, open_stream_audio
+from fakeyou.audio_persist import SlotAudioWriter
 from fakeyou.deaf import DeafVerdict
-from fakeyou.faults import FaultReporter
+from fakeyou.faults import FaultReporter, record_consumer_fault
 from fakeyou.journal import Journal
 from fakeyou.playback import PlaybackEngine, PlaybackEvent
 from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings
@@ -239,12 +240,14 @@ class StreamRegistry:
         silence_seconds: float = SESSION_SILENCE_SECONDS,
         binder: SlotBinder | None = None,
         journal: Journal | None = None,
+        recorder: SlotAudioWriter | None = None,
     ) -> None:
         self._monotonic = monotonic
         self._input_factory = _default_input if input_factory is None else input_factory
         self._silence_seconds = silence_seconds
         self._binder = binder
         self._journal = journal
+        self._recorder = recorder
         self._sessions: dict[int, StreamSession] = {}
         self._roster_seen: dict[str, float] = {}
 
@@ -307,6 +310,13 @@ class StreamRegistry:
             self._binder.observe_stream(chunk.slot, chunk.csrcs)
         session.input.note_capture(chunk.seq, chunk.page_ms)
         await session.input.feed(chunk.pcm)
+        if self._recorder is not None:
+            try:
+                self._recorder.write_chunk(chunk.slot, chunk.seq, chunk.page_ms, chunk.pcm)
+            except Exception as error:
+                record_consumer_fault(
+                    None, self._journal, source="audio", detail="audio_persist", error=error
+                )
 
     def prune(self) -> None:
         now = self._monotonic()
@@ -551,6 +561,7 @@ async def open_stream_fleet(
     turn_tap_factory: Callable[[int], TurnAudioTap] | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
+    recorder: SlotAudioWriter | None = None,
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
     deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
     alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
@@ -562,7 +573,7 @@ async def open_stream_fleet(
 ) -> AsyncIterator[StreamFleetSession]:
     if slots <= 0:
         raise ValueError("stream fleet needs at least one slot")
-    registry = StreamRegistry(binder=binder, journal=journal)
+    registry = StreamRegistry(binder=binder, journal=journal, recorder=recorder)
     async with AsyncExitStack() as stack:
         sessions: list[MeetingAudioSession] = []
         for slot in range(slots):

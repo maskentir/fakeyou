@@ -1,13 +1,17 @@
+import asyncio
 import json
+import os
 import wave
 from pathlib import Path
 
 import pytest
+from pipecat.transports.base_transport import TransportParams
 from pydantic import ValidationError
 
 from fakeyou.audio_persist import AudioRecordingSummary, SlotAudioWriter
 from fakeyou.journal import Journal
 from fakeyou.settings import AudioSettings, Configuration
+from fakeyou.stream_capture import StreamAudioInput, StreamChunk, StreamRegistry
 
 
 class FakeClock:
@@ -183,3 +187,84 @@ def test_audio_settings_default_to_disabled_with_thirty_day_retention() -> None:
 def test_audio_settings_reject_non_positive_retention() -> None:
     with pytest.raises(ValidationError):
         AudioSettings(retention_days=0)
+
+
+class _SilentInput(StreamAudioInput):
+    def __init__(self) -> None:
+        super().__init__(TransportParams(audio_in_enabled=True))
+        self.fed: list[bytes] = []
+
+    async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
+        self.fed.append(audio)
+
+
+def _wiring_chunk(slot: int, seq: int) -> StreamChunk:
+    return StreamChunk(
+        slot=slot,
+        seq=seq,
+        csrcs=(7,),
+        level=0.5,
+        page_ms=1000.0 + seq * 20.0,
+        pcm=_pcm(7, 80),
+    )
+
+
+async def test_registry_with_recorder_writes_wav_sidecar_and_events(tmp_path: Path) -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    directory = tmp_path / "meeting-1" / "audio"
+    writer = SlotAudioWriter(directory, monotonic=FakeClock().monotonic, journal=journal)
+    registry = StreamRegistry(input_factory=_SilentInput, journal=journal, recorder=writer)
+    for seq in (0, 1, 3):
+        await registry.feed(_wiring_chunk(0, seq))
+    summary = writer.close()
+
+    assert summary == AudioRecordingSummary(
+        slots=(0,), seconds_total=0.02, bytes_total=640, gaps_filled=1, chunks=3
+    )
+    with wave.open(str(directory / "slot-0.wav"), "rb") as handle:
+        assert handle.getnframes() == 320
+    sidecar = json.loads((directory / "slots.json").read_text())
+    assert sidecar["slots"]["0"]["gaps_filled"] == 1
+    assert len(_rows(lines, "audio_recording_started")) == 1
+    assert len(_rows(lines, "audio_recording_finished")) == 1
+
+
+async def test_registry_without_recorder_writes_no_audio_files_or_events(
+    tmp_path: Path,
+) -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    registry = StreamRegistry(input_factory=_SilentInput, journal=journal)
+    for seq in (0, 1, 3):
+        await registry.feed(_wiring_chunk(0, seq))
+
+    assert registry.sessions[0].seq == 3
+    assert await asyncio.to_thread(os.listdir, tmp_path) == []
+    events = [json.loads(line)["event"] for line in lines]
+    assert "audio_recording_started" not in events
+    assert "audio_recording_finished" not in events
+
+
+async def test_registry_write_failure_records_fault_and_keeps_session(
+    tmp_path: Path,
+) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("read-only directory is writable for root")
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    directory = tmp_path / "audio"
+    writer = SlotAudioWriter(directory, monotonic=FakeClock().monotonic, journal=journal)
+    registry = StreamRegistry(input_factory=_SilentInput, journal=journal, recorder=writer)
+    directory.chmod(0o555)
+    try:
+        await registry.feed(_wiring_chunk(0, 0))
+    finally:
+        directory.chmod(0o755)
+
+    assert registry.sessions[0].seq == 0
+    assert registry.sessions[0].level == 0.5
+    faults = _rows(lines, "fault_recorded")
+    assert len(faults) == 1
+    assert faults[0]["source"] == "audio"
+    assert str(faults[0]["detail"]).startswith("audio_persist")

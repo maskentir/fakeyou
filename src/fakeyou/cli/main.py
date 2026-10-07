@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, TypeAdapter
 
+from fakeyou.cli.audio import audio_purge_expired
 from fakeyou.cli.chat import chat
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
@@ -295,6 +296,16 @@ def build_parser() -> argparse.ArgumentParser:
     voiceprint_commands.add_parser(
         "purge-expired", help="Delete voiceprints past retention", allow_abbrev=False
     ).set_defaults(handler=voiceprint_purge_expired)
+    audio_parser = commands.add_parser(
+        "audio", help="Manage persisted meeting audio", allow_abbrev=False
+    )
+    audio_commands = audio_parser.add_subparsers(dest="audio_command", required=True)
+    audio_purge_parser = audio_commands.add_parser(
+        "purge-expired", help="Delete meeting audio past retention", allow_abbrev=False
+    )
+    audio_purge_parser.add_argument("--root", type=Path, default=None)
+    audio_purge_parser.add_argument("--days", type=int, default=None)
+    audio_purge_parser.set_defaults(handler=audio_purge_expired)
     return parser
 
 
@@ -304,6 +315,7 @@ def main() -> None:
     del options["command"]
     options.pop("worker_command", None)
     options.pop("voiceprint_command", None)
+    options.pop("audio_command", None)
     try:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):
