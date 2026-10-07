@@ -627,6 +627,7 @@ class ConversationLoop:
         self._closed = False
         self._interrupted = False
         self._last_interim: str | None = None
+        self._last_interim_text: str | None = None
         self._pre_generate_enabled = pre_generate_enabled
         self._endpoint = SemanticEndpoint()
         self._pregen: _Pregeneration | None = None
@@ -669,6 +670,7 @@ class ConversationLoop:
         self._seen.add(event.id)
         self._events.append(event)
         self._endpoint.reset()
+        self._last_interim_text = None
         bare_ack = _is_bare_ack(event.text)
         if self._participant_policy_enabled:
             if not self._policy_allows(event):
@@ -705,6 +707,7 @@ class ConversationLoop:
         self._start_pending()
 
     async def handle_interim(self, text: str) -> None:
+        self._last_interim_text = text
         await self._observe_pregen(text)
         session = self._session
         if (
@@ -754,6 +757,35 @@ class ConversationLoop:
             return
         if not self._endpoint.observe(text):
             return
+        self._begin_pregen(text)
+
+    async def note_vad(self, active: bool) -> None:
+        if active:
+            return
+        session = self._session
+        if self._closed or self._failure is not None:
+            return
+        if session is None:
+            return
+        if not self._pre_generate_enabled:
+            return
+        if not self._sentence_streaming:
+            return
+        if not isinstance(self._responder, StreamingConversationResponder):
+            return
+        if self.is_busy or self._pending or session.is_speaking:
+            return
+        child = self._active_turn
+        if child is not None and not child.done():
+            return
+        if self._pregen is not None:
+            return
+        text = self._last_interim_text or ""
+        if not self._endpoint.observe_stop(text):
+            return
+        self._begin_pregen(text)
+
+    def _begin_pregen(self, text: str) -> None:
         self._pregen_count += 1
         interim = TranscriptEvent(
             f"pregen-{self._pregen_count}",

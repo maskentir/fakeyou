@@ -18,6 +18,9 @@ class SemanticEndpoint:
         self._run = 0
         self._fired = False
 
+    def observe_stop(self, text: str) -> bool:
+        return len(normalize_words(text)) >= self._min_words
+
     def observe(self, text: str) -> bool:
         words = normalize_words(text)
         terminal = text.strip().endswith(tuple(TERMINAL_MARKS))

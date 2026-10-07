@@ -215,12 +215,14 @@ class _CaptureObserver(FrameProcessor):
         journal: Journal | None = None,
         probe: AttributionProbe | None = None,
         voice_activity: VoiceActivityTracker | None = None,
+        on_vad: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__()
         self._activity = activity
         self._journal = journal
         self._probe = probe
         self._voice_activity = voice_activity
+        self._on_vad = on_vad
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -244,6 +246,22 @@ class _CaptureObserver(FrameProcessor):
                 self._activity.observe_speech(False)
                 self._record("speech_stopped")
                 self._observe_vad(False)
+            if self._on_vad is not None and isinstance(
+                frame, (VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
+            ):
+                try:
+                    async with asyncio.timeout(10):
+                        await self._on_vad(isinstance(frame, VADUserStartedSpeakingFrame))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    record_consumer_fault(
+                        None,
+                        self._journal,
+                        source="audio",
+                        detail="vad_consumer",
+                        error=error,
+                    )
         await self.push_frame(frame, direction)
 
     def _record(self, event: str) -> None:
@@ -708,6 +726,7 @@ async def open_meeting_audio(
     playback: PlaybackEngine | None = None,
     on_playback_event: Callable[[PlaybackEvent], None] | None = None,
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
+    on_vad: Callable[[bool], Awaitable[None]] | None = None,
     activity: CaptureActivity | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
@@ -758,7 +777,7 @@ async def open_meeting_audio(
                     [
                         transport.input(),
                         VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
-                        _CaptureObserver(activity, journal, probe, voice_activity),
+                        _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
                         stt,
                         _TranscriptObserver(
                             on_transcript, activity, faults, on_interim, journal=journal
@@ -886,6 +905,7 @@ async def open_stream_audio(
     playback: PlaybackEngine | None = None,
     on_playback_event: Callable[[PlaybackEvent], None] | None = None,
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
+    on_vad: Callable[[bool], Awaitable[None]] | None = None,
     activity: CaptureActivity | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
@@ -939,7 +959,7 @@ async def open_stream_audio(
                     [
                         input,
                         VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
-                        _CaptureObserver(activity, journal, probe, voice_activity),
+                        _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
                         PreRollBuffer(CAPTURE_SAMPLE_RATE, preroll_ms=stt_settings.preroll_ms),
                         stt,
                         _TranscriptObserver(

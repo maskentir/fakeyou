@@ -2002,3 +2002,99 @@ async def test_pregeneration_stays_off_by_default(journal) -> None:
     await loop.wait_idle()
     assert len(responder.calls) == 1
     await loop.close()
+
+
+async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    assert journal_has(journal, "pregeneration_started")
+    await loop.handle_transcript(event("f1", "can you help me today", finalized=True))
+    await loop.wait_idle()
+    assert audio.spoken == ["Yes I can."]
+    assert len(responder.calls) == 1
+    assert journal_has(journal, "pregeneration_finished", outcome="adopted")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    await loop.close()
+
+
+async def test_note_vad_stays_silent_on_speech_start(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today")
+    await loop.note_vad(True)
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    assert journal.events("pregeneration_started") == []
+    await loop.close()
+
+
+async def test_note_vad_stays_silent_without_interim(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    assert journal.events("pregeneration_started") == []
+    await loop.close()
+
+
+async def test_note_vad_stays_silent_on_short_interim(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("see you")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    assert journal.events("pregeneration_started") == []
+    await loop.close()
+
+
+async def test_note_vad_stays_silent_when_disabled(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal, sentence_streaming=True)
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    assert journal.events("pregeneration_started") == []
+    await loop.close()
+
+
+async def test_note_vad_stays_silent_when_busy(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    audio.speaking = True
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today")
+    await loop.note_vad(False)
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    assert journal.events("pregeneration_started") == []
+    await loop.close()

@@ -58,3 +58,19 @@ def test_endpoint_punctuated_fires_fast_on_second() -> None:
     endpoint = SemanticEndpoint()
     assert endpoint.observe("please open the hatch.") is False
     assert endpoint.observe("please open the hatch.") is True
+
+
+def test_observe_stop_fires_on_long_text() -> None:
+    endpoint = SemanticEndpoint()
+    assert endpoint.observe_stop("can you help me today") is True
+
+
+def test_observe_stop_ignores_short_text() -> None:
+    endpoint = SemanticEndpoint()
+    assert endpoint.observe_stop("see you") is False
+
+
+def test_observe_stop_ignores_empty_text() -> None:
+    endpoint = SemanticEndpoint()
+    assert endpoint.observe_stop("") is False
+    assert endpoint.observe_stop("   ") is False
