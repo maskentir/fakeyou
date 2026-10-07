@@ -19,6 +19,7 @@ from pipecat.frames.frames import (
     AudioRawFrame,
     ErrorFrame,
     Frame,
+    InputAudioRawFrame,
     InterimTranscriptionFrame,
     TranscriptionFrame,
     UserSpeakingFrame,
@@ -238,6 +239,56 @@ class _CaptureObserver(FrameProcessor):
             self._probe.observe_vad(active)
         except Exception:
             pass
+
+
+class PreRollBuffer(FrameProcessor):
+    def __init__(self, sample_rate: int, *, preroll_ms: float = 500.0, channels: int = 1) -> None:
+        super().__init__()
+        self._sample_rate = sample_rate
+        self._channels = max(channels, 1)
+        self._limit_bytes = max(int(sample_rate * 2 * self._channels * preroll_ms / 1000.0), 0)
+        self._ring: deque[bytes] = deque()
+        self._ring_bytes = 0
+        self._speaking = False
+
+    @property
+    def buffered_ms(self) -> float:
+        width = self._sample_rate * 2 * self._channels
+        return (self._ring_bytes / width * 1000.0) if width else 0.0
+
+    async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if direction != FrameDirection.DOWNSTREAM:
+            await self.push_frame(frame, direction)
+            return
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._speaking = True
+            if self._ring_bytes:
+                await self.push_frame(
+                    InputAudioRawFrame(
+                        audio=b"".join(self._ring),
+                        sample_rate=self._sample_rate,
+                        num_channels=self._channels,
+                    ),
+                    direction,
+                )
+                self._ring.clear()
+                self._ring_bytes = 0
+            await self.push_frame(frame, direction)
+            return
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._speaking = False
+            await self.push_frame(frame, direction)
+            return
+        if isinstance(frame, AudioRawFrame) and not self._speaking:
+            if frame.audio:
+                self._ring.append(frame.audio)
+                self._ring_bytes += len(frame.audio)
+                while self._ring_bytes > self._limit_bytes and self._ring:
+                    self._ring_bytes -= len(self._ring.popleft())
+            await self.push_frame(cast(Frame, frame), direction)
+            return
+        await self.push_frame(frame, direction)
 
 
 class _TranscriptObserver(FrameProcessor):
@@ -856,6 +907,7 @@ async def open_stream_audio(
                         input,
                         VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
                         _CaptureObserver(activity, journal, probe, voice_activity),
+                        PreRollBuffer(CAPTURE_SAMPLE_RATE, preroll_ms=stt_settings.preroll_ms),
                         stt,
                         _TranscriptObserver(
                             _tagged(

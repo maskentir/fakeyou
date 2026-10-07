@@ -362,7 +362,7 @@ git commit -m "feat(l0): observe tap supervisor rescues"
 
 **Interfaces:**
 
-- Consumes: `AudioRawFrame(audio: bytes, sample_rate: int, num_channels: int)`, `VADUserStartedSpeakingFrame`, `VADUserStoppedSpeakingFrame` (pipecat; impor yang sudah ada di `audio.py`).
+- Consumes: `InputAudioRawFrame(audio: bytes, sample_rate: int, num_channels: int)`, `VADUserStartedSpeakingFrame`, `VADUserStoppedSpeakingFrame` (pipecat; impor yang sudah ada di `audio.py`).
 - Produces: `PreRollBuffer(FrameProcessor)` dengan `__init__(sample_rate, *, preroll_ms = 500.0, channels = 1)`; saat idle menyimpan audio sampai `preroll_ms`; saat bingkai mulai-bicara lewat, mendorong isi ring sebagai `AudioRawFrame` gabungan DAHULU lalu bingkai itu; passthrough saat bicara; kembali menyimpan saat berhenti-bicara. `open_stream_audio` memasangnya di antara `_CaptureObserver` dan `stt` dengan `preroll_ms=stt_settings.preroll_ms`. Jalur mixed (`open_meeting_audio`) TIDAK diubah (beku warisan).
 
 - [ ] **Step 1: tulis tes merah**
@@ -387,7 +387,7 @@ class _Sink(FrameProcessor):
 
 
 def _audio(byte: int, count: int = 320) -> AudioRawFrame:
-    return AudioRawFrame(audio=bytes([byte]) * count, sample_rate=16000, num_channels=1)
+    return InputAudioRawFrame(audio=bytes([byte]) * count, sample_rate=16000, num_channels=1)
 
 
 async def test_preroll_replays_ring_before_speech_start() -> None:
@@ -405,9 +405,10 @@ async def test_preroll_replays_ring_before_speech_start() -> None:
     await buffer.process_frame(_audio(9), FrameDirection.DOWNSTREAM)
     await buffer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     kinds = [type(frame).__name__ for frame in sink.frames]
-    assert kinds[0] == "AudioRawFrame"
-    assert sink.frames[0].audio == b"".join(bytes([index]) * 320 for index in range(4))
-    assert kinds[1] == "VADUserStartedSpeakingFrame"
+    assert kinds[:4] == ["InputAudioRawFrame"] * 4
+    assert kinds[4] == "InputAudioRawFrame"
+    assert sink.frames[4].audio == b"".join(bytes([index]) * 320 for index in range(4))
+    assert kinds[5] == "VADUserStartedSpeakingFrame"
     assert any(
         isinstance(frame, AudioRawFrame) and frame.audio == bytes([9]) * 320
         for frame in sink.frames
@@ -457,7 +458,7 @@ class PreRollBuffer(FrameProcessor):
             self._speaking = True
             if self._ring_bytes:
                 await self.push_frame(
-                    AudioRawFrame(
+                    InputAudioRawFrame(
                         audio=b"".join(self._ring),
                         sample_rate=self._sample_rate,
                         num_channels=self._channels,

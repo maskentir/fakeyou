@@ -142,6 +142,7 @@ class STTSettings(Section):
     api_key: SecretStr | None = None
     url: str = "wss://api.meta.ai/v1/asr/realtime"
     mode: STTMode = "ENDPOINTING"
+    preroll_ms: float = 500.0
 
 
 class VADSettings(Section):
