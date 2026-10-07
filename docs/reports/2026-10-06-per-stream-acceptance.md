@@ -244,3 +244,38 @@ tanpa `ready`), verb `rescued` di taksonomi.
 
 Sisa Fase 1: butir 15 (tabel fusi identitas) dan 16
 (endpointing semantik + pra-generate) — plan tersendiri.
+
+## Adendum implementasi butir 15 (2026-10-07)
+
+Cabang `feat/phase-1-identity` (basis
+`feat/phase-1-robustness`), plan
+[phase-1-identity.md](../plans/phase-1-identity.md), tiap
+task SDD (tes merah → implementasi → reviewer terpisah →
+commit lokal).
+
+| Butir | Kerja | Commit |
+| --- | --- | --- |
+| 15a | `SpeakerRegistry`: baris uuid deterministik,
+status/keyakinan/margin/riwayat, aturan 1:1 + refusal | `91e6e43` |
+| 15b | `SlotBinder` jadi adaptor tipis; tes lama hijau
+tanpa modifikasi | `92912c6` |
+| 15c | Tracker + binder stream berbagi satu registry;
+`speaker_uuid` di ekstra/journal; `_csrc_labels` dihapus | `fc238df` |
+
+Gate aktual (output teramati): suite serial 3276 passed /
+41 skipped / 43 deselected, exit 0; browser 26 passed /
+2 skipped; `ruff check` bersih; `ruff format --check`
+bersih (217 berkas); `mypy src` bersih (57 berkas). Flag
+default tetap MATI.
+
+Bukti kesetaraan: probe diferensial reviewer 15/15 —
+29 operasi atas binder lama vs registry: semua outcome dan
+event `tenure_*` identik bita-per-bita. Dua substrat kini
+satu; label huruf tampil-saja; relabel sunyi mustahil
+(baris stabil, slot menumpang). Catatan reviewer:
+indeks slot last-wins, kapasitas mixed 3→4 di sesi
+berbagi, margin 1.0 kandidat-tunggal (jarak embedding
+Fase 2).
+
+Sisa Fase 1: butir 16 (endpointing semantik +
+pra-generate) — plan tersendiri.
