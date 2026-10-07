@@ -392,3 +392,42 @@ memakai password default sehingga URL checkpoint sesi
 ini menunjuk password itu (non-destruktif, `.env`
 direstore setelah sesi); `sentence_streaming` wajib
 nyala agar gate pregen lolos.
+
+## Adendum kalibrasi voiceprint ronde 1 (host-only, 2026-10-08)
+
+Sesi vp-t5 (shakedown TTS, 45 keputusan) + vp-e (host,
+64 keputusan matched), per-stream ON, θ=0,60/margin 0,15.
+
+| Populasi | n | Skor | Hasil |
+| --- | --- | --- | --- |
+| TTS vs print TTS (shakedown) | 45 | 0,22–0,98 | 35 verified (loop live terbukti) |
+| Host vs print host | 17 | 0,46–0,86 | 11 verified (cakupan 65%) |
+| TTS vs print host (impostor) | 40 | 0,17–0,79 | 0 verified (semua via negatif/ambang) |
+
+H1 consent ✓; H2 solo campur (di atas); H3 overlap —
+turn host tetap verified BENAR (slot per-stream bersih,
+ekspektasi unknown hanya untuk audio campuran); H4 mute
+✓ + miss tepat di 0,60; H5+H6 rejoin + nama baru →
+verified 0,86 di kedua worker ✓✓; T2 gate durasi tepat
+(≥3 dtk terskor, <3 dtk dibuang); P1 latensi p50 219
+mdtk p95 427 mdtk ✓; S1 audit ✓ (consent tercatat,
+purge jalan, audio mentah enrollment dihapus pasca-sesi,
+print ikut retensi 90 hari).
+
+Temuan keras: (1) populasi true vs impostor TTS TUMPANG
+di [0,45–0,79] — ambang tunggal tak memisahkan; nol
+false-verify HANYA berkat print negatif (impostor
+0,83 pun tertolak). (2) Turn identik diskor beda
+antar worker s.d. 0,13 — segmentasi VAD per worker
+mengayun batas klip. (3) Skor ≥0,60 pada solo rejoin
+panjang vs miss pada solo pendek — durasi klip
+mendominasi kualitas.
+
+Kunci sementara: θ=0,60 + margin 0,15 + negatif wajib
+dipertahankan (default flag tetap MATI). Gate presisi
+0,98 butuh sesi multi-manusia + kerja stabilisasi skor
+(batas klip deterministik, enroll lebih kaya); butir 19
+mewarisi temuan ini. Temuan bug sesi: tap menimpa
+segmen VAD (stop 0,2 dtk) → diakumulasi + discard-on-final
+(cabang fix merge terpisah, SDD review); pin sherpa
+1.12.38 cocok ORT 1.24.x pipecat.
