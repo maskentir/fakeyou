@@ -1930,3 +1930,75 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
     [entry] = load_meeting_record(tmp_path / "record.jsonl")
     assert isinstance(entry, TranscriptEntry)
     assert entry.capture_ms == 55.5
+
+
+class _StreamingResponder:
+    def __init__(self, sentences: list[str]) -> None:
+        self.sentences = sentences
+        self.calls: list[list[TranscriptEvent]] = []
+        self.released = asyncio.Event()
+
+    def stream_sentences(self, events, on_tool_start, *, request_id: str):
+        self.calls.append(list(events))
+        return self._generate()
+
+    async def _generate(self):
+        for sentence in self.sentences:
+            yield sentence
+
+
+def journal_has(journal, name, **fields):
+    return any(
+        all(row.get(key) == value for key, value in fields.items()) for row in journal.events(name)
+    )
+
+
+async def test_pregeneration_adopts_exact_match_without_second_call(journal) -> None:
+    responder = _StreamingResponder(["Yes I can.", "Let me check."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today?")
+    await loop.handle_interim("can you help me today?")
+    await asyncio.sleep(0.05)
+    assert len(responder.calls) == 1
+    await loop.handle_transcript(event("f1", "can you help me today?", finalized=True))
+    await loop.wait_idle()
+    assert audio.spoken == ["Yes I can.", "Let me check."]
+    assert len(responder.calls) == 1
+    assert journal_has(journal, "pregeneration_finished", outcome="adopted")
+    await loop.close()
+
+
+async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(
+        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+    )
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today?")
+    await loop.handle_interim("can you help me today?")
+    await asyncio.sleep(0.05)
+    await loop.handle_transcript(event("f1", "cancel everything now", finalized=True))
+    await loop.wait_idle()
+    assert len(responder.calls) == 2
+    assert journal_has(journal, "pregeneration_finished", outcome="discarded")
+    await loop.close()
+
+
+async def test_pregeneration_stays_off_by_default(journal) -> None:
+    responder = _StreamingResponder(["Yes I can."])
+    audio = FakeReplyAudio()
+    loop = ConversationLoop(responder, journal=journal, sentence_streaming=True)
+    loop.bind(audio)
+    await loop.handle_interim("can you help me today?")
+    await loop.handle_interim("can you help me today?")
+    await asyncio.sleep(0.05)
+    assert responder.calls == []
+    await loop.handle_transcript(event("f1", "can you help me today?", finalized=True))
+    await loop.wait_idle()
+    assert len(responder.calls) == 1
+    await loop.close()

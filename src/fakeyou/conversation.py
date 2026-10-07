@@ -20,6 +20,7 @@ from langchain_core.runnables import Runnable
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.utils.string import match_endofsentence
 
+from fakeyou.endpointing import SemanticEndpoint
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal, JournalTiming
 from fakeyou.participation import (
@@ -31,6 +32,7 @@ from fakeyou.participation import (
 from fakeyou.provider_faults import classify_exception
 from fakeyou.session import ConversationError, MeetingAudio
 from fakeyou.settings import DEFAULTS
+from fakeyou.utterance_quality import normalize_words
 
 ConversationPhase = Literal[
     "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
@@ -537,6 +539,32 @@ def cap_spoken_reply(
     return " ".join(sentences)
 
 
+@dataclass(slots=True)
+class _Pregeneration:
+    words: tuple[str, ...]
+    request_id: str
+    started: float
+    generation: int
+    queue: asyncio.Queue[str | None]
+    buffered: list[str]
+    task: asyncio.Task[None] | None = None
+    stream: AsyncIterator[str] | None = None
+    adopted: bool = False
+
+
+def _pregen_failure_reason(task: asyncio.Task[None] | None) -> str | None:
+    if task is None or not task.done():
+        return None
+    if task.cancelled():
+        return "error"
+    error = task.exception()
+    if error is None:
+        return None
+    if isinstance(error, TimeoutError):
+        return "expired"
+    return "error"
+
+
 class ConversationLoop:
     def __init__(
         self,
@@ -555,6 +583,7 @@ class ConversationLoop:
         faults: FaultReporter | None = None,
         journal: Journal | None = None,
         participant_policy_enabled: bool = False,
+        pre_generate_enabled: bool = DEFAULTS.conversation.pre_generate_enabled,
     ) -> None:
         if not math.isfinite(response_timeout_seconds) or response_timeout_seconds <= 0:
             raise ValueError("response timeout must be positive and finite")
@@ -598,6 +627,10 @@ class ConversationLoop:
         self._closed = False
         self._interrupted = False
         self._last_interim: str | None = None
+        self._pre_generate_enabled = pre_generate_enabled
+        self._endpoint = SemanticEndpoint()
+        self._pregen: _Pregeneration | None = None
+        self._pregen_count = 0
 
     @property
     def is_busy(self) -> bool:
@@ -635,20 +668,26 @@ class ConversationLoop:
             return
         self._seen.add(event.id)
         self._events.append(event)
+        self._endpoint.reset()
         bare_ack = _is_bare_ack(event.text)
         if self._participant_policy_enabled:
             if not self._policy_allows(event):
+                await self._discard_pregen("rejected")
                 return
         elif self._wake_phrases and not self._addressed(event):
+            await self._discard_pregen("rejected")
             return
         elif bare_ack and self._previous_inbound_was_bare_ack:
             self._record(
                 "ack_decided", transcript_id=event.id, action="silent", reason="bare_ack_run"
             )
             self._previous_inbound_was_bare_ack = True
+            await self._discard_pregen("rejected")
             return
         if not self._participant_policy_enabled:
             self._previous_inbound_was_bare_ack = bare_ack
+        if await self._maybe_adopt_pregen(event):
+            return
         self._pending.append(event)
         self._generation += 1
         if self._task is not None and not self._task.done():
@@ -666,6 +705,7 @@ class ConversationLoop:
         self._start_pending()
 
     async def handle_interim(self, text: str) -> None:
+        await self._observe_pregen(text)
         session = self._session
         if (
             self._closed
@@ -692,6 +732,52 @@ class ConversationLoop:
                 await session.stop_playback()
                 self._stream_stops += 1
         await self._cancel_active_turn("interim")
+
+    async def _observe_pregen(self, text: str) -> None:
+        session = self._session
+        if self._closed or self._failure is not None:
+            return
+        if session is None:
+            return
+        if not self._pre_generate_enabled:
+            return
+        if not self._sentence_streaming:
+            return
+        if not isinstance(self._responder, StreamingConversationResponder):
+            return
+        if self.is_busy or self._pending or session.is_speaking:
+            return
+        child = self._active_turn
+        if child is not None and not child.done():
+            return
+        if self._pregen is not None:
+            return
+        if not self._endpoint.observe(text):
+            return
+        self._pregen_count += 1
+        interim = TranscriptEvent(
+            f"pregen-{self._pregen_count}",
+            datetime.now(UTC).isoformat(),
+            "meeting_audio",
+            text,
+            False,
+            "unknown",
+            None,
+        )
+        words = normalize_words(text)
+        request_id = f"{interim.id}:{self._generation}"
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        pregen = _Pregeneration(
+            words=words,
+            request_id=request_id,
+            started=self._clock(),
+            generation=self._generation,
+            queue=queue,
+            buffered=[],
+        )
+        pregen.task = asyncio.create_task(self._buffer_pregen(pregen, (interim,)))
+        self._pregen = pregen
+        self._record("pregeneration_started", request_id=request_id, words=len(words))
 
     def _addressed(self, event: TranscriptEvent) -> bool:
         now = self._clock()
@@ -736,6 +822,9 @@ class ConversationLoop:
         self._closed = True
         self._generation += 1
         self._pending.clear()
+        pregen = self._pregen
+        if pregen is not None:
+            await self._discard_pregen(_pregen_failure_reason(pregen.task) or "rejected")
         self._session = None
         await self._cancel_active_turn("close")
         if self._task is not None and not self._task.done():
@@ -918,6 +1007,230 @@ class ConversationLoop:
             self._move("waiting", event_id)
         else:
             self._move("listening", event_id)
+
+    async def _maybe_adopt_pregen(self, event: TranscriptEvent) -> bool:
+        pregen = self._pregen
+        if pregen is None:
+            return False
+        reason = _pregen_failure_reason(pregen.task)
+        if reason is not None:
+            await self._discard_pregen(reason)
+            return False
+        if normalize_words(event.text) != pregen.words:
+            await self._discard_pregen("mismatched")
+            return False
+        session = self._session
+        if session is None:
+            await self._discard_pregen("error")
+            return False
+        self._pregen = None
+        pregen.adopted = True
+        if pregen.task is not None and pregen.task.done():
+            pregen.queue.put_nowait(None)
+        self._generation += 1
+        self._pending.clear()
+        generation = self._generation
+        started = self._clock()
+        request_id = f"{event.id}:{generation}"
+        self._record(
+            "pregeneration_finished",
+            request_id=request_id,
+            outcome="adopted",
+            duration_ms=(started - pregen.started) * 1000,
+        )
+        for index, sentence in enumerate(pregen.buffered):
+            await session.speak(sentence, sentence_index=index, transcript_id=event.id)
+        if pregen.buffered:
+            self._move("queued", event.id)
+        worker = asyncio.create_task(
+            self._consume_adopted(
+                pregen, event, request_id, generation, started, len(pregen.buffered)
+            )
+        )
+        self._active_turn = worker
+        self._active_request_id = request_id
+        self._active_transcript_id = event.id
+        self._active_generation = generation
+        self._active_started = started
+        self._task = asyncio.create_task(self._await_adopted(worker))
+        return True
+
+    async def _buffer_pregen(
+        self, pregen: _Pregeneration, events: tuple[TranscriptEvent, ...]
+    ) -> None:
+        responder = self._responder
+        if not isinstance(responder, StreamingConversationResponder):
+            return
+        stream = responder.stream_sentences(
+            events,
+            partial(self._tool_started, pregen.generation, pregen.request_id),
+            request_id=pregen.request_id,
+        )
+        pregen.stream = stream
+        try:
+            async with asyncio.timeout(self._response_timeout):
+                async for sentence in stream:
+                    if pregen.adopted:
+                        pregen.queue.put_nowait(sentence)
+                    else:
+                        pregen.buffered.append(sentence)
+        finally:
+            if pregen.adopted:
+                pregen.queue.put_nowait(None)
+            close = getattr(stream, "aclose", None)
+            if close is not None:
+                with suppress(Exception):
+                    await close()
+
+    async def _consume_adopted(
+        self,
+        pregen: _Pregeneration,
+        event: TranscriptEvent,
+        request_id: str,
+        generation: int,
+        started: float,
+        offset: int,
+    ) -> None:
+        stop_mark = self._stream_stops
+        spoken = offset
+        event_id = event.id
+        try:
+            async with asyncio.timeout(self._response_timeout):
+                while True:
+                    sentence = await pregen.queue.get()
+                    if sentence is None:
+                        break
+                    if (
+                        self._closed
+                        or generation != self._generation
+                        or self._stream_stops != stop_mark
+                    ):
+                        if self._closed:
+                            detail = "closed"
+                            reason = "close"
+                        elif generation != self._generation:
+                            detail = "stale_generation"
+                            reason = "new_final"
+                        else:
+                            detail = "stopped"
+                            reason = "interim"
+                        self._record(
+                            "sentence_dropped",
+                            request_id=request_id,
+                            transcript_id=event_id,
+                            sentence_index=spoken,
+                            detail=detail,
+                        )
+                        self._record(
+                            "agent_cancelled",
+                            request_id=request_id,
+                            transcript_id=event_id,
+                            generation=generation,
+                            reason=reason,
+                            duration_ms=(self._clock() - started) * 1000,
+                        )
+                        return
+                    session = self._session
+                    if session is None:
+                        self._record(
+                            "sentence_dropped",
+                            request_id=request_id,
+                            transcript_id=event_id,
+                            sentence_index=spoken,
+                            detail="closed",
+                        )
+                        self._record(
+                            "agent_cancelled",
+                            request_id=request_id,
+                            transcript_id=event_id,
+                            generation=generation,
+                            reason="close",
+                            duration_ms=(self._clock() - started) * 1000,
+                        )
+                        return
+                    if not spoken:
+                        self._move("queued", event_id)
+                    self.raise_if_failed()
+                    self._interrupted = False
+                    self._last_interim = None
+                    await session.speak(sentence, sentence_index=spoken, transcript_id=event_id)
+                    spoken += 1
+        except asyncio.CancelledError:
+            if spoken:
+                if self._closed:
+                    detail = "closed"
+                elif generation != self._generation:
+                    detail = "stale_generation"
+                else:
+                    detail = "stopped"
+                self._record(
+                    "sentence_dropped",
+                    request_id=request_id,
+                    transcript_id=event_id,
+                    sentence_index=spoken,
+                    detail=detail,
+                )
+            raise
+        except BaseException:
+            self._record(
+                "agent_failed",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+            raise
+        else:
+            self._record(
+                "agent_finished",
+                request_id=request_id,
+                duration_ms=(self._clock() - started) * 1000,
+            )
+        finally:
+            close = getattr(pregen.stream, "aclose", None)
+            if close is not None:
+                with suppress(Exception):
+                    await close()
+            task = pregen.task
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.raise_if_failed()
+        if generation != self._generation or self._closed:
+            return
+        if not spoken:
+            self._move("waiting", event_id)
+        else:
+            self._move("listening", event_id)
+
+    async def _await_adopted(self, worker: asyncio.Task[None]) -> None:
+        try:
+            await worker
+        except asyncio.CancelledError:
+            if self._closed:
+                raise
+            self.raise_if_failed()
+        except Exception as error:
+            self._fail(error)
+        finally:
+            if self._active_turn is worker:
+                self._active_turn = None
+        if not self._closed and self._failure is None and self._pending:
+            await self._respond_pending()
+
+    async def _discard_pregen(self, reason: str) -> None:
+        pregen = self._pregen
+        if pregen is None:
+            return
+        self._pregen = None
+        task = pregen.task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._record(
+            "pregeneration_finished",
+            request_id=pregen.request_id,
+            outcome="discarded",
+            reason=reason,
+        )
 
     async def _run_turn(
         self,

@@ -167,6 +167,7 @@ async def open_conversation(
             faults=faults,
             journal=journal,
             participant_policy_enabled=settings.conversation.participant_policy_enabled,
+            pre_generate_enabled=settings.conversation.pre_generate_enabled,
         )
         resources.push_async_callback(conversation.close)
         yield conversation
