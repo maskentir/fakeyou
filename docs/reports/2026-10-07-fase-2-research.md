@@ -131,3 +131,18 @@ terpisah default mati) + sesi ukur; D4 sebagai task sendiri.
 3. Diarisasi: setujui persistensi audio sesi + retensinya?
 4. Ambang risiko fuzzy: tetap exact-only sampai data, atau izinkan
    kelas allowlist sempit sejak awal?
+
+## Keputusan yang diambil (2026-10-07)
+
+- Fase 2 pertama: telemetri pregen + D1 — selesai, merge, ukur live
+  lolos (adendum acceptance).
+- Q5: sherpa-onnx disetujui sebagai dependensi opsional (extra).
+- Q6: CAM++ sejak awal (lisensi paling bersih).
+- Q1: persetujuan lisan di call + catatan jurnal.
+- Q2: voiceprint di Postgres (dalam region).
+- Q3: retensi 90 hari inaktivitas + hapus manual via CLI.
+- Q4: scope SEMUA peserta (melawan rekomendasi terdaftar-saja;
+  risiko salah-ikat lebih besar, dimitigasi ambang tinggi + Q7).
+- Q7: salah-ikat = fault + event jurnal.
+- Q8: enroll suara TTS twin sebagai print negatif.
+- Diarisasi: audio campuran sesi boleh disimpan + retensi.
