@@ -501,6 +501,9 @@ class MeetingAudioSession:
     def mark_admitted(self) -> None:
         if self._failure is None:
             self.activity.mark_ready()
+        if self._reconnect_state == "queued":
+            self._reconnect_since = self._now()
+            self._reconnect_attempts = 0
 
     async def wait_failed(self) -> None:
         await self._failed.wait()

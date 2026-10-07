@@ -7,6 +7,7 @@ from websockets.protocol import State
 import fakeyou.audio as audio
 from fakeyou.audio import (
     ManagedMuseSTT,
+    MeetingAudioError,
     MeetingAudioSession,
     run_stt_reconnect,
     stt_ready,
@@ -352,3 +353,66 @@ async def test_stt_ready_reports_duck_typed_session() -> None:
     assert await stt_ready(_ReadySTT(ready), timeout_seconds=0.1) is False
     ready.set()
     assert await stt_ready(_ReadySTT(ready), timeout_seconds=0.1) is True
+
+
+async def test_stale_queued_reconnect_deadline_fails_without_admit() -> None:
+    clock = [1000.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    activity.mark_ready()
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    stt = FakeReconnectableSTT()
+    stt._websocket = _FakeSocket(State.CLOSED)
+    session = MeetingAudioSession(
+        object(),
+        object(),
+        runner_task,
+        _Playback(),
+        stt=stt,
+        activity=activity,
+        now=lambda: clock[0],
+    )
+    try:
+        session.request_stt_reconnect("native_request")
+        clock[0] += 130.0
+        with pytest.raises(MeetingAudioError, match="STT reconnect deadline exceeded"):
+            await session.maintenance_tick(is_busy=False)
+    finally:
+        gate.set()
+        await runner_task
+    assert stt.calls == 0
+    assert session.reconnect_state() == "exhausted"
+
+
+async def test_admit_resets_stale_queued_reconnect_epoch(journal) -> None:
+    clock = [1000.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    stt = FakeReconnectableSTT()
+    stt._websocket = _FakeSocket(State.CLOSED)
+    session = MeetingAudioSession(
+        object(),
+        object(),
+        runner_task,
+        _Playback(),
+        stt=stt,
+        activity=activity,
+        journal=journal,
+        now=lambda: clock[0],
+    )
+    try:
+        session.request_stt_reconnect("native_request")
+        clock[0] += 130.0
+        session.mark_admitted()
+        await session.maintenance_tick(is_busy=False)
+    finally:
+        gate.set()
+        await runner_task
+    assert stt.calls == 1
+    assert session._reconnect_attempts == 1
+    assert session.reconnect_state() == "idle"
+    rows = journal.events()
+    finished = [row for row in rows if row["event"] == "stt_reconnect_finished"]
+    assert len(finished) == 1
+    assert finished[0]["attempts"] == 1
