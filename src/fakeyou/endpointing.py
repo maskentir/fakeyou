@@ -18,8 +18,9 @@ class SemanticEndpoint:
         self._run = 0
         self._fired = False
 
-    def observe_stop(self, text: str) -> bool:
-        return len(normalize_words(text)) >= self._min_words
+    def observe_stop(self, text: str, min_words: int | None = None) -> bool:
+        threshold = min_words if min_words is not None else self._min_words
+        return len(normalize_words(text)) >= threshold
 
     def observe(self, text: str) -> bool:
         words = normalize_words(text)

@@ -74,3 +74,10 @@ def test_observe_stop_ignores_empty_text() -> None:
     endpoint = SemanticEndpoint()
     assert endpoint.observe_stop("") is False
     assert endpoint.observe_stop("   ") is False
+
+
+def test_observe_stop_accepts_min_words_override() -> None:
+    endpoint = SemanticEndpoint()
+    assert endpoint.observe_stop("see you", min_words=1) is True
+    assert endpoint.observe_stop("see you") is False
+    assert endpoint.observe_stop("", min_words=1) is False

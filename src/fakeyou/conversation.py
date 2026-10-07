@@ -632,6 +632,7 @@ class ConversationLoop:
         self._endpoint = SemanticEndpoint()
         self._pregen: _Pregeneration | None = None
         self._pregen_count = 0
+        self._vad_stopped: bool = False
 
     @property
     def is_busy(self) -> bool:
@@ -670,6 +671,7 @@ class ConversationLoop:
         self._seen.add(event.id)
         self._events.append(event)
         self._endpoint.reset()
+        self._vad_stopped = False
         self._last_interim_text = None
         bare_ack = _is_bare_ack(event.text)
         if self._participant_policy_enabled:
@@ -709,6 +711,15 @@ class ConversationLoop:
     async def handle_interim(self, text: str) -> None:
         self._last_interim_text = text
         await self._observe_pregen(text)
+        if self._vad_stopped and self._pregen_gates_pass():
+            fresh = normalize_words(text)
+            pregen = self._pregen
+            if pregen is None:
+                if fresh:
+                    self._begin_pregen(text)
+            elif fresh and fresh != pregen.words:
+                await self._discard_pregen("superseded")
+                self._begin_pregen(text)
         session = self._session
         if (
             self._closed
@@ -736,22 +747,27 @@ class ConversationLoop:
                 self._stream_stops += 1
         await self._cancel_active_turn("interim")
 
-    async def _observe_pregen(self, text: str) -> None:
+    def _pregen_gates_pass(self) -> bool:
         session = self._session
         if self._closed or self._failure is not None:
-            return
+            return False
         if session is None:
-            return
+            return False
         if not self._pre_generate_enabled:
-            return
+            return False
         if not self._sentence_streaming:
-            return
+            return False
         if not isinstance(self._responder, StreamingConversationResponder):
-            return
+            return False
         if self.is_busy or self._pending or session.is_speaking:
-            return
+            return False
         child = self._active_turn
         if child is not None and not child.done():
+            return False
+        return True
+
+    async def _observe_pregen(self, text: str) -> None:
+        if not self._pregen_gates_pass():
             return
         if self._pregen is not None:
             return
@@ -761,27 +777,15 @@ class ConversationLoop:
 
     async def note_vad(self, active: bool) -> None:
         if active:
+            self._vad_stopped = False
             return
-        session = self._session
-        if self._closed or self._failure is not None:
-            return
-        if session is None:
-            return
-        if not self._pre_generate_enabled:
-            return
-        if not self._sentence_streaming:
-            return
-        if not isinstance(self._responder, StreamingConversationResponder):
-            return
-        if self.is_busy or self._pending or session.is_speaking:
-            return
-        child = self._active_turn
-        if child is not None and not child.done():
+        self._vad_stopped = True
+        if not self._pregen_gates_pass():
             return
         if self._pregen is not None:
             return
         text = self._last_interim_text or ""
-        if not self._endpoint.observe_stop(text):
+        if not self._endpoint.observe_stop(text, min_words=1):
             return
         self._begin_pregen(text)
 
@@ -853,6 +857,7 @@ class ConversationLoop:
     async def close(self) -> None:
         self._closed = True
         self._generation += 1
+        self._vad_stopped = False
         self._pending.clear()
         pregen = self._pregen
         if pregen is not None:
