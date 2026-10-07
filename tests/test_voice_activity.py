@@ -967,13 +967,24 @@ def test_binder_refuses_follow_when_shared_label_spans_two_slots() -> None:
         assert outcome.label == "B"
 
 
+def test_binder_emits_minted_event_on_new_label_only() -> None:
+    binder = SlotBinder()
+    binder.update_roster(["host", "guest"])
+    first = binder.resolve(0)
+    assert not isinstance(first, str)
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "A", "slot": 0}]
+    kept = binder.resolve(0)
+    assert not isinstance(kept, str)
+    assert binder.drain_binder_events() == []
+
+
 def test_binder_emits_move_event_on_csrc_follow() -> None:
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
     binder.observe_stream(0, [777])
     first = binder.resolve(0)
     assert not isinstance(first, str)
-    assert binder.drain_binder_events() == []
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "A", "slot": 0}]
     binder.observe_stream(1, [777])
     moved = binder.resolve(1)
     assert not isinstance(moved, str)
@@ -996,7 +1007,7 @@ def test_binder_emits_release_event_on_departure() -> None:
     binder.update_roster(["host"])
     host = binder.resolve(3)
     assert not isinstance(host, str)
-    assert binder.drain_binder_events() == []
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "A", "slot": 3}]
     binder.update_roster([])
     events = binder.drain_binder_events()
     assert events == [
@@ -1009,7 +1020,7 @@ def test_binder_flags_relabel_when_delete_one_releases_present_slot() -> None:
     binder.update_roster(["a", "b", "c"])
     first = binder.resolve(3)
     assert not isinstance(first, str)
-    assert binder.drain_binder_events() == []
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "A", "slot": 3}]
     binder.update_roster(["a", "b"])
     release = binder.drain_binder_events()
     assert release == [
@@ -1019,7 +1030,10 @@ def test_binder_flags_relabel_when_delete_one_releases_present_slot() -> None:
     assert not isinstance(replaced, str)
     assert replaced.label == "B"
     fault = binder.drain_binder_events()
-    assert fault == [{"event": "tenure_relabel", "slot": 3, "old_label": "A", "new_label": "B"}]
+    assert fault == [
+        {"event": "tenure_minted", "label": "B", "slot": 3},
+        {"event": "tenure_relabel", "slot": 3, "old_label": "A", "new_label": "B"},
+    ]
 
 
 def test_binder_reset_clears_labels_and_events() -> None:
@@ -1032,7 +1046,7 @@ def test_binder_reset_clears_labels_and_events() -> None:
     binder.update_roster(["host"])
     outcome = binder.resolve(0)
     assert not isinstance(outcome, str)
-    assert binder.drain_binder_events() == []
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "B", "slot": 0}]
 
 
 def test_binder_defers_dormant_restore_while_slot_occupied() -> None:
@@ -1042,7 +1056,7 @@ def test_binder_defers_dormant_restore_while_slot_occupied() -> None:
     assert not isinstance(host, str)
     assert host.device == "host"
     binder.update_roster(["host", "guest"])
-    assert binder.drain_binder_events() == []
+    assert binder.drain_binder_events() == [{"event": "tenure_minted", "label": "A", "slot": 0}]
     binder.update_roster(["guest"])
     assert binder.drain_binder_events() != []
     other = binder.resolve(0)

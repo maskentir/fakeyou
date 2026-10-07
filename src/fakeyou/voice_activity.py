@@ -175,6 +175,7 @@ class SlotBinder:
             return "slot_conflict"
         tenure = Tenure(next(self._labels))
         self._tenures[slot] = tenure
+        self._emit({"event": "tenure_minted", "label": tenure.label, "slot": slot})
         self._bind()
         self._remember(slot, tenure)
         return tenure

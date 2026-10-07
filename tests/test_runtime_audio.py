@@ -305,6 +305,31 @@ async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session)
     ]
 
 
+async def test_capture_drain_starts_before_initial_speech(open_audio, session):
+    import json
+    from dataclasses import replace
+
+    from fakeyou.journal import Journal
+
+    journal = Journal(
+        "meeting",
+        emit=lambda line: session.events.append("journal:" + json.loads(line)["event"]),
+        stdout=False,
+    )
+    open_audio = partial(open_audio, FakeAudio(session.events), started=True)
+    config = replace(session.config, per_stream_enabled=True)
+
+    result = await runtime.run_meeting_session(
+        config, open_audio=open_audio, initial_speech="Hello", journal=journal, **session.kwargs
+    )
+    journal.close()
+
+    assert result.terminal_reason == "stopped_by_owner"
+    assert session.events.index("journal:stream_capture_started") < session.events.index(
+        "speak:Hello"
+    )
+
+
 async def test_conversation_requires_audio(session):
     with pytest.raises(ValueError, match="conversation requires meeting audio"):
         await runtime.run_meeting_session(

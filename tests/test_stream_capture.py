@@ -1854,7 +1854,7 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
     rows = [row for row in rows if row["event"] == "transcript_finalized"]
     assert len(rows) == 2
     assert rows[0]["speaker_csrc"] == [111]
-    assert "tenure_events" not in rows[0]
+    assert rows[0]["tenure_events"] == [{"event": "tenure_minted", "label": "A", "slot": 0}]
     assert rows[1]["tenure_events"] == [
         {"event": "tenure_moved", "label": "A", "from_slot": 0, "to_slot": 1, "csrcs": [111]}
     ]

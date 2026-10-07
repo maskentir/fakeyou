@@ -51,6 +51,20 @@ def test_score_script_matches_transcripts_inside_time_windows() -> None:
     assert report["word_error_rate"] == 0.25
 
 
+def test_score_script_skips_punctuation_only_stray_transcript() -> None:
+    script = [{"text": "hello world", "at": "2026-10-06T01:00:10+00:00"}]
+    transcripts = [
+        {"text": ".", "spoken_at": "2026-10-06T01:00:09+00:00"},
+        {"text": "hello world", "spoken_at": "2026-10-06T01:00:11+00:00"},
+    ]
+
+    report = score_script(script, transcripts)
+
+    assert report["covered"] == 1
+    assert report["exact_matches"] == 1
+    assert report["word_error_rate"] == 0.0
+
+
 def test_score_script_prefers_earliest_transcript_in_window() -> None:
     script = [{"text": "zebra early hello", "at": "2026-10-06T01:00:10+00:00"}]
     transcripts = [

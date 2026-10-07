@@ -264,9 +264,15 @@ class _MeetingWorker:
             )
         self.record("microphone_enabled", source="runtime")
         audio.raise_if_failed()
+        try:
+            await self.start_capture_drain(enabled=self.config.per_stream_enabled)
+        except Exception as error:
+            if self.faults is not None:
+                self.faults.record(classify_exception("browser", error, operation="stream_capture"))
         if self.initial_speech:
             await _until_stopped(audio.speak(self.initial_speech), self.stop)
         if self.stop.is_set():
+            await self.close_capture_drain()
             return await self.finish(
                 "owner_stopped", "owner_action", "owner stopped conversation startup"
             )

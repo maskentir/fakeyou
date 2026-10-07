@@ -69,8 +69,11 @@ def score_script(
     before_seconds: float = SCRIPT_WINDOW_BEFORE_SECONDS,
     after_seconds: float = SCRIPT_WINDOW_AFTER_SECONDS,
 ) -> dict[str, Any]:
+    candidates = (
+        (str(entry.get("text") or ""), _moment(entry.get("spoken_at"))) for entry in transcripts
+    )
     spoken = sorted(
-        ((str(entry.get("text") or ""), _moment(entry.get("spoken_at"))) for entry in transcripts),
+        ((heard, at) for heard, at in candidates if normalize_words(heard)),
         key=lambda item: item[1],
     )
     matched: list[tuple[str, str]] = []
