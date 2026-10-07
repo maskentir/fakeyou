@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["pipecat-ai[local]==1.12.0; sys_platform == 'linux'"]
+voiceprint = ["sherpa-onnx==1.13.8"]
 
 [dependency-groups]
 dev = [
@@ -71,4 +72,8 @@ files = ["src/fakeyou", "tests/fakes.py", "tests/conftest.py"]
 
 [[tool.mypy.overrides]]
 module = ["cloakbrowser", "cloakbrowser.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sherpa_onnx", "sherpa_onnx.*"]
 ignore_missing_imports = true

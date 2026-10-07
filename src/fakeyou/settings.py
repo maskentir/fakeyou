@@ -33,6 +33,16 @@ class IdentitySettings(Section):
     owner_id: SessionId = "local_owner"
     twin_id: SessionId = "local_twin"
     twin_name: TwinName = "Fakeyou Twin"
+    voiceprint_enabled: bool = False
+    voiceprint_threshold: float = 0.60
+    voiceprint_min_margin: float = 0.15
+    voiceprint_min_seconds: float = 3.0
+    voiceprint_retention_days: int = 90
+    voiceprint_model_path: str = ""
+    voiceprint_model_sha256: str = (
+        "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b"
+    )
+    voiceprint_policy_version: str = "v1"
 
 
 class PathSettings(Section):

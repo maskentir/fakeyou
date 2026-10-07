@@ -19,7 +19,12 @@ from pipecat.frames.frames import TranscriptionFrame
 from psycopg import Error as PsycopgError
 from pydantic import ValidationError
 
-from fakeyou.assembly import open_conversation, stop_signal_handlers
+from fakeyou.assembly import (
+    VoiceprintLive,
+    create_voiceprint_live,
+    open_conversation,
+    stop_signal_handlers,
+)
 from fakeyou.attribution_probe import PROBE_FILE_NAME, AttributionProbe
 from fakeyou.audio import open_meeting_audio
 from fakeyou.brief import (
@@ -44,7 +49,7 @@ from fakeyou.conversation import (
     transcript_event,
     transcript_stamp,
 )
-from fakeyou.faults import FaultReporter
+from fakeyou.faults import FaultReporter, record_consumer_fault
 from fakeyou.identity import SpeakerRegistry
 from fakeyou.ingestion import meeting_windows
 from fakeyou.ingestion_status import (
@@ -72,6 +77,7 @@ from fakeyou.settings import (
 )
 from fakeyou.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
 from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
+from fakeyou.voiceprint_match import apply_voice_scores, score_turn_audio
 
 
 def stream_slot(stream_id: str) -> int | None:
@@ -83,7 +89,7 @@ def stream_slot(stream_id: str) -> int | None:
 
 def attribute_stream_frame(
     frame: TranscriptionFrame, binder: SlotBinder | None
-) -> tuple[str, str | None, str, dict[str, Any], float]:
+) -> tuple[str, str | None, str, dict[str, Any], float, str | None]:
     raw_capture = getattr(frame, "capture_ms", 0.0)
     capture_ms = (
         float(raw_capture)
@@ -105,7 +111,7 @@ def attribute_stream_frame(
             drained = binder.drain_binder_events()
             if drained:
                 extra["tenure_events"] = drained
-        return ("unknown", None, stream_id, extra, capture_ms)
+        return ("unknown", None, stream_id, extra, capture_ms, None)
     outcome = binder.resolve(slot)
     drained = binder.drain_binder_events()
     csrcs = list(binder.stream_csrcs(slot))
@@ -120,7 +126,7 @@ def attribute_stream_frame(
             extra["speaker_csrc"] = csrcs
         if drained:
             extra["tenure_events"] = drained
-        return ("unknown", None, stream_id, extra, capture_ms)
+        return ("unknown", None, stream_id, extra, capture_ms, None)
     extra = {
         "speaker_reason": "stream_slot",
         "speaker_slot": slot,
@@ -138,6 +144,7 @@ def attribute_stream_frame(
         stream_id,
         extra,
         capture_ms,
+        outcome.device,
     )
 
 
@@ -166,6 +173,39 @@ async def emit_transcript(
         await conversation.handle_transcript(event)
 
 
+def _score_live_turn(
+    voiceprint: VoiceprintLive,
+    registry: SpeakerRegistry,
+    speaker_uuid: str,
+    stream_id: str,
+    device: str | None,
+    journal: Journal,
+    faults: FaultReporter | None,
+) -> None:
+    try:
+        scores = score_turn_audio(
+            voiceprint.tap_for(stream_id).take_clip(),
+            voiceprint.embedder,
+            voiceprint.matcher,
+            min_seconds=voiceprint.min_seconds,
+        )
+        if scores is None:
+            return
+        apply_voice_scores(
+            registry,
+            speaker_uuid,
+            scores,
+            device=device,
+            owners=voiceprint.owners,
+            journal=journal,
+            faults=faults,
+        )
+    except Exception as error:
+        record_consumer_fault(
+            faults, journal, source="audio", detail="voiceprint_scoring", error=error
+        )
+
+
 def build_transcript_callback(
     *,
     journal: Journal,
@@ -174,6 +214,9 @@ def build_transcript_callback(
     voice_activity: VoiceActivityTracker | None,
     binder: SlotBinder,
     per_stream_enabled: bool = False,
+    voiceprint: VoiceprintLive | None = None,
+    registry: SpeakerRegistry | None = None,
+    faults: FaultReporter | None = None,
 ) -> Callable[[TranscriptionFrame], Awaitable[None]]:
     pending: list[TranscriptEvent] = []
     handled: set[str] = set()
@@ -183,8 +226,8 @@ def build_transcript_callback(
     async def transcript(frame: TranscriptionFrame) -> None:
         nonlocal emitted_max
         if per_stream_enabled:
-            participant_id, evidence_id, stream_id, extra, capture_ms = attribute_stream_frame(
-                frame, binder
+            participant_id, evidence_id, stream_id, extra, capture_ms, device = (
+                attribute_stream_frame(frame, binder)
             )
             event = transcript_event(
                 frame, participant_id, evidence_id, stream_id, capture_ms=capture_ms
@@ -216,6 +259,17 @@ def build_transcript_callback(
                     extra=extras.pop(ordered.id, None),
                 )
             pending[:] = [event for event in pending if event.id not in handled]
+            speaker_uuid = extra.get("speaker_uuid")
+            if (
+                voiceprint is not None
+                and registry is not None
+                and frame.finalized
+                and isinstance(speaker_uuid, str)
+                and speaker_uuid
+            ):
+                _score_live_turn(
+                    voiceprint, registry, speaker_uuid, stream_id, device, journal, faults
+                )
         else:
             attribution = voice_activity.attribute() if voice_activity is not None else None
             event = (
@@ -235,6 +289,16 @@ def build_transcript_callback(
                 conversation=conversation,
                 extra=attribution.journal_fields() if attribution is not None else None,
             )
+            if (
+                voiceprint is not None
+                and registry is not None
+                and frame.finalized
+                and attribution is not None
+                and attribution.speaker_uuid
+            ):
+                _score_live_turn(
+                    voiceprint, registry, attribution.speaker_uuid, "", None, journal, faults
+                )
 
     return transcript
 
@@ -479,6 +543,9 @@ async def join_meeting(
                         )
 
                     speaker_registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
+                    voiceprint_live = create_voiceprint_live(settings)
+                    if voiceprint_live is not None:
+                        resources.callback(voiceprint_live.close)
                     voice_activity = (
                         VoiceActivityTracker(twin_name=config.twin_name, registry=speaker_registry)
                         if settings.conversation.voice_labels_enabled and audio_enabled
@@ -526,6 +593,9 @@ async def join_meeting(
                         voice_activity=voice_activity,
                         binder=stream_binder,
                         per_stream_enabled=settings.conversation.per_stream_enabled,
+                        voiceprint=voiceprint_live,
+                        registry=speaker_registry,
+                        faults=faults,
                     )
 
                     async def interim(frame: TranscriptionFrame) -> None:
@@ -563,6 +633,11 @@ async def join_meeting(
                                 deaf_window_seconds=config.deaf_window_seconds,
                                 deaf_grace_seconds=config.deaf_grace_seconds,
                                 stt_keywords=stt_keywords,
+                                turn_tap_factory=(
+                                    voiceprint_live.tap_for_slot
+                                    if voiceprint_live is not None
+                                    else None
+                                ),
                             )
                         else:
                             audio_factory = partial(
@@ -582,6 +657,9 @@ async def join_meeting(
                                 deaf_window_seconds=config.deaf_window_seconds,
                                 deaf_grace_seconds=config.deaf_grace_seconds,
                                 stt_keywords=stt_keywords,
+                                turn_tap=voiceprint_live.tap
+                                if voiceprint_live is not None
+                                else None,
                             )
                     preflight_kwargs: dict[str, Any] = (
                         {
