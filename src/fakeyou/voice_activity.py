@@ -10,6 +10,8 @@ from operator import itemgetter
 from string import ascii_uppercase
 from typing import Any, Literal
 
+from fakeyou.identity import ResolveRefusal, SpeakerRegistry
+
 VOICE_ACTIVITY_DRAIN_JS = (
     "() => { const tracker = window.__fakeyouVoiceActivity;"
     " if (!tracker) return null; return tracker.drain(); }"
@@ -40,7 +42,7 @@ VoiceReason = Literal[
     "slot_conflict",
     "self_overlap",
 ]
-BinderRefusal = Literal["no_roster", "slot_contention", "slot_conflict", "self_overlap"]
+BinderRefusal = ResolveRefusal
 
 
 def load_voice_activity_script() -> str:
@@ -71,6 +73,7 @@ def voice_speaker_name(participant_id: str) -> str | None:
 class Tenure:
     label: str
     device: str | None = None
+    uuid: str = ""
 
 
 def voice_labels() -> Iterator[str]:
@@ -79,180 +82,46 @@ def voice_labels() -> Iterator[str]:
 
 class SlotBinder:
     def __init__(
-        self, labels: Iterator[str] | None = None, capacity: int = MEET_AUDIO_SLOTS
+        self,
+        labels: Iterator[str] | None = None,
+        capacity: int = MEET_AUDIO_SLOTS,
+        registry: SpeakerRegistry | None = None,
     ) -> None:
-        self._tenures: dict[int, Tenure] = {}
-        self._stream_csrcs: dict[int, frozenset[int]] = {}
-        self._present: frozenset[str] = frozenset()
-        self._dormant: dict[str, tuple[int, Tenure]] = {}
-        self._labels = labels if labels is not None else voice_labels()
-        self._capacity = capacity
-        self._events: list[dict[str, Any]] = []
-        self._slot_labels: dict[int, str] = {}
+        self._registry = registry if registry is not None else SpeakerRegistry(labels, capacity)
+        self._wrappers: dict[int, Tenure] = {}
 
     @property
     def roster_size(self) -> int:
-        return len(self._present)
+        return self._registry.roster_size
 
     def drain_binder_events(self) -> list[dict[str, Any]]:
-        drained = self._events
-        self._events = []
-        return drained
+        return self._registry.drain_events()
 
     def stream_csrcs(self, slot: int) -> tuple[int, ...]:
-        return tuple(sorted(self._stream_csrcs.get(slot, frozenset())))
-
-    def _emit(self, event: dict[str, Any]) -> None:
-        self._events.append(event)
-        while len(self._events) > BINDER_EVENT_BUFFER:
-            del self._events[0]
-
-    def _remember(self, slot: int, tenure: Tenure) -> None:
-        previous = self._slot_labels.get(slot)
-        if previous is not None and previous != tenure.label:
-            self._emit(
-                {
-                    "event": "tenure_relabel",
-                    "slot": slot,
-                    "old_label": previous,
-                    "new_label": tenure.label,
-                }
-            )
-        self._slot_labels[slot] = tenure.label
+        return self._registry.stream_csrcs(slot)
 
     def update_roster(self, devices: Iterable[str]) -> None:
-        present = frozenset(devices)
-        for device in self._present - present:
-            self._release(device)
-        self._present = present
-        if self._contended():
-            self._dormant.clear()
-        else:
-            for device in present:
-                saved = self._dormant.pop(device, None)
-                if saved is None:
-                    continue
-                if saved[0] in self._tenures:
-                    self._dormant[device] = saved
-                    continue
-                self._tenures[saved[0]] = saved[1]
-                self._emit(
-                    {
-                        "event": "tenure_restored",
-                        "label": saved[1].label,
-                        "slot": saved[0],
-                        "device": device,
-                    }
-                )
-        self._bind()
+        self._registry.update_roster(devices)
 
     def reset(self) -> None:
-        self._tenures.clear()
-        self._stream_csrcs.clear()
-        self._dormant.clear()
-        self._slot_labels.clear()
-        self._events.clear()
+        self._registry.reset()
+        self._wrappers.clear()
 
     def observe_stream(self, slot: int, csrcs: Sequence[int]) -> None:
-        self._stream_csrcs[slot] = frozenset(csrcs)
+        self._registry.observe_stream(slot, csrcs)
 
     def resolve(self, slot: int, *, allow_new: bool = True) -> Tenure | BinderRefusal:
-        if not self._present:
-            return "no_roster"
-        tenure = self._tenures.get(slot)
-        if tenure is not None:
-            self._remember(slot, tenure)
-            return tenure
-        if self._demand_full():
-            return "slot_contention"
-        followed = self._follow_csrc(slot)
-        if followed is not None:
-            self._remember(slot, followed)
-            return followed
-        if not allow_new:
-            return "self_overlap"
-        if len(self._unbound_tenures()) >= len(self._unbound_devices()):
-            return "slot_conflict"
-        tenure = Tenure(next(self._labels))
-        self._tenures[slot] = tenure
-        self._emit({"event": "tenure_minted", "label": tenure.label, "slot": slot})
-        self._bind()
-        self._remember(slot, tenure)
+        row = self._registry.resolve(slot, allow_new=allow_new)
+        if isinstance(row, str):
+            return row
+        cached = self._wrappers.get(slot)
+        if cached is not None and cached.uuid == row.uuid:
+            cached.label = row.label
+            cached.device = row.device
+            return cached
+        tenure = Tenure(label=row.label, device=row.device, uuid=row.uuid)
+        self._wrappers[slot] = tenure
         return tenure
-
-    def _follow_csrc(self, slot: int) -> Tenure | None:
-        csrcs = self._stream_csrcs.get(slot, frozenset())
-        if not csrcs:
-            return None
-        matches = {
-            other
-            for other in self._tenures
-            if other != slot and self._stream_csrcs.get(other, frozenset()) & csrcs
-        }
-        if len(matches) != 1:
-            return None
-        [moved] = matches
-        tenure = self._tenures.pop(moved)
-        self._tenures[slot] = tenure
-        self._bind()
-        self._emit(
-            {
-                "event": "tenure_moved",
-                "label": tenure.label,
-                "from_slot": moved,
-                "to_slot": slot,
-                "csrcs": sorted(csrcs),
-            }
-        )
-        return tenure
-
-    def _contended(self) -> bool:
-        return len(self._present) > self._capacity
-
-    def _demand_full(self) -> bool:
-        return len(self._tenures) >= self._capacity
-
-    def _release(self, device: str) -> None:
-        owned = [slot for slot, tenure in self._tenures.items() if tenure.device == device]
-        if owned:
-            for slot in owned:
-                tenure = self._tenures.pop(slot)
-                self._dormant[device] = (slot, tenure)
-                self._emit(
-                    {
-                        "event": "tenure_released",
-                        "label": tenure.label,
-                        "slot": slot,
-                        "device": device,
-                        "dormant": True,
-                    }
-                )
-            return
-        for slot, tenure in self._tenures.items():
-            if tenure.device is None:
-                del self._tenures[slot]
-                self._emit(
-                    {
-                        "event": "tenure_released",
-                        "label": tenure.label,
-                        "slot": slot,
-                        "device": None,
-                        "dormant": False,
-                    }
-                )
-                return
-
-    def _unbound_devices(self) -> set[str]:
-        return set(self._present) - {tenure.device for tenure in self._tenures.values()}
-
-    def _unbound_tenures(self) -> list[Tenure]:
-        return [tenure for tenure in self._tenures.values() if tenure.device is None]
-
-    def _bind(self) -> None:
-        devices = self._unbound_devices()
-        tenures = self._unbound_tenures()
-        if len(devices) == 1 and len(tenures) == 1:
-            tenures[0].device = devices.pop()
 
 
 @dataclass(frozen=True, slots=True)

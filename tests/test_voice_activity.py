@@ -1090,3 +1090,23 @@ def test_tracker_binds_two_humans_with_unique_names() -> None:
     )
     second = tracker.attribute()
     assert (second.participant_id, second.slot) == ("speaker-b", 4)
+
+
+def test_binder_adapter_exposes_registry_uuid() -> None:
+    from fakeyou.identity import SpeakerRegistry
+
+    registry = SpeakerRegistry()
+    registry.update_roster(["dev-a"])
+    binder = SlotBinder(registry=registry)
+    outcome = binder.resolve(0)
+    assert outcome.uuid == registry.resolve(0).uuid
+    assert outcome.uuid
+
+
+def test_binder_adapter_keeps_default_registry_private() -> None:
+    first = SlotBinder()
+    second = SlotBinder()
+    first.update_roster(["dev-a"])
+    second.update_roster(["dev-a"])
+    assert first.resolve(0).uuid == second.resolve(0).uuid
+    assert first.drain_binder_events() != []
