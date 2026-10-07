@@ -515,7 +515,7 @@ git commit -m "feat(l2): replay pre-roll audio on speech start"
 **Interfaces:**
 
 - Consumes: `maintenance_tick`, `request_stt_reconnect`, `stt_socket_dead`, `STTSettings`.
-- Produces: `ManagedMuseSTT.idle_seconds(now: float) -> float | None` (`None` bila belum pernah terima audio; cap waktu diperbarui di `run_stt` saat `audio` tak kosong); `MeetingAudioSession(..., stt_idle_reconnect_seconds: float = 0.0)` — bila > 0 dan idle melewati ambang dalam kondisi sepi (syarat sepi yang sama persis dengan jalur antre) dan state `idle`, panggil `request_stt_reconnect("proactive_idle")`; `stt_ready(stt, *, timeout_seconds: float) -> bool` (duck-typed `_session_ready`; True langsung bila atribut tak ada); `open_stream_audio` memverifikasi kesiapan setelah pipeline start: sukses → jurnal `stt_session_ready` (source `stt`), gagal → jurnal `stt_session_not_ready` + `MeetingAudioError("STT session did not become ready")`. `STTSettings.idle_reconnect_seconds: float = 0.0` (mati default; dinyalakan dari data live), `ready_timeout_seconds: float = 10.0`.
+- Produces: `ManagedMuseSTT.idle_seconds(now: float) -> float | None` (`None` bila belum pernah terima audio; cap waktu diperbarui di `run_stt` saat `audio` tak kosong); `MeetingAudioSession(..., stt_idle_reconnect_seconds: float = 0.0)` — bila > 0 dan idle melewati ambang dalam kondisi sepi (syarat sepi yang sama persis dengan jalur antre) dan state `idle`, panggil `request_stt_reconnect("proactive_idle")`; `stt_ready(stt, *, timeout_seconds: float) -> bool` (duck-typed `_session_ready`; True langsung bila atribut tak ada); `open_stream_audio` memverifikasi kesiapan setelah pipeline start: sukses → jurnal `stt_session_started` (source `stt`), gagal → jurnal `stt_session_failed` + `MeetingAudioError("STT session did not become ready")`. `STTSettings.idle_reconnect_seconds: float = 0.0` (mati default; dinyalakan dari data live), `ready_timeout_seconds: float = 10.0`.
 
 - [ ] **Step 1: tulis tes merah**
 
@@ -628,10 +628,10 @@ Di `open_stream_audio` setelah blok start (`session.raise_if_failed()` pasca-sta
 ```python
         if not await stt_ready(stt, timeout_seconds=stt_settings.ready_timeout_seconds):
             if journal is not None:
-                journal.record("stt_session_not_ready", source="stt", stream_id=stream_id)
+                journal.record("stt_session_failed", source="stt", stream_id=stream_id)
             raise MeetingAudioError("STT session did not become ready")
         if journal is not None:
-            journal.record("stt_session_ready", source="stt", stream_id=stream_id)
+            journal.record("stt_session_started", source="stt", stream_id=stream_id)
 ```
 
 `open_stream_audio` teruskan `stt_idle_reconnect_seconds=stt_settings.idle_reconnect_seconds` ke konstruktor `MeetingAudioSession`. `settings.py` `STTSettings` tambah `idle_reconnect_seconds: float = 0.0` dan `ready_timeout_seconds: float = 10.0`.

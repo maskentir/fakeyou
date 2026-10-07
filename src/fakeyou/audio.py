@@ -91,6 +91,7 @@ class ManagedMuseSTT(MetaSTTService):
         self.reconnect_requested: Callable[[str], None] | None = None
         self._continuity_buffer: deque[bytes] = deque()
         self._continuity_bytes = 0
+        self._last_audio_at: float | None = None
 
     def _continuity_limit_bytes(self) -> int:
         rate = self.sample_rate or CAPTURE_SAMPLE_RATE
@@ -150,7 +151,14 @@ class ManagedMuseSTT(MetaSTTService):
         async with asyncio.timeout(5):
             await cast(Callable[[], Awaitable[None]], super()._disconnect)()
 
+    def idle_seconds(self, now: float) -> float | None:
+        if self._last_audio_at is None:
+            return None
+        return max(now - self._last_audio_at, 0.0)
+
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame | None, None]:
+        if audio:
+            self._last_audio_at = time.monotonic()
         async with asyncio.timeout(10):
             if not self._socket_ready():
                 self._buffer_continuity_audio(audio)
@@ -178,6 +186,18 @@ def stt_socket_dead(stt: object) -> bool:
     if socket is None:
         return False
     return getattr(getattr(socket, "state", None), "name", None) != "OPEN"
+
+
+async def stt_ready(stt: object, *, timeout_seconds: float) -> bool:
+    ready = getattr(stt, "_session_ready", None)
+    if ready is None:
+        return True
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await ready.wait()
+    except TimeoutError:
+        return False
+    return True
 
 
 async def run_stt_reconnect(stt: object) -> None:
@@ -401,10 +421,12 @@ class MeetingAudioSession:
         alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
         now: Callable[[], float] = time.monotonic,
         stream_id: str | None = None,
+        stt_idle_reconnect_seconds: float = 0.0,
     ) -> None:
         self.activity = activity or CaptureActivity(now=now)
         self._now = now
         self._stream_id = stream_id
+        self._stt_idle_reconnect_seconds = stt_idle_reconnect_seconds
         self._stt = stt
         self._faults = faults
         self._journal = journal
@@ -497,6 +519,19 @@ class MeetingAudioSession:
                 "stt_reconnect_queued", source="stt", reason=reason, **self._reconnect_tags()
             )
 
+    def _quiet_for_reconnect(self, stamp: float, is_busy: bool) -> bool:
+        snapshot = self.activity.snapshot()
+        quiet_since = (
+            snapshot.last_speech_at if snapshot.last_speech_at is not None else snapshot.ready_at
+        )
+        return not (
+            is_busy
+            or self.is_speaking
+            or snapshot.speech_active
+            or quiet_since is None
+            or stamp - quiet_since < 3
+        )
+
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
     ) -> DeafVerdict:
@@ -511,6 +546,16 @@ class MeetingAudioSession:
                 self.raise_if_failed()
             if action == "repair":
                 self.request_stt_reconnect(verdict)
+            if (
+                self._reconnect_state == "idle"
+                and self._stt_idle_reconnect_seconds > 0
+                and not stt_socket_dead(self._stt)
+                and self._quiet_for_reconnect(stamp, is_busy)
+            ):
+                idle_of = getattr(self._stt, "idle_seconds", None)
+                idle = idle_of(stamp) if callable(idle_of) else None
+                if idle is not None and idle >= self._stt_idle_reconnect_seconds:
+                    self.request_stt_reconnect("proactive_idle")
             if self._reconnect_state != "queued":
                 return verdict
             if self._reconnect_since is not None and stamp - self._reconnect_since >= 120:
@@ -520,19 +565,7 @@ class MeetingAudioSession:
             if self._stopping:
                 return verdict
             if not stt_socket_dead(self._stt):
-                snapshot = self.activity.snapshot()
-                quiet_since = (
-                    snapshot.last_speech_at
-                    if snapshot.last_speech_at is not None
-                    else snapshot.ready_at
-                )
-                if (
-                    is_busy
-                    or self.is_speaking
-                    or snapshot.speech_active
-                    or quiet_since is None
-                    or stamp - quiet_since < 3
-                ):
+                if not self._quiet_for_reconnect(stamp, is_busy):
                     return verdict
             if self._last_reconnect_at is not None and stamp - self._last_reconnect_at < 5:
                 return verdict
@@ -966,6 +999,7 @@ async def open_stream_audio(
                 deaf_grace_seconds=deaf_grace_seconds,
                 alone_leave_seconds=alone_leave_seconds,
                 stream_id=stream_id,
+                stt_idle_reconnect_seconds=stt_settings.idle_reconnect_seconds,
             )
             for cause in early_failures:
                 session._fail("meeting audio provider failed", cause=cause)
@@ -993,6 +1027,12 @@ async def open_stream_audio(
         except TimeoutError:
             raise MeetingAudioError("meeting audio startup timed out") from None
         session.raise_if_failed()
+        if not await stt_ready(stt, timeout_seconds=stt_settings.ready_timeout_seconds):
+            if journal is not None:
+                journal.record("stt_session_failed", source="stt", stream_id=stream_id)
+            raise MeetingAudioError("STT session did not become ready")
+        if journal is not None:
+            journal.record("stt_session_started", source="stt", stream_id=stream_id)
         yield session
     finally:
         original_error = sys.exc_info()[1]

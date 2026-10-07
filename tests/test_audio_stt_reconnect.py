@@ -9,6 +9,7 @@ from fakeyou.audio import (
     ManagedMuseSTT,
     MeetingAudioSession,
     run_stt_reconnect,
+    stt_ready,
     stt_reconnect_supported,
 )
 from fakeyou.deaf import CaptureActivity
@@ -34,6 +35,42 @@ class _Playback:
 class _FailingReconnectSTT:
     async def reconnect_when_idle(self) -> None:
         raise ConnectionError("socket gone")
+
+
+class _ReadySTT:
+    def __init__(self, ready: asyncio.Event) -> None:
+        self._session_ready = ready
+
+
+def _quiet_session(
+    stt: Any, *, stt_idle_reconnect_seconds: float, idle_seconds: float
+) -> MeetingAudioSession:
+    clock = [1000.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    activity.mark_ready()
+    stt.idle_seconds = lambda now: idle_seconds
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    session = MeetingAudioSession(
+        object(),
+        object(),
+        runner_task,
+        _Playback(),
+        stt=stt,
+        activity=activity,
+        now=lambda: clock[0],
+        stt_idle_reconnect_seconds=stt_idle_reconnect_seconds,
+    )
+    clock[0] += 10.0
+    activity.observe_audio()
+    session._test_gate = gate
+    session._test_runner = runner_task
+    return session
+
+
+async def _close_quiet_session(session: MeetingAudioSession) -> None:
+    session._test_gate.set()
+    await session._test_runner
 
 
 def _speech_chunk(index: int, size: int = 320) -> bytes:
@@ -286,3 +323,32 @@ async def test_reconnect_journal_events_omit_missing_stream_id(journal) -> None:
     rows = journal.events()
     assert rows
     assert all("stream_id" not in row for row in rows)
+
+
+async def test_proactive_reconnect_requests_only_when_idle_and_quiet() -> None:
+    stt = FakeReconnectableSTT()
+    session = _quiet_session(stt, stt_idle_reconnect_seconds=60.0, idle_seconds=61.0)
+    try:
+        await session.maintenance_tick(is_busy=False, remote_participants=2)
+    finally:
+        await _close_quiet_session(session)
+    assert session.reconnect_state() in ("queued", "idle")
+    assert stt.calls >= 1
+
+
+async def test_proactive_reconnect_stays_off_by_default() -> None:
+    stt = FakeReconnectableSTT()
+    session = _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=3600.0)
+    try:
+        await session.maintenance_tick(is_busy=False, remote_participants=2)
+    finally:
+        await _close_quiet_session(session)
+    assert stt.calls == 0
+
+
+async def test_stt_ready_reports_duck_typed_session() -> None:
+    assert await stt_ready(object(), timeout_seconds=0.1) is True
+    ready = asyncio.Event()
+    assert await stt_ready(_ReadySTT(ready), timeout_seconds=0.1) is False
+    ready.set()
+    assert await stt_ready(_ReadySTT(ready), timeout_seconds=0.1) is True

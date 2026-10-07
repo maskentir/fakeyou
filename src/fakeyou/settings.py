@@ -143,6 +143,8 @@ class STTSettings(Section):
     url: str = "wss://api.meta.ai/v1/asr/realtime"
     mode: STTMode = "ENDPOINTING"
     preroll_ms: float = 500.0
+    idle_reconnect_seconds: float = 0.0
+    ready_timeout_seconds: float = 10.0
 
 
 class VADSettings(Section):
