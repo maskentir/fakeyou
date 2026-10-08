@@ -71,6 +71,8 @@ def mix_session_slots(audio_dir: Path) -> bytes:
 def split_chunks(frames: bytes, frames_per_second: int) -> list[bytes]:
     if frames_per_second <= 0:
         raise ValueError("frames per second must be positive")
+    if len(frames) % 2:
+        raise ValueError("frames length must be even")
     limit = min(_CHUNK_MINUTES * 60 * frames_per_second * 2, _CHUNK_BYTES - _HEADER_BYTES)
     limit = limit // 2 * 2
     return [

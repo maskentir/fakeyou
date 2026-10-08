@@ -35,6 +35,14 @@ def _clamp(value: int) -> int:
     return max(-32768, min(32767, value))
 
 
+def _read_chunk_payload(chunk: bytes, expected_rate: int = 16000) -> bytes:
+    with wave.open(BytesIO(chunk), "rb") as handle:
+        assert handle.getnchannels() == 1
+        assert handle.getsampwidth() == 2
+        assert handle.getframerate() == expected_rate
+        return handle.readframes(handle.getnframes())
+
+
 def test_mix_two_tones_sums_clamps_and_zero_fills_short_slot(tmp_path: Path) -> None:
     audio_dir = tmp_path / "audio"
     audio_dir.mkdir()
@@ -73,12 +81,25 @@ def test_split_25_minutes_yields_10_10_5_chunks_within_size_limit() -> None:
     assert payload == frames
 
 
-def _read_chunk_payload(chunk: bytes) -> bytes:
-    with wave.open(BytesIO(chunk), "rb") as handle:
-        assert handle.getnchannels() == 1
-        assert handle.getsampwidth() == 2
-        assert handle.getframerate() == 16000
-        return handle.readframes(handle.getnframes())
+def test_split_bytes_cap_binds_before_time_cap_at_high_rate() -> None:
+    rate = 48000
+    limit = 32 * 1024 * 1024 - 44
+    total = limit + 5000
+    assert total < 10 * 60 * rate * 2
+    frames = bytes(range(256)) * (total // 256) + bytes(range(total % 256))
+
+    chunks = split_chunks(frames, rate)
+
+    assert len(chunks) == 2
+    assert [len(chunk) - 44 for chunk in chunks] == [limit, 5000]
+    assert all(len(chunk) <= 32 * 1024 * 1024 for chunk in chunks)
+    payload = b"".join(_read_chunk_payload(chunk, rate) for chunk in chunks)
+    assert payload == frames
+
+
+def test_split_with_odd_length_frames_raises() -> None:
+    with pytest.raises(ValueError):
+        split_chunks(bytes(33), 16000)
 
 
 def test_mix_without_slot_wavs_raises(tmp_path: Path) -> None:
