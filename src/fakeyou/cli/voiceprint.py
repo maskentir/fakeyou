@@ -1,6 +1,9 @@
 import json
+import math
+import secrets
 import struct
 import sys
+import uuid
 import wave
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,6 +29,11 @@ VOICEPRINT_MIN_RMS = 0.01
 VOICEPRINT_SAMPLE_RATE = 16000
 VOICEPRINT_JOURNAL_ID = "voiceprint"
 MIN_ENROLL_CLIPS = 3
+PROVISIONAL_SNR_FLOOR_DB = 10.0
+ENROLL_MIN_SECONDS = 30.0
+ENROLL_MAX_TRANSCRIPT_EDITS = 1
+_SNR_FRAME = 320
+_SNR_CEILING_DB = 60.0
 
 
 def _reject(message: str) -> NoReturn:
@@ -99,6 +107,75 @@ def _to_utterance(frames: bytes, count: int) -> list[float]:
     return [sample / 32768.0 for sample in samples]
 
 
+def _digits_only(value: str) -> str:
+    return "".join(char for char in value if char.isdigit())
+
+
+def _edit_distance(left: str, right: str) -> int:
+    previous = list(range(len(right) + 1))
+    for row, left_char in enumerate(left, 1):
+        current = [row]
+        for column, right_char in enumerate(right, 1):
+            current.append(
+                min(
+                    previous[column] + 1,
+                    current[column - 1] + 1,
+                    previous[column - 1] + (left_char != right_char),
+                )
+            )
+        previous = current
+    return previous[len(right)]
+
+
+def _snr_db(samples: list[float]) -> float:
+    frames = [samples[index : index + _SNR_FRAME] for index in range(0, len(samples), _SNR_FRAME)]
+    energies = sorted(sum(value * value for value in frame) / len(frame) for frame in frames)
+    if not energies:
+        return 0.0
+    edge = max(1, len(energies) // 10)
+    noise = sum(energies[:edge]) / edge
+    signal = sum(energies[-edge:]) / edge
+    if noise <= 0.0:
+        return _SNR_CEILING_DB if signal > 0.0 else 0.0
+    if signal <= noise:
+        return 0.0
+    return min(_SNR_CEILING_DB, 10.0 * math.log10((signal - noise) / noise))
+
+
+def _reject_enrollment(
+    owned_journal: Journal,
+    *,
+    person_id: str,
+    challenge_id: str,
+    snr: float,
+    seconds: float,
+    segments: dict[str, int],
+    reason: str,
+) -> NoReturn:
+    owned_journal.record(
+        "enrollment_rejected",
+        source="cli",
+        person_id=person_id,
+        challenge_id=challenge_id,
+        snr_db=round(snr, 2),
+        seconds=round(seconds, 2),
+        segments=segments,
+    )
+    print(json.dumps({"enrolled": False, "reason": reason, "challenge_id": challenge_id}))
+    raise SystemExit(2)
+
+
+def voiceprint_challenge(meeting: str, *, settings: Settings) -> None:
+    print(
+        json.dumps(
+            {
+                "challenge": f"{secrets.randbelow(10**8):08d}",
+                "challenge_id": str(uuid.uuid4()),
+            }
+        )
+    )
+
+
 def voiceprint_enroll(
     name: str,
     clip: list[str],
@@ -108,12 +185,31 @@ def voiceprint_enroll(
     store: VoiceprintStore | None = None,
     journal: Journal | None = None,
     embedder: SpeakerEmbedder | None = None,
+    challenge_id: str | None = None,
+    challenge: str | None = None,
+    transcript: str | None = None,
+    owner_name: str | None = None,
+    spontaneous_clip: list[str] | None = None,
 ) -> None:
-    if len(clip) < MIN_ENROLL_CLIPS:
-        _reject(f"enroll needs at least {MIN_ENROLL_CLIPS} clips, got {len(clip)}")
+    spontaneous = list(spontaneous_clip or [])
+    gated = (
+        len(spontaneous) > 0
+        or challenge_id is not None
+        or challenge is not None
+        or transcript is not None
+        or owner_name is not None
+    )
+    if gated and not (challenge_id and challenge and transcript and owner_name):
+        raise CliError(
+            "gated enrollment needs --challenge-id, --challenge, --transcript, and --owner-name"
+        )
+    paths = list(clip) + spontaneous
+    if len(paths) < MIN_ENROLL_CLIPS:
+        _reject(f"enroll needs at least {MIN_ENROLL_CLIPS} clips, got {len(paths)}")
     min_seconds = settings.identity.voiceprint_min_seconds
     utterances: list[list[float]] = []
-    for path in clip:
+    total_seconds = 0.0
+    for path in paths:
         label, frames, count = _read_clip_frames(path)
         seconds = count / VOICEPRINT_SAMPLE_RATE
         if seconds < min_seconds:
@@ -125,24 +221,124 @@ def voiceprint_enroll(
         if level < VOICEPRINT_MIN_RMS:
             _reject(f"clip is silent: {label} rms {level:.4f} below {VOICEPRINT_MIN_RMS}")
         utterances.append(_to_utterance(frames, count))
-    with (
-        _open_store(settings, store) as owned_store,
-        _open_journal(settings, journal) as owned_journal,
-    ):
-        embedding = _embedder_for(settings, embedder).embed(utterances)
-        stamp = datetime.now(UTC).isoformat()
-        owned_store.save(
-            VoiceprintRecord(
-                person_id=name,
-                embedding=tuple(embedding),
-                dim=len(embedding),
-                n_utterances=len(utterances),
-                consent_ts=stamp,
-                policy_version=settings.identity.voiceprint_policy_version,
-                is_negative=negative,
-                enrolled_at=stamp,
-                last_used_at=stamp,
+        total_seconds += seconds
+    if not gated:
+        with (
+            _open_store(settings, store) as owned_store,
+            _open_journal(settings, journal) as owned_journal,
+        ):
+            embedding = _embedder_for(settings, embedder).embed(utterances)
+            stamp = datetime.now(UTC).isoformat()
+            owned_store.save(
+                VoiceprintRecord(
+                    person_id=name,
+                    embedding=tuple(embedding),
+                    dim=len(embedding),
+                    n_utterances=len(utterances),
+                    consent_ts=stamp,
+                    policy_version=settings.identity.voiceprint_policy_version,
+                    is_negative=negative,
+                    enrolled_at=stamp,
+                    last_used_at=stamp,
+                    owner_name="",
+                )
             )
+            owned_journal.record(
+                "voiceprint_recorded",
+                source="cli",
+                person_id=name,
+                n_utterances=len(utterances),
+                is_negative=negative,
+            )
+        print(
+            json.dumps(
+                {
+                    "person_id": name,
+                    "n_utterances": len(utterances),
+                    "dim": len(embedding),
+                    "is_negative": negative,
+                }
+            )
+        )
+        return
+    assert challenge_id and challenge and transcript and owner_name
+    segments = {"read": len(clip), "spontaneous": len(spontaneous)}
+    snr = min(_snr_db(utterance) for utterance in utterances)
+    with _open_journal(settings, journal) as owned_journal:
+        heard = _digits_only(transcript)
+        wanted = _digits_only(challenge)
+        distance = _edit_distance(wanted, heard)
+        if distance > ENROLL_MAX_TRANSCRIPT_EDITS:
+            _reject_enrollment(
+                owned_journal,
+                person_id=name,
+                challenge_id=challenge_id,
+                snr=snr,
+                seconds=total_seconds,
+                segments=segments,
+                reason=(
+                    f"challenge transcript differs by {distance} edits,"
+                    f" need at most {ENROLL_MAX_TRANSCRIPT_EDITS}"
+                ),
+            )
+        if total_seconds < ENROLL_MIN_SECONDS:
+            _reject_enrollment(
+                owned_journal,
+                person_id=name,
+                challenge_id=challenge_id,
+                snr=snr,
+                seconds=total_seconds,
+                segments=segments,
+                reason=(
+                    f"enrollment audio holds {total_seconds:.2f}s,"
+                    f" need at least {ENROLL_MIN_SECONDS:.1f}s"
+                ),
+            )
+        if segments["read"] < 1 or segments["spontaneous"] < 1:
+            _reject_enrollment(
+                owned_journal,
+                person_id=name,
+                challenge_id=challenge_id,
+                snr=snr,
+                seconds=total_seconds,
+                segments=segments,
+                reason="enrollment needs at least 1 read segment and 1 spontaneous segment",
+            )
+        if snr < PROVISIONAL_SNR_FLOOR_DB:
+            _reject_enrollment(
+                owned_journal,
+                person_id=name,
+                challenge_id=challenge_id,
+                snr=snr,
+                seconds=total_seconds,
+                segments=segments,
+                reason=(f"enrollment snr {snr:.2f}db below floor {PROVISIONAL_SNR_FLOOR_DB:.1f}db"),
+            )
+        with _open_store(settings, store) as owned_store:
+            embedding = _embedder_for(settings, embedder).embed(utterances)
+            stamp = datetime.now(UTC).isoformat()
+            owned_store.save(
+                VoiceprintRecord(
+                    person_id=name,
+                    embedding=tuple(embedding),
+                    dim=len(embedding),
+                    n_utterances=len(utterances),
+                    consent_ts=stamp,
+                    policy_version=settings.identity.voiceprint_policy_version,
+                    is_negative=negative,
+                    enrolled_at=stamp,
+                    last_used_at=stamp,
+                    owner_name=owner_name,
+                )
+            )
+        owned_journal.record(
+            "enrollment_accepted",
+            source="cli",
+            person_id=name,
+            challenge_id=challenge_id,
+            snr_db=round(snr, 2),
+            seconds=round(total_seconds, 2),
+            segments=segments,
         )
         owned_journal.record(
             "voiceprint_recorded",
@@ -158,6 +354,8 @@ def voiceprint_enroll(
                 "n_utterances": len(utterances),
                 "dim": len(embedding),
                 "is_negative": negative,
+                "challenge_id": challenge_id,
+                "owner_name": owner_name,
             }
         )
     )

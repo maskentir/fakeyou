@@ -23,6 +23,7 @@ from fakeyou.cli.memory import (
     reembed_memory,
 )
 from fakeyou.cli.voiceprint import (
+    voiceprint_challenge,
     voiceprint_delete,
     voiceprint_enroll,
     voiceprint_list,
@@ -278,7 +279,17 @@ def build_parser() -> argparse.ArgumentParser:
     voiceprint_enroll_parser.add_argument("--name", required=True)
     voiceprint_enroll_parser.add_argument("--clip", action="append", required=True)
     voiceprint_enroll_parser.add_argument("--negative", action="store_true")
+    voiceprint_enroll_parser.add_argument("--challenge-id", default=None)
+    voiceprint_enroll_parser.add_argument("--challenge", default=None)
+    voiceprint_enroll_parser.add_argument("--transcript", default=None)
+    voiceprint_enroll_parser.add_argument("--owner-name", default=None)
+    voiceprint_enroll_parser.add_argument("--spontaneous-clip", action="append", default=None)
     voiceprint_enroll_parser.set_defaults(handler=voiceprint_enroll)
+    voiceprint_challenge_parser = voiceprint_commands.add_parser(
+        "challenge", help="Issue an enrollment liveness challenge", allow_abbrev=False
+    )
+    voiceprint_challenge_parser.add_argument("--meeting", required=True)
+    voiceprint_challenge_parser.set_defaults(handler=voiceprint_challenge)
     voiceprint_verify_parser = voiceprint_commands.add_parser(
         "verify", help="Verify an audio clip against a voiceprint", allow_abbrev=False
     )

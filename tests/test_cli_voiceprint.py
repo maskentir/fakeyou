@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import json
 import math
+import random
+import re
 import struct
 import wave
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
 import fakeyou.cli.main as cli_main
 from fakeyou.cli.errors import CliError
 from fakeyou.cli.voiceprint import (
+    PROVISIONAL_SNR_FLOOR_DB,
     VOICEPRINT_MIN_RMS,
+    voiceprint_challenge,
     voiceprint_delete,
     voiceprint_enroll,
     voiceprint_list,
@@ -614,3 +619,362 @@ def test_voiceprint_commands_dispatch_without_leaking_parser_state(
     assert "worker_command" not in call
     assert "voiceprint_command" not in call
     assert "command" not in call
+
+
+CHALLENGE_ID = "11111111-2222-3333-4444-555555555555"
+CHALLENGE_DIGITS = "12345678"
+
+
+def write_speechlike_clip(
+    path: Path,
+    *,
+    seconds: float = 10.0,
+    freq: float = 440.0,
+    amplitude: float = 0.5,
+    noise: float = 0.0,
+    seed: int = 7,
+) -> Path:
+    rng = random.Random(seed)
+    frames = bytearray()
+    total = int(16000 * seconds)
+    for index in range(total):
+        voiced = (index % 12000) < 8000
+        tone = amplitude * math.sin(2.0 * math.pi * freq * index / 16000) if voiced else 0.0
+        sample = int(32767.0 * max(-1.0, min(1.0, tone + rng.uniform(-noise, noise))))
+        frames += struct.pack("<h", sample)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(bytes(frames))
+    return path
+
+
+def gated_enroll(
+    name: str,
+    clips: list[str],
+    spontaneous: list[str],
+    *,
+    settings: Settings,
+    store: FakeStore,
+    journal: RecordingJournal,
+    embedder: ScriptedEmbedder,
+    challenge: str = CHALLENGE_DIGITS,
+    transcript: str = CHALLENGE_DIGITS,
+    owner_name: str = "Maya",
+    challenge_id: str = CHALLENGE_ID,
+) -> None:
+    voiceprint_enroll(
+        name,
+        clips,
+        False,
+        settings=settings,
+        store=store,
+        journal=journal,
+        embedder=embedder,
+        challenge_id=challenge_id,
+        challenge=challenge,
+        transcript=transcript,
+        owner_name=owner_name,
+        spontaneous_clip=spontaneous,
+    )
+
+
+def test_challenge_issues_unique_eight_digit_codes(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    voiceprint_challenge("meeting-1", settings=settings)
+    first = json.loads(capsys.readouterr().out)
+    voiceprint_challenge("meeting-1", settings=settings)
+    second = json.loads(capsys.readouterr().out)
+
+    assert set(first) == {"challenge", "challenge_id"}
+    assert re.fullmatch(r"[0-9]{8}", first["challenge"]) is not None
+    assert re.fullmatch(r"[0-9]{8}", second["challenge"]) is not None
+    UUID(first["challenge_id"])
+    UUID(second["challenge_id"])
+    assert (first["challenge"], first["challenge_id"]) != (
+        second["challenge"],
+        second["challenge_id"],
+    )
+
+
+def test_enroll_matching_challenge_enrolls_with_owner_and_accept_journal(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
+    store = FakeStore()
+    journal = RecordingJournal()
+    embedder = ScriptedEmbedder([(1.0, 0.0)])
+
+    gated_enroll(
+        "alice",
+        clips,
+        spontaneous,
+        settings=settings,
+        store=store,
+        journal=journal,
+        embedder=embedder,
+    )
+
+    record = store.records["alice"]
+    assert record.owner_name == "Maya"
+    assert record.n_utterances == 3
+    [row] = journal.events("enrollment_accepted")
+    assert row["person_id"] == "alice"
+    assert row["challenge_id"] == CHALLENGE_ID
+    assert row["snr_db"] >= PROVISIONAL_SNR_FLOOR_DB
+    assert row["seconds"] >= 30.0
+    assert row["segments"] == {"read": 2, "spontaneous": 1}
+    assert "transcript" not in row
+    assert CHALLENGE_DIGITS not in json.dumps(row)
+    assert len(journal.events("voiceprint_recorded")) == 1
+    assert journal.events("enrollment_rejected") == []
+    body = json.loads(capsys.readouterr().out)
+    assert body["person_id"] == "alice"
+    assert body["challenge_id"] == CHALLENGE_ID
+
+
+def test_enroll_transcript_two_edits_away_rejects_without_store(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [
+        str(write_speechlike_clip(tmp_path / f"read-{index}.wav", seconds=3.0))
+        for index in range(2)
+    ]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", seconds=3.0))]
+    store = FakeStore()
+    journal = RecordingJournal()
+    embedder = ScriptedEmbedder([(1.0, 0.0)])
+
+    with pytest.raises(SystemExit) as caught:
+        gated_enroll(
+            "alice",
+            clips,
+            spontaneous,
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=embedder,
+            transcript="12345699",
+        )
+
+    assert caught.value.code == 2
+    body = json.loads(capsys.readouterr().out)
+    assert body["enrolled"] is False
+    assert "reason" in body
+    assert store.records == {}
+    assert embedder.calls == []
+    [row] = journal.events("enrollment_rejected")
+    assert row["challenge_id"] == CHALLENGE_ID
+    assert journal.events("enrollment_accepted") == []
+    assert journal.events("voiceprint_recorded") == []
+
+
+def test_enroll_short_total_duration_rejects(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [
+        str(write_speechlike_clip(tmp_path / f"read-{index}.wav", seconds=3.0))
+        for index in range(2)
+    ]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", seconds=3.0))]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    with pytest.raises(SystemExit) as caught:
+        gated_enroll(
+            "alice",
+            clips,
+            spontaneous,
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        )
+
+    assert caught.value.code == 2
+    body = json.loads(capsys.readouterr().out)
+    assert body["enrolled"] is False
+    assert "30" in body["reason"]
+    assert store.records == {}
+    [row] = journal.events("enrollment_rejected")
+    assert row["seconds"] < 30.0
+    assert row["segments"] == {"read": 2, "spontaneous": 1}
+
+
+def test_enroll_low_snr_rejects(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert PROVISIONAL_SNR_FLOOR_DB == 10.0
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", noise=0.45))]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    with pytest.raises(SystemExit) as caught:
+        gated_enroll(
+            "alice",
+            clips,
+            spontaneous,
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        )
+
+    assert caught.value.code == 2
+    body = json.loads(capsys.readouterr().out)
+    assert body["enrolled"] is False
+    assert "snr" in body["reason"].lower()
+    assert store.records == {}
+    [row] = journal.events("enrollment_rejected")
+    assert row["snr_db"] < PROVISIONAL_SNR_FLOOR_DB
+
+
+def test_enroll_without_spontaneous_rejects(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(3)]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    with pytest.raises(SystemExit) as caught:
+        gated_enroll(
+            "alice",
+            clips,
+            [],
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        )
+
+    assert caught.value.code == 2
+    body = json.loads(capsys.readouterr().out)
+    assert body["enrolled"] is False
+    assert "spontaneous" in body["reason"].lower()
+    assert store.records == {}
+    [row] = journal.events("enrollment_rejected")
+    assert row["segments"] == {"read": 3, "spontaneous": 0}
+
+
+def test_enroll_single_edit_accepts(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    gated_enroll(
+        "alice",
+        clips,
+        spontaneous,
+        settings=settings,
+        store=store,
+        journal=journal,
+        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        transcript="12345679",
+    )
+
+    assert store.records["alice"].owner_name == "Maya"
+    assert len(journal.events("enrollment_accepted")) == 1
+    capsys.readouterr()
+
+
+def test_enroll_partial_liveness_args_raises_without_journal(
+    settings: Settings, tmp_path: Path
+) -> None:
+    clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
+    journal = RecordingJournal()
+
+    with pytest.raises(CliError):
+        voiceprint_enroll(
+            "alice",
+            clips,
+            False,
+            settings=settings,
+            store=FakeStore(),
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            challenge_id=CHALLENGE_ID,
+        )
+
+    assert journal.events() == []
+
+
+def test_enroll_owner_name_without_challenge_flags_raises(
+    settings: Settings, tmp_path: Path
+) -> None:
+    clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    with pytest.raises(CliError):
+        voiceprint_enroll(
+            "alice",
+            clips,
+            False,
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            owner_name="Maya",
+        )
+
+    assert store.records == {}
+    assert journal.events() == []
+
+
+def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Path) -> None:
+    clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
+    store = FakeStore()
+
+    voiceprint_enroll(
+        "alice",
+        clips,
+        False,
+        settings=settings,
+        store=store,
+        journal=RecordingJournal(),
+        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+    )
+
+    assert store.records["alice"].owner_name == ""
+
+
+def test_challenge_and_gated_enroll_parsers_map_to_handlers() -> None:
+    parser = cli_main.build_parser()
+
+    options = parser.parse_args(["voiceprint", "challenge", "--meeting", "meeting-1"])
+    assert options.handler is voiceprint_challenge
+    assert options.meeting == "meeting-1"
+
+    options = parser.parse_args(
+        [
+            "voiceprint",
+            "enroll",
+            "--name",
+            "alice",
+            "--clip",
+            "a.wav",
+            "--spontaneous-clip",
+            "s.wav",
+            "--challenge-id",
+            CHALLENGE_ID,
+            "--challenge",
+            CHALLENGE_DIGITS,
+            "--transcript",
+            CHALLENGE_DIGITS,
+            "--owner-name",
+            "Maya",
+        ]
+    )
+    assert options.handler is voiceprint_enroll
+    assert options.challenge_id == CHALLENGE_ID
+    assert options.challenge == CHALLENGE_DIGITS
+    assert options.transcript == CHALLENGE_DIGITS
+    assert options.owner_name == "Maya"
+    assert options.spontaneous_clip == ["s.wav"]

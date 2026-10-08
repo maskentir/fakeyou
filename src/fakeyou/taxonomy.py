@@ -17,6 +17,7 @@ Subsystem = Literal[
     "transport",
 ]
 EventVerb = Literal[
+    "accepted",
     "bound",
     "cancelled",
     "capped",
@@ -38,6 +39,7 @@ EventVerb = Literal[
     "polled",
     "queued",
     "recorded",
+    "rejected",
     "requested",
     "required",
     "rescued",
