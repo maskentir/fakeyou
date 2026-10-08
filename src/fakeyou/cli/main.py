@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, TypeAdapter
 
 from fakeyou.cli.audio import audio_purge_expired
+from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
@@ -307,6 +308,24 @@ def build_parser() -> argparse.ArgumentParser:
     voiceprint_commands.add_parser(
         "purge-expired", help="Delete voiceprints past retention", allow_abbrev=False
     ).set_defaults(handler=voiceprint_purge_expired)
+    calibrate_parser = commands.add_parser(
+        "calibrate", help="Lock and evaluate verified-name calibration", allow_abbrev=False
+    )
+    calibrate_commands = calibrate_parser.add_subparsers(dest="calibrate_command", required=True)
+    calibrate_lock_parser = calibrate_commands.add_parser(
+        "lock", help="Fit calibration from dev score journals", allow_abbrev=False
+    )
+    calibrate_lock_parser.add_argument("--dev", dest="dev_journals", action="append", required=True)
+    calibrate_lock_parser.add_argument("--out", required=True)
+    calibrate_lock_parser.set_defaults(handler=calibrate_lock)
+    calibrate_eval_parser = calibrate_commands.add_parser(
+        "eval", help="Evaluate calibration on eval score journals", allow_abbrev=False
+    )
+    calibrate_eval_parser.add_argument(
+        "--eval", dest="eval_journals", action="append", required=True
+    )
+    calibrate_eval_parser.add_argument("--artifact", required=True)
+    calibrate_eval_parser.set_defaults(handler=calibrate_eval)
     audio_parser = commands.add_parser(
         "audio", help="Manage persisted meeting audio", allow_abbrev=False
     )
@@ -327,6 +346,7 @@ def main() -> None:
     options.pop("worker_command", None)
     options.pop("voiceprint_command", None)
     options.pop("audio_command", None)
+    options.pop("calibrate_command", None)
     try:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):
