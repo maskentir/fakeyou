@@ -1,0 +1,253 @@
+import json
+import struct
+import urllib.request
+import wave
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import SecretStr
+
+from fakeyou.cli.diarize import diarize_run
+from fakeyou.cli.errors import CliError
+from fakeyou.cli.main import build_parser
+from fakeyou.diarize_client import DiarizeError
+from fakeyou.ingestion_status import lock_path, record_lock
+from fakeyou.invariants import CAPTURE_SAMPLE_RATE
+from fakeyou.record import meeting_record_path
+from fakeyou.settings import Settings
+
+SECRET_KEY = "super-secret-stt-key"
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+
+def _write_slot_wav(path: Path, samples: list[int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(CAPTURE_SAMPLE_RATE)
+        handle.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+
+
+def _write_session(
+    settings: Settings, meeting_id: str, *, seq_starts: dict[int, int], frames: int = 1600
+) -> tuple[Path, Path]:
+    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text('{"kind": "resume", "at": "2026-10-08T00:00:00+00:00"}\n')
+    audio_dir = record_path.parent / "audio"
+    slots = {
+        str(slot): {
+            "seq_start": start,
+            "seq_end": start + 10,
+            "frames": frames,
+            "gaps_filled": 0,
+        }
+        for slot, start in seq_starts.items()
+    }
+    (audio_dir).mkdir(parents=True, exist_ok=True)
+    (audio_dir / "slots.json").write_text(
+        json.dumps({"schema": "slot_audio/v1", "slots": slots, "anchors": []}),
+        encoding="utf-8",
+    )
+    for slot in seq_starts:
+        _write_slot_wav(audio_dir / f"slot-{slot}.wav", [100] * frames)
+    return record_path, audio_dir
+
+
+def _turns_payload(turns: list[tuple[int, int, str]]) -> bytes:
+    return json.dumps(
+        {
+            "turns": [
+                {
+                    "turnId": f"t{index}",
+                    "startMs": start,
+                    "endMs": end,
+                    "transcript": "discarded words",
+                    "speaker": speaker,
+                }
+                for index, (start, end, speaker) in enumerate(turns)
+            ]
+        }
+    ).encode("utf-8")
+
+
+def test_diarize_run_refuses_missing_api_key(settings: Settings) -> None:
+    assert settings.stt.api_key is None
+
+    with pytest.raises(CliError, match="FAKEYOU_STT__API_KEY"):
+        diarize_run("m1", settings=settings)
+
+
+def test_diarize_run_maps_client_error_without_secret_text(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    _write_session(settings, "m1", seq_starts={0: 0})
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        return _FakeResponse(b"not-json{{{")
+
+    with pytest.raises(CliError) as error:
+        diarize_run("m1", settings=settings, opener=opener)
+
+    assert SECRET_KEY not in str(error.value)
+    assert isinstance(error.value.__cause__, DiarizeError)
+
+
+def test_diarize_run_refuses_concurrent_run_via_lease(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("locked run must not transcribe")
+
+    with record_lock(record_path, purpose="meeting"):
+        with pytest.raises(CliError, match="locked"):
+            diarize_run("m1", settings=settings, opener=opener)
+
+
+def test_diarize_run_releases_diarization_lease_on_success(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        return _FakeResponse(_turns_payload([(0, 5000, "A")]))
+
+    assert diarize_run("m1", settings=settings, opener=opener) == 0
+    assert not lock_path(record_path).exists()
+
+
+def test_diarize_run_refuses_unequal_seq_start(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    _write_session(settings, "m1", seq_starts={0: 0, 1: 5})
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("misaligned run must not transcribe")
+
+    with pytest.raises(CliError, match="misaligned"):
+        diarize_run("m1", settings=settings, opener=opener)
+
+
+def test_diarize_run_refuses_nonzero_seq_start(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    _write_session(settings, "m1", seq_starts={0: 3, 1: 3})
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("misaligned run must not transcribe")
+
+    with pytest.raises(CliError, match="zero"):
+        diarize_run("m1", settings=settings, opener=opener)
+
+
+def test_diarize_run_maps_empty_audio_dir_to_cli_error(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path = meeting_record_path(settings.paths.record_dir, "m1")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text("{}\n")
+    (record_path.parent / "audio").mkdir(parents=True, exist_ok=True)
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("empty run must not transcribe")
+
+    with pytest.raises(CliError):
+        diarize_run("m1", settings=settings, opener=opener)
+
+
+def test_diarize_run_maps_missing_slot_wavs_to_cli_error(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, audio_dir = _write_session(settings, "m1", seq_starts={0: 0})
+    (audio_dir / "slot-0.wav").unlink()
+    assert list(audio_dir.glob("slot-*.wav")) == []
+    before = record_path.read_bytes()
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("wav-less run must not transcribe")
+
+    with pytest.raises(CliError, match="no slot wav files"):
+        diarize_run("m1", settings=settings, opener=opener)
+    assert record_path.read_bytes() == before
+
+
+def test_diarize_run_writes_sidecar_and_keeps_record_identical(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0, 1: 0})
+    before = record_path.read_bytes()
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        return _FakeResponse(_turns_payload([(0, 5000, "A"), (6000, 12000, "B")]))
+
+    assert diarize_run("m1", settings=settings, opener=opener) == 0
+
+    assert record_path.read_bytes() == before
+    payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
+    assert payload["schema"] == "diarization_correction/v1"
+    assert [(turn["start_ms"], turn["end_ms"], turn["speaker"]) for turn in payload["turns"]] == [
+        (0, 5000, "A"),
+        (6000, 12000, "B"),
+    ]
+    assert all("corrected_uuid" in turn for turn in payload["turns"])
+    assert "discarded words" not in (record_path.parent / "diarization.json").read_text(
+        encoding="utf-8"
+    )
+    assert "discarded words" not in (record_path.parent / "diarization.rttm").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_diarize_run_offsets_chunk_turns_by_chunk_start(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fakeyou.cli.diarize as cli_diarize
+
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+
+    def chunk_wav(seconds: int) -> bytes:
+        buffer = BytesIO()
+        with wave.open(buffer, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(CAPTURE_SAMPLE_RATE)
+            handle.writeframes(bytes(seconds * CAPTURE_SAMPLE_RATE * 2))
+        return buffer.getvalue()
+
+    chunks = [chunk_wav(10), chunk_wav(10)]
+    monkeypatch.setattr(cli_diarize, "split_chunks", lambda frames, rate: chunks)
+    calls = {"count": 0}
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeResponse(_turns_payload([(0, 5000, "A")]))
+        return _FakeResponse(_turns_payload([(0, 5000, "B")]))
+
+    assert diarize_run("m1", settings=settings, opener=opener) == 0
+
+    payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
+    assert [(turn["start_ms"], turn["end_ms"], turn["speaker"]) for turn in payload["turns"]] == [
+        (0, 5000, "A"),
+        (10000, 15000, "B"),
+    ]
+
+
+def test_diarize_parser_registers_run() -> None:
+    arguments = build_parser().parse_args(["diarize", "run", "--meeting", "m1"])
+
+    assert arguments.command == "diarize"
+    assert arguments.diarize_command == "run"
+    assert arguments.meeting_id == "m1"
+    assert arguments.handler is diarize_run

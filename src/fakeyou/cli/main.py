@@ -13,6 +13,7 @@ from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
+from fakeyou.cli.diarize import diarize_run
 from fakeyou.cli.errors import FAILURE_EXIT_CODES
 from fakeyou.cli.join import join_meeting
 from fakeyou.cli.memory import (
@@ -338,6 +339,15 @@ def build_parser() -> argparse.ArgumentParser:
     audio_purge_parser.add_argument("--root", type=Path, default=None)
     audio_purge_parser.add_argument("--days", type=int, default=None)
     audio_purge_parser.set_defaults(handler=audio_purge_expired)
+    diarize_parser = commands.add_parser(
+        "diarize", help="Run offline speaker correction for one meeting", allow_abbrev=False
+    )
+    diarize_commands = diarize_parser.add_subparsers(dest="diarize_command", required=True)
+    diarize_run_parser = diarize_commands.add_parser(
+        "run", help="Mix slot audio and write diarization sidecars", allow_abbrev=False
+    )
+    diarize_run_parser.add_argument("--meeting", dest="meeting_id", required=True)
+    diarize_run_parser.set_defaults(handler=diarize_run)
     return parser
 
 
@@ -349,6 +359,7 @@ def main() -> None:
     options.pop("voiceprint_command", None)
     options.pop("audio_command", None)
     options.pop("calibrate_command", None)
+    options.pop("diarize_command", None)
     try:
         outcome = handler(**options, settings=Settings())
         if inspect.iscoroutine(outcome):
