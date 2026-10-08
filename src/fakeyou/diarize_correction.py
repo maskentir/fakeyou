@@ -15,6 +15,10 @@ RTTM_FILE_NAME = "diarization.rttm"
 JSON_FILE_NAME = "diarization.json"
 
 
+class StaleDiarizationError(DiarizeError):
+    pass
+
+
 @dataclass(frozen=True)
 class CorrectionBundle:
     rttm_path: Path
@@ -126,7 +130,7 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
         raise DiarizeError("diarization sidecar schema is unsupported")
     expected = sha256(record_path.read_bytes()).hexdigest()
     if payload.get("record_sha256") != expected:
-        raise DiarizeError("diarization sidecar is stale: record changed since correction")
+        raise StaleDiarizationError("diarization sidecar is stale: record changed since correction")
     turns = payload.get("turns")
     if not isinstance(turns, list):
         raise DiarizeError("diarization sidecar turns are invalid")

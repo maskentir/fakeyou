@@ -337,6 +337,36 @@ def test_diarize_show_exits_stale_when_record_changed(
     assert "stale" in capsys.readouterr().out
 
 
+def test_diarize_show_maps_invalid_schema_to_cli_error_without_stale_label(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record_path = _show_session(settings, "m1", [1000.0])
+    sidecar = record_path.parent / "diarization.json"
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["schema"] = "diarization_correction/v99"
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CliError, match="schema"):
+        diarize_show("m1", settings=settings)
+
+    assert "stale" not in capsys.readouterr().out
+
+
+def test_diarize_show_maps_invalid_turns_to_cli_error_without_stale_label(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record_path = _show_session(settings, "m1", [1000.0])
+    sidecar = record_path.parent / "diarization.json"
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["turns"] = [{"start_ms": "zero", "end_ms": 1000, "corrected_uuid": "u"}]
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CliError, match="turns are invalid"):
+        diarize_show("m1", settings=settings)
+
+    assert "stale" not in capsys.readouterr().out
+
+
 def test_diarize_show_refuses_missing_sidecar(settings: Settings) -> None:
     record_path = meeting_record_path(settings.paths.record_dir, "m1")
     record_path.parent.mkdir(parents=True, exist_ok=True)

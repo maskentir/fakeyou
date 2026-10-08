@@ -57,6 +57,8 @@ Sidecar menyimpan `record_sha256` dari bita `record.jsonl` saat koreksi
 ditulis. Bila record berubah sesudahnya, `load_corrected_record`
 menolak dengan `DiarizeError` stale dan `diarize show` keluar dengan
 kode 2. Perbaikannya: jalankan ulang `diarize run` untuk sesi itu.
+Sidecar yang rusak (skema tak dikenal atau turn tak valid) bukan stale:
+`diarize show` menolak dengan kode 1 tanpa label stale.
 
 Bila sidecar belum ada, `load_corrected_record` mengembalikan record
 asli apa adanya, sedangkan `diarize show` menolak karena belum ada

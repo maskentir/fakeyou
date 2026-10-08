@@ -11,6 +11,7 @@ from fakeyou.cli.errors import CliError
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError, merge_short_turns, transcribe_chunk
 from fakeyou.diarize_correction import (
     JSON_FILE_NAME,
+    StaleDiarizationError,
     load_corrected_record,
     write_correction_bundle,
 )
@@ -110,7 +111,7 @@ def diarize_show(meeting_id: str, *, settings: Settings) -> int:
         raise CliError(f"no diarization correction for meeting: {meeting_id}")
     try:
         entries = load_corrected_record(record_path)
-    except DiarizeError as error:
+    except StaleDiarizationError as error:
         total = len(
             [
                 entry
@@ -122,6 +123,8 @@ def diarize_show(meeting_id: str, *, settings: Settings) -> int:
         print(f"covered: 0/{total} transcript entries")
         print(f"status: stale: {error}")
         raise SystemExit(2) from None
+    except DiarizeError as error:
+        raise CliError(str(error)) from error
     transcripts = [entry for entry in entries if isinstance(entry, TranscriptEntry)]
     covered = sum(1 for entry in transcripts if entry.corrected_speaker_uuid is not None)
     print(f"turns: {_sidecar_turn_count(record_path)}")

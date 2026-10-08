@@ -9,6 +9,7 @@ import pytest
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarize_correction import (
     CorrectionBundle,
+    StaleDiarizationError,
     correction_uuid,
     load_corrected_record,
     write_correction_bundle,
@@ -183,6 +184,18 @@ def test_load_corrected_record_rejects_changed_record_as_stale(tmp_path: Path) -
         handle.write(_transcript_line(9, 6100.0) + "\n")
 
     with pytest.raises(DiarizeError, match="stale"):
+        load_corrected_record(record_path)
+
+
+def test_stale_error_is_distinguishable_from_invalid_sidecar(tmp_path: Path) -> None:
+    assert issubclass(StaleDiarizationError, DiarizeError)
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(_transcript_line(9, 6100.0) + "\n")
+
+    with pytest.raises(StaleDiarizationError, match="stale"):
         load_corrected_record(record_path)
 
 
