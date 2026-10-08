@@ -412,6 +412,131 @@ def test_loader_malformed_file_returns_null(tmp_path: Path) -> None:
     assert load_calibration_artifact(empty) is None
 
 
+DIGEST_A = "a" * 64
+DIGEST_B = "b" * 64
+
+
+def _stamped_artifact(model_version: str | None) -> CalibrationArtifact:
+    return CalibrationArtifact(
+        theta_llr=ARTIFACT.theta_llr,
+        margin_floor=ARTIFACT.margin_floor,
+        snorm_cohort=ARTIFACT.snorm_cohort,
+        platt_a=ARTIFACT.platt_a,
+        platt_b=ARTIFACT.platt_b,
+        platt_version=ARTIFACT.platt_version,
+        report_id=ARTIFACT.report_id,
+        model_version=model_version,
+    )
+
+
+def _passing_scores() -> VoiceScores:
+    return VoiceScores("alice", 0.9, 0.1, "verified", owner_name="alice", consent_ts=CONSENT)
+
+
+def test_decide_refuses_artifact_embedder_model_mismatch() -> None:
+    registry = _registry()
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    decision = decide_verified(
+        row.uuid,
+        _passing_scores(),
+        claim_of(row),
+        _stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
+        registry=registry,
+        slot=row.slot,
+        embedder=_embedder(f"model-b.onnx:{DIGEST_B}"),
+        journal=journal,
+        faults=faults,
+    )
+    assert decision is None
+    assert journal.events("name_verified") == []
+    assert "voiceprint_model_mismatch" in _misbind_kinds(faults)
+
+
+def test_decide_accepts_matching_digest_with_different_model_name() -> None:
+    registry = _registry()
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    decision = decide_verified(
+        row.uuid,
+        _passing_scores(),
+        claim_of(row),
+        _stamped_artifact(f"container.onnx:{DIGEST_A}"),
+        registry=registry,
+        slot=row.slot,
+        embedder=_embedder(f"host-other.onnx:{DIGEST_A}"),
+        journal=journal,
+        faults=faults,
+    )
+    assert decision is not None
+
+
+def test_decide_refuses_stamped_artifact_with_unparsable_embedder_id() -> None:
+    registry = _registry()
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    decision = decide_verified(
+        row.uuid,
+        _passing_scores(),
+        claim_of(row),
+        _stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
+        registry=registry,
+        slot=row.slot,
+        embedder=_embedder("embed-test-v1"),
+        journal=journal,
+        faults=faults,
+    )
+    assert decision is None
+    assert journal.events("name_verified") == []
+
+
+def test_loader_reads_model_version_from_file(tmp_path: Path) -> None:
+    path = tmp_path / "stamped.json"
+    stamped = f"model-a.onnx:{DIGEST_A}"
+    path.write_text(
+        json.dumps(
+            {
+                "theta_llr": 2.0,
+                "margin_floor": 0.15,
+                "snorm_cohort": [0.1, 0.2, 0.3, 0.4],
+                "platt_a": 1.0,
+                "platt_b": 0.0,
+                "platt_version": "platt-v1",
+                "report_id": "cal-001",
+                "model_version": stamped,
+            }
+        )
+    )
+    loaded = load_calibration_artifact(path)
+    assert loaded is not None
+    assert loaded.model_version == stamped
+
+
+def test_loader_rejects_invalid_model_version_type(tmp_path: Path) -> None:
+    path = tmp_path / "badmodel.json"
+    path.write_text(
+        json.dumps(
+            {
+                "theta_llr": 2.0,
+                "margin_floor": 0.15,
+                "snorm_cohort": [0.1, 0.2, 0.3, 0.4],
+                "platt_a": 1.0,
+                "platt_b": 0.0,
+                "platt_version": "platt-v1",
+                "report_id": "cal-001",
+                "model_version": 123,
+            }
+        )
+    )
+    assert load_calibration_artifact(path) is None
+
+
 def test_apply_voice_scores_forwards_to_verified_path() -> None:
     registry = _registry()
     journal = RecordingJournal()

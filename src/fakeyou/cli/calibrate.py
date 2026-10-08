@@ -11,7 +11,7 @@ from typing import Any, NoReturn
 
 from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
-from fakeyou.verify import load_calibration_artifact
+from fakeyou.verify import load_calibration_artifact, model_digest
 
 LLR_BIN_WIDTH = 0.5
 MARGIN_BIN_WIDTH = 0.05
@@ -255,7 +255,15 @@ def _report_id(trials: list[Trial]) -> str:
     return f"cal-{digest}"
 
 
-def calibrate_lock(dev_journals: list[str], out: str, *, settings: Settings) -> None:
+def calibrate_lock(
+    dev_journals: list[str],
+    out: str,
+    *,
+    settings: Settings,
+    model_version: str | None = None,
+) -> None:
+    if model_version is not None and model_digest(model_version) is None:
+        raise CliError(f"model version holds no sha256 digest: {model_version}")
     trials = _load_trials(dev_journals)
     targets = [trial for trial in trials if trial.target]
     nontargets = [trial for trial in trials if not trial.target]
@@ -297,6 +305,8 @@ def calibrate_lock(dev_journals: list[str], out: str, *, settings: Settings) -> 
         "report_id": report,
         "dev_speaker_ids": sorted({trial.speaker for trial in trials}),
     }
+    if model_version is not None:
+        payload["model_version"] = model_version
     try:
         Path(out).write_text(json.dumps(payload))
     except OSError:
@@ -337,10 +347,22 @@ def _ship_gate(
     )
 
 
-def calibrate_eval(eval_journals: list[str], artifact: str, *, settings: Settings) -> None:
+def calibrate_eval(
+    eval_journals: list[str],
+    artifact: str,
+    *,
+    settings: Settings,
+    model_version: str | None = None,
+) -> None:
     loaded = load_calibration_artifact(artifact)
     if loaded is None:
         _fail_eval({"pass": False, "error": "invalid_artifact"}, 4)
+    if model_version is not None:
+        if loaded.model_version is None:
+            _fail_eval({"pass": False, "error": "model_unknown"}, 2)
+        claimed = model_digest(model_version)
+        if claimed is None or claimed != model_digest(loaded.model_version):
+            _fail_eval({"pass": False, "error": "model_mismatch"}, 2)
     trials = _load_trials(eval_journals)
     dev = _dev_speakers(artifact)
     if dev is None:

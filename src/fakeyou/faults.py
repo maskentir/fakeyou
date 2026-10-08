@@ -12,6 +12,7 @@ HealthKind = Literal[
     "reconnect_unsupported",
     "callback_failed",
     "voiceprint_misbind",
+    "voiceprint_model_mismatch",
 ]
 FaultKind = ProviderFaultKind | HealthKind
 

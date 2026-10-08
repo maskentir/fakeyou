@@ -26,6 +26,7 @@ class CalibrationArtifact:
     platt_b: float
     platt_version: str
     report_id: str
+    model_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,19 @@ def _artifact_text(value: Any) -> str | None:
     return value
 
 
+def model_digest(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    candidate = value.rsplit(":", 1)[-1].strip().lower()
+    if len(candidate) != 64:
+        return None
+    try:
+        int(candidate, 16)
+    except ValueError:
+        return None
+    return candidate
+
+
 def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
     try:
         raw = json.loads(Path(path).read_text())
@@ -64,6 +78,7 @@ def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
     bias = _artifact_number(raw.get("platt_b"))
     version = _artifact_text(raw.get("platt_version"))
     report = _artifact_text(raw.get("report_id"))
+    model = _artifact_text(raw.get("model_version"))
     cohort_raw = raw.get("snorm_cohort")
     if (
         theta is None
@@ -72,6 +87,7 @@ def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
         or bias is None
         or version is None
         or report is None
+        or ("model_version" in raw and model is None)
         or not isinstance(cohort_raw, list)
         or not cohort_raw
     ):
@@ -90,6 +106,7 @@ def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
         platt_b=bias,
         platt_version=version,
         report_id=report,
+        model_version=model,
     )
 
 
@@ -117,6 +134,23 @@ def decide_verified(
     model_id = embedder.model_id
     if not model_id:
         return None
+    if artifact.model_version is not None:
+        want = model_digest(artifact.model_version)
+        got = model_digest(model_id)
+        if want is None or got is None or want != got:
+            if faults is not None:
+                faults.record(
+                    Fault(
+                        source="audio",
+                        kind="voiceprint_model_mismatch",
+                        detail=(
+                            "calibration model"
+                            f" {str(artifact.model_version)[:16]} disagrees with embedder"
+                            f" {str(model_id)[:16]} for speaker {uuid}"
+                        ),
+                    )
+                )
+            return None
     person = scores.person_id
     if person is None or scores.outcome == "negative":
         return None

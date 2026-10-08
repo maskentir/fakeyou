@@ -24,6 +24,7 @@ from fakeyou.cli.calibrate import (
     calibrate_eval,
     calibrate_lock,
 )
+from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
 from fakeyou.verify import load_calibration_artifact
 
@@ -339,3 +340,92 @@ def test_parser_accepts_calibrate_commands() -> None:
     assert evaluation.handler is calibrate_eval
     assert evaluation.eval_journals == ["e.jsonl"]
     assert evaluation.artifact == "c.json"
+
+
+CALIBRATE_DIGEST_A = "c" * 64
+CALIBRATE_DIGEST_B = "d" * 64
+
+
+def _lock_stamped(tmp_path: Path, model_version: str) -> str:
+    first = tmp_path / "dev-a.jsonl"
+    second = tmp_path / "dev-b.jsonl"
+    trials = _dev_trials()
+    out = str(tmp_path / "artifact.json")
+    calibrate_lock(
+        [_write_journal(first, trials[:12]), _write_journal(second, trials[12:])],
+        out,
+        settings=Settings(),
+        model_version=model_version,
+    )
+    return out
+
+
+def test_lock_model_version_flag_recorded_in_artifact(tmp_path: Path) -> None:
+    stamped = f"model-a.onnx:{CALIBRATE_DIGEST_A}"
+    out = _lock_stamped(tmp_path, stamped)
+    payload = json.loads(Path(out).read_text())
+    assert payload["model_version"] == stamped
+    artifact = load_calibration_artifact(out)
+    assert artifact is not None
+    assert artifact.model_version == stamped
+
+
+def test_lock_garbage_model_version_exits_2(tmp_path: Path) -> None:
+    first = tmp_path / "dev-a.jsonl"
+    out = str(tmp_path / "artifact.json")
+    with pytest.raises(CliError):
+        calibrate_lock(
+            [_write_journal(first, _dev_trials())],
+            out,
+            settings=Settings(),
+            model_version="not-a-digest",
+        )
+    assert not Path(out).exists()
+
+
+def test_eval_model_mismatch_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = _lock_stamped(tmp_path, f"model-a.onnx:{CALIBRATE_DIGEST_A}")
+    journal = tmp_path / "eval.jsonl"
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as failure:
+        calibrate_eval(
+            [_write_journal(journal, _pass_trials())],
+            out,
+            settings=Settings(),
+            model_version=f"model-b.onnx:{CALIBRATE_DIGEST_B}",
+        )
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().out)["error"] == "model_mismatch"
+
+
+def test_eval_matching_model_version_proceeds(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stamped = f"model-a.onnx:{CALIBRATE_DIGEST_A}"
+    out = _lock_stamped(tmp_path, stamped)
+    journal = tmp_path / "eval.jsonl"
+    capsys.readouterr()
+    calibrate_eval(
+        [_write_journal(journal, _pass_trials())],
+        out,
+        settings=Settings(),
+        model_version=f"other-name.onnx:{CALIBRATE_DIGEST_A}",
+    )
+    assert json.loads(capsys.readouterr().out)["pass"] is True
+
+
+def test_eval_flag_against_legacy_artifact_exits_2(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _lock_dev(tmp_path)
+    journal = tmp_path / "eval.jsonl"
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as failure:
+        calibrate_eval(
+            [_write_journal(journal, _pass_trials())],
+            out,
+            settings=Settings(),
+            model_version=f"model-a.onnx:{CALIBRATE_DIGEST_A}",
+        )
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().out)["error"] == "model_unknown"

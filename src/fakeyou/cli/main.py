@@ -317,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     calibrate_lock_parser.add_argument("--dev", dest="dev_journals", action="append", required=True)
     calibrate_lock_parser.add_argument("--out", required=True)
+    calibrate_lock_parser.add_argument("--model-version", default=None)
     calibrate_lock_parser.set_defaults(handler=calibrate_lock)
     calibrate_eval_parser = calibrate_commands.add_parser(
         "eval", help="Evaluate calibration on eval score journals", allow_abbrev=False
@@ -325,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--eval", dest="eval_journals", action="append", required=True
     )
     calibrate_eval_parser.add_argument("--artifact", required=True)
+    calibrate_eval_parser.add_argument("--model-version", default=None)
     calibrate_eval_parser.set_defaults(handler=calibrate_eval)
     audio_parser = commands.add_parser(
         "audio", help="Manage persisted meeting audio", allow_abbrev=False

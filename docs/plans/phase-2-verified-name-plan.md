@@ -192,10 +192,13 @@ git commit -m "feat(verified): enrollment gates and liveness"
 - `lock`: s-norm per trial, fit Platt + reliabilitas, pindai θ
   minDCF 10:1, histogram margin + cek lembah (gagal → exit 3,
   tanpa artefak), tulis artefak JSON berversi.
+  `--model-version` opsional dicatat sebagai provenance artefak.
 - `eval`: terapkan artefak, penegakan disjoint (tolak id pembicara
-  eval yang ada di dev → exit 2), metrik: presisi + CI-bawah
-  (Wilson), overlap-unverified, twin false-verify, lembah margin;
-  cetak JSON + exit 0 lolos / 4 gagal gate.
+  eval yang ada di dev → exit 2), penegakan model (digest
+  `--model-version` wajib cocok dengan artefak → exit 2 bila beda),
+  metrik: presisi + CI-bawah (Wilson), overlap-unverified, twin
+  false-verify, lembah margin; cetak JSON + exit 0 lolos / 4 gagal
+  gate.
 - Tanpa teks transkrip di input; jurnal skor saja.
 
 - [ ] **Step 1: tulis tes merah**
