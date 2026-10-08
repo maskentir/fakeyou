@@ -171,6 +171,33 @@ def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) ->
     return tuple(ident for ident, _ in found)
 
 
+def parse_roster_names(
+    payload: Mapping[str, Any], *, twin_name: str | None = None
+) -> tuple[dict[str, str], ...]:
+    roster = payload.get("roster")
+    if not isinstance(roster, list):
+        return ()
+    folded = twin_name.strip().casefold() if isinstance(twin_name, str) else ""
+    found: list[tuple[str, str]] = []
+    for entry in roster:
+        if not isinstance(entry, Mapping):
+            continue
+        ident = entry.get("id")
+        name = entry.get("name")
+        if not isinstance(ident, str) or not ident:
+            continue
+        if not isinstance(name, str) or not name.strip():
+            continue
+        found.append((ident, name.strip()))
+    if folded:
+        matches = [ident for ident, name in found if name.casefold() == folded]
+        if len(matches) == 1:
+            return tuple(
+                {"id": ident, "name": name} for ident, name in found if ident != matches[0]
+            )
+    return tuple({"id": ident, "name": name} for ident, name in found)
+
+
 @dataclass(frozen=True)
 class TapHealth:
     slot: int
@@ -273,6 +300,10 @@ class StreamRegistry:
             del self._roster_seen[device]
         if self._binder is not None:
             self._binder.update_roster(self._roster_seen)
+
+    def note_roster(self, entries: Iterable[Mapping[str, str]]) -> None:
+        if self._binder is not None:
+            self._binder.note_roster(entries)
 
     async def feed(self, chunk: StreamChunk) -> None:
         session = self._sessions.get(chunk.slot)
@@ -414,6 +445,7 @@ class CaptureDrainLoop:
                 self._fails += 1
                 return False
             self._registry.update_roster(parse_roster(batch, twin_name=self._twin_name))
+            self._registry.note_roster(parse_roster_names(batch, twin_name=self._twin_name))
             chunks = parse_drain(batch)
             for chunk in chunks:
                 await self._registry.feed(chunk)

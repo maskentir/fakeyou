@@ -77,6 +77,7 @@ from fakeyou.settings import (
     Settings,
 )
 from fakeyou.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
+from fakeyou.verify import claim_of
 from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
 from fakeyou.voiceprint_match import apply_voice_scores, score_turn_audio
 
@@ -192,6 +193,8 @@ def _score_live_turn(
         )
         if scores is None:
             return
+        row = registry.row(speaker_uuid)
+        claim = claim_of(row) if row is not None else None
         apply_voice_scores(
             registry,
             speaker_uuid,
@@ -200,11 +203,24 @@ def _score_live_turn(
             owners=voiceprint.owners,
             journal=journal,
             faults=faults,
+            artifact=voiceprint.artifact,
+            claim=claim,
+            slot=stream_slot(stream_id),
+            embedder=voiceprint.embedder,
         )
     except Exception as error:
         record_consumer_fault(
             faults, journal, source="audio", detail="voiceprint_scoring", error=error
         )
+
+
+def _claim_for_uuid(registry: SpeakerRegistry | None, speaker_uuid: Any) -> str | None:
+    if registry is None or not isinstance(speaker_uuid, str) or not speaker_uuid:
+        return None
+    row = registry.row(speaker_uuid)
+    if row is None:
+        return None
+    return claim_of(row)
 
 
 def build_transcript_callback(
@@ -231,7 +247,12 @@ def build_transcript_callback(
                 attribute_stream_frame(frame, binder)
             )
             event = transcript_event(
-                frame, participant_id, evidence_id, stream_id, capture_ms=capture_ms
+                frame,
+                participant_id,
+                evidence_id,
+                stream_id,
+                capture_ms=capture_ms,
+                display_claim=_claim_for_uuid(registry, extra.get("speaker_uuid")),
             )
             pending.append(event)
             extras[event.id] = extra
@@ -270,14 +291,17 @@ def build_transcript_callback(
                     voiceprint.tap_for(stream_id).take_clip()
         else:
             attribution = voice_activity.attribute() if voice_activity is not None else None
+            legacy_uuid = attribution.speaker_uuid if attribution is not None else None
+            legacy_claim = _claim_for_uuid(registry, legacy_uuid)
             event = (
-                transcript_event(frame, "unknown", None, "")
+                transcript_event(frame, "unknown", None, "", display_claim=legacy_claim)
                 if attribution is None
                 else transcript_event(
                     frame,
                     attribution.participant_id,
                     attribution.evidence_id,
                     "",
+                    display_claim=legacy_claim,
                 )
             )
             await emit_transcript(

@@ -55,6 +55,7 @@ from fakeyou.session import SessionConfig
 from fakeyou.settings import (
     Settings,
 )
+from fakeyou.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.voiceprint_match import VoiceprintMatcher
 from fakeyou.voiceprint_store import VoiceprintStore, ensure_voiceprint_schema
@@ -69,6 +70,7 @@ class VoiceprintLive:
     owners: Mapping[str, str]
     slot_taps: dict[str, TurnAudioTap] = field(default_factory=dict)
     connection: Any = None
+    artifact: CalibrationArtifact | None = None
 
     def tap_for(self, stream_id: str) -> TurnAudioTap:
         if not stream_id:
@@ -125,6 +127,18 @@ def create_voiceprint_live(
                 failed.close()
         raise
     store = VoiceprintStore(lambda: connection)
+    calibration_path = settings.identity.voiceprint_calibration_path
+    artifact: CalibrationArtifact | None = None
+    if calibration_path:
+        artifact = load_calibration_artifact(calibration_path)
+        if artifact is None:
+            if owned:
+                with suppress(Exception):
+                    connection.close()
+            raise CliError(
+                "Set FAKEYOU_IDENTITY__VOICEPRINT_CALIBRATION_PATH in .env"
+                " to a valid calibration artifact before enabling voiceprints."
+            )
     return VoiceprintLive(
         tap=TurnAudioTap(),
         matcher=VoiceprintMatcher(
@@ -136,6 +150,7 @@ def create_voiceprint_live(
         min_seconds=settings.identity.voiceprint_min_seconds,
         owners={},
         connection=connection if owned else None,
+        artifact=artifact,
     )
 
 

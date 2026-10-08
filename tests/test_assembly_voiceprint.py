@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import struct
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +11,7 @@ from fakeyou.assembly import VoiceprintLive, create_voiceprint_live
 from fakeyou.audio import TurnAudioTap
 from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
+from fakeyou.verify import CalibrationArtifact
 from tests.test_voiceprint_match import FakeEmbedder, make_record
 
 
@@ -117,3 +120,53 @@ def test_live_bundle_serves_stable_taps_per_stream(settings: Settings) -> None:
     assert live.tap_for("slot-0") is first
     assert live.tap_for("slot-1") is not first
     live.close()
+
+
+def test_live_bundle_without_calibration_path_has_no_artifact(settings: Settings) -> None:
+    enable_voiceprint(settings)
+
+    live = create_voiceprint_live(
+        settings, connect=FakeConnection, embedder=FakeEmbedder((1.0, 0.0))
+    )
+
+    assert live is not None
+    assert live.artifact is None
+    live.close()
+
+
+def test_live_bundle_loads_calibration_artifact(settings: Settings, tmp_path: Path) -> None:
+    enable_voiceprint(settings)
+    artifact_path = tmp_path / "dev-lock.json"
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "theta_llr": 1.5,
+                "margin_floor": 0.3,
+                "snorm_cohort": [0.1, 0.2],
+                "platt_a": 1.0,
+                "platt_b": 0.0,
+                "platt_version": "v1",
+                "report_id": "test",
+            }
+        )
+    )
+    settings.identity.voiceprint_calibration_path = str(artifact_path)
+
+    live = create_voiceprint_live(
+        settings, connect=FakeConnection, embedder=FakeEmbedder((1.0, 0.0))
+    )
+
+    assert live is not None
+    assert isinstance(live.artifact, CalibrationArtifact)
+    assert live.artifact.theta_llr == 1.5
+    live.close()
+
+
+def test_live_bundle_with_broken_calibration_path_raises(
+    settings: Settings, tmp_path: Path
+) -> None:
+    enable_voiceprint(settings)
+    settings.identity.voiceprint_calibration_path = str(tmp_path / "missing.json")
+
+    with pytest.raises(CliError, match="VOICEPRINT_CALIBRATION_PATH"):
+        create_voiceprint_live(settings, connect=FakeConnection, embedder=FakeEmbedder((1.0, 0.0)))

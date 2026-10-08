@@ -9,12 +9,14 @@ import pytest
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.browser import open_direct_page
+from fakeyou.identity import SpeakerRegistry
 from fakeyou.journal import Journal
 from fakeyou.stream_capture import (
     StreamAudioInput,
     StreamChunk,
     StreamRegistry,
     load_capture_script,
+    parse_roster_names,
 )
 from fakeyou.voice_activity import SlotBinder
 from tests.fakes import FakeClock, meet_page
@@ -2333,3 +2335,52 @@ async def test_drain_loop_ignores_malformed_released() -> None:
         assert await loop.poll() is True
     drops = [row for line in lines if (row := json.loads(line))["event"] == "tap_slot_dropped"]
     assert [row["slot"] for row in drops] == [0, 3]
+
+
+def test_parse_roster_names_keeps_id_name_and_drops_twin() -> None:
+    payload = {
+        "roster": [
+            {"id": "dev-x", "name": "  Harun  "},
+            {"id": "dev-t", "name": "Rani Twin"},
+            {"id": "dev-blank", "name": "   "},
+            {"name": "NoDevice"},
+            {"id": "dev-noname"},
+            "junk",
+        ]
+    }
+    assert parse_roster_names(payload, twin_name="Rani Twin") == ({"id": "dev-x", "name": "Harun"},)
+    assert parse_roster_names({"roster": []}) == ()
+    assert parse_roster_names({}) == ()
+
+
+async def test_capture_poll_binds_display_claim_from_roster() -> None:
+    from fakeyou.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
+        ],
+        "roster": [
+            {"id": "dev-x", "muted": False, "name": "Harun"},
+            {"id": "dev-t", "muted": False, "name": "Rani Twin"},
+        ],
+        "dropped": 0,
+    }
+    page = meet_page([], evaluates=[payload, None])
+    speakers = SpeakerRegistry()
+    binder = SlotBinder(registry=speakers)
+    registry, _ = _recording_registry(FakeClock().monotonic, binder=binder)
+    loop = CaptureDrainLoop(page, registry, twin_name="Rani Twin")
+    assert await loop.poll() is True
+    row = speakers.resolve(0)
+    assert not isinstance(row, str)
+    assert row.device == "dev-x"
+    assert row.display_claim == "Harun"
+    assert row.claim_confidence == 1.0

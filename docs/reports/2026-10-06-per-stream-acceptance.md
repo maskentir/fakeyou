@@ -485,7 +485,13 @@ Batasan peluncuran (blocker sebelum flag hidup): `display_claim`
 tercatat None di semua sesi live sehingga `decide_verified`
 selalu None di produksi hari ini — gate suara terbukti,
 pengikatan nama butuh perbaikan aliran claim (tindak lanjut).
-`voiceprint_enabled` tetap default mati sampai itu beres.
+Perbaikan wiring mendarat 2026-10-08: poll→`note_roster` via
+`parse_roster_names`, klaim pending untuk baris yang lahir
+belakangan, `VoiceprintLive.artifact`, dan join meneruskan
+klaim+artifact+slot ke scoring (sesi solo mengikat; multi-party
+tetap abstain sampai atribusi fusion speaker-names ada).
+`voiceprint_enabled` tetap default mati sampai verifikasi live
+ulang membuktikan `name_verified` terbit di produksi.
 Temuan infra sesi (bukan voiceprint): modal privacy-tip Meet
 tak tertangani mematikan satu twin; brief `meeting_id` wajib
 cocok sesi; jangkar `slots.json` dev1 meleset ~55 dtk.

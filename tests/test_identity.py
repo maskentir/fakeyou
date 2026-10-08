@@ -237,3 +237,27 @@ def test_display_claim_has_no_decision_readers() -> None:
     allowed = DISPLAY_CLAIM_RENDER_READERS | DISPLAY_CLAIM_TASK_READERS | {"identity.py"}
 
     assert _display_claim_reader_files() <= allowed
+
+
+def test_registry_row_returns_snapshot_or_none() -> None:
+    registry = _registry()
+    registry.observe_stream(0, [11])
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    snapshot = registry.row(row.uuid)
+    assert snapshot is not None
+    assert snapshot.uuid == row.uuid
+    assert snapshot.label == "A"
+    assert registry.row("missing") is None
+
+
+def test_registry_applies_pending_claim_when_row_binds_late() -> None:
+    registry = SpeakerRegistry()
+    registry.update_roster(["dev-a"])
+    registry.note_roster([{"id": "dev-a", "name": "Maya"}])
+    registry.observe_stream(0, [11])
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    assert row.device == "dev-a"
+    assert row.display_claim == "Maya"
+    assert row.claim_confidence == 1.0

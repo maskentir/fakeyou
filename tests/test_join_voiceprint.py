@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 from typing import Any, cast
@@ -270,3 +271,131 @@ async def test_disabled_voiceprint_never_scores(settings: Settings, tmp_path: Pa
     assert row.margin == 1.0
     record.close()
     journal.close()
+
+
+async def test_live_turn_binds_verified_name_when_claim_matches_voice(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings.identity.voiceprint_enabled = True
+    artifact_path = tmp_path / "dev-lock.json"
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "theta_llr": -10.0,
+                "margin_floor": -10.0,
+                "snorm_cohort": [0.0, 1.0],
+                "platt_a": 1.0,
+                "platt_b": 0.0,
+                "platt_version": "v1",
+                "report_id": "test",
+            }
+        )
+    )
+    settings.identity.voiceprint_calibration_path = str(artifact_path)
+    conn = FakeConnection()
+    embedder = FakeEmbedder((1.0, 0.0))
+    embedder.model_id = "test-model"
+    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=embedder)
+    assert live is not None
+    assert live.artifact is not None
+    owned = make_record("alice", (1.0, 0.0), owner_name="Maya")
+    conn.results.append(
+        [
+            (
+                owned.person_id,
+                struct.pack("<2f", *owned.embedding),
+                owned.dim,
+                owned.n_utterances,
+                owned.consent_ts,
+                owned.policy_version,
+                owned.is_negative,
+                owned.enrolled_at,
+                owned.last_used_at,
+                owned.owner_name,
+            )
+        ]
+    )
+    await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
+    registry, binder = bound_binder()
+    binder.note_roster([{"id": "dev-a", "name": "Maya"}])
+    journal = RecordingJournal()
+    record_path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(record_path)
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=None,
+        binder=binder,
+        per_stream_enabled=True,
+        voiceprint=live,
+        registry=registry,
+        faults=None,
+    )
+    frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
+    frame.transport_source = "slot-0"
+
+    await callback(frame)
+
+    [verified] = journal.events("name_verified")
+    assert verified["enrollment_id"] == "alice"
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    assert row.verified_name == "Maya"
+    record.close()
+    journal.close()
+    live.close()
+    transcripts = [
+        row
+        for line in record_path.read_text(encoding="utf-8").splitlines()
+        if (row := json.loads(line))["kind"] == "transcript"
+    ]
+    assert [row["display_claim"] for row in transcripts] == ["Maya"]
+
+
+async def test_legacy_transcript_carries_display_claim(tmp_path: Path) -> None:
+    registry = SpeakerRegistry()
+    binder = SlotBinder(registry=registry)
+    binder.update_roster(["dev-a"])
+    binder.observe_stream(0, [7])
+    resolved = binder.resolve(0)
+    assert not isinstance(resolved, str)
+    binder.note_roster([{"id": "dev-a", "name": "Maya"}])
+    voice_activity = _ScriptedVoiceActivity(
+        [
+            VoiceAttribution(
+                "speaker-a",
+                "dominant_slot",
+                "voice-1",
+                slot=0,
+                bound=True,
+                speaker_uuid=resolved.uuid,
+            ),
+        ]
+    )
+    journal = RecordingJournal()
+    record_path = meeting_record_path(tmp_path, "meeting-9")
+    record = MeetingRecord(record_path)
+    callback = build_transcript_callback(
+        journal=journal,
+        record=record,
+        conversation=None,
+        voice_activity=cast(Any, voice_activity),
+        binder=binder,
+        per_stream_enabled=False,
+        voiceprint=None,
+        registry=registry,
+        faults=None,
+    )
+    frame = TranscriptionFrame("Hi.", "", "2026-10-06T01:00:03+00:00", finalized=True)
+
+    await callback(frame)
+
+    record.close()
+    journal.close()
+    transcripts = [
+        row
+        for line in record_path.read_text(encoding="utf-8").splitlines()
+        if (row := json.loads(line))["kind"] == "transcript"
+    ]
+    assert [row["display_claim"] for row in transcripts] == ["Maya"]

@@ -43,6 +43,7 @@ class IdentitySettings(Section):
         "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
     )
     voiceprint_policy_version: str = "v1"
+    voiceprint_calibration_path: str = ""
 
 
 class PathSettings(Section):

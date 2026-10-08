@@ -105,6 +105,9 @@ class SlotBinder:
     def update_roster(self, devices: Iterable[str]) -> None:
         self._registry.update_roster(devices)
 
+    def note_roster(self, entries: Iterable[Mapping[str, str]]) -> None:
+        self._registry.note_roster(entries)
+
     def reset(self) -> None:
         self._registry.reset()
         self._wrappers.clear()

@@ -78,6 +78,7 @@ class SpeakerRegistry:
         self._events: list[dict[str, Any]] = []
         self._slot_labels: dict[int, str] = {}
         self._voice_scores: dict[str, VoiceScores] = {}
+        self._pending_claims: dict[str, str] = {}
 
     @property
     def roster_size(self) -> int:
@@ -180,41 +181,53 @@ class SpeakerRegistry:
             return
         self._voice_scores[uuid] = scores
 
+    def row(self, uuid: str) -> SpeakerRow | None:
+        if uuid not in self._rows:
+            return None
+        return self._snapshot(uuid)
+
     def note_roster(self, entries: Iterable[Mapping[str, str]]) -> None:
         seen: dict[str, str] = {}
         for entry in entries:
             seen[entry["id"]] = entry["name"]
-        counts: dict[str, int] = {}
-        for name in seen.values():
-            counts[name] = counts.get(name, 0) + 1
+        self._pending_claims.update(seen)
         for device, name in seen.items():
-            uuid = next(
-                (known for known, record in self._rows.items() if record.device == device),
-                None,
-            )
-            if uuid is None:
-                continue
-            record = self._rows[uuid]
-            if counts[name] > 1:
+            self._apply_claim(device, name)
+
+    def _claim_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for name in self._pending_claims.values():
+            counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def _apply_claim(self, device: str, name: str) -> None:
+        uuid = next(
+            (known for known, record in self._rows.items() if record.device == device),
+            None,
+        )
+        if uuid is None:
+            return
+        record = self._rows[uuid]
+        if self._claim_counts().get(name, 0) > 1:
+            record.display_claim = None
+            record.claim_confidence = 0.0
+            return
+        if record.claim_locked:
+            if record.display_claim is not None and name != record.display_claim:
                 record.display_claim = None
                 record.claim_confidence = 0.0
-                continue
-            if record.claim_locked:
-                if record.display_claim is not None and name != record.display_claim:
-                    record.display_claim = None
-                    record.claim_confidence = 0.0
-                    self._emit(
-                        {
-                            "event": "display_claim_changed",
-                            "label": record.label,
-                            "slot": record.slot,
-                            "device": device,
-                        }
-                    )
-                continue
-            record.display_claim = name
-            record.claim_confidence = 1.0
-            record.claim_locked = True
+                self._emit(
+                    {
+                        "event": "display_claim_changed",
+                        "label": record.label,
+                        "slot": record.slot,
+                        "device": device,
+                    }
+                )
+            return
+        record.display_claim = name
+        record.claim_confidence = 1.0
+        record.claim_locked = True
 
     def note_verified(self, uuid: str, person_id: str, name: str) -> VerifyResult:
         record = self._rows.get(uuid)
@@ -335,6 +348,7 @@ class SpeakerRegistry:
         return len(self._by_slot) >= self._capacity
 
     def _release(self, device: str) -> None:
+        self._pending_claims.pop(device, None)
         owned = [slot for slot, uuid in self._by_slot.items() if self._rows[uuid].device == device]
         if owned:
             for slot in owned:
@@ -382,4 +396,8 @@ class SpeakerRegistry:
         devices = self._unbound_devices()
         rows = self._unbound_rows()
         if len(devices) == 1 and len(rows) == 1:
-            rows[0].device = devices.pop()
+            device = devices.pop()
+            rows[0].device = device
+            pending = self._pending_claims.get(device)
+            if pending is not None:
+                self._apply_claim(device, pending)
