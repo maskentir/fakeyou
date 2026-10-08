@@ -56,13 +56,17 @@ def transcribe_chunk(
     )
     try:
         with call(request) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+            raw = response.read()
     except (urllib.error.HTTPError, urllib.error.URLError) as error:
         raise DiarizeError(f"transcription request failed: {error}") from error
-    return [
-        DiarizedTurn(start_ms=turn["startMs"], end_ms=turn["endMs"], speaker=turn["speaker"])
-        for turn in payload["turns"]
-    ]
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+        return [
+            DiarizedTurn(start_ms=turn["startMs"], end_ms=turn["endMs"], speaker=turn["speaker"])
+            for turn in payload["turns"]
+        ]
+    except (ValueError, KeyError, TypeError) as error:
+        raise DiarizeError("transcription response parse failed") from error
 
 
 def merge_short_turns(

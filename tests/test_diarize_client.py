@@ -52,11 +52,20 @@ def _turn_payload() -> bytes:
     ).encode("utf-8")
 
 
+def _request_part(body: bytes) -> dict[str, Any]:
+    marker = b"Content-Type: application/json\r\n\r\n"
+    start = body.index(marker) + len(marker)
+    end = body.index(b"\r\n--", start)
+    parsed: dict[str, Any] = json.loads(body[start:end].decode("utf-8"))
+    return parsed
+
+
 def test_transcribe_chunk_parses_turns_and_drops_transcript_text() -> None:
     seen: dict[str, Any] = {}
 
     def opener(request: urllib.request.Request) -> _FakeResponse:
         seen["url"] = request.full_url
+        seen["method"] = request.get_method()
         seen["auth"] = request.get_header("Authorization")
         seen["content_type"] = request.get_header("Content-type")
         seen["body"] = request.data
@@ -72,12 +81,17 @@ def test_transcribe_chunk_parses_turns_and_drops_transcript_text() -> None:
     ]
     assert seen["url"] == "https://api.meta.ai/v1/asr/transcribe"
     assert seen["auth"] == "Bearer secret-key"
+    assert seen["method"] == "POST"
     assert str(seen["content_type"]).startswith("multipart/form-data; boundary=")
     body = bytes(seen["body"])
     assert chunk in body
-    assert b"muse-voice-transcribe-1.0" in body
-    assert b"DIARIZATION" in body
-    assert b"WAV" in body
+    assert b'name="request"' in body
+    assert b'name="audio"' in body
+    assert _request_part(body) == {
+        "model": "muse-voice-transcribe-1.0",
+        "mode": "DIARIZATION",
+        "audioEncoding": "WAV",
+    }
 
 
 def test_transcribe_chunk_http_error_becomes_diarize_error_without_key() -> None:
@@ -98,6 +112,20 @@ def test_transcribe_chunk_url_error_becomes_diarize_error_without_key() -> None:
         transcribe_chunk(b"RIFF" + bytes(60), api_key="secret-key", opener=opener)
 
     assert "secret-key" not in str(group.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"this is not json", json.dumps({"status": "ok"}).encode("utf-8")],
+)
+def test_transcribe_chunk_malformed_body_becomes_diarize_error(payload: bytes) -> None:
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        return _FakeResponse(payload)
+
+    with pytest.raises(DiarizeError) as group:
+        transcribe_chunk(b"RIFF" + bytes(60), api_key="dummy-key-1", opener=opener)
+
+    assert "dummy-key-1" not in str(group.value)
 
 
 def test_merge_short_turns_joins_tail_flanked_by_same_speaker() -> None:
