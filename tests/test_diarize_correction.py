@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
+
 from fakeyou.diarize_client import DiarizedTurn
 from fakeyou.diarize_correction import (
     CorrectionBundle,
@@ -99,3 +101,16 @@ def test_sidecar_carries_no_transcript_text(tmp_path: Path) -> None:
 
     assert RECORD_TEXT not in bundle.json_path.read_text(encoding="utf-8")
     assert RECORD_TEXT not in bundle.rttm_path.read_text(encoding="utf-8")
+
+
+def test_write_correction_bundle_rejects_hostile_speaker_label(tmp_path: Path) -> None:
+    audio_dir, record_path = _session(tmp_path)
+    hostile = DiarizedTurn(
+        start_ms=0, end_ms=1000, speaker="A\nSPEAKER m1 1 0.000 1.000 <NA> <NA> X <NA>"
+    )
+
+    with pytest.raises(ValueError, match="speaker"):
+        write_correction_bundle(audio_dir, record_path, [hostile], clock=lambda: FIXED_NOW)
+
+    assert not (record_path.parent / "diarization.rttm").exists()
+    assert not (record_path.parent / "diarization.json").exists()

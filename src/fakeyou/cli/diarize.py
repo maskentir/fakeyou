@@ -86,6 +86,6 @@ def diarize_run(
             _run_locked(record_path, audio_dir, api_key, opener)
     except RecordLockError:
         raise CliError(f"meeting is locked by another operation: {meeting_id}") from None
-    except (FileNotFoundError, ValueError, DiarizeError) as error:
+    except (FileNotFoundError, ValueError, DiarizeError, wave.Error) as error:
         raise CliError(str(error)) from error
     return 0

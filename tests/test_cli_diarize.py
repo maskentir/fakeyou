@@ -244,6 +244,22 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
     ]
 
 
+def test_diarize_run_maps_corrupt_slot_wav_to_cli_error(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, audio_dir = _write_session(settings, "m1", seq_starts={0: 0})
+    (audio_dir / "slot-0.wav").write_bytes(b"not a wav file" * 8)
+    before = record_path.read_bytes()
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        raise AssertionError("corrupt run must not transcribe")
+
+    with pytest.raises(CliError) as error:
+        diarize_run("m1", settings=settings, opener=opener)
+
+    assert isinstance(error.value.__cause__, wave.Error)
+    assert record_path.read_bytes() == before
+
+
 def test_diarize_parser_registers_run() -> None:
     arguments = build_parser().parse_args(["diarize", "run", "--meeting", "m1"])
 

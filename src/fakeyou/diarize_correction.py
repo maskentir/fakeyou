@@ -32,9 +32,16 @@ def _rttm_line(file_id: str, turn: DiarizedTurn) -> str:
     return f"SPEAKER {file_id} 1 {start:.3f} {duration:.3f} <NA> <NA> {turn.speaker} <NA>"
 
 
+def _check_speaker_labels(turns: list[DiarizedTurn]) -> None:
+    for turn in turns:
+        if not turn.speaker or any(char.isspace() for char in turn.speaker):
+            raise ValueError("speaker label must be a single token without whitespace")
+
+
 def write_correction_bundle(
     audio_dir: Path, record_path: Path, turns: list[DiarizedTurn], *, clock: Callable[[], datetime]
 ) -> CorrectionBundle:
+    _check_speaker_labels(turns)
     record_bytes = record_path.read_bytes()
     payload = {
         "schema": SCHEMA,
