@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import count
 from string import ascii_uppercase
@@ -42,6 +42,8 @@ class SpeakerRow:
     track: str
     level: float
     history: tuple[str, ...]
+    display_claim: str | None = None
+    claim_confidence: float = 0.0
 
 
 @dataclass(slots=True)
@@ -49,6 +51,9 @@ class _Record:
     label: str
     device: str | None = None
     slot: int | None = None
+    display_claim: str | None = None
+    claim_confidence: float = 0.0
+    claim_locked: bool = False
     followed: bool = False
     history: list[str] = field(default_factory=list)
 
@@ -165,6 +170,42 @@ class SpeakerRegistry:
             return
         self._voice_scores[uuid] = scores
 
+    def note_roster(self, entries: Iterable[Mapping[str, str]]) -> None:
+        seen: dict[str, str] = {}
+        for entry in entries:
+            seen[entry["id"]] = entry["name"]
+        counts: dict[str, int] = {}
+        for name in seen.values():
+            counts[name] = counts.get(name, 0) + 1
+        for device, name in seen.items():
+            uuid = next(
+                (known for known, record in self._rows.items() if record.device == device),
+                None,
+            )
+            if uuid is None:
+                continue
+            record = self._rows[uuid]
+            if counts[name] > 1:
+                record.display_claim = None
+                record.claim_confidence = 0.0
+                continue
+            if record.claim_locked:
+                if record.display_claim is not None and name != record.display_claim:
+                    record.display_claim = None
+                    record.claim_confidence = 0.0
+                    self._emit(
+                        {
+                            "event": "display_claim_changed",
+                            "label": record.label,
+                            "slot": record.slot,
+                            "device": device,
+                        }
+                    )
+                continue
+            record.display_claim = name
+            record.claim_confidence = 1.0
+            record.claim_locked = True
+
     def _emit(self, event: dict[str, Any]) -> None:
         self._events.append(event)
         while len(self._events) > SPEAKER_EVENT_BUFFER:
@@ -228,6 +269,8 @@ class SpeakerRegistry:
             track=track,
             level=level,
             history=tuple(record.history),
+            display_claim=record.display_claim,
+            claim_confidence=record.claim_confidence,
         )
 
     def _follow_csrc(self, slot: int) -> str | None:

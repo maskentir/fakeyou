@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from fakeyou import voice_activity
 from fakeyou.audio import _CaptureObserver
 from fakeyou.browser import open_direct_page
 from fakeyou.deaf import CaptureActivity
@@ -71,6 +72,20 @@ def test_voice_labels_run_past_z() -> None:
     assert voice_speaker_name("unknown") is None
     assert voice_speaker_name("speaker-") is None
     assert voice_speaker_name("Rani") is None
+
+
+def test_voice_speaker_name_renders_display_claim_as_unverified() -> None:
+    assert voice_speaker_name("speaker-b", "Maya") == "Speaker B, shown as Maya, unverified"
+
+
+def test_voice_speaker_name_without_claim_is_unchanged() -> None:
+    assert voice_speaker_name("speaker-b", None) == "Speaker B"
+    assert voice_speaker_name("speaker-b") == "Speaker B"
+
+
+def test_voice_speaker_name_has_no_verified_path() -> None:
+    assert voice_speaker_name("speaker-b", "Maya") != "Maya"
+    assert not hasattr(voice_activity, "verified_name")
 
 
 def test_binder_binds_lone_device_and_releases_only_its_slot() -> None:

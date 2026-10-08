@@ -61,11 +61,14 @@ def voice_participant_id(label: str) -> str:
     return VOICE_PARTICIPANT_PREFIX + label.lower()
 
 
-def voice_speaker_name(participant_id: str) -> str | None:
+def voice_speaker_name(participant_id: str, display_claim: str | None = None) -> str | None:
     label = participant_id.removeprefix(VOICE_PARTICIPANT_PREFIX)
     if label == participant_id or not label or not set(label) <= set(ascii_uppercase.lower()):
         return None
-    return f"Speaker {label.upper()}"
+    name = f"Speaker {label.upper()}"
+    if display_claim is None:
+        return name
+    return f"{name}, shown as {display_claim}, unverified"
 
 
 @dataclass(slots=True)
