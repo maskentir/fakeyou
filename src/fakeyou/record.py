@@ -29,6 +29,7 @@ class TranscriptEntry(_Entry):
     speaker_evidence_id: str | None
     stream_id: str = ""
     capture_ms: float = 0.0
+    display_claim: str | None = None
 
 
 class TwinSpeechEntry(_Entry):
@@ -115,6 +116,7 @@ class MeetingRecord:
                 speaker_evidence_id=event.speaker_evidence_id,
                 stream_id=event.stream_id,
                 capture_ms=event.capture_ms,
+                display_claim=event.display_claim,
             )
         )
 

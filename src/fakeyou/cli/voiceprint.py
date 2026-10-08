@@ -267,6 +267,16 @@ def voiceprint_enroll(
     with _open_journal(settings, journal) as owned_journal:
         heard = _digits_only(transcript)
         wanted = _digits_only(challenge)
+        if not wanted or not heard:
+            _reject_enrollment(
+                owned_journal,
+                person_id=name,
+                challenge_id=challenge_id,
+                snr=snr,
+                seconds=total_seconds,
+                segments=segments,
+                reason="challenge transcript holds no digits to verify liveness",
+            )
         distance = _edit_distance(wanted, heard)
         if distance > ENROLL_MAX_TRANSCRIPT_EDITS:
             _reject_enrollment(

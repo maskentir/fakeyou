@@ -84,7 +84,7 @@ def _trial_of(payload: Any, origin: str) -> Trial:
     if s1 is None or s2 is None:
         raise CliError(f"trial entry has bad scores in {origin}")
     overlap = _trial_flag(payload.get("overlap"), False)
-    claim_agree = _trial_flag(payload.get("claim_agree"), True)
+    claim_agree = _trial_flag(payload.get("claim_agree"), False)
     twin = _trial_flag(payload.get("twin"), False)
     if overlap is None or claim_agree is None or twin is None:
         raise CliError(f"trial entry has bad flags in {origin}")
@@ -297,7 +297,10 @@ def calibrate_lock(dev_journals: list[str], out: str, *, settings: Settings) -> 
         "report_id": report,
         "dev_speaker_ids": sorted({trial.speaker for trial in trials}),
     }
-    Path(out).write_text(json.dumps(payload))
+    try:
+        Path(out).write_text(json.dumps(payload))
+    except OSError:
+        _fail_lock(f"artifact cannot be written: {out}")
     summary = {"artifact": out, "theta_llr": theta, "margin_floor": floor, "report_id": report}
     print(json.dumps(summary))
 
@@ -368,7 +371,7 @@ def calibrate_eval(eval_journals: list[str], artifact: str, *, settings: Setting
     lower = _wilson_lower(hits, verified)
     overlapped = [trial for trial in trials if trial.overlap]
     held = sum(1 for trial, flag in zip(trials, flags, strict=True) if trial.overlap and not flag)
-    overlap_rate = held / len(overlapped) if overlapped else 1.0
+    overlap_rate = held / len(overlapped) if overlapped else 0.0
     twin_alarms = sum(1 for trial, flag in zip(trials, flags, strict=True) if flag and trial.twin)
     valley = _valley_holds(llrs, loaded.theta_llr, LLR_BIN_WIDTH)
     passed = _ship_gate(

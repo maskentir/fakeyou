@@ -22,6 +22,7 @@ class SourceEntry:
     kind: Literal["participant", "twin"]
     participant_id: str
     at: datetime
+    display_claim: str | None = None
 
     def __post_init__(self) -> None:
         if self.at.utcoffset() is None:
@@ -67,6 +68,7 @@ def load_record_snapshot(path: Path) -> RecordSnapshot:
                         kind="participant",
                         participant_id=entry.participant_id,
                         at=entry.at,
+                        display_claim=entry.display_claim,
                     )
                 )
         elif isinstance(entry, TwinSpeechEntry) and entry.text.strip():

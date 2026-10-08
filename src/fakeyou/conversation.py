@@ -50,6 +50,7 @@ class TranscriptEvent:
     speaker_evidence_id: str | None
     stream_id: str = ""
     capture_ms: float = 0.0
+    display_claim: str | None = None
 
 
 def transcript_event(
@@ -58,6 +59,7 @@ def transcript_event(
     speaker_evidence_id: str | None,
     stream_id: str = "",
     capture_ms: float = 0.0,
+    display_claim: str | None = None,
 ) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
@@ -74,6 +76,7 @@ def transcript_event(
         speaker_evidence_id=speaker_evidence_id,
         stream_id=stream_id,
         capture_ms=capture_ms,
+        display_claim=display_claim,
     )
 
 

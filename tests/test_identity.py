@@ -5,7 +5,9 @@ from uuid import NAMESPACE_URL, uuid5
 from fakeyou.identity import SpeakerRegistry
 from fakeyou.voiceprint_match import VoiceScores
 
-DISPLAY_CLAIM_RENDER_READERS = frozenset({"record.py", "debrief.py"})
+DISPLAY_CLAIM_RENDER_READERS = frozenset(
+    {"record.py", "debrief.py", "debrief_sources.py", "cli/debrief.py"}
+)
 DISPLAY_CLAIM_TASK_READERS = frozenset({"verify.py"})
 
 

@@ -183,10 +183,15 @@ async def _debrief_locked(
             limitations.append(
                 "Unknown participants have not been identified or mapped to the owner."
             )
-        if any(voice_speaker_name(entry.participant_id) for entry in snapshot.sources):
+        voice_labels = []
+        for entry in snapshot.sources:
+            label = voice_speaker_name(entry.participant_id, entry.display_claim)
+            if label is not None and label not in voice_labels:
+                voice_labels.append(label)
+        if voice_labels:
             limitations.append(
                 "Speaker labels are anonymous voice labels within this meeting, "
-                "not verified identities."
+                "not verified identities: " + "; ".join(voice_labels) + "."
             )
         if fallback is not None:
             limitations.append(

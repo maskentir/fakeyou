@@ -179,6 +179,58 @@ def test_eval_disjoint_pass_prints_metrics_exit_0(
     assert metrics["n_verified"] == 190
 
 
+def test_lock_unwritable_out_exits_3_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal = tmp_path / "dev.jsonl"
+    out = str(tmp_path / "missing-dir" / "artifact.json")
+
+    with pytest.raises(SystemExit) as failure:
+        calibrate_lock([_write_journal(journal, _dev_trials())], out, settings=Settings())
+
+    assert failure.value.code == 3
+    assert "error" in capsys.readouterr().err
+    assert not Path(out).exists()
+
+
+def test_eval_missing_claim_agree_defaults_to_unverified(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _lock_dev(tmp_path)
+    capsys.readouterr()
+    journal = tmp_path / "eval.jsonl"
+    trials = [
+        {key: value for key, value in trial.items() if key != "claim_agree"}
+        for trial in _pass_trials()
+    ]
+
+    with pytest.raises(SystemExit) as failure:
+        calibrate_eval([_write_journal(journal, trials)], out, settings=Settings())
+
+    assert failure.value.code == 4
+    metrics = json.loads(capsys.readouterr().out)
+    assert metrics["pass"] is False
+    assert metrics["n_verified"] == 0
+
+
+def test_eval_zero_overlap_trials_fails_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _lock_dev(tmp_path)
+    capsys.readouterr()
+    journal = tmp_path / "eval.jsonl"
+    trials = [trial for trial in _pass_trials() if not trial["overlap"]]
+    assert trials
+
+    with pytest.raises(SystemExit) as failure:
+        calibrate_eval([_write_journal(journal, trials)], out, settings=Settings())
+
+    assert failure.value.code == 4
+    metrics = json.loads(capsys.readouterr().out)
+    assert metrics["pass"] is False
+    assert metrics["overlap_unverified_rate"] == 0.0
+
+
 def test_eval_small_n_exits_4(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out = _lock_dev(tmp_path)
     capsys.readouterr()

@@ -884,6 +884,37 @@ def test_enroll_single_edit_accepts(
     capsys.readouterr()
 
 
+def test_enroll_empty_normalized_challenge_rejects_without_store(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    with pytest.raises(SystemExit) as caught:
+        gated_enroll(
+            "alice",
+            clips,
+            spontaneous,
+            settings=settings,
+            store=store,
+            journal=journal,
+            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            challenge="no digits here",
+            transcript="nothing spoken",
+        )
+
+    assert caught.value.code == 2
+    body = json.loads(capsys.readouterr().out)
+    assert body["enrolled"] is False
+    assert "digit" in body["reason"].lower()
+    assert store.records == {}
+    [row] = journal.events("enrollment_rejected")
+    assert row["challenge_id"] == CHALLENGE_ID
+    assert journal.events("enrollment_accepted") == []
+
+
 def test_enroll_partial_liveness_args_raises_without_journal(
     settings: Settings, tmp_path: Path
 ) -> None:

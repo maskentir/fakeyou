@@ -376,3 +376,51 @@ def test_debrief_parser_uses_operator_scope_and_force():
     assert parsed.meeting_id == "m1"
     assert parsed.force is True
     assert parsed.persona_path == Path("persona.json")
+
+
+async def test_debrief_renders_display_claim_as_unverified_speaker_label(
+    settings, tmp_path, monkeypatch
+):
+    profile = PersonaProfile(
+        owner_id=settings.identity.owner_id,
+        twin_id=settings.identity.twin_id,
+        display_name="Demo Twin",
+        role="Project coordinator",
+    )
+    persona_path = tmp_path / "persona.json"
+    persona_path.write_text(profile.model_dump_json())
+    record_path = meeting_record_path(settings.paths.record_dir, "debrief-claim")
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        TranscriptEntry(
+            at=datetime(2026, 10, 3, tzinfo=UTC),
+            id="t1",
+            spoken_at="2026-10-03T00:00:00+00:00",
+            source="meeting_audio",
+            text="The owner must decide whether to move the deadline to Monday.",
+            participant_id="speaker-b",
+            speaker_evidence_id=None,
+            display_claim="Maya",
+        ).model_dump_json()
+        + "\n"
+    )
+    write_status(
+        status_path(record_path),
+        IngestionStatus(
+            meeting_id="debrief-claim", group_id=profile.memory_group, status="not_requested"
+        ),
+    )
+    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
+    await cli_debrief.debrief_meeting(
+        meeting_id="debrief-claim",
+        persona_path=persona_path,
+        owner_id=None,
+        twin_id=None,
+        force=False,
+        settings=settings,
+    )
+    report = json.loads((record_path.parent / "debrief.json").read_text())
+    assert any(
+        "shown as Maya, unverified" in limitation for limitation in report["source_limitations"]
+    )
+    assert "shown as Maya, unverified" in (record_path.parent / "debrief.md").read_text()
