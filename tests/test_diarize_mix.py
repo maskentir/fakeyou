@@ -97,6 +97,21 @@ def test_split_bytes_cap_binds_before_time_cap_at_high_rate() -> None:
     assert payload == frames
 
 
+def test_split_custom_five_minute_cap_splits_12_minutes_into_3_chunks() -> None:
+    frames = bytes(range(256)) * (12 * 60 * 16000 * 2 // 256)
+
+    chunks = split_chunks(frames, 16000, max_minutes=5.0)
+
+    assert len(chunks) == 3
+    assert [len(chunk) - 44 for chunk in chunks] == [
+        5 * 60 * 16000 * 2,
+        5 * 60 * 16000 * 2,
+        2 * 60 * 16000 * 2,
+    ]
+    payload = b"".join(_read_chunk_payload(chunk) for chunk in chunks)
+    assert payload == frames
+
+
 def test_split_with_odd_length_frames_raises() -> None:
     with pytest.raises(ValueError):
         split_chunks(bytes(33), 16000)

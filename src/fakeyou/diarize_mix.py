@@ -68,13 +68,25 @@ def mix_session_slots(audio_dir: Path) -> bytes:
     return _write_wav(bytes(mixed), CAPTURE_SAMPLE_RATE)
 
 
-def split_chunks(frames: bytes, frames_per_second: int) -> list[bytes]:
+def split_chunks(
+    frames: bytes,
+    frames_per_second: int,
+    *,
+    max_minutes: float = _CHUNK_MINUTES,
+    max_bytes: int = _CHUNK_BYTES,
+) -> list[bytes]:
     if frames_per_second <= 0:
         raise ValueError("frames per second must be positive")
     if len(frames) % 2:
         raise ValueError("frames length must be even")
-    limit = min(_CHUNK_MINUTES * 60 * frames_per_second * 2, _CHUNK_BYTES - _HEADER_BYTES)
+    if max_minutes <= 0:
+        raise ValueError("max minutes must be positive")
+    if max_bytes <= _HEADER_BYTES:
+        raise ValueError("max bytes must exceed header size")
+    limit = min(int(max_minutes * 60 * frames_per_second * 2), max_bytes - _HEADER_BYTES)
     limit = limit // 2 * 2
+    if limit <= 0:
+        raise ValueError("chunk size limit must be positive")
     return [
         _write_wav(frames[start : start + limit], frames_per_second)
         for start in range(0, len(frames), limit)

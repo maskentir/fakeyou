@@ -20,6 +20,8 @@ from fakeyou.ingestion_status import RecordLockError, record_lock
 from fakeyou.record import TranscriptEntry, load_meeting_record, meeting_record_path
 from fakeyou.settings import Settings
 
+_CHUNK_MAX_MINUTES = 5.0
+
 
 def _check_slot_alignment(audio_dir: Path) -> None:
     path = audio_dir / "slots.json"
@@ -57,7 +59,7 @@ def _run_locked(
     with wave.open(BytesIO(mixed), "rb") as handle:
         rate = handle.getframerate()
         frames = handle.readframes(handle.getnframes())
-    chunks = split_chunks(frames, rate)
+    chunks = split_chunks(frames, rate, max_minutes=_CHUNK_MAX_MINUTES)
     turns: list[DiarizedTurn] = []
     offset = 0
     for chunk in chunks:

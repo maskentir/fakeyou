@@ -228,7 +228,7 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
         return buffer.getvalue()
 
     chunks = [chunk_wav(10), chunk_wav(10)]
-    monkeypatch.setattr(cli_diarize, "split_chunks", lambda frames, rate: chunks)
+    monkeypatch.setattr(cli_diarize, "split_chunks", lambda frames, rate, **kwargs: chunks)
     calls = {"count": 0}
 
     def opener(request: urllib.request.Request) -> _FakeResponse:
@@ -244,6 +244,46 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
         (0, 5000, "A"),
         (10000, 15000, "B"),
     ]
+
+
+def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fakeyou.cli.diarize as cli_diarize
+    import fakeyou.diarize_mix as diarize_mix
+
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    _write_session(settings, "m1", seq_starts={0: 0})
+
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(CAPTURE_SAMPLE_RATE)
+        handle.writeframes(bytes(6 * 60 * CAPTURE_SAMPLE_RATE * 2))
+    monkeypatch.setattr(cli_diarize, "mix_session_slots", lambda audio_dir: buffer.getvalue())
+
+    real_split = diarize_mix.split_chunks
+    seen: dict[str, Any] = {}
+
+    def recording(frames: bytes, rate: int, **kwargs: Any) -> list[bytes]:
+        seen.update(kwargs)
+        return real_split(frames, rate, **kwargs)
+
+    monkeypatch.setattr(cli_diarize, "split_chunks", recording)
+
+    sizes: list[int] = []
+
+    def opener(request: urllib.request.Request) -> _FakeResponse:
+        assert request.data is not None
+        sizes.append(len(request.data))
+        return _FakeResponse(_turns_payload([]))
+
+    assert diarize_run("m1", settings=settings, opener=opener) == 0
+
+    assert seen.get("max_minutes") == 5.0
+    assert len(sizes) == 2
+    assert all(size <= 5 * 60 * CAPTURE_SAMPLE_RATE * 2 + 44 + 4096 for size in sizes)
 
 
 def test_diarize_run_maps_corrupt_slot_wav_to_cli_error(settings: Settings) -> None:
