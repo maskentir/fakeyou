@@ -8,7 +8,7 @@ yang membuat `SpeakerRow.margin` jujur (`s1−s2`), di balik flag
 default mati.
 
 **Architecture:** Store Postgres (`voiceprints`, koneksi memakai
-ulang DSN checkpoint, tanpa dep baru) + ekstraktor CAM++ via
+ulang DSN checkpoint, tanpa dep baru) + ekstraktor ERes2Net via
 `sherpa-onnx` (extra opsional baru yang disetujui) + CLI
 `voiceprint` file-based + adapter skor yang disuntik ke
 `SpeakerRegistry`; ambang θ=0,60, margin-min 0,15, tolak
@@ -45,9 +45,12 @@ Pelaksana membaca ketiganya plus plan ini.
 Keputusan pemilik yang mengikat (Q1–Q8): persetujuan lisan +
 jurnal; store Postgres; retensi 90 hari + hapus manual;
 scope SEMUA peserta; salah-ikat = fault + jurnal; enroll
-negatif TTS; model CAM++ (`3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx`,
-dim 512, 29.596.978 byte, sha256
-`357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b`).
+negatif TTS; model ERes2Net (`3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`,
+dim 192, 26.485.263 byte, sha256
+`c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5`).
+CAM++ dibatalkan 2026-10-08: ekspor ONNX-nya kacau terhadap panjang
+audio (konten identik ±0,3 dtk → cosine 0,295), ERes2Net lolos uji
+ketahanan panjang dan 9/9 take diagnosis benar.
 
 ---
 
@@ -108,7 +111,7 @@ Settings (`IdentitySettings`, nama persis):
 `voiceprint_min_seconds: float = 3.0`,
 `voiceprint_retention_days: int = 90`,
 `voiceprint_model_path: str = ""`,
-`voiceprint_model_sha256: str = "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b"`,
+`voiceprint_model_sha256: str = "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"`,
 `voiceprint_policy_version: str = "v1"`.
 
 - [ ] **Step 1: tulis tes merah store + settings**
@@ -190,7 +193,7 @@ me-raise `RuntimeError` (simulasikan dengan monkeypatch
 `sys.modules`, JANGAN uninstall); (e) bila terpasang
 (`pytest.importorskip("sherpa_onnx")`), embed dua ujaran
 sintetis (sinus 440 Hz vs 880 Hz, 3 dtk, 16 kHz) dan
-assert hasil panjang 512 + ternormalisasi L2
+assert hasil panjang 192 + ternormalisasi L2
 (norm ≈ 1,0 ±1e-3). Tes (e) menandai bahwa API
 sherpa benar-benar terpanggil, bukan stub.
 
@@ -203,7 +206,7 @@ Expected: FAIL (modul belum ada).
 - [ ] **Step 3: implementasi minimal + extra**
 
 Tulis `voiceprint_embed.py` (lazy import, cek sha,
-instansiasi recognizer sherpa CAM++, rata-rata
+instansiasi recognizer sherpa ERes2Net, rata-rata
 utterance-embedding → normalisasi L2, `cosine` murni).
 Tambah extra di `pyproject.toml`:
 

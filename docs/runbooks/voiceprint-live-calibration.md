@@ -2,7 +2,7 @@
 
 Sesi: enroll pemilik + manusia, kunci θ + margin pada data live,
 buktikan TTS twin tak terverifikasi dan overlap → unknown.
-Flag `voiceprint_enabled` + model CAM++ dalam image worker;
+Flag `voiceprint_enabled` + model ERes2Net dalam image worker;
 default tetap mati di luar sesi.
 
 ## Persiapan async (tanpa room, tanpa bebarengan)

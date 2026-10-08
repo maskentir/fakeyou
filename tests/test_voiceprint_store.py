@@ -207,7 +207,7 @@ def test_voiceprint_defaults_follow_identity_settings() -> None:
     assert DEFAULTS.identity.voiceprint_model_path == ""
     assert (
         DEFAULTS.identity.voiceprint_model_sha256
-        == "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b"
+        == "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
     )
     assert DEFAULTS.identity.voiceprint_policy_version == "v1"
     assert IdentitySettings() == DEFAULTS.identity

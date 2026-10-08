@@ -648,14 +648,14 @@ def test_journal_model_version_comes_from_embedder_model_id_and_stays_stable() -
         registry=registry,
         slot=row.slot,
         overlap=False,
-        embedder=_embedder("campplus:deadbeef"),
+        embedder=_embedder("eres2net:deadbeef"),
         journal=journal,
         faults=faults,
     )
 
     assert second is not None
     events = journal.events("name_verified")
-    assert [event["model_version"] for event in events] == [MODEL_VERSION, "campplus:deadbeef"]
+    assert [event["model_version"] for event in events] == [MODEL_VERSION, "eres2net:deadbeef"]
 
 
 def test_embedder_without_model_id_returns_null() -> None:

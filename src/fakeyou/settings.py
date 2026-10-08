@@ -40,7 +40,7 @@ class IdentitySettings(Section):
     voiceprint_retention_days: int = 90
     voiceprint_model_path: str = ""
     voiceprint_model_sha256: str = (
-        "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b"
+        "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
     )
     voiceprint_policy_version: str = "v1"
 

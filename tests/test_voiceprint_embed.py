@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import random
 import sys
 import types
 from pathlib import Path
@@ -83,15 +84,27 @@ def test_load_embedder_exposes_stable_model_id(
     assert second.model_id == first.model_id
 
 
-def test_embed_two_synthetic_utterances_returns_normalized_512_vector() -> None:
+def _load_test_embedder() -> SpeakerEmbedder:
     pytest.importorskip("sherpa_onnx")
-    default_model = "/tmp/f2-spike/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
+    default_model = "/tmp/f2-spike/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"
     model_path = os.environ.get("FAKEYOU_VOICEPRINT_TEST_MODEL", default_model)
     if not os.path.exists(model_path):
         pytest.skip("voiceprint test model not available")
-    embedder = load_embedder(model_path, IdentitySettings().voiceprint_model_sha256)
+    return load_embedder(model_path, IdentitySettings().voiceprint_model_sha256)
+
+
+def test_embed_two_synthetic_utterances_returns_normalized_192_vector() -> None:
+    embedder = _load_test_embedder()
     first = [0.5 * math.sin(2.0 * math.pi * 440.0 * t / 16000.0) for t in range(16000 * 3)]
     second = [0.5 * math.sin(2.0 * math.pi * 880.0 * t / 16000.0) for t in range(16000 * 3)]
     embedding = embedder.embed([first, second])
-    assert len(embedding) == 512
+    assert len(embedding) == 192
     assert math.sqrt(sum(x * x for x in embedding)) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_embed_truncated_utterance_stays_close_to_full() -> None:
+    embedder = _load_test_embedder()
+    rng = random.Random(11)
+    full = [rng.uniform(-0.5, 0.5) for _ in range(16000 * 6)]
+    half = full[: 16000 * 3]
+    assert cosine(embedder.embed([full]), embedder.embed([half])) >= 0.95
