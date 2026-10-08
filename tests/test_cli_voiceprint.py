@@ -18,6 +18,8 @@ from fakeyou.cli.errors import CliError
 from fakeyou.cli.voiceprint import (
     PROVISIONAL_SNR_FLOOR_DB,
     VOICEPRINT_MIN_RMS,
+    _digit_words,
+    _digits_only,
     voiceprint_challenge,
     voiceprint_delete,
     voiceprint_enroll,
@@ -1009,3 +1011,116 @@ def test_challenge_and_gated_enroll_parsers_map_to_handlers() -> None:
     assert options.transcript == CHALLENGE_DIGITS
     assert options.owner_name == "Maya"
     assert options.spontaneous_clip == ["s.wav"]
+
+
+ENGLISH_NUMBER_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+)
+
+
+def spoken_word(digit: str) -> str:
+    table = _digit_words()
+    return next(
+        word
+        for word, mapped in table.items()
+        if mapped == digit and word not in ENGLISH_NUMBER_WORDS
+    )
+
+
+def spoken_phrase(digits: str) -> str:
+    return " ".join(spoken_word(digit) for digit in digits)
+
+
+def test_digits_only_maps_spelled_out_words_to_digits() -> None:
+    spoken = spoken_phrase("216")
+
+    assert not any(char.isdigit() for char in spoken)
+    assert _digits_only(spoken) == "216"
+
+
+def test_digits_only_mixes_digits_and_words() -> None:
+    assert _digits_only(f"1 {spoken_word('2')}, three!") == "123"
+
+
+def test_digits_only_drops_unknown_words() -> None:
+    assert _digits_only("abc def 7 ghi") == "7"
+    assert _digits_only("please call two now") == "2"
+
+
+def test_digits_only_empty_holds_no_digits() -> None:
+    assert _digits_only("") == ""
+    assert _digits_only("... !!!") == ""
+    assert _digits_only("nothing here") == ""
+
+
+def test_digit_words_asset_maps_english_digits() -> None:
+    table = _digit_words()
+
+    assert len(table) == 20
+    for digit, word in enumerate(ENGLISH_NUMBER_WORDS):
+        assert table[word] == str(digit)
+
+
+def test_digit_words_asset_maps_each_digit_in_second_locale() -> None:
+    table = _digit_words()
+
+    for digit in "0123456789":
+        others = [
+            word
+            for word, mapped in table.items()
+            if mapped == digit and word not in ENGLISH_NUMBER_WORDS
+        ]
+        assert len(others) == 1
+        assert others[0].isascii()
+        assert others[0].isalpha()
+
+
+def test_digit_words_missing_file_fails_closed(tmp_path: Path) -> None:
+    missing = tmp_path / "absent.json"
+
+    assert _digit_words(path=missing) == {}
+    assert _digits_only("two three", path=missing) == ""
+    assert _digits_only("42", path=missing) == "42"
+
+
+def test_digit_words_broken_file_fails_closed(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json"
+    broken.write_text("{nope")
+    listed = tmp_path / "listed.json"
+    listed.write_text('["zero"]')
+
+    assert _digit_words(path=broken) == {}
+    assert _digit_words(path=listed) == {}
+
+
+def test_enroll_worded_transcript_accepts(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
+    spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
+    store = FakeStore()
+    journal = RecordingJournal()
+
+    gated_enroll(
+        "alice",
+        clips,
+        spontaneous,
+        settings=settings,
+        store=store,
+        journal=journal,
+        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        transcript=spoken_phrase(CHALLENGE_DIGITS),
+    )
+
+    assert store.records["alice"].owner_name == "Maya"
+    assert len(journal.events("enrollment_accepted")) == 1
+    capsys.readouterr()

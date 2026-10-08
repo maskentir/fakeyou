@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import secrets
 import struct
 import sys
@@ -8,6 +9,7 @@ import wave
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import NoReturn
 
@@ -107,8 +109,38 @@ def _to_utterance(frames: bytes, count: int) -> list[float]:
     return [sample / 32768.0 for sample in samples]
 
 
-def _digits_only(value: str) -> str:
-    return "".join(char for char in value if char.isdigit())
+def _digit_words(path: Path | None = None) -> dict[str, str]:
+    try:
+        if path is None:
+            text = (files("fakeyou") / "assets" / "digit_words.json").read_text(encoding="utf-8")
+        else:
+            text = path.read_text(encoding="utf-8")
+        raw = json.loads(text)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    words: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if len(value) != 1 or not value.isascii() or not value.isdigit():
+            continue
+        words[key.lower()] = value
+    return words
+
+
+def _digits_only(value: str, path: Path | None = None) -> str:
+    words = _digit_words(path)
+    parts: list[str] = []
+    for token in re.findall(r"[0-9A-Za-z]+", value.lower()):
+        if token.isdigit():
+            parts.append(token)
+        elif token in words:
+            parts.append(words[token])
+        else:
+            parts.append("".join(char for char in token if char.isdigit()))
+    return "".join(parts)
 
 
 def _edit_distance(left: str, right: str) -> int:
