@@ -457,3 +457,35 @@ host/container — pola sama seperti `report
 `session_finished` ditolak ("session already ended") —
 dipakai id baru. Artefak WAV dipertahankan sebagai
 deliverable retensi 30 hari.
+
+## Adendum verified_name Fase 2 butir 19 (dev-lock + eval disjoint, 2026-10-08 s.d. 2026-10-09)
+
+Hasil akhir Task 6–7 (`docs/plans/phase-2-verified-name-design.md`,
+`phase-2-verified-name-plan.md`): gate eval SHIP (exit 0) —
+presisi 1,0 (192/192 solo target terverifikasi, 0 alarm),
+Wilson-bawah 0,9804 ≥ 0,98, overlap-unverified 1,0 (15/15),
+twin false-verify 0 (188 trial TTS), lembah LLR non-overlap
+lolos, θ=1,706, margin_floor=−0,19, artefak
+`evals/fixtures/verified-name-dev-lock-v2.json`
+(cal-18d382494254, dev_speakers=[harun], model ERes2Net
+c5915837…, diprovenance `model_version`).
+
+Jalur ke gate: ekspor ONNX CampPlus terbukti kacau-panjang
+(konten identik ±0,3 dtk → cosine 0,295) lewat sesi diagnosis
+bertakedump; diganti ERes2Net (uji regresi ketahanan panjang
++ suite 3693 hijau, review terpisah). Dev: 159 turn unik
+compliant (dev2 speed-read didokumentasikan non-compliant,
+tidak dipakai lock). Eval speaker-disjoint via re-split yang
+disetujui (manusia segar tak ada): dev hanya-Harun
+(120 target + 10 nontarget TTS), eval hanya-Annisa
+(192 solo + 15 overlap + 188 twin,_tts) — id pembicara eval
+∩ dev = ∅, diverifikasi exit-2 bila overlap.
+
+Batasan peluncuran (blocker sebelum flag hidup): `display_claim`
+tercatat None di semua sesi live sehingga `decide_verified`
+selalu None di produksi hari ini — gate suara terbukti,
+pengikatan nama butuh perbaikan aliran claim (tindak lanjut).
+`voiceprint_enabled` tetap default mati sampai itu beres.
+Temuan infra sesi (bukan voiceprint): modal privacy-tip Meet
+tak tertangani mematikan satu twin; brief `meeting_id` wajib
+cocok sesi; jangkar `slots.json` dev1 meleset ~55 dtk.
