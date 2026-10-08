@@ -478,7 +478,7 @@ compliant (dev2 speed-read didokumentasikan non-compliant,
 tidak dipakai lock). Eval speaker-disjoint via re-split yang
 disetujui (manusia segar tak ada): dev hanya-Harun
 (120 target + 10 nontarget TTS), eval hanya-Annisa
-(192 solo + 15 overlap + 188 twin,_tts) — id pembicara eval
+(192 solo + 15 overlap + 188 twin-TTS) — id pembicara eval
 ∩ dev = ∅, diverifikasi exit-2 bila overlap.
 
 Batasan peluncuran (blocker sebelum flag hidup): `display_claim`
