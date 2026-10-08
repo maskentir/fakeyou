@@ -1,4 +1,5 @@
 import asyncio
+import math
 import sys
 import time
 from collections import deque
@@ -60,6 +61,7 @@ from fakeyou.provider_faults import category_fault, classify_exception
 from fakeyou.settings import DEFAULTS, STTSettings, TTSSettings, VADSettings, require_secret
 from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
 from fakeyou.voice_activity import VoiceActivityTracker
+from fakeyou.voiceprint_match import CLIP_GRID_MS, CLIP_PAD_MS, cut_turn_clip
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_CONTINUITY_BUFFER_SECONDS = 30
@@ -334,29 +336,58 @@ class TurnAudioTap(FrameProcessor):
     def __init__(self) -> None:
         super().__init__()
         self._speaking = False
-        self._current: list[bytes] = []
-        self._clip = b""
+        self._clock_ms = 0.0
+        self._buffer = bytearray()
+        self._segments: list[list[float]] = []
         self._limit_bytes = max(int(CAPTURE_SAMPLE_RATE * 2 * 1 * TURN_TAP_MAX_SECONDS), 0)
 
     def take_clip(self) -> bytes:
-        clip, self._clip = self._clip, b""
+        closed = [segment for segment in self._segments if len(segment) == 2]
+        if not closed:
+            return b""
+        base = self._buffer_start_ms()
+        start_ms = min(segment[0] for segment in closed) - base
+        stop_ms = max(segment[1] for segment in closed) - base
+        clip = cut_turn_clip(bytes(self._buffer), start_ms, stop_ms)
+        keep = [segment for segment in self._segments if len(segment) == 1]
+        if keep:
+            edge_ms = max(keep[0][0] - CLIP_PAD_MS - CLIP_GRID_MS, 0.0)
+            aligned_ms = math.floor(edge_ms / CLIP_GRID_MS) * CLIP_GRID_MS
+            drop_ms = max(aligned_ms - base, 0.0)
+            drop = min(
+                round(drop_ms * CAPTURE_SAMPLE_RATE * 2 / 1000.0) // 2 * 2, len(self._buffer)
+            )
+            del self._buffer[:drop]
+        else:
+            self._buffer.clear()
+        self._segments = keep
         return clip
+
+    def _buffer_start_ms(self) -> float:
+        return self._clock_ms - len(self._buffer) / (CAPTURE_SAMPLE_RATE * 2 / 1000.0)
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if direction == FrameDirection.DOWNSTREAM:
             if isinstance(frame, VADUserStartedSpeakingFrame):
                 self._speaking = True
-                self._current = []
+                if self._segments and len(self._segments[-1]) == 1:
+                    self._segments[-1][0] = self._clock_ms
+                else:
+                    self._segments.append([self._clock_ms])
             elif isinstance(frame, VADUserStoppedSpeakingFrame):
                 if self._speaking:
                     self._speaking = False
-                    self._clip = self._clip + b"".join(self._current)
-                    if len(self._clip) > self._limit_bytes:
-                        self._clip = self._clip[len(self._clip) - self._limit_bytes :]
-                    self._current = []
-            elif isinstance(frame, AudioRawFrame) and self._speaking:
-                self._current.append(frame.audio)
+                    self._segments[-1].append(self._clock_ms)
+            elif isinstance(frame, AudioRawFrame):
+                rate = frame.sample_rate or CAPTURE_SAMPLE_RATE
+                channels = max(frame.num_channels, 1)
+                self._clock_ms += len(frame.audio) / (rate * 2 * channels / 1000.0)
+                if frame.audio:
+                    self._buffer += frame.audio
+                    excess = len(self._buffer) - self._limit_bytes
+                    if excess > 0:
+                        del self._buffer[:excess]
         await self.push_frame(frame, direction)
 
 

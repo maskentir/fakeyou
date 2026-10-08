@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import math
+import struct
 from collections.abc import Sequence
 
 from fakeyou.faults import FaultReporter
 from fakeyou.identity import SpeakerRegistry
-from fakeyou.voiceprint_embed import SpeakerEmbedder
+from fakeyou.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder
 from fakeyou.voiceprint_match import (
+    CLIP_GRID_MS,
+    CLIP_PAD_MS,
     VoiceprintMatcher,
     VoiceScores,
     apply_voice_scores,
+    cut_turn_clip,
     score_turn_audio,
 )
 from fakeyou.voiceprint_store import VoiceprintRecord, VoiceprintStore
@@ -296,3 +301,64 @@ def test_score_turn_audio_at_min_seconds_embeds_and_matches() -> None:
     [utterances] = embedder.calls
     [utterance] = utterances
     assert len(utterance) == 48000
+
+
+def _turn_audio(seconds: float) -> bytes:
+    total = int(seconds * SAMPLE_RATE)
+    samples = [
+        int(20000.0 * math.sin(index * 0.05) + 5000.0 * math.sin(index * 0.013))
+        for index in range(total)
+    ]
+    return struct.pack("<" + "h" * total, *samples)
+
+
+class ContentEmbedder(SpeakerEmbedder):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
+        self.calls += 1
+        flat = [sample for utterance in utterances for sample in utterance]
+        mean = sum(flat) / len(flat)
+        rms = math.sqrt(sum(sample * sample for sample in flat) / len(flat))
+        norm = math.hypot(mean, rms) or 1.0
+        return (mean / norm, rms / norm)
+
+
+def test_clips_with_bounds_inside_one_grid_cell_are_byte_identical() -> None:
+    audio = _turn_audio(6.0)
+
+    first = cut_turn_clip(audio, 1050.0, 2310.0)
+    second = cut_turn_clip(audio, 1090.0, 2350.0)
+
+    assert first == second
+    assert first == audio[800 * 32 : 2600 * 32]
+
+
+def test_short_segment_gets_exact_padding_clamped_at_audio_start() -> None:
+    assert CLIP_GRID_MS == 100
+    assert CLIP_PAD_MS == 200
+    audio = _turn_audio(6.0)
+
+    clip = cut_turn_clip(audio, 50.0, 150.0)
+
+    assert clip == audio[: 400 * 32]
+
+
+def test_identical_turn_scores_zero_difference_across_workers() -> None:
+    audio = _turn_audio(6.0)
+    matcher = VoiceprintMatcher(
+        FakeStore([make_record("alice", (0.0, 1.0)), make_record("bob", (1.0, 0.0))])
+    )
+
+    worker_a = cut_turn_clip(audio, 1050.0, 2310.0)
+    worker_b = cut_turn_clip(audio, 1090.0, 2350.0)
+
+    assert worker_a == worker_b
+    scores_a = score_turn_audio(worker_a, ContentEmbedder(), matcher, min_seconds=1.0)
+    scores_b = score_turn_audio(worker_b, ContentEmbedder(), matcher, min_seconds=1.0)
+
+    assert scores_a is not None
+    assert scores_b is not None
+    assert scores_a == scores_b
+    assert scores_a.s1 - scores_b.s1 == 0

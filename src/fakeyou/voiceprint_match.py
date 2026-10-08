@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ MatchOutcome = Literal["verified", "unknown", "conflict", "negative"]
 DecidedOutcome = Literal["verified", "unknown", "conflict", "mismatched_owner"]
 
 EMPTY_SCORE = -1.0
+
+CLIP_GRID_MS = 100.0
+CLIP_PAD_MS = 200.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +62,20 @@ class VoiceprintMatcher:
         if s1 - s2 < self._min_margin:
             return VoiceScores(person, s1, s2, "conflict")
         return VoiceScores(person, s1, s2, "verified")
+
+
+def cut_turn_clip(audio: bytes, start_ms: float, end_ms: float) -> bytes:
+    begin = min(start_ms, end_ms)
+    finish = max(start_ms, end_ms)
+    outer_start = math.floor(begin / CLIP_GRID_MS) * CLIP_GRID_MS - CLIP_PAD_MS
+    outer_finish = math.ceil(finish / CLIP_GRID_MS) * CLIP_GRID_MS + CLIP_PAD_MS
+    total_ms = len(audio) / (SAMPLE_RATE * 2) * 1000.0
+    clamped_start = min(max(outer_start, 0.0), total_ms)
+    clamped_finish = min(max(outer_finish, 0.0), total_ms)
+    bytes_per_ms = SAMPLE_RATE * 2 / 1000.0
+    first = int(clamped_start * bytes_per_ms) // 2 * 2
+    last = int(clamped_finish * bytes_per_ms) // 2 * 2
+    return audio[first:last]
 
 
 def score_turn_audio(

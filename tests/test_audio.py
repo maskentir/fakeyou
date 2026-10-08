@@ -1,4 +1,5 @@
 import asyncio
+import struct
 
 import pytest
 from pipecat.frames.frames import EndFrame, InputAudioRawFrame, TranscriptionFrame
@@ -1065,7 +1066,7 @@ async def test_turn_tap_collects_audio_between_speech_boundaries() -> None:
     )
     await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
-    assert tap.take_clip() == b"\x02" * 320 + b"\x03" * 160
+    assert tap.take_clip() == b"\x01" * 320 + b"\x02" * 320 + b"\x03" * 160
     assert tap.take_clip() == b""
     assert [type(frame).__name__ for frame in pushed] == [
         "InputAudioRawFrame",
@@ -1111,7 +1112,7 @@ async def test_turn_tap_restarts_on_repeated_start() -> None:
     )
     await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
-    assert tap.take_clip() == b"\x05" * 320
+    assert tap.take_clip() == b"\x04" * 320 + b"\x05" * 320
 
 
 async def test_turn_tap_accumulates_segments_across_vad_cycles() -> None:
@@ -1193,3 +1194,131 @@ async def test_turn_tap_accumulated_take_clears() -> None:
 
     assert tap.take_clip() == b"\x0e" * 320 + b"\x0f" * 160
     assert tap.take_clip() == b""
+
+
+def _tap_stream_frame(index: int) -> bytes:
+    base = index * 160
+    samples = [((base + offset) * 257 + 12345) % 65536 - 32768 for offset in range(160)]
+    return struct.pack("<160h", *samples)
+
+
+async def _drive_tap(tap: TurnAudioTap, total: int, start_at: int, stop_at: int) -> None:
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    for index in range(total):
+        if index == start_at:
+            await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+        if index == stop_at:
+            await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+        await tap.process_frame(
+            InputAudioRawFrame(audio=_tap_stream_frame(index), sample_rate=16000, num_channels=1),
+            FrameDirection.DOWNSTREAM,
+        )
+    if start_at == total:
+        await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    if stop_at == total:
+        await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+
+async def test_turn_tap_clips_within_one_grid_cell_are_byte_identical() -> None:
+    first = TurnAudioTap()
+    second = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    first.push_frame = sink
+    second.push_frame = sink
+    await _drive_tap(first, 300, 105, 231)
+    await _drive_tap(second, 300, 109, 235)
+
+    first_clip = first.take_clip()
+    second_clip = second.take_clip()
+
+    assert first_clip == second_clip
+    assert first_clip == b"".join(_tap_stream_frame(index) for index in range(80, 260))
+
+
+async def test_turn_tap_includes_preroll_before_speech_start() -> None:
+    tap = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    tap.push_frame = sink
+    await _drive_tap(tap, 100, 50, 100)
+
+    clip = tap.take_clip()
+
+    assert clip == b"".join(_tap_stream_frame(index) for index in range(30, 100))
+    assert clip[:6400] == b"".join(_tap_stream_frame(index) for index in range(30, 50))
+
+
+async def test_turn_tap_includes_trailing_after_speech_stop() -> None:
+    tap = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    tap.push_frame = sink
+    await _drive_tap(tap, 110, 10, 60)
+
+    clip = tap.take_clip()
+
+    assert clip == b"".join(_tap_stream_frame(index) for index in range(80))
+    assert clip[600 * 32 : 800 * 32] == b"".join(
+        _tap_stream_frame(index) for index in range(60, 80)
+    )
+
+
+async def test_turn_tap_keep_open_second_take_is_byte_identical() -> None:
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
+
+    first = TurnAudioTap()
+    second = TurnAudioTap()
+
+    async def sink(frame, direction):
+        return None
+
+    first.push_frame = sink
+    second.push_frame = sink
+    first_bounds = (20, 40, 105, 231)
+    second_bounds = (20, 40, 109, 235)
+    total = 300
+    mid = 150
+
+    for index in range(mid):
+        for tap, bounds in ((first, first_bounds), (second, second_bounds)):
+            start_first, stop_first, start_second, stop_second = bounds
+            if index == start_first or index == start_second:
+                await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+            if index == stop_first or index == stop_second:
+                await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+            await tap.process_frame(
+                InputAudioRawFrame(
+                    audio=_tap_stream_frame(index), sample_rate=16000, num_channels=1
+                ),
+                FrameDirection.DOWNSTREAM,
+            )
+
+    assert first.take_clip() == second.take_clip()
+
+    for index in range(mid, total):
+        for tap, bounds in ((first, first_bounds), (second, second_bounds)):
+            start_first, stop_first, start_second, stop_second = bounds
+            if index == start_first or index == start_second:
+                await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+            if index == stop_first or index == stop_second:
+                await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+            await tap.process_frame(
+                InputAudioRawFrame(
+                    audio=_tap_stream_frame(index), sample_rate=16000, num_channels=1
+                ),
+                FrameDirection.DOWNSTREAM,
+            )
+
+    first_clip = first.take_clip()
+    second_clip = second.take_clip()
+
+    assert first_clip == second_clip
+    assert first_clip == b"".join(_tap_stream_frame(index) for index in range(80, 260))
