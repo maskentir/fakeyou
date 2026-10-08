@@ -151,6 +151,16 @@ giliran-bicara. Desain Fase B perlu heuristik gabung (turn pendek <2 dtk
 yang bersebelahan) untuk melawan over-segmentasi cross-talk. Opsi P
 (pyannote) hanya relevan bila nanti butuh separasi overlap sejati.
 
+## 6b. Adendum validasi Fase B Task 5 (2026-10-09)
+
+`fakeyou diarize run --meeting v19-dev2a` (±20 mnt, 4 chunk @5 mnt):
+exit 0, 81 giliran (speaker A/B), `show` 74/80 entri tercakup status ok,
+`record.jsonl` bita-identik (sha e6645753 sama sebelum/sesudah), sidecar
+tanpa teks transkrip. Temuan operasional: chunk 10 menit kena HTTP 504
+dua kali; produksi dipatok 5 menit (043802d). 6 entri tak tercakup
+(di luar span + toleransi: twin speech dan entri tepi). Keputusan adopsi
+konsumen (debrief/ingestion): follow-up di luar Fase B sesuai plan.
+
 ## 7. Pertanyaan terbuka
 
 - Apakah Indonesia benar di daftar 25 tervalidasi resmi? (konfirmasi docs)
