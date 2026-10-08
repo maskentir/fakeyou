@@ -4,12 +4,25 @@ import hashlib
 import math
 import os
 import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from fakeyou.settings import IdentitySettings
 from fakeyou.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
+
+
+class StubExtractorConfig:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+
+class StubExtractor:
+    def __init__(self, config: Any) -> None:
+        self.config = config
 
 
 def test_cosine_same_vector_is_one() -> None:
@@ -49,6 +62,25 @@ def test_load_embedder_without_extra_raises_runtime_error(
     message = str(excinfo.value)
     assert "voiceprint" in message
     assert "pip install" in message
+
+
+def test_load_embedder_exposes_stable_model_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = tmp_path / "tiny.onnx"
+    data = b"not a model"
+    model.write_bytes(data)
+    stub = types.ModuleType("sherpa_onnx")
+    stub.SpeakerEmbeddingExtractorConfig = StubExtractorConfig
+    stub.SpeakerEmbeddingExtractor = StubExtractor
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", stub)
+    digest = hashlib.sha256(data).hexdigest()
+
+    first = load_embedder(str(model), digest)
+    second = load_embedder(str(model), digest)
+
+    assert first.model_id == f"tiny.onnx:{digest}"
+    assert second.model_id == first.model_id
 
 
 def test_embed_two_synthetic_utterances_returns_normalized_512_vector() -> None:

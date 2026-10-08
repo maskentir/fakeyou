@@ -5,6 +5,7 @@ from typing import Any
 
 from fakeyou.settings import DEFAULTS, IdentitySettings
 from fakeyou.voiceprint_store import (
+    MIGRATION_SQL,
     VoiceprintRecord,
     VoiceprintStore,
     ensure_voiceprint_schema,
@@ -65,17 +66,22 @@ def make_record() -> VoiceprintRecord:
         is_negative=False,
         enrolled_at="2026-10-07T10:00:01+00:00",
         last_used_at="2026-10-07T10:00:02+00:00",
+        owner_name="Maya",
     )
 
 
-def test_ensure_schema_executes_ddl_with_nine_columns() -> None:
+def test_ensure_schema_executes_ddl_with_ten_columns() -> None:
     conn = FakeConnection()
 
     ensure_voiceprint_schema(conn)
 
-    assert len(conn.statements) == 1
+    assert len(conn.statements) == 2
     sql = conn.statements[0][0]
     assert "CREATE TABLE IF NOT EXISTS voiceprints" in sql
+    second = conn.statements[1][0]
+    assert second == MIGRATION_SQL
+    assert "ALTER TABLE voiceprints" in second
+    assert "ADD COLUMN IF NOT EXISTS owner_name" in second
     for column in (
         "person_id",
         "embedding",
@@ -86,6 +92,7 @@ def test_ensure_schema_executes_ddl_with_nine_columns() -> None:
         "is_negative",
         "enrolled_at",
         "last_used_at",
+        "owner_name",
     ):
         assert column in sql
     assert conn.commits == 1
@@ -110,6 +117,7 @@ def test_save_load_all_roundtrip_restores_identical_record() -> None:
         params[6],
         params[7],
         params[8],
+        params[9],
     )
     conn.results.append([row])
 
@@ -117,6 +125,7 @@ def test_save_load_all_roundtrip_restores_identical_record() -> None:
 
     assert loaded == [record]
     assert loaded[0].embedding == record.embedding
+    assert loaded[0].owner_name == "Maya"
 
 
 def test_load_all_converts_datetime_columns_with_isoformat() -> None:
@@ -135,6 +144,7 @@ def test_load_all_converts_datetime_columns_with_isoformat() -> None:
                 record.is_negative,
                 datetime.fromisoformat(record.enrolled_at),
                 datetime.fromisoformat(record.last_used_at),
+                record.owner_name,
             )
         ]
     )

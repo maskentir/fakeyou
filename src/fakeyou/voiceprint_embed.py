@@ -17,8 +17,11 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 class SpeakerEmbedder:
-    def __init__(self, extractor: Any) -> None:
+    model_id: str | None = None
+
+    def __init__(self, extractor: Any, *, model_id: str | None = None) -> None:
         self._extractor = extractor
+        self.model_id = model_id
 
     def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
         if len(utterances) == 0:
@@ -46,8 +49,8 @@ class SpeakerEmbedder:
 
 def load_embedder(model_path: str, expected_sha256: str) -> SpeakerEmbedder:
     digest = hashlib.sha256(Path(model_path).read_bytes()).hexdigest()
+    name = Path(model_path).name
     if digest != expected_sha256:
-        name = Path(model_path).name
         raise ValueError(
             f"sha256 mismatch for model file {name}: expected {expected_sha256} got {digest}"
         )
@@ -60,4 +63,5 @@ def load_embedder(model_path: str, expected_sha256: str) -> SpeakerEmbedder:
     config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
         model=model_path, num_threads=1, debug=False, provider="cpu"
     )
-    return SpeakerEmbedder(sherpa_onnx.SpeakerEmbeddingExtractor(config))
+    extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+    return SpeakerEmbedder(extractor, model_id=f"{name}:{digest}")

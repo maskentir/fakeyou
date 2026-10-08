@@ -38,7 +38,9 @@ class FakeEmbedder(SpeakerEmbedder):
         return self._vector
 
 
-def make_record(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRecord:
+def make_record(
+    person_id: str, embedding: tuple[float, ...], owner_name: str = ""
+) -> VoiceprintRecord:
     return VoiceprintRecord(
         person_id=person_id,
         embedding=embedding,
@@ -49,6 +51,7 @@ def make_record(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRecor
         is_negative=False,
         enrolled_at="2026-10-07T10:00:01+00:00",
         last_used_at="2026-10-07T10:00:02+00:00",
+        owner_name=owner_name,
     )
 
 
@@ -64,6 +67,7 @@ def make_negative(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRec
         is_negative=True,
         enrolled_at=record.enrolled_at,
         last_used_at=record.last_used_at,
+        owner_name=record.owner_name,
     )
 
 
@@ -362,3 +366,20 @@ def test_identical_turn_scores_zero_difference_across_workers() -> None:
     assert scores_b is not None
     assert scores_a == scores_b
     assert scores_a.s1 - scores_b.s1 == 0
+
+
+def test_match_threads_owner_name_and_consent_into_scores() -> None:
+    matcher = VoiceprintMatcher(
+        FakeStore(
+            [
+                make_record("spk-1", (1.0, 0.0), owner_name="Maya"),
+                make_record("spk-2", (0.0, 1.0), owner_name="Rani"),
+            ]
+        )
+    )
+
+    scores = matcher.match((1.0, 0.0))
+
+    assert scores.person_id == "spk-1"
+    assert scores.owner_name == "Maya"
+    assert scores.consent_ts == "2026-10-07T10:00:00+00:00"

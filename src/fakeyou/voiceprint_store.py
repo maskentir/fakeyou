@@ -15,7 +15,8 @@ SCHEMA_SQL = """CREATE TABLE IF NOT EXISTS voiceprints (
     policy_version TEXT NOT NULL,
     is_negative BOOLEAN NOT NULL DEFAULT FALSE,
     enrolled_at TIMESTAMPTZ NOT NULL,
-    last_used_at TIMESTAMPTZ NOT NULL
+    last_used_at TIMESTAMPTZ NOT NULL,
+    owner_name TEXT NOT NULL
 )"""
 
 
@@ -30,11 +31,18 @@ class VoiceprintRecord:
     is_negative: bool
     enrolled_at: str
     last_used_at: str
+    owner_name: str = ""
+
+
+MIGRATION_SQL = (
+    "ALTER TABLE voiceprints ADD COLUMN IF NOT EXISTS owner_name TEXT NOT NULL DEFAULT ''"
+)
 
 
 def ensure_voiceprint_schema(conn: Any) -> None:
     with conn.cursor() as cur:
         cur.execute(SCHEMA_SQL)
+        cur.execute(MIGRATION_SQL)
     conn.commit()
 
 
@@ -61,13 +69,14 @@ class VoiceprintStore:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO voiceprints (person_id, embedding, dim, n_utterances,"
-                " consent_ts, policy_version, is_negative, enrolled_at, last_used_at)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " consent_ts, policy_version, is_negative, enrolled_at, last_used_at,"
+                " owner_name)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " ON CONFLICT (person_id) DO UPDATE SET embedding = EXCLUDED.embedding,"
                 " dim = EXCLUDED.dim, n_utterances = EXCLUDED.n_utterances,"
                 " consent_ts = EXCLUDED.consent_ts, policy_version = EXCLUDED.policy_version,"
                 " is_negative = EXCLUDED.is_negative, enrolled_at = EXCLUDED.enrolled_at,"
-                " last_used_at = EXCLUDED.last_used_at",
+                " last_used_at = EXCLUDED.last_used_at, owner_name = EXCLUDED.owner_name",
                 (
                     record.person_id,
                     pack_embedding(record.embedding),
@@ -78,6 +87,7 @@ class VoiceprintStore:
                     record.is_negative,
                     record.enrolled_at,
                     record.last_used_at,
+                    record.owner_name,
                 ),
             )
         conn.commit()
@@ -87,7 +97,7 @@ class VoiceprintStore:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT person_id, embedding, dim, n_utterances, consent_ts,"
-                " policy_version, is_negative, enrolled_at, last_used_at"
+                " policy_version, is_negative, enrolled_at, last_used_at, owner_name"
                 " FROM voiceprints ORDER BY person_id"
             )
             rows = cur.fetchall()
@@ -102,6 +112,7 @@ class VoiceprintStore:
                 is_negative=bool(row[6]),
                 enrolled_at=_stamp_text(row[7]),
                 last_used_at=_stamp_text(row[8]),
+                owner_name=row[9],
             )
             for row in rows
         ]

@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 from fakeyou.voiceprint_match import VoiceScores
 
 ResolveRefusal = Literal["no_roster", "slot_contention", "slot_conflict", "self_overlap"]
+VerifyResult = Literal["bound", "repeat", "conflict", "unknown"]
 
 SPEAKER_EVENT_BUFFER = 128
 
@@ -44,6 +45,8 @@ class SpeakerRow:
     history: tuple[str, ...]
     display_claim: str | None = None
     claim_confidence: float = 0.0
+    verified_name: str | None = None
+    verified_enrollment: str | None = None
 
 
 @dataclass(slots=True)
@@ -54,6 +57,9 @@ class _Record:
     display_claim: str | None = None
     claim_confidence: float = 0.0
     claim_locked: bool = False
+    verified_name: str | None = None
+    verified_enrollment: str | None = None
+    verified_locked: bool = False
     followed: bool = False
     history: list[str] = field(default_factory=list)
 
@@ -117,6 +123,10 @@ class SpeakerRegistry:
     def reset(self) -> None:
         for uuid in self._by_slot.values():
             self._rows[uuid].slot = None
+        for record in self._rows.values():
+            record.verified_name = None
+            record.verified_enrollment = None
+            record.verified_locked = False
         self._by_slot.clear()
         self._stream_csrcs.clear()
         self._stream_meta.clear()
@@ -206,6 +216,19 @@ class SpeakerRegistry:
             record.claim_confidence = 1.0
             record.claim_locked = True
 
+    def note_verified(self, uuid: str, person_id: str, name: str) -> VerifyResult:
+        record = self._rows.get(uuid)
+        if record is None:
+            return "unknown"
+        if record.verified_locked:
+            if record.verified_enrollment == person_id and record.verified_name == name:
+                return "repeat"
+            return "conflict"
+        record.verified_name = name
+        record.verified_enrollment = person_id
+        record.verified_locked = True
+        return "bound"
+
     def _emit(self, event: dict[str, Any]) -> None:
         self._events.append(event)
         while len(self._events) > SPEAKER_EVENT_BUFFER:
@@ -271,6 +294,8 @@ class SpeakerRegistry:
             history=tuple(record.history),
             display_claim=record.display_claim,
             claim_confidence=record.claim_confidence,
+            verified_name=record.verified_name,
+            verified_enrollment=record.verified_enrollment,
         )
 
     def _follow_csrc(self, slot: int) -> str | None:

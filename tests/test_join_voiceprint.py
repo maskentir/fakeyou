@@ -38,6 +38,7 @@ def program_print(conn: FakeConnection) -> None:
                 record.is_negative,
                 record.enrolled_at,
                 record.last_used_at,
+                record.owner_name,
             )
         ]
     )

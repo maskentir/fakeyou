@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from fakeyou.faults import Fault
+from fakeyou.verify import decide_verified
 from fakeyou.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder, cosine
 from fakeyou.voiceprint_store import VoiceprintStore
 
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from fakeyou.faults import FaultReporter
     from fakeyou.identity import SpeakerRegistry
     from fakeyou.journal import Journal
+    from fakeyou.verify import CalibrationArtifact
 
 MatchOutcome = Literal["verified", "unknown", "conflict", "negative"]
 DecidedOutcome = Literal["verified", "unknown", "conflict", "mismatched_owner"]
@@ -30,6 +32,8 @@ class VoiceScores:
     s1: float
     s2: float
     outcome: MatchOutcome
+    owner_name: str | None = None
+    consent_ts: str | None = None
 
 
 class VoiceprintMatcher:
@@ -41,7 +45,7 @@ class VoiceprintMatcher:
         self._min_margin = min_margin
 
     def match(self, embedding: Sequence[float]) -> VoiceScores:
-        ranked: list[tuple[float, str]] = []
+        ranked: list[tuple[float, str, str, str]] = []
         best_negative = EMPTY_SCORE
         has_negative = False
         for record in self._store.load_all():
@@ -50,18 +54,20 @@ class VoiceprintMatcher:
                 has_negative = True
                 best_negative = max(best_negative, score)
             else:
-                ranked.append((score, record.person_id))
+                ranked.append((score, record.person_id, record.owner_name, record.consent_ts))
         ranked.sort(reverse=True)
         person = ranked[0][1] if ranked else None
+        owner = ranked[0][2] if ranked else None
+        consent = ranked[0][3] if ranked else None
         s1 = ranked[0][0] if ranked else EMPTY_SCORE
         s2 = ranked[1][0] if len(ranked) > 1 else EMPTY_SCORE
         if has_negative and best_negative >= s1:
-            return VoiceScores(person, s1, s2, "negative")
+            return VoiceScores(person, s1, s2, "negative", owner, consent)
         if s1 < self._threshold:
-            return VoiceScores(person, s1, s2, "unknown")
+            return VoiceScores(person, s1, s2, "unknown", owner, consent)
         if s1 - s2 < self._min_margin:
-            return VoiceScores(person, s1, s2, "conflict")
-        return VoiceScores(person, s1, s2, "verified")
+            return VoiceScores(person, s1, s2, "conflict", owner, consent)
+        return VoiceScores(person, s1, s2, "verified", owner, consent)
 
 
 def cut_turn_clip(audio: bytes, start_ms: float, end_ms: float) -> bytes:
@@ -102,6 +108,11 @@ def apply_voice_scores(
     owners: Mapping[str, str],
     journal: Journal | None = None,
     faults: FaultReporter | None = None,
+    artifact: CalibrationArtifact | None = None,
+    claim: str | None = None,
+    overlap: bool | None = None,
+    slot: int | None = None,
+    embedder: SpeakerEmbedder | None = None,
 ) -> DecidedOutcome:
     registry.note_voice_scores(speaker_uuid, scores)
     person = scores.person_id
@@ -140,5 +151,18 @@ def apply_voice_scores(
             score=round(scores.s1, 4),
             margin=round(scores.s1 - scores.s2, 4),
             speaker_uuid=speaker_uuid,
+        )
+    if artifact is not None and embedder is not None:
+        decide_verified(
+            speaker_uuid,
+            scores,
+            claim,
+            artifact,
+            registry=registry,
+            slot=slot,
+            overlap=overlap,
+            embedder=embedder,
+            journal=journal,
+            faults=faults,
         )
     return outcome

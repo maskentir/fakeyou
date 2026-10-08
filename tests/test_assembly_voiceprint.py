@@ -93,6 +93,7 @@ def test_enabled_flag_with_seams_returns_working_bundle(settings: Settings) -> N
                 record.is_negative,
                 record.enrolled_at,
                 record.last_used_at,
+                record.owner_name,
             )
         ]
     )

@@ -64,6 +64,7 @@ class FakeStore(VoiceprintStore):
             is_negative=record.is_negative,
             enrolled_at=record.enrolled_at,
             last_used_at=now.isoformat(),
+            owner_name=record.owner_name,
         )
 
 
