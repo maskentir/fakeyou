@@ -30,6 +30,7 @@ class TranscriptEntry(_Entry):
     stream_id: str = ""
     capture_ms: float = 0.0
     display_claim: str | None = None
+    corrected_speaker_uuid: str | None = None
 
 
 class TwinSpeechEntry(_Entry):

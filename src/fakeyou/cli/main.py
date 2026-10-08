@@ -13,7 +13,7 @@ from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
-from fakeyou.cli.diarize import diarize_run
+from fakeyou.cli.diarize import diarize_run, diarize_show
 from fakeyou.cli.errors import FAILURE_EXIT_CODES
 from fakeyou.cli.join import join_meeting
 from fakeyou.cli.memory import (
@@ -348,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     diarize_run_parser.add_argument("--meeting", dest="meeting_id", required=True)
     diarize_run_parser.set_defaults(handler=diarize_run)
+    diarize_show_parser = diarize_commands.add_parser(
+        "show", help="Show diarization correction coverage", allow_abbrev=False
+    )
+    diarize_show_parser.add_argument("--meeting", dest="meeting_id", required=True)
+    diarize_show_parser.set_defaults(handler=diarize_show)
     return parser
 
 

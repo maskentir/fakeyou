@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.diarize_client import DiarizedTurn
+from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarize_correction import (
     CorrectionBundle,
     correction_uuid,
+    load_corrected_record,
     write_correction_bundle,
 )
+from fakeyou.record import TranscriptEntry, load_meeting_record
 
 FIXED_NOW = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
 RECORD_TEXT = "pineapple-transcript-marker"
@@ -114,3 +116,103 @@ def test_write_correction_bundle_rejects_hostile_speaker_label(tmp_path: Path) -
 
     assert not (record_path.parent / "diarization.rttm").exists()
     assert not (record_path.parent / "diarization.json").exists()
+
+
+def _transcript_line(index: int, capture_ms: float) -> str:
+    return json.dumps(
+        {
+            "kind": "transcript",
+            "at": "2026-10-08T00:00:00+00:00",
+            "id": f"event-{index}",
+            "spoken_at": "2026-10-08T00:00:00+00:00",
+            "source": "meeting_audio",
+            "text": "hello world",
+            "participant_id": "unknown",
+            "speaker_evidence_id": None,
+            "stream_id": "",
+            "capture_ms": capture_ms,
+        }
+    )
+
+
+def _record_session(
+    tmp_path: Path, captures: list[float], *, anchors: list[dict[str, object]]
+) -> tuple[Path, Path]:
+    meeting_dir = tmp_path / "meetings" / "m1"
+    meeting_dir.mkdir(parents=True)
+    record_path = meeting_dir / "record.jsonl"
+    record_path.write_text(
+        "".join(_transcript_line(index, capture) + "\n" for index, capture in enumerate(captures)),
+        encoding="utf-8",
+    )
+    audio_dir = meeting_dir / "audio"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "slots.json").write_text(
+        json.dumps({"schema": "slot_audio/v1", "slots": {}, "anchors": anchors}),
+        encoding="utf-8",
+    )
+    return audio_dir, record_path
+
+
+def test_load_corrected_record_attaches_exact_uuids_with_anchor_offset(tmp_path: Path) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0, 10000.0], anchors=anchors)
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+
+    entries = load_corrected_record(record_path)
+
+    assert [entry.corrected_speaker_uuid for entry in entries] == [
+        _expected_uuid("A", 0),
+        _expected_uuid("B", 3600),
+    ]
+    assert all(isinstance(entry, TranscriptEntry) for entry in entries)
+
+
+def test_load_corrected_record_without_sidecar_matches_plain_load(tmp_path: Path) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    _, record_path = _record_session(tmp_path, [6000.0, 10000.0], anchors=anchors)
+
+    assert load_corrected_record(record_path) == load_meeting_record(record_path)
+
+
+def test_load_corrected_record_rejects_changed_record_as_stale(tmp_path: Path) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(_transcript_line(9, 6100.0) + "\n")
+
+    with pytest.raises(DiarizeError, match="stale"):
+        load_corrected_record(record_path)
+
+
+def test_load_corrected_record_leaves_far_entries_unattached(tmp_path: Path) -> None:
+    _, record_path = _record_session(tmp_path, [500.0, 3000.0, 3001.0, 20000.0], anchors=[])
+    audio_dir = record_path.parent / "audio"
+    write_correction_bundle(
+        audio_dir,
+        record_path,
+        [DiarizedTurn(start_ms=0, end_ms=1000, speaker="A")],
+        clock=lambda: FIXED_NOW,
+    )
+
+    entries = load_corrected_record(record_path)
+
+    assert [entry.corrected_speaker_uuid for entry in entries] == [
+        _expected_uuid("A", 0),
+        _expected_uuid("A", 0),
+        None,
+        None,
+    ]
+
+
+def test_old_record_lines_without_correction_field_still_load(tmp_path: Path) -> None:
+    _, record_path = _record_session(tmp_path, [6000.0], anchors=[])
+    assert "corrected_speaker_uuid" not in record_path.read_text(encoding="utf-8")
+
+    entries = load_meeting_record(record_path)
+
+    assert len(entries) == 1
+    assert isinstance(entries[0], TranscriptEntry)
+    assert entries[0].corrected_speaker_uuid is None
+    assert load_corrected_record(record_path) == entries

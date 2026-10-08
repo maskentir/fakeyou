@@ -2,6 +2,7 @@ import json
 import struct
 import urllib.request
 import wave
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -9,10 +10,11 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from fakeyou.cli.diarize import diarize_run
+from fakeyou.cli.diarize import diarize_run, diarize_show
 from fakeyou.cli.errors import CliError
 from fakeyou.cli.main import build_parser
-from fakeyou.diarize_client import DiarizeError
+from fakeyou.diarize_client import DiarizedTurn, DiarizeError
+from fakeyou.diarize_correction import write_correction_bundle
 from fakeyou.ingestion_status import lock_path, record_lock
 from fakeyou.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.record import meeting_record_path
@@ -267,3 +269,87 @@ def test_diarize_parser_registers_run() -> None:
     assert arguments.diarize_command == "run"
     assert arguments.meeting_id == "m1"
     assert arguments.handler is diarize_run
+
+
+def _show_line(index: int, capture_ms: float) -> str:
+    return json.dumps(
+        {
+            "kind": "transcript",
+            "at": "2026-10-08T00:00:00+00:00",
+            "id": f"event-{index}",
+            "spoken_at": "2026-10-08T00:00:00+00:00",
+            "source": "meeting_audio",
+            "text": "hello world",
+            "participant_id": "unknown",
+            "speaker_evidence_id": None,
+            "stream_id": "",
+            "capture_ms": capture_ms,
+        }
+    )
+
+
+def _show_session(settings: Settings, meeting_id: str, captures: list[float]) -> Path:
+    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        "".join(_show_line(index, capture) + "\n" for index, capture in enumerate(captures)),
+        encoding="utf-8",
+    )
+    audio_dir = record_path.parent / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    (audio_dir / "slots.json").write_text(
+        json.dumps({"schema": "slot_audio/v1", "slots": {}, "anchors": []}),
+        encoding="utf-8",
+    )
+    write_correction_bundle(
+        audio_dir,
+        record_path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC),
+    )
+    return record_path
+
+
+def test_diarize_show_prints_turns_coverage_and_ok_status(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _show_session(settings, "m1", [1000.0, 2000.0, 20000.0])
+
+    assert diarize_show("m1", settings=settings) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "turns: 1" in lines
+    assert "covered: 2/3 transcript entries" in lines
+    assert "status: ok" in lines
+
+
+def test_diarize_show_exits_stale_when_record_changed(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record_path = _show_session(settings, "m1", [1000.0])
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(_show_line(9, 1100.0) + "\n")
+
+    with pytest.raises(SystemExit) as exit:
+        diarize_show("m1", settings=settings)
+
+    assert exit.value.code == 2
+    assert "stale" in capsys.readouterr().out
+
+
+def test_diarize_show_refuses_missing_sidecar(settings: Settings) -> None:
+    record_path = meeting_record_path(settings.paths.record_dir, "m1")
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(_show_line(0, 1000.0) + "\n", encoding="utf-8")
+
+    with pytest.raises(CliError, match="no diarization correction"):
+        diarize_show("m1", settings=settings)
+
+
+def test_diarize_parser_registers_show() -> None:
+    arguments = build_parser().parse_args(["diarize", "show", "--meeting", "m1"])
+
+    assert arguments.command == "diarize"
+    assert arguments.diarize_command == "show"
+    assert arguments.meeting_id == "m1"
+    assert arguments.handler is diarize_show

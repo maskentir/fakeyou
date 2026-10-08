@@ -9,10 +9,14 @@ from typing import Any
 
 from fakeyou.cli.errors import CliError
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError, merge_short_turns, transcribe_chunk
-from fakeyou.diarize_correction import write_correction_bundle
+from fakeyou.diarize_correction import (
+    JSON_FILE_NAME,
+    load_corrected_record,
+    write_correction_bundle,
+)
 from fakeyou.diarize_mix import mix_session_slots, split_chunks
 from fakeyou.ingestion_status import RecordLockError, record_lock
-from fakeyou.record import meeting_record_path
+from fakeyou.record import TranscriptEntry, load_meeting_record, meeting_record_path
 from fakeyou.settings import Settings
 
 
@@ -88,4 +92,39 @@ def diarize_run(
         raise CliError(f"meeting is locked by another operation: {meeting_id}") from None
     except (FileNotFoundError, ValueError, DiarizeError, wave.Error) as error:
         raise CliError(str(error)) from error
+    return 0
+
+
+def _sidecar_turn_count(record_path: Path) -> int:
+    try:
+        payload = json.loads((record_path.parent / JSON_FILE_NAME).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return 0
+    turns = payload.get("turns") if isinstance(payload, dict) else None
+    return len(turns) if isinstance(turns, list) else 0
+
+
+def diarize_show(meeting_id: str, *, settings: Settings) -> int:
+    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+    if not (record_path.parent / JSON_FILE_NAME).exists():
+        raise CliError(f"no diarization correction for meeting: {meeting_id}")
+    try:
+        entries = load_corrected_record(record_path)
+    except DiarizeError as error:
+        total = len(
+            [
+                entry
+                for entry in load_meeting_record(record_path)
+                if isinstance(entry, TranscriptEntry)
+            ]
+        )
+        print(f"turns: {_sidecar_turn_count(record_path)}")
+        print(f"covered: 0/{total} transcript entries")
+        print(f"status: stale: {error}")
+        raise SystemExit(2) from None
+    transcripts = [entry for entry in entries if isinstance(entry, TranscriptEntry)]
+    covered = sum(1 for entry in transcripts if entry.corrected_speaker_uuid is not None)
+    print(f"turns: {_sidecar_turn_count(record_path)}")
+    print(f"covered: {covered}/{len(transcripts)} transcript entries")
+    print("status: ok")
     return 0
