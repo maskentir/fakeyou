@@ -91,6 +91,9 @@ Ship bila SEMUA lolos di eval: CI-bawah presisi ≥0,98 +
 overlap-unverified ≥0,95 + twin false-verify = 0 + lembah
 margin lolos + latensi tak berubah (toleransi nol). Gagal satu
 → display_claim-only, flag mati, lapor, tanpa relaksasi ambang.
+Lembah dihitung pada trial non-overlap saja: trial overlap
+dihitung oleh metriknya sendiri dan skor suaranya memang boleh
+di mana saja karena aturan overlap memaksanya unverified.
 
 Pengujian: merah-dulu per task SDD + reviewer terpisah; fixture
 regresi dev; gate hijau; tanpa xfail.

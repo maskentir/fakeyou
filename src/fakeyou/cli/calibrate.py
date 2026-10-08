@@ -378,7 +378,8 @@ def calibrate_eval(
     flags: list[bool] = []
     for trial in trials:
         llr = loaded.platt_a * (trial.s1 - mean) / std + loaded.platt_b
-        llrs.append(llr)
+        if not trial.overlap:
+            llrs.append(llr)
         margin = trial.s1 - trial.s2
         flags.append(
             llr >= loaded.theta_llr

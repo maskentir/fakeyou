@@ -429,3 +429,21 @@ def test_eval_flag_against_legacy_artifact_exits_2(
         )
     assert failure.value.code == 2
     assert json.loads(capsys.readouterr().out)["error"] == "model_unknown"
+
+
+def test_eval_valley_ignores_overlap_trials(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _lock_dev(tmp_path)
+    artifact = load_calibration_artifact(out)
+    assert artifact is not None
+    mean = statistics.mean(artifact.snorm_cohort)
+    std = statistics.pstdev(artifact.snorm_cohort)
+    on_theta = mean + std * (artifact.theta_llr - artifact.platt_b) / artifact.platt_a
+    trials = _pass_trials() + [_trial("eval-ox", "target", on_theta, 0.10, overlap=True)]
+    journal = tmp_path / "eval.jsonl"
+    capsys.readouterr()
+    calibrate_eval([_write_journal(journal, trials)], out, settings=Settings())
+    metrics = json.loads(capsys.readouterr().out)
+    assert metrics["valley"] is True
+    assert metrics["pass"] is True
