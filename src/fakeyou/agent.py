@@ -4,9 +4,12 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
+
+from fakeyou.visual_caption import VisualCaptioner, frame_ref
+from fakeyou.visual_store import VisualStore
 
 MEETING_GUIDANCE = (
     "You are a precise digital twin for a meeting participant. "
@@ -31,6 +34,12 @@ SPOKEN_LANGUAGE_GUIDANCE = {
     ),
 }
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
+VISUAL_GUIDANCE = (
+    "Visual context: the participant message may carry visual references to shared screen "
+    "frames. When exactly one visual reference is attached, answer about that frame and cite "
+    "its frame reference. When several or no visual references are attached, ask exactly one "
+    "neutral clarification question and do not guess."
+)
 
 
 def create_meeting_agent(
@@ -49,3 +58,17 @@ def create_meeting_agent(
         middleware=middleware,
         checkpointer=checkpointer,
     )
+
+
+def create_visual_tools(store: VisualStore, captioner: VisualCaptioner) -> list[BaseTool]:
+    @tool(description="Describe a captured meeting frame in detail by its frame id.")
+    async def describe_frame(frame_id: str) -> str:
+        frame = next((item for item in store.frames if item.frame_id == frame_id), None)
+        if frame is None:
+            return f"Unknown frame {frame_id}; no caption available."
+        caption = await captioner.caption_frame(frame)
+        if caption is None:
+            return f"Caption unavailable; visual budget exhausted. {frame_ref(frame)}"
+        return f"{caption.text}\n{frame_ref(frame)}"
+
+    return [describe_frame]

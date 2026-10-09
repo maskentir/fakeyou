@@ -7,6 +7,7 @@ from typing import NoReturn
 
 from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
+from fakeyou.visual_retention import PurgeReport, purge_visual_files
 
 DAY_SECONDS = 86400
 
@@ -49,3 +50,30 @@ def audio_purge_expired(*, root: Path | None, days: int | None, settings: Settin
         else:
             kept += 1
     print(json.dumps({"removed": removed, "kept": kept, "freed_bytes": freed_bytes}))
+
+
+def visual_purge_expired(*, root: Path | None, days: int | None, settings: Settings) -> PurgeReport:
+    raw_days = settings.visual.retention_raw_days if days is None else days
+    if raw_days <= 0:
+        raise CliError("--days must be positive")
+    resolved_root = settings.paths.record_dir if root is None else root
+    if not resolved_root.is_dir():
+        _reject(f"visual root is missing: {resolved_root}")
+    now = time.time()
+    raw_cutoff = now - raw_days * DAY_SECONDS
+    text_cutoff = now - settings.visual.retention_text_days * DAY_SECONDS
+    total = PurgeReport()
+    for meeting in sorted(resolved_root.iterdir()):
+        visual_dir = meeting / "visual"
+        if not visual_dir.is_dir():
+            continue
+        partial = purge_visual_files(
+            visual_dir, raw_cutoff=raw_cutoff, text_cutoff=text_cutoff, prefix=meeting.name
+        )
+        total.removed.extend(partial.removed)
+        total.kept += partial.kept
+        total.freed_bytes += partial.freed_bytes
+    print(
+        json.dumps({"removed": total.removed, "kept": total.kept, "freed_bytes": total.freed_bytes})
+    )
+    return total

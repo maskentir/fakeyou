@@ -84,7 +84,7 @@ class EvidenceSource(BaseModel):
 
     id: Annotated[str, StringConstraints(min_length=1)]
     text: str
-    kind: Literal["participant", "twin"]
+    kind: Literal["participant", "twin", "visual"]
     participant_id: str
     at: AwareDatetime
 

@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from fakeyou.assembly import (
     VoiceprintLive,
+    create_visual_captioner,
     create_voiceprint_live,
     open_conversation,
     stop_signal_handlers,
@@ -78,6 +79,8 @@ from fakeyou.settings import (
 )
 from fakeyou.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
 from fakeyou.verify import claim_of
+from fakeyou.visual_caption import VisualCaption, frame_ref
+from fakeyou.visual_store import VisualFrame, VisualStore, visual_refs_for_utterance
 from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
 from fakeyou.voiceprint_match import apply_voice_scores, score_turn_audio
 
@@ -214,6 +217,25 @@ def _score_live_turn(
         )
 
 
+def record_visual_caption(
+    record: MeetingRecord, frame: VisualFrame, caption: VisualCaption
+) -> None:
+    try:
+        captured_at = datetime.fromisoformat(frame.captured_at)
+    except ValueError:
+        return
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=UTC)
+    record.add_visual(
+        visual_id=frame.frame_id,
+        caption=caption.text,
+        sha256=frame.sha256,
+        captured_at=captured_at,
+        frame_ref=frame_ref(frame),
+        captured_page_ms=frame.captured_page_ms,
+    )
+
+
 def _claim_for_uuid(registry: SpeakerRegistry | None, speaker_uuid: Any) -> str | None:
     if registry is None or not isinstance(speaker_uuid, str) or not speaker_uuid:
         return None
@@ -234,6 +256,7 @@ def build_transcript_callback(
     voiceprint: VoiceprintLive | None = None,
     registry: SpeakerRegistry | None = None,
     faults: FaultReporter | None = None,
+    visual_store: VisualStore | None = None,
 ) -> Callable[[TranscriptionFrame], Awaitable[None]]:
     pending: list[TranscriptEvent] = []
     handled: set[str] = set()
@@ -254,6 +277,15 @@ def build_transcript_callback(
                 capture_ms=capture_ms,
                 display_claim=_claim_for_uuid(registry, extra.get("speaker_uuid")),
             )
+            if visual_store is not None:
+                event = replace(
+                    event,
+                    visual_refs=visual_refs_for_utterance(
+                        visual_store.frames,
+                        capture_ms=event.capture_ms,
+                        spoken_at=event.timestamp,
+                    ),
+                )
             pending.append(event)
             extras[event.id] = extra
             for ordered in merge_transcripts(pending):
@@ -304,6 +336,15 @@ def build_transcript_callback(
                     display_claim=legacy_claim,
                 )
             )
+            if visual_store is not None:
+                event = replace(
+                    event,
+                    visual_refs=visual_refs_for_utterance(
+                        visual_store.frames,
+                        capture_ms=event.capture_ms,
+                        spoken_at=event.timestamp,
+                    ),
+                )
             await emit_transcript(
                 event,
                 journal=journal,
@@ -471,6 +512,7 @@ async def join_meeting(
         attribution_probe_path=probe_path,
         per_stream_enabled=settings.conversation.per_stream_enabled,
         meet_actions_enabled=settings.conversation.meet_actions_enabled,
+        visual_enabled=settings.visual.enabled,
     )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"
@@ -581,6 +623,21 @@ async def join_meeting(
                         if settings.conversation.meet_actions_enabled and conversation_enabled
                         else None
                     )
+                    visual_store = (
+                        VisualStore(record_path.parent / "visual", journal=journal)
+                        if settings.visual.enabled
+                        else None
+                    )
+                    visual_captioner = (
+                        create_visual_captioner(settings, journal=journal)
+                        if visual_store is not None and conversation_enabled
+                        else None
+                    )
+                    visual_on_caption = (
+                        partial(record_visual_caption, record)
+                        if visual_store is not None and visual_captioner is not None
+                        else None
+                    )
 
                     def log_playback(event: PlaybackEvent) -> None:
                         if voice_activity is not None:
@@ -611,6 +668,8 @@ async def join_meeting(
                                 journal=journal,
                                 brief=brief,
                                 meet_dispatcher=meet_dispatcher,
+                                visual_store=visual_store,
+                                visual_captioner=visual_captioner,
                             )
                         )
 
@@ -627,6 +686,7 @@ async def join_meeting(
                         voiceprint=voiceprint_live,
                         registry=speaker_registry,
                         faults=faults,
+                        visual_store=visual_store,
                     )
 
                     async def interim(frame: TranscriptionFrame) -> None:
@@ -721,6 +781,9 @@ async def join_meeting(
                                 journal=journal,
                                 voice_activity=voice_activity,
                                 meet_dispatcher=meet_dispatcher,
+                                visual_store=visual_store,
+                                visual_captioner=visual_captioner,
+                                visual_on_caption=visual_on_caption,
                                 **preflight_kwargs,
                             )
                     result = session_result

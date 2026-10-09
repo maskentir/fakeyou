@@ -54,6 +54,9 @@ _MEET_ACTION_TERMINAL = {
     "meet_action_failed": "failed",
     "meet_action_rejected": "rejected",
 }
+VISUAL_BUDGET_P95 = 12.0
+VISUAL_BUDGET_MAX = 30.0
+VISUAL_STABILITY_MIN = 0.95
 
 
 SessionState = Literal["fresh", "unfinished", "finished"]
@@ -140,6 +143,10 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     diff_classes = Counter[str]()
     norm_dist_buckets = Counter[str]()
     overlaps: list[float] = []
+    visual_frames = 0
+    visual_captioned = 0
+    visual_cost_usd = 0.0
+    visual_capture_ms: list[float] = []
     for row in rows:
         event = row.get("event")
         try:
@@ -365,6 +372,26 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 engine = slot.get("engine") if isinstance(slot, dict) else None
                 if isinstance(engine, str) and engine:
                     capture_engines[engine] += 1
+        elif event == "visual_captured":
+            visual_frames += 1
+            duration = row.get("duration_ms")
+            if (
+                isinstance(duration, (int, float))
+                and not isinstance(duration, bool)
+                and math.isfinite(duration)
+                and duration >= 0
+            ):
+                visual_capture_ms.append(float(duration))
+        elif event == "visual_captioned":
+            visual_captioned += 1
+            cost = row.get("cost_usd")
+            if (
+                isinstance(cost, (int, float))
+                and not isinstance(cost, bool)
+                and math.isfinite(cost)
+                and cost >= 0
+            ):
+                visual_cost_usd += float(cost)
         elif event == "pregeneration_started":
             starts += 1
         elif event == "pregeneration_finished":
@@ -468,6 +495,12 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "diff_classes": dict(diff_classes),
             "norm_dist_buckets": dict(norm_dist_buckets),
             "adopted_overlap_seconds": summarize(overlaps),
+        },
+        "visual": {
+            "frames": visual_frames,
+            "captioned": visual_captioned,
+            "cost_usd": round(visual_cost_usd, 6),
+            "p95_ms": summarize(visual_capture_ms)["p95"],
         },
         "result": result,
     }

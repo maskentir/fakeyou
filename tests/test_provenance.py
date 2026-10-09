@@ -418,3 +418,24 @@ def test_rendered_json_roundtrips_through_file(tmp_path: Path) -> None:
     reloaded = json.loads(target.read_text(encoding="utf-8"))
     assert json.loads(rendered) == reloaded
     assert reloaded["excluded"] == {"pending": 1, "superseded": 0, "missing_source": 0}
+
+
+def test_provenance_visual_kind() -> None:
+    at = datetime(2026, 10, 3, 12, tzinfo=UTC)
+    ref = f"frame:abcd1234@{at.isoformat()}"
+    visual = SourceEvidence(
+        "e9", "meeting_visual", "Google Meet m1 visual", at, at, "frame", frame_ref=ref
+    )
+    facts = [FactEvidence(("v1",), "Quarterly revenue grew.", (visual,))]
+    payload = json.loads(render_evidence(facts, result_limit=5, excluded={}))
+
+    assert payload["schema"] == "memory_evidence/v2"
+    [source] = payload["facts"][0]["sources"]
+    assert source["kind"] == "meeting_visual"
+    assert source["frame_ref"] == ref
+    assert source["time_granularity"] == "frame"
+    slim = json.loads(render_evidence(facts, result_limit=5, excluded={}, compact=True))
+    assert slim["schema"] == "memory_evidence/v2"
+    assert slim["facts"][0]["sources"][0]["frame_ref"] == ref
+    with pytest.raises(ValueError):
+        SourceEvidence("e9", "meeting_visual", "Google Meet m1 visual", at, at, "frame")

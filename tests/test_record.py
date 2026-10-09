@@ -207,6 +207,60 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
     assert [entry.text for entry in raw if entry.kind == "transcript"] == ["two", "one", "old"]
 
 
+def test_record_accepts_visual_entry(tmp_path: Path) -> None:
+    from fakeyou.record import VisualEntry
+
+    record = open_record(tmp_path)
+    record.add_visual(
+        visual_id="frame-7",
+        caption="Quarterly revenue grew twelve percent.",
+        sha256="ab" * 32,
+        captured_at=NOW,
+        captured_page_ms=1727690400000.0,
+        frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
+    )
+    record.add_visual(
+        visual_id="frame-7",
+        caption="Quarterly revenue grew twelve percent.",
+        sha256="ab" * 32,
+        captured_at=NOW,
+        captured_page_ms=1727690400000.0,
+        frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
+    )
+    record.add_visual(
+        visual_id="frame-8",
+        caption="   ",
+        sha256="cd" * 32,
+        captured_at=NOW,
+        frame_ref=f"frame:{'cd' * 4}@{NOW.isoformat()}",
+    )
+    record.close()
+
+    entries = load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))
+    assert entries == [
+        VisualEntry(
+            at=NOW,
+            visual_id="frame-7",
+            captured_at=NOW,
+            captured_page_ms=1727690400000.0,
+            sha256="ab" * 32,
+            caption="Quarterly revenue grew twelve percent.",
+            frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
+        )
+    ]
+    [line] = meeting_record_path(tmp_path, "meeting-1").read_text(encoding="utf-8").splitlines()
+    assert set(json.loads(line)) == {
+        "kind",
+        "at",
+        "visual_id",
+        "captured_at",
+        "captured_page_ms",
+        "sha256",
+        "caption",
+        "frame_ref",
+    }
+
+
 def test_repaired_order_is_stable_and_pure() -> None:
     first = TranscriptEntry(
         at=NOW,

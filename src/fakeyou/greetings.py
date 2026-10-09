@@ -75,9 +75,7 @@ class _GreetingMiddleware(AgentMiddleware[Any, Any, Any]):
         latest = trailing[0]
         if "meeting_event" not in (latest.additional_kwargs or {}):
             return None
-        if not isinstance(latest.content, str):
-            return None
-        reply = neutral_greeting(latest.content, self._language)
+        reply = neutral_greeting(latest.text, self._language)
         if reply is None:
             return None
         return {"messages": [AIMessage(content=reply)], "jump_to": "end"}
