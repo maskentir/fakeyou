@@ -1,0 +1,105 @@
+{
+  "schema_version": "visual_eval_fixture/v1",
+  "note": "Synthetic anonymized screenshare scenarios. No real meeting data.",
+  "tolerance_ms": 2000,
+  "frames": [
+    {
+      "frame_id": "frame-launch",
+      "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "captured_at": "2026-10-09T03:10:00+00:00",
+      "captured_page_ms": 100000.0,
+      "dhash": 0,
+      "caption": "The Northwind launch timeline shows beta on 14 October."
+    },
+    {
+      "frame_id": "frame-pricing",
+      "sha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "captured_at": "2026-10-09T03:10:10+00:00",
+      "captured_page_ms": 110000.0,
+      "dhash": 18446744073709551615,
+      "caption": "The pricing table lists three tiers with the middle tier marked popular."
+    },
+    {
+      "frame_id": "frame-roadmap",
+      "sha256": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "captured_at": "2026-10-09T03:10:30+00:00",
+      "captured_page_ms": 130000.0,
+      "dhash": 12297829382473034410,
+      "caption": "The roadmap shows three milestones across two quarters."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "answer_correct_visual",
+      "utterance": {
+        "id": "u-launch",
+        "text": "What date is shown on the launch timeline?",
+        "from_ms": 99500.0,
+        "to_ms": 100500.0
+      },
+      "expected_frame": "frame-launch",
+      "expected_ref": "frame:a1a1a1a1@2026-10-09T03:10:00+00:00"
+    },
+    {
+      "id": "clarify_ambiguous",
+      "utterance": {
+        "id": "u-which",
+        "text": "What about that slide?",
+        "from_ms": 99000.0,
+        "to_ms": 111000.0
+      },
+      "candidates": ["frame-launch", "frame-pricing"],
+      "forbidden_terms": [
+        "14 October",
+        "beta",
+        "timeline",
+        "pricing",
+        "tiers",
+        "popular",
+        "Northwind"
+      ]
+    },
+    {
+      "id": "clarify_missing",
+      "utterance": {
+        "id": "u-blank",
+        "text": "What is on the shared screen?",
+        "from_ms": 150000.0,
+        "to_ms": 151000.0
+      },
+      "forbidden_terms": [
+        "14 October",
+        "beta",
+        "timeline",
+        "pricing",
+        "tiers",
+        "popular",
+        "roadmap",
+        "milestones",
+        "quarters",
+        "Northwind"
+      ]
+    },
+    {
+      "id": "debrief_cites_visual",
+      "visual_frame": "frame-launch",
+      "expected_ref": "frame:a1a1a1a1@2026-10-09T03:10:00+00:00",
+      "transcript": {
+        "kind": "transcript",
+        "at": "2026-10-09T03:10:05+00:00",
+        "id": "v1",
+        "spoken_at": "2026-10-09T03:10:05+00:00",
+        "source": "meeting_audio",
+        "text": "The launch timeline shows beta in mid October.",
+        "participant_id": "participant-a",
+        "speaker_evidence_id": null
+      },
+      "item_text": "The launch timeline places beta on 14 October.",
+      "quote": "beta on 14 October"
+    },
+    {
+      "id": "budget_caps_hold",
+      "replay_frames": ["frame-launch", "frame-pricing", "frame-roadmap"]
+    }
+  ]
+}
