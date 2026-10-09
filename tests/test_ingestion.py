@@ -714,3 +714,283 @@ async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid
     assert summary.detail is not None
     assert "uuid-meeting-1:w00001:corrected" in summary.detail
     assert "window 1" in summary.detail
+
+
+def correction_record_three(tmp_path: Path) -> Path:
+    lines = [
+        (0, "The budget is approved.", 1000.0),
+        (61, "Guest is the PIC.", 70000.0),
+        (122, "We ship on Friday.", 130000.0),
+    ]
+    entries = [
+        TranscriptEntry(
+            at=START + timedelta(seconds=seconds),
+            id=f"m{index}",
+            spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
+            source="meeting_audio",
+            text=text,
+            participant_id="unknown",
+            speaker_evidence_id=None,
+            capture_ms=capture,
+        )
+        for index, (seconds, text, capture) in enumerate(lines)
+    ]
+    record_path = tmp_path / "meeting-1" / "record.jsonl"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        "".join(entry.model_dump_json() + "\n" for entry in entries), encoding="utf-8"
+    )
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Host"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: CORRECTED_AT,
+    )
+    return record_path
+
+
+async def test_ingest_corrections_retry_after_midrun_failure_writes_no_duplicates(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.changed_windows == 3
+    assert second.completed is True
+    names = [episode["name"] for episode in memory.added]
+    assert sorted(names) == sorted(
+        [correction_episode_name("meeting-1", index) for index in range(3)]
+    )
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at == CORRECTED_AT.isoformat()
+
+
+async def test_ingest_corrections_partial_map_survives_failure_and_retry_skips_it(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert first.completed is False
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at is None
+    assert status.correction_windows == {0: "uuid-meeting-1:w00000:corrected"}
+    added_before_retry = len(memory.added)
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    names = [episode["name"] for episode in memory.added[added_before_retry:]]
+    assert names == [
+        correction_episode_name("meeting-1", 1),
+        correction_episode_name("meeting-1", 2),
+    ]
+
+
+async def test_ingest_corrections_new_run_resets_window_map(tmp_path: Path) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert first.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.correction_run == CORRECTED_AT.isoformat()
+    assert sorted(status.correction_windows) == [0, 1, 2]
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest")],
+        clock=lambda: rotated,
+    )
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.correction_run == rotated.isoformat()
+    assert status.correction_windows == {1: "uuid-meeting-1:w00001:corrected"}
+
+
+async def test_ingest_corrections_status_write_failure_reports_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    calls = 0
+    real_write_status = write_status
+
+    def failing_write(path: Path, status: IngestionStatus) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("status store is down")
+        real_write_status(path, status)
+
+    monkeypatch.setattr("fakeyou.ingestion.write_status", failing_write)
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.completed is False
+    assert calls == 2
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at is None
+    assert status.correction_windows == {0: "uuid-meeting-1:w00000:corrected"}
+
+
+async def test_ingest_corrections_rotation_retry_recovers_same_run_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="episode-", edges=[])
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is True
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Host"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: rotated,
+    )
+    calls = 0
+    real_write_status = write_status
+
+    def flaky_write(path: Path, status: IngestionStatus) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("status store is down")
+        real_write_status(path, status)
+
+    monkeypatch.setattr("fakeyou.ingestion.write_status", flaky_write)
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert second.completed is False
+    third = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert third.completed is True
+    names = [episode["name"] for episode in memory.added]
+    assert names.count(correction_episode_name("meeting-1", 1)) == 2
+
+
+async def test_ingest_corrections_rotation_reingests_overlapping_windows_with_new_labels(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="episode-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Guest"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Host"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: rotated,
+    )
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    bodies = [
+        episode["episode_body"]
+        for episode in memory.added
+        if episode["name"] == correction_episode_name("meeting-1", 0)
+    ]
+    assert bodies == ["Host: The budget is approved.", "Guest: The budget is approved."]
+
+
+async def test_ingest_corrections_completion_unions_prior_attempt_episodes(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[2] = RuntimeError("boom")
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert sorted(status.correction_episodes) == sorted(status.correction_windows.values())
+    assert len(status.correction_episodes) == 3
+
+
+def test_ingestion_status_old_schema_json_defaults_new_correction_fields() -> None:
+    payload = {
+        "meeting_id": "meeting-1",
+        "group_id": "twin_group",
+        "status": "completed",
+        "windows": 3,
+        "resumed_from": 0,
+        "ingested": 3,
+        "record_sha256": None,
+        "updated_at": CORRECTED_AT.isoformat(),
+        "reason": None,
+        "episode_uuids": {"0": "uuid-a"},
+        "corrected_at": CORRECTED_AT.isoformat(),
+        "correction_episodes": ["uuid-fix"],
+    }
+
+    status = IngestionStatus.model_validate_json(json.dumps(payload))
+
+    assert status.correction_windows == {}
+    assert status.correction_run is None

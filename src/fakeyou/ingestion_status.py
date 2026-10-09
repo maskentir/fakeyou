@@ -44,6 +44,8 @@ class IngestionStatus(BaseModel):
     episode_uuids: dict[int, str] = Field(default_factory=dict)
     corrected_at: str | None = None
     correction_episodes: list[str] = Field(default_factory=list)
+    correction_windows: dict[int, str] = Field(default_factory=dict)
+    correction_run: str | None = None
 
 
 def status_path(record_path: Path) -> Path:

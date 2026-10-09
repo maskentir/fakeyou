@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from graphiti_core import Graphiti
-from graphiti_core.nodes import EpisodeType
+from graphiti_core.nodes import EpisodeType, EpisodicNode
 
 from fakeyou.diarize_client import DiarizeError
 from fakeyou.diarize_correction import JSON_FILE_NAME, load_corrected_record
@@ -332,12 +332,33 @@ async def ingest_corrections(
             )
         return CorrectionResult(len(changed), (), True)
     now = datetime.now(UTC)
+    base = existing
+    if base is None:
+        base = IngestionStatus(meeting_id=meeting_id, group_id=group_id, status="not_requested")
+    window_map: dict[int, str] = {}
+    if existing is not None and existing.correction_run == corrected_at:
+        window_map = dict(existing.correction_windows)
+    if changed and (existing is None or existing.correction_run in (None, corrected_at)):
+        adopted = await _orphaned_corrections(
+            memory, group_id=group_id, meeting_id=meeting_id, changed=changed
+        )
+        prior: set[str] = set()
+        if existing is not None:
+            prior.update(existing.correction_episodes)
+            prior.update(existing.correction_windows.values())
+        for adopted_index, adopted_uuids in adopted.items():
+            for adopted_uuid in adopted_uuids:
+                if adopted_uuid not in prior:
+                    window_map.setdefault(adopted_index, adopted_uuid)
+                    break
     last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
     previous_uuid = last[-1].uuid if last else None
     originals = existing.episode_uuids if existing is not None else {}
     episodes: list[str] = []
     completed = True
     for index in changed:
+        if index in window_map:
+            continue
         window = fixed_windows[index]
         written_uuid: str | None = None
         try:
@@ -377,13 +398,22 @@ async def ingest_corrections(
                         memory, group_id=group_id, episode_uuid=original, at=now
                     )
                 timing.fields.update(facts=len(result.edges), invalidated=invalidated)
+                window_map[index] = result.episode.uuid
+                base = base.model_copy(
+                    update={
+                        "correction_windows": dict(window_map),
+                        "correction_run": corrected_at,
+                        "updated_at": now,
+                    }
+                )
+                write_status(status_file, base)
         except Exception as error:
             if faults is not None:
                 fault = classify_exception("memory_ingest", error)
                 if written_uuid is not None:
                     detail = (
                         f"correction window {index} orphaned episode {written_uuid}; "
-                        "retry re-ingests the window"
+                        "retry recovers the window"
                     )
                     if fault.detail is not None:
                         detail = f"{detail} ({fault.detail})"
@@ -401,20 +431,17 @@ async def ingest_corrections(
         previous_uuid = result.episode.uuid
         episodes.append(result.episode.uuid)
     if completed:
-        base = existing
-        if base is None:
-            base = IngestionStatus(meeting_id=meeting_id, group_id=group_id, status="not_requested")
         try:
-            write_status(
-                status_file,
-                base.model_copy(
-                    update={
-                        "corrected_at": corrected_at,
-                        "correction_episodes": [*base.correction_episodes, *episodes],
-                        "updated_at": now,
-                    }
-                ),
+            base = base.model_copy(
+                update={
+                    "corrected_at": corrected_at,
+                    "correction_episodes": list(
+                        dict.fromkeys([*base.correction_episodes, *window_map.values()])
+                    ),
+                    "updated_at": now,
+                }
             )
+            write_status(status_file, base)
         except OSError as error:
             if faults is not None:
                 faults.record(classify_exception("memory_ingest", error))
@@ -435,6 +462,30 @@ def _correction_index(name: str, meeting_id: str) -> int | None:
     return int(match.group(1)) if match is not None else None
 
 
+async def _saga_episodes(memory: Graphiti, *, group_id: str, meeting_id: str) -> list[EpisodicNode]:
+    batch = 10
+    while True:
+        episodes = await meeting_episodes(
+            memory, group_id=group_id, meeting_id=meeting_id, last_n=batch
+        )
+        if len(episodes) < batch:
+            return episodes
+        batch *= 2
+
+
+async def _orphaned_corrections(
+    memory: Graphiti, *, group_id: str, meeting_id: str, changed: Sequence[int]
+) -> dict[int, list[str]]:
+    wanted = {correction_episode_name(meeting_id, index): index for index in changed}
+    found: dict[int, list[str]] = {}
+    episodes = await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id)
+    for episode in episodes:
+        index = wanted.get(episode.name)
+        if index is not None:
+            found.setdefault(index, []).append(episode.uuid)
+    return found
+
+
 async def _resume_point(
     memory: Graphiti, *, group_id: str, meeting_id: str
 ) -> tuple[int, str | None]:
@@ -444,17 +495,11 @@ async def _resume_point(
     head = last[-1]
     if _correction_index(head.name, meeting_id) is None:
         return _next_window(head.name, meeting_id), head.uuid
-    batch = 10
-    while True:
-        episodes = await meeting_episodes(
-            memory, group_id=group_id, meeting_id=meeting_id, last_n=batch
-        )
-        for episode in reversed(episodes):
-            if _correction_index(episode.name, meeting_id) is None:
-                return _next_window(episode.name, meeting_id), head.uuid
-        if len(episodes) < batch:
-            return 0, head.uuid
-        batch *= 2
+    episodes = await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id)
+    for episode in reversed(episodes):
+        if _correction_index(episode.name, meeting_id) is None:
+            return _next_window(episode.name, meeting_id), head.uuid
+    return 0, head.uuid
 
 
 def _next_window(name: str, meeting_id: str) -> int:

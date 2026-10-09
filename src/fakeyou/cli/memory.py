@@ -245,6 +245,10 @@ def _finish_ingest(
                 correction_episodes=list(previous.correction_episodes)
                 if previous is not None
                 else [],
+                correction_windows=dict(previous.correction_windows)
+                if previous is not None
+                else {},
+                correction_run=previous.correction_run if previous is not None else None,
             ),
         )
     except OSError as error:
