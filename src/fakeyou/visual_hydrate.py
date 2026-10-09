@@ -1,7 +1,6 @@
 import asyncio
 import base64
-import contextvars
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -18,12 +17,22 @@ from fakeyou.visual_store import VisualFrame, VisualStore
 VISUAL_HYDRATE_MAX_IMAGES = 2
 VISUAL_EVIDENCE_VERSION = "v1"
 VISUAL_EVIDENCE_MIME = "image/jpeg"
+VISUAL_CLARIFY_AMBIGUOUS = "I can see more than one shared slide. Which one do you mean?"
+VISUAL_CLARIFY_MISSING = "I cannot see a shared slide right now. Which slide do you mean?"
 
 
 def format_visual_line(ref: str, text: str | None) -> str:
     if text:
         return f"[visual {ref}: {text}]"
     return f"[visual {ref}]"
+
+
+def visual_clarification(candidate_count: int) -> str | None:
+    if candidate_count > 1:
+        return VISUAL_CLARIFY_AMBIGUOUS
+    if candidate_count == 0:
+        return VISUAL_CLARIFY_MISSING
+    return None
 
 
 def _without_echo_images(message: AIMessage) -> AIMessage | None:
@@ -37,15 +46,6 @@ def _without_echo_images(message: AIMessage) -> AIMessage | None:
     if len(kept) == len(message.content):
         return None
     return message.model_copy(update={"content": kept if kept else ""})
-
-
-async def _await_detached[T](coro: Coroutine[Any, Any, T]) -> T:
-    task = contextvars.Context().run(asyncio.ensure_future, coro)
-    try:
-        return await task
-    except BaseException:
-        task.cancel()
-        raise
 
 
 class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -127,11 +127,8 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         by_id = {frame.frame_id: frame for frame in self._store.frames}
         return [by_id[ref] for ref in refs if ref in by_id]
 
-    async def _caption_line(self, frame: VisualFrame) -> str:
-        try:
-            caption = await self._captioner.caption_frame(frame)
-        except Exception:
-            caption = None
+    def _caption_line(self, frame: VisualFrame) -> str:
+        caption = self._captioner.cached_caption(frame)
         return format_visual_line(frame_ref(frame), caption.text if caption else None)
 
     async def _hydrate(self, message: HumanMessage, frames: list[VisualFrame]) -> HumanMessage:
@@ -173,7 +170,7 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
 
     async def _trim(self, message: HumanMessage) -> HumanMessage:
         frames = self._resolve(visual_refs_of(message))
-        lines = [await self._caption_line(frame) for frame in frames]
+        lines = [self._caption_line(frame) for frame in frames]
         event = dict(message.additional_kwargs["meeting_event"])
         event["visual_refs"] = []
         parts = [message.text, *lines] if message.text else lines
@@ -207,7 +204,7 @@ def create_visual_resolver(
         frame = next((item for item in store.frames if item.frame_id == ref), None)
         if frame is None:
             return None
-        caption = await _await_detached(captioner.caption_frame(frame))
+        caption = captioner.cached_caption(frame)
         text = caption.text if caption is not None else None
         return format_visual_line(frame_ref(frame), text)
 

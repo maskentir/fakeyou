@@ -9,6 +9,7 @@ from typing import Any
 from PIL import Image
 
 from fakeyou.journal import Journal
+from fakeyou.visual_caption import VisualCaption, VisualCaptioner
 from fakeyou.visual_store import (
     VISUAL_FRAME_SUFFIX,
     VISUAL_KIND,
@@ -73,37 +74,6 @@ def _scan_page_ms(scan: Any) -> float:
     return datetime.now(UTC).timestamp() * 1000.0
 
 
-async def _box_or_none(tile: Any) -> dict[str, float] | None:
-    try:
-        box = await tile.bounding_box()
-    except Exception:
-        return None
-    if not isinstance(box, dict):
-        return None
-    values: dict[str, float] = {}
-    for key in ("x", "y", "width", "height"):
-        value = box.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        values[key] = float(value)
-    if values["width"] <= 0 or values["height"] <= 0:
-        return None
-    return values
-
-
-def _clip_full_page(data: bytes, box: dict[str, float] | None) -> Image.Image:
-    image = Image.open(io.BytesIO(data)).convert("RGB")
-    if box is None:
-        return image
-    left = max(0, int(box["x"]))
-    top = max(0, int(box["y"]))
-    right = min(image.width, left + max(1, int(box["width"])))
-    bottom = min(image.height, top + max(1, int(box["height"])))
-    if right <= left or bottom <= top:
-        return image
-    return image.crop((left, top, right, bottom))
-
-
 def _encode_jpeg(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=VISUAL_JPEG_QUALITY)
@@ -128,6 +98,8 @@ class VisualObserver:
         monotonic: Callable[[], float] = time.monotonic,
         poll_interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS,
         enabled: bool = True,
+        captioner: VisualCaptioner | None = None,
+        on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None,
     ) -> None:
         self._page = page
         self._store = store
@@ -135,9 +107,12 @@ class VisualObserver:
         self._monotonic = monotonic
         self._poll_interval = poll_interval_seconds
         self._enabled = enabled
+        self._captioner = captioner
+        self._on_caption = on_caption
         self._hits = 0
         self._presenting = False
         self._task: asyncio.Task[None] | None = None
+        self._eager: set[asyncio.Task[None]] = set()
         self._closed = False
 
     @property
@@ -158,6 +133,16 @@ class VisualObserver:
                 await task
             except asyncio.CancelledError:
                 pass
+        eager, self._eager = set(self._eager), set()
+        for pending in eager:
+            pending.cancel()
+        if eager:
+            await asyncio.gather(*eager, return_exceptions=True)
+
+    async def drain_eager(self) -> None:
+        pending = [task for task in self._eager if not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def poll(self) -> VisualFrame | None:
         if not self._enabled:
@@ -192,17 +177,43 @@ class VisualObserver:
             elapsed = self._monotonic() - started
             await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
 
-    async def _capture(self, scan: Any) -> VisualFrame:
+    async def _caption_and_emit(self, frame: VisualFrame) -> None:
+        captioner = self._captioner
+        if captioner is None:
+            return
+        try:
+            caption = await captioner.caption_frame(frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+        if caption is None:
+            return
+        callback = self._on_caption
+        if callback is None:
+            return
+        try:
+            callback(frame, caption)
+        except Exception:
+            pass
+
+    def _schedule_eager_caption(self, frame: VisualFrame) -> None:
+        if self._captioner is None:
+            return
+        task = asyncio.create_task(self._caption_and_emit(frame))
+        self._eager.add(task)
+        task.add_done_callback(self._eager.discard)
+
+    async def _capture(self, scan: Any) -> VisualFrame | None:
         started = self._monotonic()
         tile = self._page.locator(f"xpath={PRESENT_TILE_XPATH}")
         try:
             raw = await tile.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
-            image = Image.open(io.BytesIO(bytes(raw))).convert("RGB")
         except asyncio.CancelledError:
             raise
         except Exception:
-            full = await self._page.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
-            image = _clip_full_page(bytes(full), await _box_or_none(tile))
+            return None
+        image = Image.open(io.BytesIO(bytes(raw))).convert("RGB")
         jpeg = _encode_jpeg(image)
         thumb = _encode_thumb(image)
         digest = hashlib.sha256(jpeg).hexdigest()
@@ -224,7 +235,10 @@ class VisualObserver:
         )
         duplicates = self._store.duplicates_suppressed
         append_visual(self._store, frame)
-        if self._journal is not None and self._store.duplicates_suppressed == duplicates:
+        stored = self._store.duplicates_suppressed == duplicates
+        if stored:
+            self._schedule_eager_caption(frame)
+        if self._journal is not None and stored:
             self._journal.record(
                 "visual_captured",
                 source="browser",

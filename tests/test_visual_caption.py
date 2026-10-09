@@ -298,3 +298,51 @@ async def test_describe_frame_unknown_frame(tmp_path: Path) -> None:
     output = await describe.ainvoke({"frame_id": "missing-frame"})
     assert "missing-frame" in output
     assert len(model.seen) == 0
+
+
+async def test_cached_caption_miss_skips_network(tmp_path: Path) -> None:
+    path = shot_file(tmp_path, "miss.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000014-qqqqrrrr", path, "77" * 32, 1700000000000.0)
+    model = caption_model("A slide.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+
+    assert captioner.cached_caption(frame) is None
+    assert len(model.seen) == 0
+
+
+async def test_cached_caption_hit_returns_stored_caption(tmp_path: Path) -> None:
+    path = shot_file(tmp_path, "hit.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000015-sssstttt", path, "88" * 32, 1700000000000.0)
+    model = caption_model("A slide.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    stored = await captioner.caption_frame(frame)
+
+    assert stored is not None
+    assert captioner.cached_caption(frame) == stored
+    assert len(model.seen) == 1
+
+
+async def test_cached_caption_expires_after_ttl(tmp_path: Path) -> None:
+    clock = FakeClock(now=1000.0)
+    path = shot_file(tmp_path, "expired.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000016-uuuuvvvv", path, "99" * 32, 1700000000000.0)
+    model = caption_model("A slide.")
+    captioner = VisualCaptioner(
+        model, settings=VisualSettings(enabled=True), monotonic=clock.monotonic
+    )
+    assert await captioner.caption_frame(frame) is not None
+    assert captioner.cached_caption(frame) is not None
+    clock.now += VISUAL_CAPTION_TTL_SECONDS + 1.0
+
+    assert captioner.cached_caption(frame) is None
+    assert len(model.seen) == 1
+
+
+async def test_cached_caption_disabled_returns_none(tmp_path: Path) -> None:
+    path = shot_file(tmp_path, "off.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000017-wwwwxxxx", path, "a0" * 32, 1700000000000.0)
+    model = caption_model("A slide.")
+    captioner = VisualCaptioner(model, settings=VisualSettings())
+
+    assert captioner.cached_caption(frame) is None
+    assert len(model.seen) == 0

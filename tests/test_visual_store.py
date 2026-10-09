@@ -12,10 +12,13 @@ from PIL import Image
 
 from fakeyou.visual_observer import VisualObserver
 from fakeyou.visual_store import (
+    VISUAL_JOIN_TOLERANCE_MS,
     VisualFrame,
     VisualStore,
     append_visual,
+    frames_in_window,
     hamming_distance,
+    visual_refs_for_utterance,
 )
 from tests.fakes import RecordingJournal
 
@@ -102,6 +105,38 @@ def _file_exists(path: str) -> bool:
     return Path(path).exists()
 
 
+def timed_frame(
+    frame_id: str, directory: Path, dhash: int, page_ms: float, captured_at: str
+) -> VisualFrame:
+    path = directory / f"{frame_id}.jpg"
+    thumb_path = directory / f"{frame_id}.thumb.jpg"
+    path.write_bytes(b"frame-bytes-" + frame_id.encode())
+    thumb_path.write_bytes(b"thumb-bytes-" + frame_id.encode())
+    return VisualFrame(
+        frame_id=frame_id,
+        captured_page_ms=page_ms,
+        captured_at=captured_at,
+        sha256="ab" * 32,
+        path=str(path),
+        thumb_path=str(thumb_path),
+        dhash=dhash,
+    )
+
+
+def window_frames(directory: Path) -> list[VisualFrame]:
+    return [
+        timed_frame(
+            "frame-launch", directory, 0x0000000000000000, 100000.0, "2026-10-09T03:10:00+00:00"
+        ),
+        timed_frame(
+            "frame-pricing", directory, 0xFFFFFFFFFFFFFFFF, 110000.0, "2026-10-09T03:10:10+00:00"
+        ),
+        timed_frame(
+            "frame-roadmap", directory, 0xAAAAAAAAAAAAAAAA, 130000.0, "2026-10-09T03:10:30+00:00"
+        ),
+    ]
+
+
 def stored_frame(
     frame_id: str, directory: Path, dhash: int, page_ms: float = 1700000000000.0
 ) -> VisualFrame:
@@ -166,14 +201,63 @@ async def test_ring_spills_to_disk(tmp_path: Path) -> None:
     assert await asyncio.to_thread(_file_exists, frames[0].path)
 
 
+def test_join_tolerance_matches_spec_window() -> None:
+    assert VISUAL_JOIN_TOLERANCE_MS == 2000
+
+
+def test_frames_in_window_selects_spec_range(tmp_path: Path) -> None:
+    frames = window_frames(tmp_path)
+
+    assert [frame.frame_id for frame in frames_in_window(frames, 99500.0, 100500.0)] == [
+        "frame-launch"
+    ]
+    assert [frame.frame_id for frame in frames_in_window(frames, 99000.0, 111000.0)] == [
+        "frame-launch",
+        "frame-pricing",
+    ]
+    assert frames_in_window(frames, 150000.0, 151000.0) == []
+
+
+def test_frames_in_window_edges_are_inclusive(tmp_path: Path) -> None:
+    frames = window_frames(tmp_path)
+
+    assert [frame.frame_id for frame in frames_in_window(frames, 102000.0, 108000.0)] == [
+        "frame-launch",
+        "frame-pricing",
+    ]
+
+
+def test_refs_for_utterance_uses_capture_join(tmp_path: Path) -> None:
+    frames = window_frames(tmp_path)
+
+    assert visual_refs_for_utterance(frames, capture_ms=100000.0) == ("frame-launch",)
+    assert visual_refs_for_utterance(frames, capture_ms=109000.0) == ("frame-pricing",)
+    assert visual_refs_for_utterance(frames, capture_ms=115000.0) == ()
+
+
+def test_refs_for_utterance_falls_back_to_wall_clock(tmp_path: Path) -> None:
+    frames = window_frames(tmp_path)
+
+    assert visual_refs_for_utterance(frames, spoken_at="2026-10-09T03:10:11+00:00") == (
+        "frame-pricing",
+    )
+    assert visual_refs_for_utterance(frames, spoken_at="2026-10-09T03:14:00+00:00") == ()
+
+
+def test_refs_for_utterance_rejects_unparseable_stamp(tmp_path: Path) -> None:
+    frames = window_frames(tmp_path)
+
+    assert visual_refs_for_utterance(frames, spoken_at="soon") == ()
+    assert visual_refs_for_utterance(frames) == ()
+
+
 async def test_journal_has_no_bytes(tmp_path: Path) -> None:
-    full = shot_bytes((200, 40, 20))
+    tile = shot_bytes((200, 40, 20))
     first_scan = dict(PRESENT_SCAN, page_ms=1700000001000.0)
     second_scan = dict(PRESENT_SCAN, page_ms=1700000003000.0)
     page = FakeShotPage(
         [first_scan, first_scan, second_scan],
-        shots=[RuntimeError("tile gone"), RuntimeError("tile gone")],
-        full=full,
+        shots=[tile, tile],
         box={"x": 8.0, "y": 8.0, "width": 24.0, "height": 24.0},
     )
     journal = RecordingJournal()
@@ -182,10 +266,10 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     assert await observer.poll() is None
     first = await observer.poll()
     assert first is not None
-    assert page.full_calls == 1
+    assert page.full_calls == 0
     second = await observer.poll()
     assert second is not None
-    assert page.full_calls == 2
+    assert page.full_calls == 0
     assert len(store.frames) == 1
     assert store.duplicates_suppressed == 1
     assert journal.events("visual_captured")

@@ -1,7 +1,9 @@
 import io
 import json
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from PIL import Image
@@ -14,6 +16,7 @@ VISUAL_SIDECAR_NAME = "visuals.jsonl"
 VISUAL_KIND = "presentation"
 VISUAL_FRAME_SUFFIX = ".jpg"
 VISUAL_THUMB_SUFFIX = ".thumb.jpg"
+VISUAL_JOIN_TOLERANCE_MS = 2000.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,3 +115,48 @@ class VisualStore:
 
 def append_visual(store: VisualStore, frame: VisualFrame) -> None:
     store.append(frame)
+
+
+def frames_in_window(
+    frames: Sequence[VisualFrame],
+    from_ms: float,
+    to_ms: float,
+    *,
+    tolerance_ms: float = VISUAL_JOIN_TOLERANCE_MS,
+) -> list[VisualFrame]:
+    low = from_ms - tolerance_ms
+    high = to_ms + tolerance_ms
+    return [frame for frame in frames if low <= frame.captured_page_ms <= high]
+
+
+def _wall_ms(stamp: str) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp() * 1000.0
+
+
+def visual_refs_for_utterance(
+    frames: Sequence[VisualFrame],
+    *,
+    capture_ms: float = 0.0,
+    spoken_at: str = "",
+    tolerance_ms: float = VISUAL_JOIN_TOLERANCE_MS,
+) -> tuple[str, ...]:
+    if isinstance(capture_ms, bool) or capture_ms <= 0.0:
+        spoken_ms = _wall_ms(spoken_at)
+        if spoken_ms is None:
+            return ()
+        refs: list[str] = []
+        for frame in frames:
+            captured_ms = _wall_ms(frame.captured_at)
+            if captured_ms is not None and abs(captured_ms - spoken_ms) <= tolerance_ms:
+                refs.append(frame.frame_id)
+        return tuple(refs)
+    return tuple(
+        frame.frame_id
+        for frame in frames_in_window(frames, capture_ms, capture_ms, tolerance_ms=tolerance_ms)
+    )

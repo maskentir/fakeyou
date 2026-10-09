@@ -34,6 +34,12 @@ SPOKEN_LANGUAGE_GUIDANCE = {
     ),
 }
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
+VISUAL_GUIDANCE = (
+    "Visual context: the participant message may carry visual references to shared screen "
+    "frames. When exactly one visual reference is attached, answer about that frame and cite "
+    "its frame reference. When several or no visual references are attached, ask exactly one "
+    "neutral clarification question and do not guess."
+)
 
 
 def create_meeting_agent(

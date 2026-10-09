@@ -9,9 +9,12 @@ from typing import Any
 
 from PIL import Image
 
+from fakeyou.settings import VisualSettings
+from fakeyou.visual_caption import VisualCaptioner
 from fakeyou.visual_observer import VisualObserver
 from fakeyou.visual_store import VisualStore, dhash_image
 from tests.fakes import RecordingJournal
+from tests.test_visual_caption import caption_model
 
 PRESENT_SCAN: dict[str, Any] = {
     "labels": [
@@ -167,6 +170,69 @@ async def test_capture_writes_frame_and_sidecar_row(tmp_path: Path) -> None:
     assert captured[0]["visual_id"] == frame.frame_id
     assert captured[0]["chars"] == len(raw)
     assert captured[0]["duration_ms"] >= 0
+
+
+async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    model = caption_model("A launch timeline.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    received: list[tuple[str, str]] = []
+    observer = VisualObserver(
+        page,
+        store,
+        journal=journal,
+        captioner=captioner,
+        on_caption=lambda frame, caption: received.append((frame.frame_id, caption.text)),
+    )
+    assert await observer.poll() is None
+    frame = await observer.poll()
+    assert frame is not None
+    await observer.drain_eager()
+
+    assert len(model.seen) == 1
+    assert received == [(frame.frame_id, "A launch timeline.")]
+    await observer.close()
+
+
+async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN, PRESENT_SCAN], shots=[png, png])
+    store = VisualStore(tmp_path)
+    model = caption_model("A launch timeline.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    received: list[tuple[str, str]] = []
+    observer = VisualObserver(
+        page,
+        store,
+        captioner=captioner,
+        on_caption=lambda frame, caption: received.append((frame.frame_id, caption.text)),
+    )
+    assert await observer.poll() is None
+    first = await observer.poll()
+    second = await observer.poll()
+    assert first is not None
+    assert second is not None
+    await observer.drain_eager()
+
+    assert store.duplicates_suppressed == 1
+    assert len(model.seen) == 1
+    assert received == [(first.frame_id, "A launch timeline.")]
+    await observer.close()
+
+
+async def test_tile_failure_skips_capture_without_full_page(tmp_path: Path) -> None:
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], shots=[RuntimeError("tile gone")], full=None)
+    store = VisualStore(tmp_path)
+    observer = VisualObserver(page, store)
+    assert await observer.poll() is None
+
+    assert await observer.poll() is None
+    assert page.full_calls == 0
+    assert store.frames == ()
+    await observer.close()
 
 
 async def test_capture_never_blocks_reply(tmp_path: Path) -> None:

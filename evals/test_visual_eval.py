@@ -14,7 +14,8 @@ from fakeyou.debrief_sources import load_record_snapshot, validate_draft
 from fakeyou.report import VISUAL_BUDGET_MAX, VISUAL_BUDGET_P95, VISUAL_STABILITY_MIN, summarize
 from fakeyou.settings import VisualSettings
 from fakeyou.visual_caption import VisualCaptioner, frame_ref
-from fakeyou.visual_store import VisualFrame, VisualStore
+from fakeyou.visual_hydrate import visual_clarification
+from fakeyou.visual_store import VisualFrame, VisualStore, frames_in_window
 from tests.fakes import RecordingJournal, ToolCallingFakeModel
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,8 +29,6 @@ EXPECTED_IDS = (
     "budget_caps_hold",
 )
 FRAME_PATTERN = re.compile(r"frame:[0-9a-f]{8}@\S+")
-CLARIFY_AMBIGUOUS = "I can see more than one shared slide. Which one do you mean?"
-CLARIFY_MISSING = "I cannot see a shared slide right now. Which slide do you mean?"
 MS_PER_SECOND = 1000.0
 
 
@@ -57,20 +56,19 @@ def frame_by_id(fixture: dict[str, Any], wanted: str) -> dict[str, Any]:
     raise ValueError(f"unknown visual frame {wanted}")
 
 
-def candidates_in_window(
-    rows: list[dict[str, Any]], from_ms: float, to_ms: float, tolerance_ms: int
-) -> list[dict[str, Any]]:
+def frames_from_rows(rows: list[dict[str, Any]]) -> list[VisualFrame]:
     return [
-        row
+        VisualFrame(
+            frame_id=row["frame_id"],
+            captured_page_ms=row["captured_page_ms"],
+            captured_at=row["captured_at"],
+            sha256=row["sha256"],
+            path="",
+            thumb_path="",
+            dhash=row["dhash"],
+        )
         for row in rows
-        if from_ms - tolerance_ms <= row["captured_page_ms"] <= to_ms + tolerance_ms
     ]
-
-
-def resolve_reply(count: int) -> str:
-    if count > 1:
-        return CLARIFY_AMBIGUOUS
-    return CLARIFY_MISSING
 
 
 def assert_neutral_clarification(reply: str, forbidden: list[str]) -> None:
@@ -138,14 +136,14 @@ async def test_answer_cites_frame_matching_utterance_window(tmp_path: Path) -> N
     scenario = scenario_by_id(fixture, "answer_correct_visual")
     tolerance_ms = fixture["tolerance_ms"]
     utterance = scenario["utterance"]
-    candidates = candidates_in_window(
-        fixture["frames"], utterance["from_ms"], utterance["to_ms"], tolerance_ms
-    )
-
-    assert [row["frame_id"] for row in candidates] == [scenario["expected_frame"]]
     journal = RecordingJournal("visual-eval")
     settings = VisualSettings(enabled=True)
     store = store_for(tmp_path / "answer", fixture["frames"], journal)
+    candidates = frames_in_window(
+        store.frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=tolerance_ms
+    )
+
+    assert [frame.frame_id for frame in candidates] == [scenario["expected_frame"]]
     expected = frame_by_id(fixture, scenario["expected_frame"])
     captioner = captioner_for([expected["caption"]], settings, journal)
     [describe] = create_visual_tools(store, captioner)
@@ -166,25 +164,31 @@ def test_ambiguous_reference_yields_single_neutral_clarification() -> None:
     fixture = load_visual_fixture()
     scenario = scenario_by_id(fixture, "clarify_ambiguous")
     utterance = scenario["utterance"]
-    candidates = candidates_in_window(
-        fixture["frames"], utterance["from_ms"], utterance["to_ms"], fixture["tolerance_ms"]
+    frames = frames_from_rows(fixture["frames"])
+    candidates = frames_in_window(
+        frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=fixture["tolerance_ms"]
     )
+    reply = visual_clarification(len(candidates))
 
-    assert sorted(row["frame_id"] for row in candidates) == sorted(scenario["candidates"])
+    assert sorted(frame.frame_id for frame in candidates) == sorted(scenario["candidates"])
     assert len(candidates) > 1
-    assert_neutral_clarification(resolve_reply(len(candidates)), scenario["forbidden_terms"])
+    assert reply is not None
+    assert_neutral_clarification(reply, scenario["forbidden_terms"])
 
 
 def test_missing_visual_yields_neutral_clarification() -> None:
     fixture = load_visual_fixture()
     scenario = scenario_by_id(fixture, "clarify_missing")
     utterance = scenario["utterance"]
-    candidates = candidates_in_window(
-        fixture["frames"], utterance["from_ms"], utterance["to_ms"], fixture["tolerance_ms"]
+    frames = frames_from_rows(fixture["frames"])
+    candidates = frames_in_window(
+        frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=fixture["tolerance_ms"]
     )
+    reply = visual_clarification(len(candidates))
 
     assert candidates == []
-    assert_neutral_clarification(resolve_reply(len(candidates)), scenario["forbidden_terms"])
+    assert reply is not None
+    assert_neutral_clarification(reply, scenario["forbidden_terms"])
 
 
 def test_debrief_cites_visual_frame(tmp_path: Path) -> None:

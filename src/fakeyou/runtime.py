@@ -68,8 +68,9 @@ from fakeyou.stream_capture import (
     SupportsCaptureRegistry,
     load_capture_script,
 )
+from fakeyou.visual_caption import VisualCaption, VisualCaptioner
 from fakeyou.visual_observer import VisualObserver
-from fakeyou.visual_store import VisualStore
+from fakeyou.visual_store import VisualFrame, VisualStore
 from fakeyou.voice_activity import (
     VoiceActivityLoop,
     VoiceActivityTracker,
@@ -341,6 +342,8 @@ class _MeetingWorker:
     capture_registry: StreamRegistry | None = None
     visual_store: VisualStore | None = None
     visual_observer: VisualObserver | None = None
+    visual_captioner: VisualCaptioner | None = None
+    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -602,6 +605,8 @@ class _MeetingWorker:
             journal=self.journal,
             monotonic=self.monotonic,
             enabled=self.config.visual_enabled,
+            captioner=self.visual_captioner,
+            on_caption=self.visual_on_caption,
         )
         await self.visual_observer.start()
         self.record("visual_observer_started", source="runtime")
@@ -836,6 +841,9 @@ async def run_meeting_session(
     preflight_budget_seconds: float | None = None,
     voice_activity: VoiceActivityTracker | None = None,
     meet_dispatcher: MeetActionDispatcher | None = None,
+    visual_store: VisualStore | None = None,
+    visual_captioner: VisualCaptioner | None = None,
+    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None,
 ) -> SessionResult:
     if initial_speech is not None and open_audio is None:
         raise ValueError("initial speech requires meeting audio")
@@ -942,6 +950,9 @@ async def run_meeting_session(
                                 faults=faults,
                                 journal=journal,
                                 voice_activity=voice_activity,
+                                visual_store=visual_store,
+                                visual_captioner=visual_captioner,
+                                visual_on_caption=visual_on_caption,
                             )
                             try:
                                 detail = await worker.run()

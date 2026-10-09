@@ -20,7 +20,9 @@ from fakeyou.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
     SPOKEN_LANGUAGE_GUIDANCE,
+    VISUAL_GUIDANCE,
     create_meeting_agent,
+    create_visual_tools,
 )
 from fakeyou.audio import TurnAudioTap
 from fakeyou.brief import MeetingBrief
@@ -53,7 +55,11 @@ from fakeyou.persona import (
     memory_wiring,
     refuse_meet_tool,
 )
-from fakeyou.providers import create_chat_model, create_fallback_chat_model
+from fakeyou.providers import (
+    create_chat_model,
+    create_fallback_chat_model,
+    create_visual_chat_model,
+)
 from fakeyou.runtime import MeetActionDispatcher
 from fakeyou.session import SessionConfig
 from fakeyou.settings import (
@@ -167,6 +173,16 @@ def default_persona(settings: Settings) -> str:
     )
 
 
+def create_visual_captioner(
+    settings: Settings, journal: Journal | None = None
+) -> VisualCaptioner | None:
+    if not settings.visual.enabled:
+        return None
+    return VisualCaptioner(
+        create_visual_chat_model(settings), settings=settings.visual, journal=journal
+    )
+
+
 @contextmanager
 def stop_signal_handlers(stop: asyncio.Event) -> Iterator[None]:
     loop = asyncio.get_running_loop()
@@ -201,6 +217,9 @@ async def open_conversation(
     visual_captioner: VisualCaptioner | None = None,
 ) -> AsyncIterator[ConversationLoop]:
     tool_names: frozenset[PersonaTool] = frozenset()
+    visual_wired = (
+        settings.visual.enabled and visual_store is not None and visual_captioner is not None
+    )
     if profile is None:
         if brief is not None:
             raise ValueError("a meeting brief requires a persona profile")
@@ -212,6 +231,8 @@ async def open_conversation(
             brief=brief,
             recall_strategy=settings.memory.recall.strategy,
         )
+    if visual_wired:
+        persona = f"{persona}\n\n{VISUAL_GUIDANCE}"
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
@@ -225,9 +246,6 @@ async def open_conversation(
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))
         visual: VisualCaptionResolver | None = None
-        visual_wired = (
-            settings.visual.enabled and visual_store is not None and visual_captioner is not None
-        )
         if visual_wired and visual_store is not None and visual_captioner is not None:
             visual = create_visual_resolver(
                 visual_store, visual_captioner, enabled=settings.visual.enabled
@@ -264,6 +282,7 @@ async def open_conversation(
                     enabled=settings.visual.enabled,
                 )
             )
+            tools.extend(create_visual_tools(visual_store, visual_captioner))
         if profile is not None and meet_dispatcher is not None:
             meet = tool_names - {"recall_meeting_context"}
             if meet:

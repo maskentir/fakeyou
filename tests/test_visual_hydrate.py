@@ -22,11 +22,14 @@ from fakeyou.memory import _current_speech, create_memory_prefetch_middleware
 from fakeyou.persona import PersonaProfile
 from fakeyou.session import SessionConfig
 from fakeyou.settings import VisualSettings
-from fakeyou.visual_caption import VisualCaptioner
+from fakeyou.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual_hydrate import (
+    VISUAL_CLARIFY_AMBIGUOUS,
+    VISUAL_CLARIFY_MISSING,
     VISUAL_HYDRATE_MAX_IMAGES,
     create_visual_hydrate_middleware,
     create_visual_resolver,
+    visual_clarification,
 )
 from fakeyou.visual_store import VisualFrame, VisualStore
 from tests.fakes import ToolCallingFakeModel, make_graphiti
@@ -183,6 +186,9 @@ async def test_state_has_refs_only(tmp_path: Path) -> None:
     store, frames = stored_frames(tmp_path, 3)
     captioner, visual = captioner_for(CAPTIONS[:2])
     first, second, third = frames
+    assert await captioner.caption_frame(first) is not None
+    assert await captioner.caption_frame(second) is not None
+    assert len(model_calls(visual)) == 2
     blobs = [frame_bytes64(frame) for frame in frames]
     assert len(set(blobs)) == 3
     echo = AIMessage(
@@ -392,6 +398,9 @@ async def test_prefetch_appends_latest_caption() -> None:
 async def test_streaming_unchanged(tmp_path: Path) -> None:
     store, frames = stored_frames(tmp_path, 2)
     captioner, visual = captioner_for(["Frame caption."])
+    assert await captioner.caption_frame(frames[0]) is not None
+    assert await captioner.caption_frame(frames[1]) is not None
+    assert len(model_calls(visual)) == 2
     blobs = [frame_bytes64(frame) for frame in frames]
     model = ToolCallingFakeModel(
         responses=[
@@ -422,7 +431,7 @@ async def test_streaming_unchanged(tmp_path: Path) -> None:
         )
     ]
     assert sentences == ["Revenue grew strongly.", "Costs stayed flat."]
-    assert len(model_calls(visual)) == 1
+    assert len(model_calls(visual)) == 2
     assert {block["base64"] for entry in model.seen for block in image_blocks(entry)} == set(blobs)
     streamed = len(model.seen)
     second = speech_event("st2", "What shows costs?", (frames[0].frame_id,))
@@ -437,6 +446,68 @@ async def test_streaming_unchanged(tmp_path: Path) -> None:
     restreamed = model.seen[streamed:]
     assert restreamed != []
     assert {block["base64"] for entry in restreamed for block in image_blocks(entry)} == {blobs[0]}
+
+
+async def test_resolver_skips_network_on_cache_miss(tmp_path: Path) -> None:
+    store, frames = stored_frames(tmp_path, 1)
+    captioner, visual = captioner_for(["Seed caption."])
+    resolve = create_visual_resolver(store, captioner)
+    [frame] = frames
+
+    line = await resolve(frame.frame_id)
+
+    assert line == f"[visual {frame_ref(frame)}]"
+    assert visual.seen == []
+
+
+async def test_resolver_serves_cached_caption_without_new_call(tmp_path: Path) -> None:
+    store, frames = stored_frames(tmp_path, 1)
+    captioner, visual = captioner_for(["Seed caption."])
+    [frame] = frames
+    assert await captioner.caption_frame(frame) is not None
+    assert len(model_calls(visual)) == 1
+    resolve = create_visual_resolver(store, captioner)
+
+    line = await resolve(frame.frame_id)
+
+    assert line == f"[visual {frame_ref(frame)}: Seed caption.]"
+    assert len(model_calls(visual)) == 1
+
+
+async def test_trim_skips_network_on_cache_miss(tmp_path: Path) -> None:
+    store, frames = stored_frames(tmp_path, 2)
+    captioner, visual = captioner_for(["Seed caption."])
+    middleware = create_visual_hydrate_middleware(store, captioner)
+    first, second = frames
+
+    update = await middleware.abefore_model(
+        {
+            "messages": [
+                participant("What shows revenue?", "t1", (first.frame_id,)),
+                participant("What shows costs?", "t2", (second.frame_id,)),
+            ]
+        },
+        None,
+    )
+
+    assert update is not None
+    [trimmed] = update["messages"]
+    assert trimmed.id == "t1"
+    assert f"[visual {frame_ref(first)}]" in trimmed.text
+    assert "Seed caption." not in trimmed.text
+    assert visual.seen == []
+
+
+def test_visual_clarification_asks_single_neutral_question() -> None:
+    assert visual_clarification(1) is None
+    for count in (0, 2, 5):
+        reply = visual_clarification(count)
+        assert reply is not None
+        assert reply.count("?") == 1
+        assert "frame:" not in reply
+    assert visual_clarification(0) == VISUAL_CLARIFY_MISSING
+    assert visual_clarification(2) == VISUAL_CLARIFY_AMBIGUOUS
+    assert VISUAL_CLARIFY_MISSING != VISUAL_CLARIFY_AMBIGUOUS
 
 
 def test_after_model_drops_echoed_images(tmp_path: Path) -> None:

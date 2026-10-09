@@ -84,16 +84,24 @@ class VisualCaptioner:
     def spent_usd(self) -> float:
         return self._spent_usd
 
+    def cached_caption(self, frame: VisualFrame) -> VisualCaption | None:
+        if not self._settings.enabled:
+            return None
+        cached = self._cache.get(frame.sha256)
+        if cached is None:
+            return None
+        caption, stored_at = cached
+        if self._monotonic() - stored_at > VISUAL_CAPTION_TTL_SECONDS:
+            del self._cache[frame.sha256]
+            return None
+        return caption
+
     async def caption_frame(self, frame: VisualFrame) -> VisualCaption | None:
         if not self._settings.enabled:
             return None
-        now = self._monotonic()
-        cached = self._cache.get(frame.sha256)
-        if cached is not None:
-            caption, stored_at = cached
-            if now - stored_at <= VISUAL_CAPTION_TTL_SECONDS:
-                return caption
-            del self._cache[frame.sha256]
+        hit = self.cached_caption(frame)
+        if hit is not None:
+            return hit
         data = await asyncio.to_thread(Path(frame.path).read_bytes)
         payload, width, height = _payload_bytes(data)
         estimate = estimate_tokens(width, height)
