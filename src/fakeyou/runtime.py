@@ -68,6 +68,8 @@ from fakeyou.stream_capture import (
     SupportsCaptureRegistry,
     load_capture_script,
 )
+from fakeyou.visual_observer import VisualObserver
+from fakeyou.visual_store import VisualStore
 from fakeyou.voice_activity import (
     VoiceActivityLoop,
     VoiceActivityTracker,
@@ -337,6 +339,8 @@ class _MeetingWorker:
     voice_loop: VoiceActivityLoop | None = None
     capture_drain: CaptureDrainLoop | None = None
     capture_registry: StreamRegistry | None = None
+    visual_store: VisualStore | None = None
+    visual_observer: VisualObserver | None = None
 
     async def run(self) -> str:
         if self.open_audio is not None:
@@ -587,6 +591,20 @@ class _MeetingWorker:
             self.capture_drain = None
         self.capture_registry = None
 
+    async def start_visual_observer(self) -> None:
+        if self.visual_observer is not None or self.visual_store is None:
+            return
+        self.visual_observer = VisualObserver(
+            self.page, self.visual_store, journal=self.journal, monotonic=self.monotonic
+        )
+        await self.visual_observer.start()
+        self.record("visual_observer_started", source="runtime")
+
+    async def close_visual_observer(self) -> None:
+        if self.visual_observer is not None:
+            await close_safely(self.visual_observer.close, source="browser", faults=self.faults)
+            self.visual_observer = None
+
     async def monitor(self, admitted_at: float) -> str:
         try:
             try:
@@ -617,8 +635,16 @@ class _MeetingWorker:
                     self.faults.record(
                         classify_exception("browser", error, operation="voice_activity")
                     )
+            try:
+                await self.start_visual_observer()
+            except Exception as error:
+                if self.faults is not None:
+                    self.faults.record(
+                        classify_exception("browser", error, operation="visual_observer")
+                    )
             return await self._monitor_loop(admitted_at)
         finally:
+            await self.close_visual_observer()
             await self.close_voice_activity()
             await self.close_probe_drain()
             await self.close_capture_drain()
@@ -752,6 +778,7 @@ class _MeetingWorker:
         self, kind: LifecycleEventKind, attribution: LifecycleAttribution, detail: str
     ) -> str:
         await self.lifecycle.send(kind, attribution, detail)
+        await self.close_visual_observer()
         await self.close_participant_observer()
         if self.conversation is not None:
             await close_safely(self.conversation.close, source="agent", faults=self.faults)
