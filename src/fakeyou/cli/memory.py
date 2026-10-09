@@ -2,7 +2,7 @@ import asyncio
 import json
 import shutil
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -220,8 +220,13 @@ def _finish_ingest(
     record_sha256: str | None,
     reason: str | None,
     faults: FaultReporter,
+    episode_uuids: Mapping[int, str] | None = None,
 ) -> bool:
     stored = True
+    previous = read_status(status_file)
+    merged = dict(previous.episode_uuids) if previous is not None else {}
+    if episode_uuids:
+        merged.update(episode_uuids)
     try:
         write_status(
             status_file,
@@ -235,6 +240,11 @@ def _finish_ingest(
                 record_sha256=record_sha256,
                 updated_at=datetime.now(UTC),
                 reason=reason,
+                episode_uuids=merged,
+                corrected_at=previous.corrected_at if previous is not None else None,
+                correction_episodes=list(previous.correction_episodes)
+                if previous is not None
+                else [],
             ),
         )
     except OSError as error:
@@ -406,6 +416,7 @@ async def ingest_recorded_meeting(
                     record_sha256=current_hash,
                     reason=reason,
                     faults=faults,
+                    episode_uuids=result.episode_uuids,
                 ):
                     raise SystemExit(1) from None
         except RecordLockError as error:

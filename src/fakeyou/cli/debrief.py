@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -20,6 +21,7 @@ from fakeyou.debrief import (
 )
 from fakeyou.debrief_schema import DebriefReport, EvidenceSource
 from fakeyou.debrief_sources import chunk_sources, load_context_snapshot, load_record_snapshot
+from fakeyou.diarize_correction import correction_digest
 from fakeyou.ingestion_status import (
     RecordLockError,
     read_status,
@@ -108,6 +110,16 @@ async def debrief_meeting(
         raise CliError("meeting record is locked by another operation") from None
 
 
+def _is_anonymous(participant_id: str) -> bool:
+    if participant_id == "unknown":
+        return True
+    try:
+        parsed = uuid.UUID(participant_id)
+    except ValueError:
+        return False
+    return str(parsed) == participant_id.lower()
+
+
 async def _debrief_locked(
     record_path: Path, profile: PersonaProfile, meeting_id: str, force: bool, settings: Settings
 ) -> None:
@@ -118,16 +130,18 @@ async def _debrief_locked(
     )
     record_digest: str | None = None
     context_digest: str | None = None
+    sidecar_digest: str | None = None
     started = time.monotonic()
     try:
-        snapshot = load_record_snapshot(record_path)
+        snapshot = load_record_snapshot(record_path, journal=journal)
         record_digest = snapshot.record_sha256
+        sidecar_digest = correction_digest(record_path)
         context, context_digest = load_context_snapshot(context_path(record_path))
         _validate_scope(record_path, context, profile, meeting_id)
         chunks = chunk_sources(snapshot.sources)
         if any(record_path.parent.glob("debrief.json.*.rollback")):
             raise CliError("canonical debrief requires publication recovery")
-        if not force and debrief_report_status(record_path) == "available":
+        if not force and debrief_report_status(record_path, journal=journal) == "available":
             report = read_debrief(record_path)
             if (report.owner_id, report.twin_id, report.meeting_id) != (
                 profile.owner_id,
@@ -161,9 +175,13 @@ async def _debrief_locked(
                 )
         if stop.is_set():
             raise asyncio.CancelledError
-        current = load_record_snapshot(record_path)
+        current = load_record_snapshot(record_path, journal=journal)
         _, current_context_digest = load_context_snapshot(context_path(record_path))
-        if current.record_sha256 != record_digest or current_context_digest != context_digest:
+        if (
+            current.record_sha256 != record_digest
+            or current_context_digest != context_digest
+            or correction_digest(record_path) != sidecar_digest
+        ):
             raise CliError("meeting sources changed during debrief generation")
         cited = {reference.entry_id for item in draft.items for reference in item.evidence}
         cited.update(
@@ -179,7 +197,7 @@ async def _debrief_locked(
             limitations.append(
                 "No historical meeting brief is available; objectives are unavailable."
             )
-        if any(entry.participant_id == "unknown" for entry in snapshot.sources):
+        if any(_is_anonymous(entry.participant_id) for entry in snapshot.sources):
             limitations.append(
                 "Unknown participants have not been identified or mapped to the owner."
             )
@@ -204,6 +222,7 @@ async def _debrief_locked(
             meeting_id=meeting_id,
             record_sha256=record_digest,
             context_sha256=context_digest,
+            correction_sha256=sidecar_digest,
             generated_at=datetime.now(UTC),
             provider=settings.debrief_role.provider,
             model=settings.debrief_role.model,

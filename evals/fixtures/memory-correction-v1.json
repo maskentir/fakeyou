@@ -1,0 +1,181 @@
+{
+  "base_at": "2026-01-15T09:00:00+00:00",
+  "corrected_speaker": "Nadia",
+  "correction": {
+    "end_ms": 91000,
+    "speaker": "Nadia",
+    "start_ms": 69000
+  },
+  "meeting_id": "memcorr-v1",
+  "queries": [
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q01",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "rollout"
+      ],
+      "query": "Who named the PIC for the rollout?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q02",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "Monday"
+      ],
+      "query": "Who announced the Monday kickoff?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q03",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "Thursday"
+      ],
+      "query": "Who moved the client demo to Thursday?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q04",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "report"
+      ],
+      "query": "Who said Joko will bring the report?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q05",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "Joko"
+      ],
+      "query": "Who assigned the rollout PIC role to Joko?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q06",
+      "kind": "changed",
+      "present": [
+        "Nadia",
+        "demo"
+      ],
+      "query": "Which speaker decided the demo schedule?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q07",
+      "kind": "stable",
+      "present": [
+        "Friday",
+        "release"
+      ],
+      "query": "When does the release ship?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "id": "q08",
+      "kind": "stable",
+      "present": [
+        "Nadia",
+        "notes"
+      ],
+      "query": "Who will send the meeting notes?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "expect_empty": true,
+      "id": "q09",
+      "kind": "abstention",
+      "present": [],
+      "query": "What did the team decide about the Surabaya warehouse lease?"
+    },
+    {
+      "absent": [
+        "Riko"
+      ],
+      "expect_empty": true,
+      "id": "q10",
+      "kind": "abstention",
+      "present": [],
+      "query": "Who owns the Medan hiring plan?"
+    }
+  ],
+  "stale_speaker": "Riko",
+  "twin_name": "Twin",
+  "version": "memory-correction-v1",
+  "windows": [
+    {
+      "changed": false,
+      "index": 0,
+      "utterances": [
+        {
+          "offset_seconds": 0,
+          "speaker": "Nadia",
+          "text": "The project budget is approved at fifty million."
+        },
+        {
+          "offset_seconds": 20,
+          "speaker": "Joko",
+          "text": "I will prepare the spending summary tonight."
+        }
+      ]
+    },
+    {
+      "changed": true,
+      "index": 1,
+      "utterances": [
+        {
+          "offset_seconds": 70,
+          "speaker": "Riko",
+          "text": "Joko is the PIC for the rollout, and the kickoff is on Monday."
+        },
+        {
+          "offset_seconds": 90,
+          "speaker": "Riko",
+          "text": "The client demo moves to Thursday, and Joko will bring the report."
+        }
+      ]
+    },
+    {
+      "changed": false,
+      "index": 2,
+      "utterances": [
+        {
+          "offset_seconds": 140,
+          "speaker": "Joko",
+          "text": "We ship the release on Friday, and the changelog is ready."
+        },
+        {
+          "offset_seconds": 160,
+          "speaker": "Nadia",
+          "text": "I will send the meeting notes by Friday evening."
+        }
+      ]
+    }
+  ]
+}

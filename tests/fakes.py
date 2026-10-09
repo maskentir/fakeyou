@@ -296,6 +296,7 @@ def make_graphiti(
     fail_build: bool = False,
     episode_prefix: str = "episode-",
     edges: Sequence[Any] = (),
+    episode_edges: dict[str, list[Any]] | None = None,
 ) -> MagicMock:
     memory = create_autospec(Graphiti, instance=True)
     memory.events = []
@@ -303,6 +304,9 @@ def make_graphiti(
     memory.searched = []
     memory.retrieved = []
     memory.removed = []
+    memory.episode_lookups = []
+    memory.executed = []
+    memory.episode_edges = dict(episode_edges or {})
     memory.facts = list(facts)
     memory.fact_episodes = episodes or {}
     memory.fact_groups = fact_groups or {}
@@ -391,12 +395,23 @@ def make_graphiti(
     async def remove_episode(episode_uuid: str) -> None:
         memory.removed.append(episode_uuid)
 
+    async def get_nodes_and_edges_by_episode(episode_uuids: list[str]) -> Any:
+        memory.episode_lookups.append(list(episode_uuids))
+        found = [edge for uuid in episode_uuids for edge in memory.episode_edges.get(uuid, [])]
+        return SimpleNamespace(edges=found, nodes=[])
+
+    async def execute_query(query: str, **params: Any) -> Any:
+        memory.executed.append({"query": query, **params})
+        return SimpleNamespace(records=[])
+
     memory.build_indices_and_constraints.side_effect = build
     memory.close.side_effect = close
     memory.search.side_effect = search
     memory.add_episode.side_effect = add_episode
     memory.retrieve_episodes.side_effect = retrieve_episodes
     memory.remove_episode.side_effect = remove_episode
+    memory.get_nodes_and_edges_by_episode.side_effect = get_nodes_and_edges_by_episode
+    memory.driver.execute_query.side_effect = execute_query
     memory.driver.client.verify_connectivity.side_effect = verify_connection
     return cast(MagicMock, memory)
 

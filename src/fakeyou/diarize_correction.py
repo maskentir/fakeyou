@@ -19,6 +19,14 @@ class StaleDiarizationError(DiarizeError):
     pass
 
 
+def correction_digest(record_path: Path) -> str | None:
+    try:
+        raw = (record_path.parent / JSON_FILE_NAME).read_bytes()
+    except OSError:
+        return None
+    return sha256(raw).hexdigest()
+
+
 @dataclass(frozen=True)
 class CorrectionBundle:
     rttm_path: Path

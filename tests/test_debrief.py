@@ -20,6 +20,9 @@ from fakeyou.debrief_schema import (
     ObjectiveFinding,
 )
 from fakeyou.debrief_sources import RecordSnapshot, SourceEntry, load_record_snapshot
+from fakeyou.diarize_client import DiarizedTurn
+from fakeyou.diarize_correction import write_correction_bundle
+from fakeyou.journal import Journal
 from tests.fakes import ToolCallingFakeModel
 
 AT = datetime(2026, 10, 3, 12, tzinfo=UTC)
@@ -792,3 +795,58 @@ async def test_native_conflicting_claims_remain_separate_without_authentication(
     )
     assert result.items == expected
     assert len(model.seen) == 2
+
+
+def test_sidecar_change_marks_cached_report_stale(record_path: Path) -> None:
+    report = report_for(record_path)
+    module.write_debrief(record_path, report)
+    assert module.debrief_report_status(record_path) == "available"
+    audio_dir = record_path.parent / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        record_path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+
+    assert module.debrief_report_status(record_path) == "stale"
+
+
+def test_status_check_reports_stale_sidecar_fallback_to_journal(record_path: Path) -> None:
+    report = report_for(record_path)
+    module.write_debrief(record_path, report)
+    audio_dir = record_path.parent / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        record_path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "kind": "transcript",
+                    "at": AT.isoformat(),
+                    "id": "e2",
+                    "spoken_at": "12:01:00",
+                    "source": "caption",
+                    "text": "A second voice notes the deadline.",
+                    "participant_id": "unknown",
+                    "speaker_evidence_id": None,
+                }
+            )
+            + "\n"
+        )
+    lines: list[str] = []
+    journal = Journal("b2-meeting", emit=lines.append)
+
+    assert module.debrief_report_status(record_path, journal=journal) == "stale"
+
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["event"] == "fault_recorded"
+    assert row["source"] == "meeting_record"
+    assert row["detail"] == "StaleDiarizationError"

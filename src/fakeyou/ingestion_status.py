@@ -41,6 +41,9 @@ class IngestionStatus(BaseModel):
     record_sha256: str | None = None
     updated_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     reason: str | None = None
+    episode_uuids: dict[int, str] = Field(default_factory=dict)
+    corrected_at: str | None = None
+    correction_episodes: list[str] = Field(default_factory=list)
 
 
 def status_path(record_path: Path) -> Path:
