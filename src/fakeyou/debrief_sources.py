@@ -1,7 +1,7 @@
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -10,6 +10,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from fakeyou.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
 from fakeyou.debrief_schema import DebriefDraft, DebriefValidationError, EvidenceRef
+from fakeyou.diarize_correction import load_corrected_record
+from fakeyou.faults import FaultReporter
+from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
@@ -35,7 +38,21 @@ class RecordSnapshot:
     sources: tuple[SourceEntry, ...]
 
 
-def load_record_snapshot(path: Path) -> RecordSnapshot:
+def _corrected_speakers(path: Path, faults: FaultReporter | None) -> dict[str, str]:
+    try:
+        entries = load_corrected_record(path)
+    except Exception as error:
+        if faults is not None:
+            faults.record(classify_exception("meeting_record", error))
+        return {}
+    return {
+        f"transcript:{entry.id}": uuid
+        for entry in entries
+        if isinstance(entry, TranscriptEntry) and (uuid := entry.corrected_speaker_uuid) is not None
+    }
+
+
+def load_record_snapshot(path: Path, *, faults: FaultReporter | None = None) -> RecordSnapshot:
     try:
         raw = path.read_bytes()
     except OSError:
@@ -83,6 +100,14 @@ def load_record_snapshot(path: Path) -> RecordSnapshot:
             )
     if not sources:
         raise DebriefValidationError("meeting record contains no usable speech sources") from None
+    corrected = _corrected_speakers(path, faults)
+    if corrected:
+        sources = [
+            replace(entry, participant_id=speaker)
+            if (speaker := corrected.get(entry.id)) is not None
+            else entry
+            for entry in sources
+        ]
     return RecordSnapshot(record_sha256=hashlib.sha256(raw).hexdigest(), sources=tuple(sources))
 
 
