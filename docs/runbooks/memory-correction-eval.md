@@ -64,3 +64,26 @@ angka: `.superpowers/sdd/phase-2-memory-correction/task-3-report.md`.
 Harness menulis `ingestion.json` (peta jendela→episode) setelah ingest awal,
 meniru langkah persistensi CLI produksi yang dipakai `ingest_corrections`
 untuk menemukan edge asli yang harus diinvalidasi.
+
+> **Caveat retry (Q3, deferred):** idempotensi per-jendela belum ada —
+> bila run koreksi gagal di tengah jalan, retry meng-ingest ulang jendela
+> yang sudah berhasil (episode koreksi duplikat) sampai follow-up
+> mendarat. `corrected_at` hanya ditulis saat run selesai penuh.
+
+## Angka headline (fixture v1, Opsi C, 3 run hijau beruntun)
+
+| Run | Durasi | inv_recall | sup_serve | akurasi* | merge* | changed_edges | over_inv |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 (`memcorr-d1b16808`) | 177 dtk | 1,0 | 0,0 | 0,0 | 1,0 | 2 | 0 |
+| 2 (`memcorr-abd2f4ad`) | 220 dtk | 1,0 | 0,0 | 0,75 | 1,0 | 2 | 0 |
+| 3 (`memcorr-bc151535`) | 170 dtk | 1,0 | 0,0 | 0,75 | 1,0 | 2 | 0 |
+
+\* Diagnostik, bukan gate: akurasi/merge bervariasi antar-run karena cakupan
+ekstraksi LLM per jendela mainan (run 1: episode koreksi 0 edge; run 2–3:
+changed 6/6, stabil 0/2). Detail forensik: laporan Task 3 di
+`.superpowers/sdd/phase-2-memory-correction/task-3-report.md`.
+
+Biaya/run: waktu dinding ±3–4 menit/run (3 ingest + 1 koreksi + 20 recall +
+3 fetch episode; model muse-spark-1.2 + TEI lokal). Token LLM tidak
+termeterai — Graphiti tidak mengekspos pemakaian, harness hanya mencatat
+durasi; estimasi tetap: 1 episode koreksi per jendela berubah + tanpa judge.

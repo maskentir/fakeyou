@@ -179,3 +179,15 @@ fallback Opsi C bila flaky, kualitas ekstraksi satu-ujaran.
 - [ ] Tanpa placeholder: nama fungsi, skema, metrik eksplisit.
 - [ ] Konsistensi tipe: `CorrectionResult`, status aditif, fixture v1 —
   cocok antar-task.
+
+## Adendum: Opsi A → Opsi C
+
+Eval live Task 3 membuktikan Opsi A (re-ingest koreksi) tidak bisa
+menginvalidasi fakta gaya-reporter produksi ("X stated that P"): laporan
+tuturan beda-penutur kompatibel secara logika, jadi dedup LLM tidak pernah
+menandai kontradiksi dan `invalid_at` tetap kosong (3/3 run
+`invalidation_recall` 0,0). Sesuai ruling ledger, penulis koreksi beralih ke
+Opsi C: invalidasi bedah via Cypher sempit (`SET invalid_at`/`expired_at`,
+tanpa `edge.save()`) memakai peta jendela→episode Task 1, lalu re-ingest
+episode koreksi. Angka hijau dan perintah jalan: runbook
+[eval koreksi memori](../runbooks/memory-correction-eval.md).
