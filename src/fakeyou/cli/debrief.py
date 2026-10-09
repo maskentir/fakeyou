@@ -12,6 +12,7 @@ from fakeyou.assembly import stop_signal_handlers
 from fakeyou.brief import MeetingContext, context_path, validate_brief_scope
 from fakeyou.cli.errors import CliError
 from fakeyou.cli.memory import load_operator_persona
+from fakeyou.correction_labels import describe_correction_speakers
 from fakeyou.debrief import (
     debrief_report_status,
     generate_debrief,
@@ -210,6 +211,17 @@ async def _debrief_locked(
             limitations.append(
                 "Speaker labels are anonymous voice labels within this meeting, "
                 "not verified identities: " + "; ".join(voice_labels) + "."
+            )
+        correction_names = describe_correction_speakers(record_path)
+        correction_speakers = []
+        for entry in snapshot.sources:
+            label = correction_names.get(entry.participant_id)
+            if label is not None and label not in correction_speakers:
+                correction_speakers.append(label)
+        if correction_speakers:
+            limitations.append(
+                "Correction speakers are anonymous diarization labels within this meeting, "
+                "not verified identities: " + "; ".join(correction_speakers) + "."
             )
         if fallback is not None:
             limitations.append(

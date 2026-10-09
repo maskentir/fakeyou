@@ -2,7 +2,7 @@ import asyncio
 import html
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -21,6 +21,7 @@ from langgraph.runtime import Runtime
 from fakeyou import debrief_schema as schema
 from fakeyou import debrief_sources as sources
 from fakeyou.brief import MeetingBrief, context_path, validate_brief_scope
+from fakeyou.correction_labels import describe_correction_speakers
 from fakeyou.diarize_correction import correction_digest
 from fakeyou.ingestion_status import write_atomically
 from fakeyou.journal import Journal
@@ -273,7 +274,9 @@ def _safe_text(value: str) -> str:
     )
 
 
-def render_debrief(report: schema.DebriefReport) -> str:
+def render_debrief(
+    report: schema.DebriefReport, *, speaker_names: Mapping[str, str] | None = None
+) -> str:
     labels = _labels()
     lines = [
         f"# {labels['title']}",
@@ -302,9 +305,12 @@ def render_debrief(report: schema.DebriefReport) -> str:
             entry = source_index.get(reference.entry_id)
             if entry is None:
                 raise schema.DebriefValidationError("report evidence source metadata is absent")
+            speaker = entry.participant_id
+            if speaker_names is not None and speaker in speaker_names:
+                speaker = speaker_names[speaker]
             lines.append(
                 f"- {labels['evidence']}: {_safe_text(reference.entry_id)}; "
-                f"{labels['speaker']}: {_safe_text(entry.participant_id)}; "
+                f"{labels['speaker']}: {_safe_text(speaker)}; "
                 f"{labels['source_kind']}: {entry.kind}; "
                 f"{labels['source_time']}: {_safe_text(entry.at.isoformat())}"
             )
@@ -409,7 +415,9 @@ def write_debrief(record_path: Path, report: schema.DebriefReport) -> None:
     if _pending_recovery(record_path):
         raise schema.DebriefValidationError("canonical debrief requires publication recovery")
     _current_report(record_path, report)
-    markdown = render_debrief(report).encode("utf-8")
+    markdown = render_debrief(
+        report, speaker_names=describe_correction_speakers(record_path)
+    ).encode("utf-8")
     canonical = (report.model_dump_json(indent=2) + "\n").encode("utf-8")
     _current_report(record_path, report)
     write_atomically(record_path.with_name(MARKDOWN_FILE_NAME), markdown)
@@ -436,7 +444,10 @@ def rebuild_debrief_markdown(record_path: Path) -> None:
     report = read_debrief(record_path)
     _current_report(record_path, report)
     write_atomically(
-        record_path.with_name(MARKDOWN_FILE_NAME), render_debrief(report).encode("utf-8")
+        record_path.with_name(MARKDOWN_FILE_NAME),
+        render_debrief(report, speaker_names=describe_correction_speakers(record_path)).encode(
+            "utf-8"
+        ),
     )
 
 

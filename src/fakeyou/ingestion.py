@@ -9,6 +9,11 @@ from pathlib import Path
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 
+from fakeyou.correction_labels import (
+    correction_labels_valid,
+    correction_speaker_name,
+    read_correction_labels,
+)
 from fakeyou.diarize_client import DiarizeError
 from fakeyou.diarize_correction import JSON_FILE_NAME, load_corrected_record
 from fakeyou.faults import FaultReporter
@@ -317,13 +322,20 @@ async def ingest_corrections(
     corrected_at = payload.get("corrected_at")
     if not isinstance(corrected_at, str) or not corrected_at:
         raise DiarizeError("diarization sidecar is invalid")
-    labels: dict[str, str] = {
-        turn["corrected_uuid"]: turn["speaker"]
-        for turn in payload.get("turns", [])
-        if isinstance(turn, dict)
-        and isinstance(turn.get("corrected_uuid"), str)
-        and isinstance(turn.get("speaker"), str)
-    }
+    stored = read_correction_labels(record_path)
+    labeled = correction_labels_valid(record_path)
+    labels: dict[str, str] = {}
+    for turn in payload.get("turns", []):
+        if (
+            isinstance(turn, dict)
+            and isinstance(turn.get("corrected_uuid"), str)
+            and isinstance(turn.get("speaker"), str)
+        ):
+            uuid = turn["corrected_uuid"]
+            if labeled:
+                labels[uuid] = correction_speaker_name(turn["speaker"], stored.get(uuid))
+            else:
+                labels[uuid] = turn["speaker"]
     live_windows = _entries_to_windows(
         live, None, window_utterances=window_utterances, window_seconds=window_seconds
     )

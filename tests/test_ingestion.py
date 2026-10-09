@@ -8,8 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 from graphiti_core.nodes import EpisodeType
 
+from fakeyou.correction_labels import LABELS_FILE_NAME, write_correction_labels
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarize_correction import write_correction_bundle
+from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import (
     TWIN_SPEAKER,
@@ -35,6 +36,9 @@ from tests.fakes import make_graphiti
 
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 CORRECTED_AT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "correction_labels.json").read_text(encoding="utf-8")
+)
 
 
 def said(seconds: float, text: str, participant_id: str = "unknown") -> TranscriptEntry:
@@ -415,7 +419,7 @@ async def test_ingest_result_carries_episode_uuids_per_window() -> None:
     }
 
 
-def correction_record(tmp_path: Path) -> Path:
+def correction_record(tmp_path: Path, speaker: str = "Harun") -> Path:
     lines = [
         (
             0,
@@ -457,7 +461,7 @@ def correction_record(tmp_path: Path) -> Path:
     write_correction_bundle(
         record_path.parent / "audio",
         record_path,
-        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Harun")],
+        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker=speaker)],
         clock=lambda: CORRECTED_AT,
     )
     return record_path
@@ -1150,3 +1154,60 @@ async def test_golden_episode_body_keeps_speaker_subject_saga_order_and_source_t
     assert first["reference_time"] == START
     assert second["reference_time"] == datetime(2026, 9, 30, 8, 58, 30, tzinfo=UTC)
     assert second["episode_body"].split("\n")[-1] == f"{UNIDENTIFIED_PARTICIPANT}: Noted."
+
+
+async def test_ingest_corrections_renders_labels_in_the_corrected_episode_body(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    uuid = correction_uuid("A", 69000)
+    write_correction_labels(record_path, {uuid: FIXTURE["render_shown"]})
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
+    assert (
+        f"Speaker A, shown as {FIXTURE['render_shown']}, unverified"
+        in (memory.added[-1]["episode_body"])
+    )
+
+
+async def test_ingest_corrections_without_labels_keeps_raw_speaker_bytes(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert memory.added[-1]["episode_body"] == (
+        "A: Budi is the PIC for the Thursday launch and owns the rollout checklist "
+        "end to end without further review from the client team."
+    )
+
+
+@pytest.mark.parametrize("payload", ["{not json", "[]", '{"uuid": 123}'])
+async def test_ingest_corrections_treats_invalid_labels_as_absent(
+    tmp_path: Path, payload: str
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    (record_path.parent / LABELS_FILE_NAME).write_text(payload, encoding="utf-8")
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert memory.added[-1]["episode_body"] == (
+        "A: Budi is the PIC for the Thursday launch and owns the rollout checklist "
+        "end to end without further review from the client team."
+    )
+    assert "unverified" not in memory.added[-1]["episode_body"]
