@@ -54,8 +54,13 @@ async def chat(
         agent = create_meeting_agent(
             model, tools=tools, checkpointer=checkpointer, persona=default_persona(settings)
         )
-        response = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": message}]},
-            config={"configurable": {"thread_id": thread}, "recursion_limit": 30},
-        )
+        remember = next((item for item in tools if item.name == "remember_meeting_fact"), None)
+        try:
+            response = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": message}]},
+                config={"configurable": {"thread_id": thread}, "recursion_limit": 30},
+            )
+        finally:
+            if remember is not None:
+                await remember.ainvoke({"fact": "", "flush": True})
         print(response["messages"][-1].content)

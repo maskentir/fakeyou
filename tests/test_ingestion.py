@@ -8,8 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 from graphiti_core.nodes import EpisodeType
 
+from fakeyou.correction_labels import LABELS_FILE_NAME, write_correction_labels
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarize_correction import write_correction_bundle
+from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import (
     TWIN_SPEAKER,
@@ -35,6 +36,9 @@ from tests.fakes import make_graphiti
 
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 CORRECTED_AT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "correction_labels.json").read_text(encoding="utf-8")
+)
 
 
 def said(seconds: float, text: str, participant_id: str = "unknown") -> TranscriptEntry:
@@ -87,7 +91,17 @@ def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
 
 def test_windows_split_by_utterance_count_and_age() -> None:
     by_count = meeting_windows([said(index, f"Sentence {index}.") for index in range(45)])
-    by_age = meeting_windows([said(0, "Start."), said(59, "Still going."), said(61, "New window.")])
+    by_age = meeting_windows(
+        [
+            said(0, "Start."),
+            said(59, "Still going."),
+            said(
+                61,
+                "New window with a much longer statement about the Thursday launch plan "
+                "and the rollout checklist items for review this week.",
+            ),
+        ]
+    )
 
     assert [len(window) for window in by_count] == [20, 20, 5]
     assert [len(window) for window in by_age] == [2, 1]
@@ -129,7 +143,11 @@ async def test_ingest_writes_one_message_episode_per_window_in_the_meeting_saga(
     entries = [
         twin(0, "Move the demo to Thursday?"),
         said(1, "Okay, agreed."),
-        said(70, "Budi is the PIC."),
+        said(
+            70,
+            "Budi is the PIC for the Thursday launch and owns the rollout checklist "
+            "end to end without further review from the client team.",
+        ),
     ]
 
     result, rows = await run(memory, entries)
@@ -218,7 +236,14 @@ async def test_ingest_falls_back_to_record_time_for_invalid_spoken_time() -> Non
 
 
 async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() -> None:
-    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
+    entries = [
+        said(
+            index * 61,
+            f"Sentence {index} covers the Thursday launch plan with the rollout checklist "
+            "and the client demo schedule for all regions this week.",
+        )
+        for index in range(3)
+    ]
     memory = make_graphiti(
         episode_prefix="uuid-",
         edges=[SimpleNamespace(fact="fact")],
@@ -243,7 +268,14 @@ async def test_ingest_resumes_after_the_last_saga_episode_and_is_idempotent() ->
 
 
 async def test_ingest_stops_at_a_failed_window_so_a_rerun_continues_there() -> None:
-    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
+    entries = [
+        said(
+            index * 61,
+            f"Sentence {index} covers the Thursday launch plan with the rollout checklist "
+            "and the client demo schedule for all regions this week.",
+        )
+        for index in range(3)
+    ]
     memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
     memory.errors[1] = RuntimeError("secret graph detail")
 
@@ -328,7 +360,14 @@ async def test_ingest_after_correction_skips_corrected_episodes_when_resuming(
 
 
 async def test_ingest_resumes_past_corrected_episodes_and_chains_from_the_latest() -> None:
-    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
+    entries = [
+        said(
+            index * 61,
+            f"Sentence {index} covers the Thursday launch plan with the rollout checklist "
+            "and the client demo schedule for all regions this week.",
+        )
+        for index in range(3)
+    ]
     memory = make_graphiti(
         episode_prefix="uuid-",
         edges=[SimpleNamespace(fact="fact")],
@@ -365,7 +404,11 @@ async def test_ingest_result_carries_episode_uuids_per_window() -> None:
     entries = [
         twin(0, "Move the demo to Thursday?"),
         said(1, "Okay, agreed."),
-        said(70, "Budi is the PIC."),
+        said(
+            70,
+            "Budi is the PIC for the Thursday launch and owns the rollout checklist "
+            "end to end without further review from the client team.",
+        ),
     ]
 
     result, _rows = await run(memory, entries)
@@ -376,11 +419,26 @@ async def test_ingest_result_carries_episode_uuids_per_window() -> None:
     }
 
 
-def correction_record(tmp_path: Path) -> Path:
+def correction_record(tmp_path: Path, speaker: str = "Harun") -> Path:
     lines = [
-        (0, "The budget is approved.", 1000.0),
-        (61, "Budi is the PIC.", 70000.0),
-        (122, "We ship on Friday.", 130000.0),
+        (
+            0,
+            "The budget is approved for the Thursday launch, including the rollout checklist, "
+            "the client demo schedule, and the release notes for all regions.",
+            1000.0,
+        ),
+        (
+            61,
+            "Budi is the PIC for the Thursday launch and owns the rollout checklist "
+            "end to end without further review from the client team.",
+            70000.0,
+        ),
+        (
+            122,
+            "We ship on Friday after the client demo, and the changelog plus the release notes "
+            "will be ready on time for all regions this week.",
+            130000.0,
+        ),
     ]
     entries = [
         TranscriptEntry(
@@ -403,7 +461,7 @@ def correction_record(tmp_path: Path) -> Path:
     write_correction_bundle(
         record_path.parent / "audio",
         record_path,
-        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Harun")],
+        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker=speaker)],
         clock=lambda: CORRECTED_AT,
     )
     return record_path
@@ -442,7 +500,10 @@ async def test_ingest_corrections_reingests_only_changed_windows(tmp_path: Path)
         correction_episode_name("meeting-1", 1),
     ]
     episode = memory.added[-1]
-    assert episode["episode_body"] == "Harun: Budi is the PIC."
+    assert episode["episode_body"] == (
+        "Harun: Budi is the PIC for the Thursday launch and owns the rollout checklist "
+        "end to end without further review from the client team."
+    )
     assert episode["source"] == EpisodeType.message
     assert episode["source_description"] == "Google Meet meeting-1 transcript (corrected)"
     assert before <= episode["reference_time"] <= after
@@ -714,3 +775,439 @@ async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid
     assert summary.detail is not None
     assert "uuid-meeting-1:w00001:corrected" in summary.detail
     assert "window 1" in summary.detail
+
+
+def correction_record_three(tmp_path: Path) -> Path:
+    lines = [
+        (
+            0,
+            "The budget is approved for the Thursday launch, including the rollout checklist, "
+            "the client demo schedule, and the release notes for all regions.",
+            1000.0,
+        ),
+        (
+            61,
+            "Guest is the PIC for the Thursday launch and owns the rollout checklist "
+            "end to end without further review from the client team.",
+            70000.0,
+        ),
+        (
+            122,
+            "We ship on Friday after the client demo, and the changelog plus the release notes "
+            "will be ready on time for all regions this week.",
+            130000.0,
+        ),
+    ]
+    entries = [
+        TranscriptEntry(
+            at=START + timedelta(seconds=seconds),
+            id=f"m{index}",
+            spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
+            source="meeting_audio",
+            text=text,
+            participant_id="unknown",
+            speaker_evidence_id=None,
+            capture_ms=capture,
+        )
+        for index, (seconds, text, capture) in enumerate(lines)
+    ]
+    record_path = tmp_path / "meeting-1" / "record.jsonl"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(
+        "".join(entry.model_dump_json() + "\n" for entry in entries), encoding="utf-8"
+    )
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Host"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: CORRECTED_AT,
+    )
+    return record_path
+
+
+async def test_ingest_corrections_retry_after_midrun_failure_writes_no_duplicates(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.changed_windows == 3
+    assert second.completed is True
+    names = [episode["name"] for episode in memory.added]
+    assert sorted(names) == sorted(
+        [correction_episode_name("meeting-1", index) for index in range(3)]
+    )
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at == CORRECTED_AT.isoformat()
+
+
+async def test_ingest_corrections_partial_map_survives_failure_and_retry_skips_it(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert first.completed is False
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at is None
+    assert status.correction_windows == {0: "uuid-meeting-1:w00000:corrected"}
+    added_before_retry = len(memory.added)
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    names = [episode["name"] for episode in memory.added[added_before_retry:]]
+    assert names == [
+        correction_episode_name("meeting-1", 1),
+        correction_episode_name("meeting-1", 2),
+    ]
+
+
+async def test_ingest_corrections_new_run_resets_window_map(tmp_path: Path) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert first.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.correction_run == CORRECTED_AT.isoformat()
+    assert sorted(status.correction_windows) == [0, 1, 2]
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest")],
+        clock=lambda: rotated,
+    )
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.correction_run == rotated.isoformat()
+    assert status.correction_windows == {1: "uuid-meeting-1:w00001:corrected"}
+
+
+async def test_ingest_corrections_status_write_failure_reports_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    calls = 0
+    real_write_status = write_status
+
+    def failing_write(path: Path, status: IngestionStatus) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("status store is down")
+        real_write_status(path, status)
+
+    monkeypatch.setattr("fakeyou.ingestion.write_status", failing_write)
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.completed is False
+    assert calls == 2
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at is None
+    assert status.correction_windows == {0: "uuid-meeting-1:w00000:corrected"}
+
+
+async def test_ingest_corrections_rotation_retry_recovers_same_run_orphan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="episode-", edges=[])
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is True
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Host"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Guest"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: rotated,
+    )
+    calls = 0
+    real_write_status = write_status
+
+    def flaky_write(path: Path, status: IngestionStatus) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("status store is down")
+        real_write_status(path, status)
+
+    monkeypatch.setattr("fakeyou.ingestion.write_status", flaky_write)
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert second.completed is False
+    third = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert third.completed is True
+    names = [episode["name"] for episode in memory.added]
+    assert names.count(correction_episode_name("meeting-1", 1)) == 2
+
+
+async def test_ingest_corrections_rotation_reingests_overlapping_windows_with_new_labels(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="episode-", edges=[])
+    memory.errors[1] = RuntimeError("boom")
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    rotated = CORRECTED_AT + timedelta(hours=1)
+    write_correction_bundle(
+        record_path.parent / "audio",
+        record_path,
+        [
+            DiarizedTurn(start_ms=0, end_ms=2000, speaker="Guest"),
+            DiarizedTurn(start_ms=69000, end_ms=71000, speaker="Host"),
+            DiarizedTurn(start_ms=129000, end_ms=131000, speaker="Twin"),
+        ],
+        clock=lambda: rotated,
+    )
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    bodies = [
+        episode["episode_body"]
+        for episode in memory.added
+        if episode["name"] == correction_episode_name("meeting-1", 0)
+    ]
+    assert bodies == [
+        "Host: The budget is approved for the Thursday launch, including the rollout "
+        "checklist, the client demo schedule, and the release notes for all regions.",
+        "Guest: The budget is approved for the Thursday launch, including the rollout "
+        "checklist, the client demo schedule, and the release notes for all regions.",
+    ]
+
+
+async def test_ingest_corrections_completion_unions_prior_attempt_episodes(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record_three(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    memory.errors[2] = RuntimeError("boom")
+    first = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+    assert first.completed is False
+    second = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert second.completed is True
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert sorted(status.correction_episodes) == sorted(status.correction_windows.values())
+    assert len(status.correction_episodes) == 3
+
+
+def test_ingestion_status_old_schema_json_defaults_new_correction_fields() -> None:
+    payload = {
+        "meeting_id": "meeting-1",
+        "group_id": "twin_group",
+        "status": "completed",
+        "windows": 3,
+        "resumed_from": 0,
+        "ingested": 3,
+        "record_sha256": None,
+        "updated_at": CORRECTED_AT.isoformat(),
+        "reason": None,
+        "episode_uuids": {"0": "uuid-a"},
+        "corrected_at": CORRECTED_AT.isoformat(),
+        "correction_episodes": ["uuid-fix"],
+    }
+
+    status = IngestionStatus.model_validate_json(json.dumps(payload))
+
+    assert status.correction_windows == {}
+    assert status.correction_run is None
+
+
+@pytest.fixture
+def golden_meeting_entries() -> list[TranscriptEntry]:
+    spoken = datetime(2026, 9, 30, 8, 58, 30, tzinfo=UTC)
+    return [
+        said(0, "The budget review starts now with the full team present."),
+        said(1, "Joko will present the spending summary for this quarter."),
+        TranscriptEntry(
+            at=START + timedelta(seconds=70),
+            id="golden-spoken",
+            spoken_at=spoken.isoformat(),
+            source="meeting_audio",
+            text="The client demo moves to Thursday for all regions.",
+            participant_id="unknown",
+            speaker_evidence_id=None,
+        ),
+        said(71, "Nadia will send the meeting notes by Friday evening."),
+        said(140, "Noted."),
+    ]
+
+
+async def test_lone_trailing_utterance_attaches_to_previous_window() -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
+    entries = [
+        said(0, "The budget review starts now with the full team present."),
+        said(1, "Joko will present the spending summary for this quarter."),
+        said(70, "Agreed."),
+    ]
+
+    result, _rows = await run(memory, entries)
+
+    assert (result.windows, result.ingested, result.completed) == (1, 1, True)
+    [episode] = memory.added
+    assert episode["episode_body"] == (
+        f"{UNIDENTIFIED_PARTICIPANT}: The budget review starts now with the full team present.\n"
+        f"{UNIDENTIFIED_PARTICIPANT}: Joko will present the spending summary for this quarter.\n"
+        f"{UNIDENTIFIED_PARTICIPANT}: Agreed."
+    )
+
+
+async def test_whole_meeting_single_utterance_ingests_exactly_once() -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
+
+    result, _rows = await run(memory, [said(0, "We ship on Friday.")])
+
+    assert (result.windows, result.resumed_from, result.ingested, result.completed) == (
+        1,
+        0,
+        1,
+        True,
+    )
+    assert [episode["name"] for episode in memory.added] == ["meeting-1:w00000"]
+
+
+async def test_golden_episode_body_keeps_speaker_subject_saga_order_and_source_time(
+    golden_meeting_entries: list[TranscriptEntry],
+) -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")])
+
+    result, _rows = await run(memory, golden_meeting_entries)
+
+    assert result.windows == 2
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00000",
+        "meeting-1:w00001",
+    ]
+    for episode in memory.added:
+        for line in episode["episode_body"].split("\n"):
+            head, separator, tail = line.partition(": ")
+            assert separator and head and tail
+    assert [episode["saga_previous_episode_uuid"] for episode in memory.added] == [
+        None,
+        "uuid-meeting-1:w00000",
+    ]
+    first, second = memory.added
+    assert first["reference_time"] == START
+    assert second["reference_time"] == datetime(2026, 9, 30, 8, 58, 30, tzinfo=UTC)
+    assert second["episode_body"].split("\n")[-1] == f"{UNIDENTIFIED_PARTICIPANT}: Noted."
+
+
+async def test_ingest_corrections_renders_labels_in_the_corrected_episode_body(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    uuid = correction_uuid("A", 69000)
+    write_correction_labels(record_path, {uuid: FIXTURE["render_shown"]})
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
+    assert (
+        f"Speaker A, shown as {FIXTURE['render_shown']}, unverified"
+        in (memory.added[-1]["episode_body"])
+    )
+
+
+async def test_ingest_corrections_without_labels_keeps_raw_speaker_bytes(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert memory.added[-1]["episode_body"] == (
+        "A: Budi is the PIC for the Thursday launch and owns the rollout checklist "
+        "end to end without further review from the client team."
+    )
+
+
+@pytest.mark.parametrize("payload", ["{not json", "[]", '{"uuid": 123}'])
+async def test_ingest_corrections_treats_invalid_labels_as_absent(
+    tmp_path: Path, payload: str
+) -> None:
+    record_path = correction_record(tmp_path, speaker="A")
+    (record_path.parent / LABELS_FILE_NAME).write_text(payload, encoding="utf-8")
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+    )
+
+    assert result.changed_windows == 1
+    assert memory.added[-1]["episode_body"] == (
+        "A: Budi is the PIC for the Thursday launch and owns the rollout checklist "
+        "end to end without further review from the client team."
+    )
+    assert "unverified" not in memory.added[-1]["episode_body"]

@@ -10,6 +10,11 @@ from langchain_core.messages import AIMessage
 
 import fakeyou.debrief as module
 from fakeyou.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
+from fakeyou.correction_labels import (
+    correction_speaker_name,
+    describe_correction_speakers,
+    write_correction_labels,
+)
 from fakeyou.debrief_schema import (
     DebriefDraft,
     DebriefItem,
@@ -21,11 +26,18 @@ from fakeyou.debrief_schema import (
 )
 from fakeyou.debrief_sources import RecordSnapshot, SourceEntry, load_record_snapshot
 from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import write_correction_bundle
+from fakeyou.diarize_correction import (
+    correction_digest,
+    correction_uuid,
+    write_correction_bundle,
+)
 from fakeyou.journal import Journal
 from tests.fakes import ToolCallingFakeModel
 
 AT = datetime(2026, 10, 3, 12, tzinfo=UTC)
+FIXTURE = json.loads(
+    (Path(__file__).parent / "fixtures" / "correction_labels.json").read_text(encoding="utf-8")
+)
 
 
 def source(index: int = 1, text: str = "Ask the owner about the deadline.") -> SourceEntry:
@@ -850,3 +862,45 @@ def test_status_check_reports_stale_sidecar_fallback_to_journal(record_path: Pat
     assert row["event"] == "fault_recorded"
     assert row["source"] == "meeting_record"
     assert row["detail"] == "StaleDiarizationError"
+
+
+@pytest.mark.parametrize("label", [FIXTURE["render_shown"], None])
+def test_render_correction_uuid_uses_human_readable_unverified_speaker(
+    record_path: Path, label: str | None
+) -> None:
+    uuid = correction_uuid("A", 0)
+    renamed = (
+        report_for(record_path).evidence_sources[0].model_copy(update={"participant_id": uuid})
+    )
+    report = report_for(record_path).model_copy(update={"evidence_sources": (renamed,)})
+    rendered = module.render_debrief(
+        report, speaker_names={uuid: correction_speaker_name("A", label)}
+    )
+
+    assert report.evidence_sources[0].participant_id == uuid
+    if label is None:
+        assert "Speaker A, unverified" in rendered
+        assert "shown as" not in rendered
+    else:
+        assert f"Speaker A, shown as {label}, unverified" in rendered
+
+
+def test_write_debrief_autoloads_correction_labels_into_markdown(record_path: Path) -> None:
+    audio_dir = record_path.parent / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        record_path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+    uuid = correction_uuid("A", 0)
+    write_correction_labels(record_path, {uuid: FIXTURE["render_shown"]})
+    report = report_for(record_path, correction_sha256=correction_digest(record_path))
+    module.write_debrief(record_path, report)
+    markdown = record_path.with_name(module.MARKDOWN_FILE_NAME).read_text(encoding="utf-8")
+    expected = f"Speaker A, shown as {FIXTURE['render_shown']}, unverified"
+
+    assert report.evidence_sources[0].participant_id == uuid
+    assert describe_correction_speakers(record_path) == {uuid: expected}
+    assert expected in markdown

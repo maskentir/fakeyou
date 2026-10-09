@@ -15,6 +15,7 @@ from pydantic import TypeAdapter
 
 from fakeyou.assembly import stop_signal_handlers
 from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
+from fakeyou.cli.diarize import diarize_run
 from fakeyou.cli.errors import CliError
 from fakeyou.conversation import (
     conversation_thread_id,
@@ -245,6 +246,10 @@ def _finish_ingest(
                 correction_episodes=list(previous.correction_episodes)
                 if previous is not None
                 else [],
+                correction_windows=dict(previous.correction_windows)
+                if previous is not None
+                else {},
+                correction_run=previous.correction_run if previous is not None else None,
             ),
         )
     except OSError as error:
@@ -266,6 +271,16 @@ def _finish_ingest(
     return completed and stored
 
 
+def _diarization_prereqs_met(settings: Settings, record_path: Path) -> bool:
+    secret = settings.stt.api_key
+    if secret is None or not secret.get_secret_value().strip():
+        return False
+    audio_dir = record_path.parent / "audio"
+    if not audio_dir.is_dir():
+        return False
+    return any(audio_dir.glob("slot-*.wav"))
+
+
 async def ingest_recorded_meeting(
     *,
     meeting_id: str,
@@ -274,6 +289,7 @@ async def ingest_recorded_meeting(
     twin_id: str | None,
     twin_name: str | None,
     settings: Settings,
+    no_correct: bool = False,
 ) -> None:
     TypeAdapter(SessionId).validate_python(meeting_id)
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
@@ -282,6 +298,11 @@ async def ingest_recorded_meeting(
     journal = Journal(meeting_id, path=journal_path(settings.paths.journal_dir, meeting_id))
     faults = FaultReporter(journal=journal)
     try:
+        if not no_correct and _diarization_prereqs_met(settings, record_path):
+            try:
+                diarize_run(meeting_id, settings=settings)
+            except CliError as error:
+                faults.record(classify_exception("stt", error))
         try:
             with record_lock(record_path, purpose="ingestion"):
                 status_file = status_path(record_path)
