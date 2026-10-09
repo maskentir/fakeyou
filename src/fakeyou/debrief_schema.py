@@ -98,6 +98,7 @@ class DebriefReport(BaseModel):
     meeting_id: SessionId
     record_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     context_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None
+    correction_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
     generated_at: AwareDatetime
     provider: Annotated[str, StringConstraints(min_length=1)]
     model: Annotated[str, StringConstraints(min_length=1)]

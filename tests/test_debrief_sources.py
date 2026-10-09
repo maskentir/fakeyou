@@ -24,7 +24,7 @@ from fakeyou.debrief_sources import (
     validate_evidence,
 )
 from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
+from fakeyou.diarize_correction import JSON_FILE_NAME, correction_uuid, write_correction_bundle
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal
 
@@ -741,3 +741,97 @@ def test_stale_sidecar_falls_back_to_plain_record_and_records_fault(tmp_path: Pa
             "detail": "StaleDiarizationError",
         }
     ]
+
+
+def test_stale_sidecar_with_no_fault_reporter_uses_live_labels(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(transcript()))
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+
+    snapshot = load_record_snapshot(path)
+
+    assert [entry.participant_id for entry in snapshot.sources] == ["unknown", "unknown"]
+
+
+@pytest.mark.parametrize("sidecar", ["unsupported_schema", "corrupt_bytes"])
+def test_unusable_sidecar_falls_back_to_live_labels_and_records_fault(
+    tmp_path: Path, sidecar: str
+) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(transcript()))
+    if sidecar == "unsupported_schema":
+        (path.parent / JSON_FILE_NAME).write_text(
+            json.dumps({"schema": "diarization_correction/v9", "turns": []})
+        )
+    else:
+        (path.parent / JSON_FILE_NAME).write_bytes(b"{invalid sidecar")
+    faults = FaultReporter(journal=Journal("meeting-1", emit=lambda line: None))
+
+    snapshot = load_record_snapshot(path, faults=faults)
+
+    assert [entry.participant_id for entry in snapshot.sources] == ["unknown"]
+    assert faults.total() == 1
+    report = faults.report()
+    assert report is not None
+    kinds = report["faults"]["kinds"]
+    assert kinds == [
+        {
+            "source": "meeting_record",
+            "operation": None,
+            "kind": "unknown",
+            "count": 1,
+            "status": None,
+            "detail": "DiarizeError",
+        }
+    ]
+
+
+def test_stale_sidecar_without_fault_reporter_emits_journal_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(transcript()))
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append)
+
+    snapshot = load_record_snapshot(path, journal=journal)
+
+    assert [entry.participant_id for entry in snapshot.sources] == ["unknown", "unknown"]
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["event"] == "fault_recorded"
+    assert row["source"] == "meeting_record"
+    assert row["kind"] == "unknown"
+    assert row["detail"] == "StaleDiarizationError"
+
+
+def test_unexpected_correction_errors_propagate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(transcript()))
+
+    def boom(record_path: Path) -> list[Any]:
+        raise RuntimeError("correction backend failed")
+
+    monkeypatch.setattr("fakeyou.debrief_sources.load_corrected_record", boom)
+
+    with pytest.raises(RuntimeError):
+        load_record_snapshot(path)

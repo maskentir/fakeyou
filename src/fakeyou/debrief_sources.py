@@ -10,8 +10,10 @@ from pydantic import TypeAdapter, ValidationError
 
 from fakeyou.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
 from fakeyou.debrief_schema import DebriefDraft, DebriefValidationError, EvidenceRef
+from fakeyou.diarize_client import DiarizeError
 from fakeyou.diarize_correction import load_corrected_record
 from fakeyou.faults import FaultReporter
+from fakeyou.journal import Journal
 from fakeyou.provider_faults import classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 
@@ -38,12 +40,24 @@ class RecordSnapshot:
     sources: tuple[SourceEntry, ...]
 
 
-def _corrected_speakers(path: Path, faults: FaultReporter | None) -> dict[str, str]:
+def _corrected_speakers(
+    path: Path, faults: FaultReporter | None, journal: Journal | None
+) -> dict[str, str]:
     try:
         entries = load_corrected_record(path)
-    except Exception as error:
+    except (DiarizeError, OSError, ValueError) as error:
+        fault = classify_exception("meeting_record", error)
         if faults is not None:
-            faults.record(classify_exception("meeting_record", error))
+            faults.record(fault)
+        elif journal is not None:
+            journal.record(
+                "fault_recorded",
+                source=fault.source,
+                operation=fault.operation,
+                kind=fault.kind,
+                status=fault.status,
+                detail=fault.detail,
+            )
         return {}
     return {
         f"transcript:{entry.id}": uuid
@@ -52,7 +66,9 @@ def _corrected_speakers(path: Path, faults: FaultReporter | None) -> dict[str, s
     }
 
 
-def load_record_snapshot(path: Path, *, faults: FaultReporter | None = None) -> RecordSnapshot:
+def load_record_snapshot(
+    path: Path, *, faults: FaultReporter | None = None, journal: Journal | None = None
+) -> RecordSnapshot:
     try:
         raw = path.read_bytes()
     except OSError:
@@ -100,7 +116,7 @@ def load_record_snapshot(path: Path, *, faults: FaultReporter | None = None) -> 
             )
     if not sources:
         raise DebriefValidationError("meeting record contains no usable speech sources") from None
-    corrected = _corrected_speakers(path, faults)
+    corrected = _corrected_speakers(path, faults, journal)
     if corrected:
         sources = [
             replace(entry, participant_id=speaker)

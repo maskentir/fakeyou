@@ -21,6 +21,7 @@ from langgraph.runtime import Runtime
 from fakeyou import debrief_schema as schema
 from fakeyou import debrief_sources as sources
 from fakeyou.brief import MeetingBrief, context_path, validate_brief_scope
+from fakeyou.diarize_correction import correction_digest
 from fakeyou.ingestion_status import write_atomically
 from fakeyou.journal import Journal
 
@@ -395,7 +396,11 @@ def _current_report(record_path: Path, report: schema.DebriefReport) -> None:
     report = schema.DebriefReport.model_validate(report.model_dump())
     snapshot = sources.load_record_snapshot(record_path)
     context, context_sha256 = sources.load_context_snapshot(context_path(record_path))
-    if (snapshot.record_sha256, context_sha256) != (report.record_sha256, report.context_sha256):
+    if (snapshot.record_sha256, context_sha256, correction_digest(record_path)) != (
+        report.record_sha256,
+        report.context_sha256,
+        report.correction_sha256,
+    ):
         raise schema.DebriefValidationError("debrief source or context hash changed")
     _validate_report(report, snapshot, context.brief if context is not None else None)
 
@@ -437,6 +442,8 @@ def rebuild_debrief_markdown(record_path: Path) -> None:
 
 def debrief_report_status(
     record_path: Path,
+    *,
+    journal: Journal | None = None,
 ) -> Literal["available", "stale", "missing", "invalid"]:
     if _pending_recovery(record_path):
         return "invalid"
@@ -444,11 +451,16 @@ def debrief_report_status(
         return "missing"
     try:
         report = read_debrief(record_path)
-        snapshot = sources.load_record_snapshot(record_path)
+        snapshot = sources.load_record_snapshot(record_path, journal=journal)
         context, context_sha256 = sources.load_context_snapshot(context_path(record_path))
+        sidecar_digest = correction_digest(record_path)
     except (OSError, ValueError):
         return "invalid"
-    if (snapshot.record_sha256, context_sha256) != (report.record_sha256, report.context_sha256):
+    if (snapshot.record_sha256, context_sha256, sidecar_digest) != (
+        report.record_sha256,
+        report.context_sha256,
+        report.correction_sha256,
+    ):
         return "stale"
     try:
         _validate_report(report, snapshot, context.brief if context is not None else None)

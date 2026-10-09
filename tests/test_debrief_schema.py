@@ -217,7 +217,7 @@ def test_should_reject_invalid_report_scope_ids(
         DebriefReport.model_validate(report_payload | {field: value})
 
 
-@pytest.mark.parametrize("field", ["record_sha256", "context_sha256"])
+@pytest.mark.parametrize("field", ["record_sha256", "context_sha256", "correction_sha256"])
 @pytest.mark.parametrize("value", ["", "a" * 63, "A" * 64, "g" * 64])
 def test_should_reject_invalid_hashes(
     field: str, value: str, report_payload: dict[str, Any]
@@ -313,3 +313,13 @@ def test_should_freeze_models_forbid_extras_and_hide_error_input(
 
 def test_should_expose_validation_error_as_value_error() -> None:
     assert isinstance(DebriefValidationError("invalid evidence reference"), ValueError)
+
+
+def test_should_default_correction_digest_for_legacy_reports(
+    report_payload: dict[str, Any],
+) -> None:
+    report = DebriefReport.model_validate(report_payload)
+    assert report.correction_sha256 is None
+    assert (
+        DebriefReport.model_validate(report_payload | {"correction_sha256": "c" * 64})
+    ).correction_sha256 == "c" * 64

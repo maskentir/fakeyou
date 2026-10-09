@@ -20,6 +20,8 @@ from fakeyou.brief import (
 from fakeyou.cli.errors import CliError
 from fakeyou.cli.main import build_parser
 from fakeyou.debrief_schema import DebriefDraft
+from fakeyou.diarize_client import DiarizedTurn
+from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.ingestion_status import IngestionStatus, record_lock, status_path, write_status
 from fakeyou.journal import Journal, journal_path
 from fakeyou.persona import PersonaProfile, persona_digest
@@ -424,3 +426,68 @@ async def test_debrief_renders_display_claim_as_unverified_speaker_label(
         "shown as Maya, unverified" in limitation for limitation in report["source_limitations"]
     )
     assert "shown as Maya, unverified" in (record_path.parent / "debrief.md").read_text()
+
+
+async def test_corrected_uuid_attribution_keeps_unknown_participant_limitation(
+    debrief_run, monkeypatch
+):
+    run, path, _profile = debrief_run
+    audio_dir = path.parent / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: datetime(2026, 10, 3, tzinfo=UTC),
+    )
+    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
+    await run()
+    report = json.loads((path.parent / "debrief.json").read_text())
+    assert report["evidence_sources"][0]["participant_id"] == correction_uuid("A", 0)
+    assert any(
+        "Unknown participants have not been identified" in limitation
+        for limitation in report["source_limitations"]
+    )
+
+
+async def test_stale_sidecar_fallback_is_visible_in_journal(debrief_run, settings, monkeypatch):
+    run, path, _profile = debrief_run
+    audio_dir = path.parent / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: datetime(2026, 10, 3, tzinfo=UTC),
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            TranscriptEntry(
+                at=datetime(2026, 10, 3, tzinfo=UTC),
+                id="t2",
+                spoken_at="2026-10-03T00:01:00+00:00",
+                source="meeting_audio",
+                text="A second voice notes the Monday deadline.",
+                participant_id="unknown",
+                speaker_evidence_id=None,
+            ).model_dump_json()
+            + "\n"
+        )
+    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
+    await run()
+    report = json.loads((path.parent / "debrief.json").read_text())
+    assert report["evidence_sources"][0]["participant_id"] == "unknown"
+    rows = [
+        json.loads(line)
+        for line in journal_path(settings.paths.journal_dir, "debrief-test")
+        .read_text()
+        .splitlines()
+        if line.strip()
+    ]
+    fallbacks = [
+        row
+        for row in rows
+        if row["event"] == "fault_recorded" and row["source"] == "meeting_record"
+    ]
+    assert len(fallbacks) >= 1
+    assert fallbacks[0]["detail"] == "StaleDiarizationError"
