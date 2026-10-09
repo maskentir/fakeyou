@@ -75,6 +75,62 @@ def correction_gate_passed(*, invalidation: float | None, superseded: float) -> 
     return invalidation == 1.0 and superseded == 0.0
 
 
+def pre_stale_hit(
+    pre_answers: dict[str, str] | None, changed_ids: list[str] | None, stale: str
+) -> bool | None:
+    if pre_answers is None or not changed_ids:
+        return None
+    return all(token_present(stale, pre_answers.get(query_id, "")) for query_id in changed_ids)
+
+
+def eval_validity(
+    *, changed_edges: int, stable_edges: int, fixed_edges: int, pre_hit: bool | None
+) -> dict[str, Any]:
+    valid = changed_edges >= 1 and stable_edges >= 1 and fixed_edges >= 1 and pre_hit is True
+    return {
+        "changed_edges": changed_edges,
+        "stable_edges": stable_edges,
+        "fixed_edges": fixed_edges,
+        "pre_stale_hit": pre_hit,
+        "valid": valid,
+    }
+
+
+def eval_is_valid(validity: dict[str, Any]) -> bool:
+    return (
+        validity["changed_edges"] >= 1
+        and validity["stable_edges"] >= 1
+        and validity["fixed_edges"] >= 1
+        and validity["pre_stale_hit"] is True
+    )
+
+
+def over_invalidation_passed(value: int, *, valid: bool) -> bool | None:
+    if not valid:
+        return None
+    return value == 0
+
+
+def entity_merge_promotion_ready(history: list[dict[str, Any]]) -> bool:
+    if len(history) < 3:
+        return False
+    tail = history[-3:]
+    return all(
+        run["valid"] is True and run["entity_merge_rate"] == 1.0 and run["fixed_edges"] >= 1
+        for run in tail
+    )
+
+
+def accuracy_gate_threshold(history: list[dict[str, Any]]) -> float | None:
+    scored = [run["corrected_answer_accuracy"] for run in history if run["valid"] is True]
+    if len(scored) < 3:
+        return None
+    median = sorted(scored[-3:])[1]
+    if median >= 0.75:
+        return 0.5
+    return None
+
+
 def write_fixture_record(target: Path, fixture: dict[str, Any]) -> Path:
     base = datetime.fromisoformat(str(fixture["base_at"]))
     lines: list[str] = []
@@ -164,6 +220,13 @@ async def run_memory_correction(
     fixed = await memory.get_nodes_and_edges_by_episode(list(corrected.episodes))
     stale = str(fixture["stale_speaker"])
     changed_ids = [str(item["id"]) for item in queries if item["kind"] == "changed"]
+    pre_hit = pre_stale_hit(pre_answers, changed_ids, stale)
+    validity = eval_validity(
+        changed_edges=len(changed.edges),
+        stable_edges=len(stable.edges),
+        fixed_edges=len(fixed.edges),
+        pre_hit=pre_hit,
+    )
     scored = [item for item in queries if item["kind"] != "abstention"]
     matches = {
         str(item["id"]): query_matches(
@@ -199,6 +262,9 @@ async def run_memory_correction(
         "matches": matches,
         "changed_edges": len(changed.edges),
         "stable_edges": len(stable.edges),
+        "fixed_edges": len(fixed.edges),
+        "validity": validity,
+        "valid": validity["valid"],
         "metrics": metrics,
     }
 
@@ -327,6 +393,56 @@ def test_gate_rejects_recall_serving_stale_fact() -> None:
     assert correction_gate_passed(invalidation=1.0, superseded=1.0) is False
 
 
+def test_validity_rejects_empty_stable_edges() -> None:
+    validity = eval_validity(changed_edges=2, stable_edges=0, fixed_edges=3, pre_hit=True)
+
+    assert validity["valid"] is False
+    assert eval_is_valid(validity) is False
+
+
+def test_validity_rejects_empty_fixed_edges() -> None:
+    validity = eval_validity(changed_edges=2, stable_edges=4, fixed_edges=0, pre_hit=True)
+
+    assert validity["valid"] is False
+    assert eval_is_valid(validity) is False
+
+
+def test_validity_rejects_empty_superseded_evidence() -> None:
+    assert pre_stale_hit({}, [], "Riko") is None
+    assert pre_stale_hit(None, None, "Riko") is None
+
+    validity = eval_validity(changed_edges=2, stable_edges=4, fixed_edges=3, pre_hit=None)
+
+    assert validity["valid"] is False
+    assert eval_is_valid(validity) is False
+
+
+def test_validity_rejects_missing_pre_stale_hit() -> None:
+    missed = eval_validity(changed_edges=2, stable_edges=4, fixed_edges=3, pre_hit=False)
+    absent = eval_validity(changed_edges=2, stable_edges=4, fixed_edges=3, pre_hit=None)
+
+    assert missed["valid"] is False
+    assert absent["valid"] is False
+    assert eval_is_valid(missed) is False
+    assert eval_is_valid(absent) is False
+
+
+def test_valid_case_evaluates_gates_normally() -> None:
+    validity = eval_validity(changed_edges=2, stable_edges=4, fixed_edges=3, pre_hit=True)
+    merged = {"valid": True, "entity_merge_rate": 1.0, "fixed_edges": 3}
+    scored = {"valid": True, "corrected_answer_accuracy": 0.75}
+
+    assert validity["valid"] is True
+    assert eval_is_valid(validity) is True
+    assert over_invalidation_passed(0, valid=True) is True
+    assert over_invalidation_passed(2, valid=True) is False
+    assert over_invalidation_passed(0, valid=False) is None
+    assert entity_merge_promotion_ready([merged, merged, merged]) is True
+    assert entity_merge_promotion_ready([merged, merged]) is False
+    assert accuracy_gate_threshold([scored, scored, scored]) == 0.5
+    assert accuracy_gate_threshold([scored, scored]) is None
+
+
 @pytest.mark.live
 async def test_live_memory_correction_gate(tmp_path: Path) -> None:
     fixture = load_correction_fixture()
@@ -348,11 +464,11 @@ async def test_live_memory_correction_gate(tmp_path: Path) -> None:
     metrics = summary["metrics"]
     print(f"\nfixture: {FIXTURE.name} group: {group_id} duration_s: {duration:.1f}")
     print(f"metrics: {json.dumps(metrics, sort_keys=True)}")
+    print(f"validity: {json.dumps(summary['validity'], sort_keys=True)}")
     print(f"changed_edges: {summary['changed_edges']} matches: {summary['matches']}")
-    stale = fixture["stale_speaker"]
-    for query in fixture["queries"]:
-        if query["kind"] == "changed":
-            assert token_present(stale, summary["pre_answers"][query["id"]]), query["id"]
+    if not eval_is_valid(summary["validity"]):
+        validity_json = json.dumps(summary["validity"], sort_keys=True)
+        pytest.fail(f"INVALID memory-correction run: {validity_json}")
     assert summary["correction_episodes"] == 1
     assert summary["changed_edges"] >= 1
     assert metrics["invalidation_recall"] == 1.0
@@ -360,4 +476,4 @@ async def test_live_memory_correction_gate(tmp_path: Path) -> None:
     assert correction_gate_passed(
         invalidation=metrics["invalidation_recall"], superseded=metrics["superseded_serve_rate"]
     )
-    assert metrics["over_invalidation"] == 0
+    assert over_invalidation_passed(metrics["over_invalidation"], valid=summary["valid"]) is True
