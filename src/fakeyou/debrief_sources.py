@@ -15,7 +15,7 @@ from fakeyou.diarize_correction import load_corrected_record
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal
 from fakeyou.provider_faults import classify_exception
-from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
+from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry, VisualEntry
 
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 
@@ -24,7 +24,7 @@ _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 class SourceEntry:
     id: str
     text: str
-    kind: Literal["participant", "twin"]
+    kind: Literal["participant", "twin", "visual"]
     participant_id: str
     at: datetime
     display_claim: str | None = None
@@ -75,6 +75,7 @@ def load_record_snapshot(
         raise DebriefValidationError("unable to read meeting record") from None
     sources: list[SourceEntry] = []
     transcripts: dict[str, TranscriptEntry] = {}
+    visuals: dict[str, VisualEntry] = {}
     for line_number, line in enumerate(raw.splitlines(), start=1):
         if not line.strip():
             continue
@@ -114,6 +115,25 @@ def load_record_snapshot(
                     at=entry.at,
                 )
             )
+        elif isinstance(entry, VisualEntry):
+            if not entry.frame_ref.strip():
+                raise DebriefValidationError("visual source id must not be blank") from None
+            previous_visual = visuals.get(entry.frame_ref)
+            if previous_visual is not None:
+                if previous_visual != entry:
+                    raise DebriefValidationError("contradictory duplicate visual source") from None
+                continue
+            visuals[entry.frame_ref] = entry
+            if entry.caption.strip():
+                sources.append(
+                    SourceEntry(
+                        id=entry.frame_ref,
+                        text=entry.caption,
+                        kind="visual",
+                        participant_id="shared_screen",
+                        at=entry.captured_at,
+                    )
+                )
     if not sources:
         raise DebriefValidationError("meeting record contains no usable speech sources") from None
     corrected = _corrected_speakers(path, faults, journal)

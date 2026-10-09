@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 EVIDENCE_SCHEMA = "memory_evidence/v1"
+EVIDENCE_SCHEMA_V2 = "memory_evidence/v2"
 OWNER_SPEAKER_IDENTITY = "owner"
 UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
 
@@ -11,29 +12,39 @@ UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any na
 @dataclass(frozen=True, slots=True)
 class SourceEvidence:
     episode_id: str
-    kind: Literal["owner_note", "meeting_transcript", "other"]
+    kind: Literal["owner_note", "meeting_transcript", "meeting_visual", "other"]
     label: str
     source_at: datetime
     recorded_at: datetime
-    time_granularity: Literal["document", "episode_window"]
+    time_granularity: Literal["document", "episode_window", "frame"]
     speaker_verified: bool = False
     speaker_identity: str = UNVERIFIED_SPEAKER_IDENTITY
+    frame_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.episode_id.strip():
             raise ValueError("episode_id must not be blank")
         kind_value: str = self.kind
-        if kind_value not in ("owner_note", "meeting_transcript", "other"):
-            raise ValueError("kind must be owner_note, meeting_transcript, or other")
+        if kind_value not in ("owner_note", "meeting_transcript", "meeting_visual", "other"):
+            raise ValueError(
+                "kind must be owner_note, meeting_transcript, meeting_visual, or other"
+            )
         if self.source_at.tzinfo is None or self.source_at.utcoffset() is None:
             raise ValueError("source_at must carry timezone")
         if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
             raise ValueError("recorded_at must carry timezone")
         granularity_value: str = self.time_granularity
-        if granularity_value not in ("document", "episode_window"):
-            raise ValueError("time_granularity must be document or episode_window")
+        if granularity_value not in ("document", "episode_window", "frame"):
+            raise ValueError("time_granularity must be document, episode_window, or frame")
         if not self.speaker_identity.strip():
             raise ValueError("speaker_identity must not be blank")
+        if kind_value == "meeting_visual":
+            if self.frame_ref is None or not self.frame_ref.strip():
+                raise ValueError("meeting_visual needs frame_ref")
+            if granularity_value != "frame":
+                raise ValueError("meeting_visual needs frame granularity")
+        elif self.frame_ref is not None:
+            raise ValueError("frame_ref needs meeting_visual kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +70,8 @@ def _rendered_source_compact(source: SourceEvidence) -> dict[str, str | bool]:
     }
     if source.recorded_at != source.source_at:
         rendered["recorded_at"] = source.recorded_at.astimezone(UTC).isoformat()
+    if source.frame_ref is not None:
+        rendered["frame_ref"] = source.frame_ref
     rendered["speaker_identity"] = source.speaker_identity
     return rendered
 
@@ -145,26 +158,32 @@ def render_evidence(
             if compact:
                 rendered_sources.append(_rendered_source_compact(source))
                 continue
-            rendered_sources.append(
-                {
-                    "episode_id": source.episode_id,
-                    "kind": source.kind,
-                    "label": source.label,
-                    "source_at": source.source_at.astimezone(UTC).isoformat(),
-                    "recorded_at": source.recorded_at.astimezone(UTC).isoformat(),
-                    "time_granularity": source.time_granularity,
-                    "speaker_verified": source.speaker_verified,
-                    "speaker_identity": source.speaker_identity,
-                }
-            )
+            rendered_source: dict[str, str | bool] = {
+                "episode_id": source.episode_id,
+                "kind": source.kind,
+                "label": source.label,
+                "source_at": source.source_at.astimezone(UTC).isoformat(),
+                "recorded_at": source.recorded_at.astimezone(UTC).isoformat(),
+                "time_granularity": source.time_granularity,
+                "speaker_verified": source.speaker_verified,
+                "speaker_identity": source.speaker_identity,
+            }
+            if source.frame_ref is not None:
+                rendered_source["frame_ref"] = source.frame_ref
+            rendered_sources.append(rendered_source)
         if compact:
             rendered_facts.append({"text": text, "sources": rendered_sources})
         else:
             rendered_facts.append(
                 {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
             )
+    schema = (
+        EVIDENCE_SCHEMA_V2
+        if any(source.kind == "meeting_visual" for source in seen.values())
+        else EVIDENCE_SCHEMA
+    )
     payload = {
-        "schema": EVIDENCE_SCHEMA,
+        "schema": schema,
         "facts": rendered_facts,
         "excluded": {
             "pending": excluded.get("pending", 0),

@@ -50,8 +50,18 @@ class ResumeEntry(_Entry):
     attempt: int
 
 
+class VisualEntry(_Entry):
+    kind: Literal["visual"] = "visual"
+    visual_id: str
+    captured_at: AwareDatetime
+    sha256: str
+    caption: str
+    frame_ref: str
+    captured_page_ms: float = 0.0
+
+
 RecordEntry = Annotated[
-    TranscriptEntry | TwinSpeechEntry | ToolResultEntry | ResumeEntry,
+    TranscriptEntry | TwinSpeechEntry | ToolResultEntry | ResumeEntry | VisualEntry,
     Field(discriminator="kind"),
 ]
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
@@ -100,6 +110,7 @@ class MeetingRecord:
         self._faults = faults
         self._now = now
         self._seen: set[str] = set()
+        self._seen_visual: set[str] = set()
         self._closed = False
 
     def add_transcript(self, event: TranscriptEvent) -> None:
@@ -132,6 +143,36 @@ class MeetingRecord:
 
     def add_resume(self, *, attempt: int) -> None:
         self._append(ResumeEntry(at=self._now(), attempt=attempt))
+
+    def add_visual(
+        self,
+        *,
+        visual_id: str,
+        caption: str,
+        sha256: str,
+        captured_at: datetime,
+        frame_ref: str,
+        captured_page_ms: float = 0.0,
+    ) -> None:
+        if (
+            not visual_id.strip()
+            or not caption.strip()
+            or not frame_ref.strip()
+            or visual_id in self._seen_visual
+        ):
+            return
+        self._seen_visual.add(visual_id)
+        self._append(
+            VisualEntry(
+                at=self._now(),
+                visual_id=visual_id,
+                captured_at=captured_at,
+                sha256=sha256,
+                caption=caption,
+                frame_ref=frame_ref,
+                captured_page_ms=captured_page_ms,
+            )
+        )
 
     def close(self) -> None:
         if self._closed:

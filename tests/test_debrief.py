@@ -696,6 +696,7 @@ def test_cached_report_scope_must_match_historical_brief(
         "A withdrawn or superseded proposal uses proposal with uncertain",
         "Copy relative task due wording into due_text verbatim",
         "Do not convert source capture timestamps into dates for undated or forwarded statements.",
+        "conflicting visual claims remain separate uncertain items with frame evidence",
     ],
 )
 async def test_native_prompt_carries_semantic_extraction_obligations(obligation: str) -> None:
@@ -904,3 +905,77 @@ def test_write_debrief_autoloads_correction_labels_into_markdown(record_path: Pa
     assert report.evidence_sources[0].participant_id == uuid
     assert describe_correction_speakers(record_path) == {uuid: expected}
     assert expected in markdown
+
+
+async def test_debrief_cites_frame(record_path: Path) -> None:
+    visual_ref = f"frame:abcd1234@{AT.isoformat()}"
+    caption = "Quarterly revenue grew twelve percent."
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "kind": "visual",
+                    "at": AT.isoformat(),
+                    "visual_id": "frame-1",
+                    "captured_at": AT.isoformat(),
+                    "captured_page_ms": 1727966400000.0,
+                    "sha256": "ab" * 32,
+                    "caption": caption,
+                    "frame_ref": visual_ref,
+                }
+            )
+            + "\n"
+        )
+
+    snapshot = load_record_snapshot(record_path)
+    visual = next(entry for entry in snapshot.sources if entry.id == visual_ref)
+
+    assert visual.kind == "visual"
+    assert visual.text == caption
+    cited = DebriefItem.model_validate(
+        {
+            "kind": "decision_claim",
+            "text": "Revenue grew twelve percent.",
+            "status": "stated",
+            "evidence": [{"entry_id": visual_ref, "quote": "revenue grew twelve percent"}],
+        }
+    )
+    merged = await module.generate_debrief(
+        model_for(DebriefDraft(items=(cited,), findings=())),
+        snapshot,
+        brief=None,
+        stop=asyncio.Event(),
+    )
+    [kept] = merged.items
+    assert kept.evidence[0].entry_id == visual_ref
+    assert kept.evidence[0].quote in caption
+    assert len(kept.evidence[0].quote) <= 1000
+    report = report_for(record_path, items=[cited])
+    assert any(entry.kind == "visual" for entry in report.evidence_sources)
+    rendered = module.render_debrief(report)
+    assert "frame&#58;abcd1234" in rendered
+    assert "revenue grew twelve percent" in rendered
+    first = DebriefItem.model_validate(
+        {
+            "kind": "decision_claim",
+            "text": "First reading of the slide.",
+            "status": "uncertain",
+            "evidence": [{"entry_id": visual_ref, "quote": "revenue grew"}],
+        }
+    )
+    second = DebriefItem.model_validate(
+        {
+            "kind": "decision_claim",
+            "text": "Second reading of the slide.",
+            "status": "uncertain",
+            "evidence": [{"entry_id": visual_ref, "quote": "twelve percent"}],
+        }
+    )
+    conflicts = module.merge_drafts(
+        (DebriefDraft(items=(first,), findings=()), DebriefDraft(items=(second,), findings=()))
+    )
+
+    assert [entry.text for entry in conflicts.items] == [
+        "First reading of the slide.",
+        "Second reading of the slide.",
+    ]

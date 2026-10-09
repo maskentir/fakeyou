@@ -21,7 +21,13 @@ from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, 
 from fakeyou.journal import Journal
 from fakeyou.memory import meeting_episodes, meeting_saga
 from fakeyou.provider_faults import ProviderFault, classify_exception
-from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry, load_meeting_record
+from fakeyou.record import (
+    RecordEntry,
+    TranscriptEntry,
+    TwinSpeechEntry,
+    VisualEntry,
+    load_meeting_record,
+)
 from fakeyou.settings import DEFAULTS
 from fakeyou.voice_activity import voice_speaker_name
 
@@ -66,6 +72,8 @@ class IngestResult:
     facts: int
     completed: bool
     episode_uuids: dict[int, str] = field(default_factory=dict)
+    visual_windows: int = 0
+    visual_uuids: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +122,21 @@ def episode_name(meeting_id: str, index: int) -> str:
 
 def correction_episode_name(meeting_id: str, index: int) -> str:
     return f"{meeting_id}:w{index:05d}:corrected"
+
+
+def visual_episode_name(meeting_id: str, index: int) -> str:
+    return f"{meeting_id}:v{index:05d}"
+
+
+def visual_windows(entries: Sequence[RecordEntry]) -> list[list[VisualEntry]]:
+    seen: set[str] = set()
+    windows: list[list[VisualEntry]] = []
+    for entry in entries:
+        if not isinstance(entry, VisualEntry) or entry.visual_id in seen:
+            continue
+        seen.add(entry.visual_id)
+        windows.append([entry])
+    return windows
 
 
 def _speaker(participant_id: str) -> str:
@@ -236,6 +259,13 @@ async def ingest_meeting(
     ingested = facts = 0
     completed = True
     uuids: dict[int, str] = {}
+    visuals = visual_windows(entries)
+    visual_done: set[int] = set()
+    if visuals:
+        for episode in await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id):
+            visual_index = _visual_index(episode.name, meeting_id)
+            if visual_index is not None:
+                visual_done.add(visual_index)
     for index in range(resumed_from, len(windows)):
         if stop is not None and stop.is_set():
             completed = False
@@ -273,6 +303,50 @@ async def ingest_meeting(
         uuids[index] = result.episode.uuid
         ingested += 1
         facts += len(result.edges)
+    visual_uuids: dict[int, str] = {}
+    visual_ingested = 0
+    for index, frame in enumerate(visuals):
+        if index in visual_done:
+            continue
+        if stop is not None and stop.is_set():
+            completed = False
+            break
+        entry = frame[0]
+        if not entry.caption.strip() or not entry.frame_ref.strip():
+            continue
+        try:
+            timer_journal = journal or Journal("", stdout=False)
+            with timer_journal.timed(
+                finished="memory_visual_ingested",
+                failed="memory_visual_failed",
+                source="memory_ingest",
+                window=index,
+                utterances=1,
+                facts=0,
+            ) as timing:
+                async with asyncio.timeout(episode_timeout_seconds):
+                    result = await memory.add_episode(
+                        name=visual_episode_name(meeting_id, index),
+                        episode_body=f"Shared screen {entry.frame_ref}: {entry.caption}",
+                        source_description=f"Google Meet {meeting_id} visual",
+                        reference_time=entry.captured_at,
+                        source=EpisodeType.message,
+                        group_id=group_id,
+                        saga=meeting_saga(meeting_id),
+                        saga_previous_episode_uuid=previous_uuid,
+                        custom_extraction_instructions=instructions,
+                    )
+                timing.fields.update(facts=len(result.edges))
+        except Exception as error:
+            if faults is not None:
+                faults.record(classify_exception("memory_ingest", error))
+            completed = False
+            break
+        previous_uuid = result.episode.uuid
+        visual_uuids[index] = result.episode.uuid
+        visual_ingested += 1
+        facts += len(result.edges)
+    ingested += visual_ingested
     if journal is not None:
         journal.record(
             "memory_ingest_finished",
@@ -282,8 +356,12 @@ async def ingest_meeting(
             ingested=ingested,
             facts=facts,
             completed=completed,
+            visual_windows=len(visuals),
+            visual_ingested=visual_ingested,
         )
-    return IngestResult(len(windows), resumed_from, ingested, facts, completed, uuids)
+    return IngestResult(
+        len(windows), resumed_from, ingested, facts, completed, uuids, len(visuals), visual_uuids
+    )
 
 
 async def _invalidate_original_edges(
@@ -490,6 +568,15 @@ def _correction_index(name: str, meeting_id: str) -> int | None:
     return int(match.group(1)) if match is not None else None
 
 
+def _visual_index(name: str, meeting_id: str) -> int | None:
+    match = re.fullmatch(rf"{re.escape(meeting_id)}:v(\d+)", name)
+    return int(match.group(1)) if match is not None else None
+
+
+def _transcript_window(name: str, meeting_id: str) -> bool:
+    return _correction_index(name, meeting_id) is None and _visual_index(name, meeting_id) is None
+
+
 async def _saga_episodes(memory: Graphiti, *, group_id: str, meeting_id: str) -> list[EpisodicNode]:
     batch = 10
     while True:
@@ -521,11 +608,11 @@ async def _resume_point(
     if not last:
         return 0, None
     head = last[-1]
-    if _correction_index(head.name, meeting_id) is None:
+    if _transcript_window(head.name, meeting_id):
         return _next_window(head.name, meeting_id), head.uuid
     episodes = await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id)
     for episode in reversed(episodes):
-        if _correction_index(episode.name, meeting_id) is None:
+        if _transcript_window(episode.name, meeting_id):
             return _next_window(episode.name, meeting_id), head.uuid
     return 0, head.uuid
 
