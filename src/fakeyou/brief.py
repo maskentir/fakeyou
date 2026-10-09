@@ -15,7 +15,9 @@ from pydantic import (
 from fakeyou.ingestion_status import write_atomically
 from fakeyou.invariants import SessionId
 
-BriefPermission = Literal["explain_facts", "discuss_options", "ask_brief_questions"]
+BriefPermission = Literal[
+    "explain_facts", "discuss_options", "ask_brief_questions", "meet_act", "meet_chat"
+]
 KnowledgeScope = Literal["brief_only", "persona_memory"]
 BriefText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
