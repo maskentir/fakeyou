@@ -51,6 +51,7 @@ class TranscriptEvent:
     stream_id: str = ""
     capture_ms: float = 0.0
     display_claim: str | None = None
+    visual_refs: tuple[str, ...] = ()
 
 
 def transcript_event(
@@ -60,6 +61,7 @@ def transcript_event(
     stream_id: str = "",
     capture_ms: float = 0.0,
     display_claim: str | None = None,
+    visual_refs: Sequence[str] = (),
 ) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
@@ -77,6 +79,7 @@ def transcript_event(
         stream_id=stream_id,
         capture_ms=capture_ms,
         display_claim=display_claim,
+        visual_refs=tuple(visual_refs),
     )
 
 
@@ -254,26 +257,37 @@ class _StreamPhase(_ToolActivity):
             self.boundary += 1
 
 
+def visual_refs_of(message: BaseMessage) -> list[str]:
+    event = (message.additional_kwargs or {}).get("meeting_event")
+    if not isinstance(event, dict):
+        return []
+    refs = event.get("visual_refs")
+    if not isinstance(refs, (list, tuple)):
+        return []
+    return [ref for ref in refs if isinstance(ref, str) and ref]
+
+
 def _request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
-    return [
-        HumanMessage(
-            content=event.text,
-            id=event.id,
-            additional_kwargs={
-                "meeting_event": {
-                    "timestamp": event.timestamp,
-                    "source": event.source,
-                    "participant_id": event.participant_id,
-                    "speaker_evidence_id": event.speaker_evidence_id,
-                    "stream_id": event.stream_id,
-                    "speaker_status": "observed"
-                    if event.participant_id != "unknown"
-                    else "unknown",
-                }
-            },
+    messages: list[HumanMessage] = []
+    for event in events:
+        meeting: dict[str, Any] = {
+            "timestamp": event.timestamp,
+            "source": event.source,
+            "participant_id": event.participant_id,
+            "speaker_evidence_id": event.speaker_evidence_id,
+            "stream_id": event.stream_id,
+            "speaker_status": "observed" if event.participant_id != "unknown" else "unknown",
+        }
+        if event.visual_refs:
+            meeting["visual_refs"] = list(event.visual_refs)
+        messages.append(
+            HumanMessage(
+                content=event.text,
+                id=event.id,
+                additional_kwargs={"meeting_event": meeting},
+            )
         )
-        for event in events
-    ]
+    return messages
 
 
 @dataclass(frozen=True, slots=True)

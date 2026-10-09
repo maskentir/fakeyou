@@ -44,6 +44,7 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from fakeyou.conversation import visual_refs_of
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal
 from fakeyou.meet_action_ledger import MeetActionKind
@@ -96,6 +97,7 @@ PREFETCH_QUERY_MAX_CHARS = 2000
 PREFETCH_RETAINED_EVIDENCE = 3
 PREFETCH_RETAINED_MAX_CHARS = 1200
 PREFETCH_TOOL_NAME = "recall_meeting_context"
+VisualCaptionResolver = Callable[[str], Awaitable[str | None]]
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
 CURRENT_FACTS_FILTER = SearchFilters(
@@ -443,6 +445,9 @@ def _current_speech(messages: Sequence[AnyMessage]) -> tuple[int, list[HumanMess
     end = 0
     for index, message in enumerate(messages):
         if isinstance(message, HumanMessage) and "meeting_event" in message.additional_kwargs:
+            event = message.additional_kwargs["meeting_event"]
+            if isinstance(event, dict) and event.get("kind") == "visual":
+                continue
             if end != index:
                 speech = []
             speech.append(message)
@@ -500,12 +505,14 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         recall: RecallSettings,
         faults: FaultReporter | None,
         journal: Journal | None,
+        visual_caption: VisualCaptionResolver | None = None,
     ) -> None:
         self._memory = memory
         self._group_id = group_id
         self._recall = recall
         self._faults = faults
         self._journal = journal or Journal("", stdout=False)
+        self._visual_caption = visual_caption
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
         self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
         self._sequence = 0
@@ -545,10 +552,13 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
                     self._retained.pop(next(iter(self._retained)))
         _, call, evidence = self._latest
+        visual = await self._visual_message(speech)
         assembled: list[AnyMessage] = []
         for index, message in enumerate(request.messages):
             assembled.append(message)
             if index == position - 1:
+                if visual is not None:
+                    assembled.append(visual)
                 assembled.extend([call, evidence])
             elif (
                 isinstance(message, HumanMessage) and message.id is not None and message.id in kept
@@ -556,6 +566,25 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 kept_call, kept_evidence = kept[message.id]
                 assembled.extend([kept_call, _trim_retained_evidence(kept_evidence)])
         return await handler(request.override(messages=assembled))
+
+    async def _visual_message(self, speech: list[HumanMessage]) -> HumanMessage | None:
+        if self._visual_caption is None:
+            return None
+        refs = visual_refs_of(speech[-1])
+        if not refs:
+            return None
+        try:
+            line = await self._visual_caption(refs[-1])
+        except Exception:
+            return None
+        if not line:
+            return None
+        transcript_id = speech[-1].id
+        return HumanMessage(
+            content=line,
+            id=f"{transcript_id}-visual" if transcript_id else None,
+            additional_kwargs={"meeting_event": {"kind": "visual", "source": "meeting_visual"}},
+        )
 
     async def _evidence(
         self,
@@ -640,9 +669,15 @@ def create_memory_prefetch_middleware(
     recall: RecallSettings = DEFAULTS.memory.recall,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
+    visual_caption: VisualCaptionResolver | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
-        memory, group_id=group_id, recall=recall, faults=faults, journal=journal
+        memory,
+        group_id=group_id,
+        recall=recall,
+        faults=faults,
+        journal=journal,
+        visual_caption=visual_caption,
     )
 
 

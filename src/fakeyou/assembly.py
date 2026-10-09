@@ -39,6 +39,7 @@ from fakeyou.faults import FaultReporter
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.journal import Journal
 from fakeyou.memory import (
+    VisualCaptionResolver,
     create_meet_action_tools,
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -59,6 +60,9 @@ from fakeyou.settings import (
     Settings,
 )
 from fakeyou.verify import CalibrationArtifact, load_calibration_artifact
+from fakeyou.visual_caption import VisualCaptioner
+from fakeyou.visual_hydrate import create_visual_hydrate_middleware, create_visual_resolver
+from fakeyou.visual_store import VisualStore
 from fakeyou.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.voiceprint_match import VoiceprintMatcher
 from fakeyou.voiceprint_store import VoiceprintStore, ensure_voiceprint_schema
@@ -193,6 +197,8 @@ async def open_conversation(
     on_tool_result: ToolResultCallback | None = None,
     brief: MeetingBrief | None = None,
     meet_dispatcher: MeetActionDispatcher | None = None,
+    visual_store: VisualStore | None = None,
+    visual_captioner: VisualCaptioner | None = None,
 ) -> AsyncIterator[ConversationLoop]:
     tool_names: frozenset[PersonaTool] = frozenset()
     if profile is None:
@@ -218,6 +224,9 @@ async def open_conversation(
         fallback = create_fallback_chat_model(settings)
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))
+        visual: VisualCaptionResolver | None = None
+        if visual_store is not None and visual_captioner is not None:
+            visual = create_visual_resolver(visual_store, visual_captioner)
         if graphiti is not None and profile is not None and tool_names:
             bound, prefetch = memory_wiring(tool_names, settings.memory.recall.strategy)
             if prefetch:
@@ -228,6 +237,7 @@ async def open_conversation(
                         recall=settings.memory.recall,
                         faults=faults,
                         journal=journal,
+                        visual_caption=visual,
                     )
                 )
             if bound:
@@ -239,6 +249,10 @@ async def open_conversation(
                     if tool.name in bound
                 )
                 middleware.append(create_recall_error_middleware(faults))
+        if visual_store is not None and visual_captioner is not None:
+            middleware.append(
+                create_visual_hydrate_middleware(visual_store, visual_captioner, journal=journal)
+            )
         if profile is not None and meet_dispatcher is not None:
             meet = tool_names - {"recall_meeting_context"}
             if meet:
