@@ -15,7 +15,7 @@ from fakeyou.faults import FaultReporter
 from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
 from fakeyou.journal import Journal
 from fakeyou.memory import meeting_episodes, meeting_saga
-from fakeyou.provider_faults import classify_exception
+from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry, load_meeting_record
 from fakeyou.settings import DEFAULTS
 from fakeyou.voice_activity import voice_speaker_name
@@ -339,6 +339,7 @@ async def ingest_corrections(
     completed = True
     for index in changed:
         window = fixed_windows[index]
+        written_uuid: str | None = None
         try:
             timer_journal = journal or Journal("", stdout=False)
             with timer_journal.timed(
@@ -360,6 +361,7 @@ async def ingest_corrections(
                         saga=meeting_saga(meeting_id),
                         saga_previous_episode_uuid=previous_uuid,
                     )
+                written_uuid = result.episode.uuid
                 original = originals.get(index)
                 if original is None:
                     if faults is not None:
@@ -377,7 +379,23 @@ async def ingest_corrections(
                 timing.fields.update(facts=len(result.edges), invalidated=invalidated)
         except Exception as error:
             if faults is not None:
-                faults.record(classify_exception("memory_ingest", error))
+                fault = classify_exception("memory_ingest", error)
+                if written_uuid is not None:
+                    detail = (
+                        f"correction window {index} orphaned episode {written_uuid}; "
+                        "retry re-ingests the window"
+                    )
+                    if fault.detail is not None:
+                        detail = f"{detail} ({fault.detail})"
+                    fault = ProviderFault(
+                        fault.source,
+                        fault.kind,
+                        status=fault.status,
+                        detail=detail,
+                        retryable=fault.retryable,
+                        operation=fault.operation,
+                    )
+                faults.record(fault)
             completed = False
             break
         previous_uuid = result.episode.uuid

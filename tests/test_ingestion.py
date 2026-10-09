@@ -671,3 +671,46 @@ async def test_ingest_corrections_aborts_when_invalidation_fails(tmp_path: Path)
     assert "memory_correction_failed" in [row["event"] for row in rows]
     assert read_status(status_path(record_path)) is not None
     assert read_status(status_path(record_path)).corrected_at is None
+
+
+async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[],
+        episode_edges={
+            "uuid-meeting-1:w00001": [
+                SimpleNamespace(uuid="edge-changed-a", invalid_at=None, expired_at=None)
+            ]
+        },
+    )
+
+    async def failing(*args, **kwargs):
+        raise RuntimeError("neo4j is down")
+
+    memory.driver.execute_query.side_effect = failing
+    journal = Journal("meeting-1", stdout=False)
+    faults = FaultReporter(journal=journal)
+
+    result = await ingest_corrections(
+        memory,
+        record_path,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        journal=journal,
+        faults=faults,
+    )
+
+    assert result.completed is False
+    assert result.episodes == ()
+    assert [episode["name"] for episode in memory.added] == [
+        correction_episode_name("meeting-1", 1)
+    ]
+    assert faults.total() == 1
+    [summary] = faults.summaries()
+    assert summary.detail is not None
+    assert "uuid-meeting-1:w00001:corrected" in summary.detail
+    assert "window 1" in summary.detail
