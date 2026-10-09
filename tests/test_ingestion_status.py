@@ -21,6 +21,47 @@ from fakeyou.ingestion_status import (
     write_status,
 )
 
+
+def test_old_status_json_without_new_fields_loads_with_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "ingestion.json"
+    payload = {
+        "meeting_id": "meeting-9",
+        "group_id": "twin_group",
+        "status": "completed",
+        "windows": 3,
+        "resumed_from": 0,
+        "ingested": 3,
+        "record_sha256": None,
+        "updated_at": NOW.isoformat(),
+        "reason": None,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    status = read_status(path)
+
+    assert status is not None
+    assert status.episode_uuids == {}
+    assert status.corrected_at is None
+    assert status.correction_episodes == []
+
+
+def test_correction_log_roundtrips_without_touching_window_map(tmp_path: Path) -> None:
+    path = tmp_path / "ingestion.json"
+    status = pending_status(
+        episode_uuids={0: "uuid-a", 1: "uuid-b"},
+        corrected_at="2026-10-09T12:00:00+00:00",
+        correction_episodes=["uuid-fix"],
+    )
+    write_status(path, status)
+
+    loaded = read_status(path)
+
+    assert loaded is not None
+    assert loaded.episode_uuids == {0: "uuid-a", 1: "uuid-b"}
+    assert loaded.corrected_at == "2026-10-09T12:00:00+00:00"
+    assert loaded.correction_episodes == ["uuid-fix"]
+
+
 NOW = datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
 
 
