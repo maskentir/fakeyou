@@ -27,6 +27,8 @@ _INVALIDATE_EDGE_QUERY = (
     "MATCH (n:Entity)-[e:RELATES_TO {uuid: $uuid}]->(m:Entity) "
     "WHERE e.group_id = $group_id SET e.invalid_at = $at, e.expired_at = $at"
 )
+_MERGE_FLOOR_UTTERANCES = 2
+_MERGE_FLOOR_CHARS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +140,11 @@ def _utterance(entry: RecordEntry, labels: Mapping[str, str] | None = None) -> U
     return Utterance(speaker, " ".join(entry.text.split()), entry.at, spoken)
 
 
+def _below_floor(window: Sequence[Utterance]) -> bool:
+    chars = sum(len(utterance.text) for utterance in window)
+    return len(window) < _MERGE_FLOOR_UTTERANCES and chars < _MERGE_FLOOR_CHARS
+
+
 def _pack_windows(
     utterances: Iterable[Utterance], *, window_utterances: int, window_seconds: float
 ) -> list[list[Utterance]]:
@@ -152,7 +159,16 @@ def _pack_windows(
             windows.append([utterance])
         else:
             current.append(utterance)
-    return windows
+    merged: list[list[Utterance]] = []
+    for window in windows:
+        if merged and _below_floor(window):
+            merged[-1].extend(window)
+        else:
+            merged.append(window)
+    while len(merged) > 1 and _below_floor(merged[0]):
+        merged[1] = merged[0] + merged[1]
+        del merged[0]
+    return merged
 
 
 def _entries_to_windows(

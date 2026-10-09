@@ -104,6 +104,93 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
 
 
 @pytest.mark.asyncio
+async def test_chat_turn_flush_persists_a_lone_short_fact(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = make_graphiti()
+    captured: dict = {}
+
+    def create_tools(_memory, *, group_id, recall):
+        tools = memory_module.create_memory_tools(_memory, group_id=group_id, recall=recall)
+        captured["tools"] = tools
+        return tools
+
+    class FakeAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            [remember, _recall] = captured["tools"]
+            await remember.ainvoke({"fact": "Budi: The demo moved to Thursday."})
+            return {"messages": [SimpleNamespace(content="ok")]}
+
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
+    monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
+    monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
+
+    await cli_chat.chat("hello", "thread", False, True, settings)
+
+    assert len(memory.added) == 1
+    assert "Budi: The demo moved to Thursday." in memory.added[0]["episode_body"]
+
+
+@pytest.mark.asyncio
+async def test_chat_flushes_pending_facts_when_the_agent_raises(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = make_graphiti()
+    captured: dict = {}
+
+    def create_tools(_memory, *, group_id, recall):
+        tools = memory_module.create_memory_tools(_memory, group_id=group_id, recall=recall)
+        captured["tools"] = tools
+        return tools
+
+    class FakeAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            [remember, _recall] = captured["tools"]
+            await remember.ainvoke({"fact": "Budi: The demo moved to Thursday."})
+            raise RuntimeError("agent exploded")
+
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
+    monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
+    monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
+
+    with pytest.raises(RuntimeError, match="agent exploded"):
+        await cli_chat.chat("hello", "thread", False, True, settings)
+
+    assert len(memory.added) == 1
+    assert "Budi: The demo moved to Thursday." in memory.added[0]["episode_body"]
+
+
+@pytest.mark.asyncio
+async def test_chat_surfaces_flush_failure_after_a_successful_turn(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory = make_graphiti()
+    memory.errors = {0: RuntimeError("episode store unavailable")}
+    captured: dict = {}
+
+    def create_tools(_memory, *, group_id, recall):
+        tools = memory_module.create_memory_tools(_memory, group_id=group_id, recall=recall)
+        captured["tools"] = tools
+        return tools
+
+    class FakeAgent:
+        async def ainvoke(self, *_args, **_kwargs):
+            [remember, _recall] = captured["tools"]
+            await remember.ainvoke({"fact": "Budi: The demo moved to Thursday."})
+            return {"messages": [SimpleNamespace(content="ok")]}
+
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
+    monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
+    monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
+
+    with pytest.raises(RuntimeError, match="episode store unavailable"):
+        await cli_chat.chat("hello", "thread", False, True, settings)
+
+
+@pytest.mark.asyncio
 async def test_memory_init_builds_indexes(
     settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -3521,7 +3608,10 @@ def write_ingest_windows(settings, meeting_id: str, count: int) -> None:
                 id=f"window-{index}",
                 timestamp=moment.isoformat(),
                 source="meeting_audio",
-                text=f"Decision {index} is final.",
+                text=(
+                    f"Decision {index} is final for the Thursday launch, with the rollout "
+                    "checklist and the client demo schedule confirmed for all regions."
+                ),
                 finalized=True,
                 participant_id="unknown",
                 speaker_evidence_id=None,

@@ -269,24 +269,78 @@ def create_recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMid
     return ToolErrorMiddleware(report_unavailable, tools=["recall_meeting_context"])
 
 
+_BUFFERED_FACT_CHARS = 120
+_BUFFERED_FACT_COUNT = 2
+
+
+def _speaker_subject(fact: str) -> str | None:
+    head, separator, tail = fact.partition(":")
+    speaker = head.strip()
+    if not separator or not speaker or not tail.strip():
+        return None
+    if len(speaker) > 64 or not any(char.isalpha() for char in speaker):
+        return None
+    return speaker
+
+
+def _fact_lines(fact: str) -> list[str]:
+    speaker = _speaker_subject(fact)
+    if speaker is None:
+        return [fact]
+    return [fact, f"{speaker} stated this during the meeting."]
+
+
 def create_memory_tools(
     memory: Graphiti, *, group_id: str, recall: RecallSettings = DEFAULTS.memory.recall
 ) -> list[BaseTool]:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", group_id):
         raise ValueError("group_id must be 1-128 characters using letters, numbers, '_' or '-'")
+    pending: list[tuple[str, str]] = []
 
-    @tool(description="Store one meeting fact in long-term memory.")
-    async def remember_meeting_fact(fact: str, source_description: str = "meeting") -> str:
-        reference_time = datetime.now(UTC)
+    async def store_facts(facts: list[tuple[str, str]], reference_time: datetime) -> None:
+        body = "\n".join(line for fact, _ in facts for line in _fact_lines(fact))
         await memory.add_episode(
             name=f"meeting-{reference_time.isoformat()}",
-            episode_body=fact,
+            episode_body=body,
             source=EpisodeType.text,
-            source_description=source_description,
+            source_description=facts[-1][1],
             reference_time=reference_time,
             group_id=group_id,
         )
-        return "Remembered meeting fact."
+
+    @tool(
+        description=(
+            "Store one meeting fact in long-term memory. Short facts are buffered "
+            "until two arrive or a call passes flush true; end the turn with flush "
+            "true so a lone buffered fact is persisted."
+        )
+    )
+    async def remember_meeting_fact(
+        fact: str, source_description: str = "meeting transcript", flush: bool = False
+    ) -> str:
+        reference_time = datetime.now(UTC)
+        text = " ".join(fact.split())
+        if flush:
+            if text:
+                pending.append((text, source_description))
+            if pending:
+                await store_facts(list(pending), reference_time)
+                pending.clear()
+            return "Remembered meeting fact."
+        if not text:
+            return "Buffered meeting fact."
+        if len(text) >= _BUFFERED_FACT_CHARS:
+            if pending:
+                await store_facts(list(pending), reference_time)
+                pending.clear()
+            await store_facts([(text, source_description)], reference_time)
+            return "Remembered meeting fact."
+        pending.append((text, source_description))
+        if len(pending) >= _BUFFERED_FACT_COUNT:
+            await store_facts(list(pending), reference_time)
+            pending.clear()
+            return "Remembered meeting fact."
+        return "Buffered meeting fact."
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
@@ -548,7 +602,7 @@ def create_memory_prefetch_middleware(
 def _evidence_kind(source_description: str) -> Literal["owner_note", "meeting_transcript", "other"]:
     if source_description == OWNER_NOTE_SOURCE:
         return "owner_note"
-    if source_description.startswith("Google Meet ") and source_description.endswith("transcript"):
+    if source_description.endswith("transcript"):
         return "meeting_transcript"
     return "other"
 

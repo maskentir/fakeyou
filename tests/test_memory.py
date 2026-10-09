@@ -38,6 +38,7 @@ async def test_memory_tools_keep_group_id_scoped(
     remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     await remember.ainvoke({"fact": "Alice owns the agenda"})
+    await remember.ainvoke({"fact": "Alice set the review date"})
     await recall.ainvoke({"query": "agenda"})
 
     assert memory.added[0]["group_id"] == "team_alpha"
@@ -1167,3 +1168,66 @@ async def test_invalidated_facts_without_an_active_owner_note_stay_excluded(
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
 
     assert await recall.ainvoke({"query": "demo"}) == memory_module.RECALL_EMPTY_RESULT
+
+
+async def test_short_remember_meeting_fact_buffers_until_two_facts_or_flush() -> None:
+    memory = make_graphiti()
+    remember, _recall = create_memory_tools(memory, group_id="team_alpha")
+
+    buffered = await remember.ainvoke({"fact": "Budi: The demo moved to Thursday."})
+
+    assert buffered == "Buffered meeting fact."
+    assert memory.added == []
+    stored = await remember.ainvoke({"fact": "Joko: The client report is ready."})
+
+    assert stored == "Remembered meeting fact."
+    assert len(memory.added) == 1
+    [episode] = memory.added
+    assert "Budi: The demo moved to Thursday." in episode["episode_body"]
+    assert "Budi stated this during the meeting." in episode["episode_body"]
+    assert "Joko: The client report is ready." in episode["episode_body"]
+    assert episode["source_description"].endswith("transcript")
+    assert memory_module._evidence_kind(episode["source_description"]) == "meeting_transcript"
+    assert episode["group_id"] == "team_alpha"
+
+    flushed_memory = make_graphiti()
+    remember_flushed, _ = create_memory_tools(flushed_memory, group_id="team_alpha")
+    await remember_flushed.ainvoke({"fact": "Nadia: The notes are sent."})
+
+    assert flushed_memory.added == []
+    outcome = await remember_flushed.ainvoke({"fact": "", "flush": True})
+
+    assert outcome == "Remembered meeting fact."
+    assert len(flushed_memory.added) == 1
+    assert "Nadia stated this during the meeting." in flushed_memory.added[0]["episode_body"]
+
+
+async def test_remember_meeting_fact_flushes_buffer_before_long_facts() -> None:
+    memory = make_graphiti()
+    remember, _recall = create_memory_tools(memory, group_id="team_alpha")
+    long_fact = (
+        "Budi: The Thursday launch stays on schedule and the rollout checklist "
+        "is complete for all regions before the client demo this week."
+    )
+
+    assert len(long_fact) >= 120
+    await remember.ainvoke({"fact": "Joko: The client report is ready."})
+    stored = await remember.ainvoke({"fact": long_fact})
+
+    assert stored == "Remembered meeting fact."
+    assert len(memory.added) == 2
+    assert "Joko: The client report is ready." in memory.added[0]["episode_body"]
+    assert "Budi: The Thursday launch stays on schedule" in memory.added[1]["episode_body"]
+    outcome = await remember.ainvoke({"fact": "", "flush": True})
+
+    assert outcome == "Remembered meeting fact."
+    assert len(memory.added) == 2
+
+
+async def test_remember_meeting_fact_ignores_blank_facts_and_empty_flush() -> None:
+    memory = make_graphiti()
+    remember, _recall = create_memory_tools(memory, group_id="team_alpha")
+
+    assert await remember.ainvoke({"fact": "   "}) == "Buffered meeting fact."
+    assert await remember.ainvoke({"fact": "", "flush": True}) == "Remembered meeting fact."
+    assert memory.added == []
