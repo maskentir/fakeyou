@@ -542,3 +542,132 @@ async def test_ingest_corrections_without_sidecar_ingests_nothing(tmp_path: Path
 
     assert result == CorrectionResult(changed_windows=0, episodes=(), completed=True)
     assert memory.added == []
+
+
+def correction_status(record_path: Path) -> None:
+    write_status(
+        status_path(record_path),
+        IngestionStatus(
+            meeting_id="meeting-1",
+            group_id="twin_group",
+            status="completed",
+            windows=3,
+            ingested=3,
+            episode_uuids={
+                0: "uuid-meeting-1:w00000",
+                1: "uuid-meeting-1:w00001",
+                2: "uuid-meeting-1:w00002",
+            },
+        ),
+    )
+
+
+async def test_ingest_corrections_invalidates_original_edges_of_changed_windows(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[],
+        episode_edges={
+            "uuid-meeting-1:w00000": [
+                SimpleNamespace(uuid="edge-stable-0", invalid_at=None, expired_at=None)
+            ],
+            "uuid-meeting-1:w00001": [
+                SimpleNamespace(uuid="edge-changed-a", invalid_at=None, expired_at=None),
+                SimpleNamespace(uuid="edge-changed-b", invalid_at=None, expired_at=None),
+                SimpleNamespace(
+                    uuid="edge-already-invalid", invalid_at=CORRECTED_AT, expired_at=None
+                ),
+            ],
+            "uuid-meeting-1:w00002": [
+                SimpleNamespace(uuid="edge-stable-2", invalid_at=None, expired_at=None)
+            ],
+        },
+    )
+
+    lines: list[str] = []
+    before = datetime.now(UTC)
+    result = await ingest_corrections(
+        memory,
+        record_path,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        journal=Journal("meeting-1", emit=lines.append),
+    )
+    after = datetime.now(UTC)
+
+    assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
+    assert result.completed is True
+    assert memory.episode_lookups == [["uuid-meeting-1:w00001"]]
+    assert sorted(call["uuid"] for call in memory.executed) == [
+        "edge-changed-a",
+        "edge-changed-b",
+    ]
+    for call in memory.executed:
+        assert "RELATES_TO" in call["query"]
+        assert "invalid_at" in call["query"] and "expired_at" in call["query"]
+        assert call["group_id"] == "twin_group"
+        assert before <= call["at"] <= after
+    rows = [json.loads(line) for line in lines]
+    ingested = next(row for row in rows if row["event"] == "memory_correction_ingested")
+    assert ingested["invalidated"] == 2
+
+
+async def test_ingest_corrections_without_window_map_skips_invalidation(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    journal = Journal("meeting-1", stdout=False)
+    faults = FaultReporter(journal=journal)
+
+    result = await ingest_corrections(
+        memory, record_path, group_id="twin_group", meeting_id="meeting-1", faults=faults
+    )
+
+    assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
+    assert result.completed is True
+    assert memory.episode_lookups == []
+    assert memory.executed == []
+    assert faults.total() == 1
+
+
+async def test_ingest_corrections_aborts_when_invalidation_fails(tmp_path: Path) -> None:
+    record_path = correction_record(tmp_path)
+    correction_status(record_path)
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[],
+        episode_edges={
+            "uuid-meeting-1:w00001": [
+                SimpleNamespace(uuid="edge-changed-a", invalid_at=None, expired_at=None)
+            ]
+        },
+    )
+
+    async def failing(*args, **kwargs):
+        raise RuntimeError("neo4j is down")
+
+    memory.driver.execute_query.side_effect = failing
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append)
+    faults = FaultReporter(journal=journal)
+
+    result = await ingest_corrections(
+        memory,
+        record_path,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        journal=journal,
+        faults=faults,
+    )
+
+    assert result.completed is False
+    assert result.episodes == ()
+    assert faults.total() == 1
+    rows = [json.loads(line) for line in lines]
+    assert "memory_correction_failed" in [row["event"] for row in rows]
+    assert read_status(status_path(record_path)) is not None
+    assert read_status(status_path(record_path)).corrected_at is None

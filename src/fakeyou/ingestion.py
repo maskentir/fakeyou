@@ -23,6 +23,10 @@ from fakeyou.voice_activity import voice_speaker_name
 UNIDENTIFIED_PARTICIPANT = "Speaker with unverified identity"
 VOICE_SPEAKER_SUFFIX = " with unverified identity"
 TWIN_SPEAKER = "Digital twin"
+_INVALIDATE_EDGE_QUERY = (
+    "MATCH (n:Entity)-[e:RELATES_TO {uuid: $uuid}]->(m:Entity) "
+    "WHERE e.group_id = $group_id SET e.invalid_at = $at, e.expired_at = $at"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +265,21 @@ async def ingest_meeting(
     return IngestResult(len(windows), resumed_from, ingested, facts, completed, uuids)
 
 
+async def _invalidate_original_edges(
+    memory: Graphiti, *, group_id: str, episode_uuid: str, at: datetime
+) -> int:
+    found = await memory.get_nodes_and_edges_by_episode([episode_uuid])
+    invalidated = 0
+    for edge in found.edges:
+        if edge.invalid_at is not None or edge.expired_at is not None:
+            continue
+        await memory.driver.execute_query(
+            _INVALIDATE_EDGE_QUERY, uuid=edge.uuid, group_id=group_id, at=at
+        )
+        invalidated += 1
+    return invalidated
+
+
 async def ingest_corrections(
     memory: Graphiti,
     record_path: Path,
@@ -315,6 +334,7 @@ async def ingest_corrections(
     now = datetime.now(UTC)
     last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
     previous_uuid = last[-1].uuid if last else None
+    originals = existing.episode_uuids if existing is not None else {}
     episodes: list[str] = []
     completed = True
     for index in changed:
@@ -340,7 +360,21 @@ async def ingest_corrections(
                         saga=meeting_saga(meeting_id),
                         saga_previous_episode_uuid=previous_uuid,
                     )
-                timing.fields.update(facts=len(result.edges))
+                original = originals.get(index)
+                if original is None:
+                    if faults is not None:
+                        faults.record(
+                            classify_exception(
+                                "memory_ingest",
+                                ValueError(f"missing episode uuid for corrected window {index}"),
+                            )
+                        )
+                    invalidated = 0
+                else:
+                    invalidated = await _invalidate_original_edges(
+                        memory, group_id=group_id, episode_uuid=original, at=now
+                    )
+                timing.fields.update(facts=len(result.edges), invalidated=invalidated)
         except Exception as error:
             if faults is not None:
                 faults.record(classify_exception("memory_ingest", error))
