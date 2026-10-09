@@ -13,6 +13,7 @@ from fakeyou.memory import (
 )
 from fakeyou.provider_faults import classify_exception
 from fakeyou.settings import (
+    AnthropicReply,
     CompatibleReply,
     GoogleReply,
     MemorySettings,
@@ -77,6 +78,34 @@ def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
     if settings.reply_fallback is None:
         return None
     return _init_chat_model(settings.reply_fallback, "FAKEYOU_REPLY_FALLBACK__API_KEY")
+
+
+def create_visual_chat_model(settings: Settings) -> BaseChatModel:
+    settings.require_roles("reply")
+    visual = settings.visual
+    reply = settings.reply
+    values: dict[str, Any] = {
+        "model": visual.model,
+        "api_key": reply.api_key,
+        "timeout_seconds": visual.timeout_seconds,
+        "max_retries": reply.max_retries,
+    }
+    if visual.base_url is not None:
+        values["base_url"] = visual.base_url
+    provider = visual.provider
+    if provider == "openai":
+        role: ReplySettings = OpenAIReply(**values)
+    elif provider == "anthropic":
+        role = AnthropicReply(**values)
+    elif provider == "google":
+        role = GoogleReply(**values)
+    elif provider == "openai_compatible":
+        if visual.base_url is None:
+            raise ValueError("visual provider openai_compatible requires FAKEYOU_VISUAL__BASE_URL")
+        role = CompatibleReply(**values)
+    else:
+        raise ValueError(f"unsupported visual provider: {provider}")
+    return _init_chat_model(role, "FAKEYOU_REPLY__API_KEY")
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
