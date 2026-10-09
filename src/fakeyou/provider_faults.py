@@ -5,6 +5,7 @@ from typing import Literal, get_args
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
+from fakeyou.cli.errors import CliError
 from fakeyou.taxonomy import Subsystem
 
 ProviderFaultKind = Literal[
@@ -143,6 +144,8 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
     categorized = category_fault(source, error)
     if categorized is not None:
         return categorized
+    if isinstance(error, CliError):
+        return ProviderFault(source, "unknown", detail=str(error))
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):

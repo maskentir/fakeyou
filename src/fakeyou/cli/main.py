@@ -114,6 +114,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_ingest_parser.add_argument("--meeting", dest="meeting_id", required=True)
     memory_ingest_parser.add_argument("--twin-name", default=None)
+    memory_ingest_parser.add_argument(
+        "--no-correct",
+        dest="no_correct",
+        action="store_true",
+        help="Skip automatic diarization before ingesting the live transcript",
+    )
     memory_ingest_parser.set_defaults(handler=ingest_recorded_meeting)
     memory_reembed_parser = commands.add_parser(
         "memory-reembed",
