@@ -3,12 +3,13 @@ import re
 from pathlib import Path
 
 import pytest
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, ValidationError
 
 from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.brief import MeetingBrief
 from fakeyou.conversation import conversation_thread_id
-from fakeyou.memory import create_memory_tools
+from fakeyou.memory import create_meet_action_tools, create_memory_tools
 from fakeyou.persona import (
     BRIEF_RULES,
     GOALS_RULE,
@@ -23,8 +24,10 @@ from fakeyou.persona import (
     meeting_tool_names,
     number_keywords,
     persona_digest,
+    refuse_meet_tool,
     speech_keywords,
 )
+from fakeyou.runtime import MeetActionDispatcher
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
@@ -885,3 +888,85 @@ def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(tool: st
     assert row["reason"] == "authority_denied"
     assert faults.total() == 0
     assert faults.report() is None
+
+
+@pytest.mark.parametrize(
+    "allowed_tools,permissions,expected",
+    [
+        (
+            ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"],
+            ["meet_act", "meet_chat"],
+            {"meet_raise_hand", "meet_lower_hand", "meet_send_chat"},
+        ),
+        (
+            ["meet_raise_hand", "meet_lower_hand"],
+            ["meet_act"],
+            {"meet_raise_hand", "meet_lower_hand"},
+        ),
+        (["meet_send_chat"], ["meet_chat"], {"meet_send_chat"}),
+        (["meet_send_chat"], ["meet_act"], set()),
+        (["meet_raise_hand"], [], set()),
+        ([], ["meet_act", "meet_chat"], set()),
+    ],
+)
+def test_meet_grants_bind_matching_tools_from_factory(
+    tmp_path: Path,
+    brief: MeetingBrief,
+    allowed_tools: list[str],
+    permissions: list[str],
+    expected: set[str],
+) -> None:
+    meeting = revised(brief, knowledge_scope="persona_memory", permissions=permissions)
+    grants = meeting_tool_names(
+        profile(allowed_tools=allowed_tools), meeting, memory_requested=False
+    )
+    dispatcher = MeetActionDispatcher(
+        tmp_path / "record.jsonl", meeting_id="meeting-bind", enabled=True
+    )
+    bound = [
+        tool.name
+        for tool in create_meet_action_tools(dispatcher, refuse=refuse_meet_tool)
+        if tool.name in grants
+    ]
+
+    assert grants == frozenset(expected)
+    assert set(bound) == expected
+
+
+def test_brief_only_meet_grants_bind_no_tools(tmp_path: Path, brief: MeetingBrief) -> None:
+    meeting = revised(brief, knowledge_scope="brief_only", permissions=["meet_act", "meet_chat"])
+    loaded = profile(allowed_tools=["meet_raise_hand", "meet_lower_hand", "meet_send_chat"])
+    grants = meeting_tool_names(loaded, meeting, memory_requested=False)
+    dispatcher = MeetActionDispatcher(
+        tmp_path / "record.jsonl", meeting_id="meeting-bind", enabled=True
+    )
+    bound = [
+        tool.name
+        for tool in create_meet_action_tools(dispatcher, refuse=refuse_meet_tool)
+        if tool.name in grants
+    ]
+
+    assert grants == frozenset()
+    assert bound == []
+
+
+def test_meet_tools_hide_call_identity_from_model(tmp_path: Path) -> None:
+    dispatcher = MeetActionDispatcher(
+        tmp_path / "record.jsonl", meeting_id="meeting-bind", enabled=True
+    )
+    tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool)
+
+    assert [tool.name for tool in tools] == [
+        "meet_raise_hand",
+        "meet_lower_hand",
+        "meet_send_chat",
+    ]
+    for tool in tools:
+        parameters = convert_to_openai_tool(tool)["function"]["parameters"]
+
+        assert "tool_call_id" not in parameters["properties"]
+        assert "tool_call_id" not in parameters.get("required", [])
+
+    assert list(convert_to_openai_tool(tools[2])["function"]["parameters"]["properties"]) == [
+        "message"
+    ]

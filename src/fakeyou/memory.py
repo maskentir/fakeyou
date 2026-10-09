@@ -7,7 +7,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from anthropic import AsyncAnthropic
 from anthropic.resources.messages import AsyncMessages
@@ -40,12 +40,13 @@ from langchain.agents.middleware import (
     ToolErrorMiddleware,
 )
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from fakeyou.faults import FaultReporter
 from fakeyou.journal import Journal
+from fakeyou.meet_action_ledger import MeetActionKind
 from fakeyou.owner_notes import (
     OWNER_NOTE_SOURCE,
     ensure_note_indexes,
@@ -60,6 +61,7 @@ from fakeyou.provenance import (
     render_evidence,
 )
 from fakeyou.provider_faults import classify_exception
+from fakeyou.runtime import MeetActionDispatcher
 from fakeyou.settings import (
     DEFAULTS,
     AnthropicMemoryLLM,
@@ -347,6 +349,51 @@ def create_memory_tools(
         return await search_memory_evidence(memory, query, group_id=group_id, recall=recall)
 
     return [remember_meeting_fact, recall_meeting_context]
+
+
+MEET_ACTION_QUEUED = "Request recorded for separate execution."
+
+
+def _request_meet_action(
+    dispatcher: MeetActionDispatcher,
+    refuse: Callable[..., str],
+    journal: Journal | None,
+    tool_name: str,
+    kind: MeetActionKind,
+    action_id: str,
+    text: str,
+) -> str:
+    if not dispatcher.enabled or dispatcher.closed:
+        return refuse(tool_name, journal=journal)
+    dispatcher.request(kind, action_id=action_id, text=text)
+    return MEET_ACTION_QUEUED
+
+
+def create_meet_action_tools(
+    dispatcher: MeetActionDispatcher,
+    *,
+    refuse: Callable[..., str],
+    journal: Journal | None = None,
+) -> list[BaseTool]:
+    @tool(description="Raise your hand in the meeting to show you want to speak.")
+    async def meet_raise_hand(tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
+        return _request_meet_action(
+            dispatcher, refuse, journal, "meet_raise_hand", "raise_hand", tool_call_id, ""
+        )
+
+    @tool(description="Lower your hand in the meeting.")
+    async def meet_lower_hand(tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
+        return _request_meet_action(
+            dispatcher, refuse, journal, "meet_lower_hand", "lower_hand", tool_call_id, ""
+        )
+
+    @tool(description="Send a short chat message to everyone in the meeting.")
+    async def meet_send_chat(message: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
+        return _request_meet_action(
+            dispatcher, refuse, journal, "meet_send_chat", "send_chat", tool_call_id, message
+        )
+
+    return [meet_raise_hand, meet_lower_hand, meet_send_chat]
 
 
 async def _search_edges(

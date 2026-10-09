@@ -71,7 +71,7 @@ from fakeyou.provider_faults import ProviderFault, classify_exception
 from fakeyou.providers import memory_config, open_persona_memory, preflight_hosts
 from fakeyou.record import MeetingRecord, ResumeEntry, load_meeting_record, meeting_record_path
 from fakeyou.report import describe_session
-from fakeyou.runtime import run_meeting_session
+from fakeyou.runtime import MeetActionDispatcher, run_meeting_session
 from fakeyou.session import MeetingAudio, SessionConfig, SessionResult
 from fakeyou.settings import (
     Settings,
@@ -470,6 +470,7 @@ async def join_meeting(
         participant_evidence_path=record_path.parent / EVIDENCE_FILE_NAME,
         attribution_probe_path=probe_path,
         per_stream_enabled=settings.conversation.per_stream_enabled,
+        meet_actions_enabled=settings.conversation.meet_actions_enabled,
     )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"
@@ -570,6 +571,16 @@ async def join_meeting(
                         if settings.conversation.voice_labels_enabled and audio_enabled
                         else None
                     )
+                    meet_dispatcher = (
+                        MeetActionDispatcher(
+                            record_path,
+                            meeting_id=resolved_meeting_id,
+                            enabled=settings.conversation.meet_actions_enabled,
+                            journal=journal,
+                        )
+                        if settings.conversation.meet_actions_enabled and conversation_enabled
+                        else None
+                    )
 
                     def log_playback(event: PlaybackEvent) -> None:
                         if voice_activity is not None:
@@ -599,6 +610,7 @@ async def join_meeting(
                                 faults=faults,
                                 journal=journal,
                                 brief=brief,
+                                meet_dispatcher=meet_dispatcher,
                             )
                         )
 
@@ -708,6 +720,7 @@ async def join_meeting(
                                 faults=faults,
                                 journal=journal,
                                 voice_activity=voice_activity,
+                                meet_dispatcher=meet_dispatcher,
                                 **preflight_kwargs,
                             )
                     result = session_result
