@@ -2,7 +2,7 @@ import io
 import json
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +28,8 @@ class VisualFrame:
     path: str
     thumb_path: str
     dhash: int
+    visible_to_page_ms: float | None = None
+    visible_to_at: str | None = None
 
 
 def dhash_image(data: bytes) -> int:
@@ -53,6 +55,7 @@ class VisualStore:
         self._journal = journal
         self._frames: deque[VisualFrame] = deque(maxlen=VISUAL_RING_SIZE)
         self._duplicates = 0
+        self._current_id: str | None = None
         self._directory.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -83,8 +86,11 @@ class VisualStore:
                         matched_id=existing.frame_id,
                         hamming=hamming_distance(frame.dhash, existing.dhash),
                     )
+                self._close_range(existing.frame_id, frame.captured_page_ms, frame.captured_at)
                 self._drop_files(frame)
                 return
+        self._close_range(self._current_id, frame.captured_page_ms, frame.captured_at)
+        self._current_id = frame.frame_id
         self.sidecar.parent.mkdir(parents=True, exist_ok=True)
         row = {
             "visual_id": frame.frame_id,
@@ -93,12 +99,47 @@ class VisualStore:
             "captured_at": frame.captured_at,
             "visible_from": frame.captured_at,
             "visible_to": None,
+            "visible_to_page_ms": None,
             "sha256": frame.sha256,
             "thumb": Path(frame.thumb_path).name,
         }
         with self.sidecar.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._frames.append(frame)
+
+    def _close_range(self, frame_id: str | None, page_ms: float, stamp: str) -> None:
+        if frame_id is None:
+            return
+        for index, existing in enumerate(self._frames):
+            if existing.frame_id == frame_id:
+                self._frames[index] = replace(
+                    existing, visible_to_page_ms=page_ms, visible_to_at=stamp
+                )
+                break
+        self._persist_range(frame_id, page_ms, stamp)
+
+    def _persist_range(self, frame_id: str, page_ms: float, stamp: str) -> None:
+        try:
+            lines = self.sidecar.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        updated = False
+        rows: list[str] = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                rows.append(line)
+                continue
+            if isinstance(row, dict) and row.get("visual_id") == frame_id:
+                row["visible_to"] = stamp
+                row["visible_to_page_ms"] = page_ms
+                rows.append(json.dumps(row, ensure_ascii=False))
+                updated = True
+            else:
+                rows.append(line)
+        if updated:
+            self.sidecar.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     def _drop_files(self, frame: VisualFrame) -> None:
         for candidate in (frame.path, frame.thumb_path):
@@ -126,7 +167,12 @@ def frames_in_window(
 ) -> list[VisualFrame]:
     low = from_ms - tolerance_ms
     high = to_ms + tolerance_ms
-    return [frame for frame in frames if low <= frame.captured_page_ms <= high]
+    selected: list[VisualFrame] = []
+    for frame in frames:
+        end = frame.visible_to_page_ms if frame.visible_to_page_ms is not None else float("inf")
+        if frame.captured_page_ms <= high and end >= low:
+            selected.append(frame)
+    return selected
 
 
 def _wall_ms(stamp: str) -> float | None:
@@ -137,6 +183,15 @@ def _wall_ms(stamp: str) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp() * 1000.0
+
+
+def _wall_end_ms(frame: VisualFrame, start_ms: float) -> float:
+    if frame.visible_to_at is None:
+        return float("inf")
+    parsed = _wall_ms(frame.visible_to_at)
+    if parsed is None:
+        return start_ms
+    return parsed
 
 
 def visual_refs_for_utterance(
@@ -152,8 +207,11 @@ def visual_refs_for_utterance(
             return ()
         refs: list[str] = []
         for frame in frames:
-            captured_ms = _wall_ms(frame.captured_at)
-            if captured_ms is not None and abs(captured_ms - spoken_ms) <= tolerance_ms:
+            start_ms = _wall_ms(frame.captured_at)
+            if start_ms is None:
+                continue
+            end_ms = _wall_end_ms(frame, start_ms)
+            if start_ms <= spoken_ms + tolerance_ms and end_ms >= spoken_ms - tolerance_ms:
                 refs.append(frame.frame_id)
         return tuple(refs)
     return tuple(

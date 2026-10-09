@@ -10,7 +10,7 @@ from typing import Any
 
 from PIL import Image
 
-from fakeyou.visual_observer import VisualObserver
+from fakeyou.visual_observer import VISUAL_SCAN_JS, VisualObserver
 from fakeyou.visual_store import (
     VISUAL_JOIN_TOLERANCE_MS,
     VisualFrame,
@@ -39,66 +39,39 @@ def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
     return buffer.getvalue()
 
 
-class FakeShotLocator:
-    def __init__(
-        self,
-        page: FakeShotPage,
-        selector: str,
-        shots: list[bytes | Exception],
-        box: dict[str, float] | None,
-    ) -> None:
-        self._page = page
-        self.selector = selector
-        self._shots = shots
-        self._box = box
-
-    async def screenshot(self, **kwargs: Any) -> bytes:
-        self._page.shot_kwargs.append(kwargs)
-        if not self._shots:
-            raise AssertionError("tile screenshot called more times than scripted")
-        result = self._shots.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    async def bounding_box(self) -> dict[str, float] | None:
-        return self._box
-
-
 class FakeShotPage:
     def __init__(
         self,
         scans: list[Any],
+        boxes: list[Any] | None = None,
         shots: list[bytes | Exception] | None = None,
-        full: bytes | Exception | None = None,
-        box: dict[str, float] | None = None,
     ) -> None:
         self._scans = list(scans)
+        self._boxes = list(boxes or [])
         self._shots = list(shots or [])
-        self._full = full
-        self._box = box
-        self.locator_calls: list[str] = []
         self.shot_kwargs: list[dict[str, Any]] = []
-        self.full_calls = 0
 
-    async def evaluate(self, _script: str) -> Any:
-        if not self._scans:
-            raise AssertionError("page evaluate called more times than scripted")
-        if len(self._scans) > 1:
-            return self._scans.pop(0)
-        return self._scans[0]
+    async def evaluate(self, script: str) -> Any:
+        if script == VISUAL_SCAN_JS:
+            if not self._scans:
+                raise AssertionError("scan evaluate called more times than scripted")
+            if len(self._scans) > 1:
+                return self._scans.pop(0)
+            return self._scans[0]
+        if not self._boxes:
+            raise AssertionError("box evaluate called more times than scripted")
+        if len(self._boxes) > 1:
+            return self._boxes.pop(0)
+        return self._boxes[0]
 
-    def locator(self, selector: str) -> FakeShotLocator:
-        self.locator_calls.append(selector)
-        return FakeShotLocator(self, selector, self._shots, self._box)
-
-    async def screenshot(self, **_kwargs: Any) -> bytes:
-        self.full_calls += 1
-        if self._full is None:
-            raise AssertionError("full page screenshot was not scripted")
-        if isinstance(self._full, Exception):
-            raise self._full
-        return self._full
+    async def screenshot(self, **kwargs: Any) -> bytes:
+        self.shot_kwargs.append(kwargs)
+        if not self._shots:
+            raise AssertionError("page screenshot called more times than scripted")
+        result = self._shots.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def _file_exists(path: str) -> bool:
@@ -124,17 +97,16 @@ def timed_frame(
 
 
 def window_frames(directory: Path) -> list[VisualFrame]:
-    return [
-        timed_frame(
-            "frame-launch", directory, 0x0000000000000000, 100000.0, "2026-10-09T03:10:00+00:00"
-        ),
-        timed_frame(
-            "frame-pricing", directory, 0xFFFFFFFFFFFFFFFF, 110000.0, "2026-10-09T03:10:10+00:00"
-        ),
-        timed_frame(
-            "frame-roadmap", directory, 0xAAAAAAAAAAAAAAAA, 130000.0, "2026-10-09T03:10:30+00:00"
-        ),
+    store = VisualStore(directory)
+    rows = [
+        ("frame-launch", 0x0000000000000000, 100000.0, "2026-10-09T03:10:00+00:00"),
+        ("frame-pricing", 0xFFFFFFFFFFFFFFFF, 110000.0, "2026-10-09T03:10:10+00:00"),
+        ("frame-roadmap", 0xAAAAAAAAAAAAAAAA, 130000.0, "2026-10-09T03:10:30+00:00"),
     ]
+    for frame_id, dhash, page_ms, stamp in rows:
+        store.append(timed_frame(frame_id, directory, dhash, page_ms, stamp))
+    assert len(store.frames) == 3
+    return list(store.frames)
 
 
 def stored_frame(
@@ -215,7 +187,9 @@ def test_frames_in_window_selects_spec_range(tmp_path: Path) -> None:
         "frame-launch",
         "frame-pricing",
     ]
-    assert frames_in_window(frames, 150000.0, 151000.0) == []
+    assert [frame.frame_id for frame in frames_in_window(frames, 150000.0, 151000.0)] == [
+        "frame-roadmap"
+    ]
 
 
 def test_frames_in_window_edges_are_inclusive(tmp_path: Path) -> None:
@@ -231,17 +205,109 @@ def test_refs_for_utterance_uses_capture_join(tmp_path: Path) -> None:
     frames = window_frames(tmp_path)
 
     assert visual_refs_for_utterance(frames, capture_ms=100000.0) == ("frame-launch",)
-    assert visual_refs_for_utterance(frames, capture_ms=109000.0) == ("frame-pricing",)
-    assert visual_refs_for_utterance(frames, capture_ms=115000.0) == ()
+    assert visual_refs_for_utterance(frames, capture_ms=109000.0) == (
+        "frame-launch",
+        "frame-pricing",
+    )
+    assert visual_refs_for_utterance(frames, capture_ms=115000.0) == ("frame-pricing",)
 
 
 def test_refs_for_utterance_falls_back_to_wall_clock(tmp_path: Path) -> None:
     frames = window_frames(tmp_path)
 
     assert visual_refs_for_utterance(frames, spoken_at="2026-10-09T03:10:11+00:00") == (
+        "frame-launch",
         "frame-pricing",
     )
-    assert visual_refs_for_utterance(frames, spoken_at="2026-10-09T03:14:00+00:00") == ()
+    assert visual_refs_for_utterance(frames, spoken_at="2026-10-09T03:14:00+00:00") == (
+        "frame-roadmap",
+    )
+
+
+def test_static_slide_asked_late_still_cites(tmp_path: Path) -> None:
+    store = VisualStore(tmp_path)
+    slide = timed_frame(
+        "static-slide", tmp_path, 0x0000000000000000, 1000000.0, "2026-10-09T23:13:43+00:00"
+    )
+    store.append(slide)
+    polls = [
+        ("static-dup-1", 0xFF, 1002000.0, "2026-10-09T23:13:45+00:00"),
+        ("static-dup-2", 0x03, 1004000.0, "2026-10-09T23:13:47+00:00"),
+        ("static-dup-3", 0x0F, 1006000.0, "2026-10-09T23:13:49+00:00"),
+    ]
+    for frame_id, dhash, page_ms, stamp in polls:
+        store.append(timed_frame(frame_id, tmp_path, dhash, page_ms, stamp))
+    assert store.duplicates_suppressed == 3
+    assert visual_refs_for_utterance(store.frames, capture_ms=1008000.0) == ("static-slide",)
+    assert visual_refs_for_utterance(store.frames, spoken_at="2026-10-09T23:13:51+00:00") == (
+        "static-slide",
+    )
+    [current] = store.frames
+    assert current.visible_to_page_ms == 1006000.0
+    assert current.visible_to_at == "2026-10-09T23:13:49+00:00"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["visual_id"] == "static-slide"
+    assert rows[0]["visible_to"] == "2026-10-09T23:13:49+00:00"
+    assert rows[0]["visible_to_page_ms"] == 1006000.0
+
+
+def test_replaced_frame_outside_range_yields_nothing(tmp_path: Path) -> None:
+    store = VisualStore(tmp_path)
+    store.append(
+        timed_frame(
+            "range-first", tmp_path, 0x0000000000000000, 200000.0, "2026-10-09T03:10:00+00:00"
+        )
+    )
+    store.append(
+        timed_frame(
+            "range-second", tmp_path, 0xFFFFFFFFFFFFFFFF, 210000.0, "2026-10-09T03:10:10+00:00"
+        )
+    )
+    assert visual_refs_for_utterance(store.frames, capture_ms=230000.0) == ("range-second",)
+    assert visual_refs_for_utterance(store.frames, spoken_at="2026-10-09T03:10:30+00:00") == (
+        "range-second",
+    )
+    assert visual_refs_for_utterance(store.frames, capture_ms=150000.0) == ()
+    assert visual_refs_for_utterance(store.frames, spoken_at="2026-10-09T03:09:30+00:00") == ()
+    first, second = store.frames
+    assert first.visible_to_page_ms == 210000.0
+    assert first.visible_to_at == "2026-10-09T03:10:10+00:00"
+    assert second.visible_to_page_ms is None
+    assert second.visible_to_at is None
+    rows = {
+        json.loads(line)["visual_id"]: json.loads(line)
+        for line in (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
+    }
+    assert rows["range-first"]["visible_to"] == "2026-10-09T03:10:10+00:00"
+    assert rows["range-first"]["visible_to_page_ms"] == 210000.0
+    assert rows["range-second"]["visible_to"] is None
+    assert rows["range-second"]["visible_to_page_ms"] is None
+
+
+def test_transition_utterance_yields_both_frames(tmp_path: Path) -> None:
+    store = VisualStore(tmp_path)
+    store.append(
+        timed_frame(
+            "swap-before", tmp_path, 0x0000000000000000, 300000.0, "2026-10-09T03:10:00+00:00"
+        )
+    )
+    store.append(
+        timed_frame(
+            "swap-after", tmp_path, 0xFFFFFFFFFFFFFFFF, 310000.0, "2026-10-09T03:10:10+00:00"
+        )
+    )
+    assert visual_refs_for_utterance(store.frames, capture_ms=310000.0) == (
+        "swap-before",
+        "swap-after",
+    )
+    assert visual_refs_for_utterance(store.frames, spoken_at="2026-10-09T03:10:10+00:00") == (
+        "swap-before",
+        "swap-after",
+    )
 
 
 def test_refs_for_utterance_rejects_unparseable_stamp(tmp_path: Path) -> None:
@@ -257,8 +323,8 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     second_scan = dict(PRESENT_SCAN, page_ms=1700000003000.0)
     page = FakeShotPage(
         [first_scan, first_scan, second_scan],
+        boxes=[{"x": 173.0, "y": 65.0, "width": 592.0, "height": 385.0}],
         shots=[tile, tile],
-        box={"x": 8.0, "y": 8.0, "width": 24.0, "height": 24.0},
     )
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
@@ -266,10 +332,10 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     assert await observer.poll() is None
     first = await observer.poll()
     assert first is not None
-    assert page.full_calls == 0
+    assert "clip" in page.shot_kwargs[0]
     second = await observer.poll()
     assert second is not None
-    assert page.full_calls == 0
+    assert "clip" in page.shot_kwargs[1]
     assert len(store.frames) == 1
     assert store.duplicates_suppressed == 1
     assert journal.events("visual_captured")

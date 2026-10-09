@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -20,7 +21,43 @@ from fakeyou.visual_store import (
     dhash_image,
 )
 
-PRESENT_TILE_XPATH = "//*[@aria-label='Presentation']"
+VISUAL_MIN_CLIP_WIDTH = 400
+VISUAL_MIN_CLIP_HEIGHT = 300
+VISUAL_CONTENT_BOX_JS = """() => {
+  const anchor = () => {
+    const nodes = document.querySelectorAll('button[aria-label]');
+    for (const node of nodes) {
+      const label = (node.getAttribute('aria-label') || '').toLowerCase();
+      if (label.startsWith('unpin') && label.includes('presentation')) {
+        return node;
+      }
+    }
+    return null;
+  };
+  let found = null;
+  try {
+    found = anchor();
+  } catch (e) {
+    return null;
+  }
+  if (found === null) {
+    return null;
+  }
+  let node = found.parentElement;
+  while (node !== null) {
+    let rect = null;
+    try {
+      rect = node.getBoundingClientRect();
+    } catch (e) {
+      return null;
+    }
+    if (rect.width >= 400 && rect.height >= 300) {
+      return {x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+    }
+    node = node.parentElement;
+  }
+  return null;
+}"""
 VISUAL_POLL_INTERVAL_SECONDS = 2.0
 VISUAL_JPEG_QUALITY = 60
 VISUAL_THUMB_WIDTH = 320
@@ -62,6 +99,25 @@ def _scan_shows_presenting(scan: Any) -> bool:
     return any(
         item.lower().startswith("unpin") and "presentation" in item.lower() for item in labels
     )
+
+
+def _content_box(found: Any) -> dict[str, float] | None:
+    if not isinstance(found, dict):
+        return None
+    values: dict[str, float] = {}
+    for key in ("x", "y", "width", "height"):
+        value = found.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        number = float(value)
+        if not math.isfinite(number):
+            return None
+        values[key] = number
+    if values["x"] < 0 or values["y"] < 0:
+        return None
+    if values["width"] < VISUAL_MIN_CLIP_WIDTH or values["height"] < VISUAL_MIN_CLIP_HEIGHT:
+        return None
+    return values
 
 
 def _scan_page_ms(scan: Any) -> float:
@@ -206,9 +262,22 @@ class VisualObserver:
 
     async def _capture(self, scan: Any) -> VisualFrame | None:
         started = self._monotonic()
-        tile = self._page.locator(f"xpath={PRESENT_TILE_XPATH}")
         try:
-            raw = await tile.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
+            found = await self._page.evaluate(VISUAL_CONTENT_BOX_JS)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            found = None
+        box = _content_box(found)
+        try:
+            if box is not None:
+                raw = await self._page.screenshot(
+                    clip=box, type="jpeg", quality=VISUAL_JPEG_QUALITY
+                )
+                capture = "clip"
+            else:
+                raw = await self._page.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
+                capture = "full"
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -246,5 +315,6 @@ class VisualObserver:
                 kind=VISUAL_KIND,
                 chars=len(jpeg),
                 duration_ms=(self._monotonic() - started) * 1000,
+                capture=capture,
             )
         return frame

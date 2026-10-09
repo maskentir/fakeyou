@@ -39,7 +39,7 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 
 | Komponen | Tugas | Pola repo yang dipakai ulang |
 | --- | --- | --- |
-| `VisualObserver` | poll flag presenting, screenshot elemen tile | `StreamPoller`, `ParticipantObserver` |
+| `VisualObserver` | poll flag presenting, screenshot klip kotak konten | `StreamPoller`, `ParticipantObserver` |
 | Dedup + ring | dhash Hamming, ring RAM 90 frame/3 mnt + spill disk | `audio_persist` anchors |
 | Captioner VLM | 1 caption per hash distinct, cache TTL | peran provider baru `visual` |
 | `VisualHydrateMiddleware` | hydrate ref→image block per-call | `_MemoryPrefetchMiddleware` |
@@ -51,7 +51,8 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 
 - `visuals.jsonl` per meeting:
   `{visual_id, kind, captured_page_ms, captured_at, visible_from,
-  visible_to|null, sha256, thumb}`. Kunci gabung = `page_ms`.
+  visible_to|null, visible_to_page_ms|null, sha256, thumb}`.
+  Kunci gabung = `page_ms`.
 - Evidence `visual_evidence/v1`:
   `{visual_id, captured_at, kind, thumb_ref, ocr_excerpt,
   transcript_anchor}`.
@@ -59,11 +60,19 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
   `frame_ref`.
 - Record: `VisualEntry` baru (discriminator record menolaknya hari
   ini — harus ditambah).
-- Gabung ke ucapan: `capture_ms` dalam `[from-tol, to+tol]`,
+- Rentang tampil: `visible_from` = jam capture;
+  `visible_to` (+ `visible_to_page_ms`) = capture frame distinct
+  berikutnya, atau null bila masih tampil; duplikat yang ditekan
+  memperpanjang `visible_to` bingkai yang cocok; baris sidecar
+  ditulis ulang setiap `visible_to` berubah.
+- Gabung ke ucapan: jendela ucapan `[from-tol, to+tol]` OVERLAP
+  (inklusif) dengan `[visible_from, visible_to||now]`,
   `tol=2000ms` (pola diarization); `capture_ms==0` fallback ke
-  kedekatan dinding `spoken_at/at`.
-- Ambiguitas (>1 visual dalam tol atau nol): jawab sitir
-  `visual_id` terdekat + satu klarifikasi netral; tidak menebak.
+  overlap jam dinding `spoken_at/at`. Toleransi TIDAK diperlebar
+  sebagai pengganti rentang (merusak ambiguitas).
+- Ambiguitas: 0 overlap → tanpa ref; 1 → sitir `visual_id` +
+  timestamp; 2+ → refs untuk satu klarifikasi netral; tidak
+  menebak.
 
 ## 5. Budget, cap, dan gate M6
 
@@ -120,4 +129,24 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 - D5: tolak desain inline-gambar-di-thread (bloat checkpoint) dan
   eager-VLM-tanpa-dedup (biaya jebol).
 - D6: angka §5–§6 sebagai default, disahkan saat review spec.
+
+## 10. Penargetan capture (koreksi lanjutan Task-0)
+
+- `xpath` `"Presentation"` TERBUKTI salah sasaran pada run live
+  2026-10-09: locator mengenai strip spanduk 233x36 (`section`,
+  label `"Name (Presenting)"`), bukan isi presentasi, sehingga
+  ronde 1–3 gagal total.
+- Penargetan baru memakai `VISUAL_CONTENT_BOX_JS`: jangkar =
+  `button` yang `aria-label`-nya berawalan `"unpin"` dan memuat
+  `"presentation"` (case-insensitive); rambat naik ke leluhur
+  pertama berukuran minimal 400x300; `page.screenshot` memakai
+  `clip` kotak itu.
+- Nama kelas CSS Meet ter-obfuscate dan TIDAK PERNAH dipakai
+  sebagai pencocokan; geometri + `aria-label` saja.
+- Bila jangkar/kotak tidak ketemu, atau kotak < 400x300, observer
+  memakai screenshot full-page (kontrak cadangan poin 2 laporan
+  probe); jalur yang dipakai (`"clip"`/`"full"`) tercatat di jurnal
+  pada field `capture` event `visual_captured`.
+- Deteksi tidak berubah: sufiks `"is presenting"` ATAU persis
+  `"Presentation"` + label Unpin; debounce 2 pindai.
 
