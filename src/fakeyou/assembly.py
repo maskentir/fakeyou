@@ -39,6 +39,7 @@ from fakeyou.faults import FaultReporter
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.journal import Journal
 from fakeyou.memory import (
+    create_meet_action_tools,
     create_memory_prefetch_middleware,
     create_memory_tools,
     create_recall_error_middleware,
@@ -49,8 +50,10 @@ from fakeyou.persona import (
     build_system_prompt,
     meeting_tool_names,
     memory_wiring,
+    refuse_meet_tool,
 )
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
+from fakeyou.runtime import MeetActionDispatcher
 from fakeyou.session import SessionConfig
 from fakeyou.settings import (
     Settings,
@@ -189,6 +192,7 @@ async def open_conversation(
     journal: Journal | None = None,
     on_tool_result: ToolResultCallback | None = None,
     brief: MeetingBrief | None = None,
+    meet_dispatcher: MeetActionDispatcher | None = None,
 ) -> AsyncIterator[ConversationLoop]:
     tool_names: frozenset[PersonaTool] = frozenset()
     if profile is None:
@@ -235,6 +239,16 @@ async def open_conversation(
                     if tool.name in bound
                 )
                 middleware.append(create_recall_error_middleware(faults))
+        if profile is not None and meet_dispatcher is not None:
+            meet = tool_names - {"recall_meeting_context"}
+            if meet:
+                tools.extend(
+                    tool
+                    for tool in create_meet_action_tools(
+                        meet_dispatcher, refuse=refuse_meet_tool, journal=journal
+                    )
+                    if tool.name in meet
+                )
         agent = create_meeting_agent(
             model,
             tools=tools,

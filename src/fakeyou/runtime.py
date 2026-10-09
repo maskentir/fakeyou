@@ -4,6 +4,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -35,6 +36,14 @@ from fakeyou.meet import (
     leave_meeting,
     observe_call_state,
     request_guest_join,
+)
+from fakeyou.meet_action_ledger import MeetActionKind, execute_meet_action
+from fakeyou.meet_actions import (
+    DEFAULT_MEET_ACTION_SIGNALS,
+    MeetActionResult,
+    lower_hand,
+    raise_hand,
+    send_chat,
 )
 from fakeyou.participant_observer import (
     QUERY_METHOD_MINING,
@@ -162,6 +171,149 @@ async def _until_stopped[T](operation: Coroutine[Any, Any, T], stop: asyncio.Eve
         running.cancel()
         stopping.cancel()
         await asyncio.gather(running, stopping, return_exceptions=True)
+
+
+WRITE_ACTION_BUDGET_P95_SECONDS = 12.0
+WRITE_ACTION_BUDGET_MAX_SECONDS = 30.0
+WRITE_ACTION_STABILITY_MIN = 0.95
+
+
+class MeetActionDispatcher:
+    def __init__(
+        self,
+        record_path: Path,
+        *,
+        meeting_id: str,
+        enabled: bool,
+        journal: Journal | None = None,
+    ) -> None:
+        self._record_path = record_path
+        self._meeting_id = meeting_id
+        self._enabled = enabled
+        self._journal = journal
+        self._signals = DEFAULT_MEET_ACTION_SIGNALS
+        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        self._monotonic: Callable[[], float] = time.monotonic
+        self._page: Page | None = None
+        self._stop: asyncio.Event | None = None
+        self._generation = 0
+        self._closed = False
+        self._wake = asyncio.Event()
+        self._pending: dict[asyncio.Task[None], tuple[MeetActionKind, str]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def request(self, kind: MeetActionKind, *, action_id: str, text: str = "") -> str:
+        task = asyncio.create_task(self._execute(kind, action_id, text, self._generation))
+        self._pending[task] = (kind, action_id)
+        task.add_done_callback(self._finish)
+        return action_id
+
+    def bind_page(
+        self,
+        page: Page,
+        *,
+        sleep: Callable[[float], Awaitable[None]],
+        monotonic: Callable[[], float],
+        stop: asyncio.Event,
+    ) -> None:
+        self._page = page
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._stop = stop
+        self._wake.set()
+
+    def cancel_pending(self) -> None:
+        self._generation += 1
+        for task, (kind, action_id) in list(self._pending.items()):
+            self._pending.pop(task, None)
+            if task.done():
+                continue
+            self._reject(kind, action_id, "stale_cancelled")
+            task.cancel()
+        self._wake.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self.cancel_pending()
+
+    async def drain(self) -> None:
+        await asyncio.gather(*list(self._pending), return_exceptions=True)
+
+    def _finish(self, task: asyncio.Task[None]) -> None:
+        self._pending.pop(task, None)
+
+    def _reject(self, kind: MeetActionKind, action_id: str, reason: str) -> None:
+        if self._journal is not None:
+            self._journal.meet_action_rejected(action=kind, action_id=action_id, reason=reason)
+
+    def _fail(self, kind: MeetActionKind, action_id: str, reason: str) -> None:
+        if self._journal is not None:
+            self._journal.meet_action_failed(
+                action=kind, action_id=action_id, reason=reason, attempts=1
+            )
+
+    async def _execute(
+        self, kind: MeetActionKind, action_id: str, text: str, generation: int
+    ) -> None:
+        await self._wake.wait()
+        page = self._page
+        stop = self._stop
+        if generation != self._generation or self._closed or page is None or stop is None:
+            self._reject(kind, action_id, "stale_cancelled")
+            return
+        if stop.is_set():
+            self._reject(kind, action_id, "stale_cancelled")
+            return
+        if kind == "send_chat":
+            params = text
+            chars: int | None = len(text)
+        else:
+            params = kind
+            chars = None
+        box: dict[str, MeetActionResult | None] = {"result": None}
+
+        async def act() -> MeetActionResult:
+            if kind == "send_chat":
+                result = await send_chat(page, text, self._signals, self._sleep, self._monotonic)
+            elif kind == "raise_hand":
+                result = await raise_hand(page, self._signals, self._sleep, self._monotonic)
+            else:
+                result = await lower_hand(page, self._signals, self._sleep, self._monotonic)
+            box["result"] = result
+            return result
+
+        async def observe() -> bool:
+            current = box["result"]
+            return current.succeeded if current is not None else False
+
+        try:
+            outcome = await _until_stopped(
+                execute_meet_action(
+                    self._record_path,
+                    meeting_id=self._meeting_id,
+                    kind=kind,
+                    act=act,
+                    observe=observe,
+                    tool_call_id=action_id,
+                    params=params,
+                    chars=chars,
+                    authorized=True,
+                    journal=self._journal,
+                ),
+                stop,
+            )
+        except Exception as error:
+            self._fail(kind, action_id, type(error).__name__)
+            return
+        if outcome is None:
+            self._reject(kind, action_id, "stale_cancelled")
 
 
 @dataclass
@@ -650,6 +802,7 @@ async def run_meeting_session(
     preflight_hosts: tuple[str, ...] | None = None,
     preflight_budget_seconds: float | None = None,
     voice_activity: VoiceActivityTracker | None = None,
+    meet_dispatcher: MeetActionDispatcher | None = None,
 ) -> SessionResult:
     if initial_speech is not None and open_audio is None:
         raise ValueError("initial speech requires meeting audio")
@@ -738,6 +891,10 @@ async def run_meeting_session(
                             detail = "owner stopped browser startup"
                             await lifecycle.send("owner_stopped", "owner_action", detail)
                         else:
+                            if meet_dispatcher is not None and config.meet_actions_enabled:
+                                meet_dispatcher.bind_page(
+                                    page, sleep=sleep, monotonic=monotonic, stop=stop_event
+                                )
                             worker = _MeetingWorker(
                                 config,
                                 lifecycle,
@@ -753,7 +910,11 @@ async def run_meeting_session(
                                 journal=journal,
                                 voice_activity=voice_activity,
                             )
-                            detail = await worker.run()
+                            try:
+                                detail = await worker.run()
+                            finally:
+                                if meet_dispatcher is not None:
+                                    meet_dispatcher.close()
             except asyncio.CancelledError:
                 await lifecycle.send(
                     "cancelled", "owner_action", "session task cancelled; closing browser"

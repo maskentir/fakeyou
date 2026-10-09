@@ -244,6 +244,7 @@ class ConversationSettings(Section):
     participant_policy_enabled: bool = False
     attribution_probe_enabled: bool = False
     voice_labels_enabled: bool = False
+    meet_actions_enabled: bool = False
     per_stream_enabled: bool = False
     pre_generate_enabled: bool = False
     pregen_fuzzy_restart_enabled: bool = False

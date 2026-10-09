@@ -189,6 +189,113 @@ class Journal:
             return
         self.record(event, **{**timing.fields, "duration_ms": timing.elapsed_ms, **fields})
 
+    def meet_action_requested(
+        self,
+        *,
+        action: str,
+        action_id: str,
+        actor: str,
+        attempt: int = 1,
+        chars: int | None = None,
+        **fields: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "action": action,
+            "action_id": action_id,
+            "actor": actor,
+            "attempt": attempt,
+            **fields,
+        }
+        if chars is not None:
+            payload["chars"] = chars
+        self.record("meet_action_requested", source="agent", **payload)
+
+    def meet_action_started(
+        self, *, action: str, action_id: str, attempt: int = 1, **fields: Any
+    ) -> None:
+        self.record(
+            "meet_action_started",
+            source="agent",
+            action=action,
+            action_id=action_id,
+            attempt=attempt,
+            **fields,
+        )
+
+    def meet_action_observed(
+        self,
+        *,
+        action: str,
+        action_id: str,
+        observed_state: str,
+        chars: int | None = None,
+        **fields: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "action": action,
+            "action_id": action_id,
+            "observed_state": observed_state,
+            **fields,
+        }
+        if chars is not None:
+            payload["chars"] = chars
+        self.record("meet_action_observed", source="agent", **payload)
+
+    def meet_action_finished(
+        self,
+        *,
+        action: str,
+        action_id: str,
+        observed: bool = False,
+        attempts: int = 1,
+        duration_ms: float | None = None,
+        **fields: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "action": action,
+            "action_id": action_id,
+            "observed": observed,
+            "attempts": attempts,
+            **fields,
+        }
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        self.record("meet_action_finished", source="agent", **payload)
+
+    def meet_action_failed(
+        self,
+        *,
+        action: str,
+        action_id: str,
+        reason: str | None = None,
+        attempts: int = 1,
+        duration_ms: float | None = None,
+        **fields: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "action": action,
+            "action_id": action_id,
+            "attempts": attempts,
+            **fields,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        self.record("meet_action_failed", source="agent", **payload)
+
+    def meet_action_rejected(
+        self, *, action: str, action_id: str, reason: str, **fields: Any
+    ) -> None:
+        self.record(
+            "meet_action_rejected",
+            source="agent",
+            action=action,
+            action_id=action_id,
+            reason=reason,
+            **fields,
+        )
+
 
 def _encode_bounded(row: dict[str, Any], max_bytes: int) -> str:
     line = json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n"
