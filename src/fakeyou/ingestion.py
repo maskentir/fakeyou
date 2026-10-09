@@ -197,9 +197,9 @@ async def ingest_meeting(
     windows = meeting_windows(
         entries, window_utterances=window_utterances, window_seconds=window_seconds
     )
-    last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
-    resumed_from = _next_window(last[-1].name, meeting_id) if last else 0
-    previous_uuid = last[-1].uuid if last else None
+    resumed_from, previous_uuid = await _resume_point(
+        memory, group_id=group_id, meeting_id=meeting_id
+    )
     instructions = extraction_instructions(
         twin_name,
         vocabulary,
@@ -376,6 +376,33 @@ async def ingest_corrections(
             completed=completed,
         )
     return CorrectionResult(len(changed), tuple(episodes), completed)
+
+
+def _correction_index(name: str, meeting_id: str) -> int | None:
+    match = re.fullmatch(rf"{re.escape(meeting_id)}:w(\d+):corrected", name)
+    return int(match.group(1)) if match is not None else None
+
+
+async def _resume_point(
+    memory: Graphiti, *, group_id: str, meeting_id: str
+) -> tuple[int, str | None]:
+    last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
+    if not last:
+        return 0, None
+    head = last[-1]
+    if _correction_index(head.name, meeting_id) is None:
+        return _next_window(head.name, meeting_id), head.uuid
+    batch = 10
+    while True:
+        episodes = await meeting_episodes(
+            memory, group_id=group_id, meeting_id=meeting_id, last_n=batch
+        )
+        for episode in reversed(episodes):
+            if _correction_index(episode.name, meeting_id) is None:
+                return _next_window(episode.name, meeting_id), head.uuid
+        if len(episodes) < batch:
+            return 0, head.uuid
+        batch *= 2
 
 
 def _next_window(name: str, meeting_id: str) -> int:

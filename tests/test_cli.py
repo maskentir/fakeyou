@@ -3821,6 +3821,81 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
     assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
 
 
+async def test_memory_ingest_persists_window_episode_uuids(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path
+
+    write_ingest_windows(settings, "meeting-9", 3)
+    graphiti = make_graphiti(episode_prefix="uuid-")
+    fake_persona_memory(monkeypatch, graphiti)
+
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="meeting-9",
+        persona_path=write_persona(tmp_path),
+        owner_id=None,
+        twin_id=None,
+        twin_name=None,
+        settings=settings,
+    )
+
+    status = read_status(status_path(meeting_record_path(settings.paths.record_dir, "meeting-9")))
+    assert status is not None
+    assert status.episode_uuids == {
+        0: "uuid-meeting-9:w00000",
+        1: "uuid-meeting-9:w00001",
+        2: "uuid-meeting-9:w00002",
+    }
+
+
+async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reingests(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import read_status, status_path, write_status
+
+    write_ingest_windows(settings, "meeting-9", 3)
+    graphiti = make_graphiti(episode_prefix="uuid-")
+    graphiti.errors[1] = RuntimeError("graph down")
+    fake_persona_memory(monkeypatch, graphiti)
+    arguments = {
+        "meeting_id": "meeting-9",
+        "persona_path": write_persona(tmp_path),
+        "owner_id": None,
+        "twin_id": None,
+        "twin_name": None,
+        "settings": settings,
+    }
+
+    with pytest.raises(SystemExit) as first:
+        await cli_memory.ingest_recorded_meeting(**arguments)
+    assert first.value.code == 1
+    path = status_path(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    failed = read_status(path)
+    assert failed is not None
+    assert failed.episode_uuids == {0: "uuid-meeting-9:w00000"}
+    write_status(
+        path,
+        failed.model_copy(
+            update={
+                "corrected_at": "2026-10-09T12:00:00+00:00",
+                "correction_episodes": ["uuid-fix"],
+            }
+        ),
+    )
+
+    await cli_memory.ingest_recorded_meeting(**arguments)
+
+    resumed = read_status(path)
+    assert resumed is not None
+    assert resumed.episode_uuids == {
+        0: "uuid-meeting-9:w00000",
+        1: "uuid-meeting-9:w00001",
+        2: "uuid-meeting-9:w00002",
+    }
+    assert resumed.corrected_at == "2026-10-09T12:00:00+00:00"
+    assert resumed.correction_episodes == ["uuid-fix"]
+
+
 async def test_memory_ingest_refuses_an_active_writer_lock(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

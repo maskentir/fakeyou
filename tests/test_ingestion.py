@@ -295,6 +295,59 @@ async def test_ingest_rejects_an_invalid_episode_name_in_the_saga() -> None:
         await run(memory, [said(0, "Hello.")])
 
 
+async def test_ingest_after_correction_skips_corrected_episodes_when_resuming(
+    tmp_path: Path,
+) -> None:
+    record_path = correction_record(tmp_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    entries = load_meeting_record(record_path)
+    await ingest_meeting(
+        memory,
+        entries,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        twin_name="Rani Twin",
+    )
+    await ingest_corrections(memory, record_path, group_id="twin_group", meeting_id="meeting-1")
+
+    result = await ingest_meeting(
+        memory,
+        entries,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        twin_name="Rani Twin",
+    )
+
+    assert (result.resumed_from, result.ingested, result.completed) == (3, 0, True)
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00000",
+        "meeting-1:w00001",
+        "meeting-1:w00002",
+        "meeting-1:w00001:corrected",
+    ]
+
+
+async def test_ingest_resumes_past_corrected_episodes_and_chains_from_the_latest() -> None:
+    entries = [said(index * 61, f"Sentence {index}.") for index in range(3)]
+    memory = make_graphiti(
+        episode_prefix="uuid-",
+        edges=[SimpleNamespace(fact="fact")],
+        existing=[
+            SimpleNamespace(uuid="old-0", name="meeting-1:w00000"),
+            SimpleNamespace(uuid="old-fix", name="meeting-1:w00000:corrected"),
+        ],
+    )
+
+    result, _rows = await run(memory, entries)
+
+    assert [episode["name"] for episode in memory.added] == [
+        "meeting-1:w00001",
+        "meeting-1:w00002",
+    ]
+    assert memory.added[0]["saga_previous_episode_uuid"] == "old-fix"
+    assert (result.resumed_from, result.ingested, result.completed) == (1, 2, True)
+
+
 async def test_ingest_of_an_empty_record_is_complete() -> None:
     result, _rows = await run(
         make_graphiti(episode_prefix="uuid-", edges=[SimpleNamespace(fact="fact")]), []
@@ -368,8 +421,13 @@ async def test_ingest_corrections_reingests_only_changed_windows(tmp_path: Path)
     )
 
     before = datetime.now(UTC)
+    lines: list[str] = []
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        group_id="twin_group",
+        meeting_id="meeting-1",
+        journal=Journal("meeting-1", emit=lines.append),
     )
     after = datetime.now(UTC)
 
@@ -392,6 +450,15 @@ async def test_ingest_corrections_reingests_only_changed_windows(tmp_path: Path)
     assert episode["group_id"] == "twin_group"
     assert episode["saga"] == meeting_saga("meeting-1")
     assert episode["saga_previous_episode_uuid"] == "uuid-meeting-1:w00002"
+    rows = [json.loads(line) for line in lines]
+    assert [row["event"] for row in rows if row["event"].startswith("memory_correction")] == [
+        "memory_correction_ingested",
+        "memory_correction_finished",
+    ]
+    ingested = next(row for row in rows if row["event"] == "memory_correction_ingested")
+    [finished] = [row for row in rows if row["event"] == "memory_correction_finished"]
+    assert ingested["window"] == 1
+    assert (finished["changed"], finished["ingested"], finished["completed"]) == (1, 1, True)
 
 
 async def test_ingest_corrections_keeps_window_map_and_logs_corrections(
