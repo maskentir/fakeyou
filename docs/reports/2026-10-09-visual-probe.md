@@ -55,3 +55,21 @@ blocks LangChain, 1 frame JPEG 640x360 + 1 kalimat, 5 invoke:
 2. Screenshot elemen tile bila locator stabil, else full-page +
    klip di Tugas 1.
 3. Kadensi default 1 frame/2 detik; dedup hash sebelum VLM.
+
+## Tindak lanjut Task-0 (run live 2026-10-09)
+
+- Bingkai live membuktikan `xpath` `"Presentation"` mengenai strip
+  spanduk 233x36 (`section.H0YpEc`, label `"Name (Presenting)"`),
+  bukan isi presentasi; ronde 1–3 gagal merekam konten.
+- Bukti geometri: `/tmp/m6probe/out/probe_geom.json` +
+  `probe_geom2.json`: isi presentasi = wilayah ±592x385 pada
+  (173,65), terjangkau sebagai leluhur terdekat (w≥400,h≥300) dari
+  tombol `Unpin` (div kedalaman 6; nama kelas ter-obfuscate,
+  tidak untuk pencocokan).
+- Perbaikan di cabang `fix/visual-stage-capture`: observer mencari
+  kotak konten via `VISUAL_CONTENT_BOX_JS` (jangkar tombol Unpin,
+  rambat naik sampai leluhur ≥400x300), lalu
+  `page.screenshot(clip=...)`; tanpa jangkar/kotak → screenshot
+  full-page; jalur tercatat di jurnal (`capture`: `"clip"`/`"full"`).
+- Deteksi tetap: sufiks `"is presenting"` ATAU persis
+  `"Presentation"` + Unpin; debounce 2.

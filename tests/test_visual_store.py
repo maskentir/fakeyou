@@ -10,7 +10,7 @@ from typing import Any
 
 from PIL import Image
 
-from fakeyou.visual_observer import VisualObserver
+from fakeyou.visual_observer import VISUAL_SCAN_JS, VisualObserver
 from fakeyou.visual_store import (
     VISUAL_JOIN_TOLERANCE_MS,
     VisualFrame,
@@ -39,66 +39,39 @@ def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
     return buffer.getvalue()
 
 
-class FakeShotLocator:
-    def __init__(
-        self,
-        page: FakeShotPage,
-        selector: str,
-        shots: list[bytes | Exception],
-        box: dict[str, float] | None,
-    ) -> None:
-        self._page = page
-        self.selector = selector
-        self._shots = shots
-        self._box = box
-
-    async def screenshot(self, **kwargs: Any) -> bytes:
-        self._page.shot_kwargs.append(kwargs)
-        if not self._shots:
-            raise AssertionError("tile screenshot called more times than scripted")
-        result = self._shots.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    async def bounding_box(self) -> dict[str, float] | None:
-        return self._box
-
-
 class FakeShotPage:
     def __init__(
         self,
         scans: list[Any],
+        boxes: list[Any] | None = None,
         shots: list[bytes | Exception] | None = None,
-        full: bytes | Exception | None = None,
-        box: dict[str, float] | None = None,
     ) -> None:
         self._scans = list(scans)
+        self._boxes = list(boxes or [])
         self._shots = list(shots or [])
-        self._full = full
-        self._box = box
-        self.locator_calls: list[str] = []
         self.shot_kwargs: list[dict[str, Any]] = []
-        self.full_calls = 0
 
-    async def evaluate(self, _script: str) -> Any:
-        if not self._scans:
-            raise AssertionError("page evaluate called more times than scripted")
-        if len(self._scans) > 1:
-            return self._scans.pop(0)
-        return self._scans[0]
+    async def evaluate(self, script: str) -> Any:
+        if script == VISUAL_SCAN_JS:
+            if not self._scans:
+                raise AssertionError("scan evaluate called more times than scripted")
+            if len(self._scans) > 1:
+                return self._scans.pop(0)
+            return self._scans[0]
+        if not self._boxes:
+            raise AssertionError("box evaluate called more times than scripted")
+        if len(self._boxes) > 1:
+            return self._boxes.pop(0)
+        return self._boxes[0]
 
-    def locator(self, selector: str) -> FakeShotLocator:
-        self.locator_calls.append(selector)
-        return FakeShotLocator(self, selector, self._shots, self._box)
-
-    async def screenshot(self, **_kwargs: Any) -> bytes:
-        self.full_calls += 1
-        if self._full is None:
-            raise AssertionError("full page screenshot was not scripted")
-        if isinstance(self._full, Exception):
-            raise self._full
-        return self._full
+    async def screenshot(self, **kwargs: Any) -> bytes:
+        self.shot_kwargs.append(kwargs)
+        if not self._shots:
+            raise AssertionError("page screenshot called more times than scripted")
+        result = self._shots.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def _file_exists(path: str) -> bool:
@@ -257,8 +230,8 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     second_scan = dict(PRESENT_SCAN, page_ms=1700000003000.0)
     page = FakeShotPage(
         [first_scan, first_scan, second_scan],
+        boxes=[{"x": 173.0, "y": 65.0, "width": 592.0, "height": 385.0}],
         shots=[tile, tile],
-        box={"x": 8.0, "y": 8.0, "width": 24.0, "height": 24.0},
     )
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
@@ -266,10 +239,10 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     assert await observer.poll() is None
     first = await observer.poll()
     assert first is not None
-    assert page.full_calls == 0
+    assert "clip" in page.shot_kwargs[0]
     second = await observer.poll()
     assert second is not None
-    assert page.full_calls == 0
+    assert "clip" in page.shot_kwargs[1]
     assert len(store.frames) == 1
     assert store.duplicates_suppressed == 1
     assert journal.events("visual_captured")

@@ -11,7 +11,13 @@ from PIL import Image
 
 from fakeyou.settings import VisualSettings
 from fakeyou.visual_caption import VisualCaptioner
-from fakeyou.visual_observer import VisualObserver
+from fakeyou.visual_observer import (
+    VISUAL_CONTENT_BOX_JS,
+    VISUAL_MIN_CLIP_HEIGHT,
+    VISUAL_MIN_CLIP_WIDTH,
+    VISUAL_SCAN_JS,
+    VisualObserver,
+)
 from fakeyou.visual_store import VisualStore, dhash_image
 from tests.fakes import RecordingJournal
 from tests.test_visual_caption import caption_model
@@ -28,6 +34,12 @@ ABSENT_SCAN: dict[str, Any] = {
     "labels": ["Alex", "Leave call"],
     "page_ms": 1700000000000.0,
 }
+PRESENTATION_ONLY_SCAN: dict[str, Any] = {
+    "labels": ["Alex", "Presentation", "Leave call"],
+    "page_ms": 1700000000000.0,
+}
+CLIP_BOX: dict[str, float] = {"x": 173.0, "y": 65.0, "width": 592.0, "height": 385.0}
+BANNER_BOX: dict[str, float] = {"x": 636.0, "y": 14.0, "width": 233.0, "height": 36.0}
 
 
 def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
@@ -37,66 +49,41 @@ def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
     return buffer.getvalue()
 
 
-class FakeShotLocator:
-    def __init__(
-        self,
-        page: FakeShotPage,
-        selector: str,
-        shots: list[bytes | Exception],
-        box: dict[str, float] | None,
-    ) -> None:
-        self._page = page
-        self.selector = selector
-        self._shots = shots
-        self._box = box
-
-    async def screenshot(self, **kwargs: Any) -> bytes:
-        self._page.shot_kwargs.append(kwargs)
-        if not self._shots:
-            raise AssertionError("tile screenshot called more times than scripted")
-        result = self._shots.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    async def bounding_box(self) -> dict[str, float] | None:
-        return self._box
-
-
 class FakeShotPage:
     def __init__(
         self,
         scans: list[Any],
+        boxes: list[Any] | None = None,
         shots: list[bytes | Exception] | None = None,
-        full: bytes | Exception | None = None,
-        box: dict[str, float] | None = None,
     ) -> None:
         self._scans = list(scans)
+        self._boxes = list(boxes or [])
         self._shots = list(shots or [])
-        self._full = full
-        self._box = box
-        self.locator_calls: list[str] = []
         self.shot_kwargs: list[dict[str, Any]] = []
-        self.full_calls = 0
+        self.evaluate_calls: list[str] = []
 
-    async def evaluate(self, _script: str) -> Any:
-        if not self._scans:
-            raise AssertionError("page evaluate called more times than scripted")
-        if len(self._scans) > 1:
-            return self._scans.pop(0)
-        return self._scans[0]
+    async def evaluate(self, script: str) -> Any:
+        self.evaluate_calls.append(script)
+        if script == VISUAL_SCAN_JS:
+            if not self._scans:
+                raise AssertionError("scan evaluate called more times than scripted")
+            if len(self._scans) > 1:
+                return self._scans.pop(0)
+            return self._scans[0]
+        if not self._boxes:
+            raise AssertionError("box evaluate called more times than scripted")
+        if len(self._boxes) > 1:
+            return self._boxes.pop(0)
+        return self._boxes[0]
 
-    def locator(self, selector: str) -> FakeShotLocator:
-        self.locator_calls.append(selector)
-        return FakeShotLocator(self, selector, self._shots, self._box)
-
-    async def screenshot(self, **_kwargs: Any) -> bytes:
-        self.full_calls += 1
-        if self._full is None:
-            raise AssertionError("full page screenshot was not scripted")
-        if isinstance(self._full, Exception):
-            raise self._full
-        return self._full
+    async def screenshot(self, **kwargs: Any) -> bytes:
+        self.shot_kwargs.append(kwargs)
+        if not self._shots:
+            raise AssertionError("page screenshot called more times than scripted")
+        result = self._shots.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class BlockingShotPage:
@@ -104,31 +91,16 @@ class BlockingShotPage:
         self._gate = gate
         self._scan = scan
         self.evaluates = 0
-        self.locator_calls = 0
 
-    async def evaluate(self, _script: str) -> Any:
+    async def evaluate(self, script: str) -> Any:
         self.evaluates += 1
-        return dict(self._scan)
-
-    def locator(self, _selector: str) -> BlockingShotLocator:
-        self.locator_calls += 1
-        return BlockingShotLocator(self._gate)
-
-    async def screenshot(self, **_kwargs: Any) -> bytes:
-        await self._gate.wait()
-        return shot_bytes()
-
-
-class BlockingShotLocator:
-    def __init__(self, gate: asyncio.Event) -> None:
-        self._gate = gate
+        if script == VISUAL_SCAN_JS:
+            return dict(self._scan)
+        return None
 
     async def screenshot(self, **kwargs: Any) -> bytes:
         await self._gate.wait()
         return shot_bytes()
-
-    async def bounding_box(self) -> None:
-        return None
 
 
 def _read_bytes(path: str) -> bytes:
@@ -141,7 +113,9 @@ def _file_exists(path: str) -> bool:
 
 async def test_capture_writes_frame_and_sidecar_row(tmp_path: Path) -> None:
     png = shot_bytes()
-    page = FakeShotPage([ABSENT_SCAN, PRESENT_SCAN, PRESENT_SCAN], shots=[png])
+    page = FakeShotPage(
+        [ABSENT_SCAN, PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png]
+    )
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     observer = VisualObserver(page, store, journal=journal)
@@ -149,8 +123,7 @@ async def test_capture_writes_frame_and_sidecar_row(tmp_path: Path) -> None:
     assert await observer.poll() is None
     frame = await observer.poll()
     assert frame is not None
-    assert page.locator_calls == ["xpath=//*[@aria-label='Presentation']"]
-    assert page.shot_kwargs == [{"type": "jpeg", "quality": 60}]
+    assert page.shot_kwargs == [{"clip": CLIP_BOX, "type": "jpeg", "quality": 60}]
     raw = await asyncio.to_thread(_read_bytes, frame.path)
     assert raw[:2] == b"\xff\xd8"
     assert await asyncio.to_thread(_file_exists, frame.thumb_path)
@@ -170,11 +143,12 @@ async def test_capture_writes_frame_and_sidecar_row(tmp_path: Path) -> None:
     assert captured[0]["visual_id"] == frame.frame_id
     assert captured[0]["chars"] == len(raw)
     assert captured[0]["duration_ms"] >= 0
+    assert captured[0]["capture"] == "clip"
 
 
 async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
     png = shot_bytes()
-    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], shots=[png])
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png])
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
@@ -199,7 +173,9 @@ async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
 
 async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
     png = shot_bytes()
-    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN, PRESENT_SCAN], shots=[png, png])
+    page = FakeShotPage(
+        [PRESENT_SCAN, PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png, png]
+    )
     store = VisualStore(tmp_path)
     model = caption_model("A launch timeline.")
     captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
@@ -223,16 +199,96 @@ async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
     await observer.close()
 
 
-async def test_tile_failure_skips_capture_without_full_page(tmp_path: Path) -> None:
-    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], shots=[RuntimeError("tile gone")], full=None)
+async def test_shot_failure_skips_capture(tmp_path: Path) -> None:
+    page = FakeShotPage(
+        [PRESENT_SCAN, PRESENT_SCAN],
+        boxes=[dict(CLIP_BOX)],
+        shots=[RuntimeError("shot gone")],
+    )
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path)
+    observer = VisualObserver(page, store, journal=journal)
+    assert await observer.poll() is None
+
+    assert await observer.poll() is None
+    assert store.frames == ()
+    assert journal.events("visual_captured") == []
+    await observer.close()
+
+
+async def test_anchored_clip_used_for_capture(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    observer = VisualObserver(page, store, journal=journal)
+    assert await observer.poll() is None
+
+    frame = await observer.poll()
+    assert frame is not None
+    assert page.shot_kwargs == [{"clip": CLIP_BOX, "type": "jpeg", "quality": 60}]
+    assert journal.events("visual_captured")[0]["capture"] == "clip"
+    await observer.close()
+
+
+async def test_missing_anchor_falls_back_to_full_page(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[None], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    observer = VisualObserver(page, store, journal=journal)
+    assert await observer.poll() is None
+
+    frame = await observer.poll()
+    assert frame is not None
+    assert page.shot_kwargs == [{"type": "jpeg", "quality": 60}]
+    assert journal.events("visual_captured")[0]["capture"] == "full"
+    await observer.close()
+
+
+async def test_tiny_box_falls_back_to_full_page(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(BANNER_BOX)], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    observer = VisualObserver(page, store, journal=journal)
+    assert await observer.poll() is None
+
+    frame = await observer.poll()
+    assert frame is not None
+    assert page.shot_kwargs == [{"type": "jpeg", "quality": 60}]
+    assert journal.events("visual_captured")[0]["capture"] == "full"
+    await observer.close()
+
+
+async def test_presentation_without_unpin_does_not_capture(tmp_path: Path) -> None:
+    page = FakeShotPage(
+        [PRESENTATION_ONLY_SCAN, PRESENTATION_ONLY_SCAN],
+        boxes=[dict(CLIP_BOX)],
+        shots=[shot_bytes()],
+    )
     store = VisualStore(tmp_path)
     observer = VisualObserver(page, store)
     assert await observer.poll() is None
 
     assert await observer.poll() is None
-    assert page.full_calls == 0
-    assert store.frames == ()
+    assert observer.presenting is False
+    assert page.shot_kwargs == []
     await observer.close()
+
+
+def test_content_box_script_never_matches_class_names() -> None:
+    assert VISUAL_MIN_CLIP_WIDTH == 400
+    assert VISUAL_MIN_CLIP_HEIGHT == 300
+    assert "aria-label" in VISUAL_CONTENT_BOX_JS
+    assert "unpin" in VISUAL_CONTENT_BOX_JS.lower()
+    assert "presentation" in VISUAL_CONTENT_BOX_JS.lower()
+    assert "getBoundingClientRect" in VISUAL_CONTENT_BOX_JS
+    assert "400" in VISUAL_CONTENT_BOX_JS
+    assert "300" in VISUAL_CONTENT_BOX_JS
+    assert "class" not in VISUAL_CONTENT_BOX_JS.lower()
+    assert "tTdl5d" not in VISUAL_CONTENT_BOX_JS
+    assert "H0YpEc" not in VISUAL_CONTENT_BOX_JS
 
 
 async def test_capture_never_blocks_reply(tmp_path: Path) -> None:

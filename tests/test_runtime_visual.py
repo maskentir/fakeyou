@@ -22,7 +22,7 @@ from tests.fakes import (
     meet_page,
 )
 from tests.test_visual_caption import caption_model
-from tests.test_visual_observer import PRESENT_SCAN, FakeShotPage, shot_bytes
+from tests.test_visual_observer import CLIP_BOX, PRESENT_SCAN, FakeShotPage, shot_bytes
 
 
 def _config(**overrides: Any) -> SessionConfig:
@@ -92,7 +92,7 @@ async def test_run_meeting_session_skips_visual_observer_when_flag_off(
 
 
 async def test_worker_wires_captioner_and_callback_into_observer(tmp_path: Path) -> None:
-    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], shots=[shot_bytes()])
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[shot_bytes()])
     store = VisualStore(tmp_path / "visual")
     model = caption_model("A launch timeline.")
     captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))

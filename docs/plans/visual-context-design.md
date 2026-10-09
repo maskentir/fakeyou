@@ -39,7 +39,7 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 
 | Komponen | Tugas | Pola repo yang dipakai ulang |
 | --- | --- | --- |
-| `VisualObserver` | poll flag presenting, screenshot elemen tile | `StreamPoller`, `ParticipantObserver` |
+| `VisualObserver` | poll flag presenting, screenshot klip kotak konten | `StreamPoller`, `ParticipantObserver` |
 | Dedup + ring | dhash Hamming, ring RAM 90 frame/3 mnt + spill disk | `audio_persist` anchors |
 | Captioner VLM | 1 caption per hash distinct, cache TTL | peran provider baru `visual` |
 | `VisualHydrateMiddleware` | hydrate ref→image block per-call | `_MemoryPrefetchMiddleware` |
@@ -120,4 +120,24 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 - D5: tolak desain inline-gambar-di-thread (bloat checkpoint) dan
   eager-VLM-tanpa-dedup (biaya jebol).
 - D6: angka §5–§6 sebagai default, disahkan saat review spec.
+
+## 10. Penargetan capture (koreksi lanjutan Task-0)
+
+- `xpath` `"Presentation"` TERBUKTI salah sasaran pada run live
+  2026-10-09: locator mengenai strip spanduk 233x36 (`section`,
+  label `"Name (Presenting)"`), bukan isi presentasi, sehingga
+  ronde 1–3 gagal total.
+- Penargetan baru memakai `VISUAL_CONTENT_BOX_JS`: jangkar =
+  `button` yang `aria-label`-nya berawalan `"unpin"` dan memuat
+  `"presentation"` (case-insensitive); rambat naik ke leluhur
+  pertama berukuran minimal 400x300; `page.screenshot` memakai
+  `clip` kotak itu.
+- Nama kelas CSS Meet ter-obfuscate dan TIDAK PERNAH dipakai
+  sebagai pencocokan; geometri + `aria-label` saja.
+- Bila jangkar/kotak tidak ketemu, atau kotak < 400x300, observer
+  memakai screenshot full-page (kontrak cadangan poin 2 laporan
+  probe); jalur yang dipakai (`"clip"`/`"full"`) tercatat di jurnal
+  pada field `capture` event `visual_captured`.
+- Deteksi tidak berubah: sufiks `"is presenting"` ATAU persis
+  `"Presentation"` + label Unpin; debounce 2 pindai.
 
