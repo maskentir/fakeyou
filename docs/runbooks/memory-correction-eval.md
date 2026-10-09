@@ -72,10 +72,11 @@ Harness menulis `ingestion.json` (peta jendela→episode) setelah ingest awal,
 meniru langkah persistensi CLI produksi yang dipakai `ingest_corrections`
 untuk menemukan edge asli yang harus diinvalidasi.
 
-> **Caveat retry (Q3, deferred):** idempotensi per-jendela belum ada —
-> bila run koreksi gagal di tengah jalan, retry meng-ingest ulang jendela
-> yang sudah berhasil (episode koreksi duplikat) sampai follow-up
-> mendarat. `corrected_at` hanya ditulis saat run selesai penuh.
+> **Retry (Q3, mendarat di Task 1 follow-up):** idempotensi per-jendela
+> sudah ada — status menyimpan `correction_windows` (jendela → episode
+> koreksi) + `correction_run`; retry setelah gagal di tengah melewati
+> jendela yang sudah sukses (0 duplikat) dan memulihkan orphan se-run
+> yang sama. `corrected_at` tetap hanya ditulis saat run selesai penuh.
 
 ## Validitas run (anti-vacuus)
 
