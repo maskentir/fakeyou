@@ -51,7 +51,8 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
 
 - `visuals.jsonl` per meeting:
   `{visual_id, kind, captured_page_ms, captured_at, visible_from,
-  visible_to|null, sha256, thumb}`. Kunci gabung = `page_ms`.
+  visible_to|null, visible_to_page_ms|null, sha256, thumb}`.
+  Kunci gabung = `page_ms`.
 - Evidence `visual_evidence/v1`:
   `{visual_id, captured_at, kind, thumb_ref, ocr_excerpt,
   transcript_anchor}`.
@@ -59,11 +60,19 @@ terbaru; (2) tool `describe_frame(frame_id)` untuk baca mendalam.
   `frame_ref`.
 - Record: `VisualEntry` baru (discriminator record menolaknya hari
   ini — harus ditambah).
-- Gabung ke ucapan: `capture_ms` dalam `[from-tol, to+tol]`,
+- Rentang tampil: `visible_from` = jam capture;
+  `visible_to` (+ `visible_to_page_ms`) = capture frame distinct
+  berikutnya, atau null bila masih tampil; duplikat yang ditekan
+  memperpanjang `visible_to` bingkai yang cocok; baris sidecar
+  ditulis ulang setiap `visible_to` berubah.
+- Gabung ke ucapan: jendela ucapan `[from-tol, to+tol]` OVERLAP
+  (inklusif) dengan `[visible_from, visible_to||now]`,
   `tol=2000ms` (pola diarization); `capture_ms==0` fallback ke
-  kedekatan dinding `spoken_at/at`.
-- Ambiguitas (>1 visual dalam tol atau nol): jawab sitir
-  `visual_id` terdekat + satu klarifikasi netral; tidak menebak.
+  overlap jam dinding `spoken_at/at`. Toleransi TIDAK diperlebar
+  sebagai pengganti rentang (merusak ambiguitas).
+- Ambiguitas: 0 overlap → tanpa ref; 1 → sitir `visual_id` +
+  timestamp; 2+ → refs untuk satu klarifikasi netral; tidak
+  menebak.
 
 ## 5. Budget, cap, dan gate M6
 

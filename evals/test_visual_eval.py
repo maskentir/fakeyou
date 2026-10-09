@@ -27,6 +27,7 @@ EXPECTED_IDS = (
     "clarify_missing",
     "debrief_cites_visual",
     "budget_caps_hold",
+    "static_slide_asked_late",
 )
 FRAME_PATTERN = re.compile(r"frame:[0-9a-f]{8}@\S+")
 MS_PER_SECOND = 1000.0
@@ -66,6 +67,8 @@ def frames_from_rows(rows: list[dict[str, Any]]) -> list[VisualFrame]:
             path="",
             thumb_path="",
             dhash=row["dhash"],
+            visible_to_page_ms=row.get("visible_to_page_ms"),
+            visible_to_at=row.get("visible_to_at"),
         )
         for row in rows
     ]
@@ -122,7 +125,7 @@ def captioner_for(
     )
 
 
-def test_fixture_covers_five_anonymized_visual_scenarios() -> None:
+def test_fixture_covers_six_anonymized_visual_scenarios() -> None:
     fixture = load_visual_fixture()
 
     assert fixture["schema_version"] == SCHEMA
@@ -158,6 +161,33 @@ async def test_answer_cites_frame_matching_utterance_window(tmp_path: Path) -> N
         <= frame.captured_page_ms
         <= utterance["to_ms"] + tolerance_ms
     )
+
+
+async def test_static_slide_asked_late_still_cites(tmp_path: Path) -> None:
+    fixture = load_visual_fixture()
+    scenario = scenario_by_id(fixture, "static_slide_asked_late")
+    tolerance_ms = fixture["tolerance_ms"]
+    utterance = scenario["utterance"]
+    journal = RecordingJournal("visual-eval")
+    settings = VisualSettings(enabled=True)
+    store = store_for(tmp_path / "late", fixture["frames"], journal)
+    candidates = frames_in_window(
+        store.frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=tolerance_ms
+    )
+
+    assert [frame.frame_id for frame in candidates] == [scenario["expected_frame"]]
+    expected = frame_by_id(fixture, scenario["expected_frame"])
+    captioner = captioner_for([expected["caption"]], settings, journal)
+    [describe] = create_visual_tools(store, captioner)
+    reply = await describe.ainvoke({"frame_id": scenario["expected_frame"]})
+    frame = next(item for item in store.frames if item.frame_id == scenario["expected_frame"])
+
+    assert frame_ref(frame) == scenario["expected_ref"]
+    assert scenario["expected_ref"] in reply
+    assert expected["caption"] in reply
+    assert frame.visible_to_page_ms is not None
+    assert frame.captured_page_ms <= utterance["to_ms"] + tolerance_ms
+    assert frame.visible_to_page_ms >= utterance["from_ms"] - tolerance_ms
 
 
 def test_ambiguous_reference_yields_single_neutral_clarification() -> None:

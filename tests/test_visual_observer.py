@@ -137,6 +137,7 @@ async def test_capture_writes_frame_and_sidecar_row(tmp_path: Path) -> None:
     assert row["kind"] == "presentation"
     assert row["captured_page_ms"] == 1700000000000.0
     assert row["visible_to"] is None
+    assert row["visible_to_page_ms"] is None
     assert row["sha256"] == frame.sha256
     captured = journal.events("visual_captured")
     assert len(captured) == 1
@@ -196,6 +197,36 @@ async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
     assert store.duplicates_suppressed == 1
     assert len(model.seen) == 1
     assert received == [(first.frame_id, "A launch timeline.")]
+    await observer.close()
+
+
+async def test_duplicate_poll_extends_visible_range(tmp_path: Path) -> None:
+    png = shot_bytes()
+    early = dict(PRESENT_SCAN, page_ms=1700000000000.0)
+    late = dict(PRESENT_SCAN, page_ms=1700000002000.0)
+    page = FakeShotPage(
+        [early, early, late], boxes=[dict(CLIP_BOX), dict(CLIP_BOX)], shots=[png, png]
+    )
+    store = VisualStore(tmp_path)
+    observer = VisualObserver(page, store)
+    assert await observer.poll() is None
+    first = await observer.poll()
+    assert first is not None
+    second = await observer.poll()
+    assert second is not None
+    assert store.duplicates_suppressed == 1
+    [current] = store.frames
+    assert current.frame_id == first.frame_id
+    assert current.visible_to_page_ms == 1700000002000.0
+    assert current.visible_to_at == second.captured_at
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(rows) == 1
+    assert rows[0]["visual_id"] == first.frame_id
+    assert rows[0]["visible_to"] == second.captured_at
+    assert rows[0]["visible_to_page_ms"] == 1700000002000.0
     await observer.close()
 
 

@@ -100,7 +100,9 @@ async def test_transcript_callback_falls_back_to_wall_clock(tmp_path: Path) -> N
 
     await callback(frame)
 
-    assert [event.visual_refs for event in conversation.events] == [("frame-pricing",)]
+    assert [event.visual_refs for event in conversation.events] == [
+        ("frame-launch", "frame-pricing")
+    ]
     record.close()
     journal.close()
 
