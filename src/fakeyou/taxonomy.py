@@ -35,6 +35,7 @@ EventVerb = Literal[
     "finalized",
     "finished",
     "ingested",
+    "observed",
     "opened",
     "polled",
     "queued",

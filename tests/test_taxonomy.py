@@ -137,3 +137,22 @@ def test_lifecycle_attributions_name_who_acted() -> None:
         "owner_action",
         "policy",
     }
+
+
+def test_meet_action_events_use_controlled_names() -> None:
+    assert "observed" in get_args(EventVerb)
+    calls = [call for call in JOURNAL_CALLS if call[2].startswith("meet_action_")]
+    assert {call[2] for call in calls} == {
+        "meet_action_requested",
+        "meet_action_started",
+        "meet_action_observed",
+        "meet_action_finished",
+        "meet_action_failed",
+        "meet_action_rejected",
+    }
+    for _file, _line, _event, node in calls:
+        sources = [keyword.value for keyword in node.keywords if keyword.arg == "source"]
+        assert len(sources) == 1
+        source = sources[0]
+        assert isinstance(source, ast.Constant)
+        assert source.value == "agent"

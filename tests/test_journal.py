@@ -141,3 +141,65 @@ def test_timed_should_record_failure_and_propagate_original_error():
     assert [row["event"] for row in rows] == ["synthesis_started", "synthesis_failed"]
     assert rows[-1]["kind"] == "timeout"
     assert rows[-1]["duration_ms"] >= 0
+
+
+def test_meet_action_lifecycle_shares_one_action_id() -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append)
+
+    journal.meet_action_requested(action="raise_hand", action_id="a1", actor="twin", attempt=1)
+    journal.meet_action_started(action="raise_hand", action_id="a1", attempt=1)
+    journal.meet_action_observed(action="raise_hand", action_id="a1", observed_state="hand_raised")
+    journal.meet_action_finished(
+        action="raise_hand", action_id="a1", observed=True, attempts=1, duration_ms=1200
+    )
+    journal.meet_action_requested(action="send_chat", action_id="c1", actor="twin", attempt=1)
+    journal.meet_action_failed(
+        action="send_chat", action_id="c1", reason="timeout", attempts=2, duration_ms=900
+    )
+    journal.meet_action_requested(action="lower_hand", action_id="a2", actor="twin", attempt=1)
+    journal.meet_action_rejected(action="lower_hand", action_id="a2", reason="authority_denied")
+
+    rows = [json.loads(line) for line in lines]
+    assert [row["event"] for row in rows] == [
+        "meet_action_requested",
+        "meet_action_started",
+        "meet_action_observed",
+        "meet_action_finished",
+        "meet_action_requested",
+        "meet_action_failed",
+        "meet_action_requested",
+        "meet_action_rejected",
+    ]
+    assert [row["action_id"] for row in rows] == ["a1", "a1", "a1", "a1", "c1", "c1", "a2", "a2"]
+    assert all(row["source"] == "agent" for row in rows)
+    assert rows[0]["actor"] == "twin"
+    assert rows[3]["duration_ms"] == 1200
+    assert rows[5]["reason"] == "timeout"
+    assert rows[7]["reason"] == "authority_denied"
+
+
+def test_meet_action_events_carry_chars_without_chat_content() -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append)
+
+    journal.meet_action_requested(
+        action="send_chat",
+        action_id="c1",
+        actor="twin",
+        attempt=1,
+        chars=42,
+        text="secret hello",
+    )
+    journal.meet_action_observed(
+        action="send_chat",
+        action_id="c1",
+        observed_state="chat_echoed",
+        chars=42,
+        body="secret echo",
+    )
+
+    rows = [json.loads(line) for line in lines]
+    assert [row["chars"] for row in rows] == [42, 42]
+    assert all("text" not in row for row in rows)
+    assert "secret" not in "\n".join(lines)

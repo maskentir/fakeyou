@@ -39,6 +39,21 @@ STARTUP_MILESTONES = (
     "microphone_enabled",
     "conversation_bound",
 )
+_MEET_ACTION_EVENTS = frozenset(
+    {
+        "meet_action_requested",
+        "meet_action_started",
+        "meet_action_observed",
+        "meet_action_finished",
+        "meet_action_failed",
+        "meet_action_rejected",
+    }
+)
+_MEET_ACTION_TERMINAL = {
+    "meet_action_finished": "finished",
+    "meet_action_failed": "failed",
+    "meet_action_rejected": "rejected",
+}
 
 
 SessionState = Literal["fresh", "unfinished", "finished"]
@@ -97,6 +112,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     excluded = Counter[str]()
     replies = Counter[str]()
     tools: dict[str, Counter[str]] = {}
+    meet_actions: dict[str, dict[str, Any]] = {}
     episodes: list[dict[str, Any]] = []
     faults = Counter[tuple[str, str]]()
     result: dict[str, Any] | None = None
@@ -217,6 +233,8 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 excluded["missing_transcript"] += 1
                 if active is not None:
                     active["tools"].append(name)
+        elif event in _MEET_ACTION_EVENTS:
+            _record_meet_action(meet_actions, row, excluded)
         elif event == "agent_finished":
             replying = _turn_for(turns, row)
             if replying is not None:
@@ -413,6 +431,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "evidence": {"excluded": dict(excluded)},
         "replies": {key: replies[key] for key in ("spoken", "interrupted", "trailing_questions")},
         "tools": {name: dict(counts) for name, counts in tools.items()},
+        "meet_actions": _meet_actions_report(meet_actions),
         "interruptions": {
             "triggers": dict(barge_in_triggers),
             "speech_to_stop_seconds": summarize(interruption_seconds),
@@ -496,6 +515,93 @@ def _transcript_turn(
         excluded["unknown_transcript"] += 1
         return None
     return turn
+
+
+def _record_meet_action(
+    meet: dict[str, dict[str, Any]], row: dict[str, Any], excluded: Counter[str]
+) -> None:
+    action_id = row.get("action_id")
+    if not isinstance(action_id, str) or not action_id:
+        excluded["missing_action_id"] += 1
+        return
+    entry = meet.get(action_id)
+    if entry is None:
+        entry = {
+            "action_id": action_id,
+            "action": None,
+            "outcome": None,
+            "reason": None,
+            "observed": False,
+            "attempts": 1,
+            "duration_ms": None,
+        }
+        meet[action_id] = entry
+    if entry["outcome"] is not None:
+        excluded["duplicate"] += 1
+        return
+    action = row.get("action")
+    if entry["action"] is None and isinstance(action, str) and action:
+        entry["action"] = action
+    for key in ("attempt", "attempts"):
+        value = row.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value) and value >= 1 and value > entry["attempts"]:
+            entry["attempts"] = int(value)
+    event = row.get("event")
+    if event == "meet_action_observed":
+        entry["observed"] = True
+        return
+    outcome = _MEET_ACTION_TERMINAL.get(event) if isinstance(event, str) else None
+    if outcome is None:
+        return
+    entry["outcome"] = outcome
+    reason = row.get("reason")
+    entry["reason"] = reason if isinstance(reason, str) else None
+    duration = row.get("duration_ms")
+    if duration is not None:
+        kind = _duration_kind(duration)
+        if kind == "nonfinite":
+            excluded["nonfinite_duration"] += 1
+        elif kind == "invalid":
+            excluded["invalid_duration"] += 1
+        else:
+            entry["duration_ms"] = duration
+    if outcome == "finished" and row.get("observed") and not entry["observed"]:
+        excluded["unobserved_finish"] += 1
+
+
+def _meet_actions_report(meet: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, Counter[str]] = {}
+    rejections = Counter[str]()
+    durations: list[float] = []
+    actions: list[dict[str, Any]] = []
+    for entry in meet.values():
+        action = entry["action"] if isinstance(entry["action"], str) else "unknown"
+        outcome = entry["outcome"] if isinstance(entry["outcome"], str) else "pending"
+        counts.setdefault(action, Counter())[outcome] += 1
+        if outcome == "rejected" and isinstance(entry["reason"], str):
+            rejections[entry["reason"]] += 1
+        duration = entry["duration_ms"]
+        if duration is not None:
+            durations.append(float(duration) / 1000)
+        actions.append(
+            {
+                "action_id": entry["action_id"],
+                "action": action,
+                "outcome": outcome,
+                "reason": entry["reason"],
+                "observed": entry["observed"],
+                "attempts": entry["attempts"],
+                "duration_ms": duration,
+            }
+        )
+    return {
+        "counts": {name: dict(outcomes) for name, outcomes in counts.items()},
+        "rejections": dict(rejections),
+        "duration_seconds": summarize(durations),
+        "actions": actions,
+    }
 
 
 def _add_duration(turn: dict[str, Any], key: str, value: Any, excluded: Counter[str]) -> None:
