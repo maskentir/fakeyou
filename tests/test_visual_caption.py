@@ -78,7 +78,7 @@ async def test_caption_called_once_per_hash(tmp_path: Path) -> None:
         for i in range(3)
     ]
     model = caption_model("A slide with quarterly numbers.")
-    captioner = VisualCaptioner(model)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     captions = [await captioner.caption_frame(frame) for frame in frames]
     assert len(model.seen) == 1
     assert captions[0] is not None
@@ -93,7 +93,7 @@ async def test_caption_prompt_images_before_text(tmp_path: Path) -> None:
     path = shot_file(tmp_path, "order.jpg", 64, 48)
     frame = frame_for(tmp_path, "0000000000004-bbbbcccc", path, "bb" * 32, 1700000000000.0)
     model = caption_model("A slide.")
-    captioner = VisualCaptioner(model)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     assert await captioner.caption_frame(frame) is not None
     assert len(model.seen) == 1
     [sent] = model.seen[0]
@@ -119,7 +119,7 @@ async def test_describe_frame_returns_caption_plus_ref(tmp_path: Path) -> None:
     store = VisualStore(tmp_path / "visual")
     append_visual(store, frame)
     model = caption_model("A bar chart.")
-    captioner = VisualCaptioner(model)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     [describe] = create_visual_tools(store, captioner)
     assert describe.name == "describe_frame"
     output = await describe.ainvoke({"frame_id": frame.frame_id})
@@ -135,7 +135,9 @@ async def test_budget_stops_calls(tmp_path: Path) -> None:
     first = frame_for(tmp_path, "0000000000008-eeeeffff", first_path, "11" * 32, 1700000000000.0)
     second = frame_for(tmp_path, "0000000000009-gggghhhh", second_path, "22" * 32, 1700000002000.0)
     model = caption_model("A slide.", total_tokens=1100)
-    captioner = VisualCaptioner(model, settings=VisualSettings(budget_usd=0.001), journal=journal)
+    captioner = VisualCaptioner(
+        model, settings=VisualSettings(enabled=True, budget_usd=0.001), journal=journal
+    )
     assert await captioner.caption_frame(first) is not None
     assert await captioner.caption_frame(second) is None
     assert len(model.seen) == 1
@@ -149,7 +151,7 @@ async def test_downscale_before_send(tmp_path: Path) -> None:
     path = shot_file(tmp_path, "wide.jpg", 2000, 1000)
     frame = frame_for(tmp_path, "0000000000010-iiiijjjj", path, "33" * 32, 1700000000000.0)
     model = caption_model("A wide slide.", total_tokens=None)
-    captioner = VisualCaptioner(model)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     caption = await captioner.caption_frame(frame)
     assert caption is not None
     [sent] = model.seen[0]
@@ -172,7 +174,9 @@ async def test_cache_expires_after_ttl(tmp_path: Path) -> None:
     path = shot_file(tmp_path, "ttl.jpg", 64, 48)
     frame = frame_for(tmp_path, "0000000000011-kkkkllll", path, "44" * 32, 1700000000000.0)
     model = caption_model("A slide.")
-    captioner = VisualCaptioner(model, monotonic=clock.monotonic)
+    captioner = VisualCaptioner(
+        model, settings=VisualSettings(enabled=True), monotonic=clock.monotonic
+    )
     assert await captioner.caption_frame(frame) is not None
     assert await captioner.caption_frame(frame) is not None
     assert len(model.seen) == 1
@@ -258,18 +262,38 @@ def test_visual_compatible_without_base_url_fails_fast() -> None:
 
 def test_visual_settings_defaults() -> None:
     settings = VisualSettings()
+    assert settings.enabled is False
     assert settings.provider == "google"
     assert settings.model == "gemini-3.8-flash"
     assert settings.timeout_seconds == 30.0
     assert settings.budget_usd == 0.5
-    assert "enabled" not in VisualSettings.model_fields
+    assert settings.max_calls == 120
+    assert settings.max_images == 2
+    assert settings.retention_raw_days == 7
+    assert settings.retention_text_days == 30
     assert Settings().visual == settings
+
+
+async def test_call_cap_stops_captions(tmp_path: Path) -> None:
+    journal = RecordingJournal()
+    first_path = shot_file(tmp_path, "cap-first.jpg", 64, 48)
+    second_path = shot_file(tmp_path, "cap-second.jpg", 64, 48)
+    first = frame_for(tmp_path, "0000000000012-mmmmnnnn", first_path, "55" * 32, 1700000000000.0)
+    second = frame_for(tmp_path, "0000000000013-oooopppp", second_path, "66" * 32, 1700000002000.0)
+    model = caption_model("A slide.", total_tokens=1100)
+    captioner = VisualCaptioner(
+        model, settings=VisualSettings(enabled=True, max_calls=1), journal=journal
+    )
+    assert await captioner.caption_frame(first) is not None
+    assert await captioner.caption_frame(second) is None
+    assert len(model.seen) == 1
+    assert len(journal.events("budget_exhausted")) == 1
 
 
 async def test_describe_frame_unknown_frame(tmp_path: Path) -> None:
     store = VisualStore(tmp_path / "visual")
     model = caption_model("A slide.")
-    captioner = VisualCaptioner(model)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     [describe] = create_visual_tools(store, captioner)
     output = await describe.ainvoke({"frame_id": "missing-frame"})
     assert "missing-frame" in output

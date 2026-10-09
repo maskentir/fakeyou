@@ -471,6 +471,7 @@ async def join_meeting(
         attribution_probe_path=probe_path,
         per_stream_enabled=settings.conversation.per_stream_enabled,
         meet_actions_enabled=settings.conversation.meet_actions_enabled,
+        visual_enabled=settings.visual.enabled,
     )
     ingest_requested = profile is not None and profile.ingest_transcripts
     ingestion_outcome = "pending" if ingest_requested else "not_requested"

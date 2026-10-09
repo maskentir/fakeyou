@@ -225,8 +225,13 @@ async def open_conversation(
         if fallback is not None:
             middleware.append(ModelFallbackMiddleware(fallback))
         visual: VisualCaptionResolver | None = None
-        if visual_store is not None and visual_captioner is not None:
-            visual = create_visual_resolver(visual_store, visual_captioner)
+        visual_wired = (
+            settings.visual.enabled and visual_store is not None and visual_captioner is not None
+        )
+        if visual_wired and visual_store is not None and visual_captioner is not None:
+            visual = create_visual_resolver(
+                visual_store, visual_captioner, enabled=settings.visual.enabled
+            )
         if graphiti is not None and profile is not None and tool_names:
             bound, prefetch = memory_wiring(tool_names, settings.memory.recall.strategy)
             if prefetch:
@@ -249,9 +254,15 @@ async def open_conversation(
                     if tool.name in bound
                 )
                 middleware.append(create_recall_error_middleware(faults))
-        if visual_store is not None and visual_captioner is not None:
+        if visual_wired and visual_store is not None and visual_captioner is not None:
             middleware.append(
-                create_visual_hydrate_middleware(visual_store, visual_captioner, journal=journal)
+                create_visual_hydrate_middleware(
+                    visual_store,
+                    visual_captioner,
+                    max_images=settings.visual.max_images,
+                    journal=journal,
+                    enabled=settings.visual.enabled,
+                )
             )
         if profile is not None and meet_dispatcher is not None:
             meet = tool_names - {"recall_meeting_context"}

@@ -127,12 +127,14 @@ class VisualObserver:
         journal: Journal | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         poll_interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS,
+        enabled: bool = True,
     ) -> None:
         self._page = page
         self._store = store
         self._journal = journal
         self._monotonic = monotonic
         self._poll_interval = poll_interval_seconds
+        self._enabled = enabled
         self._hits = 0
         self._presenting = False
         self._task: asyncio.Task[None] | None = None
@@ -158,6 +160,8 @@ class VisualObserver:
                 pass
 
     async def poll(self) -> VisualFrame | None:
+        if not self._enabled:
+            return None
         try:
             scan = await self._page.evaluate(VISUAL_SCAN_JS)
         except asyncio.CancelledError:

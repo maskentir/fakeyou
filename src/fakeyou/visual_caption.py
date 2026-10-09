@@ -78,12 +78,15 @@ class VisualCaptioner:
         self._monotonic = monotonic
         self._cache: dict[str, tuple[VisualCaption, float]] = {}
         self._spent_usd = 0.0
+        self._calls = 0
 
     @property
     def spent_usd(self) -> float:
         return self._spent_usd
 
     async def caption_frame(self, frame: VisualFrame) -> VisualCaption | None:
+        if not self._settings.enabled:
+            return None
         now = self._monotonic()
         cached = self._cache.get(frame.sha256)
         if cached is not None:
@@ -95,6 +98,16 @@ class VisualCaptioner:
         payload, width, height = _payload_bytes(data)
         estimate = estimate_tokens(width, height)
         if self._spent_usd + estimate * VISUAL_USD_PER_MTOK / 1_000_000 > self._settings.budget_usd:
+            if self._journal is not None:
+                self._journal.record(
+                    "budget_exhausted",
+                    source="llm",
+                    visual_id=frame.frame_id,
+                    spent_usd=self._spent_usd,
+                    budget_usd=self._settings.budget_usd,
+                )
+            return None
+        if self._calls >= self._settings.max_calls:
             if self._journal is not None:
                 self._journal.record(
                     "budget_exhausted",
@@ -125,6 +138,7 @@ class VisualCaptioner:
             cost_usd=cost,
         )
         self._spent_usd += cost
+        self._calls += 1
         self._cache[frame.sha256] = (caption, self._monotonic())
         if self._journal is not None:
             self._journal.record(

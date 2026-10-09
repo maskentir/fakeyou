@@ -21,6 +21,7 @@ from fakeyou.greetings import create_greeting_middleware
 from fakeyou.memory import _current_speech, create_memory_prefetch_middleware
 from fakeyou.persona import PersonaProfile
 from fakeyou.session import SessionConfig
+from fakeyou.settings import VisualSettings
 from fakeyou.visual_caption import VisualCaptioner
 from fakeyou.visual_hydrate import (
     VISUAL_HYDRATE_MAX_IMAGES,
@@ -75,7 +76,7 @@ def frame_bytes64(frame: VisualFrame) -> str:
 
 def captioner_for(texts: list[str]) -> tuple[VisualCaptioner, ToolCallingFakeModel]:
     model = ToolCallingFakeModel(responses=[AIMessage(content=text) for text in texts], seen=[])
-    return VisualCaptioner(model), model
+    return VisualCaptioner(model, settings=VisualSettings(enabled=True)), model
 
 
 def participant(text: str, message_id: str, refs: tuple[str, ...] = ()) -> HumanMessage:
@@ -479,8 +480,12 @@ async def test_assembly_registers_hydrate_after_prefetch(
 
     monkeypatch.setattr(assembly_module, "create_meeting_agent", fake_agent)
     recall = settings.memory.recall.model_copy(update={"strategy": "prefetch"})
+    visual = settings.visual.model_copy(update={"enabled": True})
     wired = settings.model_copy(
-        update={"memory": settings.memory.model_copy(update={"recall": recall})}
+        update={
+            "memory": settings.memory.model_copy(update={"recall": recall}),
+            "visual": visual,
+        }
     )
     profile = PersonaProfile(
         owner_id=settings.identity.owner_id,

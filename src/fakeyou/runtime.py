@@ -594,8 +594,14 @@ class _MeetingWorker:
     async def start_visual_observer(self) -> None:
         if self.visual_observer is not None or self.visual_store is None:
             return
+        if not self.config.visual_enabled:
+            return
         self.visual_observer = VisualObserver(
-            self.page, self.visual_store, journal=self.journal, monotonic=self.monotonic
+            self.page,
+            self.visual_store,
+            journal=self.journal,
+            monotonic=self.monotonic,
+            enabled=self.config.visual_enabled,
         )
         await self.visual_observer.start()
         self.record("visual_observer_started", source="runtime")

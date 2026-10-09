@@ -287,11 +287,16 @@ class WorkerSettings(Section):
 
 
 class VisualSettings(Section):
+    enabled: bool = False
     provider: Literal["openai", "openai_compatible", "anthropic", "google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = None
     timeout_seconds: PositiveSeconds = 30.0
     budget_usd: float = Field(default=0.5, ge=0)
+    max_calls: int = Field(default=120, ge=0)
+    max_images: int = Field(default=2, gt=0)
+    retention_raw_days: int = Field(default=7, gt=0)
+    retention_text_days: int = Field(default=30, gt=0)
 
 
 class Configuration(Section):
