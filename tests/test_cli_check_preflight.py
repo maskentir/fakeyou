@@ -1,0 +1,451 @@
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from pydantic import SecretStr
+
+import fakeyou.cli.diagnostics as cli_diagnostics
+import fakeyou.cli.main as cli_main
+import fakeyou.orchestration.assembly as assembly
+import fakeyou.orchestration.providers as providers
+from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
+from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
+from fakeyou.cli._operator import OperatorIdentity
+from fakeyou.config.settings import (
+    CompatibleReply,
+    GoogleReply,
+    MiniMaxTTS,
+    Settings,
+)
+from fakeyou.foundation.greetings import create_greeting_middleware
+from fakeyou.foundation.invariants import (
+    AGENT_MIC_SOURCE_NAME,
+    AGENT_SINK_NAME,
+    CAPTURE_SAMPLE_RATE,
+    MEETING_MONITOR_SOURCE_NAME,
+    MEETING_SINK_NAME,
+    PLAYBACK_SAMPLE_RATE,
+)
+from fakeyou.orchestration.assembly import LoopBehavior
+from tests._cli_support import BASE_HOSTS, _join_with_audio, with_muse_fallback
+
+
+def test_main_exits_2_on_input_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "join", "not-a-link"])
+    with pytest.raises(SystemExit) as excinfo:
+        cli_main.main()
+    assert excinfo.value.code == 2
+    assert "meet.google.com" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "handler", "expected"),
+    [
+        (
+            ["memory-reembed", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
+            "reembed_memory",
+            {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
+        ),
+        (
+            ["memory-forget", "--meeting-id", "m1", "--persona", "p.json", "--keep-record"],
+            "forget_memory",
+            {"meeting_id": "m1", "episode_uuid": None, "keep_record": True},
+        ),
+        (
+            ["report", "--meeting-id", "m1"],
+            "show_session_report",
+            {"meeting_id": "m1", "journal_dir": None},
+        ),
+        (
+            ["chat", "hello", "--thread", "t1", "--memory"],
+            "chat",
+            {"message": "hello", "thread": "t1", "use_browser": False, "use_memory": True},
+        ),
+    ],
+)
+def test_main_dispatches_parsed_options_to_the_command_handler(
+    monkeypatch, argv, handler, expected
+) -> None:
+    calls: list[dict] = []
+
+    def record(**kwargs):
+        calls.append(kwargs)
+
+    async def record_async(**kwargs):
+        calls.append(kwargs)
+
+    sync_handlers = {"show_session_report"}
+    monkeypatch.setattr(cli_main, handler, record if handler in sync_handlers else record_async)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert isinstance(call.pop("settings"), Settings)
+    assert {key: call[key] for key in expected} == expected
+
+
+def test_compose_pulse_defaults_match_audio_constants() -> None:
+    compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text()
+    assert f"PULSE_SOURCE: ${{PULSE_SOURCE:-{MEETING_MONITOR_SOURCE_NAME}}}" in compose
+    assert f"PULSE_SINK: ${{PULSE_SINK:-{AGENT_SINK_NAME}}}" in compose
+
+
+def test_compose_worker_reaches_neo4j_service_and_example_profiles() -> None:
+    compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text()
+    assert (
+        "FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}"
+        in compose
+    )
+    assert "./examples:/workspace/examples:ro" in compose
+
+
+def test_env_example_declares_pulse_overrides() -> None:
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    assert f"PULSE_SOURCE={MEETING_MONITOR_SOURCE_NAME}" in example.splitlines()
+    assert f"PULSE_SINK={AGENT_SINK_NAME}" in example.splitlines()
+
+
+def test_dockerfile_pulse_defaults_match_audio_constants() -> None:
+    dockerfile = (Path(__file__).resolve().parent.parent / "docker/audio/Dockerfile").read_text()
+    assert f"PULSE_SOURCE={MEETING_MONITOR_SOURCE_NAME}" in dockerfile
+    assert f"PULSE_SINK={AGENT_SINK_NAME}" in dockerfile
+
+
+def test_default_pa_pins_audio_constants() -> None:
+    default_pa = (Path(__file__).resolve().parent.parent / "docker/audio/default.pa").read_text()
+    assert f"sink_name={MEETING_SINK_NAME} rate={CAPTURE_SAMPLE_RATE}" in default_pa
+    assert f"sink_name={AGENT_SINK_NAME} rate={PLAYBACK_SAMPLE_RATE}" in default_pa
+    assert f"source_name={AGENT_MIC_SOURCE_NAME} master={AGENT_SINK_NAME}.monitor" in default_pa
+    assert f"set-default-sink {MEETING_SINK_NAME}" in default_pa
+    assert f"set-default-source {AGENT_MIC_SOURCE_NAME}" in default_pa
+
+
+@pytest.mark.asyncio
+async def test_join_audio_wires_journal_and_preflight_hosts(
+    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = await _join_with_audio(
+        tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
+    )
+
+    journal = captured["open_audio"].keywords["diagnostics"].journal
+    assert journal._meeting_id == "meeting-9"
+    assert captured["preflight_hosts"] == BASE_HOSTS
+    assert captured["preflight_budget_seconds"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_join_without_audio_skips_preflight(
+    session_run,
+    join,
+) -> None:
+    captured = session_run
+
+    session_run.result.update(
+        {"phase": "ended", "terminal_reason": "stopped_by_owner", "detail": "ok"}
+    )
+
+    await join(
+        "https://meet.google.com/abc-defg-hij",
+    )
+
+    assert captured["preflight_hosts"] is None
+
+
+def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        providers, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    return calls
+
+
+def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsys) -> None:
+    from fakeyou.observability.provider_faults import ProviderFault
+
+    async def unavailable(*_args, **_kwargs):
+        raise ProviderFault("memory", "unavailable")
+
+    monkeypatch.setattr(cli_main, "add_owner_note", unavailable)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--persona", "p.json"])
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == 3
+    assert "memory unavailable" in capsys.readouterr().err
+
+
+def test_chat_model_uses_role_configuration(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings.reply = CompatibleReply(
+        model="muse-spark-1.3",
+        base_url="https://api.meta.ai/v1",
+        api_key=SecretStr("meta-key"),
+        reasoning_effort="minimal",
+    )
+    providers.create_chat_model(settings)
+    assert calls == [
+        (
+            ("muse-spark-1.3",),
+            {
+                "model_provider": "openai",
+                "api_key": "meta-key",
+                "timeout": 15.0,
+                "max_retries": 2,
+                "base_url": "https://api.meta.ai/v1",
+                "reasoning_effort": "minimal",
+            },
+        )
+    ]
+
+
+def test_chat_model_forwards_google_reasoning_effort(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings.reply = GoogleReply(
+        model="gemini-3.8-flash",
+        api_key=SecretStr("google-key"),
+        reasoning_effort="low",
+    )
+    providers.create_chat_model(settings)
+    assert calls == [
+        (
+            ("gemini-3.8-flash",),
+            {
+                "model_provider": "google_genai",
+                "api_key": "google-key",
+                "timeout": 15.0,
+                "max_retries": 2,
+                "base_url": "https://generativelanguage.googleapis.com",
+                "reasoning_effort": "low",
+            },
+        )
+    ]
+
+
+def test_chat_model_passes_provider_request_fields_as_extra_body(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings.reply = CompatibleReply(
+        model="MiniMax-M3",
+        base_url="https://api.minimax.io/v1",
+        api_key=SecretStr("minimax-key"),
+        extra_body={"reasoning_split": True},
+        max_retries=0,
+    )
+    settings.reply_fallback = settings.reply.model_copy(update={"model": "MiniMax-M2.5-highspeed"})
+    providers.create_chat_model(settings)
+    providers.create_fallback_chat_model(settings)
+    assert [kwargs.get("extra_body") for _args, kwargs in calls] == [
+        {"reasoning_split": True},
+        {"reasoning_split": True},
+    ]
+
+
+def test_settings_read_extra_body_as_json(settings, monkeypatch):
+    monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
+    monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
+    monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
+    assert Settings(_env_file=None).reply.extra_body == {"reasoning_split": True}
+
+
+def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    providers.create_chat_model(settings)
+    assert calls == [
+        (
+            ("model",),
+            {
+                "api_key": "test-key",
+                "model_provider": "openai",
+                "timeout": 15.0,
+                "max_retries": 2,
+                "base_url": "https://api.openai.com/v1",
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["http://127.0.0.1:8080/v1", "https://api.meta.ai:8443/v1", "https://api.anthropic.com"],
+)
+def test_preflight_hosts_follow_the_configured_chat_endpoint(settings, endpoint):
+    settings.reply.base_url = endpoint
+    assert providers.preflight_hosts(settings) == (*BASE_HOSTS, endpoint)
+
+
+def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
+    settings.tts = MiniMaxTTS()
+    settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
+    with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
+        create_speech_synthesizer(settings.tts)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
+    settings.tts.api_key = SecretStr("minimax-key")
+    assert isinstance(create_speech_synthesizer(settings.tts), MiniMaxSpeechSynthesizer)
+    assert providers.preflight_hosts(settings) == (
+        "https://api.minimax.io/v1/t2a_v2",
+        "wss://api.meta.ai/v1/asr/realtime",
+        "https://api.minimax.io/v1",
+    )
+
+
+def test_openai_speech_requires_its_own_key(settings):
+    settings.tts.api_key = None
+    with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
+        create_speech_synthesizer(settings.tts)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
+
+
+def test_check_reports_the_speech_provider_defaults(settings, capsys):
+    settings.tts = MiniMaxTTS()
+    cli_diagnostics.check_setup(settings)
+    assert json.loads(capsys.readouterr().out)["tts"] == settings.tts.model_dump(mode="json")
+
+
+def test_check_reports_models_per_role(settings, capsys):
+    cli_diagnostics.check_setup(settings)
+    report = capsys.readouterr().out
+    assert json.loads(report) == settings.model_dump(mode="json")
+    assert "test-key" not in report
+    assert "memory-key" not in report
+
+
+def test_primary_and_fallback_use_explicit_retry_budgets(settings, monkeypatch):
+    calls = record_chat_model_calls(monkeypatch)
+    settings = with_muse_fallback(settings)
+    providers.create_chat_model(settings)
+    providers.create_fallback_chat_model(settings)
+    assert [kwargs["max_retries"] for _args, kwargs in calls] == [0, 1]
+    assert [args for args, _kwargs in calls] == [("model",), ("muse-spark-1.2",)]
+
+
+def test_fallback_chat_model_is_optional(settings) -> None:
+    assert providers.create_fallback_chat_model(settings) is None
+
+
+async def test_conversation_adds_model_fallback_middleware_when_configured(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langchain.agents.middleware import ModelFallbackMiddleware
+
+    created: dict = {}
+
+    def fake_agent(model, **kwargs):
+        created.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)
+    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    settings = with_muse_fallback(settings)
+    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
+        pass
+
+    greeting_type = type(create_greeting_middleware("id"))
+    assert [type(item) for item in created["middleware"]] == [
+        greeting_type,
+        ModelFallbackMiddleware,
+    ]
+
+
+async def test_open_conversation_wires_sentence_streaming_flag(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
+
+    seen: dict = {}
+
+    class StubLoop:
+        async def close(self) -> None:
+            pass
+
+    def fake_loop(responder, **kwargs):
+        seen["responder"] = responder
+        seen["kwargs"] = kwargs
+        return StubLoop()
+
+    monkeypatch.setattr(
+        assembly, "create_meeting_agent", lambda *args, **kwargs: SimpleNamespace(name="agent")
+    )
+    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(assembly, "ConversationLoop", fake_loop)
+    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
+        pass
+    assert type(seen["responder"]) is LangGraphResponder
+    assert seen["kwargs"]["generation"].sentence_streaming is False
+
+    settings.conversation.sentence_streaming = True
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
+        pass
+    assert isinstance(seen["responder"], StreamingLangGraphResponder)
+    assert seen["kwargs"]["generation"].sentence_streaming is True
+
+
+def test_preflight_probes_the_fallback_endpoint(settings):
+    settings = with_muse_fallback(settings)
+    settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"
+    assert providers.preflight_hosts(settings) == (
+        *BASE_HOSTS,
+        "https://fallback.example.com:8443/v1",
+    )
+
+
+def test_check_reports_the_fallback_model(settings, capsys):
+    settings = with_muse_fallback(settings)
+    cli_diagnostics.check_setup(settings)
+    assert json.loads(capsys.readouterr().out)[
+        "reply_fallback"
+    ] == settings.reply_fallback.model_dump(mode="json")
+
+
+def test_check_reports_no_fallback_by_default(settings, capsys):
+    cli_diagnostics.check_setup(settings)
+    assert json.loads(capsys.readouterr().out)["reply_fallback"] is None
+
+
+def test_ctrl_c_is_reported_as_an_operation_interruption(monkeypatch, capsys) -> None:
+    def interrupted(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main, "show_session_report", interrupted)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "m1"])
+
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == CATALOG[ErrorCode.OPERATION_INTERRUPTED].exit_code
+    assert "operation interrupted" in capsys.readouterr().err
+
+
+def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
+    monkeypatch, capsys
+) -> None:
+    def interrupted_settings(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main, "Settings", interrupted_settings)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "m1"])
+
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == CATALOG[ErrorCode.OPERATION_INTERRUPTED].exit_code
+    assert "operation interrupted" in capsys.readouterr().err
