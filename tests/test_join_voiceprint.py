@@ -13,14 +13,14 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 
 import fakeyou.cli.join as join_module
-from fakeyou.assembly import VoiceprintLive, build_voiceprint_live
+from fakeyou.audio.voice_activity import SlotBinder, VoiceAttribution
 from fakeyou.cli.join import build_transcript_callback
+from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintRecord
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.record import MeetingRecord, meeting_record_path
-from fakeyou.settings import Settings
-from fakeyou.verify import CalibrationArtifact
-from fakeyou.voice_activity import SlotBinder, VoiceAttribution
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.verify import CalibrationArtifact
+from fakeyou.orchestration.assembly import VoiceprintLive, build_voiceprint_live
+from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 from tests.fakes import FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
 
 

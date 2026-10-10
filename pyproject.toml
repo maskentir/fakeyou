@@ -62,7 +62,13 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "T20", "RUF021", "FURB110", "PLC0207", "SIM114"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/fakeyou/cli/output.py" = ["T201"]
+"src/fakeyou/observability/journal.py" = ["T201"]
+"tests/*" = ["T201"]
+"evals/*" = ["T201"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
@@ -98,3 +104,60 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["sherpa_onnx", "sherpa_onnx.*"]
 ignore_missing_imports = true
+
+[tool.importlinter]
+root_package = "fakeyou"
+
+[[tool.importlinter.contracts]]
+name = "catalog never imports cli or db"
+type = "forbidden"
+source_modules = ["fakeyou.catalog"]
+forbidden_modules = ["fakeyou.cli", "fakeyou.db"]
+
+[[tool.importlinter.contracts]]
+name = "db never imports cli"
+type = "forbidden"
+source_modules = ["fakeyou.db"]
+forbidden_modules = ["fakeyou.cli"]
+
+[[tool.importlinter.contracts]]
+name = "cli commands are independent of each other"
+type = "independence"
+modules = [
+    "fakeyou.cli.audio",
+    "fakeyou.cli.calibrate",
+    "fakeyou.cli.chat",
+    "fakeyou.cli.db",
+    "fakeyou.cli.debrief",
+    "fakeyou.cli.diagnostics",
+    "fakeyou.cli.diarize",
+    "fakeyou.cli.join",
+    "fakeyou.cli.memory",
+    "fakeyou.cli.voiceprint",
+    "fakeyou.cli.worker",
+]
+# memory-ingest reuses the diarize_run command handler until P6 splits handlers from services.
+ignore_imports = ["fakeyou.cli.memory -> fakeyou.cli.diarize"]
+
+[[tool.importlinter.contracts]]
+name = "domain packages respect the layer order"
+type = "layers"
+layers = [
+    "fakeyou.cli",
+    "fakeyou.worker",
+    "fakeyou.orchestration",
+    "fakeyou.memory",
+    "fakeyou.debrief",
+    "fakeyou.conversation",
+    "fakeyou.visual",
+    "fakeyou.diarization",
+    "fakeyou.audio",
+    "fakeyou.identity",
+    "fakeyou.meet",
+    "fakeyou.persistence",
+    "fakeyou.db",
+    "fakeyou.observability",
+    "fakeyou.config",
+    "fakeyou.catalog",
+    "fakeyou.foundation",
+]

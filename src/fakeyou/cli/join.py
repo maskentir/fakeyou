@@ -16,17 +16,62 @@ from graphiti_core import Graphiti
 from pipecat.frames.frames import TranscriptionFrame
 from pydantic import ValidationError
 
-from fakeyou.assembly import (
+from fakeyou.audio.audio import open_meeting_audio
+from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
+from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
+from fakeyou.cli._operator import load_operator_persona
+from fakeyou.cli.output import emit_json
+from fakeyou.config.meeting_request import validate_meeting_request
+from fakeyou.config.settings import (
+    Settings,
+)
+from fakeyou.conversation.conversation import (
+    ConversationLoop,
+    ConversationPhase,
+    conversation_thread_id,
+)
+from fakeyou.conversation.session import MeetingAudio, SessionConfig, SessionResult
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import configured_url
+from fakeyou.foundation.attribution_probe import PROBE_FILE_NAME, AttributionProbe
+from fakeyou.foundation.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
+from fakeyou.foundation.transcript import (
+    TranscriptEvent,
+    merge_transcripts,
+    transcript_event,
+    transcript_stamp,
+)
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.verify import claim_of
+from fakeyou.identity.voiceprint_match import apply_voice_scores, score_turn_audio
+from fakeyou.meet.browser import profile_lock
+from fakeyou.meet.participant_observer import EVIDENCE_FILE_NAME
+from fakeyou.memory.ingestion import meeting_windows
+from fakeyou.memory.persona import (
+    PersonaProfile,
+    meeting_tool_names,
+    persona_digest,
+    speech_keywords,
+)
+from fakeyou.observability.faults import FaultReporter, record_consumer_fault
+from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.observability.report import describe_session
+from fakeyou.orchestration.assembly import (
     VoiceprintLive,
     create_visual_captioner,
     open_conversation,
     open_voiceprint,
     stop_signal_handlers,
 )
-from fakeyou.attribution_probe import PROBE_FILE_NAME, AttributionProbe
-from fakeyou.audio import open_meeting_audio
-from fakeyou.audio_persist import SlotAudioWriter
-from fakeyou.brief import (
+from fakeyou.orchestration.lifecycle import meeting_thread_id
+from fakeyou.orchestration.providers import memory_config, open_persona_memory, preflight_hosts
+from fakeyou.orchestration.runtime import MeetActionDispatcher, run_meeting_session
+from fakeyou.persistence.audio_persist import SlotAudioWriter
+from fakeyou.persistence.brief import (
     MeetingBrief,
     MeetingContext,
     brief_digest,
@@ -35,55 +80,22 @@ from fakeyou.brief import (
     read_meeting_context,
     write_meeting_context,
 )
-from fakeyou.browser import profile_lock
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
-from fakeyou.cli.memory import load_operator_persona
-from fakeyou.cli.output import emit_json
-from fakeyou.conversation import (
-    ConversationLoop,
-    ConversationPhase,
-    TranscriptEvent,
-    conversation_thread_id,
-    merge_transcripts,
-    transcript_event,
-    transcript_stamp,
-)
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import configured_url
-from fakeyou.faults import FaultReporter, record_consumer_fault
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.ingestion import meeting_windows
-from fakeyou.ingestion_status import (
+from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     hash_meeting_record,
     record_lock,
     status_path,
     write_status,
 )
-from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
-from fakeyou.journal import Journal, journal_path
-from fakeyou.lifecycle import meeting_thread_id
-from fakeyou.meeting_request import validate_meeting_request
-from fakeyou.participant_observer import EVIDENCE_FILE_NAME
-from fakeyou.persona import PersonaProfile, meeting_tool_names, persona_digest, speech_keywords
-from fakeyou.playback import PlaybackEvent
-from fakeyou.provider_faults import ProviderFault, classify_exception
-from fakeyou.providers import memory_config, open_persona_memory, preflight_hosts
-from fakeyou.record import MeetingRecord, ResumeEntry, load_meeting_record, meeting_record_path
-from fakeyou.report import describe_session
-from fakeyou.runtime import MeetActionDispatcher, run_meeting_session
-from fakeyou.session import MeetingAudio, SessionConfig, SessionResult
-from fakeyou.settings import (
-    Settings,
+from fakeyou.persistence.record import (
+    MeetingRecord,
+    ResumeEntry,
+    load_meeting_record,
+    meeting_record_path,
 )
-from fakeyou.stream_capture import STREAM_FLEET_SLOTS, open_stream_fleet
-from fakeyou.verify import claim_of
-from fakeyou.visual_caption import VisualCaption, frame_ref
-from fakeyou.visual_store import VisualFrame, VisualStore, visual_refs_for_utterance
-from fakeyou.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
-from fakeyou.voiceprint_match import apply_voice_scores, score_turn_audio
-from fakeyou.worker_backend import memory_ingest_args
+from fakeyou.visual.visual_caption import VisualCaption, frame_ref
+from fakeyou.visual.visual_store import VisualFrame, VisualStore, visual_refs_for_utterance
+from fakeyou.worker.worker_backend import memory_ingest_args
 
 
 def stream_slot(stream_id: str) -> int | None:

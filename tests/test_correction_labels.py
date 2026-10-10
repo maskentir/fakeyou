@@ -1,14 +1,14 @@
 import json
 from pathlib import Path
 
-from fakeyou.correction_labels import (
+from fakeyou.diarization.correction_labels import (
     CorrectionTurn,
     LabelEvidence,
     build_correction_labels,
     describe_correction_speakers,
     write_correction_labels,
 )
-from fakeyou.diarize_correction import JSON_FILE_NAME, correction_uuid
+from fakeyou.diarization.diarize_correction import JSON_FILE_NAME, correction_uuid
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "correction_labels.json").read_text(encoding="utf-8")

@@ -7,8 +7,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.agent import create_meeting_agent
-from fakeyou.greetings import create_greeting_middleware, neutral_greeting
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.foundation.greetings import create_greeting_middleware, neutral_greeting
 from tests.fakes import ToolCallingFakeModel
 
 CASES: dict[str, Any] = json.loads(

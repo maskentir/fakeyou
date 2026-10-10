@@ -8,7 +8,7 @@ import pytest
 
 from fakeyou.catalog.commands import Command
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.worker_backend import (
+from fakeyou.worker.worker_backend import (
     DockerWorkerBackend,
     WorkerError,
     WorkerStartRequest,
@@ -805,7 +805,7 @@ def test_stop_only_escalates_against_the_same_container(tmp_path: Path) -> None:
 
 
 def test_session_finished_without_a_reason_keeps_the_earlier_reason(tmp_path: Path) -> None:
-    from fakeyou.worker_backend import summarize_session
+    from fakeyou.worker.worker_backend import summarize_session
 
     summary = summarize_session(
         [
@@ -818,7 +818,7 @@ def test_session_finished_without_a_reason_keeps_the_earlier_reason(tmp_path: Pa
 
 
 def test_summarize_session_maps_a_resume_marker_to_the_join_phase() -> None:
-    from fakeyou.worker_backend import summarize_session
+    from fakeyou.worker.worker_backend import summarize_session
 
     summary = summarize_session(
         [
@@ -834,7 +834,7 @@ def test_summarize_session_maps_a_resume_marker_to_the_join_phase() -> None:
 def write_ingestion(path: Path, status: str) -> None:
     from typing import cast
 
-    from fakeyou.ingestion_status import IngestionState, IngestionStatus, write_status
+    from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, write_status
 
     path.parent.mkdir(parents=True, exist_ok=True)
     write_status(
@@ -875,8 +875,8 @@ def ingest_backend(tmp_path: Path, runner: Any) -> DockerWorkerBackend:
 
 
 def test_ingest_runs_memory_ingest_in_a_foreground_container(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     runner.expect(" run ", "abc123\n")
@@ -1043,8 +1043,8 @@ def test_ingest_refuses_a_session_that_has_not_finished(tmp_path: Path) -> None:
 
 
 def test_ingest_refuses_a_live_record_lock(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import lock_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import lock_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     backend = ingest_backend(tmp_path, runner)
@@ -1064,8 +1064,8 @@ def test_ingest_refuses_a_live_record_lock(tmp_path: Path) -> None:
 
 
 def test_ingest_refuses_a_corrupt_record_lock(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import lock_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import lock_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     backend = ingest_backend(tmp_path, runner)
@@ -1102,8 +1102,8 @@ def test_ingest_rejects_persona_files_outside_the_mounted_volumes(tmp_path: Path
 
 
 def test_ingest_reports_an_interrupted_job_for_resume(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     record = meeting_record_path(tmp_path / "meetings", "meeting-9")
     write_ingestion(status_path(record), "pending")
@@ -1128,8 +1128,8 @@ def test_ingest_reports_an_interrupted_job_for_resume(tmp_path: Path) -> None:
 
 
 def test_ingest_resumes_from_an_interrupted_status(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     record = meeting_record_path(tmp_path / "meetings", "meeting-9")
     write_ingestion(status_path(record), "interrupted")
@@ -1157,8 +1157,8 @@ def test_ingest_resumes_from_an_interrupted_status(tmp_path: Path) -> None:
 
 
 def test_ingest_reports_unknown_when_the_job_writes_no_status(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     runner.fail_with(" run ", 1, "boom")
@@ -1199,8 +1199,8 @@ def test_ingest_reports_an_interrupted_run_on_keyboard_interrupt(tmp_path: Path)
 def test_status_shows_ingestion_and_debrief_for_a_finished_meeting(
     tmp_path: Path,
 ) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     backend = ingest_backend(tmp_path, runner)
@@ -1281,8 +1281,8 @@ def test_status_all_lists_only_worker_containers(tmp_path: Path) -> None:
 
 
 def test_status_shows_pending_ingestion_and_an_invalid_debrief(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     backend = ingest_backend(tmp_path, runner)
@@ -1302,8 +1302,8 @@ def test_status_shows_pending_ingestion_and_an_invalid_debrief(tmp_path: Path) -
 def test_status_reports_an_unreadable_ingestion_status_as_invalid(
     tmp_path: Path,
 ) -> None:
-    from fakeyou.ingestion_status import status_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.ingestion_status import status_path
+    from fakeyou.persistence.record import meeting_record_path
 
     runner = FakeRunner()
     backend = ingest_backend(tmp_path, runner)

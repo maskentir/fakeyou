@@ -6,7 +6,7 @@ import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from pipecat.utils.errors import ErrorCategory
 
-from fakeyou.provider_faults import (
+from fakeyou.observability.provider_faults import (
     ERROR_CATEGORY_KINDS,
     ProviderFault,
     classify_exception,

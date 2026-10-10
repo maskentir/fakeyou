@@ -6,12 +6,11 @@ import pytest
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, ValidationError
 
-from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE
-from fakeyou.brief import MeetingBrief
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.conversation import conversation_thread_id
-from fakeyou.memory import create_meet_action_tools, create_memory_tools
-from fakeyou.persona import (
+from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE
+from fakeyou.conversation.conversation import conversation_thread_id
+from fakeyou.memory.memory import create_meet_action_tools, create_memory_tools
+from fakeyou.memory.persona import (
     BRIEF_RULES,
     GOALS_RULE,
     KNOWN_FACT_RULES,
@@ -28,7 +27,8 @@ from fakeyou.persona import (
     refuse_meet_tool,
     speech_keywords,
 )
-from fakeyou.runtime import MeetActionDispatcher
+from fakeyou.orchestration.runtime import MeetActionDispatcher
+from fakeyou.persistence.brief import MeetingBrief
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
@@ -872,9 +872,9 @@ def test_meet_instructions_inside_facts_and_brief_add_no_tools(brief: MeetingBri
 
 @pytest.mark.parametrize("tool", ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"])
 def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(tool: str) -> None:
-    from fakeyou.faults import FaultReporter
-    from fakeyou.journal import Journal
-    from fakeyou.persona import MEET_REFUSAL_TEXT, refuse_meet_tool
+    from fakeyou.memory.persona import MEET_REFUSAL_TEXT, refuse_meet_tool
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.journal import Journal
 
     lines: list[str] = []
     journal = Journal("meeting-1", emit=lines.append, echo=False)

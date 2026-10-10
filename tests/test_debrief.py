@@ -8,15 +8,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-import fakeyou.debrief as module
-from fakeyou.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
+import fakeyou.debrief.debrief as module
 from fakeyou.catalog.errors import ErrorCode
-from fakeyou.correction_labels import (
-    correction_speaker_name,
-    describe_correction_speakers,
-    write_correction_labels,
-)
-from fakeyou.debrief_schema import (
+from fakeyou.debrief.debrief_schema import (
     DebriefDraft,
     DebriefItem,
     DebriefReport,
@@ -25,14 +19,20 @@ from fakeyou.debrief_schema import (
     EvidenceSource,
     ObjectiveFinding,
 )
-from fakeyou.debrief_sources import RecordSnapshot, SourceEntry, load_record_snapshot
-from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import (
+from fakeyou.debrief.debrief_sources import RecordSnapshot, SourceEntry, load_record_snapshot
+from fakeyou.diarization.correction_labels import (
+    correction_speaker_name,
+    describe_correction_speakers,
+    write_correction_labels,
+)
+from fakeyou.diarization.diarize_client import DiarizedTurn
+from fakeyou.diarization.diarize_correction import (
     correction_digest,
     correction_uuid,
     write_correction_bundle,
 )
-from fakeyou.journal import Journal
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
 from tests.fakes import ToolCallingFakeModel
 
 AT = datetime(2026, 10, 3, 12, tzinfo=UTC)

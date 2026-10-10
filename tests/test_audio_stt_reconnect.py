@@ -4,8 +4,8 @@ from typing import Any
 import pytest
 from websockets.protocol import State
 
-import fakeyou.audio as audio
-from fakeyou.audio import (
+import fakeyou.audio.audio as audio
+from fakeyou.audio.audio import (
     ManagedMuseSTT,
     MeetingAudioError,
     MeetingAudioSession,
@@ -13,8 +13,8 @@ from fakeyou.audio import (
     stt_ready,
     stt_reconnect_supported,
 )
-from fakeyou.deaf import CaptureActivity
-from fakeyou.voice import create_muse_stt
+from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.voice import create_muse_stt
 from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT
 
 

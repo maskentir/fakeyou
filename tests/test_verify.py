@@ -4,17 +4,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fakeyou.db.voiceprint_store import VoiceprintRecord
-from fakeyou.faults import FaultReporter
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.verify import (
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.verify import (
     CalibrationArtifact,
     VerifiedDecision,
     claim_of,
     decide_verified,
     load_calibration_artifact,
 )
-from fakeyou.voiceprint_embed import SpeakerEmbedder
-from fakeyou.voiceprint_match import VoiceprintMatcher, VoiceScores, apply_voice_scores
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
+from fakeyou.identity.voiceprint_match import VoiceprintMatcher, VoiceScores, apply_voice_scores
+from fakeyou.observability.faults import FaultReporter
 from tests.fakes import InMemoryVoiceprints, RecordingJournal
 
 ARTIFACT = CalibrationArtifact(

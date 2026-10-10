@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.participant_observer import (
+from fakeyou.meet.participant_observer import (
     ParticipantObserver,
     append_participant_evidence,
     observer_epoch,

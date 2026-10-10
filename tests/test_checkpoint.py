@@ -10,8 +10,8 @@ from sqlalchemy import Engine, inspect
 import fakeyou.db.checkpoint as checkpoint_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.diagnostics import check_setup
+from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.settings import Settings
 
 LANGGRAPH_TABLES = {"checkpoint_blobs", "checkpoint_migrations", "checkpoint_writes", "checkpoints"}
 

@@ -10,12 +10,12 @@ from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-import fakeyou.assembly as assembly
-import fakeyou.memory as memory_module
-from fakeyou.agent import create_meeting_agent
-from fakeyou.brief import MeetingBrief
-from fakeyou.journal import Journal
-from fakeyou.memory import (
+import fakeyou.memory.memory as memory_module
+import fakeyou.orchestration.assembly as assembly
+from fakeyou.config.settings import RecallSettings
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.memory.memory import (
     CURRENT_FACTS_FILTER,
     PREFETCH_EMPTY_EVIDENCE,
     PREFETCH_EVIDENCE_PREFIX,
@@ -24,9 +24,9 @@ from fakeyou.memory import (
     create_memory_prefetch_middleware,
     create_memory_tools,
 )
-from fakeyou.persona import RECALL_RULES, PersonaProfile, memory_wiring
-from fakeyou.session import SessionConfig
-from fakeyou.settings import RecallSettings
+from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, memory_wiring
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.brief import MeetingBrief
 from tests.fakes import ToolCallingFakeModel, make_graphiti
 
 GROUP = "team_alpha"

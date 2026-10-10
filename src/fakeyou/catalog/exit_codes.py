@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from enum import IntEnum
 
-from fakeyou.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import TerminalReason
 
 
 class ExitCode(IntEnum):

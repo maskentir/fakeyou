@@ -218,6 +218,8 @@ Dengan `--barge-in`, transkrip interim minimal tiga kata menghentikan twin yang 
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
+uv run lint-imports
+uv run deptry .
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run pytest
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_meeting_agent_eval.py
 DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_persona_eval.py
@@ -240,7 +242,7 @@ uv run --env-file .env pytest tests/test_providers.py -m live
 
 Eval persona live memerlukan `EVAL_JUDGE_API_KEY` tersendiri untuk judge OpenAI; key jawaban aktif tidak dipinjam. Variabel ini hanya untuk evaluator, bukan runtime.
 
-CI menjalankan lint, format, type check, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
+CI menjalankan lint, format, type check, kontrak layering, dependency hygiene, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 
 Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/runbooks/live-muse-test.md). Tes ini opt-in dan memakai Model API key terpisah dari login OAuth Muse Code.
 
@@ -248,6 +250,7 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/ru
 
 - [Arsitektur](docs/reference/architecture.md)
 - [Katalog error dan exit code](docs/reference/error-catalog.md)
+- [Standar kode](docs/reference/code-standard.md)
 - [Kemampuan Digital Twin](docs/reference/capabilities.md)
 - [Lesson learned Amazon LMA, Attendee, Vexa](docs/reference/reference-lessons.md)
 - [Sumber dokumentasi library](docs/reference/library-sources.md)

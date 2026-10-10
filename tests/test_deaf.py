@@ -3,14 +3,14 @@ import struct
 
 import pytest
 
-from fakeyou.deaf import (
+from fakeyou.audio.deaf import (
     CaptureActivity,
     DeafMonitor,
     audio_duration_ms,
     evaluate_deafness,
     rms_level,
 )
-from fakeyou.faults import FaultReporter
+from fakeyou.observability.faults import FaultReporter
 
 
 @pytest.fixture

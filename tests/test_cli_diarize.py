@@ -14,12 +14,12 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.diarize import diarize_run, diarize_show
 from fakeyou.cli.main import build_parser
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarize_correction import write_correction_bundle
-from fakeyou.ingestion_status import lock_path, record_lock
-from fakeyou.invariants import CAPTURE_SAMPLE_RATE
-from fakeyou.record import meeting_record_path
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
+from fakeyou.diarization.diarize_correction import write_correction_bundle
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
+from fakeyou.persistence.ingestion_status import lock_path, record_lock
+from fakeyou.persistence.record import meeting_record_path
 
 SECRET_KEY = "super-secret-stt-key"
 
@@ -262,8 +262,8 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
 def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import fakeyou.audio.diarize_mix as diarize_mix
     import fakeyou.cli.diarize as cli_diarize
-    import fakeyou.diarize_mix as diarize_mix
 
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0})

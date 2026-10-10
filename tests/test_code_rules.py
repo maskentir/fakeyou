@@ -147,16 +147,9 @@ def test_persistence_drivers_are_imported_only_by_the_db_package(path: Path) -> 
     assert sorted(module for module in drivers if _is_persistence_driver(module)) == []
 
 
-@pytest.mark.parametrize("path", sorted(DATABASE_PACKAGE.rglob("*.py")), ids=_relative)
-def test_db_package_does_not_depend_on_the_cli(path: Path) -> None:
-    modules = _imported_modules(path.read_text())
-
-    assert sorted(module for module in modules if module.startswith("fakeyou.cli")) == []
-
-
 ERROR_CATALOG_FILE = ROOT / "src" / "fakeyou" / "catalog" / "errors.py"
 OUTPUT_FILE = ROOT / "src" / "fakeyou" / "cli" / "output.py"
-JOURNAL_FILE = ROOT / "src" / "fakeyou" / "journal.py"
+JOURNAL_FILE = ROOT / "src" / "fakeyou" / "observability" / "journal.py"
 RETIRED_ERROR_NAMES = ("CliError", "PersistenceError", "FAILURE_EXIT_CODES")
 
 

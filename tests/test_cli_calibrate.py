@@ -26,8 +26,8 @@ from fakeyou.cli.calibrate import (
     calibrate_eval,
     calibrate_lock,
 )
-from fakeyou.settings import Settings
-from fakeyou.verify import load_calibration_artifact
+from fakeyou.config.settings import Settings
+from fakeyou.identity.verify import load_calibration_artifact
 
 
 def _trial(

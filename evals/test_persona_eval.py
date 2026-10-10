@@ -12,11 +12,11 @@ from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.agent import create_meeting_agent
-from fakeyou.memory import create_memory_tools
-from fakeyou.persona import PersonaProfile, build_system_prompt
-from fakeyou.providers import create_chat_model
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.memory.memory import create_memory_tools
+from fakeyou.memory.persona import PersonaProfile, build_system_prompt
+from fakeyou.orchestration.providers import create_chat_model
 from tests.fakes import OfflineJudge, ToolCallingFakeModel, make_graphiti, recall_call
 
 EXAMPLE_PROFILE = PersonaProfile.model_validate_json(

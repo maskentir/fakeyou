@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.conversation import TranscriptEvent
-from fakeyou.faults import FaultReporter
-from fakeyou.record import (
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.persistence.record import (
     MeetingRecord,
     ToolResultEntry,
     TranscriptEntry,
@@ -122,7 +122,7 @@ def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:
 
 
 def test_record_roundtrips_a_resume_marker(tmp_path: Path) -> None:
-    from fakeyou.record import ResumeEntry
+    from fakeyou.persistence.record import ResumeEntry
 
     record = open_record(tmp_path)
     record.add_transcript(transcript(0))
@@ -208,7 +208,7 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
 
 
 def test_record_accepts_visual_entry(tmp_path: Path) -> None:
-    from fakeyou.record import VisualEntry
+    from fakeyou.persistence.record import VisualEntry
 
     record = open_record(tmp_path)
     record.add_visual(

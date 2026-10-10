@@ -1,4 +1,4 @@
-from fakeyou.settings import export_dotenv
+from fakeyou.config.settings import export_dotenv
 
 
 def main() -> None:

@@ -6,16 +6,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fakeyou.settings import VisualSettings
-from fakeyou.visual_caption import VisualCaptioner
-from fakeyou.visual_observer import (
+from fakeyou.config.settings import VisualSettings
+from fakeyou.visual.visual_caption import VisualCaptioner
+from fakeyou.visual.visual_observer import (
     VISUAL_CONTENT_BOX_JS,
     VISUAL_MIN_CLIP_HEIGHT,
     VISUAL_MIN_CLIP_WIDTH,
     VISUAL_SCAN_JS,
     VisualObserver,
 )
-from fakeyou.visual_store import VisualStore, dhash_image
+from fakeyou.visual.visual_store import VisualStore, dhash_image
 from tests.fakes import (
     CLIP_BOX,
     PRESENT_SCAN,

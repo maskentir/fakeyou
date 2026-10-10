@@ -6,7 +6,12 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError, merge_short_turns, transcribe_chunk
+from fakeyou.diarization.diarize_client import (
+    DiarizedTurn,
+    DiarizeError,
+    merge_short_turns,
+    transcribe_chunk,
+)
 
 
 class _FakeResponse:

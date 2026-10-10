@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-import fakeyou.runtime as runtime
-from fakeyou.audio import MeetingAudioError
-from fakeyou.journal import Journal
-from fakeyou.meet import CallObservation, JoinResult, LeaveResult
-from fakeyou.session import SessionConfig
+import fakeyou.orchestration.runtime as runtime
+from fakeyou.audio.audio import MeetingAudioError
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.meet import CallObservation, JoinResult, LeaveResult
+from fakeyou.observability.journal import Journal
 from tests.fakes import FakeAudio, FakeClock, FakeConversation
 
 
@@ -157,7 +157,7 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
 async def test_camera_failure_is_recorded_without_failing_session(
     journal, open_audio, session, monkeypatch
 ):
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     async def camera(*args):
         raise RuntimeError("no toggle")
@@ -309,7 +309,7 @@ async def test_capture_drain_starts_before_initial_speech(open_audio, session):
     import json
     from dataclasses import replace
 
-    from fakeyou.journal import Journal
+    from fakeyou.observability.journal import Journal
 
     journal = Journal(
         "meeting",
@@ -394,8 +394,8 @@ async def test_conversation_closes_before_audio_on_unexpected_monitor_error(
 
 
 def _faulty_reporter():
-    from fakeyou.faults import FaultReporter
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.provider_faults import ProviderFault
 
     reporter = FaultReporter(journal=Journal("meeting"))
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
@@ -423,7 +423,7 @@ class _ScriptedMaintenanceAudio(FakeAudio):
 
 
 async def test_finish_merges_fault_suffix_on_audio_failure(open_audio, session):
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = _faulty_reporter()
 
@@ -455,7 +455,7 @@ async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
 
 
 async def test_empty_faults_leave_detail_byte_identical(journal, open_audio, session):
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     result = await runtime.run_meeting_session(
         session.config,
@@ -468,7 +468,7 @@ async def test_empty_faults_leave_detail_byte_identical(journal, open_audio, ses
 
 
 async def test_broken_reporter_never_changes_exit_path(journal, open_audio, session):
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     class _BrokenReporter(FaultReporter):
         def summaries(self):
@@ -493,7 +493,7 @@ async def test_broken_reporter_never_changes_exit_path(journal, open_audio, sess
 
 
 async def test_preflight_all_fail_refuses_before_browser(session):
-    from fakeyou.preflight import ProbeResult
+    from fakeyou.orchestration.preflight import ProbeResult
 
     opened = []
 
@@ -525,7 +525,7 @@ async def test_preflight_all_fail_refuses_before_browser(session):
 
 
 async def test_preflight_partial_failure_refuses_to_join(open_audio, session):
-    from fakeyou.preflight import ProbeResult
+    from fakeyou.orchestration.preflight import ProbeResult
 
     async def mixed():
         return [

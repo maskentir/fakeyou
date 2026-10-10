@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from fakeyou.browser import ProfileInUseError, profile_lock, profile_lock_path
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.meet.browser import ProfileInUseError, profile_lock, profile_lock_path
 
 LINK = "https://meet.google.com/abc-defg-hij"
 
@@ -33,9 +33,8 @@ async def test_join_refuses_a_second_worker_on_a_signed_in_profile(
 ) -> None:
     profile = tmp_path / "signed-in"
 
-    with profile_lock(profile):
-        with pytest.raises(FakeYouError, match="in use") as caught:
-            await join(LINK, meeting_id="meeting-9", profile_dir=str(profile))
+    with profile_lock(profile), pytest.raises(FakeYouError, match="in use") as caught:
+        await join(LINK, meeting_id="meeting-9", profile_dir=str(profile))
     assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
     assert "config" not in session_run
 

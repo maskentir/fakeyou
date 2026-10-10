@@ -21,9 +21,9 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
+from fakeyou.audio.voice import SPEECH_LANGUAGES, create_muse_stt
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.settings import Settings, require_secret
-from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt
+from fakeyou.config.settings import Settings, require_secret
 from tests.fakes import FakeSTT
 
 

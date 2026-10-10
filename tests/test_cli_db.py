@@ -10,10 +10,10 @@ from pydantic import SecretStr
 import fakeyou.cli.db as cli_db
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.main import build_parser
+from fakeyou.config.settings import Settings
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.db.schema import head_revision
 from fakeyou.db.tables import voiceprints
-from fakeyou.settings import Settings
 
 
 @pytest.fixture

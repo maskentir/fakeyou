@@ -49,9 +49,9 @@ PCM pertama dicatat sebelum chunk diserahkan ke playback. Timestamp itu membukti
 
 ### Batas alur yang terbukti di source
 
-- [Responder](../../src/fakeyou/conversation.py), `LangGraphResponder.respond()` baris 154–195, menunggu `agent.ainvoke()` selesai. `_respond_pending()` baris 395–447 baru memanggil `session.speak()` setelah balasan lengkap diperiksa dan dibatasi kalimatnya.
-- [Synthesizer](../../src/fakeyou/voice.py), `MiniMaxSpeechSynthesizer` baris 117–175, memakai satu klien HTTP sepanjang umur objek dan sudah meminta PCM streaming. Mengaktifkan flag streaming TTS lagi tidak mengubah penantian balasan lengkap.
-- [Playback](../../src/fakeyou/playback.py), `create_paplay_stream_runner()` baris 63–117, membuka satu proses untuk satu aliran jawaban, lalu menulis chunk berurutan dengan `drain()`. Tidak membuka proses baru untuk setiap chunk.
+- [Responder](../../src/fakeyou/conversation/conversation.py), `LangGraphResponder.respond()` baris 154–195, menunggu `agent.ainvoke()` selesai. `_respond_pending()` baris 395–447 baru memanggil `session.speak()` setelah balasan lengkap diperiksa dan dibatasi kalimatnya.
+- [Synthesizer](../../src/fakeyou/audio/voice.py), `MiniMaxSpeechSynthesizer` baris 117–175, memakai satu klien HTTP sepanjang umur objek dan sudah meminta PCM streaming. Mengaktifkan flag streaming TTS lagi tidak mengubah penantian balasan lengkap.
+- [Playback](../../src/fakeyou/audio/playback.py), `create_paplay_stream_runner()` baris 63–117, membuka satu proses untuk satu aliran jawaban, lalu menulis chunk berurutan dengan `drain()`. Tidak membuka proses baru untuk setiap chunk.
 - Journal mengukur request model selesai dan PCM pertama; belum mempunyai bukti teks jawaban pertama, kalimat pertama siap, HTTP TTS terbuka, atau PCM pertama tertulis ke sink.
 
 Alur sekarang: ucapan selesai → final STT → seluruh agent selesai → request TTS → PCM pertama. Bagian pembangkitan model dan permulaan TTS belum bisa tumpang tindih.

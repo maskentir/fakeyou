@@ -1,4 +1,4 @@
-from fakeyou.endpointing import SemanticEndpoint
+from fakeyou.conversation.endpointing import SemanticEndpoint
 
 
 def test_endpoint_fires_once_per_stable_completion() -> None:

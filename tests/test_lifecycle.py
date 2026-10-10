@@ -6,7 +6,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.lifecycle import (
+from fakeyou.orchestration.lifecycle import (
     MeetingLifecycle,
     create_lifecycle_graph,
     initial_lifecycle_state,

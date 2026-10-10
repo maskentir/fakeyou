@@ -4,9 +4,9 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock
 import pytest
 from playwright.async_api import Page
 
-from fakeyou.browser import open_direct_page
-from fakeyou.meet import CallObservation
-from fakeyou.watchdog import UIWatchdog, read_participant_count
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.meet import CallObservation
+from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
 
 
 @pytest.fixture

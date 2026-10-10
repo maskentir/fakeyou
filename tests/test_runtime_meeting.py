@@ -2,12 +2,12 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from fakeyou.browser import open_direct_page
+from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.lifecycle import create_lifecycle_graph
-from fakeyou.meet import enable_meeting_microphone
-from fakeyou.runtime import run_meeting_session
-from fakeyou.session import SessionConfig
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.meet import enable_meeting_microphone
+from fakeyou.orchestration.lifecycle import create_lifecycle_graph
+from fakeyou.orchestration.runtime import run_meeting_session
 from tests.fakes import DATABASE_URL
 
 MEETING_PAGE = """<!doctype html><html><body>

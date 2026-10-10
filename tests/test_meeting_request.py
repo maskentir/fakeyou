@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.meeting_request import validate_meeting_request
+from fakeyou.config.meeting_request import validate_meeting_request
 
 LINK = "https://meet.google.com/abc-defg-hij"
 PERSONA = Path("persona.json")

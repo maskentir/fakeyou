@@ -21,7 +21,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 
-import fakeyou.memory as memory_module
+import fakeyou.memory.memory as memory_module
 from evals.runtime_evidence import (
     ModelCallCounter,
     capture_candidate,
@@ -33,17 +33,18 @@ from evals.runtime_evidence import (
 )
 from evals.test_replay_eval import _sanitized_role
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.conversation import TranscriptEvent, cap_spoken_reply
-from fakeyou.memory import RECALL_EMPTY_RESULT, create_memory_tools
-from fakeyou.persona import (
+from fakeyou.config.settings import CompatibleReply, OpenAIReply, Settings
+from fakeyou.conversation.conversation import cap_spoken_reply
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.memory import RECALL_EMPTY_RESULT, create_memory_tools
+from fakeyou.memory.persona import (
     PersonaProfile,
     build_system_prompt,
     meeting_tool_names,
     memory_wiring,
     persona_digest,
 )
-from fakeyou.providers import create_chat_model, create_fallback_chat_model
-from fakeyou.settings import CompatibleReply, OpenAIReply, Settings
+from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
 from tests.fakes import ToolCallingFakeModel, make_graphiti, recall_call
 
 ROOT = Path(__file__).resolve().parent.parent

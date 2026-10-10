@@ -5,7 +5,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.debrief_schema import (
+from fakeyou.debrief.debrief_schema import (
     DebriefDraft,
     DebriefItem,
     DebriefReport,

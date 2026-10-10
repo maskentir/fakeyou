@@ -7,11 +7,16 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.lifecycle import MeetingLifecycle, create_lifecycle_graph, initial_lifecycle_state
-from fakeyou.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.participant_observer import OBSERVE_JS
-from fakeyou.runtime import _MeetingWorker, run_meeting_session
-from fakeyou.session import SessionConfig
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.meet.participant_observer import OBSERVE_JS
+from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.lifecycle import (
+    MeetingLifecycle,
+    create_lifecycle_graph,
+    initial_lifecycle_state,
+)
+from fakeyou.orchestration.runtime import _MeetingWorker, run_meeting_session
 from tests.fakes import (
     ASK_SELECTOR,
     DENIED,
@@ -217,6 +222,34 @@ async def test_run_meeting_session_maps_observation_crash_to_browser_failure() -
 
     assert result.phase == "ended"
     assert result.terminal_reason == "browser_failure"
+
+
+async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
+    events: list[str] = []
+    journal = Journal("meeting-1", emit=events.append, echo=False)
+    clock = FakeClock()
+
+    def failing_open(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("boom secret-token")
+
+    result = await run_meeting_session(
+        _config(),
+        open_page=failing_open,
+        saver_factory=FakeSaverSession().factory,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        journal=journal,
+    )
+
+    assert result.phase == "ended"
+    assert result.terminal_reason == "browser_failure"
+    assert result.detail == "browser session failed (RuntimeError)"
+    assert "secret-token" not in result.detail
+    rows = [json.loads(line) for line in events]
+    details = [row for row in rows if row["event"] == "browser_error_recorded"]
+    assert len(details) == 1
+    assert details[0]["error"] == "boom secret-token"
+    assert details[0]["error_type"] == "RuntimeError"
 
 
 async def test_run_meeting_session_tolerates_single_observation_blip() -> None:
@@ -466,8 +499,8 @@ def test_session_rejects_invalid_timing(field, value) -> None:
 
 
 async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path):
-    from fakeyou.journal import Journal
-    from fakeyou.report import read_journal
+    from fakeyou.observability.journal import Journal
+    from fakeyou.observability.report import read_journal
 
     clock = FakeClock()
 

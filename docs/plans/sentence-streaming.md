@@ -54,7 +54,7 @@ Sasaran: ucapkan kalimat pertama segera setelah siap tanpa mengubah isi, persona
 
 ### 4.1 Deteksi batas kalimat
 
-- Pemisah: `match_endofsentence` dari `pipecat.utils.string`, bahasa dari `Settings.speech.language` — pemisah sama seperti `cap_spoken_reply` pada [conversation.py](../../src/fakeyou/conversation.py). Perilaku terverifikasi: mengembalikan indeks batas (> 0) atau 0 bila belum ada batas.
+- Pemisah: `match_endofsentence` dari `pipecat.utils.string`, bahasa dari `Settings.speech.language` — pemisah sama seperti `cap_spoken_reply` pada [conversation.py](../../src/fakeyou/conversation/conversation.py). Perilaku terverifikasi: mengembalikan indeks batas (> 0) atau 0 bila belum ada batas.
 - Buffer inkremental: tiap potong teks jawab ditambah ke buffer; tiap penambahan, panggil pemisah; bila batas > 0, potong kalimat, kirim ke antre ucap, lanjutkan sisa buffer.
 - Guard: hanya teks pasca-`tool_end` masuk buffer; kalimat kosong dilewati; hormati `max_spoken_sentences` (hentikan stream setelah kalimat kedua siap + catat `reply_capped`); sisa akhir tanpa titik diucapkan sebagai kalimat terakhir bila tak kosong.
 - Tanpa pemisah baru, tanpa regex lokal, tanpa pustaka tambahan.
@@ -73,15 +73,15 @@ async for piece in answer_pieces():
 ### 4.2 Alur ucap per kalimat
 
 - Responder streaming baru di samping `LangGraphResponder`; kontrak `ConversationResponder` lama tetap untuk alur non-stream. Responder baru memakai `agent.astream(..., stream_mode="messages")`, hanya node `model`, cutoff `tool_end` — persis metode probe bukti 2.2.
-- Tiap kalimat siap → `session.speak(kalimat)` berurutan dalam generasi sama; TTS per kalimat memakai synthesizer lama pada [voice.py](../../src/fakeyou/voice.py); journal `synthesis_*` per kalimat beserta `sentence_index`.
-- Urutan audio dijamin antre [playback.py](../../src/fakeyou/playback.py); tidak ada ucap paralel.
+- Tiap kalimat siap → `session.speak(kalimat)` berurutan dalam generasi sama; TTS per kalimat memakai synthesizer lama pada [voice.py](../../src/fakeyou/audio/voice.py); journal `synthesis_*` per kalimat beserta `sentence_index`.
+- Urutan audio dijamin antre [playback.py](../../src/fakeyou/audio/playback.py); tidak ada ucap paralel.
 - Timeout respons lama tetap membungkus seluruh giliran; stream di dalam timeout sama.
 
 ### 4.3 Persona, recall, fallback tetap utuh
 
 - Recall tuntas sebelum kalimat pertama: tool call memblokir stream jawab; tidak ada ucap selama model masih memanggil tool; cutoff `tool_end` membuang teks pra-tool dari buffer (bukti s1-2: selisih 6,0 detik).
 - Persona, prompt sistem, aturan kewenangan, provenance, ending rule: tidak berubah; `build_system_prompt` sama; `allowed_tools` sama.
-- Fallback eksplisit via `ModelFallbackMiddleware` pada [assembly.py](../../src/fakeyou/assembly.py) tetap; peran `reply_fallback` via Settings tetap; budget respons tetap.
+- Fallback eksplisit via `ModelFallbackMiddleware` pada [assembly.py](../../src/fakeyou/orchestration/assembly.py) tetap; peran `reply_fallback` via Settings tetap; budget respons tetap.
 - Cap dua kalimat tetap: kalimat ketiga serta sisanya tidak diucapkan; metrik cap tetap dicatat.
 
 ### 4.4 Pembatalan generasi usang per kalimat
@@ -98,13 +98,13 @@ async for piece in answer_pieces():
 
 ### 4.6 Journal serta laporan
 
-Event baru memakai kata kerja terkendali pada [taxonomy.py](../../src/fakeyou/taxonomy.py) (`emitted`, `dropped`; tanpa isi percakapan; durasi `_ms`):
+Event baru memakai kata kerja terkendali pada [taxonomy.py](../../src/fakeyou/foundation/taxonomy.py) (`emitted`, `dropped`; tanpa isi percakapan; durasi `_ms`):
 
 - `answer_text_emitted` source `llm`: teks jawab pertama pasca-tool; field `request_id`, `transcript_id`.
 - `answer_sentence_emitted` source `agent`: tiap kalimat siap diucapkan; field `request_id`, `transcript_id`, `sentence_index`, `chars`.
 - `sentence_dropped` source `agent`: kalimat dibuang (usang/stop); field `request_id`, `transcript_id`, `sentence_index`, `detail`.
 
-Tahap laporan baru pada [report.py](../../src/fakeyou/report.py) (satuan `_seconds`, pola `_STAGE_BOUNDS` lama dipertahankan):
+Tahap laporan baru pada [report.py](../../src/fakeyou/observability/report.py) (satuan `_seconds`, pola `_STAGE_BOUNDS` lama dipertahankan):
 
 - `agent_to_first_text_seconds`, `agent_to_first_sentence_seconds`, `first_sentence_to_first_pcm_seconds`.
 - Per giliran: `sentence_count`, `streamed` (nyala/mati).
@@ -118,20 +118,20 @@ Tahap laporan baru pada [report.py](../../src/fakeyou/report.py) (satuan `_secon
 
 ### 4.8 Rollback
 
-- Flag `ConversationSettings.sentence_streaming: bool = False` pada [settings.py](../../src/fakeyou/settings.py) via Settings saja; mati = alur lama persis (`ainvoke` + satu `speak`).
+- Flag `ConversationSettings.sentence_streaming: bool = False` pada [settings.py](../../src/fakeyou/config/settings.py) via Settings saja; mati = alur lama persis (`ainvoke` + satu `speak`).
 - Uji regresi kedua jalur; rollback = matikan flag, tanpa deploy ulang source.
 
 ## 5 Rencana tugas
 
 | Tugas | File milik | Acceptance |
 | --- | --- | --- |
-| 1. Responder streaming + buffer kalimat | `src/fakeyou/conversation.py`; `tests/test_conversation.py` | Fake `astream` multi-chunk menghasilkan kalimat sama seperti `cap_spoken_reply`; bahasa `id`/`en` lulus; tanpa `stream` tak ada perubahan perilaku |
-| 2. Guard recall/tool + cap kalimat | `src/fakeyou/conversation.py`; `tests/test_conversation.py` | Teks pra-`tool_end` tak pernah diucapkan; recall gagal tetap fallback `unknown`; kalimat ketiga tak diucapkan + `reply_capped` tercatat |
-| 3. Batal usang + stop antar-kalimat | `src/fakeyou/conversation.py`; `tests/test_conversation.py` | Transkrip baru di tengah stream membuang sisa tanpa ucap; stop antar-kalimat tanpa audio susulan; `sentence_dropped` tercatat |
-| 4. Event journal baru | `src/fakeyou/conversation.py`; `tests/test_taxonomy.py` (otomatis) | Tiga event lolos cek verb, source, tanpa konten, `_ms`; metadata saja |
-| 5. Tahap laporan baru | `src/fakeyou/report.py`; `tests/test_report.py` | Tahap baru benar pada journal stream; `None` beralasan pada journal lama; tahap lama tak berubah |
+| 1. Responder streaming + buffer kalimat | `src/fakeyou/conversation/conversation.py`; `tests/test_conversation.py` | Fake `astream` multi-chunk menghasilkan kalimat sama seperti `cap_spoken_reply`; bahasa `id`/`en` lulus; tanpa `stream` tak ada perubahan perilaku |
+| 2. Guard recall/tool + cap kalimat | `src/fakeyou/conversation/conversation.py`; `tests/test_conversation.py` | Teks pra-`tool_end` tak pernah diucapkan; recall gagal tetap fallback `unknown`; kalimat ketiga tak diucapkan + `reply_capped` tercatat |
+| 3. Batal usang + stop antar-kalimat | `src/fakeyou/conversation/conversation.py`; `tests/test_conversation.py` | Transkrip baru di tengah stream membuang sisa tanpa ucap; stop antar-kalimat tanpa audio susulan; `sentence_dropped` tercatat |
+| 4. Event journal baru | `src/fakeyou/conversation/conversation.py`; `tests/test_taxonomy.py` (otomatis) | Tiga event lolos cek verb, source, tanpa konten, `_ms`; metadata saja |
+| 5. Tahap laporan baru | `src/fakeyou/observability/report.py`; `tests/test_report.py` | Tahap baru benar pada journal stream; `None` beralasan pada journal lama; tahap lama tak berubah |
 | 6. Komparabilitas replay | `evals/test_replay_eval.py`; `tests/test_conversation_benchmark.py` | Field stream per giliran + flag pada manifest; gate sama; sampel 24/24 |
-| 7. Flag Settings + rollback | `src/fakeyou/settings.py`; `tests/test_settings.py` | Default mati = alur lama bit-perilaku; nyala = alur stream; tanpa alias env lama |
+| 7. Flag Settings + rollback | `src/fakeyou/config/settings.py`; `tests/test_settings.py` | Default mati = alur lama bit-perilaku; nyala = alur stream; tanpa alias env lama |
 | 8. Ukur live + putusan henti | Laporan bertanggal `docs/reports/` | ≥ 20 jawaban dua sesi; delta first-sentence vs penuh dilaporkan; putusan lanjut/henti eksplisit |
 
 Urutan: 7 → 1 → 2 → 3 → 4 → 5 → 6 → 8. Tiap tugas: tulis regresi dulu (merah), implementasi minimal, gate lokal (`ruff check`, `ruff format --check`, `mypy`, `pytest -m 'not live and not container'`). Python Inggris tanpa komentar/docstring; tanpa sentuh `.env`, data `acc2`/`acc3`, backup, stash, persona privat; uji memori memakai namespace uji terpisah.

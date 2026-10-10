@@ -9,10 +9,11 @@ from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.search.search_filters import ComparisonOperator
 from neo4j.exceptions import ServiceUnavailable
 
-import fakeyou.memory as memory_module
-from fakeyou import owner_notes
+import fakeyou.memory.memory as memory_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.memory import (
+from fakeyou.config.settings import DEFAULTS, MemorySettings, RecallSettings
+from fakeyou.memory import owner_notes
+from fakeyou.memory.memory import (
     create_memory_tools,
     create_recall_error_middleware,
     ensure_indexes,
@@ -22,7 +23,6 @@ from fakeyou.memory import (
     open_graphiti_memory,
     verify_memory_connection,
 )
-from fakeyou.settings import DEFAULTS, MemorySettings, RecallSettings
 from tests.fakes import FakeSaga, make_graphiti
 
 
@@ -539,7 +539,7 @@ async def test_recall_returns_empty_when_no_evidence_survives(
 async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     monkeypatch: pytest.MonkeyPatch, journal
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     moment = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     stored = {
@@ -627,7 +627,7 @@ async def test_verify_memory_connection_requires_neo4j_driver() -> None:
 def test_recall_error_middleware_returns_unknown_and_records_fault(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     lines = journal.lines
     faults = FaultReporter(journal=journal)

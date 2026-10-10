@@ -9,12 +9,12 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
-import fakeyou.assembly as assembly
 import fakeyou.cli.join as cli_join
-import fakeyou.providers as providers
+import fakeyou.orchestration.assembly as assembly
+import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.foundation.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 
 LINK = "https://meet.google.com/abc-defg-hij"
 
@@ -54,8 +54,8 @@ def write_brief(tmp_path: Path, **overrides: object) -> Path:
 
 
 def seed_unfinished_session(settings: Settings) -> None:
-    from fakeyou.journal import journal_path
-    from fakeyou.record import meeting_record_path
+    from fakeyou.observability.journal import journal_path
+    from fakeyou.persistence.record import meeting_record_path
 
     record = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +78,7 @@ def seed_unfinished_session(settings: Settings) -> None:
 
 
 def seed_finished_session(settings: Settings) -> None:
-    from fakeyou.journal import journal_path
+    from fakeyou.observability.journal import journal_path
 
     seed_unfinished_session(settings)
     journal = journal_path(settings.paths.journal_dir, "meeting-9")
@@ -108,8 +108,8 @@ async def test_join_refuses_an_unfinished_meeting_without_resume(
 async def test_join_resume_writes_markers_and_rejoins(
     settings: Settings, join: Any, session_run: Any
 ) -> None:
-    from fakeyou.journal import journal_path
-    from fakeyou.record import load_meeting_record, meeting_record_path
+    from fakeyou.observability.journal import journal_path
+    from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 
     seed_unfinished_session(settings)
 
@@ -130,9 +130,9 @@ async def test_join_resume_detects_a_live_checkpoint_without_journal(
 ) -> None:
     from fakeyou.db.checkpoint import open_checkpointer
     from fakeyou.db.engine import configured_url, require_url
-    from fakeyou.journal import journal_path
-    from fakeyou.lifecycle import MeetingLifecycle
-    from fakeyou.record import load_meeting_record, meeting_record_path
+    from fakeyou.observability.journal import journal_path
+    from fakeyou.orchestration.lifecycle import MeetingLifecycle
+    from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 
     async with open_checkpointer(require_url(configured_url(settings))) as saver:
         first = MeetingLifecycle("settings-owner", "settings-twin", "meeting-9", saver)
@@ -181,15 +181,15 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(
         assembly, "create_meeting_agent", lambda *a, **k: SimpleNamespace(name="agent")
     )
-    from fakeyou.brief import (
+    from fakeyou.memory.persona import PersonaProfile, persona_digest
+    from fakeyou.persistence.brief import (
         MeetingBrief,
         MeetingContext,
         brief_digest,
         context_path,
         write_meeting_context,
     )
-    from fakeyou.persona import PersonaProfile, persona_digest
-    from fakeyou.record import meeting_record_path
+    from fakeyou.persistence.record import meeting_record_path
 
     seed_unfinished_session(settings)
     brief = MeetingBrief.model_validate(BRIEF_DATA)

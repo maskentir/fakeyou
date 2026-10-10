@@ -10,20 +10,20 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import write_correction_bundle
-from fakeyou.ingestion import ingest_corrections, ingest_meeting
-from fakeyou.ingestion_status import IngestionStatus, status_path, write_status
-from fakeyou.memory import (
+from fakeyou.config.settings import DEFAULTS, Settings
+from fakeyou.diarization.diarize_client import DiarizedTurn
+from fakeyou.diarization.diarize_correction import write_correction_bundle
+from fakeyou.memory.ingestion import ingest_corrections, ingest_meeting
+from fakeyou.memory.memory import (
     RECALL_EMPTY_RESULT,
     ensure_indexes,
     open_graphiti_memory,
     search_memory_evidence,
     verify_memory_connection,
 )
-from fakeyou.providers import memory_config
-from fakeyou.record import TranscriptEntry, load_meeting_record
-from fakeyou.settings import DEFAULTS, Settings
+from fakeyou.orchestration.providers import memory_config
+from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
+from fakeyou.persistence.record import TranscriptEntry, load_meeting_record
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "memory-correction-v1.json"

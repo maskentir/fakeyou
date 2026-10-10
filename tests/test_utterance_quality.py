@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from fakeyou.utterance_quality import (
+from fakeyou.foundation.utterance_quality import (
     describe_word_diff,
     score_pairs,
     score_script,

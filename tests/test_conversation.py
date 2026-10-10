@@ -10,22 +10,21 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from langgraph.checkpoint.memory import InMemorySaver
 from pipecat.frames.frames import TranscriptionFrame
 
-from fakeyou.agent import create_meeting_agent
-from fakeyou.conversation import (
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.conversation import (
     BARE_ACK_VOCABULARY,
     ConversationLoop,
     LangGraphResponder,
     StreamingLangGraphResponder,
-    TranscriptEvent,
     _is_bare_ack,
     _request_messages,
     cap_spoken_reply,
     conversation_thread_id,
-    transcript_event,
 )
-from fakeyou.memory import create_recall_error_middleware
-from fakeyou.session import ConversationError
-from fakeyou.utterance_quality import describe_word_diff, normalize_words
+from fakeyou.conversation.session import ConversationError
+from fakeyou.foundation.transcript import TranscriptEvent, transcript_event
+from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
+from fakeyou.memory.memory import create_recall_error_middleware
 from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
 
 
@@ -332,7 +331,7 @@ async def test_barge_in_disabled_never_stops_playback():
 
 
 async def test_agent_error_raises_typed_provider_fault():
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingAgent:
         async def ainvoke(self, request, config):
@@ -460,7 +459,7 @@ async def test_responder_journals_tool_failures(
 
     from langchain_core.tools import tool
 
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
@@ -634,7 +633,7 @@ async def test_model_and_tool_events_carry_their_transcript(journal):
 
 
 async def test_failed_model_request_keeps_transcript_and_error_type(journal):
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingChatModel(ToolCallingFakeModel):
         async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
@@ -1208,7 +1207,7 @@ async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal):
 def test_sentence_streaming_default_follows_settings_flag():
     import inspect
 
-    from fakeyou.settings import DEFAULTS
+    from fakeyou.config.settings import DEFAULTS
 
     assert DEFAULTS.conversation.sentence_streaming is False
     params = inspect.signature(ConversationLoop).parameters
@@ -1906,7 +1905,7 @@ async def test_addressed_text_replies_inside_wake_window_ack_runs(journal) -> No
 
 
 def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
-    from fakeyou.record import MeetingRecord, TranscriptEntry, load_meeting_record
+    from fakeyou.persistence.record import MeetingRecord, TranscriptEntry, load_meeting_record
 
     event = transcript_event(
         TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
@@ -2545,7 +2544,7 @@ async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(jour
 def test_pregen_fuzzy_restart_default_follows_settings_flag():
     import inspect
 
-    from fakeyou.settings import DEFAULTS
+    from fakeyou.config.settings import DEFAULTS
 
     assert DEFAULTS.conversation.pregen_fuzzy_restart_enabled is False
     params = inspect.signature(ConversationLoop).parameters

@@ -8,8 +8,8 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
 from pipecat.workers.runner import WorkerRunner
 
-import fakeyou.audio as audio
-from fakeyou.audio import (
+import fakeyou.audio.audio as audio
+from fakeyou.audio.audio import (
     MeetingAudioError,
     MeetingAudioSession,
     TurnAudioTap,
@@ -17,9 +17,9 @@ from fakeyou.audio import (
     create_playback_engine,
     open_meeting_audio,
 )
-from fakeyou.deaf import CaptureActivity
-from fakeyou.journal import Journal
-from fakeyou.settings import MiniMaxTTS, OpenAITTS, STTSettings
+from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.config.settings import MiniMaxTTS, OpenAITTS, STTSettings
+from fakeyou.observability.journal import Journal
 from tests.fakes import FakeReconnectableSTT, FakeSTT
 
 
@@ -167,8 +167,8 @@ async def test_unexpected_worker_exit_is_reported() -> None:
 async def test_callback_failure_degrades_without_killing_session(
     journal,
 ) -> None:
-    from fakeyou.deaf import CaptureActivity
-    from fakeyou.faults import FaultReporter
+    from fakeyou.audio.deaf import CaptureActivity
+    from fakeyou.observability.faults import FaultReporter
 
     activity = CaptureActivity()
     reporter = FaultReporter(journal=journal)
@@ -511,7 +511,7 @@ async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> No
 
 
 async def test_interim_frames_route_to_on_interim_and_tap() -> None:
-    from fakeyou.deaf import CaptureActivity
+    from fakeyou.audio.deaf import CaptureActivity
 
     activity = CaptureActivity()
     interims: list[str] = []
@@ -547,7 +547,7 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
 
 
 async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> None:
-    from fakeyou.deaf import CaptureActivity
+    from fakeyou.audio.deaf import CaptureActivity
 
     activity = CaptureActivity()
 
@@ -573,8 +573,8 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
 async def test_permanent_error_records_before_kill_with_typed_cause(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.provider_faults import ProviderFault
 
     reporter = FaultReporter(journal=journal)
 
@@ -604,7 +604,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause(
 async def test_nonpermanent_error_records_without_killing(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = FaultReporter(journal=journal)
 
@@ -634,8 +634,8 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
 ) -> None:
     import httpx2
 
-    from fakeyou.faults import FaultReporter
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.provider_faults import ProviderFault
 
     reporter = FaultReporter(journal=journal)
 
@@ -665,7 +665,7 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
 async def test_unsupported_stt_reconnect_records_without_attempts(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = FaultReporter(journal=journal)
 
@@ -693,7 +693,7 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
 async def test_supported_stt_reconnect_queues_request(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = FaultReporter(journal=journal)
 
@@ -719,7 +719,7 @@ async def test_stt_reconnect_lifecycle_is_journaled(
     journal,
 ) -> None:
 
-    from fakeyou.deaf import CaptureActivity
+    from fakeyou.audio.deaf import CaptureActivity
 
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
@@ -769,7 +769,7 @@ def test_default_playback_engine_streams_tts_to_paplay() -> None:
 
 
 def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
-    from fakeyou.voice import MiniMaxSpeechSynthesizer
+    from fakeyou.audio.voice import MiniMaxSpeechSynthesizer
 
     engine = create_playback_engine(
         tts_settings=MiniMaxTTS(api_key="k", voice="Indonesian_CaringMan")
@@ -780,8 +780,8 @@ def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
 
 
 async def test_default_playback_engine_wires_faults_and_journal() -> None:
-    from fakeyou.faults import FaultReporter
-    from fakeyou.journal import Journal
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.journal import Journal
 
     reporter = FaultReporter(journal=Journal("meeting-1"))
     journal = Journal("meeting-1", emit=lambda _: None, echo=False)
@@ -918,7 +918,7 @@ async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() 
 
 
 async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path):
-    from fakeyou.report import read_journal
+    from fakeyou.observability.report import read_journal
 
     path = tmp_path / "events.jsonl"
     journal = Journal("meeting-7", path=path, echo=False)
@@ -978,7 +978,7 @@ async def test_transcript_observer_journals_turn_stats(journal) -> None:
     from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection
 
-    from fakeyou.audio import _TranscriptObserver
+    from fakeyou.audio.audio import _TranscriptObserver
 
     seen = []
 
@@ -1020,9 +1020,9 @@ async def test_transcript_observer_journals_turn_stats(journal) -> None:
 def test_vad_analyzer_maps_settings_to_params() -> None:
     from pipecat.audio.vad.vad_analyzer import VADParams
 
-    from fakeyou.audio import vad_analyzer
-    from fakeyou.invariants import CAPTURE_SAMPLE_RATE
-    from fakeyou.settings import DEFAULTS, VADSettings
+    from fakeyou.audio.audio import vad_analyzer
+    from fakeyou.config.settings import DEFAULTS, VADSettings
+    from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 
     default = vad_analyzer(CAPTURE_SAMPLE_RATE, DEFAULTS.vad)
     expected = VADParams()
@@ -1143,7 +1143,7 @@ async def test_turn_tap_accumulates_segments_across_vad_cycles() -> None:
 async def test_turn_tap_trims_accumulation_to_recent_tail() -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
-    from fakeyou.audio import TURN_TAP_MAX_SECONDS
+    from fakeyou.audio.audio import TURN_TAP_MAX_SECONDS
 
     limit = int(16000 * 2 * TURN_TAP_MAX_SECONDS)
     first = b"\x0c" * limit

@@ -17,17 +17,45 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
-import fakeyou.assembly as assembly
 import fakeyou.cli.chat as cli_chat
 import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.join as cli_join
 import fakeyou.cli.main as cli_main
 import fakeyou.cli.memory as cli_memory
-import fakeyou.memory as memory_module
-import fakeyou.providers as providers
-from fakeyou import owner_notes
-from fakeyou.agent import DEFAULT_PERSONA, create_meeting_agent
-from fakeyou.brief import (
+import fakeyou.memory.memory as memory_module
+import fakeyou.orchestration.assembly as assembly
+import fakeyou.orchestration.providers as providers
+from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import (
+    DEFAULTS,
+    CompatibleReply,
+    EmbedderSettings,
+    GoogleReply,
+    MiniMaxTTS,
+    Settings,
+)
+from fakeyou.conversation.agent import DEFAULT_PERSONA, create_meeting_agent
+from fakeyou.conversation.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.conversation.session import SessionResult
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import configured_url, require_url
+from fakeyou.foundation.greetings import create_greeting_middleware
+from fakeyou.foundation.invariants import (
+    AGENT_MIC_SOURCE_NAME,
+    AGENT_SINK_NAME,
+    CAPTURE_SAMPLE_RATE,
+    MEETING_MONITOR_SOURCE_NAME,
+    MEETING_SINK_NAME,
+    PLAYBACK_SAMPLE_RATE,
+)
+from fakeyou.meet.browser import profile_lock
+from fakeyou.memory import owner_notes
+from fakeyou.memory.owner_notes import NoteConflictError, OwnerNoteResult
+from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
+from fakeyou.observability.journal import journal_path
+from fakeyou.persistence.brief import (
     MAX_BRIEF_BYTES,
     MeetingBrief,
     MeetingContext,
@@ -36,35 +64,7 @@ from fakeyou.brief import (
     read_meeting_context,
     write_meeting_context,
 )
-from fakeyou.browser import profile_lock
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.conversation import ConversationLoop, conversation_thread_id
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import configured_url, require_url
-from fakeyou.greetings import create_greeting_middleware
-from fakeyou.invariants import (
-    AGENT_MIC_SOURCE_NAME,
-    AGENT_SINK_NAME,
-    CAPTURE_SAMPLE_RATE,
-    MEETING_MONITOR_SOURCE_NAME,
-    MEETING_SINK_NAME,
-    PLAYBACK_SAMPLE_RATE,
-)
-from fakeyou.journal import journal_path
-from fakeyou.owner_notes import NoteConflictError, OwnerNoteResult
-from fakeyou.persona import PersonaProfile, build_system_prompt, persona_digest
-from fakeyou.playback import PlaybackEvent
-from fakeyou.record import load_meeting_record, meeting_record_path
-from fakeyou.session import SessionResult
-from fakeyou.settings import (
-    DEFAULTS,
-    CompatibleReply,
-    EmbedderSettings,
-    GoogleReply,
-    MiniMaxTTS,
-    Settings,
-)
-from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
+from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 from tests.fakes import (
     DATABASE_URL,
     FakeReplyAudio,
@@ -368,8 +368,8 @@ async def test_join_result_carries_terminal_fault_report(
 async def test_join_without_audio_still_wires_faults_and_journal(
     session_run, join, tmp_path: Path
 ) -> None:
-    from fakeyou.faults import FaultReporter
-    from fakeyou.journal import Journal
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.journal import Journal
 
     captured = session_run
 
@@ -1612,7 +1612,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.memory.recall.strategy = "tool"
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     graphiti = make_graphiti()
     model = ToolCallingFakeModel(responses=[AIMessage(content="The demo moves to Thursday.")])
@@ -1663,7 +1663,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
 async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     graphiti = make_graphiti()
 
@@ -2251,18 +2251,18 @@ async def test_join_refuses_a_profile_already_in_use(
     forbid_resources(monkeypatch)
     profile = tmp_path / "profile"
 
-    with profile_lock(profile):
-        with pytest.raises(
-            FakeYouError, match="browser profile is in use: lease is locked:"
-        ) as caught:
-            await join(MEET_LINK, profile_dir=str(profile))
+    with (
+        profile_lock(profile),
+        pytest.raises(FakeYouError, match="browser profile is in use: lease is locked:") as caught,
+    ):
+        await join(MEET_LINK, profile_dir=str(profile))
     assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
 
 
 async def test_join_refuses_a_locked_meeting_record(
     join, settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import record_lock
+    from fakeyou.persistence.ingestion_status import record_lock
 
     forbid_resources(monkeypatch)
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-1")
@@ -2906,7 +2906,7 @@ async def _forget_meeting_with_local_files(
         (settings.paths.journal_dir / name).write_text("{}\n")
     thread_id = await seed_conversation_thread(settings, "meeting-9")
     await seed_conversation_thread(settings, "meeting-10")
-    from fakeyou.lifecycle import MeetingLifecycle
+    from fakeyou.orchestration.lifecycle import MeetingLifecycle
 
     async with open_checkpointer(require_url(configured_url(settings))) as saver:
         for meeting in ("meeting-9", "meeting-10"):
@@ -3212,7 +3212,7 @@ def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
 
 
 def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsys) -> None:
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     async def unavailable(*_args, **_kwargs):
         raise ProviderFault("memory", "unavailable")
@@ -3489,8 +3489,8 @@ def test_check_reports_models_per_role(settings, capsys):
 
 
 def write_record(settings: Settings, meeting_id: str) -> None:
-    from fakeyou.conversation import TranscriptEvent
-    from fakeyou.record import MeetingRecord
+    from fakeyou.foundation.transcript import TranscriptEvent
+    from fakeyou.persistence.record import MeetingRecord
 
     record = MeetingRecord(meeting_record_path(settings.paths.record_dir, meeting_id))
     record.add_transcript(
@@ -3609,7 +3609,7 @@ async def test_join_passes_persona_vocabulary_as_speech_keywords(
         session_run=session_run,
     )
 
-    from fakeyou.persona import number_keywords
+    from fakeyou.memory.persona import number_keywords
 
     assert captured["open_audio"].keywords["stt_keywords"] == (
         "Rani Twin",
@@ -3683,7 +3683,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 async def test_open_conversation_wires_sentence_streaming_flag(
     settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation import LangGraphResponder, StreamingLangGraphResponder
+    from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
 
     seen: dict = {}
 
@@ -3779,7 +3779,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
 async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings(
     settings, tmp_path, monkeypatch
 ):
-    from fakeyou.lifecycle import meeting_thread_id
+    from fakeyou.orchestration.lifecycle import meeting_thread_id
 
     settings, thread_id = await _forget_meeting_with_local_files(
         tmp_path, monkeypatch, keep_record=False, settings=settings
@@ -3812,8 +3812,8 @@ def printed_join_summary(capsys) -> dict:
 def write_ingest_windows(settings, meeting_id: str, count: int) -> None:
     from datetime import timedelta
 
-    from fakeyou.conversation import TranscriptEvent
-    from fakeyou.record import MeetingRecord
+    from fakeyou.foundation.transcript import TranscriptEvent
+    from fakeyou.persistence.record import MeetingRecord
 
     start = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
     moments = iter(start + timedelta(seconds=61 * index) for index in range(count))
@@ -3844,7 +3844,7 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
 ) -> None:
     import hashlib
 
-    from fakeyou.ingestion_status import lock_path, read_status, status_path
+    from fakeyou.persistence.ingestion_status import lock_path, read_status, status_path
 
     graphiti = make_graphiti()
     model = ToolCallingFakeModel(responses=[AIMessage(content="The demo moves to Thursday.")])
@@ -3909,7 +3909,7 @@ async def test_join_with_hanging_graphiti_leaves_without_ingesting(
 async def test_join_without_ingest_intent_writes_not_requested(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     graphiti = make_graphiti()
     model = ToolCallingFakeModel(responses=[AIMessage(content="Okay.")])
@@ -3936,7 +3936,7 @@ async def test_join_without_ingest_intent_writes_not_requested(
 async def test_join_without_persona_writes_no_status(
     session_run, join, settings, tmp_path: Path, capsys
 ) -> None:
-    from fakeyou.ingestion_status import status_path
+    from fakeyou.persistence.ingestion_status import status_path
 
     await join(MEET_LINK)
 
@@ -4023,7 +4023,12 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
 ) -> None:
     import hashlib
 
-    from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
+    from fakeyou.persistence.ingestion_status import (
+        IngestionStatus,
+        read_status,
+        status_path,
+        write_status,
+    )
 
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -4069,7 +4074,7 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
 async def test_memory_ingest_failure_then_resumes_from_native_progress(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     write_ingest_windows(settings, "meeting-9", 3)
     graphiti = make_graphiti(episode_prefix="uuid-")
@@ -4141,7 +4146,7 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
 async def test_memory_ingest_persists_window_episode_uuids(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     write_ingest_windows(settings, "meeting-9", 3)
     graphiti = make_graphiti(episode_prefix="uuid-")
@@ -4168,7 +4173,7 @@ async def test_memory_ingest_persists_window_episode_uuids(
 async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reingests(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path, write_status
+    from fakeyou.persistence.ingestion_status import read_status, status_path, write_status
 
     write_ingest_windows(settings, "meeting-9", 3)
     graphiti = make_graphiti(episode_prefix="uuid-")
@@ -4216,7 +4221,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
 async def test_memory_ingest_refuses_an_active_writer_lock(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import record_lock
+    from fakeyou.persistence.ingestion_status import record_lock
 
     write_record(settings, "meeting-9")
     opened = fake_persona_memory(monkeypatch, make_graphiti())
@@ -4240,9 +4245,9 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
 async def test_memory_ingest_rejects_a_changed_record_hash(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation import TranscriptEvent
-    from fakeyou.ingestion_status import read_status, status_path
-    from fakeyou.record import MeetingRecord
+    from fakeyou.foundation.transcript import TranscriptEvent
+    from fakeyou.persistence.ingestion_status import read_status, status_path
+    from fakeyou.persistence.record import MeetingRecord
 
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -4283,7 +4288,12 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
 async def test_memory_ingest_rejects_a_foreign_group_status(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
+    from fakeyou.persistence.ingestion_status import (
+        IngestionStatus,
+        read_status,
+        status_path,
+        write_status,
+    )
 
     write_record(settings, "meeting-9")
     opened = fake_persona_memory(monkeypatch, make_graphiti())
@@ -4324,7 +4334,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
 async def test_memory_ingest_corrupt_status_starts_fresh(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -4350,7 +4360,7 @@ async def test_memory_ingest_corrupt_status_starts_fresh(
 async def test_memory_ingest_partial_record_is_not_completed(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     write_record(settings, "meeting-9")
     opened = fake_persona_memory(monkeypatch, make_graphiti())
@@ -4376,8 +4386,8 @@ async def test_memory_ingest_partial_record_is_not_completed(
 async def test_memory_ingest_empty_record_reports_zero_windows(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
-    from fakeyou.record import MeetingRecord
+    from fakeyou.persistence.ingestion_status import read_status, status_path
+    from fakeyou.persistence.record import MeetingRecord
 
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     MeetingRecord(record_path).close()
@@ -4402,7 +4412,7 @@ async def test_memory_ingest_empty_record_reports_zero_windows(
 async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.ingestion_status import read_status, status_path
+    from fakeyou.persistence.ingestion_status import read_status, status_path
 
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -4433,7 +4443,7 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
 async def test_ingest_until_stopped_uses_the_caller_stop_event(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
     from tests.fakes import RecordingJournal
 
     write_record(settings, "meeting-9")
@@ -4479,7 +4489,7 @@ async def test_ingest_until_stopped_uses_the_caller_stop_event(
 async def test_memory_forget_meeting_refuses_an_active_lock(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool, lock_purpose: str
 ) -> None:
-    from fakeyou.ingestion_status import record_lock
+    from fakeyou.persistence.ingestion_status import record_lock
 
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)

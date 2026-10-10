@@ -8,35 +8,39 @@ from typing import Literal
 
 from pydantic import TypeAdapter
 
-from fakeyou.assembly import stop_signal_handlers
-from fakeyou.brief import MeetingContext, context_path, validate_brief_scope
+from fakeyou.audio.voice_activity import voice_speaker_name
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.memory import load_operator_persona
+from fakeyou.cli._operator import load_operator_persona
 from fakeyou.cli.output import emit_json
-from fakeyou.correction_labels import describe_correction_speakers
-from fakeyou.debrief import (
+from fakeyou.config.settings import Settings
+from fakeyou.debrief.debrief import (
     debrief_report_status,
     generate_debrief,
     read_debrief,
     rebuild_debrief_markdown,
     write_debrief,
 )
-from fakeyou.debrief_schema import DebriefReport, EvidenceSource
-from fakeyou.debrief_sources import chunk_sources, load_context_snapshot, load_record_snapshot
-from fakeyou.diarize_correction import correction_digest
-from fakeyou.ingestion_status import (
+from fakeyou.debrief.debrief_schema import DebriefReport, EvidenceSource
+from fakeyou.debrief.debrief_sources import (
+    chunk_sources,
+    load_context_snapshot,
+    load_record_snapshot,
+)
+from fakeyou.diarization.correction_labels import describe_correction_speakers
+from fakeyou.diarization.diarize_correction import correction_digest
+from fakeyou.foundation.invariants import SessionId
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.orchestration.assembly import stop_signal_handlers
+from fakeyou.orchestration.providers import create_debrief_chat_model, create_fallback_chat_model
+from fakeyou.persistence.brief import MeetingContext, context_path, validate_brief_scope
+from fakeyou.persistence.ingestion_status import (
     read_status,
     record_lock,
     status_path,
     write_atomically,
 )
-from fakeyou.invariants import SessionId
-from fakeyou.journal import Journal, journal_path
-from fakeyou.persona import PersonaProfile
-from fakeyou.providers import create_debrief_chat_model, create_fallback_chat_model
-from fakeyou.record import meeting_record_path
-from fakeyou.settings import Settings
-from fakeyou.voice_activity import voice_speaker_name
+from fakeyou.persistence.record import meeting_record_path
 
 
 def debrief_total_budget(settings: Settings, chunk_count: int) -> float:

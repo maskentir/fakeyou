@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.provenance import FactEvidence, SourceEvidence, render_evidence
+from fakeyou.foundation.provenance import FactEvidence, SourceEvidence, render_evidence
 
 
 def test_identical_facts_keep_both_source_times() -> None:

@@ -13,22 +13,22 @@ from pathlib import Path
 import pytest
 from playwright.async_api import Page
 
-from fakeyou.audio import open_meeting_audio
-from fakeyou.browser import open_direct_page
+from fakeyou.audio.audio import open_meeting_audio
+from fakeyou.audio.playback import (
+    PlaybackEngine,
+    create_pactl_muter,
+    create_paplay_stream_runner,
+)
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.invariants import (
+from fakeyou.config.settings import Settings, require_secret
+from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
     MEETING_MONITOR_SOURCE_NAME,
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
-from fakeyou.playback import (
-    PlaybackEngine,
-    create_pactl_muter,
-    create_paplay_stream_runner,
-)
-from fakeyou.settings import Settings, require_secret
+from fakeyou.meet.browser import open_direct_page
 from tests.fakes import FakeSTT
 
 PAGE = "<!doctype html><html><body><h1>Audio fixture</h1></body></html>"
@@ -140,34 +140,36 @@ async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_bro
     async def on_transcript(_frame) -> None:
         pass
 
-    async with _audio_page() as page:
-        async with open_meeting_audio(
+    async with (
+        _audio_page() as page,
+        open_meeting_audio(
             on_transcript=on_transcript,
             stt=stt,
             playback=_container_playback(),
-        ) as session:
-            await page.evaluate("window.audioProbe.start()")
-            await asyncio.wait_for(stt.signal.wait(), timeout=10)
-            assert max(stt.levels) > 0.02
+        ) as session,
+    ):
+        await page.evaluate("window.audioProbe.start()")
+        await asyncio.wait_for(stt.signal.wait(), timeout=10)
+        assert max(stt.levels) > 0.02
 
-            await page.evaluate("window.audioProbe.stop()")
-            await asyncio.sleep(0.7)
-            stt.levels.clear()
-            quiet = await page.evaluate("window.audioProbe.sample(500)")
-            assert max(quiet) < 0.015
+        await page.evaluate("window.audioProbe.stop()")
+        await asyncio.sleep(0.7)
+        stt.levels.clear()
+        quiet = await page.evaluate("window.audioProbe.sample(500)")
+        assert max(quiet) < 0.015
 
-            captured = asyncio.create_task(page.evaluate("window.audioProbe.sample(3800)"))
-            try:
-                await asyncio.sleep(0.2)
-                await session.speak("container roundtrip")
-                browser_levels = await captured
-            finally:
-                if not captured.done():
-                    captured.cancel()
-                    await asyncio.gather(captured, return_exceptions=True)
-            assert max(browser_levels) > 0.02
-            assert max(stt.levels, default=0) < 0.015
-            session.raise_if_failed()
+        captured = asyncio.create_task(page.evaluate("window.audioProbe.sample(3800)"))
+        try:
+            await asyncio.sleep(0.2)
+            await session.speak("container roundtrip")
+            browser_levels = await captured
+        finally:
+            if not captured.done():
+                captured.cancel()
+                await asyncio.gather(captured, return_exceptions=True)
+        assert max(browser_levels) > 0.02
+        assert max(stt.levels, default=0) < 0.015
+        session.raise_if_failed()
 
 
 @pytest.mark.browser
@@ -200,29 +202,31 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
         if _normalise(" ".join(finals)) == expected_text:
             received.set()
 
-    async with _audio_page() as page:
-        async with open_meeting_audio(
+    async with (
+        _audio_page() as page,
+        open_meeting_audio(
             stt_settings=settings.stt,
             tts_settings=settings.tts,
             speech_language=settings.speech.language,
             on_transcript=on_transcript,
-        ) as session:
-            await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)
-            await asyncio.wait_for(received.wait(), timeout=35)
-            assert _normalise(" ".join(finals)) == expected_text
-            await asyncio.sleep(1)
-            final_count = len(finals)
-            quiet = await page.evaluate("window.audioProbe.sample(500)")
-            assert max(quiet) < 0.015
-            captured = asyncio.create_task(page.evaluate("window.audioProbe.sample(12000)"))
-            try:
-                await asyncio.sleep(0.2)
-                await session.speak("I heard you clearly.")
-                browser_levels = await captured
-            finally:
-                if not captured.done():
-                    captured.cancel()
-                    await asyncio.gather(captured, return_exceptions=True)
-            assert max(browser_levels) > 0.02
-            assert len(finals) == final_count
-            session.raise_if_failed()
+        ) as session,
+    ):
+        await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)
+        await asyncio.wait_for(received.wait(), timeout=35)
+        assert _normalise(" ".join(finals)) == expected_text
+        await asyncio.sleep(1)
+        final_count = len(finals)
+        quiet = await page.evaluate("window.audioProbe.sample(500)")
+        assert max(quiet) < 0.015
+        captured = asyncio.create_task(page.evaluate("window.audioProbe.sample(12000)"))
+        try:
+            await asyncio.sleep(0.2)
+            await session.speak("I heard you clearly.")
+            browser_levels = await captured
+        finally:
+            if not captured.done():
+                captured.cancel()
+                await asyncio.gather(captured, return_exceptions=True)
+        assert max(browser_levels) > 0.02
+        assert len(finals) == final_count
+        session.raise_if_failed()

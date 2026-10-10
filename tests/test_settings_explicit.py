@@ -4,7 +4,7 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.settings import MemorySettings, Settings
+from fakeyou.config.settings import MemorySettings, Settings
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +60,7 @@ def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(monkeypa
     "role", ["reply", "reply_fallback", "tts", "stt", "memory.llm", "memory.embedder"]
 )
 def test_activated_role_never_borrows_a_key(role):
-    from fakeyou.settings import OpenAIReply
+    from fakeyou.config.settings import OpenAIReply
 
     settings = Settings(
         _env_file=None, reply_fallback=OpenAIReply(max_retries=0), reply=OpenAIReply(max_retries=0)
@@ -100,7 +100,7 @@ def test_invalid_provider_configuration_is_rejected(reply):
 
 
 def test_google_reply_accepts_reasoning_effort_with_unchanged_default():
-    from fakeyou.settings import GoogleReply
+    from fakeyou.config.settings import GoogleReply
 
     assert GoogleReply().reasoning_effort is None
     assert GoogleReply(reasoning_effort="low").reasoning_effort == "low"
@@ -132,8 +132,8 @@ def test_empty_embedding_url_is_normalized_at_schema_boundary(monkeypatch):
 
 
 async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeypatch):
-    import fakeyou.memory as module
-    from fakeyou.memory import open_graphiti_memory
+    import fakeyou.memory.memory as module
+    from fakeyou.memory.memory import open_graphiti_memory
 
     config = MemorySettings.model_validate(
         {
@@ -154,7 +154,7 @@ async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeyp
 
 
 def test_preflight_preserves_all_active_role_urls_and_ports():
-    from fakeyou.providers import preflight_hosts
+    from fakeyou.orchestration.providers import preflight_hosts
 
     settings = Settings(
         _env_file=None,
@@ -178,7 +178,7 @@ def test_preflight_preserves_all_active_role_urls_and_ports():
 def test_anthropic_memory_client_uses_explicit_endpoint_and_key():
     from graphiti_core.llm_client.anthropic_client import AnthropicClient
 
-    from fakeyou.memory import AnthropicReranker, create_graphiti_memory
+    from fakeyou.memory.memory import AnthropicReranker, create_graphiti_memory
 
     config = MemorySettings.model_validate(
         {
@@ -205,8 +205,8 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
 
     import httpx2
 
-    import fakeyou.voice as voice
-    from fakeyou.settings import MiniMaxTTS, OpenAITTS
+    import fakeyou.audio.voice as voice
+    from fakeyou.config.settings import MiniMaxTTS, OpenAITTS
 
     requests = []
 
@@ -250,7 +250,7 @@ async def test_anthropic_reranker_orders_scores_and_rejects_incomplete_results()
 
     from graphiti_core.llm_client.anthropic_client import AnthropicClient
 
-    from fakeyou.memory import AnthropicReranker
+    from fakeyou.memory.memory import AnthropicReranker
 
     client = create_autospec(AnthropicClient, instance=True, spec_set=True)
     client.generate_response.return_value = {"scores": [0.2, 0.9]}
@@ -270,8 +270,8 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
 
     import httpx2
 
-    import fakeyou.memory as memory_module
-    from fakeyou.memory import GraphitiAnthropicSDK, create_graphiti_memory
+    import fakeyou.memory.memory as memory_module
+    from fakeyou.memory.memory import GraphitiAnthropicSDK, create_graphiti_memory
 
     requests = []
 
@@ -342,7 +342,11 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
 def test_blank_reply_endpoint_ignores_library_destination_environment(
     monkeypatch, provider, expected, role
 ):
-    from fakeyou.providers import create_chat_model, create_fallback_chat_model, preflight_hosts
+    from fakeyou.orchestration.providers import (
+        create_chat_model,
+        create_fallback_chat_model,
+        preflight_hosts,
+    )
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")
@@ -363,7 +367,7 @@ def test_blank_reply_endpoint_ignores_library_destination_environment(
 
 
 def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(monkeypatch):
-    from fakeyou.providers import create_chat_model, preflight_hosts
+    from fakeyou.orchestration.providers import create_chat_model, preflight_hosts
 
     monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", "https://unconfigured.example.invalid")
     monkeypatch.setenv("GOOGLE_API_KEY", "unconfigured-key")
@@ -381,7 +385,7 @@ def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(monkeypatch):
 
 
 def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key():
-    from fakeyou.providers import create_debrief_chat_model
+    from fakeyou.orchestration.providers import create_debrief_chat_model
 
     reply = {"provider": "google", "model": "gemini-3.5-flash-lite", "api_key": "reply-key"}
     shared = Settings(_env_file=None, reply=reply)
@@ -408,8 +412,8 @@ def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key
 def test_blank_memory_endpoints_ignore_library_destination_environment(
     monkeypatch, client, expected
 ):
-    from fakeyou.memory import create_graphiti_memory
-    from fakeyou.providers import memory_config, preflight_hosts
+    from fakeyou.memory.memory import create_graphiti_memory
+    from fakeyou.orchestration.providers import memory_config, preflight_hosts
 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://unconfigured.example.invalid/v1")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://unconfigured.example.invalid")

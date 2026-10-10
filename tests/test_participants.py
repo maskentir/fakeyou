@@ -1,4 +1,9 @@
-from fakeyou.participants import Participant, SpeakerSample, SpeechWindow, attribute_speaker
+from fakeyou.foundation.participants import (
+    Participant,
+    SpeakerSample,
+    SpeechWindow,
+    attribute_speaker,
+)
 
 
 def roster(*parts):

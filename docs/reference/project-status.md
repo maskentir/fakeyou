@@ -36,7 +36,7 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, 5 skenario kualitas persona live (GEval), harness brief/trust, dan review independen tiap korpus live | Skenario meeting nyata multipihak dan evaluasi memori hasil ingestion |
 | Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan, dan CLI `worker start/status/stop/ingest` dengan lock lease di branch | Backend Kubernetes, penjadwalan, serta antarmuka pengguna |
 
-Sumber implementasi: [agent](../../src/fakeyou/agent.py), [browser](../../src/fakeyou/browser.py), [voice](../../src/fakeyou/voice.py), [memory](../../src/fakeyou/memory.py), dan [CLI](../../src/fakeyou/cli/).
+Sumber implementasi: [agent](../../src/fakeyou/conversation/agent.py), [browser](../../src/fakeyou/meet/browser.py), [voice](../../src/fakeyou/audio/voice.py), [memory](../../src/fakeyou/memory/memory.py), dan [CLI](../../src/fakeyou/cli/).
 
 LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan satu permintaan; CLI `join` memiliki browser sepanjang sesi. Checkpoint tidak mempertahankan resource browser/audio setelah proses mati. Refactor memisahkan konfigurasi, persistence lifecycle, adapter Meet, dan worker; lihat [batas modul dan verifikasi](../reports/2026-09-28-refactor.md).
 

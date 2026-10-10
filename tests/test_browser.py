@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import fakeyou.browser as browser_module
-from fakeyou.browser import (
+import fakeyou.meet.browser as browser_module
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.meet.browser import (
     BROWSER_LAUNCH_ARGS,
     apply_browser_audio_policy,
     open_browser_tools,
@@ -16,7 +17,6 @@ from fakeyou.browser import (
     stable_fingerprint_seed,
     warmup_profile,
 )
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from tests.fakes import FakeBrowserContext, FakeWarmupContext, FakeWarmupPage
 
 

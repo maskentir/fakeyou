@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from fakeyou.brief import (
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.persistence.brief import (
     CONTEXT_FILE_NAME,
     MAX_BRIEF_BYTES,
     MAX_CONTEXT_BYTES,
@@ -22,7 +23,6 @@ from fakeyou.brief import (
     validate_brief_scope,
     write_meeting_context,
 )
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 
 EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples" / "meeting-brief.example.json"
 SCOPE = {"owner_id": "demo_owner", "twin_id": "demo_twin", "meeting_id": "brief-demo-1003"}
@@ -515,7 +515,7 @@ def test_failed_first_context_write_leaves_no_snapshot_or_temp_file(
     def reject_replace(source: Path, target: Path) -> None:
         raise OSError("replace failed")
 
-    monkeypatch.setattr("fakeyou.ingestion_status.os.replace", reject_replace)
+    monkeypatch.setattr("fakeyou.persistence.ingestion_status.os.replace", reject_replace)
     with pytest.raises(OSError, match="replace failed"):
         write_meeting_context(tmp_path / CONTEXT_FILE_NAME, context_for(brief))
 
@@ -557,7 +557,7 @@ def test_rewriting_the_same_snapshot_does_not_touch_the_file(
     def reject_replace(source: Path, target: Path) -> None:
         raise OSError("replace must not run")
 
-    monkeypatch.setattr("fakeyou.ingestion_status.os.replace", reject_replace)
+    monkeypatch.setattr("fakeyou.persistence.ingestion_status.os.replace", reject_replace)
     write_meeting_context(path, context_for(load_meeting_brief(EXAMPLE_BRIEF, **SCOPE)))
 
     assert path.read_bytes() == first

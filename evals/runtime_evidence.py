@@ -16,13 +16,14 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-import fakeyou.assembly as assembly
+import fakeyou.orchestration.assembly as assembly
 from evals.test_replay_eval import _sanitized_role
-from fakeyou.brief import MeetingBrief
-from fakeyou.conversation import LangGraphResponder, ToolResultCallback, TranscriptEvent
-from fakeyou.persona import PersonaProfile
-from fakeyou.session import SessionConfig
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.conversation.conversation import LangGraphResponder, ToolResultCallback
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.persistence.brief import MeetingBrief
 
 ROOT = Path(__file__).resolve().parent.parent
 CANDIDATE_FILES = (
@@ -147,7 +148,7 @@ def runtime_metadata(settings: Settings) -> dict[str, Any]:
     dumped = settings.model_dump(mode="json")
     return {
         "proof_scope": "native non-streaming agent/responder; not full ConversationLoop/audio",
-        "assembly": "fakeyou.assembly.open_conversation",
+        "assembly": "fakeyou.orchestration.assembly.open_conversation",
         "boundaries": "supplied model/fallback, synthetic Graphiti, fresh InMemorySaver",
         "reply": _sanitized_role(dumped["reply"]),
         "reply_fallback": _sanitized_role(dumped["reply_fallback"])

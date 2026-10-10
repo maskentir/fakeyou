@@ -9,13 +9,11 @@ import pytest
 from graphiti_core.nodes import EpisodeType
 
 from fakeyou.catalog.errors import ErrorCode
-from fakeyou.correction_labels import LABELS_FILE_NAME, write_correction_labels
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
-from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import (
-    TWIN_SPEAKER,
-    UNIDENTIFIED_PARTICIPANT,
+from fakeyou.diarization.correction_labels import LABELS_FILE_NAME, write_correction_labels
+from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
+from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
+from fakeyou.foundation.speakers import TWIN_SPEAKER, UNIDENTIFIED_PARTICIPANT
+from fakeyou.memory.ingestion import (
     CorrectionResult,
     correction_episode_name,
     episode_name,
@@ -24,10 +22,16 @@ from fakeyou.ingestion import (
     ingest_meeting,
     meeting_windows,
 )
-from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
-from fakeyou.journal import Journal
-from fakeyou.memory import meeting_saga
-from fakeyou.record import (
+from fakeyou.memory.memory import meeting_saga
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    read_status,
+    status_path,
+    write_status,
+)
+from fakeyou.persistence.record import (
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
@@ -936,7 +940,7 @@ async def test_ingest_corrections_status_write_failure_reports_incomplete(
             raise OSError("status store is down")
         real_write_status(path, status)
 
-    monkeypatch.setattr("fakeyou.ingestion.write_status", failing_write)
+    monkeypatch.setattr("fakeyou.memory.ingestion.write_status", failing_write)
 
     result = await ingest_corrections(
         memory, record_path, group_id="twin_group", meeting_id="meeting-1"
@@ -981,7 +985,7 @@ async def test_ingest_corrections_rotation_retry_recovers_same_run_orphan(
             raise OSError("status store is down")
         real_write_status(path, status)
 
-    monkeypatch.setattr("fakeyou.ingestion.write_status", flaky_write)
+    monkeypatch.setattr("fakeyou.memory.ingestion.write_status", flaky_write)
     second = await ingest_corrections(
         memory, record_path, group_id="twin_group", meeting_id="meeting-1"
     )
@@ -1216,7 +1220,7 @@ async def test_ingest_corrections_treats_invalid_labels_as_absent(
 
 
 def visual_entry(visual_id: str, caption: str, captured: datetime, ref: str):
-    from fakeyou.record import VisualEntry
+    from fakeyou.persistence.record import VisualEntry
 
     return VisualEntry(
         at=START,
@@ -1255,9 +1259,9 @@ async def test_ingest_visual_window() -> None:
 
 
 async def test_forget_meeting_cleans_visuals(monkeypatch: pytest.MonkeyPatch) -> None:
-    import fakeyou.memory as memory_module
-    from fakeyou.ingestion import visual_episode_name
-    from fakeyou.memory import forget_meeting
+    import fakeyou.memory.memory as memory_module
+    from fakeyou.memory.ingestion import visual_episode_name
+    from fakeyou.memory.memory import forget_meeting
 
     saga = meeting_saga("meeting-1")
     captured = datetime(2026, 9, 30, 9, 5, tzinfo=UTC)

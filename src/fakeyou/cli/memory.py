@@ -11,19 +11,37 @@ from uuid import UUID, uuid4
 from graphiti_core import Graphiti
 from pydantic import TypeAdapter
 
-from fakeyou.assembly import stop_signal_handlers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli._operator import load_operator_persona
 from fakeyou.cli.diarize import diarize_run
 from fakeyou.cli.output import emit_json, emit_progress, emit_text
-from fakeyou.conversation import (
+from fakeyou.config.settings import (
+    Settings,
+)
+from fakeyou.conversation.conversation import (
     conversation_thread_id,
 )
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url
-from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import IngestResult, ingest_meeting
-from fakeyou.ingestion_status import (
+from fakeyou.foundation.invariants import SessionId
+from fakeyou.memory.ingestion import IngestResult, ingest_meeting
+from fakeyou.memory.memory import (
+    ensure_indexes,
+    forget_episode,
+    forget_meeting,
+    open_graphiti_memory,
+    reembed_group,
+)
+from fakeyou.memory.owner_notes import OwnerNoteResult, remember_owner_note
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal, journal_files, journal_path
+from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.orchestration.assembly import stop_signal_handlers
+from fakeyou.orchestration.lifecycle import meeting_thread_id
+from fakeyou.orchestration.providers import memory_config, open_persona_memory
+from fakeyou.persistence.ingestion_status import (
     IngestionState,
     IngestionStatus,
     hash_meeting_record,
@@ -32,43 +50,13 @@ from fakeyou.ingestion_status import (
     status_path,
     write_status,
 )
-from fakeyou.invariants import SessionId
-from fakeyou.journal import Journal, journal_files, journal_path
-from fakeyou.lifecycle import meeting_thread_id
-from fakeyou.memory import (
-    ensure_indexes,
-    forget_episode,
-    forget_meeting,
-    open_graphiti_memory,
-    reembed_group,
-)
-from fakeyou.owner_notes import OwnerNoteResult, remember_owner_note
-from fakeyou.persona import PersonaProfile, load_persona
-from fakeyou.provider_faults import ProviderFault, classify_exception
-from fakeyou.providers import memory_config, open_persona_memory
-from fakeyou.record import load_meeting_record, meeting_record_path
-from fakeyou.settings import (
-    Settings,
-)
+from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 
 
 async def initialize_memory(settings: Settings) -> None:
     async with open_graphiti_memory(memory_config(settings)) as memory:
         await ensure_indexes(memory)
         emit_text("Graphiti indexes initialized.")
-
-
-async def load_operator_persona(
-    persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
-) -> PersonaProfile:
-    try:
-        return await load_persona(
-            persona_path,
-            owner_id=owner_id or settings.identity.owner_id,
-            twin_id=twin_id or settings.identity.twin_id,
-        )
-    except OSError as error:
-        raise FakeYouError(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=error.strerror) from None
 
 
 @asynccontextmanager

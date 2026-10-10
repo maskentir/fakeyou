@@ -2,17 +2,17 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from fakeyou.browser import open_browser_tools
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.output import emit_json, emit_text
-from fakeyou.debrief import debrief_report_status
-from fakeyou.invariants import SessionId
-from fakeyou.journal import journal_path
-from fakeyou.record import meeting_record_path
-from fakeyou.report import build_session_report, read_journal
-from fakeyou.settings import (
+from fakeyou.config.settings import (
     Settings,
 )
+from fakeyou.debrief.debrief import debrief_report_status
+from fakeyou.foundation.invariants import SessionId
+from fakeyou.meet.browser import open_browser_tools
+from fakeyou.observability.journal import journal_path
+from fakeyou.observability.report import build_session_report, read_journal
+from fakeyou.persistence.record import meeting_record_path
 
 
 def check_setup(settings: Settings) -> None:

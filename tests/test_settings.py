@@ -8,7 +8,7 @@ from pydantic import SecretStr
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.settings import DEFAULTS, IdentitySettings, Settings, require_secret
+from fakeyou.config.settings import DEFAULTS, IdentitySettings, Settings, require_secret
 
 
 @pytest.fixture(autouse=True)

@@ -3,13 +3,13 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-import fakeyou.assembly as assembly_module
-import fakeyou.providers as providers_module
-from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
-from fakeyou.assembly import open_conversation
+import fakeyou.orchestration.assembly as assembly_module
+import fakeyou.orchestration.providers as providers_module
+from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
+from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.persona import PersonaProfile
-from fakeyou.session import SessionConfig
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.orchestration.assembly import open_conversation
 from tests.fakes import ToolCallingFakeModel
 
 

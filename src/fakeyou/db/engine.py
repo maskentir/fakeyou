@@ -7,7 +7,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.exc import OperationalError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
 
 POSTGRES_SCHEME = "postgresql://"
 DRIVER_PREFIX = "postgresql+psycopg://"

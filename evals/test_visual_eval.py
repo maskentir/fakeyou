@@ -7,15 +7,20 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from PIL import Image
 
-import fakeyou.debrief as debrief_module
-from fakeyou.agent import create_visual_tools
-from fakeyou.debrief_schema import DebriefDraft, DebriefItem, DebriefReport, EvidenceSource
-from fakeyou.debrief_sources import load_record_snapshot, validate_draft
-from fakeyou.report import VISUAL_BUDGET_MAX, VISUAL_BUDGET_P95, VISUAL_STABILITY_MIN, summarize
-from fakeyou.settings import VisualSettings
-from fakeyou.visual_caption import VisualCaptioner, frame_ref
-from fakeyou.visual_hydrate import visual_clarification
-from fakeyou.visual_store import VisualFrame, VisualStore, frames_in_window
+import fakeyou.debrief.debrief as debrief_module
+from fakeyou.config.settings import VisualSettings
+from fakeyou.conversation.agent import create_visual_tools
+from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefItem, DebriefReport, EvidenceSource
+from fakeyou.debrief.debrief_sources import load_record_snapshot, validate_draft
+from fakeyou.memory.visual_hydrate import visual_clarification
+from fakeyou.observability.report import (
+    VISUAL_BUDGET_MAX,
+    VISUAL_BUDGET_P95,
+    VISUAL_STABILITY_MIN,
+    summarize,
+)
+from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
+from fakeyou.visual.visual_store import VisualFrame, VisualStore, frames_in_window
 from tests.fakes import RecordingJournal, ToolCallingFakeModel
 
 ROOT = Path(__file__).resolve().parent.parent

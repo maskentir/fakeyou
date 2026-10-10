@@ -9,9 +9,9 @@ from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.nodes import EpisodeType
 from neo4j.exceptions import ConstraintError
 
-import fakeyou.owner_notes as owner_notes_module
+import fakeyou.memory.owner_notes as owner_notes_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.owner_notes import (
+from fakeyou.memory.owner_notes import (
     OWNER_NOTE_SOURCE,
     NoteConflictError,
     OwnerNoteResult,

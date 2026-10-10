@@ -7,21 +7,21 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from fakeyou.audio.diarize_mix import mix_session_slots, split_chunks
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_text
-from fakeyou.diarize_client import DiarizedTurn, merge_short_turns, transcribe_chunk
-from fakeyou.diarize_correction import (
+from fakeyou.config.settings import Settings
+from fakeyou.diarization.diarize_client import DiarizedTurn, merge_short_turns, transcribe_chunk
+from fakeyou.diarization.diarize_correction import (
     JSON_FILE_NAME,
     StaleDiarizationError,
     load_corrected_record,
     write_correction_bundle,
 )
-from fakeyou.diarize_mix import mix_session_slots, split_chunks
-from fakeyou.ingestion_status import record_lock
-from fakeyou.record import TranscriptEntry, load_meeting_record, meeting_record_path
-from fakeyou.settings import Settings
+from fakeyou.persistence.ingestion_status import record_lock
+from fakeyou.persistence.record import TranscriptEntry, load_meeting_record, meeting_record_path
 
 _CHUNK_MAX_MINUTES = 5.0
 

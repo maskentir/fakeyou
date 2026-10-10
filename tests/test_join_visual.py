@@ -6,11 +6,16 @@ from typing import Any
 
 from pipecat.frames.frames import TranscriptionFrame
 
+from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.cli.join import build_transcript_callback, record_visual_caption
-from fakeyou.record import MeetingRecord, VisualEntry, load_meeting_record, meeting_record_path
-from fakeyou.visual_caption import VisualCaption, frame_ref
-from fakeyou.visual_store import VisualFrame, VisualStore
-from fakeyou.voice_activity import SlotBinder
+from fakeyou.persistence.record import (
+    MeetingRecord,
+    VisualEntry,
+    load_meeting_record,
+    meeting_record_path,
+)
+from fakeyou.visual.visual_caption import VisualCaption, frame_ref
+from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests.fakes import RecordingJournal
 
 FRAME_IDS = ["frame-launch", "frame-pricing", "frame-roadmap"]

@@ -14,25 +14,29 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import SecretStr
 
-from fakeyou import owner_notes
-from fakeyou.agent import create_meeting_agent
+from fakeyou.audio.voice import create_speech_synthesizer
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.conversation import TranscriptEvent
-from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import ingest_meeting
-from fakeyou.journal import Journal
-from fakeyou.memory import (
+from fakeyou.config.settings import CompatibleReply, MemorySettings, Settings, require_secret
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory import owner_notes
+from fakeyou.memory.ingestion import ingest_meeting
+from fakeyou.memory.memory import (
     create_graphiti_memory,
     create_memory_tools,
     forget_episode,
     forget_meeting,
 )
-from fakeyou.owner_notes import read_note_states, remember_owner_note
-from fakeyou.persona import PersonaProfile
-from fakeyou.providers import create_chat_model, create_fallback_chat_model, memory_config
-from fakeyou.record import MeetingRecord, load_meeting_record, meeting_record_path
-from fakeyou.settings import CompatibleReply, MemorySettings, Settings, require_secret
-from fakeyou.voice import create_speech_synthesizer
+from fakeyou.memory.owner_notes import read_note_states, remember_owner_note
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.providers import (
+    create_chat_model,
+    create_fallback_chat_model,
+    memory_config,
+)
+from fakeyou.persistence.record import MeetingRecord, load_meeting_record, meeting_record_path
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 

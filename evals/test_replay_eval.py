@@ -14,13 +14,14 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.agent import create_meeting_agent
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.conversation import LangGraphResponder, TranscriptEvent, cap_spoken_reply
-from fakeyou.memory import RECALL_EMPTY_RESULT
-from fakeyou.persona import PersonaProfile, build_system_prompt
-from fakeyou.providers import create_chat_model
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.conversation import LangGraphResponder, cap_spoken_reply
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.memory import RECALL_EMPTY_RESULT
+from fakeyou.memory.persona import PersonaProfile, build_system_prompt
+from fakeyou.orchestration.providers import create_chat_model
 from tests.fakes import ToolCallingFakeModel
 
 ROOT = Path(__file__).resolve().parent.parent

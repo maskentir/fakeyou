@@ -4,18 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.attribution_probe import (
-    PROBE_DRAIN_JS,
-    AttributionProbe,
-    ProbeDrainLoop,
-    append_probe_batch,
-    load_probe_script,
-)
-from fakeyou.audio import _CaptureObserver
-from fakeyou.browser import open_direct_page
-from fakeyou.deaf import CaptureActivity
-from fakeyou.meet import GuestJoinRequest, request_guest_join
-from fakeyou.probe_replay import (
+from fakeyou.audio.audio import _CaptureObserver
+from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.probe_replay import (
     _percentile,
     _vad_windows,
     align_turns,
@@ -26,9 +17,18 @@ from fakeyou.probe_replay import (
     source_sets_by_speaker,
     summarize_probe_session,
 )
-from fakeyou.runtime import run_meeting_session
-from fakeyou.session import SessionConfig
-from fakeyou.settings import DEFAULTS
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.attribution_probe import (
+    PROBE_DRAIN_JS,
+    AttributionProbe,
+    ProbeDrainLoop,
+    append_probe_batch,
+    load_probe_script,
+)
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.meet import GuestJoinRequest, request_guest_join
+from fakeyou.orchestration.runtime import run_meeting_session
 from tests.fakes import (
     IN_CALL,
     LINK,
@@ -684,7 +684,7 @@ def test_merge_levels_drops_malformed_entries() -> None:
 
 
 def test_dominant_sources_ignore_quiet_bleed() -> None:
-    from fakeyou.probe_replay import dominant_sources_in_window
+    from fakeyou.audio.probe_replay import dominant_sources_in_window
 
     samples = [
         {"page_ms": 1000.0, "sources": [{"source": 3, "audioLevel": 0.34}]},

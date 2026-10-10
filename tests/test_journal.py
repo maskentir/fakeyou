@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 
-from fakeyou.journal import Journal
+from fakeyou.observability.journal import Journal
 
 
 def test_record_carries_meeting_id_timestamp_and_fields() -> None:
@@ -99,7 +99,7 @@ def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
 
 
 def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
-    import fakeyou.journal as module
+    import fakeyou.observability.journal as module
 
     lines = []
     journal = Journal("timed", emit=lines.append)
@@ -123,19 +123,21 @@ def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
 def test_timed_should_record_failure_and_propagate_original_error():
     import pytest
 
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     lines = []
     journal = Journal("timed", emit=lines.append)
     error = ProviderFault("tts", "timeout")
-    with pytest.raises(ProviderFault) as raised:
-        with journal.timed(
+    with (
+        pytest.raises(ProviderFault) as raised,
+        journal.timed(
             started="synthesis_started",
             finished="synthesis_finished",
             failed="synthesis_failed",
             source="tts",
-        ):
-            raise error
+        ),
+    ):
+        raise error
     assert raised.value is error
     rows = [json.loads(line) for line in lines]
     assert [row["event"] for row in rows] == ["synthesis_started", "synthesis_failed"]

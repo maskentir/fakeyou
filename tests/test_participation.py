@@ -1,4 +1,4 @@
-from fakeyou.participation import (
+from fakeyou.foundation.participation import (
     ParticipationContext,
     choose_participation,
     is_vocative,

@@ -4,7 +4,7 @@ import stat
 
 import pytest
 
-from fakeyou.playback import (
+from fakeyou.audio.playback import (
     PlaybackEngine,
     PlaybackError,
     PlaybackEvent,
@@ -584,8 +584,8 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
 async def test_typed_synth_fault_records_and_engine_recovers(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.faults import FaultReporter
+    from fakeyou.observability.provider_faults import ProviderFault
 
     reporter = FaultReporter(journal=journal)
     synth = _Synth(error=ProviderFault("tts", "timeout", detail="slow", retryable=True))
@@ -618,7 +618,7 @@ async def test_typed_synth_fault_records_and_engine_recovers(
 async def test_play_failure_records_and_worker_survives(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = FaultReporter(journal=journal)
     synth = _Synth()
@@ -770,7 +770,7 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
 async def test_streaming_play_failure_reports_and_engine_recovers(
     journal,
 ) -> None:
-    from fakeyou.faults import FaultReporter
+    from fakeyou.observability.faults import FaultReporter
 
     reporter = FaultReporter(journal=journal)
     synth = _StreamSynth()

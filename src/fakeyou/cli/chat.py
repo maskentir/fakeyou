@@ -3,24 +3,24 @@ from contextlib import AsyncExitStack
 
 from langchain_core.tools import BaseTool
 
-from fakeyou.agent import (
-    create_meeting_agent,
-)
-from fakeyou.assembly import default_persona
-from fakeyou.browser import open_browser_tools
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.output import emit_text
+from fakeyou.config.settings import (
+    Settings,
+)
+from fakeyou.conversation.agent import (
+    create_meeting_agent,
+)
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, require_url
-from fakeyou.invariants import IDENTIFIER_PATTERN
-from fakeyou.memory import (
+from fakeyou.foundation.invariants import IDENTIFIER_PATTERN
+from fakeyou.meet.browser import open_browser_tools
+from fakeyou.memory.memory import (
     create_memory_tools,
     open_graphiti_memory,
 )
-from fakeyou.providers import create_chat_model, memory_config
-from fakeyou.settings import (
-    Settings,
-)
+from fakeyou.orchestration.assembly import default_persona
+from fakeyou.orchestration.providers import create_chat_model, memory_config
 
 
 async def chat(

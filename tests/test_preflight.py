@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.preflight import ProbeResult, probe_endpoint, run_preflight
+from fakeyou.orchestration.preflight import ProbeResult, probe_endpoint, run_preflight
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LOCAL_CERT = FIXTURES / "preflight-localhost.pem"
@@ -63,7 +63,7 @@ async def test_probe_endpoint_never_raises_on_garbage() -> None:
 
 
 async def test_probe_endpoint_rejects_a_host_without_a_scheme(monkeypatch) -> None:
-    import fakeyou.preflight as preflight
+    import fakeyou.orchestration.preflight as preflight
 
     async def unexpected_connection(*args):
         pytest.fail("an endpoint without a scheme must not open a connection")
@@ -159,7 +159,7 @@ async def test_live_tls_to_openai_opt_in() -> None:
 
 @pytest.mark.parametrize("scheme", ["bolt+ssc", "neo4j+ssc"])
 async def test_self_signed_neo4j_scheme_accepts_local_certificate(scheme):
-    from fakeyou.preflight import probe_endpoint
+    from fakeyou.orchestration.preflight import probe_endpoint
 
     server = await _serve_tls_once()
     port = server.sockets[0].getsockname()[1]
@@ -174,7 +174,7 @@ async def test_self_signed_neo4j_scheme_accepts_local_certificate(scheme):
 
 @pytest.mark.parametrize("scheme", ["bolt+s", "neo4j+s", "https", "wss"])
 async def test_verified_scheme_rejects_untrusted_local_certificate(scheme):
-    from fakeyou.preflight import probe_endpoint
+    from fakeyou.orchestration.preflight import probe_endpoint
 
     server = await _serve_tls_once()
     port = server.sockets[0].getsockname()[1]

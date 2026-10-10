@@ -3,14 +3,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import fakeyou.cli.diagnostics as cli_diagnostics
-from fakeyou.report import (
+from fakeyou.observability.report import (
     VISUAL_BUDGET_MAX,
     VISUAL_BUDGET_P95,
     VISUAL_STABILITY_MIN,
     build_session_report,
     read_journal,
 )
-from fakeyou.runtime import (
+from fakeyou.orchestration.runtime import (
     WRITE_ACTION_BUDGET_MAX_SECONDS,
     WRITE_ACTION_BUDGET_P95_SECONDS,
     WRITE_ACTION_STABILITY_MIN,

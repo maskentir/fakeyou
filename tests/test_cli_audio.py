@@ -10,7 +10,7 @@ import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import audio_purge_expired
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
 
 DAY = 86400.0
 

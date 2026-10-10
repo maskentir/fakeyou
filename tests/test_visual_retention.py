@@ -12,16 +12,17 @@ from langgraph.checkpoint.memory import InMemorySaver
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import PurgeReport, visual_purge_expired
-from fakeyou.conversation import TranscriptEvent, _request_messages
-from fakeyou.lifecycle import MeetingLifecycle
-from fakeyou.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.runtime import _MeetingWorker
-from fakeyou.session import SessionConfig
-from fakeyou.settings import Settings, VisualSettings
-from fakeyou.visual_caption import VisualCaptioner
-from fakeyou.visual_hydrate import VisualHydrateMiddleware
-from fakeyou.visual_observer import VisualObserver
-from fakeyou.visual_store import VisualFrame, VisualStore
+from fakeyou.config.settings import Settings, VisualSettings
+from fakeyou.conversation.conversation import _request_messages
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.memory.visual_hydrate import VisualHydrateMiddleware
+from fakeyou.orchestration.lifecycle import MeetingLifecycle
+from fakeyou.orchestration.runtime import _MeetingWorker
+from fakeyou.visual.visual_caption import VisualCaptioner
+from fakeyou.visual.visual_observer import VisualObserver
+from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests.fakes import FakeClock, RecordingJournal
 
 DAY = 86400.0

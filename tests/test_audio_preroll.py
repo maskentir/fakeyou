@@ -6,7 +6,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from fakeyou.audio import PreRollBuffer
+from fakeyou.audio.audio import PreRollBuffer
 
 
 class _Sink(FrameProcessor):

@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.settings import IdentitySettings
-from fakeyou.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
+from fakeyou.config.settings import IdentitySettings
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
 
 
 class StubExtractorConfig:

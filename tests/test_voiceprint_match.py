@@ -5,10 +5,9 @@ import struct
 from collections.abc import Sequence
 
 from fakeyou.db.voiceprint_store import VoiceprintRecord
-from fakeyou.faults import FaultReporter
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder
-from fakeyou.voiceprint_match import (
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder
+from fakeyou.identity.voiceprint_match import (
     CLIP_GRID_MS,
     CLIP_PAD_MS,
     VoiceprintMatcher,
@@ -17,6 +16,7 @@ from fakeyou.voiceprint_match import (
     cut_turn_clip,
     score_turn_audio,
 )
+from fakeyou.observability.faults import FaultReporter
 from tests.fakes import CONSENT_AT, FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
 
 

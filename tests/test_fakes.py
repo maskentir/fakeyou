@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
 
 
 @pytest.mark.parametrize("prefix", ["FAKEYOU_", "fakeyou_", "FakeYou_"])

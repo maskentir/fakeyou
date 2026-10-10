@@ -2,13 +2,18 @@ import ast
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.voiceprint_match import VoiceScores
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.voiceprint_match import VoiceScores
 
 DISPLAY_CLAIM_RENDER_READERS = frozenset(
-    {"record.py", "debrief.py", "debrief_sources.py", "cli/debrief.py"}
+    {
+        "persistence/record.py",
+        "debrief/debrief.py",
+        "debrief/debrief_sources.py",
+        "cli/debrief.py",
+    }
 )
-DISPLAY_CLAIM_TASK_READERS = frozenset({"verify.py"})
+DISPLAY_CLAIM_TASK_READERS = frozenset({"identity/verify.py"})
 
 
 def _registry() -> SpeakerRegistry:
@@ -234,7 +239,7 @@ def test_registry_keeps_first_display_claim_on_repeated_fusion() -> None:
 
 
 def test_display_claim_has_no_decision_readers() -> None:
-    allowed = DISPLAY_CLAIM_RENDER_READERS | DISPLAY_CLAIM_TASK_READERS | {"identity.py"}
+    allowed = DISPLAY_CLAIM_RENDER_READERS | DISPLAY_CLAIM_TASK_READERS | {"identity/identity.py"}
 
     assert _display_claim_reader_files() <= allowed
 

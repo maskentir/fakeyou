@@ -6,9 +6,7 @@ import pytest
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
-from fakeyou.invariants import PLAYBACK_SAMPLE_RATE
-from fakeyou.settings import DEFAULTS, MiniMaxTTS, OpenAITTS, STTMode
-from fakeyou.voice import (
+from fakeyou.audio.voice import (
     SPEECH_LANGUAGES,
     TTS_HTTP_TIMEOUT,
     TTS_REQUEST_TIMEOUT_SECONDS,
@@ -18,6 +16,8 @@ from fakeyou.voice import (
     create_speech_synthesizer,
     tts_voice_instructions,
 )
+from fakeyou.config.settings import DEFAULTS, MiniMaxTTS, OpenAITTS, STTMode
+from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 
 
 def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
@@ -110,7 +110,7 @@ def test_synthesizer_disables_sdk_retries() -> None:
 
 
 async def test_synthesizer_timeout_raises_typed_provider_fault(openai_client) -> None:
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
         api_key="k", client=openai_client(error=httpx2.ReadTimeout("stalled"))
@@ -129,7 +129,7 @@ async def test_synthesizer_timeout_raises_typed_provider_fault(openai_client) ->
 
 
 async def test_synthesizer_payment_status_raises_typed_provider_fault(openai_client) -> None:
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(api_key="k", client=openai_client(status=402))
 
@@ -178,7 +178,7 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
 
 async def test_synthesizer_stream_failure_raises_typed_fault(journal, openai_client) -> None:
 
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     lines = journal.lines
     client = openai_client(chunks=[b"\x00" * 64], stream_error=httpx2.ReadTimeout("stalled"))
@@ -278,7 +278,7 @@ async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event
     [(1002, "rate_limited"), (1004, "unauthorized"), (1008, "payment_required"), (9999, "unknown")],
 )
 async def test_minimax_error_status_raises_typed_provider_fault(status_code, kind) -> None:
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
@@ -298,7 +298,7 @@ async def test_minimax_error_status_raises_typed_provider_fault(status_code, kin
 
 
 async def test_minimax_http_error_raises_typed_provider_fault() -> None:
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = MiniMaxSpeechSynthesizer(
         api_key="k", client=_minimax_client(lambda request: httpx2.Response(503))
@@ -386,7 +386,7 @@ async def test_empty_chunks_are_skipped_before_first_pcm(openai_client, journal)
 
 
 async def test_journaled_stream_skips_empty_chunks(journal):
-    from fakeyou.voice import _journaled_stream
+    from fakeyou.audio.voice import _journaled_stream
 
     async def open_stream(text):
         assert text == "Hello."
@@ -417,7 +417,7 @@ async def test_empty_stream_records_no_first_pcm(openai_client, journal):
 
 
 async def test_failure_before_first_pcm_records_no_first_pcm(openai_client, journal):
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
         api_key="k",
@@ -434,7 +434,7 @@ async def test_failure_before_first_pcm_records_no_first_pcm(openai_client, jour
 
 
 async def test_failure_after_first_pcm_keeps_the_first_pcm_proof(openai_client, journal):
-    from fakeyou.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
         api_key="k",

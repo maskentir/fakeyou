@@ -18,9 +18,7 @@ from sqlalchemy.engine import make_url
 
 import fakeyou.cli.join as cli_join
 import fakeyou.db.checkpoint as checkpoint_module
-from fakeyou.db.engine import create_engine_for_url
-from fakeyou.db.schema import upgrade
-from fakeyou.settings import (
+from fakeyou.config.settings import (
     BrowserSettings,
     DatabaseSettings,
     EmbedderSettings,
@@ -33,6 +31,8 @@ from fakeyou.settings import (
     Settings,
     StoreSettings,
 )
+from fakeyou.db.engine import create_engine_for_url
+from fakeyou.db.schema import upgrade
 from tests.fakes import (
     DATABASE_URL,
     FakeAudio,

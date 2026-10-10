@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.agent import create_meeting_agent
+from fakeyou.conversation.agent import create_meeting_agent
 from tests.fakes import OfflineJudge, ToolCallingFakeModel
 
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-import fakeyou.memory as memory_module
+import fakeyou.memory.memory as memory_module
 from evals.test_memory_correction_eval import (
     answer_queries,
     load_correction_fixture,
@@ -19,17 +19,17 @@ from evals.test_memory_correction_eval import (
     write_fixture_record,
 )
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.ingestion import ingest_corrections, ingest_meeting
-from fakeyou.ingestion_status import IngestionStatus, status_path, write_status
-from fakeyou.memory import (
+from fakeyou.config.settings import Settings
+from fakeyou.memory.ingestion import ingest_corrections, ingest_meeting
+from fakeyou.memory.memory import (
     create_memory_tools,
     ensure_indexes,
     open_graphiti_memory,
     verify_memory_connection,
 )
-from fakeyou.providers import memory_config
-from fakeyou.record import load_meeting_record
-from fakeyou.settings import Settings
+from fakeyou.orchestration.providers import memory_config
+from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
+from fakeyou.persistence.record import load_meeting_record
 from tests.fakes import make_graphiti
 
 SHADOW_GROUP_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")

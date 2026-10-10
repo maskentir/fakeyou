@@ -14,7 +14,7 @@ from evals.test_replay_eval import (
     replay,
     write_replay_artifacts,
 )
-from fakeyou.settings import CompatibleReply, Settings
+from fakeyou.config.settings import CompatibleReply, Settings
 from tests.fakes import ToolCallingFakeModel, recall_call
 
 

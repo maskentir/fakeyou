@@ -10,8 +10,8 @@ import pytest
 from evals.runtime_evidence import finish_candidate
 from evals.test_trust_eval import contract_model, replay_trust, strategy_settings
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.providers import create_chat_model, create_fallback_chat_model
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
+from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "evals" / "fixtures" / "speaker-probe.json"

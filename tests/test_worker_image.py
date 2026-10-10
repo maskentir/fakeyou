@@ -41,8 +41,8 @@ def test_worker_image_ships_page_script_assets() -> None:
             "meeting-worker",
             "python",
             "-c",
-            "from fakeyou.attribution_probe import load_probe_script;"
-            "from fakeyou.voice_activity import load_voice_activity_script;"
+            "from fakeyou.foundation.attribution_probe import load_probe_script;"
+            "from fakeyou.audio.voice_activity import load_voice_activity_script;"
             "assert '__fakeyouAttributionProbe' in load_probe_script();"
             "assert '__fakeyouVoiceActivity' in load_voice_activity_script();"
             "print('page-assets-ok')",
@@ -116,7 +116,7 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
 def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path) -> None:
-    from fakeyou.worker_backend import DockerWorkerBackend, compose_override
+    from fakeyou.worker.worker_backend import DockerWorkerBackend, compose_override
 
     meeting_id = f"probe-{uuid4().hex[:8]}"
     override = tmp_path / "override.yml"
@@ -168,7 +168,7 @@ def _postgres_dsn() -> str:
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is required")
 async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
     from fakeyou.db.checkpoint import open_checkpointer
-    from fakeyou.lifecycle import MeetingLifecycle, meeting_thread_id
+    from fakeyou.orchestration.lifecycle import MeetingLifecycle, meeting_thread_id
 
     environment = {
         **os.environ,

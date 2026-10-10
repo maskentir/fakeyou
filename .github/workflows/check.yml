@@ -40,6 +40,8 @@ jobs:
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy
+      - run: uv run --no-sync lint-imports
+      - run: uv run --no-sync deptry .
       - run: uv run --no-sync pytest
       - run: uv run --no-sync deepeval test run evals/test_meeting_agent_eval.py
       - run: uv run --no-sync deepeval test run evals/test_persona_eval.py

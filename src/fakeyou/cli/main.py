@@ -35,8 +35,8 @@ from fakeyou.cli.voiceprint import (
     voiceprint_verify,
 )
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
-from fakeyou.provider_faults import ProviderFault
-from fakeyou.settings import Settings, export_dotenv
+from fakeyou.config.settings import Settings, export_dotenv
+from fakeyou.observability.provider_faults import ProviderFault
 
 _SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 

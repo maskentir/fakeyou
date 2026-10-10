@@ -4,8 +4,8 @@ from pathlib import Path
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.output import emit_json
-from fakeyou.settings import Settings
-from fakeyou.visual_retention import PurgeReport, purge_visual_files
+from fakeyou.config.settings import Settings
+from fakeyou.foundation.visual_retention import PurgeReport, purge_visual_files
 
 DAY_SECONDS = 86400
 

@@ -5,13 +5,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-import fakeyou.assembly as assembly_module
-from fakeyou.agent import VISUAL_GUIDANCE
-from fakeyou.persona import PersonaProfile
-from fakeyou.session import SessionConfig
-from fakeyou.settings import Settings
-from fakeyou.visual_caption import VisualCaptioner
-from fakeyou.visual_store import VisualStore
+import fakeyou.orchestration.assembly as assembly_module
+from fakeyou.config.settings import Settings
+from fakeyou.conversation.agent import VISUAL_GUIDANCE
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.visual.visual_caption import VisualCaptioner
+from fakeyou.visual.visual_store import VisualStore
 from tests.fakes import ToolCallingFakeModel, make_graphiti
 
 

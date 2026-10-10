@@ -4,13 +4,13 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
 from fakeyou.db.engine import (
     configured_url,
     create_engine_for_url,
     open_database,
     require_url,
 )
-from fakeyou.settings import Settings
 
 PLAIN_URL = "postgresql://fakeyou:pw@db.internal:5432/fakeyou"
 DRIVER_URL = "postgresql+psycopg://fakeyou:pw@db.internal:5432/fakeyou"
@@ -81,9 +81,8 @@ def test_create_engine_for_url_selects_the_psycopg_driver() -> None:
 def test_open_database_requires_a_configured_url(settings: Settings) -> None:
     settings.database.url = None
 
-    with pytest.raises(FakeYouError) as error:
-        with open_database(settings):
-            pass
+    with pytest.raises(FakeYouError) as error, open_database(settings):
+        pass
 
     assert error.value.code is ErrorCode.DATABASE_URL_MISSING
 

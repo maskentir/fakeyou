@@ -7,12 +7,12 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from PIL import Image
 
-from fakeyou import providers
-from fakeyou.agent import create_visual_tools
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.providers import create_visual_chat_model
-from fakeyou.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
-from fakeyou.visual_caption import (
+from fakeyou.config.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
+from fakeyou.conversation.agent import create_visual_tools
+from fakeyou.orchestration import providers
+from fakeyou.orchestration.providers import create_visual_chat_model
+from fakeyou.visual.visual_caption import (
     VISUAL_CAPTION_TTL_SECONDS,
     VISUAL_MAX_EDGE,
     VISUAL_USD_PER_MTOK,
@@ -20,7 +20,7 @@ from fakeyou.visual_caption import (
     estimate_tokens,
     frame_ref,
 )
-from fakeyou.visual_store import VisualFrame, VisualStore, append_visual
+from fakeyou.visual.visual_store import VisualFrame, VisualStore, append_visual
 from tests.fakes import FakeClock, FakeVisualModel, RecordingJournal, caption_model
 
 AT = "2026-10-09T03:10:00+00:00"

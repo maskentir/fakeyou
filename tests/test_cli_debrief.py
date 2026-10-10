@@ -10,23 +10,28 @@ from langchain_core.messages import AIMessage
 import fakeyou.cli.debrief as cli_debrief
 import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
-from fakeyou.brief import (
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.cli.main import build_parser
+from fakeyou.config.settings import GoogleReply
+from fakeyou.debrief.debrief_schema import DebriefDraft
+from fakeyou.diarization.diarize_client import DiarizedTurn
+from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
+from fakeyou.memory.persona import PersonaProfile, persona_digest
+from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.persistence.brief import (
     MeetingBrief,
     MeetingContext,
     brief_digest,
     context_path,
     write_meeting_context,
 )
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.main import build_parser
-from fakeyou.debrief_schema import DebriefDraft
-from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
-from fakeyou.ingestion_status import IngestionStatus, record_lock, status_path, write_status
-from fakeyou.journal import Journal, journal_path
-from fakeyou.persona import PersonaProfile, persona_digest
-from fakeyou.record import TranscriptEntry, meeting_record_path
-from fakeyou.settings import GoogleReply
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    record_lock,
+    status_path,
+    write_status,
+)
+from fakeyou.persistence.record import TranscriptEntry, meeting_record_path
 from tests.fakes import ToolCallingFakeModel
 
 

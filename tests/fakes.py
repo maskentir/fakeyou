@@ -37,15 +37,21 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
 
-from fakeyou.conversation import ConversationResponder, TranscriptEvent
+from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.conversation.conversation import ConversationResponder
+from fakeyou.conversation.session import (
+    ConversationError,
+    MeetingAudio,
+    MeetingConversation,
+    SessionResult,
+)
 from fakeyou.db.voiceprint_store import VoiceprintRecord
-from fakeyou.journal import Journal
-from fakeyou.playback import PlaybackEvent
-from fakeyou.session import ConversationError, MeetingAudio, MeetingConversation, SessionResult
-from fakeyou.visual_observer import (
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
+from fakeyou.observability.journal import Journal
+from fakeyou.visual.visual_observer import (
     VISUAL_SCAN_JS,
 )
-from fakeyou.voiceprint_embed import SpeakerEmbedder
 
 LINK = "https://meet.google.com/abc-defg-hij"
 DATABASE_URL = "postgresql://fakeyou:test@localhost:5432/fakeyou"

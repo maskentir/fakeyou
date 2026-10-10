@@ -4,13 +4,13 @@ from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.lifecycle import MeetingLifecycle
-from fakeyou.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.runtime import _MeetingWorker, run_meeting_session
-from fakeyou.session import SessionConfig
-from fakeyou.settings import VisualSettings
-from fakeyou.visual_caption import VisualCaptioner
-from fakeyou.visual_store import VisualStore
+from fakeyou.config.settings import VisualSettings
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.orchestration.lifecycle import MeetingLifecycle
+from fakeyou.orchestration.runtime import _MeetingWorker, run_meeting_session
+from fakeyou.visual.visual_caption import VisualCaptioner
+from fakeyou.visual.visual_store import VisualStore
 from tests.fakes import (
     CLIP_BOX,
     ENDED,

@@ -10,8 +10,8 @@ from typing import Any
 
 from PIL import Image
 
-from fakeyou.visual_observer import VISUAL_SCAN_JS, VisualObserver
-from fakeyou.visual_store import (
+from fakeyou.visual.visual_observer import VISUAL_SCAN_JS, VisualObserver
+from fakeyou.visual.visual_store import (
     VISUAL_JOIN_TOLERANCE_MS,
     VisualFrame,
     VisualStore,

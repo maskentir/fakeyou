@@ -10,20 +10,19 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from PIL import Image
 
-import fakeyou.assembly as assembly_module
-from fakeyou.agent import create_meeting_agent
-from fakeyou.conversation import (
+import fakeyou.orchestration.assembly as assembly_module
+from fakeyou.config.settings import VisualSettings
+from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.conversation import (
     StreamingLangGraphResponder,
-    TranscriptEvent,
     _request_messages,
 )
-from fakeyou.greetings import create_greeting_middleware
-from fakeyou.memory import _current_speech, create_memory_prefetch_middleware
-from fakeyou.persona import PersonaProfile
-from fakeyou.session import SessionConfig
-from fakeyou.settings import VisualSettings
-from fakeyou.visual_caption import VisualCaptioner, frame_ref
-from fakeyou.visual_hydrate import (
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.greetings import create_greeting_middleware
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.memory import create_memory_prefetch_middleware, current_speech
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.memory.visual_hydrate import (
     VISUAL_CLARIFY_AMBIGUOUS,
     VISUAL_CLARIFY_MISSING,
     VISUAL_HYDRATE_MAX_IMAGES,
@@ -31,7 +30,8 @@ from fakeyou.visual_hydrate import (
     create_visual_resolver,
     visual_clarification,
 )
-from fakeyou.visual_store import VisualFrame, VisualStore
+from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
+from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests.fakes import ToolCallingFakeModel, make_graphiti
 
 AT = "2026-10-09T03:10:00+00:00"
@@ -357,7 +357,7 @@ async def test_prefetch_appends_latest_caption() -> None:
             additional_kwargs={"meeting_event": {"kind": "visual"}},
         ),
     )
-    end, speech = _current_speech(captioned)
+    end, speech = current_speech(captioned)
     assert [message.id for message in speech] == ["c1"]
     assert end == index + 1
     await turn(agent, participant("Anything else?", "c2"), "caption-empty")

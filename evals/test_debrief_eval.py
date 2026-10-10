@@ -20,23 +20,28 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, ValidationErr
 
 import fakeyou.cli.debrief as cli_debrief
 from evals.runtime_evidence import CANDIDATE_FILES, capture_candidate, finish_candidate
-from fakeyou.brief import (
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import OpenAIReply, PathSettings, Settings
+from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefReport
+from fakeyou.debrief.debrief_sources import (
+    chunk_sources,
+    validate_draft,
+)
+from fakeyou.memory.persona import PersonaProfile, persona_digest
+from fakeyou.persistence.brief import (
     MeetingBrief,
     MeetingContext,
     brief_digest,
     context_path,
     write_meeting_context,
 )
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.debrief_schema import DebriefDraft, DebriefReport
-from fakeyou.debrief_sources import (
-    chunk_sources,
-    validate_draft,
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    record_lock,
+    status_path,
+    write_status,
 )
-from fakeyou.ingestion_status import IngestionStatus, record_lock, status_path, write_status
-from fakeyou.persona import PersonaProfile, persona_digest
-from fakeyou.record import meeting_record_path
-from fakeyou.settings import OpenAIReply, PathSettings, Settings
+from fakeyou.persistence.record import meeting_record_path
 from tests.fakes import ToolCallingFakeModel
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,10 +56,10 @@ REQUIRED_CHECKS = (
     "coverage",
 )
 B_FILES = (
-    "src/fakeyou/debrief.py",
-    "src/fakeyou/debrief_labels.json",
-    "src/fakeyou/debrief_schema.py",
-    "src/fakeyou/debrief_sources.py",
+    "src/fakeyou/debrief/debrief.py",
+    "src/fakeyou/debrief/debrief_labels.json",
+    "src/fakeyou/debrief/debrief_schema.py",
+    "src/fakeyou/debrief/debrief_sources.py",
     "src/fakeyou/cli/debrief.py",
     "evals/fixtures/debrief-scenarios.json",
     "evals/test_debrief_eval.py",
@@ -265,7 +270,7 @@ def contract_reviews(fixture: dict, results: list[dict]) -> list[dict]:
 
 def test_candidate_hashes_include_b_runtime_and_fixture():
     candidate = capture_debrief_candidate()
-    assert "src/fakeyou/debrief.py" in candidate.get("start_files", {})
+    assert "src/fakeyou/debrief/debrief.py" in candidate.get("start_files", {})
     assert "evals/fixtures/debrief-scenarios.json" in candidate.get("start_files", {})
 
 
@@ -400,8 +405,8 @@ def _case_brief(
 def _source_index(case: dict[str, Any]) -> dict[str, Any]:
     from pydantic import TypeAdapter
 
-    from fakeyou.debrief_sources import SourceEntry
-    from fakeyou.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
+    from fakeyou.debrief.debrief_sources import SourceEntry
+    from fakeyou.persistence.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 
     adapter = TypeAdapter(RecordEntry)
     sources = {}

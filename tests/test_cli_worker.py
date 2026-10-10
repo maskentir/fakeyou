@@ -9,8 +9,8 @@ import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.worker import worker_start, worker_status, worker_stop
-from fakeyou.settings import Settings
-from fakeyou.worker_backend import WorkerStarted, WorkerState, WorkerStopped
+from fakeyou.config.settings import Settings
+from fakeyou.worker.worker_backend import WorkerStarted, WorkerState, WorkerStopped
 
 LINK = "https://meet.google.com/abc-defg-hij"
 
@@ -53,7 +53,7 @@ class FakeBackend:
         )
 
     def ingest(self, meeting_id: str, **kwargs: Any) -> Any:
-        from fakeyou.worker_backend import WorkerIngest
+        from fakeyou.worker.worker_backend import WorkerIngest
 
         self.calls.append(("ingest", {"meeting_id": meeting_id, **kwargs}))
         return WorkerIngest(meeting_id=meeting_id, status="completed")
@@ -230,7 +230,7 @@ def test_worker_ingest_exits_nonzero_unless_completed(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from fakeyou.cli.worker import worker_ingest
-    from fakeyou.worker_backend import WorkerIngest
+    from fakeyou.worker.worker_backend import WorkerIngest
 
     backend = FakeBackend()
 

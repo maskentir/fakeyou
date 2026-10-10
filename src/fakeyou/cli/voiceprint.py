@@ -12,16 +12,16 @@ from importlib.resources import files
 from pathlib import Path
 from typing import NoReturn
 
+from fakeyou.audio.deaf import rms_level
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
+from fakeyou.config.settings import Settings
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRecord, VoiceprintRepository, VoiceprintStore
-from fakeyou.deaf import rms_level
-from fakeyou.journal import Journal, journal_path
-from fakeyou.settings import Settings
-from fakeyou.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
+from fakeyou.observability.journal import Journal, journal_path
 
 VOICEPRINT_MIN_RMS = 0.01
 VOICEPRINT_SAMPLE_RATE = 16000
@@ -427,9 +427,7 @@ def voiceprint_verify(
                 [cosine(probe, record.embedding) for record in prints if record.is_negative],
                 default=-1.0,
             )
-            if negatives >= score:
-                outcome = "unknown"
-            elif score < settings.identity.voiceprint_threshold:
+            if negatives >= score or score < settings.identity.voiceprint_threshold:
                 outcome = "unknown"
             elif score - runner_up < settings.identity.voiceprint_min_margin:
                 outcome = "conflict"

@@ -7,15 +7,15 @@ from pathlib import Path
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarize_correction import (
+from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
+from fakeyou.diarization.diarize_correction import (
     CorrectionBundle,
     StaleDiarizationError,
     correction_uuid,
     load_corrected_record,
     write_correction_bundle,
 )
-from fakeyou.record import TranscriptEntry, load_meeting_record
+from fakeyou.persistence.record import TranscriptEntry, load_meeting_record
 
 FIXED_NOW = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
 RECORD_TEXT = "pineapple-transcript-marker"

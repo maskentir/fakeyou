@@ -11,8 +11,8 @@ from typing import Any, NoReturn
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
-from fakeyou.settings import Settings
-from fakeyou.verify import load_calibration_artifact, model_digest
+from fakeyou.config.settings import Settings
+from fakeyou.identity.verify import load_calibration_artifact, model_digest
 
 LLR_BIN_WIDTH = 0.5
 MARGIN_BIN_WIDTH = 0.05

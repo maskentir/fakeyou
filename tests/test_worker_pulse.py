@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from fakeyou.invariants import (
+from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
     CAPTURE_SAMPLE_RATE,

@@ -8,17 +8,17 @@ from pathlib import Path
 import pytest
 from pipecat.transports.base_transport import TransportParams
 
-from fakeyou.browser import open_direct_page
-from fakeyou.identity import SpeakerRegistry
-from fakeyou.journal import Journal
-from fakeyou.stream_capture import (
+from fakeyou.audio.stream_capture import (
     StreamAudioInput,
     StreamChunk,
     StreamRegistry,
     load_capture_script,
     parse_roster_names,
 )
-from fakeyou.voice_activity import SlotBinder
+from fakeyou.audio.voice_activity import SlotBinder
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.observability.journal import Journal
 from tests.fakes import FakeClock, meet_page
 
 WINDOW_SAMPLES = 800
@@ -464,8 +464,8 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from pipecat.transports.base_transport import TransportParams
 
-    from fakeyou.audio import open_stream_audio
-    from fakeyou.stream_capture import StreamAudioInput
+    from fakeyou.audio.audio import open_stream_audio
+    from fakeyou.audio.stream_capture import StreamAudioInput
 
     class _EchoSTT(FrameProcessor):
         def __init__(self, text: str) -> None:
@@ -515,31 +515,33 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
 
     left_input = StreamAudioInput(TransportParams(audio_in_enabled=True))
     right_input = StreamAudioInput(TransportParams(audio_in_enabled=True))
-    async with open_stream_audio(
-        stream_id="slot-0",
-        input=left_input,
-        on_transcript=on_left,
-        stt=_EchoSTT("left speech"),
-        playback=_Playback(),
-    ):
-        async with open_stream_audio(
+    async with (
+        open_stream_audio(
+            stream_id="slot-0",
+            input=left_input,
+            on_transcript=on_left,
+            stt=_EchoSTT("left speech"),
+            playback=_Playback(),
+        ),
+        open_stream_audio(
             stream_id="slot-1",
             input=right_input,
             on_transcript=on_right,
             stt=_EchoSTT("right speech"),
             playback=_Playback(),
-        ):
-            await left_input.feed(b"\x01\x02" * 160)
-            await right_input.feed(b"\x03\x04" * 160)
-            await asyncio.wait_for(left_ready.wait(), timeout=5)
-            await asyncio.wait_for(right_ready.wait(), timeout=5)
+        ),
+    ):
+        await left_input.feed(b"\x01\x02" * 160)
+        await right_input.feed(b"\x03\x04" * 160)
+        await asyncio.wait_for(left_ready.wait(), timeout=5)
+        await asyncio.wait_for(right_ready.wait(), timeout=5)
 
     assert left == [("slot-0", "left speech")]
     assert right == [("slot-1", "right speech")]
 
 
 def test_parse_drain_decodes_pcm_windows() -> None:
-    from fakeyou.stream_capture import parse_drain
+    from fakeyou.audio.stream_capture import parse_drain
 
     payload = {
         "streams": [
@@ -651,8 +653,8 @@ def test_parse_drain_decodes_pcm_windows() -> None:
 def test_parse_drain_rejects_corrupt_windows(payload: dict[str, object]) -> None:
     from typing import Any, cast
 
-    from fakeyou.audio import MeetingAudioError
-    from fakeyou.stream_capture import parse_drain
+    from fakeyou.audio.audio import MeetingAudioError
+    from fakeyou.audio.stream_capture import parse_drain
 
     with pytest.raises(MeetingAudioError):
         parse_drain(cast(dict[str, Any], payload))
@@ -661,8 +663,8 @@ def test_parse_drain_rejects_corrupt_windows(payload: dict[str, object]) -> None
 def test_parse_drain_rejects_bad_seq() -> None:
     from typing import Any, cast
 
-    from fakeyou.audio import MeetingAudioError
-    from fakeyou.stream_capture import parse_drain
+    from fakeyou.audio.audio import MeetingAudioError
+    from fakeyou.audio.stream_capture import parse_drain
 
     good = {
         "slot": 0,
@@ -683,7 +685,7 @@ def test_parse_drain_rejects_bad_seq() -> None:
 
 
 async def test_registry_forwards_pcm_to_slot_inputs() -> None:
-    from fakeyou.stream_capture import StreamChunk
+    from fakeyou.audio.stream_capture import StreamChunk
 
     registry, made = _recording_registry(FakeClock().monotonic)
     await registry.feed(
@@ -705,7 +707,7 @@ async def test_registry_forwards_pcm_to_slot_inputs() -> None:
 
 
 async def test_registry_releases_session_after_silence() -> None:
-    from fakeyou.stream_capture import StreamChunk
+    from fakeyou.audio.stream_capture import StreamChunk
 
     clock = FakeClock(now=1000.0)
     registry, _ = _recording_registry(clock.monotonic)
@@ -738,7 +740,7 @@ async def test_drain_throughput_within_budget() -> None:
     import base64
     import time
 
-    from fakeyou.stream_capture import parse_drain
+    from fakeyou.audio.stream_capture import parse_drain
 
     pcm_b64 = base64.b64encode(bytes(8000)).decode("ascii")
     payload = {
@@ -765,7 +767,7 @@ async def test_drain_throughput_within_budget() -> None:
 
 
 async def test_capture_drain_loop_polls_and_feeds_registry() -> None:
-    from fakeyou.stream_capture import CAPTURE_DRAIN_JS, CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CAPTURE_DRAIN_JS, CaptureDrainLoop
 
     payload = {
         "streams": [
@@ -797,10 +799,10 @@ async def test_start_capture_drain_respects_enabled_flag() -> None:
 
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from fakeyou.lifecycle import MeetingLifecycle
-    from fakeyou.meet import DEFAULT_MEET_SIGNALS
-    from fakeyou.runtime import _MeetingWorker
-    from fakeyou.session import SessionConfig
+    from fakeyou.conversation.session import SessionConfig
+    from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+    from fakeyou.orchestration.lifecycle import MeetingLifecycle
+    from fakeyou.orchestration.runtime import _MeetingWorker
     from tests.fakes import LINK
 
     clock = FakeClock()
@@ -837,7 +839,7 @@ def _frame(text: str, timestamp: str):
 
 
 def test_merge_orders_two_streams_chronologically() -> None:
-    from fakeyou.conversation import merge_transcripts, transcript_event
+    from fakeyou.foundation.transcript import merge_transcripts, transcript_event
 
     first = transcript_event(_frame("hello", "2026-10-06T01:00:02+00:00"), "a", None, "s1")
     second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
@@ -845,7 +847,7 @@ def test_merge_orders_two_streams_chronologically() -> None:
 
 
 def test_merge_keeps_stream_tags_stable_on_id() -> None:
-    from fakeyou.conversation import merge_transcripts, transcript_event
+    from fakeyou.foundation.transcript import merge_transcripts, transcript_event
 
     first = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s1")
     second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
@@ -855,7 +857,7 @@ def test_merge_keeps_stream_tags_stable_on_id() -> None:
 
 
 def test_binder_follows_csrc_across_slot_rotation() -> None:
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.voice_activity import SlotBinder
 
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
@@ -873,13 +875,13 @@ def test_binder_follows_csrc_across_slot_rotation() -> None:
 
 
 def test_flag_off_keeps_mixed_path() -> None:
-    from fakeyou.settings import Settings
+    from fakeyou.config.settings import Settings
 
     assert Settings().conversation.per_stream_enabled is False
 
 
 def test_stream_ids_change_transcript_identity() -> None:
-    from fakeyou.conversation import transcript_event
+    from fakeyou.foundation.transcript import transcript_event
 
     left = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s0")
     replay = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
@@ -889,7 +891,8 @@ def test_stream_ids_change_transcript_identity() -> None:
 
 
 def test_request_messages_carry_stream_id() -> None:
-    from fakeyou.conversation import _request_messages, transcript_event
+    from fakeyou.conversation.conversation import _request_messages
+    from fakeyou.foundation.transcript import transcript_event
 
     event = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", "e1", "slot-2")
     (message,) = _request_messages([event])
@@ -899,8 +902,8 @@ def test_request_messages_carry_stream_id() -> None:
 def test_record_stores_stream_id(tmp_path: Path) -> None:
     from pipecat.frames.frames import TranscriptionFrame
 
-    from fakeyou.conversation import transcript_event
-    from fakeyou.record import (
+    from fakeyou.foundation.transcript import transcript_event
+    from fakeyou.persistence.record import (
         MeetingRecord,
         TranscriptEntry,
         load_meeting_record,
@@ -937,8 +940,8 @@ async def test_stream_input_buffers_audio_before_start() -> None:
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from pipecat.transports.base_transport import TransportParams
 
-    from fakeyou.audio import open_stream_audio
-    from fakeyou.stream_capture import StreamAudioInput
+    from fakeyou.audio.audio import open_stream_audio
+    from fakeyou.audio.stream_capture import StreamAudioInput
 
     class _EchoSTT(FrameProcessor):
         def __init__(self, text: str) -> None:
@@ -988,8 +991,8 @@ async def test_stream_input_buffers_audio_before_start() -> None:
 
 
 async def test_registry_observes_streams_and_roster_into_binder() -> None:
-    from fakeyou.stream_capture import StreamChunk
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import StreamChunk
+    from fakeyou.audio.voice_activity import SlotBinder
 
     clock = FakeClock()
     binder = SlotBinder()
@@ -1021,8 +1024,8 @@ async def test_registry_observes_streams_and_roster_into_binder() -> None:
 
 
 async def test_capture_drain_poll_updates_binder_roster() -> None:
-    from fakeyou.stream_capture import CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = {
         "streams": [
@@ -1056,8 +1059,8 @@ async def test_capture_drain_poll_updates_binder_roster() -> None:
 async def test_capture_drain_loop_emits_level_heartbeat() -> None:
     import json
 
-    from fakeyou.journal import Journal
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+    from fakeyou.observability.journal import Journal
 
     payload = {
         "streams": [
@@ -1124,10 +1127,10 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     turns = [
@@ -1228,11 +1231,11 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.conversation import TranscriptEvent
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.foundation.transcript import TranscriptEvent
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     binder = SlotBinder()
@@ -1281,8 +1284,8 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
     from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    from fakeyou.stream_capture import StreamChunk, open_stream_fleet
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import StreamChunk, open_stream_fleet
+    from fakeyou.audio.voice_activity import SlotBinder
 
     class _EchoSTT(FrameProcessor):
         def __init__(self, text: str) -> None:
@@ -1346,8 +1349,8 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
     from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, StreamChunk, open_stream_fleet
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, StreamChunk, open_stream_fleet
+    from fakeyou.audio.voice_activity import SlotBinder
 
     class _EchoSTT(FrameProcessor):
         def __init__(self, text: str) -> None:
@@ -1414,11 +1417,11 @@ async def test_start_capture_drain_uses_fleet_registry() -> None:
 
     from langgraph.checkpoint.memory import InMemorySaver
 
-    from fakeyou.lifecycle import MeetingLifecycle
-    from fakeyou.meet import DEFAULT_MEET_SIGNALS
-    from fakeyou.runtime import _MeetingWorker
-    from fakeyou.session import SessionConfig
-    from fakeyou.stream_capture import StreamRegistry
+    from fakeyou.audio.stream_capture import StreamRegistry
+    from fakeyou.conversation.session import SessionConfig
+    from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+    from fakeyou.orchestration.lifecycle import MeetingLifecycle
+    from fakeyou.orchestration.runtime import _MeetingWorker
     from tests.fakes import LINK
 
     clock = FakeClock()
@@ -1449,7 +1452,7 @@ async def test_start_capture_drain_uses_fleet_registry() -> None:
 
 
 async def test_fleet_alone_requires_every_slot_alone() -> None:
-    from fakeyou.stream_capture import StreamFleetSession, StreamRegistry
+    from fakeyou.audio.stream_capture import StreamFleetSession, StreamRegistry
 
     class _Slot:
         def __init__(self, verdict: str) -> None:
@@ -1468,8 +1471,8 @@ async def test_fleet_alone_requires_every_slot_alone() -> None:
 
 
 async def test_fleet_speak_raises_when_every_slot_dead() -> None:
-    from fakeyou.audio import MeetingAudioError
-    from fakeyou.stream_capture import StreamFleetSession, StreamRegistry
+    from fakeyou.audio.audio import MeetingAudioError
+    from fakeyou.audio.stream_capture import StreamFleetSession, StreamRegistry
 
     class _DeadSlot:
         spoken: list[str] = []
@@ -1487,7 +1490,7 @@ async def test_fleet_speak_raises_when_every_slot_dead() -> None:
 
 
 def test_parse_roster_excludes_twin_self() -> None:
-    from fakeyou.stream_capture import parse_roster
+    from fakeyou.audio.stream_capture import parse_roster
 
     payload = {
         "roster": [
@@ -1502,8 +1505,8 @@ def test_parse_roster_excludes_twin_self() -> None:
 
 
 async def test_capture_drain_binds_three_remote_streams_with_self_present() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = {
         "streams": [
@@ -1543,10 +1546,10 @@ async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path:
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
@@ -1582,10 +1585,10 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
@@ -1621,8 +1624,8 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
 
 
 async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
-    from fakeyou.journal import Journal
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+    from fakeyou.observability.journal import Journal
 
     payload = {
         "streams": [
@@ -1664,8 +1667,8 @@ async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
 
 
 async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -> None:
-    from fakeyou.journal import Journal
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+    from fakeyou.observability.journal import Journal
 
     steady = {
         "streams": [
@@ -1808,7 +1811,7 @@ async def test_stream_capture_drain_reports_roster_tile_count() -> None:
 
 
 def test_parse_roster_keeps_all_entries_when_twin_name_collides() -> None:
-    from fakeyou.stream_capture import parse_roster
+    from fakeyou.audio.stream_capture import parse_roster
 
     payload = {
         "roster": [{"id": f"devices/{index}", "name": "Twin"} for index in range(5)],
@@ -1844,8 +1847,8 @@ def _collision_payload(names: list[str]) -> dict[str, object]:
 
 
 async def test_capture_drain_binds_four_streams_when_twin_names_collide() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = _collision_payload(["Twin"] * 5)
     page = meet_page([], evaluates=[payload])
@@ -1867,8 +1870,8 @@ async def test_capture_drain_binds_four_streams_when_twin_names_collide() -> Non
 
 
 async def test_capture_drain_leaves_colliding_self_entry_unbound() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = _collision_payload(["Twin"] * 4 + ["Host"])
     page = meet_page([], evaluates=[payload])
@@ -1884,8 +1887,8 @@ async def test_capture_drain_leaves_colliding_self_entry_unbound() -> None:
 
 
 async def test_capture_drain_binds_speakers_with_lurker_present() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = _collision_payload(["Twin"] * 4 + ["Host"])
     roster = list(payload["roster"])
@@ -1910,8 +1913,8 @@ async def test_capture_drain_binds_speakers_with_lurker_present() -> None:
 
 
 async def test_capture_drain_binds_four_humans_with_unique_names() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, CaptureDrainLoop
+    from fakeyou.audio.voice_activity import SlotBinder
 
     payload = _collision_payload(["Host", "Guest", "Visitor", "Partner", "Twin"])
     page = meet_page([], evaluates=[payload])
@@ -1930,8 +1933,8 @@ async def test_capture_drain_binds_four_humans_with_unique_names() -> None:
 
 
 async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None:
-    from fakeyou.journal import Journal
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+    from fakeyou.observability.journal import Journal
 
     payload = {
         "streams": [
@@ -1970,10 +1973,10 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
@@ -2019,10 +2022,10 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
@@ -2069,10 +2072,10 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
 
     from pipecat.frames.frames import TranscriptionFrame
 
+    from fakeyou.audio.voice_activity import SlotBinder
     from fakeyou.cli.join import build_transcript_callback
-    from fakeyou.journal import Journal
-    from fakeyou.record import MeetingRecord, meeting_record_path
-    from fakeyou.voice_activity import SlotBinder
+    from fakeyou.observability.journal import Journal
+    from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
@@ -2113,7 +2116,7 @@ async def test_registry_feed_stamps_capture_clock_on_input() -> None:
 async def test_tagged_callback_stamps_capture_clock() -> None:
     from pipecat.frames.frames import TranscriptionFrame
 
-    from fakeyou.audio import _tagged
+    from fakeyou.audio.audio import _tagged
 
     seen: list[TranscriptionFrame] = []
 
@@ -2248,7 +2251,7 @@ async def test_stream_capture_supervisor_releases_futile_slot() -> None:
 
 
 def test_parse_health_skips_malformed_entries() -> None:
-    from fakeyou.stream_capture import TapHealth, parse_health
+    from fakeyou.audio.stream_capture import TapHealth, parse_health
 
     payload = {
         "health": [
@@ -2265,7 +2268,7 @@ def test_parse_health_skips_malformed_entries() -> None:
 
 
 async def test_drain_loop_journals_slot_rescue_once() -> None:
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
 
     def payload(rescued: int) -> dict:
         return {
@@ -2296,7 +2299,7 @@ async def test_drain_loop_journals_slot_rescue_once() -> None:
 
 
 async def test_drain_loop_journals_released_slots_as_dropped() -> None:
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
 
     payload = {
         "streams": [],
@@ -2315,7 +2318,7 @@ async def test_drain_loop_journals_released_slots_as_dropped() -> None:
 
 
 async def test_drain_loop_ignores_malformed_released() -> None:
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
 
     def payload(released: object) -> dict:
         return {"streams": [], "roster": [], "dropped": 0, "released": released}
@@ -2354,7 +2357,7 @@ def test_parse_roster_names_keeps_id_name_and_drops_twin() -> None:
 
 
 async def test_capture_poll_binds_display_claim_from_roster() -> None:
-    from fakeyou.stream_capture import CaptureDrainLoop
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
 
     payload = {
         "streams": [

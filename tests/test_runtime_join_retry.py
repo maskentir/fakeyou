@@ -1,8 +1,8 @@
 import pytest
 
-from fakeyou.meet import JoinResult
-from fakeyou.runtime import run_join_with_retry, run_meeting_session
-from fakeyou.session import SessionConfig
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.meet import JoinResult
+from fakeyou.orchestration.runtime import run_join_with_retry, run_meeting_session
 from tests.fakes import (
     ENDED,
     IN_CALL,

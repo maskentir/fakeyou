@@ -5,23 +5,16 @@ from typing import Any
 
 import pytest
 
-from fakeyou import voice_activity
-from fakeyou.audio import _CaptureObserver
-from fakeyou.browser import open_direct_page
-from fakeyou.deaf import CaptureActivity
-from fakeyou.ingestion import extraction_instructions, meeting_windows
-from fakeyou.probe_replay import (
+from fakeyou.audio import voice_activity
+from fakeyou.audio.audio import _CaptureObserver
+from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.probe_replay import (
     LABEL_STABILITY_GATE,
     OVERLAP_UNKNOWN_GATE,
     replay_voice_labels,
     voice_fixture_from_probe,
 )
-from fakeyou.record import TranscriptEntry
-from fakeyou.report import build_session_report
-from fakeyou.runtime import run_meeting_session
-from fakeyou.session import SessionConfig
-from fakeyou.settings import DEFAULTS
-from fakeyou.voice_activity import (
+from fakeyou.audio.voice_activity import (
     MEET_AUDIO_SLOTS,
     VOICE_ACTIVITY_DRAIN_JS,
     SlotBinder,
@@ -31,6 +24,13 @@ from fakeyou.voice_activity import (
     voice_label,
     voice_speaker_name,
 )
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.memory.ingestion import extraction_instructions, meeting_windows
+from fakeyou.observability.report import build_session_report
+from fakeyou.orchestration.runtime import run_meeting_session
+from fakeyou.persistence.record import TranscriptEntry
 from tests.fakes import (
     IN_CALL,
     LINK,
@@ -755,7 +755,7 @@ def test_csrc_label_replay_gate_on_live_session() -> None:
 
 
 def test_binder_fleet_capacity_binds_three_remote_streams_stably() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS
 
     binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
     binder.update_roster(["remote-a", "remote-b", "remote-c"])
@@ -859,7 +859,7 @@ def test_binder_distinct_sync_sources_keep_per_slot_labels_without_follow() -> N
 
 
 def test_binder_binds_four_streams_when_five_share_the_roster() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS
 
     binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
     binder.update_roster([f"devices/{index}" for index in range(5)])
@@ -878,7 +878,7 @@ def test_binder_binds_four_streams_when_five_share_the_roster() -> None:
 
 
 def test_binder_never_binds_self_entry_to_a_speaking_slot() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS
 
     binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
     binder.update_roster(["devices/self"] + [f"devices/{index}" for index in range(4)])
@@ -894,7 +894,7 @@ def test_binder_never_binds_self_entry_to_a_speaking_slot() -> None:
 
 
 def test_binder_binds_speakers_with_lurker_in_roster() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS
 
     binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
     binder.update_roster([f"devices/{index}" for index in range(5)] + ["devices/lurker"])
@@ -913,7 +913,7 @@ def test_binder_binds_speakers_with_lurker_in_roster() -> None:
 
 
 def test_binder_departure_releases_only_one_tenure() -> None:
-    from fakeyou.stream_capture import STREAM_FLEET_SLOTS
+    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS
 
     binder = SlotBinder(capacity=STREAM_FLEET_SLOTS)
     binder.update_roster([f"devices/{index}" for index in range(5)])
@@ -1108,7 +1108,7 @@ def test_tracker_binds_two_humans_with_unique_names() -> None:
 
 
 def test_binder_adapter_exposes_registry_uuid() -> None:
-    from fakeyou.identity import SpeakerRegistry
+    from fakeyou.identity.identity import SpeakerRegistry
 
     registry = SpeakerRegistry()
     registry.update_roster(["dev-a"])
@@ -1128,7 +1128,7 @@ def test_binder_adapter_keeps_default_registry_private() -> None:
 
 
 def test_tracker_and_binder_share_registry_rows() -> None:
-    from fakeyou.identity import SpeakerRegistry
+    from fakeyou.identity.identity import SpeakerRegistry
 
     registry = SpeakerRegistry()
     registry.update_roster(["dev-a", "dev-b"])

@@ -13,7 +13,7 @@ from neo4j.time import DateTime as Neo4jDateTime
 from pipecat.frames.frames import TranscriptionFrame
 from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
 
-from fakeyou.settings import STTSettings
+from fakeyou.config.settings import STTSettings
 
 
 def test_graphiti_add_episode_accepts_the_arguments_ingestion_relies_on() -> None:
@@ -139,7 +139,7 @@ def test_init_chat_model_builds_claude_with_the_reply_timeout_and_retries() -> N
 def test_env_settings_source_exposes_mutable_env_vars(monkeypatch) -> None:
     from pydantic_settings.sources import EnvSettingsSource
 
-    from fakeyou.settings import Settings
+    from fakeyou.config.settings import Settings
 
     monkeypatch.setenv("FAKEYOU_REPLY__MODEL", "contract-model")
     source = EnvSettingsSource(Settings, env_prefix="FAKEYOU_", env_nested_delimiter="__")

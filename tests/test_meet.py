@@ -1,8 +1,8 @@
 import pytest
 
-from fakeyou.meet import (
+from fakeyou.meet.meet import (
     GuestJoinRequest,
-    _click_when_ready,
+    click_when_ready,
     disable_meeting_camera,
     enable_meeting_microphone,
     leave_meeting,
@@ -359,7 +359,7 @@ async def test_click_when_ready_resolves_locator_once_per_attempt() -> None:
         calls.append(1)
         return page.locator(ASK_SELECTOR)
 
-    failure = await _click_when_ready(locate, "join button", clock.sleep)
+    failure = await click_when_ready(locate, "join button", clock.sleep)
 
     assert failure is None
     assert calls == [1]
@@ -375,7 +375,7 @@ async def test_click_when_ready_resolves_fresh_locator_each_attempt() -> None:
         seen.append(locator)
         return locator
 
-    failure = await _click_when_ready(locate, "join button", clock.sleep)
+    failure = await click_when_ready(locate, "join button", clock.sleep)
 
     assert failure is None
     assert len(seen) == 2
@@ -396,7 +396,7 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
         async def click(self, **kwargs):
             calls["click"] = kwargs
 
-    failure = await _click_when_ready(_TimeoutLocator, "join button", FakeClock().sleep)
+    failure = await click_when_ready(_TimeoutLocator, "join button", FakeClock().sleep)
 
     assert failure is None
     assert calls["wait_for"] == {"state": "visible", "timeout": 2000}

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.browser import open_direct_page
-from fakeyou.faults import FaultReporter
-from fakeyou.ingestion_status import RecordLockError, record_lock
-from fakeyou.meet_action_ledger import (
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.session import SessionConfig
+from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.meet_action_ledger import (
     ACTIONS_FILE_NAME,
     LedgerError,
     MeetActionLedger,
@@ -19,24 +19,24 @@ from fakeyou.meet_action_ledger import (
     ledger_lock,
     reconcile_ledger,
 )
-from fakeyou.meet_actions import (
+from fakeyou.meet.meet_actions import (
     MeetActionResult,
     MeetActionSignals,
     lower_hand,
     raise_hand,
     send_chat,
 )
-from fakeyou.memory import MEET_ACTION_QUEUED, create_meet_action_tools
-from fakeyou.persona import (
+from fakeyou.memory.memory import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.memory.persona import (
     MEET_REFUSAL_TEXT,
     PersonaProfile,
     meeting_tool_names,
     refuse_meet_tool,
 )
-from fakeyou.provider_faults import ProviderFault
-from fakeyou.runtime import MeetActionDispatcher
-from fakeyou.session import SessionConfig
-from fakeyou.settings import DEFAULTS
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.orchestration.runtime import MeetActionDispatcher
+from fakeyou.persistence.ingestion_status import RecordLockError, record_lock
 from tests.fakes import (
     IN_CALL,
     LINK,
@@ -522,20 +522,18 @@ async def test_meet_action_writes_hold_single_writer_ledger_lock(tmp_path: Path)
     async def act() -> MeetActionResult:
         raise AssertionError("act must not run while the ledger lock is held")
 
-    with ledger_lock(record):
-        with pytest.raises(RecordLockError, match="locked"):
-            await execute_meet_action(
-                record,
-                meeting_id="meeting-ledger-5",
-                kind="raise_hand",
-                act=act,
-                observe=observe,
-                tool_call_id="call-contended",
-            )
-    with ledger_lock(record):
-        with pytest.raises(RecordLockError, match="locked"):
-            with ledger_lock(record):
-                pytest.fail("second writer must not acquire the lock")
+    with ledger_lock(record), pytest.raises(RecordLockError, match="locked"):
+        await execute_meet_action(
+            record,
+            meeting_id="meeting-ledger-5",
+            kind="raise_hand",
+            act=act,
+            observe=observe,
+            tool_call_id="call-contended",
+        )
+    with ledger_lock(record), pytest.raises(RecordLockError, match="locked"):
+        with ledger_lock(record):
+            pytest.fail("second writer must not acquire the lock")
 
 
 async def test_double_delivery_actuates_exactly_once(tmp_path: Path) -> None:
@@ -843,7 +841,7 @@ def test_ledger_load_treats_directory_as_error(tmp_path: Path) -> None:
 def test_loop_lock_registry_is_keyed_by_loop_object() -> None:
     import asyncio
 
-    from fakeyou import meet_action_ledger as ledger_module
+    from fakeyou.meet import meet_action_ledger as ledger_module
 
     async def fetch_lock() -> object:
         return ledger_module._loop_lock()
@@ -1101,9 +1099,9 @@ async def test_bound_dispatcher_stays_idle_without_tool_calls(tmp_path: Path) ->
 
 
 def test_meet_dispatcher_defines_no_timers_or_triggers() -> None:
-    source = (Path(__file__).resolve().parent.parent / "src" / "fakeyou" / "runtime.py").read_text(
-        encoding="utf-8"
-    )
+    source = (
+        Path(__file__).resolve().parent.parent / "src" / "fakeyou" / "orchestration" / "runtime.py"
+    ).read_text(encoding="utf-8")
     [node] = [
         entry
         for entry in ast.walk(ast.parse(source))

@@ -7,13 +7,13 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import Engine
 
-import fakeyou.assembly as assembly
-from fakeyou.assembly import VoiceprintLive, build_voiceprint_live, open_voiceprint
-from fakeyou.audio import TurnAudioTap
+import fakeyou.orchestration.assembly as assembly
+from fakeyou.audio.audio import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintStore
-from fakeyou.settings import Settings
-from fakeyou.verify import CalibrationArtifact
+from fakeyou.identity.verify import CalibrationArtifact
+from fakeyou.orchestration.assembly import VoiceprintLive, build_voiceprint_live, open_voiceprint
 from tests.fakes import FakeEmbedder, InMemoryVoiceprints, make_record
 
 
@@ -74,9 +74,8 @@ def test_enabled_flag_with_broken_calibration_path_raises(
     stub_embedder(monkeypatch, FakeEmbedder((1.0, 0.0)))
     migrated_settings.identity.voiceprint_calibration_path = str(tmp_path / "missing.json")
 
-    with pytest.raises(FakeYouError) as caught:
-        with open_voiceprint(migrated_settings):
-            pass
+    with pytest.raises(FakeYouError) as caught, open_voiceprint(migrated_settings):
+        pass
 
     assert caught.value.code is ErrorCode.VOICEPRINT_CALIBRATION_INVALID
 

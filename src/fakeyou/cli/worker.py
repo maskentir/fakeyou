@@ -6,8 +6,8 @@ from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
-from fakeyou.settings import Settings
-from fakeyou.worker_backend import (
+from fakeyou.config.settings import Settings
+from fakeyou.worker.worker_backend import (
     DockerWorkerBackend,
     WorkerBackend,
     WorkerStartRequest,

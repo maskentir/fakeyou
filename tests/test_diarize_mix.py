@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.diarize_mix import mix_session_slots, split_chunks
+from fakeyou.audio.diarize_mix import mix_session_slots, split_chunks
 
 
 def _write_slot_wav(path: Path, samples: list[int]) -> None:

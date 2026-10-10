@@ -1,7 +1,7 @@
 from fakeyou.cli.output import emit_json
+from fakeyou.config.settings import Settings
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import SchemaStatus, stamp, status, upgrade
-from fakeyou.settings import Settings
 
 
 def db_upgrade(*, settings: Settings) -> None:

@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.brief import context_path
 from fakeyou.catalog.errors import ErrorCode
-from fakeyou.ingestion_status import (
+from fakeyou.persistence.brief import context_path
+from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     RecordLockError,
     hash_meeting_record,
@@ -328,7 +328,7 @@ def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
         time.sleep(0.6)
         monkeypatch.setattr(
-            "fakeyou.ingestion_status.socket.gethostname", lambda: "other-container"
+            "fakeyou.persistence.ingestion_status.socket.gethostname", lambda: "other-container"
         )
         with pytest.raises(RecordLockError, match="locked") as error:
             with record_lock(record, purpose="ingestion", stale_after_seconds=0.3):
@@ -439,7 +439,7 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
 ) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
     real_write = __import__(
-        "fakeyou.ingestion_status", fromlist=["write_atomically"]
+        "fakeyou.persistence.ingestion_status", fromlist=["write_atomically"]
     ).write_atomically
     calls: list[str] = []
 
@@ -451,7 +451,7 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
 
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
         first = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
-        monkeypatch.setattr("fakeyou.ingestion_status.write_atomically", fail_once)
+        monkeypatch.setattr("fakeyou.persistence.ingestion_status.write_atomically", fail_once)
         time.sleep(0.6)
         second = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
         assert len(calls) >= 2
@@ -461,7 +461,7 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
 
 
 def test_describe_lease_reports_absent_live_stale_and_corrupt(tmp_path: Path) -> None:
-    from fakeyou.ingestion_status import describe_lease
+    from fakeyou.persistence.ingestion_status import describe_lease
 
     record = tmp_path / "meeting-9" / "record.jsonl"
     path = lock_path(record)

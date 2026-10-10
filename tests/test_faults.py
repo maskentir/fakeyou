@@ -2,10 +2,10 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fakeyou.faults import Fault, FaultReporter, record_consumer_fault
-from fakeyou.journal import Journal
-from fakeyou.provider_faults import ProviderFault
-from fakeyou.report import build_session_report, read_journal
+from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
+from fakeyou.observability.journal import Journal
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.observability.report import build_session_report, read_journal
 
 
 def _reporter(**overrides):

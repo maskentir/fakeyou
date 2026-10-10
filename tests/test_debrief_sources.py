@@ -7,16 +7,15 @@ from typing import Any
 
 import pytest
 
-from fakeyou.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
 from fakeyou.catalog.errors import ErrorCode
-from fakeyou.debrief_schema import (
+from fakeyou.debrief.debrief_schema import (
     DebriefDraft,
     DebriefItem,
     DebriefValidationError,
     EvidenceRef,
     ObjectiveFinding,
 )
-from fakeyou.debrief_sources import (
+from fakeyou.debrief.debrief_sources import (
     SourceEntry,
     chunk_sources,
     load_context_snapshot,
@@ -24,10 +23,15 @@ from fakeyou.debrief_sources import (
     validate_draft,
     validate_evidence,
 )
-from fakeyou.diarize_client import DiarizedTurn
-from fakeyou.diarize_correction import JSON_FILE_NAME, correction_uuid, write_correction_bundle
-from fakeyou.faults import FaultReporter
-from fakeyou.journal import Journal
+from fakeyou.diarization.diarize_client import DiarizedTurn
+from fakeyou.diarization.diarize_correction import (
+    JSON_FILE_NAME,
+    correction_uuid,
+    write_correction_bundle,
+)
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
 
 AT = datetime(2026, 10, 3, tzinfo=UTC)
 PRIVATE_MARKER = "PRIVATE-TRANSCRIPT-MARKER"
@@ -892,7 +896,7 @@ def test_unexpected_correction_errors_propagate(
     def boom(record_path: Path) -> list[Any]:
         raise RuntimeError("correction backend failed")
 
-    monkeypatch.setattr("fakeyou.debrief_sources.load_corrected_record", boom)
+    monkeypatch.setattr("fakeyou.debrief.debrief_sources.load_corrected_record", boom)
 
     with pytest.raises(RuntimeError):
         load_record_snapshot(path)

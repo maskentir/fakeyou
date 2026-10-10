@@ -8,10 +8,10 @@ import pytest
 from pipecat.transports.base_transport import TransportParams
 from pydantic import ValidationError
 
-from fakeyou.audio_persist import AudioRecordingSummary, SlotAudioWriter
-from fakeyou.journal import Journal
-from fakeyou.settings import AudioSettings, Configuration
-from fakeyou.stream_capture import StreamAudioInput, StreamChunk, StreamRegistry
+from fakeyou.audio.stream_capture import StreamAudioInput, StreamChunk, StreamRegistry
+from fakeyou.config.settings import AudioSettings, Configuration
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.audio_persist import AudioRecordingSummary, SlotAudioWriter
 
 
 class FakeClock:

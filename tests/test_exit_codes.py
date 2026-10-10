@@ -1,7 +1,7 @@
 from typing import get_args
 
 from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
-from fakeyou.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import TerminalReason
 
 FAILING_REASONS = frozenset(
     {"infra_failure", "browser_failure", "audio_failure", "conversation_failure"}

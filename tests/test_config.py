@@ -10,7 +10,7 @@ from fakeyou.catalog.config import (
     NESTED_DELIMITER,
     ConfigKey,
 )
-from fakeyou.settings import Settings
+from fakeyou.config.settings import Settings
 
 
 def _env_path(key: ConfigKey) -> tuple[str, ...]:

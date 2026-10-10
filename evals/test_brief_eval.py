@@ -37,23 +37,23 @@ from evals.test_trust_eval import (
     trust_gate,
     write_trust_summary,
 )
-from fakeyou.brief import MeetingBrief, brief_digest
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.conversation import (
-    TranscriptEvent,
+from fakeyou.config.settings import CompatibleReply, OpenAIReply, Settings
+from fakeyou.conversation.conversation import (
     cap_spoken_reply,
 )
-from fakeyou.greetings import neutral_greeting
-from fakeyou.memory import RECALL_EMPTY_RESULT
-from fakeyou.persona import (
+from fakeyou.foundation.greetings import neutral_greeting
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.memory import RECALL_EMPTY_RESULT
+from fakeyou.memory.persona import (
     PersonaProfile,
     build_system_prompt,
     meeting_tool_names,
     memory_wiring,
     persona_digest,
 )
-from fakeyou.providers import create_chat_model, create_fallback_chat_model
-from fakeyou.settings import CompatibleReply, OpenAIReply, Settings
+from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
+from fakeyou.persistence.brief import MeetingBrief, brief_digest
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "brief-scenarios.json"
 BRIEF_RUNS = 3

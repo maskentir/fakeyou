@@ -5,8 +5,8 @@ from typing import get_args
 
 import pytest
 
-from fakeyou.lifecycle import LifecycleAttribution, LifecycleEventKind
-from fakeyou.taxonomy import EventVerb, Subsystem, TerminalReason
+from fakeyou.foundation.taxonomy import EventVerb, Subsystem, TerminalReason
+from fakeyou.orchestration.lifecycle import LifecycleAttribution, LifecycleEventKind
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "src" / "fakeyou"
 EVENT_VERBS = frozenset(get_args(EventVerb))
@@ -122,7 +122,7 @@ LIFECYCLE_VERBS = frozenset(
 
 @pytest.mark.parametrize("kind", sorted(get_args(LifecycleEventKind)))
 def test_lifecycle_event_kinds_end_with_a_past_participle(kind: str) -> None:
-    assert kind.split("_")[-1] in LIFECYCLE_VERBS
+    assert kind.rsplit("_", maxsplit=1)[-1] in LIFECYCLE_VERBS
 
 
 @pytest.mark.parametrize("reason", sorted(get_args(TerminalReason)))

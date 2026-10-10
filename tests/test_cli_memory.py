@@ -12,17 +12,22 @@ import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.cli.main import build_parser
 from fakeyou.cli.memory import _finish_ingest, ingest_recorded_meeting
-from fakeyou.conversation import TranscriptEvent
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.faults import FaultReporter
-from fakeyou.ingestion import ingest_corrections
-from fakeyou.ingestion_status import IngestionStatus, read_status, status_path, write_status
-from fakeyou.invariants import CAPTURE_SAMPLE_RATE
-from fakeyou.journal import Journal
-from fakeyou.persona import PersonaProfile
-from fakeyou.record import MeetingRecord, meeting_record_path
-from fakeyou.settings import Settings
-from fakeyou.worker_backend import DockerWorkerBackend
+from fakeyou.config.settings import Settings
+from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory.ingestion import ingest_corrections
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    read_status,
+    status_path,
+    write_status,
+)
+from fakeyou.persistence.record import MeetingRecord, meeting_record_path
+from fakeyou.worker.worker_backend import DockerWorkerBackend
 from tests.fakes import FINISHED_ROWS, FakeRunner, make_graphiti, write_journal
 
 PERSONA_DATA = {

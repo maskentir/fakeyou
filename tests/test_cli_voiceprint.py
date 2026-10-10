@@ -30,9 +30,9 @@ from fakeyou.cli.voiceprint import (
     voiceprint_purge_expired,
     voiceprint_verify,
 )
+from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintRecord, VoiceprintStore
-from fakeyou.settings import Settings
-from fakeyou.voiceprint_embed import SpeakerEmbedder
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
 from tests.fakes import InMemoryVoiceprints, RecordingJournal
 
 CONSENT_AT = datetime(2026, 10, 7, 10, 0, 0, tzinfo=UTC)
