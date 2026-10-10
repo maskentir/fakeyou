@@ -786,7 +786,7 @@ def test_trust_artifacts_sanitize_credentials(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("role_name", ["reply", "reply_fallback"])
 @pytest.mark.parametrize(
-    "field,value",
+    ("field", "value"),
     [
         ("unchanged", None),
         ("model", "different-writer-model"),

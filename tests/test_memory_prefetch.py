@@ -365,7 +365,7 @@ async def test_prefetch_says_explicitly_when_memory_holds_nothing(
 
 
 @pytest.mark.parametrize(
-    "options,recall",
+    ("options", "recall"),
     [
         ({"search_error": RuntimeError("graph down")}, RecallSettings()),
         ({"search_gate": asyncio.Event()}, RecallSettings(timeout_seconds=0.01)),
@@ -449,7 +449,7 @@ async def test_fallback_retry_reuses_the_prefetched_evidence_of_the_turn(
 
 
 @pytest.mark.parametrize(
-    "names,strategy,expected",
+    ("names", "strategy", "expected"),
     [
         (RECALL, "tool", (RECALL, False)),
         (RECALL, "prefetch", (frozenset(), True)),
@@ -507,7 +507,7 @@ async def opened_agent(
 
 
 @pytest.mark.parametrize(
-    "strategy,tools,prefetch",
+    ("strategy", "tools", "prefetch"),
     [
         ("tool", ["recall_meeting_context"], False),
         ("prefetch", [], True),

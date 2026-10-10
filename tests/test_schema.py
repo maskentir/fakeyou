@@ -59,7 +59,8 @@ def add_drift_column(engine: Engine) -> None:
 
 def test_head_revision_is_the_revision_declared_by_the_baseline_migration() -> None:
     spec = importlib.util.spec_from_file_location("baseline_migration", BASELINE)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     baseline = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(baseline)
 
@@ -198,12 +199,10 @@ def test_baseline_downgrade_refuses_to_drop_biometric_data(migrated_engine: Engi
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
 
-    with (
-        pytest.raises(RuntimeError, match="refusing to drop voiceprints"),
-        migrated_engine.begin() as connection,
-    ):
+    with migrated_engine.begin() as connection:
         config.attributes["connection"] = connection
-        command.downgrade(config, "base")
+        with pytest.raises(RuntimeError, match="refusing to drop voiceprints"):
+            command.downgrade(config, "base")
 
     assert inspect(migrated_engine).has_table("voiceprints")
     assert status(migrated_engine).current == head_revision()

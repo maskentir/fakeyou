@@ -171,7 +171,7 @@ def test_write_after_close_raises(tmp_path: Path) -> None:
     writer = _writer(tmp_path / "audio", FakeClock(), lines)
     writer.close()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="writer is closed"):
         writer.write_chunk(0, 0, 1000.0, _pcm(7, 80))
 
 

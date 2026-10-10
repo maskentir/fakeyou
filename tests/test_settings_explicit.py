@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -81,6 +82,24 @@ def test_inspection_does_not_require_credentials(capsys):
     assert json.loads(capsys.readouterr().out) == settings.model_dump(mode="json")
 
 
+_REPLY_MATCH = {
+    '{"model": "custom", "provider": "openai_compatible"}': "Field required",
+    '{"model": "openai:gpt-4.1-mini", "provider": "openai"}': (
+        "must not contain a provider prefix"
+    ),
+    '{"extra_body": {}, "provider": "anthropic"}': "Extra inputs are not permitted",
+    '{"provider": "anthropic", "reasoning_effort": "minimal"}': ("Extra inputs are not permitted"),
+    '{"extra_body": {}, "provider": "google"}': "Extra inputs are not permitted",
+    '{"provider": "google", "reasoning_effort": "unlimited"}': (
+        "Input should be 'minimal', 'low', 'medium' or 'high'"
+    ),
+    '{"model": "google_genai:gemini-3.8-flash", "provider": "google"}': (
+        "must not contain a provider prefix"
+    ),
+    '{"provider": "ollama"}': "does not match any of the expected tags",
+}
+
+
 @pytest.mark.parametrize(
     "reply",
     [
@@ -95,7 +114,7 @@ def test_inspection_does_not_require_credentials(capsys):
     ],
 )
 def test_invalid_provider_configuration_is_rejected(reply):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=_REPLY_MATCH[json.dumps(reply, sort_keys=True)]):
         Settings(_env_file=None, reply=reply)
 
 
@@ -111,7 +130,12 @@ def test_google_reply_accepts_reasoning_effort_with_unchanged_default():
     [{"provider": "openai", "voice": "unknown"}, {"provider": "minimax", "sample_rate": 16000}],
 )
 def test_invalid_voice_or_playback_rate_is_rejected(tts):
-    with pytest.raises(ValueError):
+    expected = (
+        "unsupported OpenAI voice"
+        if tts["provider"] == "openai"
+        else "TTS sample_rate must equal playback sample rate"
+    )
+    with pytest.raises(ValueError, match=expected):
         Settings(_env_file=None, tts=tts)
 
 
@@ -260,7 +284,7 @@ async def test_anthropic_reranker_orders_scores_and_rejects_incomplete_results()
         ("irrelevant", 0.2),
     ]
     client.generate_response.return_value = {"scores": [0.5]}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="shorter than argument 1"):
         await reranker.rank("agenda", ["first", "second"])
 
 
@@ -336,7 +360,7 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
 
 @pytest.mark.parametrize("role", ["reply", "reply_fallback"])
 @pytest.mark.parametrize(
-    "provider,expected",
+    ("provider", "expected"),
     [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
 )
 def test_blank_reply_endpoint_ignores_library_destination_environment(
@@ -406,7 +430,7 @@ def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key
 
 
 @pytest.mark.parametrize(
-    "client,expected",
+    ("client", "expected"),
     [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
 )
 def test_blank_memory_endpoints_ignore_library_destination_environment(

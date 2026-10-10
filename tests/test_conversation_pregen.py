@@ -470,7 +470,8 @@ async def test_pregen_journal_diff_values_are_metadata_only(journal) -> None:
     for row in rows:
         for key in ("dist", "words_pre", "words_final"):
             if key in row:
-                assert isinstance(row[key], int) and not isinstance(row[key], bool)
+                assert isinstance(row[key], int)
+                assert not isinstance(row[key], bool)
         if "norm_dist_bucket" in row:
             assert isinstance(row["norm_dist_bucket"], float)
         if "diff_class" in row:
@@ -514,7 +515,8 @@ async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None
     assert before is not None
     request_id = before.request_id
     task = before.task
-    assert task is not None and not task.done()
+    assert task is not None
+    assert not task.done()
     await loop.handle_interim("can you help me today")
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1

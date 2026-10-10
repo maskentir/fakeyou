@@ -228,8 +228,8 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
     async def on_transcript(frame: TranscriptionFrame) -> None:
         pass
 
-    with pytest.raises(MeetingAudioError) as caught:
-        async with asyncio.timeout(2):
+    async with asyncio.timeout(2):
+        with pytest.raises(MeetingAudioError) as caught:
             async with open_meeting_audio(
                 transport=_Transport(),
                 callbacks=StreamCallbacks(on_transcript),

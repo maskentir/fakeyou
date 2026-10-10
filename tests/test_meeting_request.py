@@ -46,7 +46,7 @@ def test_a_request_that_honours_every_rule_raises_nothing() -> None:
 
 
 @pytest.mark.parametrize(
-    "overrides,code",
+    ("overrides", "code"),
     [
         pytest.param({"link": ""}, ErrorCode.MEETING_LINK_INVALID, id="link-empty"),
         pytest.param({"link": "not-a-url"}, ErrorCode.MEETING_LINK_INVALID, id="link-no-scheme"),

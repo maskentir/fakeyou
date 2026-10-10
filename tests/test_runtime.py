@@ -503,7 +503,7 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
 @pytest.mark.parametrize("field", ["owner_id", "twin_id", "meeting_id"])
 @pytest.mark.parametrize("value", ["", "../another-profile", "contains:separator"])
 def test_session_rejects_invalid_identity(field, value) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="String should match pattern"):
         _config(**{field: value})
 
 
@@ -522,7 +522,8 @@ def test_session_rejects_invalid_identity(field, value) -> None:
 )
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
 def test_session_rejects_invalid_timing(field, value) -> None:
-    with pytest.raises(ValueError):
+    expected = "finite number" if isinstance(value, float) else "greater than 0"
+    with pytest.raises(ValueError, match=expected):
         _config(**{field: value})
 
 
@@ -562,7 +563,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
 
 
 @pytest.mark.parametrize(
-    "contents,evaluates,counts,overrides,expected,detail",
+    ("contents", "evaluates", "counts", "overrides", "expected", "detail"),
     [
         ([EXPLICIT_DENIED], [], {}, {}, "denied_by_host", ""),
         ([DENIED], [NO_CAPTCHA], {}, {}, "blocked_by_platform", ""),

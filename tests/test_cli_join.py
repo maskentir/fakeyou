@@ -111,7 +111,7 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
 
 
 @pytest.mark.parametrize(
-    "terminal_reason,exit_code",
+    ("terminal_reason", "exit_code"),
     [
         ("stopped_by_owner", 0),
         ("denied_by_host", 0),
@@ -196,7 +196,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
     assert (tmp_path / "journals" / "meeting-1.jsonl").is_file()
 
 
-@pytest.mark.parametrize("audio_enabled,speech", [(False, "hello"), (True, " ")])
+@pytest.mark.parametrize(("audio_enabled", "speech"), [(False, "hello"), (True, " ")])
 async def test_join_rejects_invalid_speech_before_browser_start(join, audio_enabled, speech):
     with pytest.raises(FakeYouError) as caught:
         await join(
@@ -228,7 +228,7 @@ async def test_join_rejects_invalid_link(join, link) -> None:
 
 
 @pytest.mark.parametrize(
-    "lobby_timeout,duration,code",
+    ("lobby_timeout", "duration", "code"),
     [
         (0.0, None, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
         (-1.0, None, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
@@ -323,7 +323,7 @@ def test_cli_rejects_owner_alias(command, capsys, monkeypatch) -> None:
     assert "No such option: --owner" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("argv,expected", [(["--headless"], True), ([], None)])
+@pytest.mark.parametrize(("argv", "expected"), [(["--headless"], True), ([], None)])
 def test_join_headless_flag(monkeypatch, argv, expected) -> None:
     captured: dict = {}
 
@@ -631,7 +631,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
 
 
 @pytest.mark.parametrize(
-    "graphiti_options,kind",
+    ("graphiti_options", "kind"),
     [
         ({"connect_error": ConnectionRefusedError("refused")}, "unknown"),
         ({"connect_gate": asyncio.Event()}, "timeout"),

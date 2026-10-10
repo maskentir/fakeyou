@@ -444,7 +444,8 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
     assert first.value.code == 1
     path = status_path(meeting_record_path(settings.paths.record_dir, "meeting-9"))
     failed = read_status(path)
-    assert failed is not None and failed.status == "failed"
+    assert failed is not None
+    assert failed.status == "failed"
 
     await cli_memory.ingest_recorded_meeting(**arguments)
 
@@ -622,7 +623,8 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
     assert caught.value.code == 1
     assert len(graphiti.added) == 1
     status = read_status(status_path(record_path))
-    assert status is not None and status.status == "failed"
+    assert status is not None
+    assert status.status == "failed"
 
 
 async def test_memory_ingest_rejects_a_foreign_group_status(
@@ -690,7 +692,8 @@ async def test_memory_ingest_corrupt_status_starts_fresh(
 
     assert len(graphiti.added) == 1
     status = read_status(path)
-    assert status is not None and status.status == "completed"
+    assert status is not None
+    assert status.status == "completed"
 
 
 async def test_memory_ingest_partial_record_is_not_completed(
@@ -714,7 +717,8 @@ async def test_memory_ingest_partial_record_is_not_completed(
     assert caught.value.code == 1
     assert opened == []
     status = read_status(status_path(record_path))
-    assert status is not None and status.status == "failed"
+    assert status is not None
+    assert status.status == "failed"
 
 
 async def test_memory_ingest_empty_record_reports_zero_windows(
@@ -770,7 +774,8 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     assert caught.value.code == 1
     assert graphiti.added == []
     status = read_status(status_path(meeting_record_path(settings.paths.record_dir, "meeting-9")))
-    assert status is not None and status.status == "interrupted"
+    assert status is not None
+    assert status.status == "interrupted"
 
 
 async def test_ingest_until_stopped_uses_the_caller_stop_event(

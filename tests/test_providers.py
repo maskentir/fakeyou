@@ -241,8 +241,10 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
 
     assert all(extracted.values()), f"Graphiti extraction produced no fact edge: {extracted}"
     first, second = employers
-    assert first in recalled[first] and second.split()[0] not in recalled[first]
-    assert second in recalled[second] and first.split()[0] not in recalled[second]
+    assert first in recalled[first]
+    assert second.split()[0] not in recalled[first]
+    assert second in recalled[second]
+    assert first.split()[0] not in recalled[second]
     assert leftovers == [0, 0]
 
 

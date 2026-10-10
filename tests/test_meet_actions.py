@@ -335,7 +335,8 @@ async def test_ledger_records_intent_before_first_click(tmp_path: Path) -> None:
     requested = journal.events("meet_action_requested")
     finished = journal.events("meet_action_finished")
     assert [row["action_id"] for row in requested] == ["call-1"]
-    assert finished and finished[0]["observed"] is True
+    assert finished
+    assert finished[0]["observed"] is True
     assert SECRET_PHRASE not in json.dumps(journal.lines)
 
 

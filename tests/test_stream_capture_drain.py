@@ -506,7 +506,9 @@ def test_parse_drain_decodes_pcm_windows() -> None:
         "dropped": 0,
     }
     (chunk,) = parse_drain(payload)
-    assert chunk.slot == 0 and chunk.csrcs == (111,) and len(chunk.pcm) == 4
+    assert chunk.slot == 0
+    assert chunk.csrcs == (111,)
+    assert len(chunk.pcm) == 4
 
 
 @pytest.mark.parametrize(
@@ -845,7 +847,8 @@ async def test_stream_capture_reports_sync_sources_without_mixer_overlap() -> No
     assert len(drained["streams"]) == 2
     csrcs = [tuple(entry["csrcs"]) for entry in drained["streams"]]
     assert all(3707908267 not in found for found in csrcs)
-    assert csrcs[0] and csrcs[1]
+    assert csrcs[0]
+    assert csrcs[1]
     assert set(csrcs[0]).isdisjoint(csrcs[1])
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])

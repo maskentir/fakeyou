@@ -25,7 +25,7 @@ def test_settings_fixture_cleans_environment_and_uses_the_real_schema(monkeypatc
 
 
 @pytest.mark.parametrize(
-    "method,args",
+    ("method", "args"),
     [("search", ("agenda",)), ("add_episode", ()), ("retrieve_episodes", ())],
 )
 async def test_graphiti_double_rejects_unknown_library_arguments(graphiti, method, args):

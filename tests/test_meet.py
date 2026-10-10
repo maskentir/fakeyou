@@ -548,7 +548,7 @@ def test_with_pinned_meet_locale_keeps_unusable_links() -> None:
 
 
 @pytest.mark.parametrize(
-    "toggle,current,opposite,device",
+    ("toggle", "current", "opposite", "device"),
     [
         (enable_meeting_microphone, MIC_ON_SELECTOR, MIC_OFF_SELECTOR, "microphone"),
         (disable_meeting_camera, CAM_OFF_SELECTOR, CAM_ON_SELECTOR, "camera"),

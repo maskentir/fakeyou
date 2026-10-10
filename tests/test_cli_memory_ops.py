@@ -287,7 +287,7 @@ _CORRECT_SOURCE = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    "text,episode_uuid,source_at,code,match",
+    ("text", "episode_uuid", "source_at", "code", "match"),
     [
         ("  ", _CORRECT_TARGET, _CORRECT_SOURCE, ErrorCode.MEMORY_NOTE_TEXT_BLANK, "blank"),
         ("Fixed.", "not-a-uuid", _CORRECT_SOURCE, ErrorCode.MEMORY_EPISODE_NOT_UUID, "UUID"),
@@ -527,7 +527,7 @@ async def test_memory_forget_episode_uses_persona_group(
 
 
 @pytest.mark.parametrize(
-    "meeting_id,episode_uuid",
+    ("meeting_id", "episode_uuid"),
     [(None, None), ("meeting-9", "episode-7")],
 )
 async def test_memory_forget_validates_before_opening_memory(
@@ -566,7 +566,7 @@ async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memor
 
 
 @pytest.mark.parametrize(
-    "argv,target,expected",
+    ("argv", "target", "expected"),
     [
         (
             ["memory-add", "A note.", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],

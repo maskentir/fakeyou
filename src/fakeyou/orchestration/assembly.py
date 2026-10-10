@@ -261,7 +261,8 @@ class _ConversationBuilder:
             return None
         store = self._agent.visual_store
         captioner = self._agent.visual_captioner
-        assert store is not None and captioner is not None
+        assert store is not None
+        assert captioner is not None
         return create_visual_resolver(store, captioner)
 
     def add_memory(self, visual: VisualCaptionResolver | None) -> None:
@@ -295,7 +296,8 @@ class _ConversationBuilder:
             return
         store = self._agent.visual_store
         captioner = self._agent.visual_captioner
-        assert store is not None and captioner is not None
+        assert store is not None
+        assert captioner is not None
         self._middleware.append(
             create_visual_hydrate_middleware(
                 store,

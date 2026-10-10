@@ -206,7 +206,8 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
                 await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
                 for thread_id in threads
             ]
-            assert stored[0] is not None and stored[1] is not None
+            assert stored[0] is not None
+            assert stored[1] is not None
             assert stored[0].checkpoint["channel_values"]["phase"] == "lobby"
             assert stored[1].checkpoint["channel_values"]["phase"] == "preparing"
         async with open_checkpointer(dsn) as saver:
@@ -214,7 +215,8 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
                 await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
                 for thread_id in threads
             ]
-            assert reopened[0] is not None and reopened[1] is not None
+            assert reopened[0] is not None
+            assert reopened[1] is not None
             assert reopened[0].checkpoint["channel_values"]["phase"] == "lobby"
             assert reopened[1].checkpoint["channel_values"]["phase"] == "preparing"
     finally:

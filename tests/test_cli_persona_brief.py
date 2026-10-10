@@ -198,7 +198,7 @@ async def test_join_rejects_unreadable_persona(
     assert caught.value.code is ErrorCode.MEMORY_PERSONA_UNREADABLE
 
 
-@pytest.mark.parametrize("twin_name,expected", [(None, "Rani Twin"), ("Override", "Override")])
+@pytest.mark.parametrize(("twin_name", "expected"), [(None, "Rani Twin"), ("Override", "Override")])
 async def test_join_persona_display_name_yields_to_explicit_twin_name(
     session_run,
     join,
@@ -482,7 +482,7 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
 
 
 @pytest.mark.parametrize(
-    "overrides,match,code",
+    ("overrides", "match", "code"),
     [
         (
             {"audio_enabled": False, "conversation_enabled": False, "persona_path": None},
@@ -550,7 +550,7 @@ async def test_join_brief_only_refuses_memory_before_resources(
 
 
 @pytest.mark.parametrize(
-    "content,match,code",
+    ("content", "match", "code"),
     [
         (None, "--brief cannot be read", ErrorCode.MEETING_BRIEF_UNREADABLE),
         (
@@ -748,7 +748,7 @@ async def test_join_brief_resume_reuses_the_matching_context_unchanged(
 
 
 @pytest.mark.parametrize(
-    "change,match,code",
+    ("change", "match", "code"),
     [
         ("persona", "meeting context differs.*new meeting ID", ErrorCode.MEETING_CONTEXT_DIFFERS),
         ("brief", "meeting context differs.*new meeting ID", ErrorCode.MEETING_CONTEXT_DIFFERS),

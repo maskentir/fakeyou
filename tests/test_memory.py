@@ -327,7 +327,8 @@ async def test_recall_merges_identical_facts_before_applying_the_limit(
 def test_current_facts_filter_excludes_invalidated_and_expired_edges() -> None:
     search_filter = memory_module.CURRENT_FACTS_FILTER
 
-    assert search_filter.invalid_at is not None and search_filter.expired_at is not None
+    assert search_filter.invalid_at is not None
+    assert search_filter.expired_at is not None
     for groups in (search_filter.invalid_at, search_filter.expired_at):
         assert [[item.comparison_operator for item in group] for group in groups] == [
             [ComparisonOperator.is_null]
@@ -685,7 +686,7 @@ async def test_forget_meeting_stops_when_an_episode_survives_removal(
     assert caught.value.code is ErrorCode.MEMORY_FORGET_INCOMPLETE
 
 
-@pytest.mark.parametrize("group_id,allowed", [("team_alpha", True), ("team_beta", False)])
+@pytest.mark.parametrize(("group_id", "allowed"), [("team_alpha", True), ("team_beta", False)])
 async def test_forget_episode_only_removes_episodes_in_the_persona_group(
     monkeypatch: pytest.MonkeyPatch, group_id: str, allowed: bool
 ) -> None:
@@ -851,6 +852,7 @@ async def test_memory_context_closes_owned_transports(provider, fail_body, monke
             await original(client)
 
         monkeypatch.setattr(sdk, "close", close)
+    error: RuntimeError | None = None
     try:
         async with open_graphiti_memory(config) as memory:
             clients = [memory.llm_client.client, memory.embedder.client]
@@ -860,8 +862,11 @@ async def test_memory_context_closes_owned_transports(provider, fail_body, monke
                 assert memory.cross_encoder.client is memory.llm_client
             if fail_body:
                 raise RuntimeError("setup failed")
-    except RuntimeError as error:
-        assert fail_body and str(error) == "setup failed"
+    except RuntimeError as caught:
+        error = caught
+    assert (error is not None) == fail_body
+    if error is not None:
+        assert str(error) == "setup failed"
     try:
         assert all(client.is_closed() for client in clients)
         assert [closed.count(client) for client in clients] == [1] * len(clients)
@@ -871,7 +876,7 @@ async def test_memory_context_closes_owned_transports(provider, fail_body, monke
 
 
 @pytest.mark.parametrize(
-    "component,provider",
+    ("component", "provider"),
     [
         ("AnthropicClient", "anthropic"),
         ("OpenAIClient", "openai"),

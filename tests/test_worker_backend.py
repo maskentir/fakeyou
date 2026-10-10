@@ -89,16 +89,25 @@ def test_start_runs_a_labeled_detached_worker_with_join_arguments(tmp_path: Path
     assert started.container_name == "fakeyou-worker-meeting-9"
     run = next(command for command in runner.commands if "run" in command)
     assert run[:3] == ["docker", "compose", "-f"]
-    assert "-d" in run and "--rm" in run
-    assert "--name" in run and "fakeyou-worker-meeting-9" in run
+    assert "-d" in run
+    assert "--rm" in run
+    assert "--name" in run
+    assert "fakeyou-worker-meeting-9" in run
     join = run[run.index("join") :]
     assert join[1] == "https://meet.google.com/abc-defg-hij"
-    assert "--meeting-id" in join and "meeting-9" in join
-    assert "--persona" in join and ".runtime/persona.json" in join
-    assert "--brief" in join and ".runtime/brief.json" in join
-    assert "--memory" in join and "--converse" in join and "--audio" in join
-    assert "--duration" in join and "600.0" in join
-    assert "--lobby-timeout" in join and "60.0" in join
+    assert "--meeting-id" in join
+    assert "meeting-9" in join
+    assert "--persona" in join
+    assert ".runtime/persona.json" in join
+    assert "--brief" in join
+    assert ".runtime/brief.json" in join
+    assert "--memory" in join
+    assert "--converse" in join
+    assert "--audio" in join
+    assert "--duration" in join
+    assert "600.0" in join
+    assert "--lobby-timeout" in join
+    assert "60.0" in join
 
 
 def test_compose_override_labels_the_container_per_meeting() -> None:
@@ -896,7 +905,8 @@ def test_ingest_runs_memory_ingest_in_a_foreground_container(tmp_path: Path) -> 
     run = next(command for command in runner.commands if "run" in command)
     assert "-d" not in run
     assert "--rm" in run
-    assert "--name" in run and "fakeyou-ingest-meeting-9" in run
+    assert "--name" in run
+    assert "fakeyou-ingest-meeting-9" in run
     assert run.count("-f") == 2
     tail = run[run.index("fakeyou") + 1 :]
     assert tail == [

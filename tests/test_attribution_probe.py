@@ -721,7 +721,7 @@ def test_reference_precision_uses_dominant_margin() -> None:
 
 
 def test_page_to_mono_rejects_empty_anchors() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="page clock mapping needs at least one anchor"):
         page_to_mono(1000.0, [])
 
 

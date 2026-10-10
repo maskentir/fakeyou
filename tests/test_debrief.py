@@ -329,7 +329,7 @@ def test_merge_deduplicates_only_exact_items_and_preserves_conflicts() -> None:
 
 
 @pytest.mark.parametrize(
-    "statuses,expected",
+    ("statuses", "expected"),
     [
         (("addressed", "uncertain"), "uncertain"),
         (("open", "addressed"), "addressed"),
@@ -444,7 +444,7 @@ def test_atomic_publish_failure_preserves_previous_canonical_report(
         real_write(path, data)
 
     monkeypatch.setattr(module, "write_atomically", failing)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="synthetic write failure"):
         module.write_debrief(record_path, report_for(record_path, model="new-model"))
     assert canonical.read_bytes() == before
     assert module.debrief_report_status(record_path) == "available"
@@ -539,7 +539,7 @@ def test_post_replace_write_failure_restores_previous_canonical_state(
             raise OSError("synthetic post-replace directory sync failure")
 
     monkeypatch.setattr(module, "write_atomically", failing_after_replace)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="synthetic post-replace directory sync failure"):
         module.write_debrief(record_path, report_for(record_path, model="new-model"))
     assert (canonical.read_bytes() if canonical.exists() else None) == before
 
@@ -566,7 +566,7 @@ def test_failed_rollback_preserves_old_backup_and_blocks_cache(
 
     monkeypatch.setattr(module, "write_atomically", failing_write)
     monkeypatch.setattr(module.os, "replace", failing_restore)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="rollback failed"):
         module.write_debrief(record_path, report_for(record_path, model="failed-model"))
     backups = list(record_path.parent.glob("debrief.json.*.rollback"))
     assert len(backups) == 1
@@ -583,7 +583,7 @@ def test_failed_rollback_preserves_old_backup_and_blocks_cache(
 
 
 @pytest.mark.parametrize(
-    "field,change",
+    ("field", "change"),
     [
         ("items", (item(evidence=(ref(quote="Fabricated approval"),)),)),
         (
@@ -637,7 +637,7 @@ def test_publish_rejects_source_changed_after_markdown_write(
 
 def test_publish_revalidates_bypassed_report_schema(record_path: Path) -> None:
     report = report_for(record_path).model_copy(update={"review_status": "verified"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be 'unreviewed'"):
         module.write_debrief(record_path, report)
     assert not (record_path.parent / "debrief.json").exists()
 
@@ -761,7 +761,7 @@ async def test_native_prompt_carries_semantic_extraction_obligations(obligation:
 
 
 @pytest.mark.parametrize(
-    "entry_text,fields",
+    ("entry_text", "fields"),
     [
         (
             "A participant claims the owner approved the plan.",

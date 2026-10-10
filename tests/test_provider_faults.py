@@ -47,7 +47,8 @@ def test_classify_http_status_matrix(status, kind, retryable) -> None:
     assert fault.kind == kind
     assert fault.status == status
     assert fault.retryable is retryable
-    assert "tts" in str(fault) and kind in str(fault)
+    assert "tts" in str(fault)
+    assert kind in str(fault)
 
 
 def test_classify_http_truncates_backend_detail() -> None:

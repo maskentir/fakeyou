@@ -125,7 +125,7 @@ async def test_load_persona_rejects_malformed_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "owner_id,twin_id", [("owner-b", "twin-a"), ("owner-a", "twin-b"), ("twin-a", "owner-a")]
+    ("owner_id", "twin_id"), [("owner-b", "twin-a"), ("owner-a", "twin-b"), ("twin-a", "owner-a")]
 )
 async def test_load_persona_rejects_identity_mismatch(
     tmp_path: Path, owner_id: str, twin_id: str
@@ -254,7 +254,7 @@ def test_build_persona_separates_owner_facts_participant_claims_and_inference() 
 
 
 @pytest.mark.parametrize(
-    "language,expected,unexpected",
+    ("language", "expected", "unexpected"),
     [("id", "spoken Indonesian", "spoken English"), ("en", "spoken English", "spoken Indonesian")],
 )
 def test_build_persona_language_guidance_matches_profile(
@@ -557,7 +557,7 @@ def test_brief_only_rejects_requested_memory(
 
 @pytest.mark.parametrize("scope", [None, "persona_memory"])
 @pytest.mark.parametrize(
-    "allowed_tools,memory_requested,expected",
+    ("allowed_tools", "memory_requested", "expected"),
     [
         (["recall_meeting_context"], True, {"recall_meeting_context"}),
         (["recall_meeting_context"], False, set()),
@@ -585,7 +585,7 @@ def test_memory_tools_stay_within_allowed_tools(
 
 
 @pytest.mark.parametrize(
-    "scope,memory_requested,expected",
+    ("scope", "memory_requested", "expected"),
     [
         ("brief_only", False, set()),
         ("persona_memory", False, set()),
@@ -658,7 +658,7 @@ def test_brief_without_permissions_keeps_the_permission_rules(
 
 
 @pytest.mark.parametrize(
-    "scope,allowed_tools,tail",
+    ("scope", "allowed_tools", "tail"),
     [
         ("brief_only", ["recall_meeting_context"], [NATURAL_SPEECH_RULE, ENDING_RULE]),
         (
@@ -785,7 +785,7 @@ MEET_INJECTION = (
 
 
 @pytest.mark.parametrize(
-    "allowed_tools,permissions,expected",
+    ("allowed_tools", "permissions", "expected"),
     [
         (["meet_raise_hand"], ["meet_act"], {"meet_raise_hand"}),
         (["meet_lower_hand"], ["meet_act"], {"meet_lower_hand"}),
@@ -812,7 +812,7 @@ def test_meet_hand_tools_bind_only_with_explicit_authority(
 
 
 @pytest.mark.parametrize(
-    "allowed_tools,permissions,expected",
+    ("allowed_tools", "permissions", "expected"),
     [
         (["meet_send_chat"], ["meet_chat"], {"meet_send_chat"}),
         (["meet_send_chat"], ["meet_act"], set()),
@@ -895,7 +895,7 @@ def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(tool: st
 
 
 @pytest.mark.parametrize(
-    "allowed_tools,permissions,expected",
+    ("allowed_tools", "permissions", "expected"),
     [
         (
             ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"],

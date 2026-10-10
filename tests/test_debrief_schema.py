@@ -64,7 +64,9 @@ def test_should_preserve_quote_whitespace_and_accept_exact_bounds() -> None:
     assert len(EvidenceRef(entry_id="transcript:x", quote="x" * 1000).quote) == 1000
 
 
-@pytest.mark.parametrize("field,value", [("entry_id", ""), ("quote", ""), ("quote", "x" * 1001)])
+@pytest.mark.parametrize(
+    ("field", "value"), [("entry_id", ""), ("quote", ""), ("quote", "x" * 1001)]
+)
 def test_should_reject_invalid_reference_fields(field: str, value: str) -> None:
     payload = {"entry_id": "transcript:x", "quote": "Valid"}
     payload[field] = value
@@ -95,7 +97,7 @@ def test_should_enforce_kind_status_compatibility(
 
 
 @pytest.mark.parametrize(
-    "field,value",
+    ("field", "value"),
     [
         ("kind", "approval"),
         ("status", "verified"),
@@ -241,7 +243,7 @@ def test_should_accept_optional_context_hash_and_json_roundtrip(
 
 
 @pytest.mark.parametrize(
-    "field,value",
+    ("field", "value"),
     [
         ("schema_version", "meeting_debrief/v2"),
         ("status", "failed"),
@@ -269,7 +271,7 @@ def test_should_require_explicit_report_markers(field: str, report_payload: dict
 
 
 @pytest.mark.parametrize(
-    "field,value", [("kind", "tool"), ("at", datetime(2026, 10, 3)), ("id", "")]
+    ("field", "value"), [("kind", "tool"), ("at", datetime(2026, 10, 3)), ("id", "")]
 )
 def test_should_reject_invalid_evidence_source_metadata(
     field: str, value: object, report_payload: dict[str, Any]

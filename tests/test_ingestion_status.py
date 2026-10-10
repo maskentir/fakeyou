@@ -94,15 +94,15 @@ def test_status_roundtrips_through_an_atomic_write(tmp_path: Path) -> None:
 
 
 def test_status_rejects_extra_fields_negative_counts_and_naive_time() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         IngestionStatus.model_validate({**pending_status().model_dump(), "note": "x"})
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be greater than or equal to 0"):
         pending_status(windows=-1)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be greater than or equal to 0"):
         pending_status(resumed_from=-1)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be greater than or equal to 0"):
         pending_status(ingested=-1)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should have timezone info"):
         pending_status(updated_at=datetime(2026, 10, 3, 8, 0))
 
 
@@ -159,7 +159,7 @@ def test_hash_meeting_record_matches_sha256(tmp_path: Path) -> None:
     record.write_bytes(b'{"kind":"transcript"}\n')
 
     assert hash_meeting_record(record) == hashlib.sha256(b'{"kind":"transcript"}\n').hexdigest()
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="absent.jsonl"):
         hash_meeting_record(tmp_path / "absent.jsonl")
 
 
@@ -176,7 +176,8 @@ def test_record_lock_releases_its_own_token(tmp_path: Path) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
 
     with record_lock(record, purpose="meeting") as token:
-        assert isinstance(token, str) and token
+        assert isinstance(token, str)
+        assert token
         owner = json.loads(lock_path(record).read_text(encoding="utf-8"))
         assert owner["pid"] == os.getpid()
         assert owner["purpose"] == "meeting"

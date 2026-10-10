@@ -113,7 +113,7 @@ def test_split_custom_five_minute_cap_splits_12_minutes_into_3_chunks() -> None:
 
 
 def test_split_with_odd_length_frames_raises() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="frames length must be even"):
         split_chunks(bytes(33), 16000)
 
 
@@ -134,7 +134,7 @@ def test_mix_with_wrong_format_raises(tmp_path: Path) -> None:
         handle.setframerate(16000)
         handle.writeframes(bytes(16))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="unsupported wav format"):
         mix_session_slots(audio_dir)
 
 
@@ -143,5 +143,5 @@ def test_split_empty_frames_yields_no_chunks() -> None:
 
 
 def test_split_with_non_positive_rate_raises() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="frames per second must be positive"):
         split_chunks(bytes(32), 0)

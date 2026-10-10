@@ -166,7 +166,8 @@ def test_epoch_reset_clears_timeline_and_roster():
         assert dict(roster) == {}
         await asyncio.sleep(0.4)
         samples, _ = observer.snapshot()
-        assert samples and all(sample.epoch == "e2" for sample in samples)
+        assert samples
+        assert all(sample.epoch == "e2" for sample in samples)
         await observer.close()
 
     asyncio.run(run())

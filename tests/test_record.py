@@ -117,7 +117,7 @@ def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text('{"kind": "screenshot", "at": "2026-09-30T10:00:00+00:00"}\n', encoding="utf-8")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="does not match any of the expected tags"):
         load_meeting_record(path)
 
 

@@ -102,7 +102,7 @@ def test_importing_fakeyou_disables_implicit_dotenv_loading(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "process_value,expected",
+    ("process_value", "expected"),
     [(None, "384"), ("512", "512")],
     ids=["dotenv", "process-overrides-dotenv"],
 )
@@ -141,7 +141,7 @@ def test_cli_entry_exports_the_embedding_dimension_before_graphiti_loads(
 
 def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values():
     assert Settings(_env_file=None).memory.recall.strategy == "prefetch"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be 'tool' or 'prefetch'"):
         Settings(_env_file=None, memory={"recall": {"strategy": "hybrid"}})
 
 
@@ -181,7 +181,7 @@ def test_join_retry_settings_default_and_read_environment(monkeypatch):
 
 
 def test_join_max_attempts_rejects_zero():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Input should be greater than or equal to 1"):
         Settings(_env_file=None, meeting={"join_max_attempts": 0})
 
 

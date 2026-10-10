@@ -313,7 +313,10 @@ def voiceprint_enroll(
             }
         )
         return
-    assert gate.challenge_id and gate.challenge and gate.transcript and gate.owner_name
+    assert gate.challenge_id
+    assert gate.challenge
+    assert gate.transcript
+    assert gate.owner_name
     segments = {"read": len(clip), "spontaneous": len(spontaneous)}
     snr = min(_snr_db(utterance) for utterance in utterances)
     with _open_journal(settings, deps.journal) as owned_journal:

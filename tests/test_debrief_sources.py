@@ -649,7 +649,7 @@ def test_draft_item_reads_placeholder_claims_as_absent(placeholder: str) -> None
 
 
 @pytest.mark.parametrize(
-    "field,value,valid",
+    ("field", "value", "valid"),
     [
         ("assignee_claim", "Rani", False),
         ("due_text", "Friday", False),
@@ -681,7 +681,7 @@ def test_draft_claims_must_come_from_the_item_quotes(field: str, value: str, val
 
 
 @pytest.mark.parametrize(
-    "claim,quotes,valid",
+    ("claim", "quotes", "valid"),
     [
         ("Monday.", ("send it Monday",), True),
         ("tomorrow  after lunch", ("send it tomorrow after lunch",), True),

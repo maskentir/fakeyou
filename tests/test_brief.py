@@ -271,7 +271,7 @@ def test_load_errors_hide_the_input(tmp_path: Path) -> None:
     content = json.dumps(brief_data(agenda=[PRIVATE_MARKER * 40])).encode()
     path = write_brief_file(tmp_path, content)
 
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(ValueError, match="String should have at most 500 characters") as error:
         load_meeting_brief(path, **SCOPE)
 
     assert PRIVATE_MARKER not in str(error.value)
@@ -475,7 +475,7 @@ def test_corrupt_or_tampered_context_is_rejected(
     write_meeting_context(path, context_for(brief))
     path.write_bytes(corrupt(path.read_bytes()))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="validation error for MeetingContext"):
         read_meeting_context(path)
 
 
@@ -567,7 +567,7 @@ def test_a_corrupt_snapshot_is_never_overwritten(tmp_path: Path, brief: MeetingB
     path = tmp_path / CONTEXT_FILE_NAME
     path.write_bytes(b"{not json")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid JSON"):
         write_meeting_context(path, context_for(brief))
 
     assert path.read_bytes() == b"{not json"

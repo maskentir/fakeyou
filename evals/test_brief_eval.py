@@ -574,7 +574,8 @@ def test_brief_corpus_defines_12_categories():
         assert case["severe_if"].strip()
         assert set(case["aids"]) == {"allow", "forbid"}
         for token in [*case["aids"]["allow"], *case["aids"]["forbid"]]:
-            assert isinstance(token, str) and token.strip()
+            assert isinstance(token, str)
+            assert token.strip()
         assert case["turns"]
         for turn in case["turns"]:
             assert turn["say"].strip()
@@ -732,7 +733,7 @@ def test_brief_artifacts_sanitize_credentials(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("role_name", ["reply", "reply_fallback"])
 @pytest.mark.parametrize(
-    "field,value",
+    ("field", "value"),
     [
         ("unchanged", None),
         ("model", "different-writer-model"),

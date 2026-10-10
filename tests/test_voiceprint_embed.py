@@ -47,9 +47,9 @@ def test_load_embedder_rejects_wrong_sha256(tmp_path: Path) -> None:
 
 def test_embed_rejects_empty_utterances() -> None:
     embedder = SpeakerEmbedder(object())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="utterances must contain at least one utterance"):
         embedder.embed([])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="utterance must contain at least one sample"):
         embedder.embed([[]])
 
 

@@ -699,7 +699,8 @@ async def test_ingest_corrections_invalidates_original_edges_of_changed_windows(
     ]
     for call in memory.executed:
         assert "RELATES_TO" in call["query"]
-        assert "invalid_at" in call["query"] and "expired_at" in call["query"]
+        assert "invalid_at" in call["query"]
+        assert "expired_at" in call["query"]
         assert call["group_id"] == "twin_group"
         assert before <= call["at"] <= after
     rows = [json.loads(line) for line in lines]
@@ -1203,7 +1204,9 @@ async def test_golden_episode_body_keeps_speaker_subject_saga_order_and_source_t
     for episode in memory.added:
         for line in episode["episode_body"].split("\n"):
             head, separator, tail = line.partition(": ")
-            assert separator and head and tail
+            assert separator
+            assert head
+            assert tail
     assert [episode["saga_previous_episode_uuid"] for episode in memory.added] == [
         None,
         "uuid-meeting-1:w00000",

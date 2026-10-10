@@ -437,5 +437,5 @@ def test_provenance_visual_kind() -> None:
     slim = json.loads(render_evidence(facts, result_limit=5, excluded={}, compact=True))
     assert slim["schema"] == "memory_evidence/v2"
     assert slim["facts"][0]["sources"][0]["frame_ref"] == ref
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="meeting_visual needs frame_ref"):
         SourceEvidence("e9", "meeting_visual", "Google Meet m1 visual", at, at, "frame")

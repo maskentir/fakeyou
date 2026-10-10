@@ -114,8 +114,10 @@ def test_binder_departure_retires_oldest_unbound_slot() -> None:
     binder.update_roster(["a", "b", "c"])
     first = binder.resolve(3)
     second = binder.resolve(4)
-    assert not isinstance(first, str) and not isinstance(second, str)
-    assert first.device is None and second.device is None
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
+    assert first.device is None
+    assert second.device is None
     binder.update_roster(["a", "b"])
     replaced = binder.resolve(3)
     assert not isinstance(replaced, str)
@@ -518,7 +520,8 @@ async def test_voice_script_taps_remote_audio_and_skips_local_microphone() -> No
         assert drained["local"] == [1]
         assert {int(slot) for _, slot, level in levels if level > 0.1} == {0}
         assert drained["participants"] == [{"id": "devices/1", "name": "Rani"}]
-        assert isinstance(drained["instance"], str) and drained["instance"]
+        assert isinstance(drained["instance"], str)
+        assert drained["instance"]
 
 
 def frames_batch(page_ms: float, frames: list[list[Any]], **extra: Any) -> dict[str, Any]:
@@ -978,7 +981,8 @@ def test_binder_refuses_follow_when_shared_label_spans_two_slots() -> None:
     binder.update_roster(["d1", "d2", "d3"])
     first = binder.resolve(0)
     second = binder.resolve(1)
-    assert not isinstance(first, str) and not isinstance(second, str)
+    assert not isinstance(first, str)
+    assert not isinstance(second, str)
     assert (first.label, second.label) == ("A", "A")
     binder.observe_stream(0, [111])
     binder.observe_stream(1, [111])

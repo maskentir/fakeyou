@@ -104,7 +104,7 @@ async def test_should_clear_replaced_dialog_and_report_new_modal(page, observe):
 
 
 @pytest.mark.parametrize(
-    "text,button_count,expected",
+    ("text", "button_count", "expected"),
     [
         ("This meeting is being recorded Got it", 1, "modal_dismissed"),
         ("This meeting is being transcribed Got it", 1, "modal_dismissed"),
@@ -187,7 +187,7 @@ async def test_should_preserve_call_observation_when_modal_scan_fails(page, obse
 
 
 @pytest.mark.parametrize(
-    "labels,expected",
+    ("labels", "expected"),
     [
         (["People - 3 participants"], 3),
         (["People - 1 participant"], 1),
