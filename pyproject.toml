@@ -29,6 +29,7 @@ dependencies = [
     "pydantic-settings>=2.10,<3",
     "python-dotenv>=1.2,<2",
     "sqlalchemy>=2.0,<3",
+    "typer>=0.27,<1",
 ]
 
 [project.optional-dependencies]
@@ -96,6 +97,8 @@ select = [
 "src/fakeyou/memory/visual_hydrate.py" = ["ARG002"]
 "src/fakeyou/cli/calibrate.py" = ["ARG001"]
 "src/fakeyou/cli/voiceprint.py" = ["ARG001"]
+# D4 typer cut-over: command signatures mirror the CLI surface (framework-imposed).
+"src/fakeyou/cli/main.py" = ["PLR0913"]
 # P7 owns tests/evals shape; the P5 rules gate src only until then.
 "tests/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]
 "evals/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]

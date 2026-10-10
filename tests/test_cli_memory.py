@@ -1,5 +1,6 @@
 import json
 import struct
+import sys
 import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,11 +9,11 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+import fakeyou.cli.main as cli_main
 import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli._operator import OperatorIdentity
-from fakeyou.cli.main import build_parser
 from fakeyou.cli.memory import IngestOutcome, _finish_ingest, ingest_recorded_meeting
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
@@ -216,18 +217,28 @@ async def test_ingest_no_correct_skips_diarization_entirely(
     assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
 
 
-def test_memory_ingest_parser_registers_no_correct() -> None:
-    arguments = build_parser().parse_args(
-        ["memory-ingest", "--meeting", "m1", "--persona", "p.json", "--no-correct"]
-    )
+@pytest.mark.parametrize(("argv", "expected"), [(["--no-correct"], True), ([], False)])
+def test_memory_ingest_dispatch_passes_no_correct(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: bool
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert arguments.handler is ingest_recorded_meeting
-    assert arguments.no_correct is True
-    defaulted = build_parser().parse_args(
-        ["memory-ingest", "--meeting", "m1", "--persona", "p.json"]
-    )
+    async def fake_ingest(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
 
-    assert defaulted.no_correct is False
+    monkeypatch.setattr(cli_main, "ingest_recorded_meeting", fake_ingest)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["fakeyou", "memory-ingest", "--meeting-id", "m1", "--persona", "p.json", *argv],
+    )
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["no_correct"] is expected
 
 
 async def test_ingest_stt_failure_still_ingests_live_transcript(

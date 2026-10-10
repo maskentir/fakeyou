@@ -124,10 +124,10 @@ Ruang memori adalah `twin_` + UUID5 dari `[owner_id, twin_id]`: stabil lintas me
 
 Dengan `ingest_transcripts: true`, memori diturunkan dari catatan meeting setelah twin leave: transkrip final dan ucapan twin yang selesai diputar disusun menjadi jendela lintas speaker (20 ucapan atau 60 detik) dan disimpan sebagai episode Graphiti `<meeting_id>:w<index>` dalam saga `meeting:<meeting_id>`. Setiap fakta menyebut speaker-nya (`Digital twin`, `Unidentified participant`, atau nama yang diketahui), dan pertanyaan tidak disimpan sebagai fakta. Selama meeting, twin memakai thread percakapan; Graphiti dipakai untuk meeting sebelumnya dan catatan pemilik. Model tidak memiliki tool tulis. Tidak ada persetujuan peserta di aplikasi dan tidak ada retensi otomatis; kepatuhan aturan rekaman menjadi tanggung jawab operator.
 
-Ingestion dapat dilanjutkan: episode terakhir di saga menjadi penanda, sehingga menjalankan ulang tidak menggandakan episode. Stop saat ingestion menghentikannya di antara jendela; sisanya dilanjutkan dengan `memory-ingest`. Untuk memproses ulang meeting setelah instruksi ekstraksi berubah, hapus episodenya dengan `--keep-record` lalu ingest lagi. `memory-forget --meeting` tanpa `--keep-record` menghapus episode, catatan meeting, journal, dan thread percakapan meeting itu.
+Ingestion dapat dilanjutkan: episode terakhir di saga menjadi penanda, sehingga menjalankan ulang tidak menggandakan episode. Stop saat ingestion menghentikannya di antara jendela; sisanya dilanjutkan dengan `memory-ingest`. Untuk memproses ulang meeting setelah instruksi ekstraksi berubah, hapus episodenya dengan `--keep-record` lalu ingest lagi. `memory-forget --meeting-id` tanpa `--keep-record` menghapus episode, catatan meeting, journal, dan thread percakapan meeting itu.
 
 ```sh
-docker compose run --rm meeting-worker fakeyou memory-ingest --meeting MEETING_ID \
+docker compose run --rm meeting-worker fakeyou memory-ingest --meeting-id MEETING_ID \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-add "Update dari Rani: demo Orchid dipindah ke hari Jumat." \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
@@ -135,15 +135,15 @@ docker compose run --rm meeting-worker fakeyou memory-correct "Koreksi dari Rani
   --episode 123e4567-e89b-12d3-a456-426614174000 --persona examples/persona.example.json \
   --owner-id demo_owner --twin-id demo_twin --source-at 2026-10-01T06:40:00+00:00 \
   --note-id 223e4567-e89b-12d3-a456-426614174002
-docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID --keep-record \
+docker compose run --rm meeting-worker fakeyou memory-forget --meeting-id MEETING_ID --keep-record \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
-docker compose run --rm meeting-worker fakeyou memory-forget --meeting MEETING_ID \
+docker compose run --rm meeting-worker fakeyou memory-forget --meeting-id MEETING_ID \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 docker compose run --rm meeting-worker fakeyou memory-forget --episode EPISODE_UUID \
   --persona examples/persona.example.json --owner-id demo_owner --twin-id demo_twin
 ```
 
-Koreksi mengganti seluruh isi satu owner note: `memory-correct` membutuhkan `--episode` note lama, `--source-at` baru yang lebih muda dari target, dan `--persona`; tanpa `--note-id`, CLI mencetak ID operasi ke stderr untuk dipakai ulang saat retry. Retry memakai ID dan payload yang sama; ID sama dengan payload berbeda ditolak sebagai konflik. Hapus note dalam rantai koreksi ditolak sampai milestone retensi tersedia. Dari host, ingestion untuk meeting finished tersedia sebagai `worker ingest` (meneruskan `--meeting`/`--persona` plus `--owner-id`/`--twin-id` opsional); lihat [runbook operasi worker](docs/runbooks/worker-operations.md).
+Koreksi mengganti seluruh isi satu owner note: `memory-correct` membutuhkan `--episode` note lama, `--source-at` baru yang lebih muda dari target, dan `--persona`; tanpa `--note-id`, CLI mencetak ID operasi ke stderr untuk dipakai ulang saat retry. Retry memakai ID dan payload yang sama; ID sama dengan payload berbeda ditolak sebagai konflik. Hapus note dalam rantai koreksi ditolak sampai milestone retensi tersedia. Dari host, ingestion untuk meeting finished tersedia sebagai `worker ingest` (meneruskan `--meeting-id`/`--persona` plus `--owner-id`/`--twin-id` opsional); lihat [runbook operasi worker](docs/runbooks/worker-operations.md).
 
 Detail keputusan dan bukti ada di [rencana persona dan memori](docs/plans/persona-memory.md), [ingestion memori](docs/plans/memory-ingestion.md), [memori tepercaya](docs/plans/trustworthy-memory.md), [acceptance memori tepercaya](docs/runbooks/trust-acceptance.md), dan [rencana jangka panjang](docs/plans/long-term.md).
 
@@ -155,10 +155,10 @@ Audio remote Meet sudah masuk ke Pipecat melalui PulseAudio, dan ucapan tersinte
 
 ## Debrief meeting
 
-`debrief --meeting ID --persona PATH` membuat laporan lokal dari record meeting dengan kutipan asli, scope historis, dan status `unreviewed`. JSON menjadi sumber canonical untuk tampilan Markdown; cache yang cocok dipakai tanpa model, sedangkan `--force` menjalankan percobaan baru. Command tidak membuka memori atau menghubungi owner. Lihat [runbook debrief](docs/runbooks/meeting-debrief.md) untuk scope, batas sumber, review owner, serta pemulihan kegagalan.
+`debrief --meeting-id ID --persona PATH` membuat laporan lokal dari record meeting dengan kutipan asli, scope historis, dan status `unreviewed`. JSON menjadi sumber canonical untuk tampilan Markdown; cache yang cocok dipakai tanpa model, sedangkan `--force` menjalankan percobaan baru. Command tidak membuka memori atau menghubungi owner. Lihat [runbook debrief](docs/runbooks/meeting-debrief.md) untuk scope, batas sumber, review owner, serta pemulihan kegagalan.
 
 ```sh
-uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json
+uv run fakeyou debrief --meeting-id MEETING_ID --persona examples/persona.example.json
 ```
 
 ## Operasi worker
@@ -205,7 +205,7 @@ Setiap `join` menulis dua berkas:
 - Catatan meeting `.runtime/meetings/<meeting_id>/record.jsonl`: transkrip final, ucapan twin yang selesai diputar, dan hasil tool secara lengkap. Catatan disimpan sampai dihapus manual.
 
 ```sh
-uv run fakeyou report --meeting MEETING_ID --journal-dir .runtime/audio/journals
+uv run fakeyou report --meeting-id MEETING_ID --journal-dir .runtime/audio/journals
 ```
 
 Laporan berisi startup (lama membuka audio, lama di lobby, admission → mikrofon dan → conversation aktif, audio siap saat admission), latency per giliran (VAD stop → transkrip final → jawaban → PCM pertama) beserta p50/p95/maks, jawaban terucap/terpotong/berakhir pertanyaan, interupsi per pemicu dan latency VAD mulai bicara → playback berhenti, pemakaian tool, ingestion, fault, dan hasil sesi. Status debrief `available`, `stale`, `missing`, atau `invalid` ditampilkan terpisah dari hasil sesi dan ingestion.

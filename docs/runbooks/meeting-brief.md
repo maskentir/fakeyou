@@ -100,7 +100,7 @@ aktif.
 Brief tidak dapat diberikan secara retroaktif. Untuk brief baru atau
 perubahan persona, pakai meeting ID baru; jangan menghapus record,
 snapshot, atau checkpoint agar validasi lolos.
-`memory-forget --meeting` tanpa `--keep-record` menghapus snapshot
+`memory-forget --meeting-id` tanpa `--keep-record` menghapus snapshot
 bersama record; dengan `--keep-record`, snapshot tetap tersimpan
 bersama record.
 Lock aktif tetap menolak forget.

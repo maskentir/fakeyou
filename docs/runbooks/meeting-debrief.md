@@ -3,9 +3,9 @@
 Debrief membaca catatan meeting yang sudah selesai dan membuat laporan lokal beserta kutipan sumber. Jalankan command ini terpisah dari join dan ingestion. Model memakai peran `debrief` bila `FAKEYOU_DEBRIEF__*` diset, misalnya Gemini yang lebih kuat untuk ekstraksi sementara jawaban live memakai model cepat; tanpa itu debrief memakai peran jawaban utama. Cadangan tetap `FAKEYOU_REPLY_FALLBACK__*`. Graphiti, embedding, browser, STT, dan TTS tidak diperlukan.
 
 ```sh
-uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json
-uv run fakeyou debrief --meeting MEETING_ID --persona examples/persona.example.json --force
-uv run fakeyou report --meeting MEETING_ID
+uv run fakeyou debrief --meeting-id MEETING_ID --persona examples/persona.example.json
+uv run fakeyou debrief --meeting-id MEETING_ID --persona examples/persona.example.json --force
+uv run fakeyou report --meeting-id MEETING_ID
 ```
 
 Tambahkan `--owner-id` dan `--twin-id` bila identitas konfigurasi berbeda dari persona operator. Gunakan direktori record yang sama dengan worker melalui `FAKEYOU_PATHS__RECORD_DIR`; persona dan meeting ID harus cocok dengan scope historis. Jangan memakai persona contoh untuk membaca record milik persona lain.

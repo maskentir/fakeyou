@@ -31,7 +31,7 @@ pasca-Fase 0. Sesi ini observasi murni — tanpa ubah kode.
 ## Analisis
 
 ```sh
-fakeyou report --meeting MEETING_ID
+fakeyou report --meeting-id MEETING_ID
 ```
 
 Dari JSON laporan, baca kunci `stt_quality` dan `latency`

@@ -26,7 +26,7 @@ def test_memory_ingest_args_derive_the_head_from_the_command_catalog() -> None:
     args = memory_ingest_args(meeting_id="meeting-9", persona=Path("/tmp/persona.json"))
 
     assert args[:2] == str(Command.MEMORY_INGEST).split(" ")
-    assert args[2:] == ["--meeting", "meeting-9", "--persona", "/tmp/persona.json"]
+    assert args[2:] == ["--meeting-id", "meeting-9", "--persona", "/tmp/persona.json"]
 
 
 def test_memory_ingest_args_quote_paths_and_carry_identity() -> None:
@@ -40,7 +40,7 @@ def test_memory_ingest_args_quote_paths_and_carry_identity() -> None:
     )
 
     assert command == (
-        "fakeyou memory-ingest --meeting meeting-9 --persona '/tmp/my persona.json'"
+        "fakeyou memory-ingest --meeting-id meeting-9 --persona '/tmp/my persona.json'"
         " --owner-id owner-1 --twin-id twin-1"
     )
 
@@ -901,7 +901,7 @@ def test_ingest_runs_memory_ingest_in_a_foreground_container(tmp_path: Path) -> 
     tail = run[run.index("fakeyou") + 1 :]
     assert tail == [
         "memory-ingest",
-        "--meeting",
+        "--meeting-id",
         "meeting-9",
         "--persona",
         ".runtime/persona.json",
@@ -924,7 +924,7 @@ def test_ingest_forwards_owner_and_twin_identity(tmp_path: Path) -> None:
     tail = run[run.index("fakeyou") + 1 :]
     assert tail == [
         "memory-ingest",
-        "--meeting",
+        "--meeting-id",
         "meeting-9",
         "--persona",
         ".runtime/persona.json",

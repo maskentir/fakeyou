@@ -1,23 +1,23 @@
-import argparse
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
+import typer.main
 
 from fakeyou.catalog.commands import Command
-from fakeyou.cli.main import build_parser
+from fakeyou.cli.main import app
 
 
-def _command_paths(
-    parser: argparse.ArgumentParser, prefix: tuple[str, ...] = ()
-) -> Iterator[tuple[str, ...]]:
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            for name, subparser in action.choices.items():
-                yield (*prefix, name)
-                yield from _command_paths(subparser, (*prefix, name))
+def _command_paths(command: Any, prefix: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
+    subcommands = getattr(command, "commands", None)
+    if subcommands is None:
+        return
+    for name, subcommand in subcommands.items():
+        yield (*prefix, name)
+        yield from _command_paths(subcommand, (*prefix, name))
 
 
-PARSER_PATHS = frozenset(_command_paths(build_parser()))
+PARSER_PATHS = frozenset(_command_paths(typer.main.get_command(app)))
 FAKEYOU_COMMANDS = [command for command in Command if command.value.startswith("fakeyou ")]
 
 

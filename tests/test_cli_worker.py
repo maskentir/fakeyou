@@ -191,24 +191,42 @@ def test_worker_subcommands_dispatch_without_leaking_parser_state(
         "argv",
         ["fakeyou", "worker", "start", LINK, "--meeting-id", "meeting-9", "--audio"],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     [call] = calls
     assert call["request"].link == LINK
     assert call["request"].meeting_id == "meeting-9"
     assert call["request"].audio is True
-    assert "worker_command" not in call
-    assert "command" not in call
-    assert "link" not in call
-    assert "identity" not in call
+    assert set(call) == {"request", "settings"}
 
 
-def test_worker_status_accepts_an_optional_meeting_id() -> None:
-    parser = cli_main.build_parser()
+@pytest.mark.parametrize(
+    ("argv", "target", "expected"),
+    [
+        (["worker", "status"], "worker_status", {"meeting_id": None}),
+        (["worker", "status", "meeting-9"], "worker_status", {"meeting_id": "meeting-9"}),
+        (["worker", "stop", "meeting-9"], "worker_stop", {"meeting_id": "meeting-9"}),
+    ],
+)
+def test_worker_status_and_stop_dispatch_meeting_id(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert parser.parse_args(["worker", "status"]).meeting_id is None
-    assert parser.parse_args(["worker", "status", "meeting-9"]).meeting_id == "meeting-9"
-    assert parser.parse_args(["worker", "stop", "meeting-9"]).meeting_id == "meeting-9"
+    def fake_command(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_main, target, fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert {key: call[key] for key in expected} == expected
 
 
 def test_worker_ingest_prints_the_job_status(
@@ -267,21 +285,21 @@ def test_worker_ingest_exits_nonzero_unless_completed(
     assert json.loads(capsys.readouterr().out)["status"] == "interrupted"
 
 
-def test_worker_ingest_parses_meeting_and_persona() -> None:
-    from fakeyou.cli.worker import worker_ingest
+def test_worker_ingest_dispatches_meeting_and_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    parser = cli_main.build_parser()
+    def fake_ingest(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
 
-    options = parser.parse_args(["worker", "ingest", "meeting-9", "--persona", "p.json"])
-
-    assert options.handler is worker_ingest
-    assert options.meeting_id == "meeting-9"
-    assert options.persona_path == Path("p.json")
-    assert options.owner_id is None
-    assert options.twin_id is None
-
-    options = parser.parse_args(
+    monkeypatch.setattr(cli_main, "worker_ingest", fake_ingest)
+    monkeypatch.setattr(
+        sys,
+        "argv",
         [
+            "fakeyou",
             "worker",
             "ingest",
             "meeting-9",
@@ -291,8 +309,13 @@ def test_worker_ingest_parses_meeting_and_persona() -> None:
             "o1",
             "--twin-id",
             "t1",
-        ]
+        ],
     )
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
-    assert options.owner_id == "o1"
-    assert options.twin_id == "t1"
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["meeting_id"] == "meeting-9"
+    assert call["identity"] == OperatorIdentity(Path("p.json"), "o1", "t1")
+    assert set(call) == {"meeting_id", "identity", "settings"}

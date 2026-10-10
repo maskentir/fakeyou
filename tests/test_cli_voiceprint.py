@@ -541,46 +541,99 @@ def test_enroll_with_missing_clip_raises_without_journal(
     assert journal.events("voiceprint_recorded") == []
 
 
-def test_voiceprint_parsers_map_to_handlers() -> None:
-    parser = cli_main.build_parser()
+@pytest.mark.parametrize(
+    ("argv", "target", "expected"),
+    [
+        (
+            ["voiceprint", "enroll", "--name", "alice", "--clip", "a.wav", "--clip", "b.wav"],
+            "voiceprint_enroll",
+            {"subject": EnrollSubject("alice", False), "clip": ["a.wav", "b.wav"]},
+        ),
+        (
+            ["voiceprint", "enroll", "--name", "twin-voice", "--clip", "a.wav", "--negative"],
+            "voiceprint_enroll",
+            {"subject": EnrollSubject("twin-voice", True), "clip": ["a.wav"]},
+        ),
+        (
+            ["voiceprint", "verify", "--name", "alice", "--clip", "t.wav"],
+            "voiceprint_verify",
+            {"name": "alice", "clip": "t.wav"},
+        ),
+        (
+            ["voiceprint", "delete", "--name", "alice"],
+            "voiceprint_delete",
+            {"name": "alice"},
+        ),
+        (["voiceprint", "list"], "voiceprint_list", {}),
+        (["voiceprint", "purge-expired"], "voiceprint_purge_expired", {}),
+        (["voiceprint", "challenge"], "voiceprint_challenge", {}),
+    ],
+)
+def test_voiceprint_commands_dispatch_to_handlers(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    options = parser.parse_args(
+    def fake_command(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    import sys
+
+    monkeypatch.setattr(cli_main, target, fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert {key: call[key] for key in expected} == expected
+
+
+def test_voiceprint_gated_enroll_dispatch_bundles_liveness_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_enroll(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    import sys
+
+    monkeypatch.setattr(cli_main, "voiceprint_enroll", fake_enroll)
+    monkeypatch.setattr(
+        sys,
+        "argv",
         [
+            "fakeyou",
             "voiceprint",
             "enroll",
             "--name",
             "alice",
             "--clip",
             "a.wav",
-            "--clip",
-            "b.wav",
-            "--clip",
-            "c.wav",
-        ]
+            "--spontaneous-clip",
+            "s.wav",
+            "--challenge-id",
+            CHALLENGE_ID,
+            "--challenge",
+            CHALLENGE_DIGITS,
+            "--transcript",
+            CHALLENGE_DIGITS,
+            "--owner-name",
+            "Maya",
+        ],
     )
-    assert options.handler is voiceprint_enroll
-    assert options.name == "alice"
-    assert options.clip == ["a.wav", "b.wav", "c.wav"]
-    assert options.negative is False
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
-    options = parser.parse_args(
-        ["voiceprint", "enroll", "--name", "twin-voice", "--clip", "a.wav", "--negative"]
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["gate"] == LivenessGate(
+        CHALLENGE_ID, CHALLENGE_DIGITS, CHALLENGE_DIGITS, "Maya", ("s.wav",)
     )
-    assert options.clip == ["a.wav"]
-    assert options.negative is True
-
-    options = parser.parse_args(["voiceprint", "verify", "--name", "alice", "--clip", "t.wav"])
-    assert options.handler is voiceprint_verify
-    assert options.clip == "t.wav"
-
-    options = parser.parse_args(["voiceprint", "delete", "--name", "alice"])
-    assert options.handler is voiceprint_delete
-
-    options = parser.parse_args(["voiceprint", "list"])
-    assert options.handler is voiceprint_list
-
-    options = parser.parse_args(["voiceprint", "purge-expired"])
-    assert options.handler is voiceprint_purge_expired
+    assert set(call) == {"subject", "clip", "gate", "settings"}
 
 
 def test_voiceprint_commands_dispatch_without_leaking_parser_state(
@@ -595,12 +648,12 @@ def test_voiceprint_commands_dispatch_without_leaking_parser_state(
 
     monkeypatch.setattr(cli_main, "voiceprint_list", fake_list)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "voiceprint", "list"])
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     [call] = calls
-    assert "worker_command" not in call
-    assert "voiceprint_command" not in call
-    assert "command" not in call
+    assert set(call) == {"settings"}
 
 
 def test_voiceprint_enroll_dispatch_bundles_subject_and_gate(
@@ -638,8 +691,10 @@ def test_voiceprint_enroll_dispatch_bundles_subject_and_gate(
             "s.wav",
         ],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     [call] = calls
     assert call["subject"] == EnrollSubject("alice", True)
     assert call["gate"] == LivenessGate("cid-1", "12345678", "12345678", "Maya", ("s.wav",))
@@ -971,41 +1026,6 @@ def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Pat
     )
 
     assert saved(store, "alice").owner_name == ""
-
-
-def test_challenge_and_gated_enroll_parsers_map_to_handlers() -> None:
-    parser = cli_main.build_parser()
-
-    options = parser.parse_args(["voiceprint", "challenge"])
-    assert options.handler is voiceprint_challenge
-    assert not hasattr(options, "meeting")
-
-    options = parser.parse_args(
-        [
-            "voiceprint",
-            "enroll",
-            "--name",
-            "alice",
-            "--clip",
-            "a.wav",
-            "--spontaneous-clip",
-            "s.wav",
-            "--challenge-id",
-            CHALLENGE_ID,
-            "--challenge",
-            CHALLENGE_DIGITS,
-            "--transcript",
-            CHALLENGE_DIGITS,
-            "--owner-name",
-            "Maya",
-        ]
-    )
-    assert options.handler is voiceprint_enroll
-    assert options.challenge_id == CHALLENGE_ID
-    assert options.challenge == CHALLENGE_DIGITS
-    assert options.transcript == CHALLENGE_DIGITS
-    assert options.owner_name == "Maya"
-    assert options.spontaneous_clip == ["s.wav"]
 
 
 ENGLISH_NUMBER_WORDS = (

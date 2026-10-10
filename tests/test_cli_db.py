@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -8,8 +9,8 @@ import pytest
 from pydantic import SecretStr
 
 import fakeyou.cli.db as cli_db
+import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.main import build_parser
 from fakeyou.config.settings import Settings
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.db.schema import head_revision
@@ -120,8 +121,20 @@ def test_db_commands_refuse_to_run_without_a_database_url(
         ("status", cli_db.db_status),
     ],
 )
-def test_db_commands_are_registered_on_the_cli(command: str, handler: Callable[..., None]) -> None:
-    parsed: dict[str, Any] = vars(build_parser().parse_args(["db", command]))
+def test_db_commands_are_registered_on_the_cli(
+    command: str, handler: Callable[..., None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert parsed["db_command"] == command
-    assert parsed["handler"] is handler
+    def fake_command(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_main, handler.__name__, fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "db", command])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert set(call) == {"settings"}

@@ -60,7 +60,7 @@ def memory_ingest_args(
 ) -> list[str]:
     args = [
         *shlex.split(Command.MEMORY_INGEST),
-        "--meeting",
+        "--meeting-id",
         meeting_id,
         "--persona",
         str(persona),

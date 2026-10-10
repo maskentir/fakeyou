@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -326,21 +327,38 @@ def test_ship_gate_thresholds() -> None:
     assert _ship_gate(**{**good, "valley": False}) is False
 
 
-def test_parser_accepts_calibrate_commands() -> None:
-    lock = cli_main.build_parser().parse_args(
-        ["calibrate", "lock", "--dev", "a.jsonl", "--dev", "b.jsonl", "--out", "c.json"]
-    )
+@pytest.mark.parametrize(
+    ("argv", "target", "expected"),
+    [
+        (
+            ["calibrate", "lock", "--dev", "a.jsonl", "--dev", "b.jsonl", "--out", "c.json"],
+            "calibrate_lock",
+            {"dev_journals": ["a.jsonl", "b.jsonl"], "out": "c.json"},
+        ),
+        (
+            ["calibrate", "eval", "--eval", "e.jsonl", "--artifact", "c.json"],
+            "calibrate_eval",
+            {"eval_journals": ["e.jsonl"], "artifact": "c.json"},
+        ),
+    ],
+)
+def test_calibrate_commands_dispatch_journals_and_outputs(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert lock.handler is calibrate_lock
-    assert lock.dev_journals == ["a.jsonl", "b.jsonl"]
-    assert lock.out == "c.json"
-    evaluation = cli_main.build_parser().parse_args(
-        ["calibrate", "eval", "--eval", "e.jsonl", "--artifact", "c.json"]
-    )
+    def fake_command(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
 
-    assert evaluation.handler is calibrate_eval
-    assert evaluation.eval_journals == ["e.jsonl"]
-    assert evaluation.artifact == "c.json"
+    monkeypatch.setattr(cli_main, target, fake_command)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert {key: call[key] for key in expected} == expected
 
 
 CALIBRATE_DIGEST_A = "c" * 64

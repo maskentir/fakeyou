@@ -1,5 +1,6 @@
 import json
 import struct
+import sys
 import urllib.request
 import wave
 from datetime import UTC, datetime
@@ -10,10 +11,10 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.diarize import diarize_run, diarize_show
-from fakeyou.cli.main import build_parser
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarization.diarize_correction import write_correction_bundle
@@ -316,13 +317,22 @@ def test_diarize_run_maps_corrupt_slot_wav_to_input_unreadable(settings: Setting
     assert record_path.read_bytes() == before
 
 
-def test_diarize_parser_registers_run() -> None:
-    arguments = build_parser().parse_args(["diarize", "run", "--meeting", "m1"])
+def test_diarize_run_dispatches_meeting_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert arguments.command == "diarize"
-    assert arguments.diarize_command == "run"
-    assert arguments.meeting_id == "m1"
-    assert arguments.handler is diarize_run
+    def fake_run(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_main, "diarize_run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "diarize", "run", "--meeting-id", "m1"])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["meeting_id"] == "m1"
+    assert set(call) == {"meeting_id", "settings"}
 
 
 def _show_line(index: int, capture_ms: float) -> str:
@@ -434,10 +444,19 @@ def test_diarize_show_refuses_missing_sidecar(settings: Settings) -> None:
     assert error.value.code is ErrorCode.DIARIZE_CORRECTION_MISSING
 
 
-def test_diarize_parser_registers_show() -> None:
-    arguments = build_parser().parse_args(["diarize", "show", "--meeting", "m1"])
+def test_diarize_show_dispatches_meeting_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
 
-    assert arguments.command == "diarize"
-    assert arguments.diarize_command == "show"
-    assert arguments.meeting_id == "m1"
-    assert arguments.handler is diarize_show
+    def fake_show(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_main, "diarize_show", fake_show)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "diarize", "show", "--meeting-id", "m1"])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["meeting_id"] == "m1"
+    assert set(call) == {"meeting_id", "settings"}

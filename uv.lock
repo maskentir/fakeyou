@@ -477,6 +477,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "sqlalchemy" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -528,6 +529,7 @@ requires-dist = [
     { name = "sherpa-onnx", marker = "extra == 'voiceprint'", specifier = "==1.12.38" },
     { name = "sherpa-onnx-core", marker = "sys_platform == 'darwin' and extra == 'voiceprint'", specifier = "==1.12.38" },
     { name = "sqlalchemy", specifier = ">=2.0,<3" },
+    { name = "typer", specifier = ">=0.27,<1" },
 ]
 provides-extras = ["audio", "voiceprint"]
 

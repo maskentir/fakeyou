@@ -57,7 +57,7 @@ def test_handler_validation_error_reports_input_invalid_with_exit_two(
     (tmp_path / ".env").write_text("")
     monkeypatch.chdir(tmp_path)
     _scrub_process_configuration(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting", "!!!"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "!!!"])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == ExitCode.INPUT_REJECTED

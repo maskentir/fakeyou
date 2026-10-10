@@ -11,9 +11,9 @@ difinalisasi dan status ingestion menjadi `pending` beserta hash
 final. Jalankan ingestion sebagai tahap operator tersendiri:
 
 ```sh
-fakeyou memory-ingest --meeting MEETING_ID --persona PERSONA \
+fakeyou memory-ingest --meeting-id MEETING_ID --persona PERSONA \
   --owner-id OWNER --twin-id TWIN
-fakeyou report --meeting MEETING_ID
+fakeyou report --meeting-id MEETING_ID
 ```
 
 `memory-ingest` memakai episode native sebagai sumber kebenaran
@@ -52,7 +52,7 @@ lama; catat trade-off recall apa adanya.
 
 ## Membaca verdict
 
-`fakeyou report --meeting MEETING_ID` menampilkan dua outcome
+`fakeyou report --meeting-id MEETING_ID` menampilkan dua outcome
 terpisah plus bukti cancellation:
 
 - `session_outcome`: `completed` (exit 0), `failed`, atau `unknown`

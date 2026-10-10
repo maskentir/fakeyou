@@ -1,13 +1,19 @@
 import re
 import shlex
 from pathlib import Path
+from typing import Any
 
 import pytest
+import typer.main
 
-from fakeyou.cli.main import build_parser
+from fakeyou.cli.main import app
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCUMENTS = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
+DOCUMENTS = [
+    ROOT / "README.md",
+    *sorted((ROOT / "docs" / "runbooks").rglob("*.md")),
+    *sorted((ROOT / "docs" / "reference").rglob("*.md")),
+]
 
 
 def documented_command_lines() -> list[tuple[str, str]]:
@@ -24,6 +30,15 @@ def documented_command_lines() -> list[tuple[str, str]]:
 COMMANDS = documented_command_lines()
 
 
+def _parse_only(tokens: list[str]) -> None:
+    command: Any = typer.main.get_command(app)
+    rest = list(tokens)
+    while rest and getattr(command, "commands", None) and rest[0] in command.commands:
+        command = command.commands[rest[0]]
+        rest = rest[1:]
+    command.make_context("fakeyou", rest)
+
+
 def test_documentation_contains_commands() -> None:
     assert len(COMMANDS) >= 10
 
@@ -33,9 +48,7 @@ def test_documented_command_is_accepted_by_the_parser(document: str, line: str) 
     tokens = shlex.split(line)
     if "fakeyou" not in tokens:
         pytest.skip("command builds or starts the worker without running fakeyou")
-    arguments = build_parser().parse_args(tokens[tokens.index("fakeyou") + 1 :])
-
-    assert arguments.command
+    _parse_only(tokens[tokens.index("fakeyou") + 1 :])
 
 
 @pytest.mark.parametrize("document,line", COMMANDS)

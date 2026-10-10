@@ -453,10 +453,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "persona group does not match the ingestion status group", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_FORGET_TARGET_REQUIRED: ErrorSpec(
-        "memory-forget requires exactly one of --meeting or --episode", ExitCode.INPUT_REJECTED
+        "memory-forget requires exactly one of --meeting-id or --episode", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING: ErrorSpec(
-        "--keep-record only applies to --meeting", ExitCode.INPUT_REJECTED
+        "--keep-record only applies to --meeting-id", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
@@ -612,7 +612,7 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.INGESTION_EPISODE_NAME_INVALID: ErrorSpec(
         "invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; run "
         + Command.MEMORY_FORGET
-        + " --meeting with --keep-record before ingesting again"
+        + " --meeting-id with --keep-record before ingesting again"
     ),
     ErrorCode.ACTION_LEDGER_UNREADABLE: ErrorSpec("unreadable action ledger: {path}"),
     ErrorCode.ACTION_LEDGER_MEETING_MISMATCH: ErrorSpec("action ledger meeting mismatch: {path}"),

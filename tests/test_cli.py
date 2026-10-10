@@ -515,12 +515,12 @@ async def test_join_headless_override(session_run, join, settings) -> None:
             {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
         ),
         (
-            ["memory-forget", "--meeting", "m1", "--persona", "p.json", "--keep-record"],
+            ["memory-forget", "--meeting-id", "m1", "--persona", "p.json", "--keep-record"],
             "forget_memory",
             {"meeting_id": "m1", "episode_uuid": None, "keep_record": True},
         ),
         (
-            ["report", "--meeting", "m1"],
+            ["report", "--meeting-id", "m1"],
             "show_session_report",
             {"meeting_id": "m1", "journal_dir": None},
         ),
@@ -545,9 +545,10 @@ def test_main_dispatches_parsed_options_to_the_command_handler(
     sync_handlers = {"show_session_report"}
     monkeypatch.setattr(cli_main, handler, record if handler in sync_handlers else record_async)
     monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
-    cli_main.main()
-
+    assert exited.value.code == 0
     [call] = calls
     assert isinstance(call.pop("settings"), Settings)
     assert {key: call[key] for key in expected} == expected
@@ -566,25 +567,28 @@ def test_join_owner_id_flag(monkeypatch) -> None:
         "argv",
         ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", "--owner-id", "owner-9"],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+    assert exited.value.code == 0
     assert captured["options"].identity.owner_id == "owner-9"
 
 
 @pytest.mark.parametrize(
     "command", ["join", "memory-add", "memory-forget", "memory-ingest", "memory-reembed"]
 )
-def test_cli_rejects_owner_alias(command, capsys) -> None:
+def test_cli_rejects_owner_alias(command, capsys, monkeypatch) -> None:
     arguments = {
         "join": ["https://meet.google.com/abc-defg-hij"],
         "memory-add": ["A note.", "--persona", "p.json"],
-        "memory-forget": ["--meeting", "meeting-1", "--persona", "p.json"],
-        "memory-ingest": ["--meeting", "meeting-1", "--persona", "p.json"],
+        "memory-forget": ["--meeting-id", "meeting-1", "--persona", "p.json"],
+        "memory-ingest": ["--meeting-id", "meeting-1", "--persona", "p.json"],
         "memory-reembed": ["--persona", "p.json"],
     }
+    monkeypatch.setattr(sys, "argv", ["fakeyou", command, *arguments[command], "--owner", "o"])
     with pytest.raises(SystemExit) as error:
-        cli_main.build_parser().parse_args([command, *arguments[command], "--owner", "o"])
+        cli_main.main()
     assert error.value.code == 2
-    assert "unrecognized arguments: --owner o" in capsys.readouterr().err
+    assert "No such option: --owner" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("argv,expected", [(["--headless"], True), ([], None)])
@@ -598,7 +602,9 @@ def test_join_headless_flag(monkeypatch, argv, expected) -> None:
     monkeypatch.setattr(
         sys, "argv", ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", *argv]
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+    assert exited.value.code == 0
     assert captured["options"].headless is expected
 
 
@@ -1583,8 +1589,10 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
         "argv",
         ["fakeyou", "join", MEET_LINK, "--audio", "--converse", "--persona", "p.json", "--memory"],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert captured["options"].identity.persona_path == Path("p.json")
     assert captured["options"].memory is True
     assert captured["options"].brief_path is None
@@ -1614,8 +1622,10 @@ def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
             "b.json",
         ],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert captured["options"].brief_path == Path("b.json")
     assert captured["options"].meeting_id == "meeting-9"
 
@@ -3045,7 +3055,7 @@ async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memor
             {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
         ),
         (
-            ["memory-forget", "--meeting", "m1", "--persona", "p.json"],
+            ["memory-forget", "--meeting-id", "m1", "--persona", "p.json"],
             "forget_memory",
             {
                 "identity": OperatorIdentity(Path("p.json"), None, None),
@@ -3065,8 +3075,10 @@ def test_memory_operator_commands_parse_arguments(
 
     monkeypatch.setattr(cli_main, target, fake_command)
     monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert {key: captured[key] for key in expected} == expected
 
 
@@ -3094,8 +3106,10 @@ def test_memory_add_parses_optional_source_and_note_id(
             "b322d326-37b5-482a-904c-ef982f4dc510",
         ],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     assert captured["note_id"] == UUID("b322d326-37b5-482a-904c-ef982f4dc510")
 
@@ -3110,8 +3124,10 @@ def test_memory_add_defaults_source_and_note_id_to_none(
 
     monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "A note.", "--persona", "p.json"])
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert captured["source_at"] is None
     assert captured["note_id"] is None
 
@@ -3142,8 +3158,10 @@ def test_memory_correct_parses_target_source_and_note_id(
             "a1b2c3d4-0000-4000-8000-000000000002",
         ],
     )
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     assert captured["text"] == "Fixed note."
     assert captured["target"] == CorrectionTarget(
         "a1b2c3d4-0000-4000-8000-000000000001",
@@ -3185,7 +3203,7 @@ def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["fakeyou", "memory-forget", "--meeting", "m1", "--episode", "e1", "--persona", "p"],
+        ["fakeyou", "memory-forget", "--meeting-id", "m1", "--episode", "e1", "--persona", "p"],
     )
     with pytest.raises(SystemExit) as caught:
         cli_main.main()
@@ -3282,11 +3300,13 @@ def test_report_command_prints_summary_from_journal(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["fakeyou", "report", "--meeting", "meeting-1", "--journal-dir", str(journal_dir)],
+        ["fakeyou", "report", "--meeting-id", "meeting-1", "--journal-dir", str(journal_dir)],
     )
 
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     report = json.loads(capsys.readouterr().out)
     assert report["meeting_id"] == "meeting-1"
     assert report["result"]["terminal_reason"] == "stopped_by_owner"
@@ -3861,7 +3881,7 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
     assert printed["session_outcome"] == "completed"
     assert printed["ingestion_outcome"] == "pending"
     assert printed["record_error"] is None
-    assert "memory-ingest --meeting meeting-9 --persona" in printed["resume_command"]
+    assert "memory-ingest --meeting-id meeting-9 --persona" in printed["resume_command"]
     assert "persona.json" in printed["resume_command"]
     assert "--owner-id settings-owner --twin-id settings-twin" in printed["resume_command"]
 
@@ -4486,7 +4506,7 @@ def test_ctrl_c_is_reported_as_an_operation_interruption(monkeypatch, capsys) ->
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli_main, "show_session_report", interrupted)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting", "m1"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "m1"])
 
     with pytest.raises(SystemExit) as caught:
         cli_main.main()
@@ -4502,7 +4522,7 @@ def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli_main, "Settings", interrupted_settings)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting", "m1"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "m1"])
 
     with pytest.raises(SystemExit) as caught:
         cli_main.main()

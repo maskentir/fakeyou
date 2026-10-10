@@ -7,7 +7,7 @@ Halaman ini dihasilkan dari katalog di `src/fakeyou/catalog/errors.py` oleh `fak
 - Setiap error yang sampai ke pengguna berupa `FakeYouError` dengan kode dari `ErrorCode`. Pesan dirender dari template di katalog, dan exit code diambil dari spesifikasi kode yang sama.
 - Kode berbentuk `domain.nama` dan dianggap bagian dari kontrak. Mengubah kode atau template adalah breaking change dan harus dicatat. Nama anggota enum mengikuti nilainya, misalnya `config.unknown_key` menjadi `CONFIG_UNKNOWN_KEY`.
 - Pesan tidak menampilkan nilai secret, isi brief, atau data biometrik. Placeholder `{...}` hanya berisi identitas sesi, path, nama field, atau alasan teknis yang sudah disanitasi.
-- `ValueError` dan `TypeError` yang tersisa adalah pelanggaran kontrak pemanggilan internal, atau validasi yang diwajibkan framework (pydantic dan argparse). Pelanggaran internal tidak dipetakan ke kode katalog dan tampil sebagai traceback. `ValidationError` dari konfigurasi dipetakan ke `CONFIG_INVALID`, dan `ValidationError` dari argumen perintah dipetakan ke `INPUT_INVALID`.
+- `ValueError` dan `TypeError` yang tersisa adalah pelanggaran kontrak pemanggilan internal, atau validasi yang diwajibkan framework (pydantic dan typer). Pelanggaran internal tidak dipetakan ke kode katalog dan tampil sebagai traceback. `ValidationError` dari konfigurasi dipetakan ke `CONFIG_INVALID`, dan `ValidationError` dari argumen perintah dipetakan ke `INPUT_INVALID`.
 
 ## Exit code
 
@@ -179,8 +179,8 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | `memory.episode_not_uuid` | `MEMORY_EPISODE_NOT_UUID` | INPUT_REJECTED | `--episode must be a UUID` |
 | `memory.record_missing` | `MEMORY_RECORD_MISSING` | INPUT_REJECTED | `no meeting record for {meeting_id} at {path}` |
 | `memory.ingestion_group_mismatch` | `MEMORY_INGESTION_GROUP_MISMATCH` | INPUT_REJECTED | `persona group does not match the ingestion status group` |
-| `memory.forget_target_required` | `MEMORY_FORGET_TARGET_REQUIRED` | INPUT_REJECTED | `memory-forget requires exactly one of --meeting or --episode` |
-| `memory.keep_record_requires_meeting` | `MEMORY_KEEP_RECORD_REQUIRES_MEETING` | INPUT_REJECTED | `--keep-record only applies to --meeting` |
+| `memory.forget_target_required` | `MEMORY_FORGET_TARGET_REQUIRED` | INPUT_REJECTED | `memory-forget requires exactly one of --meeting-id or --episode` |
+| `memory.keep_record_requires_meeting` | `MEMORY_KEEP_RECORD_REQUIRES_MEETING` | INPUT_REJECTED | `--keep-record only applies to --meeting-id` |
 | `memory.forget_incomplete` | `MEMORY_FORGET_INCOMPLETE` | FAILURE | `episode {uuid} survived removal during forget` |
 | `memory.unavailable` | `MEMORY_UNAVAILABLE` | INFRA_FAILURE | `memory unavailable: {reason}` |
 
@@ -360,7 +360,7 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
-| `ingestion.episode_name_invalid` | `INGESTION_EPISODE_NAME_INVALID` | FAILURE | `invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; run fakeyou memory-forget --meeting with --keep-record before ingesting again` |
+| `ingestion.episode_name_invalid` | `INGESTION_EPISODE_NAME_INVALID` | FAILURE | `invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; run fakeyou memory-forget --meeting-id with --keep-record before ingesting again` |
 
 ### persona
 

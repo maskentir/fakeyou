@@ -57,7 +57,7 @@ mengunci θ + margin sementara + membuktikan mekanisme.
 ## Analisis
 
 ```sh
-fakeyou report --meeting <id> --journal-dir .runtime/audio/journals
+fakeyou report --meeting-id <id> --journal-dir .runtime/audio/journals
 ```
 
 Baca event `voiceprint_decided` (outcome, s1/s2, margin,

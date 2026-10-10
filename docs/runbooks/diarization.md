@@ -14,7 +14,7 @@ pernah menulis `record.jsonl`; hasilnya dua sidecar di direktori sesi:
 Jalankan manual setelah sesi selesai dan audio per-slot Fase A lengkap:
 
 ```sh
-fakeyou diarize run --meeting m1
+fakeyou diarize run --meeting-id m1
 ```
 
 Prasyarat: `FAKEYOU_STT__API_KEY` di `.env`, WAV per-slot selaras
@@ -40,7 +40,7 @@ terhadap WAV campuran; offset awal sesi dibaca dari `anchors` di
 Untuk ringkasan cepat tanpa kode:
 
 ```sh
-fakeyou diarize show --meeting m1
+fakeyou diarize show --meeting-id m1
 ```
 
 Contoh keluaran:

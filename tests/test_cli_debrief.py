@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -12,7 +13,6 @@ import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli._operator import OperatorIdentity
-from fakeyou.cli.main import build_parser
 from fakeyou.config.settings import GoogleReply
 from fakeyou.debrief.debrief_schema import DebriefDraft
 from fakeyou.diarization.diarize_client import DiarizedTurn
@@ -42,7 +42,7 @@ async def test_debrief_cancellation_exits_nonzero_without_traceback(monkeypatch,
         raise asyncio.CancelledError
 
     monkeypatch.setattr(
-        "sys.argv", ["fakeyou", "debrief", "--meeting", "m1", "--persona", "p.json"]
+        "sys.argv", ["fakeyou", "debrief", "--meeting-id", "m1", "--persona", "p.json"]
     )
     monkeypatch.setattr(cli_main, "debrief_meeting", cancel)
     with pytest.raises(SystemExit) as error:
@@ -398,13 +398,26 @@ async def test_debrief_cancellation_keeps_previous_result_and_lock(debrief_run, 
         pass
 
 
-def test_debrief_parser_uses_operator_scope_and_force():
-    parsed = build_parser().parse_args(
-        ["debrief", "--meeting", "m1", "--persona", "persona.json", "--force"]
+def test_debrief_dispatch_builds_operator_scope_and_force(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_debrief(*args: Any, **kwargs: Any) -> None:
+        assert args == ()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_main, "debrief_meeting", fake_debrief)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["fakeyou", "debrief", "--meeting-id", "m1", "--persona", "persona.json", "--force"],
     )
-    assert parsed.meeting_id == "m1"
-    assert parsed.force is True
-    assert parsed.persona_path == Path("persona.json")
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["meeting_id"] == "m1"
+    assert call["force"] is True
+    assert call["identity"] == OperatorIdentity(Path("persona.json"), None, None)
 
 
 async def test_debrief_renders_display_claim_as_unverified_speaker_label(

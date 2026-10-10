@@ -113,18 +113,28 @@ def test_purge_expired_with_non_positive_days_raises(settings: Settings, tmp_pat
     assert outcome.value.code is ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE
 
 
-def test_audio_parsers_map_to_handler(tmp_path: Path) -> None:
-    parser = cli_main.build_parser()
+def test_audio_purge_expired_dispatches_root_and_days(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
 
-    options = parser.parse_args(["audio", "purge-expired"])
-    assert options.handler is audio_purge_expired
-    assert options.root is None
-    assert options.days is None
+    def fake_purge(**kwargs: Any) -> None:
+        calls.append(kwargs)
 
-    options = parser.parse_args(["audio", "purge-expired", "--root", str(tmp_path), "--days", "7"])
-    assert options.handler is audio_purge_expired
-    assert options.root == tmp_path
-    assert options.days == 7
+    import sys
+
+    monkeypatch.setattr(cli_main, "audio_purge_expired", fake_purge)
+    monkeypatch.setattr(
+        sys, "argv", ["fakeyou", "audio", "purge-expired", "--root", str(tmp_path), "--days", "7"]
+    )
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    [call] = calls
+    assert call["root"] == tmp_path
+    assert call["days"] == 7
+    assert set(call) == {"root", "days", "settings"}
 
 
 def test_audio_commands_dispatch_without_leaking_parser_state(
@@ -139,10 +149,9 @@ def test_audio_commands_dispatch_without_leaking_parser_state(
 
     monkeypatch.setattr(cli_main, "audio_purge_expired", fake_purge)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "audio", "purge-expired", "--root", str(tmp_path)])
-    cli_main.main()
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
 
+    assert exited.value.code == 0
     [call] = calls
-    assert "worker_command" not in call
-    assert "voiceprint_command" not in call
-    assert "audio_command" not in call
-    assert "command" not in call
+    assert set(call) == {"root", "days", "settings"}
