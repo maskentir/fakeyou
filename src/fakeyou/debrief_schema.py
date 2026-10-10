@@ -10,6 +10,7 @@ from pydantic import (
     model_validator,
 )
 
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.invariants import SessionId
 
 ABSENT_CLAIMS = frozenset({"", "null", "none", "unknown", "n/a"})
@@ -112,5 +113,5 @@ class DebriefReport(BaseModel):
     source_limitations: tuple[str, ...]
 
 
-class DebriefValidationError(ValueError):
+class DebriefValidationError(FakeYouError, ValueError):
     pass

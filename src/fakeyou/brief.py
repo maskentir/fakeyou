@@ -12,6 +12,7 @@ from pydantic import (
     model_validator,
 )
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.ingestion_status import write_atomically
 from fakeyou.invariants import SessionId
 
@@ -90,14 +91,14 @@ def validate_brief_scope(
     brief: MeetingBrief, *, owner_id: str, twin_id: str, meeting_id: str
 ) -> None:
     if (brief.owner_id, brief.twin_id, brief.meeting_id) != (owner_id, twin_id, meeting_id):
-        raise ValueError("meeting brief owner_id, twin_id, and meeting_id must match the session")
+        raise FakeYouError(ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH)
 
 
 def load_meeting_brief(path: Path, *, owner_id: str, twin_id: str, meeting_id: str) -> MeetingBrief:
     with path.open("rb") as handle:
         raw = handle.read(MAX_BRIEF_BYTES + 1)
     if len(raw) > MAX_BRIEF_BYTES:
-        raise ValueError(f"meeting brief must be at most {MAX_BRIEF_BYTES} bytes")
+        raise FakeYouError(ErrorCode.MEETING_BRIEF_TOO_LARGE, limit=MAX_BRIEF_BYTES)
     brief = MeetingBrief.model_validate_json(raw)
     validate_brief_scope(brief, owner_id=owner_id, twin_id=twin_id, meeting_id=meeting_id)
     return brief
@@ -114,7 +115,7 @@ def read_meeting_context(path: Path) -> MeetingContext | None:
     except FileNotFoundError:
         return None
     if len(raw) > MAX_CONTEXT_BYTES:
-        raise ValueError(f"meeting context must be at most {MAX_CONTEXT_BYTES} bytes")
+        raise FakeYouError(ErrorCode.MEETING_CONTEXT_TOO_LARGE, limit=MAX_CONTEXT_BYTES)
     return MeetingContext.model_validate_json(raw)
 
 
@@ -123,5 +124,5 @@ def write_meeting_context(path: Path, context: MeetingContext) -> None:
     if existing == context:
         return
     if existing is not None:
-        raise ValueError("meeting context differs from the recorded snapshot")
+        raise FakeYouError(ErrorCode.MEETING_CONTEXT_DIFFERS)
     write_atomically(path, (context.model_dump_json(indent=2) + "\n").encode("utf-8"))

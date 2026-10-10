@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from fakeyou.browser import ProfileInUseError, profile_lock, profile_lock_path
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.settings import Settings
 
 LINK = "https://meet.google.com/abc-defg-hij"
@@ -34,8 +34,9 @@ async def test_join_refuses_a_second_worker_on_a_signed_in_profile(
     profile = tmp_path / "signed-in"
 
     with profile_lock(profile):
-        with pytest.raises(CliError, match="in use"):
+        with pytest.raises(FakeYouError, match="in use") as caught:
             await join(LINK, meeting_id="meeting-9", profile_dir=str(profile))
+    assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
     assert "config" not in session_run
 
 
@@ -91,7 +92,8 @@ def test_profile_lock_refuses_a_live_foreign_lease(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ProfileInUseError, match="in use"):
+    with pytest.raises(ProfileInUseError, match="in use") as caught:
         with profile_lock(profile, stale_after_seconds=60.0):
             pytest.fail("live foreign lease must not be taken over")
+    assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "foreign"

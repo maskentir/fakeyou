@@ -1,4 +1,5 @@
 import math
+import shlex
 import subprocess
 import tempfile
 import time
@@ -6,10 +7,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
 
+from fakeyou.catalog.commands import Command
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.debrief import debrief_report_status
 from fakeyou.ingestion_status import (
     describe_lease,
@@ -19,6 +21,7 @@ from fakeyou.ingestion_status import (
 )
 from fakeyou.invariants import SessionId
 from fakeyou.journal import journal_path
+from fakeyou.meeting_request import validate_meeting_request
 from fakeyou.record import meeting_record_path
 from fakeyou.report import describe_session, read_journal
 
@@ -34,7 +37,7 @@ STATUS_POLL_SECONDS = 0.5
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-class WorkerError(Exception):
+class WorkerError(FakeYouError):
     pass
 
 
@@ -45,7 +48,28 @@ def checked_meeting_id(meeting_id: str) -> str:
     try:
         return _MEETING_ID.validate_python(meeting_id)
     except ValueError:
-        raise WorkerError(f"invalid meeting ID: {meeting_id!r}") from None
+        raise WorkerError(ErrorCode.WORKER_MEETING_ID_INVALID, meeting_id=meeting_id) from None
+
+
+def memory_ingest_args(
+    *,
+    meeting_id: str,
+    persona: str | Path,
+    owner_id: str | None = None,
+    twin_id: str | None = None,
+) -> list[str]:
+    args = [
+        *shlex.split(Command.MEMORY_INGEST),
+        "--meeting",
+        meeting_id,
+        "--persona",
+        str(persona),
+    ]
+    if owner_id is not None:
+        args += ["--owner-id", owner_id]
+    if twin_id is not None:
+        args += ["--twin-id", twin_id]
+    return args
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,35 +94,20 @@ class WorkerStartRequest:
 
     def __post_init__(self) -> None:
         checked_meeting_id(self.meeting_id)
-        parsed = urlparse(self.link)
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname != "meet.google.com"
-            or parsed.path.strip("/") == ""
-        ):
-            raise WorkerError("link must be an https://meet.google.com/ meeting URL")
-        if self.lobby_timeout is not None and not self.lobby_timeout > 0:
-            raise WorkerError("--lobby-timeout must be positive")
-        if self.duration is not None and not self.duration > 0:
-            raise WorkerError("--duration must be positive")
-        if self.initial_speech is not None and (not self.audio or not self.initial_speech.strip()):
-            raise WorkerError("--speak requires --audio and nonempty text")
-        if self.conversation and not self.audio:
-            raise WorkerError("--converse requires --audio")
-        if self.memory and not self.conversation:
-            raise WorkerError("--memory requires --converse")
-        if self.persona_path is not None and not self.conversation:
-            raise WorkerError("--persona requires --converse")
-        if self.memory and self.persona_path is None:
-            raise WorkerError("--memory requires --persona")
-        if self.brief_path is not None and not self.conversation:
-            raise WorkerError("--brief requires --converse")
-        if self.brief_path is not None and self.persona_path is None:
-            raise WorkerError("--brief requires --persona")
-        if self.wake_phrase and not self.conversation:
-            raise WorkerError("--wake-phrase requires --converse")
-        if self.barge_in and not self.conversation:
-            raise WorkerError("--barge-in requires --converse")
+        validate_meeting_request(
+            link=self.link,
+            lobby_timeout=self.lobby_timeout,
+            duration=self.duration,
+            initial_speech=self.initial_speech,
+            audio=self.audio,
+            conversation=self.conversation,
+            memory=self.memory,
+            persona_path=self.persona_path,
+            brief_path=self.brief_path,
+            meeting_id=self.meeting_id,
+            wake_phrase=self.wake_phrase,
+            barge_in=self.barge_in,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,9 +212,11 @@ class DockerWorkerBackend:
 
     def start(self, request: WorkerStartRequest) -> WorkerStarted:
         if self._running_container(request.meeting_id) is not None:
-            raise WorkerError(f"worker for meeting {request.meeting_id} is already running")
+            raise WorkerError(ErrorCode.WORKER_ALREADY_RUNNING, meeting_id=request.meeting_id)
         if self._running_container(request.meeting_id, role="ingest") is not None:
-            raise WorkerError(f"ingest job for meeting {request.meeting_id} is still running")
+            raise WorkerError(
+                ErrorCode.WORKER_INGEST_ALREADY_RUNNING, meeting_id=request.meeting_id
+            )
         join_args = self._join_args(request)
         if describe_session(self._host_journal_dir(), request.meeting_id) == "unfinished":
             join_args.append("--resume")
@@ -239,10 +250,10 @@ class DockerWorkerBackend:
             if override is not None:
                 Path(override).unlink(missing_ok=True)
         if completed.returncode != 0:
-            raise WorkerError(f"worker start failed: {completed.stderr.strip()}")
+            raise WorkerError(ErrorCode.WORKER_START_FAILED, stderr=completed.stderr.strip())
         container_id = completed.stdout.strip()
         if not container_id:
-            raise WorkerError("worker start produced no container id")
+            raise WorkerError(ErrorCode.WORKER_START_NO_CONTAINER)
         return WorkerStarted(
             meeting_id=request.meeting_id,
             container_id=container_id,
@@ -268,7 +279,7 @@ class DockerWorkerBackend:
             ]
         )
         if completed.returncode != 0:
-            raise WorkerError(f"docker ps failed: {completed.stderr.strip()}")
+            raise WorkerError(ErrorCode.DOCKER_PS_FAILED, stderr=completed.stderr.strip())
         states: dict[str, WorkerState] = {}
         for line in completed.stdout.splitlines():
             parts = line.split("\t")
@@ -287,7 +298,7 @@ class DockerWorkerBackend:
     def stop(self, meeting_id: str, *, timeout_seconds: float) -> WorkerStopped:
         checked_meeting_id(meeting_id)
         if timeout_seconds < 0:
-            raise WorkerError("--timeout must not be negative")
+            raise WorkerError(ErrorCode.WORKER_TIMEOUT_NEGATIVE)
         container_id = self._running_container(meeting_id)
         if container_id is None:
             summary = summarize_session(self._read_session(meeting_id))
@@ -298,7 +309,7 @@ class DockerWorkerBackend:
                     terminal_reason=summary["terminal_reason"],
                     escalated=False,
                 )
-            raise WorkerError(f"no running worker for meeting {meeting_id}")
+            raise WorkerError(ErrorCode.WORKER_NOT_RUNNING, meeting_id=meeting_id)
         grace = min(int(STOP_GRACE_SECONDS), math.ceil(timeout_seconds))
         self._run_docker(["docker", "stop", "--time", str(grace), container_id])
         deadline = time.monotonic() + timeout_seconds
@@ -336,30 +347,23 @@ class DockerWorkerBackend:
     ) -> WorkerIngest:
         checked_meeting_id(meeting_id)
         if self._running_container(meeting_id) is not None:
-            raise WorkerError(f"worker for meeting {meeting_id} is still running")
+            raise WorkerError(ErrorCode.WORKER_STILL_RUNNING, meeting_id=meeting_id)
         if self._running_container(meeting_id, role="ingest") is not None:
-            raise WorkerError(f"ingest job for meeting {meeting_id} is already running")
+            raise WorkerError(ErrorCode.WORKER_INGEST_ALREADY_RUNNING, meeting_id=meeting_id)
         if describe_session(self._host_journal_dir(), meeting_id) != "finished":
-            raise WorkerError(f"meeting {meeting_id} has no finished session to ingest")
+            raise WorkerError(ErrorCode.WORKER_INGEST_NO_FINISHED_SESSION, meeting_id=meeting_id)
         record = meeting_record_path(self._host_record_dir(), meeting_id)
         lease = describe_lease(lock_path(record))
         if lease == "live":
-            raise WorkerError(f"meeting record is locked: {lock_path(record)}")
+            raise WorkerError(ErrorCode.RECORD_LOCKED, path=lock_path(record))
         if lease == "corrupt":
-            raise WorkerError(
-                f"meeting record lock is corrupt: {lock_path(record)}; inspect it first"
-            )
-        ingest_args = [
-            "memory-ingest",
-            "--meeting",
-            meeting_id,
-            "--persona",
-            self._container_path(persona_path),
-        ]
-        if owner_id is not None:
-            ingest_args += ["--owner-id", owner_id]
-        if twin_id is not None:
-            ingest_args += ["--twin-id", twin_id]
+            raise WorkerError(ErrorCode.RECORD_LOCK_CORRUPT, path=lock_path(record))
+        ingest_args = memory_ingest_args(
+            meeting_id=meeting_id,
+            persona=self._container_path(persona_path),
+            owner_id=owner_id,
+            twin_id=twin_id,
+        )
         name = f"{INGEST_CONTAINER_PREFIX}{meeting_id}"
         status_file = status_path(record)
         before = self._status_fingerprint(status_file)
@@ -384,14 +388,15 @@ class DockerWorkerBackend:
                         "--name",
                         name,
                         WORKER_SERVICE,
-                        "fakeyou",
                         *ingest_args,
                     ]
                 )
             except KeyboardInterrupt:
-                raise WorkerError(f"ingest interrupted for meeting {meeting_id}") from None
+                raise WorkerError(
+                    ErrorCode.WORKER_INGEST_INTERRUPTED, meeting_id=meeting_id
+                ) from None
             except OSError as error:
-                raise WorkerError(f"docker is not available: {error}") from None
+                raise WorkerError(ErrorCode.DOCKER_UNAVAILABLE, reason=str(error)) from None
         finally:
             if override is not None:
                 Path(override).unlink(missing_ok=True)
@@ -421,7 +426,7 @@ class DockerWorkerBackend:
         try:
             return self._run(args, capture_output=True, text=True, check=False)
         except OSError as error:
-            raise WorkerError(f"docker is not available: {error}") from None
+            raise WorkerError(ErrorCode.DOCKER_UNAVAILABLE, reason=str(error)) from None
 
     def _state(self, meeting_id: str, found: tuple[str, str, str] | None) -> WorkerState:
         summary = summarize_session(self._read_session(meeting_id))
@@ -504,7 +509,7 @@ class DockerWorkerBackend:
             ]
         )
         if completed.returncode != 0:
-            raise WorkerError(f"docker ps failed: {completed.stderr.strip()}")
+            raise WorkerError(ErrorCode.DOCKER_PS_FAILED, stderr=completed.stderr.strip())
         for line in completed.stdout.splitlines():
             if line.strip():
                 return line.strip()
@@ -525,7 +530,7 @@ class DockerWorkerBackend:
             ]
         )
         if completed.returncode != 0:
-            raise WorkerError(f"docker ps failed: {completed.stderr.strip()}")
+            raise WorkerError(ErrorCode.DOCKER_PS_FAILED, stderr=completed.stderr.strip())
         for line in completed.stdout.splitlines():
             parts = line.split("\t")
             if len(parts) == 3 and parts[0]:
@@ -580,6 +585,6 @@ class DockerWorkerBackend:
             except ValueError:
                 continue
             if must_exist and not (host_dir / relative).exists():
-                raise WorkerError(f"file not found: {path}")
+                raise WorkerError(ErrorCode.WORKER_FILE_MISSING, path=path)
             return f"{container_dir}/{relative.as_posix()}"
-        raise WorkerError(f"file is not visible inside the worker container: {path}")
+        raise WorkerError(ErrorCode.WORKER_FILE_NOT_VISIBLE, path=path)

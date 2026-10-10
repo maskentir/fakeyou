@@ -1,20 +1,21 @@
 import argparse
 import asyncio
 import inspect
-import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 from uuid import UUID
 
-from pydantic import AwareDatetime, TypeAdapter
+from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.cli.audio import audio_purge_expired
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
+from fakeyou.cli.db import db_stamp, db_status, db_upgrade
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
 from fakeyou.cli.diarize import diarize_run, diarize_show
-from fakeyou.cli.errors import FAILURE_EXIT_CODES
 from fakeyou.cli.join import join_meeting
 from fakeyou.cli.memory import (
     add_owner_note,
@@ -24,6 +25,7 @@ from fakeyou.cli.memory import (
     initialize_memory,
     reembed_memory,
 )
+from fakeyou.cli.output import emit_error
 from fakeyou.cli.voiceprint import (
     voiceprint_challenge,
     voiceprint_delete,
@@ -34,22 +36,27 @@ from fakeyou.cli.voiceprint import (
 )
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
 from fakeyou.provider_faults import ProviderFault
-from fakeyou.settings import (
-    Settings,
-)
+from fakeyou.settings import Settings, export_dotenv
 
 _SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 
 
 def _source_at_argument(value: str) -> datetime:
-    return _SOURCE_AT_ARGUMENT.validate_python(value)
+    try:
+        return _SOURCE_AT_ARGUMENT.validate_python(value)
+    except ValidationError:
+        raise argparse.ArgumentTypeError(
+            render_error(ErrorCode.MEMORY_SOURCE_AT_INVALID, value=value)
+        ) from None
 
 
 def _note_id_argument(value: str) -> UUID:
     try:
         return UUID(value)
     except ValueError:
-        raise ValueError(f"--note-id must be a UUID: {value}") from None
+        raise argparse.ArgumentTypeError(
+            render_error(ErrorCode.NOTE_ID_NOT_UUID, value=value)
+        ) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -277,6 +284,22 @@ def build_parser() -> argparse.ArgumentParser:
     worker_ingest_parser.add_argument("--owner-id", dest="owner_id", default=None)
     worker_ingest_parser.add_argument("--twin-id", default=None)
     worker_ingest_parser.set_defaults(handler=worker_ingest)
+    db_parser = commands.add_parser("db", help="Manage the database schema", allow_abbrev=False)
+    db_commands = db_parser.add_subparsers(dest="db_command", required=True)
+    db_upgrade_parser = db_commands.add_parser(
+        "upgrade", help="Apply schema migrations up to head", allow_abbrev=False
+    )
+    db_upgrade_parser.set_defaults(handler=db_upgrade)
+    db_stamp_parser = db_commands.add_parser(
+        "stamp",
+        help="Adopt an existing voiceprints table as the baseline revision",
+        allow_abbrev=False,
+    )
+    db_stamp_parser.set_defaults(handler=db_stamp)
+    db_status_parser = db_commands.add_parser(
+        "status", help="Show the applied schema revision and head", allow_abbrev=False
+    )
+    db_status_parser.set_defaults(handler=db_status)
     voiceprint_parser = commands.add_parser(
         "voiceprint", help="Enroll and verify speaker voiceprints", allow_abbrev=False
     )
@@ -363,27 +386,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    options = vars(build_parser().parse_args())
-    handler = options.pop("handler")
-    del options["command"]
-    options.pop("worker_command", None)
-    options.pop("voiceprint_command", None)
-    options.pop("audio_command", None)
-    options.pop("calibrate_command", None)
-    options.pop("diarize_command", None)
+    export_dotenv()
+    parsed = vars(build_parser().parse_args())
+    handler = parsed.pop("handler")
+    options = {
+        name: value
+        for name, value in parsed.items()
+        if name != "command" and not name.endswith("_command")
+    }
     try:
-        outcome = handler(**options, settings=Settings())
+        settings = Settings()
+    except FakeYouError as error:
+        _report(error)
+    except ValidationError as error:
+        _report(FakeYouError(ErrorCode.CONFIG_INVALID, reason=_describe(error)))
+    try:
+        outcome = handler(**options, settings=settings)
         if inspect.iscoroutine(outcome):
             asyncio.run(outcome)
     except asyncio.CancelledError:
-        print("fakeyou: error: operation interrupted", file=sys.stderr)
-        raise SystemExit(1) from None
-    except ValueError as error:
-        print(f"fakeyou: error: {error}", file=sys.stderr)
-        raise SystemExit(1) from None
+        _report(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
+    except FakeYouError as error:
+        _report(error)
+    except ValidationError as error:
+        _report(FakeYouError(ErrorCode.INPUT_INVALID, reason=_describe(error)))
     except ProviderFault as fault:
-        print(f"fakeyou: error: memory unavailable: {fault}", file=sys.stderr)
-        raise SystemExit(FAILURE_EXIT_CODES["infra_failure"]) from None
+        _report(FakeYouError(ErrorCode.PROVIDER_UNAVAILABLE, reason=fault))
+
+
+def _report(error: FakeYouError) -> NoReturn:
+    emit_error(error)
+    raise SystemExit(error.exit_code) from None
+
+
+def _describe(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(part) for part in issue['loc']) or 'input'}: {issue['msg']}"
+        for issue in error.errors(include_url=False, include_input=False)
+    )
 
 
 if __name__ == "__main__":

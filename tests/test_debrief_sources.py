@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from fakeyou.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.debrief_schema import (
     DebriefDraft,
     DebriefItem,
@@ -181,32 +182,39 @@ def test_contradictory_duplicate_ids_are_rejected_without_input(
     path = tmp_path / "record.jsonl"
     path.write_bytes(encoded(transcript(), transcript(**changes)))
 
-    with pytest.raises(DebriefValidationError) as error:
+    with pytest.raises(DebriefValidationError) as caught:
         load_record_snapshot(path)
 
-    assert PRIVATE_MARKER not in str(error.value)
+    assert caught.value.code is ErrorCode.DEBRIEF_TRANSCRIPT_CONTRADICTORY
+    assert PRIVATE_MARKER not in str(caught.value)
 
 
 @pytest.mark.parametrize(
-    "raw",
+    ("raw", "code"),
     [
-        b'{"text":"PRIVATE-TRANSCRIPT-MARKER"',
-        b"\xff\n",
-        encoded(transcript(kind=PRIVATE_MARKER)),
-        encoded(transcript(at="2026-10-03T12:00:00", text=PRIVATE_MARKER)),
-        encoded(transcript(id="", text=PRIVATE_MARKER)),
-        encoded(transcript(extra=PRIVATE_MARKER)),
+        (b'{"text":"PRIVATE-TRANSCRIPT-MARKER"', ErrorCode.DEBRIEF_RECORD_INVALID_LINE),
+        (b"\xff\n", ErrorCode.DEBRIEF_RECORD_INVALID_LINE),
+        (encoded(transcript(kind=PRIVATE_MARKER)), ErrorCode.DEBRIEF_RECORD_INVALID_LINE),
+        (
+            encoded(transcript(at="2026-10-03T12:00:00", text=PRIVATE_MARKER)),
+            ErrorCode.DEBRIEF_RECORD_INVALID_LINE,
+        ),
+        (encoded(transcript(id="", text=PRIVATE_MARKER)), ErrorCode.DEBRIEF_TRANSCRIPT_ID_BLANK),
+        (encoded(transcript(extra=PRIVATE_MARKER)), ErrorCode.DEBRIEF_RECORD_INVALID_LINE),
     ],
 )
-def test_corrupt_record_is_wrapped_without_transcript_input(tmp_path: Path, raw: bytes) -> None:
+def test_corrupt_record_is_wrapped_without_transcript_input(
+    tmp_path: Path, raw: bytes, code: ErrorCode
+) -> None:
     path = tmp_path / "record.jsonl"
     path.write_bytes(raw)
 
-    with pytest.raises(DebriefValidationError) as error:
+    with pytest.raises(DebriefValidationError) as caught:
         load_record_snapshot(path)
 
-    assert PRIVATE_MARKER not in str(error.value)
-    assert error.value.__suppress_context__
+    assert caught.value.code is code
+    assert PRIVATE_MARKER not in str(caught.value)
+    assert caught.value.__suppress_context__
 
 
 @pytest.mark.parametrize(
@@ -231,19 +239,31 @@ def test_empty_or_unusable_records_are_rejected(tmp_path: Path, raw: bytes) -> N
     path = tmp_path / "record.jsonl"
     path.write_bytes(raw)
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         load_record_snapshot(path)
 
+    assert caught.value.code is ErrorCode.DEBRIEF_NO_SPEECH_SOURCES
 
-@pytest.mark.parametrize("loader", [load_record_snapshot, load_context_snapshot])
-def test_source_os_errors_are_wrapped(tmp_path: Path, loader: Any) -> None:
-    with pytest.raises(DebriefValidationError):
+
+@pytest.mark.parametrize(
+    ("loader", "code"),
+    [
+        (load_record_snapshot, ErrorCode.DEBRIEF_RECORD_UNREADABLE),
+        (load_context_snapshot, ErrorCode.DEBRIEF_CONTEXT_UNREADABLE),
+    ],
+)
+def test_source_os_errors_are_wrapped(tmp_path: Path, loader: Any, code: ErrorCode) -> None:
+    with pytest.raises(DebriefValidationError) as caught:
         loader(tmp_path)
+
+    assert caught.value.code is code
 
 
 def test_missing_record_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         load_record_snapshot(tmp_path / "absent.jsonl")
+
+    assert caught.value.code is ErrorCode.DEBRIEF_RECORD_UNREADABLE
 
 
 def test_context_hash_is_for_the_original_context_bytes(
@@ -285,11 +305,12 @@ def test_corrupt_context_is_rejected_without_input(
     path = tmp_path / "meeting-context.json"
     path.write_bytes(raw)
 
-    with pytest.raises(DebriefValidationError) as error:
+    with pytest.raises(DebriefValidationError) as caught:
         load_context_snapshot(path)
 
-    assert PRIVATE_MARKER not in str(error.value)
-    assert error.value.__suppress_context__
+    assert caught.value.code is ErrorCode.DEBRIEF_CONTEXT_INVALID
+    assert PRIVATE_MARKER not in str(caught.value)
+    assert caught.value.__suppress_context__
 
 
 def test_context_ceiling_accepts_bound_and_rejects_overflow(
@@ -302,17 +323,21 @@ def test_context_ceiling_accepts_bound_and_rejects_overflow(
     assert load_context_snapshot(path)[1] == hashlib.sha256(padded).hexdigest()
     path.write_bytes(padded + b" ")
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         load_context_snapshot(path)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_CONTEXT_TOO_LARGE
 
 
 def test_context_endless_file_is_bounded() -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         load_context_snapshot(Path("/dev/zero"))
+
+    assert caught.value.code is ErrorCode.DEBRIEF_CONTEXT_TOO_LARGE
 
 
 def test_sources_require_aware_clocks() -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         SourceEntry(
             id="transcript:x",
             text="Claim",
@@ -320,6 +345,8 @@ def test_sources_require_aware_clocks() -> None:
             participant_id="unknown",
             at=datetime(2026, 10, 3),
         )
+
+    assert caught.value.code is ErrorCode.DEBRIEF_SOURCE_TIME_NOT_AWARE
 
 
 def test_chunks_cover_each_source_with_default_overlap() -> None:
@@ -362,21 +389,27 @@ def test_small_entry_limits_cannot_loop_on_overlap() -> None:
 
 
 def test_chunks_reject_oversize_entries() -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         chunk_sources((source(text="x" * 16001),))
+
+    assert caught.value.code is ErrorCode.DEBRIEF_SOURCE_EXCEEDS_CHUNK
 
 
 def test_twenty_chunks_are_accepted_but_twenty_one_are_rejected() -> None:
     sources = tuple(source(index, "x") for index in range(21))
 
     assert len(chunk_sources(sources[:20], max_entries=1, overlap=0)) == 20
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         chunk_sources(sources, max_entries=1, overlap=0)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_TOO_MANY_CHUNKS
 
 
 def test_chunks_reject_empty_sources() -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         chunk_sources(())
+
+    assert caught.value.code is ErrorCode.DEBRIEF_NO_SOURCES
 
 
 @pytest.mark.parametrize(
@@ -391,8 +424,10 @@ def test_chunks_reject_empty_sources() -> None:
     ],
 )
 def test_chunk_parameters_preserve_pilot_bounds(limits: dict[str, int]) -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         chunk_sources((source(),), **limits)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_CHUNK_LIMITS_INVALID
 
 
 def test_exact_quote_keeps_original_whitespace() -> None:
@@ -416,13 +451,17 @@ def test_exact_quote_keeps_original_whitespace() -> None:
 )
 def test_invalid_evidence_is_rejected(reference: EvidenceRef) -> None:
     entry = source()
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_evidence((reference,), {entry.id: entry})
+
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
 
 
 def test_missing_evidence_is_rejected() -> None:
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_evidence((), {})
+
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_MISSING
 
 
 def test_draft_item_references_cannot_escape_the_supplied_chunk() -> None:
@@ -440,8 +479,10 @@ def test_draft_item_references_cannot_escape_the_supplied_chunk() -> None:
         findings=(),
     )
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={entry.id: entry}, brief=None)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
     validate_draft(draft, sources={other.id: other}, brief=None)
 
 
@@ -480,8 +521,10 @@ def test_addressed_finding_rejects_twin_only_evidence(brief: MeetingBrief) -> No
         ),
     )
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={twin.id: twin}, brief=brief)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_ADDRESSED_NEEDS_PARTICIPANT
 
 
 def test_addressed_finding_accepts_participant_evidence(brief: MeetingBrief) -> None:
@@ -511,8 +554,10 @@ def test_draft_rejects_non_brief_finding_ids(brief: MeetingBrief, finding_id: st
         findings=(ObjectiveFinding(objective_id=finding_id, status="uncertain", evidence=()),),
     )
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={}, brief=brief)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_FINDING_NOT_IN_BRIEF
 
 
 def test_draft_without_brief_must_have_no_findings() -> None:
@@ -523,8 +568,10 @@ def test_draft_without_brief_must_have_no_findings() -> None:
         ),
     )
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={}, brief=None)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_FINDING_NOT_IN_BRIEF
     validate_draft(DebriefDraft(items=(), findings=()), sources={}, brief=None)
 
 
@@ -541,8 +588,10 @@ def test_finding_evidence_cannot_escape_chunk(brief: MeetingBrief, status: Any) 
         ),
     )
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={}, brief=brief)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
 
 
 def test_draft_status_validation_rejects_unvalidated_model_instances() -> None:
@@ -553,8 +602,10 @@ def test_draft_status_validation_rejects_unvalidated_model_instances() -> None:
     )
     draft = DebriefDraft.model_construct(items=(invalid_item,), findings=())
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={entry.id: entry}, brief=None)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_DRAFT_INVALID
 
 
 def test_draft_finding_status_must_be_valid_even_without_evidence(brief: MeetingBrief) -> None:
@@ -563,16 +614,20 @@ def test_draft_finding_status_must_be_valid_even_without_evidence(brief: Meeting
     )
     draft = DebriefDraft.model_construct(items=(), findings=(invalid,))
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_draft(draft, sources={}, brief=brief)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_DRAFT_INVALID
 
 
 def test_evidence_map_cannot_alias_a_different_source_id() -> None:
     entry = source(2)
     reference = EvidenceRef(entry_id="transcript:entry-1", quote="Please ask")
 
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         validate_evidence((reference,), {reference.entry_id: entry})
+
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
 
 
 @pytest.mark.parametrize("placeholder", ["null", "NULL", " none ", "unknown", "n/a", ""])
@@ -616,8 +671,9 @@ def test_draft_claims_must_come_from_the_item_quotes(field: str, value: str, val
     if valid:
         validate_draft(draft, sources={entry.id: entry}, brief=None)
     else:
-        with pytest.raises(DebriefValidationError, match="claim"):
+        with pytest.raises(DebriefValidationError, match="claim") as caught:
             validate_draft(draft, sources={entry.id: entry}, brief=None)
+        assert caught.value.code is ErrorCode.DEBRIEF_CLAIM_NOT_IN_QUOTES
 
 
 @pytest.mark.parametrize(
@@ -651,8 +707,9 @@ def test_claim_grounding_is_per_quote_on_word_boundaries(
     if valid:
         validate_draft(draft, sources={entry.id: entry}, brief=None)
     else:
-        with pytest.raises(DebriefValidationError, match="claim"):
+        with pytest.raises(DebriefValidationError, match="claim") as caught:
             validate_draft(draft, sources={entry.id: entry}, brief=None)
+        assert caught.value.code is ErrorCode.DEBRIEF_CLAIM_NOT_IN_QUOTES
 
 
 def test_corrected_sidecar_attributes_quotes_to_corrected_speaker(tmp_path: Path) -> None:
@@ -738,7 +795,7 @@ def test_stale_sidecar_falls_back_to_plain_record_and_records_fault(tmp_path: Pa
             "kind": "unknown",
             "count": 1,
             "status": None,
-            "detail": "StaleDiarizationError",
+            "detail": "diarization sidecar is stale: record changed since correction",
         }
     ]
 
@@ -783,6 +840,10 @@ def test_unusable_sidecar_falls_back_to_live_labels_and_records_fault(
     report = faults.report()
     assert report is not None
     kinds = report["faults"]["kinds"]
+    expected_detail = {
+        "unsupported_schema": "diarization sidecar schema is unsupported",
+        "corrupt_bytes": "diarization sidecar is invalid",
+    }[sidecar]
     assert kinds == [
         {
             "source": "meeting_record",
@@ -790,7 +851,7 @@ def test_unusable_sidecar_falls_back_to_live_labels_and_records_fault(
             "kind": "unknown",
             "count": 1,
             "status": None,
-            "detail": "DiarizeError",
+            "detail": expected_detail,
         }
     ]
 
@@ -819,7 +880,7 @@ def test_stale_sidecar_without_fault_reporter_emits_journal_fallback(tmp_path: P
     assert row["event"] == "fault_recorded"
     assert row["source"] == "meeting_record"
     assert row["kind"] == "unknown"
-    assert row["detail"] == "StaleDiarizationError"
+    assert row["detail"] == "diarization sidecar is stale: record changed since correction"
 
 
 def test_unexpected_correction_errors_propagate(

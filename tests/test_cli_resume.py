@@ -12,7 +12,7 @@ from pydantic import SecretStr
 import fakeyou.assembly as assembly
 import fakeyou.cli.join as cli_join
 import fakeyou.providers as providers
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 from fakeyou.settings import Settings
 
@@ -96,8 +96,10 @@ async def test_join_refuses_an_unfinished_meeting_without_resume(
 ) -> None:
     seed_unfinished_session(settings)
 
-    with pytest.raises(CliError, match="unfinished session"):
+    with pytest.raises(FakeYouError, match="unfinished session") as error:
         await join(LINK, meeting_id="meeting-9")
+
+    assert error.value.code is ErrorCode.MEETING_UNFINISHED_SESSION
 
     assert "config" not in session_run
 
@@ -126,15 +128,13 @@ async def test_join_resume_writes_markers_and_rejoins(
 async def test_join_resume_detects_a_live_checkpoint_without_journal(
     settings: Settings, join: Any, session_run: Any
 ) -> None:
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
+    from fakeyou.db.checkpoint import open_checkpointer
+    from fakeyou.db.engine import configured_url, require_url
     from fakeyou.journal import journal_path
     from fakeyou.lifecycle import MeetingLifecycle
     from fakeyou.record import load_meeting_record, meeting_record_path
 
-    database = settings.paths.checkpoint_path
-    database.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncSqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(require_url(configured_url(settings))) as saver:
         first = MeetingLifecycle("settings-owner", "settings-twin", "meeting-9", saver)
         await first.initialize()
         await first.send("join_requested", "owner_action", "test")
@@ -154,8 +154,10 @@ async def test_join_resume_refuses_a_finished_meeting(
 ) -> None:
     seed_finished_session(settings)
 
-    with pytest.raises(CliError, match="already ended"):
+    with pytest.raises(FakeYouError, match="already ended") as error:
         await join(LINK, meeting_id="meeting-9", resume=True)
+
+    assert error.value.code is ErrorCode.MEETING_ALREADY_ENDED
 
     assert "config" not in session_run
 
@@ -172,7 +174,7 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(value, dsn=None):
+    async def fake_saver(url):
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
@@ -203,11 +205,13 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     )
 
     live = {"audio_enabled": True, "conversation_enabled": True}
-    with pytest.raises(CliError, match="same --brief and --persona"):
+    with pytest.raises(FakeYouError, match="same --brief and --persona") as error:
         await join(LINK, meeting_id="meeting-9", resume=True, **live)
 
+    assert error.value.code is ErrorCode.MEETING_STARTED_WITH_BRIEF
+
     other_brief = write_brief(tmp_path, agenda=["Something else entirely"])
-    with pytest.raises(CliError, match="differs from --brief or --persona"):
+    with pytest.raises(FakeYouError, match="differs from --brief or --persona") as error:
         await join(
             LINK,
             meeting_id="meeting-9",
@@ -216,6 +220,8 @@ async def test_join_resume_requires_the_same_brief_and_persona(
             brief_path=other_brief,
             **live,
         )
+
+    assert error.value.code is ErrorCode.MEETING_CONTEXT_DIFFERS
 
     await join(
         LINK,

@@ -1,7 +1,9 @@
 import json
 import statistics
+from datetime import UTC, datetime
 from pathlib import Path
 
+from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.faults import FaultReporter
 from fakeyou.identity import SpeakerRegistry
 from fakeyou.verify import (
@@ -13,8 +15,7 @@ from fakeyou.verify import (
 )
 from fakeyou.voiceprint_embed import SpeakerEmbedder
 from fakeyou.voiceprint_match import VoiceprintMatcher, VoiceScores, apply_voice_scores
-from fakeyou.voiceprint_store import VoiceprintRecord, VoiceprintStore
-from tests.fakes import RecordingJournal
+from tests.fakes import InMemoryVoiceprints, RecordingJournal
 
 ARTIFACT = CalibrationArtifact(
     theta_llr=2.0,
@@ -28,15 +29,9 @@ ARTIFACT = CalibrationArtifact(
 
 MODEL_VERSION = "embed-test-v1"
 
-CONSENT = "2026-10-07T10:00:00+00:00"
-
-
-class FakeStore(VoiceprintStore):
-    def __init__(self, records: list[VoiceprintRecord]) -> None:
-        self._records = list(records)
-
-    def load_all(self) -> list[VoiceprintRecord]:
-        return list(self._records)
+CONSENT = datetime(2026, 10, 7, 10, 0, 0, tzinfo=UTC)
+ENROLLED_AT = datetime(2026, 10, 7, 10, 0, 1, tzinfo=UTC)
+LAST_USED_AT = datetime(2026, 10, 7, 10, 0, 2, tzinfo=UTC)
 
 
 def _embedder(model_id: str | None = MODEL_VERSION) -> SpeakerEmbedder:
@@ -56,7 +51,7 @@ def _stored_record(
     person_id: str,
     owner_name: str,
     embedding: tuple[float, ...],
-    consent_ts: str = CONSENT,
+    consent_ts: datetime = CONSENT,
 ) -> VoiceprintRecord:
     return VoiceprintRecord(
         person_id=person_id,
@@ -66,13 +61,13 @@ def _stored_record(
         consent_ts=consent_ts,
         policy_version="v1",
         is_negative=False,
-        enrolled_at="2026-10-07T10:00:01+00:00",
-        last_used_at="2026-10-07T10:00:02+00:00",
+        enrolled_at=ENROLLED_AT,
+        last_used_at=LAST_USED_AT,
         owner_name=owner_name,
     )
 
 
-def _owner_scores(owner_name: str | None, consent_ts: str | None) -> VoiceScores:
+def _owner_scores(owner_name: str | None, consent_ts: datetime | None) -> VoiceScores:
     return VoiceScores("spk-1", 0.9, 0.1, "verified", owner_name=owner_name, consent_ts=consent_ts)
 
 
@@ -571,7 +566,7 @@ def test_claim_matching_owner_name_verifies_with_distinct_person_id() -> None:
     registry = _named_registry("Maya")
     journal = RecordingJournal()
     faults = FaultReporter(journal=journal)
-    store = FakeStore(
+    store = InMemoryVoiceprints(
         [
             _stored_record("spk-1", "Maya", (1.0, 0.0)),
             _stored_record("spk-2", "Rani", (0.0, 1.0)),
@@ -615,7 +610,7 @@ def test_claim_matching_person_id_but_not_owner_returns_null_with_misbind() -> N
     registry = _named_registry("spk-1")
     journal = RecordingJournal()
     faults = FaultReporter(journal=journal)
-    store = FakeStore(
+    store = InMemoryVoiceprints(
         [
             _stored_record("spk-1", "Maya", (1.0, 0.0)),
             _stored_record("spk-2", "Rani", (0.0, 1.0)),
@@ -650,7 +645,7 @@ def test_missing_owner_name_returns_null_without_fault() -> None:
     faults = FaultReporter(journal=journal)
     row = registry.resolve(0)
     assert not isinstance(row, str)
-    store = FakeStore(
+    store = InMemoryVoiceprints(
         [
             _stored_record("spk-1", "", (1.0, 0.0)),
             _stored_record("spk-2", "Rani", (0.0, 1.0)),
@@ -699,30 +694,7 @@ def test_missing_consent_returns_null_without_fault() -> None:
     faults = FaultReporter(journal=journal)
     row = registry.resolve(0)
     assert not isinstance(row, str)
-    store = FakeStore(
-        [
-            _stored_record("spk-1", "Maya", (1.0, 0.0), consent_ts=""),
-            _stored_record("spk-2", "Rani", (0.0, 1.0)),
-        ]
-    )
-    scores = VoiceprintMatcher(store).match((1.0, 0.0))
-    assert scores.consent_ts == ""
 
-    assert (
-        decide_verified(
-            row.uuid,
-            scores,
-            claim_of(row),
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=_embedder(),
-            journal=journal,
-            faults=faults,
-        )
-        is None
-    )
     assert (
         decide_verified(
             row.uuid,

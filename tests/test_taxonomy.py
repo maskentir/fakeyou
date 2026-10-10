@@ -5,8 +5,8 @@ from typing import get_args
 
 import pytest
 
-from fakeyou.lifecycle import LifecycleAttribution, LifecycleEventKind, TerminalReason
-from fakeyou.taxonomy import EventVerb, Subsystem
+from fakeyou.lifecycle import LifecycleAttribution, LifecycleEventKind
+from fakeyou.taxonomy import EventVerb, Subsystem, TerminalReason
 
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "src" / "fakeyou"
 EVENT_VERBS = frozenset(get_args(EventVerb))

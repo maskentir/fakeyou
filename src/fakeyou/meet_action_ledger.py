@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.ingestion_status import LeaseError, RecordLockError, file_lease, write_atomically
 from fakeyou.journal import Journal
 from fakeyou.meet_actions import ActionOutcome, MeetActionResult
@@ -33,7 +34,7 @@ ActEffect = Callable[[], Awaitable[MeetActionResult]]
 ObserveEffect = Callable[[], Awaitable[bool]]
 
 
-class LedgerError(Exception):
+class LedgerError(FakeYouError):
     pass
 
 
@@ -96,7 +97,7 @@ def ledger_lock(record_path: Path) -> Iterator[str]:
             yield token
     except LeaseError:
         path = ledger_lock_path(record_path)
-        raise RecordLockError(f"action ledger is locked: {path}") from None
+        raise RecordLockError(ErrorCode.ACTION_LEDGER_LOCKED, path=path) from None
 
 
 def action_id_for(meeting_id: str, seq: int, tool_call_id: str | None = None) -> str:
@@ -144,13 +145,13 @@ class MeetActionLedger:
         except FileNotFoundError:
             return cls(record_path, ActionLedgerFile(meeting_id=meeting_id))
         except OSError as error:
-            raise LedgerError(f"unreadable action ledger: {path}") from error
+            raise LedgerError(ErrorCode.ACTION_LEDGER_UNREADABLE, path=path) from error
         try:
             data = ActionLedgerFile.model_validate_json(raw)
         except ValueError as error:
-            raise LedgerError(f"unreadable action ledger: {path}") from error
+            raise LedgerError(ErrorCode.ACTION_LEDGER_UNREADABLE, path=path) from error
         if data.meeting_id != meeting_id:
-            raise LedgerError(f"action ledger meeting mismatch: {path}")
+            raise LedgerError(ErrorCode.ACTION_LEDGER_MEETING_MISMATCH, path=path)
         return cls(record_path, data)
 
     @property
@@ -212,7 +213,7 @@ class MeetActionLedger:
     ) -> ActionIntent:
         existing = self._data.intents.get(action_id)
         if existing is None:
-            raise LedgerError(f"unknown action intent: {action_id}")
+            raise LedgerError(ErrorCode.ACTION_LEDGER_INTENT_UNKNOWN, action_id=action_id)
         if existing.state in TERMINAL_ACTION_STATES:
             return existing
         update: dict[str, object] = {"state": state}

@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.debrief_schema import (
     DebriefDraft,
     DebriefItem,
@@ -312,7 +313,12 @@ def test_should_freeze_models_forbid_extras_and_hide_error_input(
 
 
 def test_should_expose_validation_error_as_value_error() -> None:
-    assert isinstance(DebriefValidationError("invalid evidence reference"), ValueError)
+    error = DebriefValidationError(ErrorCode.DEBRIEF_EVIDENCE_INVALID)
+
+    assert isinstance(error, FakeYouError)
+    assert isinstance(error, ValueError)
+    assert error.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
+    assert str(error) == "invalid evidence reference"
 
 
 def test_should_default_correction_digest_for_legacy_reports(

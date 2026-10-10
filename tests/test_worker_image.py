@@ -4,10 +4,11 @@ import shutil
 import subprocess
 import time
 from contextlib import suppress
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+from fakeyou.catalog.errors import FakeYouError
 
 GRACEFUL_CHILD = (
     'trap "sleep 2; echo graceful-done; exit 0" TERM; echo child-started; '
@@ -103,7 +104,7 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
             "python",
             "-c",
             "from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver;"
-            "from fakeyou.checkpoint import open_checkpointer;"
+            "from fakeyou.db.checkpoint import open_checkpointer;"
             "print('pg-checkpointer-ok')",
         ],
         capture_output=True,
@@ -166,7 +167,7 @@ def _postgres_dsn() -> str:
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is required")
 async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
-    from fakeyou.checkpoint import open_checkpointer
+    from fakeyou.db.checkpoint import open_checkpointer
     from fakeyou.lifecycle import MeetingLifecycle, meeting_thread_id
 
     environment = {
@@ -177,7 +178,7 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
     }
     started = await asyncio.to_thread(
         subprocess.run,
-        ["docker", "compose", "--profile", "production", "up", "-d", "postgres"],
+        ["docker", "compose", "up", "-d", "--wait", "postgres"],
         capture_output=True,
         text=True,
         env=environment,
@@ -187,15 +188,15 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
     deadline = time.monotonic() + 300
     while True:
         try:
-            async with open_checkpointer(Path("unused"), dsn=dsn):
+            async with open_checkpointer(dsn):
                 break
-        except Exception as error:
+        except FakeYouError as error:
             if time.monotonic() >= deadline:
                 pytest.fail(f"postgres did not become ready: {error}")
             await asyncio.sleep(2)
     threads = [meeting_thread_id("pg-probe-twin", f"pg-probe-{name}") for name in ("a", "b")]
     try:
-        async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+        async with open_checkpointer(dsn) as saver:
             first = MeetingLifecycle("pg-probe-owner", "pg-probe-twin", "pg-probe-a", saver)
             await first.initialize()
             await first.send("join_requested", "owner_action", "probe")
@@ -208,7 +209,7 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
             assert stored[0] is not None and stored[1] is not None
             assert stored[0].checkpoint["channel_values"]["phase"] == "lobby"
             assert stored[1].checkpoint["channel_values"]["phase"] == "preparing"
-        async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+        async with open_checkpointer(dsn) as saver:
             reopened = [
                 await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
                 for thread_id in threads
@@ -217,7 +218,7 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens() -> None:
             assert reopened[0].checkpoint["channel_values"]["phase"] == "lobby"
             assert reopened[1].checkpoint["channel_values"]["phase"] == "preparing"
     finally:
-        with suppress(Exception):
-            async with open_checkpointer(Path("unused"), dsn=dsn) as saver:
+        with suppress(FakeYouError):
+            async with open_checkpointer(dsn) as saver:
                 for thread_id in threads:
                     await saver.adelete_thread(thread_id)

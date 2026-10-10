@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from fakeyou.settings import Settings, require_secret
+from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.settings import DEFAULTS, IdentitySettings, Settings, require_secret
 
 
 @pytest.fixture(autouse=True)
@@ -19,8 +21,9 @@ def isolated_settings(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("value", [None, SecretStr(""), SecretStr("  ")])
 def test_missing_credentials_fail_before_starting_resources(value):
-    with pytest.raises(ValueError, match="Set FAKEYOU_STT__API_KEY"):
-        require_secret(value, "FAKEYOU_STT__API_KEY")
+    with pytest.raises(FakeYouError, match="Set FAKEYOU_STT__API_KEY") as error:
+        require_secret(value, ConfigKey.STT_API_KEY)
+    assert error.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 def test_meeting_settings_read_nested_environment(monkeypatch):
@@ -35,8 +38,9 @@ def test_meeting_settings_read_nested_environment(monkeypatch):
 
 def test_neo4j_password_has_no_default_secret():
     assert Settings().memory.store.password is None
-    with pytest.raises(ValueError, match="FAKEYOU_MEMORY__STORE__PASSWORD"):
-        require_secret(Settings().memory.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD")
+    with pytest.raises(FakeYouError, match="FAKEYOU_MEMORY__STORE__PASSWORD") as error:
+        require_secret(Settings().memory.store.password, ConfigKey.MEMORY_STORE_PASSWORD)
+    assert error.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 @pytest.mark.parametrize(
@@ -172,3 +176,18 @@ def test_join_retry_settings_default_and_read_environment(monkeypatch):
 def test_join_max_attempts_rejects_zero():
     with pytest.raises(ValueError):
         Settings(_env_file=None, meeting={"join_max_attempts": 0})
+
+
+def test_voiceprint_defaults_follow_identity_settings() -> None:
+    assert DEFAULTS.identity.voiceprint_enabled is False
+    assert DEFAULTS.identity.voiceprint_threshold == 0.60
+    assert DEFAULTS.identity.voiceprint_min_margin == 0.15
+    assert DEFAULTS.identity.voiceprint_min_seconds == 3.0
+    assert DEFAULTS.identity.voiceprint_retention_days == 90
+    assert DEFAULTS.identity.voiceprint_model_path == ""
+    assert (
+        DEFAULTS.identity.voiceprint_model_sha256
+        == "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5"
+    )
+    assert DEFAULTS.identity.voiceprint_policy_version == "v1"
+    assert IdentitySettings() == DEFAULTS.identity

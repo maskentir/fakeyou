@@ -16,13 +16,15 @@ from fakeyou.browser import (
     stable_fingerprint_seed,
     warmup_profile,
 )
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from tests.fakes import FakeBrowserContext, FakeWarmupContext, FakeWarmupPage
 
 
 async def test_missing_mcp_server_fails_before_browser_launch(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="npm ci"):
+    with pytest.raises(FakeYouError, match="npm ci") as error:
         async with open_browser_tools(mcp_script=tmp_path / "missing.js"):
             pytest.fail("An unavailable MCP server cannot provide browser tools")
+    assert error.value.code is ErrorCode.BROWSER_MCP_MISSING
 
 
 def test_browser_launch_args_include_automation_hardening() -> None:
@@ -376,13 +378,15 @@ async def test_devtools_endpoint_waits_for_file_to_appear(tmp_path: Path) -> Non
 async def test_devtools_endpoint_rejects_invalid_content(tmp_path: Path, content: str) -> None:
     (tmp_path / "DevToolsActivePort").write_text(content)
 
-    with pytest.raises(RuntimeError, match="DevTools endpoint is unavailable"):
+    with pytest.raises(FakeYouError, match="DevTools endpoint is unavailable") as error:
         await browser_module._read_devtools_endpoint(str(tmp_path), timeout_seconds=0.0)
+    assert error.value.code is ErrorCode.BROWSER_DEVTOOLS_UNAVAILABLE
 
 
 async def test_devtools_endpoint_times_out_without_file(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="DevTools endpoint is unavailable"):
+    with pytest.raises(FakeYouError, match="DevTools endpoint is unavailable") as error:
         await browser_module._read_devtools_endpoint(str(tmp_path), timeout_seconds=0.0)
+    assert error.value.code is ErrorCode.BROWSER_DEVTOOLS_UNAVAILABLE
 
 
 @pytest.mark.browser

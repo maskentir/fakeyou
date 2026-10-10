@@ -149,13 +149,15 @@ def test_env_settings_source_exposes_mutable_env_vars(monkeypatch) -> None:
     assert source.env_vars == {}
 
 
-async def test_sqlite_saver_reports_whether_a_thread_has_a_checkpoint(tmp_path) -> None:
+async def test_checkpointer_reports_whether_a_thread_has_a_checkpoint() -> None:
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
     from langchain_core.messages import AIMessage
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-    async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "checkpoints.sqlite")) as saver:
+    from fakeyou.db.checkpoint import open_checkpointer
+    from tests.fakes import DATABASE_URL
+
+    async with open_checkpointer(DATABASE_URL) as saver:
         assert await saver.aget_tuple({"configurable": {"thread_id": "meeting:a"}}) is None
         agent = create_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver

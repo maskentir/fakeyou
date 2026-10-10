@@ -784,7 +784,7 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
     from fakeyou.journal import Journal
 
     reporter = FaultReporter(journal=Journal("meeting-1"))
-    journal = Journal("meeting-1", emit=lambda _: None, stdout=False)
+    journal = Journal("meeting-1", emit=lambda _: None, echo=False)
     engine = create_playback_engine(
         tts_settings=OpenAITTS(api_key="k"), faults=reporter, journal=journal
     )
@@ -921,7 +921,7 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
     from fakeyou.report import read_journal
 
     path = tmp_path / "events.jsonl"
-    journal = Journal("meeting-7", path=path, stdout=False)
+    journal = Journal("meeting-7", path=path, echo=False)
     failed = asyncio.Event()
 
     async def on_transcript(frame: TranscriptionFrame) -> None:

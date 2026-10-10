@@ -16,6 +16,7 @@ from pydantic import SecretStr
 
 from fakeyou import owner_notes
 from fakeyou.agent import create_meeting_agent
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.conversation import TranscriptEvent
 from fakeyou.faults import FaultReporter
 from fakeyou.ingestion import ingest_meeting
@@ -43,7 +44,7 @@ LIVE_INGESTION_MEETING = (
 def _secret_or_skip(settings_value, name: str) -> str:
     try:
         return require_secret(settings_value, name)
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
 
 
@@ -58,7 +59,7 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
     settings = Settings()
     try:
         model = create_chat_model(settings)
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
 
     @tool(description="Return the synthetic agenda marker for a meeting test.")
@@ -99,7 +100,7 @@ async def test_configured_tts_streams_pcm_audio() -> None:
     settings = Settings()
     try:
         require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
     synthesizer = create_speech_synthesizer(
         settings.tts,
@@ -130,7 +131,7 @@ def _neo4j_config_or_skip() -> MemorySettings:
         pytest.skip("Neo4j is not listening at the configured URI")
     try:
         return memory_config(settings)
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
 
 

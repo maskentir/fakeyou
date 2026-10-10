@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 
 import fakeyou.cli.main as cli_main
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import audio_purge_expired
-from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
 
 DAY = 86400.0
@@ -94,21 +95,22 @@ def test_purge_expired_defaults_to_settings_root(
     assert report == {"removed": ["meeting-old"], "kept": 0, "freed_bytes": freed}
 
 
-def test_purge_expired_with_missing_root_exits_two(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_purge_expired_with_missing_root_exits_two(settings: Settings, tmp_path: Path) -> None:
     missing = tmp_path / "no-such-root"
 
-    with pytest.raises(SystemExit) as outcome:
+    with pytest.raises(FakeYouError) as outcome:
         audio_purge_expired(root=missing, days=None, settings=settings)
 
-    assert outcome.value.code == 2
-    assert str(missing) in capsys.readouterr().err
+    assert outcome.value.code is ErrorCode.AUDIO_ROOT_MISSING
+    assert outcome.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(outcome.value) == f"audio root is missing: {missing}"
 
 
 def test_purge_expired_with_non_positive_days_raises(settings: Settings, tmp_path: Path) -> None:
-    with pytest.raises(CliError, match="positive"):
+    with pytest.raises(FakeYouError, match="positive") as outcome:
         audio_purge_expired(root=tmp_path, days=0, settings=settings)
+
+    assert outcome.value.code is ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE
 
 
 def test_audio_parsers_map_to_handler(tmp_path: Path) -> None:

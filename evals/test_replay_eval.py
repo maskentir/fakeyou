@@ -15,6 +15,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.agent import create_meeting_agent
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.conversation import LangGraphResponder, TranscriptEvent, cap_spoken_reply
 from fakeyou.memory import RECALL_EMPTY_RESULT
 from fakeyou.persona import PersonaProfile, build_system_prompt
@@ -346,7 +347,7 @@ async def test_live_replay_meets_quality_and_latency_budgets(tmp_path: Path) -> 
     settings = Settings()
     try:
         create_chat_model(settings)
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
 
     score = await replay(lambda: create_chat_model(settings), load_fixture(), REPLAY_RUNS)

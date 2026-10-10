@@ -1,65 +1,48 @@
 import json
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from fakeyou.catalog.commands import Command
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.worker_backend import (
     DockerWorkerBackend,
     WorkerError,
     WorkerStartRequest,
     compose_override,
+    memory_ingest_args,
 )
-
-
-class FakeRunner:
-    def __init__(self) -> None:
-        self.commands: list[list[str]] = []
-        self.outputs: dict[str, str] = {}
-        self.sequences: dict[str, list[str]] = {}
-        self.failures: dict[str, tuple[int, str]] = {}
-        self.blowups: dict[str, Exception] = {}
-        self.default_output = ""
-
-    def expect(self, needle: str, output: str) -> None:
-        self.outputs[needle] = output
-
-    def expect_sequence(self, needle: str, outputs: list[str]) -> None:
-        self.sequences[needle] = list(outputs)
-
-    def fail_with(self, needle: str, returncode: int, stderr: str) -> None:
-        self.failures[needle] = (returncode, stderr)
-
-    def blow_up(self, needle: str, error: Exception) -> None:
-        self.blowups[needle] = error
-
-    def __call__(self, *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        command = [str(part) for part in args[0]]
-        self.commands.append(command)
-        text = " ".join(command)
-        for needle, error in self.blowups.items():
-            if needle in text:
-                raise error
-        for needle, outputs in self.sequences.items():
-            if needle in text and outputs:
-                return subprocess.CompletedProcess(command, 0, outputs.pop(0), "")
-        for needle, (returncode, stderr) in self.failures.items():
-            if needle in text:
-                return subprocess.CompletedProcess(command, returncode, "", stderr)
-        for needle, output in self.outputs.items():
-            if needle in text:
-                return subprocess.CompletedProcess(command, 0, output, "")
-        return subprocess.CompletedProcess(command, 0, self.default_output, "")
+from tests.fakes import FINISHED_ROWS, FakeRunner, write_journal
 
 
 def running_container(container_id: str, name: str) -> str:
     return f"{container_id}\trunning\t{name}\n"
 
 
-def write_journal(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+def test_memory_ingest_args_derive_the_head_from_the_command_catalog() -> None:
+    args = memory_ingest_args(meeting_id="meeting-9", persona=Path("/tmp/persona.json"))
+
+    assert args[:2] == str(Command.MEMORY_INGEST).split(" ")
+    assert args[2:] == ["--meeting", "meeting-9", "--persona", "/tmp/persona.json"]
+
+
+def test_memory_ingest_args_quote_paths_and_carry_identity() -> None:
+    command = shlex.join(
+        memory_ingest_args(
+            meeting_id="meeting-9",
+            persona=Path("/tmp/my persona.json"),
+            owner_id="owner-1",
+            twin_id="twin-1",
+        )
+    )
+
+    assert command == (
+        "fakeyou memory-ingest --meeting meeting-9 --persona '/tmp/my persona.json'"
+        " --owner-id owner-1 --twin-id twin-1"
+    )
 
 
 def start_request(tmp_path: Path, **overrides: Any) -> WorkerStartRequest:
@@ -242,9 +225,10 @@ def test_start_refuses_a_meeting_that_is_already_running(tmp_path: Path) -> None
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="already running"):
+    with pytest.raises(WorkerError, match="already running") as caught:
         backend.start(start_request(runtime))
 
+    assert caught.value.code is ErrorCode.WORKER_ALREADY_RUNNING
     assert all("run" not in command for command in runner.commands)
 
 
@@ -260,8 +244,10 @@ def test_start_rejects_persona_files_outside_the_mounted_volumes(tmp_path: Path)
     outside.parent.mkdir(parents=True)
     outside.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="not visible"):
+    with pytest.raises(WorkerError, match="not visible") as caught:
         backend.start(start_request(tmp_path, persona_path=outside))
+
+    assert caught.value.code is ErrorCode.WORKER_FILE_NOT_VISIBLE
 
 
 def test_start_rejects_a_missing_persona_file(tmp_path: Path) -> None:
@@ -275,8 +261,10 @@ def test_start_rejects_a_missing_persona_file(tmp_path: Path) -> None:
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="not found"):
+    with pytest.raises(WorkerError, match="not found") as caught:
         backend.start(start_request(runtime, persona_path=runtime / "absent.json"))
+
+    assert caught.value.code is ErrorCode.WORKER_FILE_MISSING
 
 
 def test_status_merges_container_state_with_the_journal(tmp_path: Path) -> None:
@@ -460,8 +448,10 @@ def test_stop_without_a_running_worker_or_session_is_an_error(tmp_path: Path) ->
         project_dir=tmp_path,
     )
 
-    with pytest.raises(WorkerError, match="no running worker"):
+    with pytest.raises(WorkerError, match="no running worker") as caught:
         backend.stop("meeting-absent", timeout_seconds=0.0)
+
+    assert caught.value.code is ErrorCode.WORKER_NOT_RUNNING
 
 
 @pytest.mark.parametrize("meeting_id", ['x"\n  evil: injected', "../../etc/x", "a/b", ""])
@@ -476,12 +466,17 @@ def test_meeting_ids_are_validated_before_any_docker_call(tmp_path: Path, meetin
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="invalid meeting ID"):
+    with pytest.raises(WorkerError, match="invalid meeting ID") as caught:
         backend.start(start_request(runtime, meeting_id=meeting_id))
-    with pytest.raises(WorkerError, match="invalid meeting ID"):
+    assert caught.value.code is ErrorCode.WORKER_MEETING_ID_INVALID
+
+    with pytest.raises(WorkerError, match="invalid meeting ID") as caught:
         backend.status(meeting_id)
-    with pytest.raises(WorkerError, match="invalid meeting ID"):
+    assert caught.value.code is ErrorCode.WORKER_MEETING_ID_INVALID
+
+    with pytest.raises(WorkerError, match="invalid meeting ID") as caught:
         backend.stop(meeting_id, timeout_seconds=0.0)
+    assert caught.value.code is ErrorCode.WORKER_MEETING_ID_INVALID
 
     assert runner.commands == []
 
@@ -590,8 +585,10 @@ def test_start_rejects_an_empty_container_id(tmp_path: Path) -> None:
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="no container id"):
+    with pytest.raises(WorkerError, match="no container id") as caught:
         backend.start(start_request(runtime))
+
+    assert caught.value.code is ErrorCode.WORKER_START_NO_CONTAINER
 
 
 def test_status_all_includes_journal_only_ended_meetings(tmp_path: Path) -> None:
@@ -633,10 +630,13 @@ def test_docker_failures_raise_worker_errors_not_tracebacks(tmp_path: Path) -> N
         project_dir=tmp_path,
     )
 
-    with pytest.raises(WorkerError, match="docker is not available"):
+    with pytest.raises(WorkerError, match="docker is not available") as caught:
         backend.status("meeting-9")
-    with pytest.raises(WorkerError, match="docker is not available"):
+    assert caught.value.code is ErrorCode.DOCKER_UNAVAILABLE
+
+    with pytest.raises(WorkerError, match="docker is not available") as caught:
         backend.status_all()
+    assert caught.value.code is ErrorCode.DOCKER_UNAVAILABLE
 
     failing = FakeRunner()
     failing.fail_with("docker ps", 1, "Cannot connect to the Docker daemon")
@@ -646,37 +646,68 @@ def test_docker_failures_raise_worker_errors_not_tracebacks(tmp_path: Path) -> N
         record_dir=tmp_path / "meetings",
         project_dir=tmp_path,
     )
-    with pytest.raises(WorkerError, match="Cannot connect"):
+    with pytest.raises(WorkerError, match="Cannot connect") as caught:
         failing_backend.status("meeting-9")
+
+    assert caught.value.code is ErrorCode.DOCKER_PS_FAILED
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    ("overrides", "code"),
     [
-        {"link": "http://meet.google.com/abc-defg-hij"},
-        {"link": "https://example.com/abc-defg-hij"},
-        {"link": "https://meet.google.com/"},
-        {"lobby_timeout": 0.0},
-        {"duration": -1.0},
-        {"initial_speech": "hi", "audio": False},
-        {"initial_speech": "  ", "audio": True},
-        {"conversation": True, "audio": False},
-        {"memory": True, "conversation": False},
-        {"memory": True, "persona_path": None},
-        {"conversation": False, "audio": False, "memory": False, "brief_path": None},
-        {
-            "brief_path": Path("brief.json"),
-            "persona_path": None,
-            "conversation": False,
-            "audio": False,
-            "memory": False,
-        },
-        {"brief_path": Path("brief.json"), "persona_path": None},
-        {"wake_phrase": "hey", "conversation": False},
-        {"barge_in": True, "conversation": False},
+        ({"link": "http://meet.google.com/abc-defg-hij"}, ErrorCode.MEETING_LINK_INVALID),
+        ({"link": "https://example.com/abc-defg-hij"}, ErrorCode.MEETING_LINK_INVALID),
+        ({"link": "https://meet.google.com/"}, ErrorCode.MEETING_LINK_INVALID),
+        ({"lobby_timeout": 0.0}, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
+        ({"duration": -1.0}, ErrorCode.MEETING_DURATION_NOT_POSITIVE),
+        ({"initial_speech": "hi", "audio": False}, ErrorCode.MEETING_SPEAK_REQUIRES_AUDIO),
+        ({"initial_speech": "  ", "audio": True}, ErrorCode.MEETING_SPEAK_REQUIRES_AUDIO),
+        ({"conversation": True, "audio": False}, ErrorCode.MEETING_CONVERSE_REQUIRES_AUDIO),
+        ({"memory": True, "conversation": False}, ErrorCode.MEETING_MEMORY_REQUIRES_CONVERSE),
+        ({"memory": True, "persona_path": None}, ErrorCode.MEETING_MEMORY_REQUIRES_PERSONA),
+        (
+            {"conversation": False, "audio": False, "memory": False, "brief_path": None},
+            ErrorCode.MEETING_PERSONA_REQUIRES_CONVERSE,
+        ),
+        (
+            {
+                "brief_path": Path("brief.json"),
+                "persona_path": None,
+                "conversation": False,
+                "audio": False,
+                "memory": False,
+            },
+            ErrorCode.MEETING_BRIEF_REQUIRES_CONVERSE,
+        ),
+        (
+            {"brief_path": Path("brief.json"), "persona_path": None, "memory": False},
+            ErrorCode.MEETING_BRIEF_REQUIRES_PERSONA,
+        ),
+        (
+            {
+                "wake_phrase": "hey",
+                "conversation": False,
+                "memory": False,
+                "persona_path": None,
+                "brief_path": None,
+            },
+            ErrorCode.MEETING_WAKE_PHRASE_REQUIRES_CONVERSE,
+        ),
+        (
+            {
+                "barge_in": True,
+                "conversation": False,
+                "memory": False,
+                "persona_path": None,
+                "brief_path": None,
+            },
+            ErrorCode.MEETING_BARGE_IN_REQUIRES_CONVERSE,
+        ),
     ],
 )
-def test_start_requests_reject_invalid_join_combinations(tmp_path: Path, overrides: dict) -> None:
+def test_start_requests_reject_invalid_join_combinations(
+    tmp_path: Path, overrides: dict, code: ErrorCode
+) -> None:
     runner = FakeRunner()
     backend = DockerWorkerBackend(
         runner=runner,
@@ -689,9 +720,10 @@ def test_start_requests_reject_invalid_join_combinations(tmp_path: Path, overrid
     if overrides.get("brief_path") is not None:
         overrides["brief_path"] = runtime / "brief.json"
 
-    with pytest.raises(WorkerError):
+    with pytest.raises(FakeYouError) as caught:
         backend.start(start_request(runtime, **overrides))
 
+    assert caught.value.code is code
     assert all("run" not in command for command in runner.commands)
 
 
@@ -726,8 +758,10 @@ def test_start_rejects_a_profile_dir_outside_the_mounts(tmp_path: Path) -> None:
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="not visible"):
+    with pytest.raises(WorkerError, match="not visible") as caught:
         backend.start(start_request(runtime, profile_dir=str(tmp_path / "profiles")))
+
+    assert caught.value.code is ErrorCode.WORKER_FILE_NOT_VISIBLE
 
 
 def test_stop_rejects_a_negative_timeout(tmp_path: Path) -> None:
@@ -739,8 +773,10 @@ def test_stop_rejects_a_negative_timeout(tmp_path: Path) -> None:
         project_dir=tmp_path,
     )
 
-    with pytest.raises(WorkerError, match="timeout"):
+    with pytest.raises(WorkerError, match="timeout") as caught:
         backend.stop("meeting-9", timeout_seconds=-1.0)
+
+    assert caught.value.code is ErrorCode.WORKER_TIMEOUT_NEGATIVE
 
     assert runner.commands == []
 
@@ -793,25 +829,6 @@ def test_summarize_session_maps_a_resume_marker_to_the_join_phase() -> None:
     )
 
     assert summary["phase"] == "join"
-
-
-FINISHED_ROWS = [
-    {
-        "event": "join_requested",
-        "meeting_id": "meeting-9",
-        "at": "2026-10-05T02:00:00+00:00",
-        "source": "runtime",
-    },
-    {
-        "event": "session_finished",
-        "meeting_id": "meeting-9",
-        "at": "2026-10-05T02:10:00+00:00",
-        "source": "cli",
-        "phase": "ended",
-        "terminal_reason": "ended_by_host",
-        "exit_code": 0,
-    },
-]
 
 
 def write_ingestion(path: Path, status: str) -> None:
@@ -969,8 +986,10 @@ def test_ingest_refuses_a_session_that_is_still_running(tmp_path: Path) -> None:
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="still running"):
+    with pytest.raises(WorkerError, match="still running") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.WORKER_STILL_RUNNING
 
     assert all("run" not in command for command in runner.commands)
 
@@ -986,8 +1005,10 @@ def test_ingest_refuses_while_another_ingest_job_runs(tmp_path: Path) -> None:
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="ingest job .* already running"):
+    with pytest.raises(WorkerError, match="ingest job .* already running") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.WORKER_INGEST_ALREADY_RUNNING
 
     assert all("run" not in command for command in runner.commands)
     queries = [command for command in runner.commands if command[:2] == ["docker", "ps"]]
@@ -1013,8 +1034,10 @@ def test_ingest_refuses_a_session_that_has_not_finished(tmp_path: Path) -> None:
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="no finished session"):
+    with pytest.raises(WorkerError, match="no finished session") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.WORKER_INGEST_NO_FINISHED_SESSION
 
     assert all("run" not in command for command in runner.commands)
 
@@ -1032,8 +1055,10 @@ def test_ingest_refuses_a_live_record_lock(tmp_path: Path) -> None:
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="record is locked"):
+    with pytest.raises(WorkerError, match="record is locked") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.RECORD_LOCKED
 
     assert all("run" not in command for command in runner.commands)
 
@@ -1053,8 +1078,10 @@ def test_ingest_refuses_a_corrupt_record_lock(tmp_path: Path) -> None:
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="lock is corrupt"):
+    with pytest.raises(WorkerError, match="lock is corrupt") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.RECORD_LOCK_CORRUPT
 
     assert all("run" not in command for command in runner.commands)
 
@@ -1066,8 +1093,10 @@ def test_ingest_rejects_persona_files_outside_the_mounted_volumes(tmp_path: Path
     outside = tmp_path / "persona.json"
     outside.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="not visible inside"):
+    with pytest.raises(WorkerError, match="not visible inside") as caught:
         backend.ingest("meeting-9", persona_path=outside)
+
+    assert caught.value.code is ErrorCode.WORKER_FILE_NOT_VISIBLE
 
     assert all("run" not in command for command in runner.commands)
 
@@ -1161,8 +1190,10 @@ def test_ingest_reports_an_interrupted_run_on_keyboard_interrupt(tmp_path: Path)
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(WorkerError, match="interrupted"):
+    with pytest.raises(WorkerError, match="interrupted") as caught:
         backend.ingest("meeting-9", persona_path=persona)
+
+    assert caught.value.code is ErrorCode.WORKER_INGEST_INTERRUPTED
 
 
 def test_status_shows_ingestion_and_debrief_for_a_finished_meeting(
@@ -1227,8 +1258,10 @@ def test_start_refuses_while_an_ingest_job_runs(tmp_path: Path) -> None:
     runtime = tmp_path / ".runtime" / "audio"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(WorkerError, match="ingest job .* still running"):
+    with pytest.raises(WorkerError, match="ingest job .* already running") as caught:
         backend.start(start_request(runtime))
+
+    assert caught.value.code is ErrorCode.WORKER_INGEST_ALREADY_RUNNING
 
     assert all("run" not in command for command in runner.commands)
     queries = [command for command in runner.commands if command[:2] == ["docker", "ps"]]

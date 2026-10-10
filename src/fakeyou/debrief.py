@@ -21,6 +21,7 @@ from langgraph.runtime import Runtime
 from fakeyou import debrief_schema as schema
 from fakeyou import debrief_sources as sources
 from fakeyou.brief import MeetingBrief, context_path, validate_brief_scope
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.correction_labels import describe_correction_speakers
 from fakeyou.diarize_correction import correction_digest
 from fakeyou.ingestion_status import write_atomically
@@ -103,7 +104,7 @@ def _require_native_response(
     state: AgentState[schema.DebriefDraft], runtime: Runtime[None]
 ) -> None:
     if not isinstance(state.get("structured_response"), schema.DebriefDraft):
-        raise schema.DebriefValidationError("native debrief structured response is absent")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT)
 
 
 async def _extract_chunk(
@@ -141,10 +142,10 @@ async def _extract_chunk(
             config={"recursion_limit": 4},
         )
     except StructuredOutputError:
-        raise schema.DebriefValidationError("invalid native debrief schema") from None
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_NATIVE_SCHEMA_INVALID) from None
     draft = result.get("structured_response")
     if not isinstance(draft, schema.DebriefDraft):
-        raise schema.DebriefValidationError("native debrief structured response is absent")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT)
     return draft
 
 
@@ -236,7 +237,7 @@ def merge_drafts(drafts: Sequence[schema.DebriefDraft]) -> schema.DebriefDraft:
             if item not in items:
                 items.append(item)
                 if len(items) > 100:
-                    raise schema.DebriefValidationError("merged debrief exceeds 100 items")
+                    raise schema.DebriefValidationError(ErrorCode.DEBRIEF_MERGED_TOO_MANY_ITEMS)
         for finding in draft.findings:
             previous = findings.get(finding.objective_id)
             if previous is None:
@@ -244,13 +245,13 @@ def merge_drafts(drafts: Sequence[schema.DebriefDraft]) -> schema.DebriefDraft:
                 continue
             evidence = tuple(dict.fromkeys((*previous.evidence, *finding.evidence)))
             if len(evidence) > 10:
-                raise schema.DebriefValidationError("merged finding exceeds 10 evidence references")
+                raise schema.DebriefValidationError(ErrorCode.DEBRIEF_MERGED_FINDING_TOO_MANY_REFS)
             selected = max((previous, finding), key=_finding_priority)
             findings[finding.objective_id] = schema.ObjectiveFinding(
                 objective_id=finding.objective_id, status=selected.status, evidence=evidence
             )
     if len(findings) > 40:
-        raise schema.DebriefValidationError("merged debrief exceeds 40 findings")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_MERGED_TOO_MANY_FINDINGS)
     return schema.DebriefDraft(items=tuple(items), findings=tuple(findings.values()))
 
 
@@ -259,7 +260,7 @@ def _labels() -> dict[str, str]:
     if not isinstance(raw, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
     ):
-        raise ValueError("invalid debrief labels")
+        raise FakeYouError(ErrorCode.DEBRIEF_LABELS_INVALID)
     return raw
 
 
@@ -306,7 +307,7 @@ def render_debrief(
         for reference in evidence:
             entry = source_index.get(reference.entry_id)
             if entry is None:
-                raise schema.DebriefValidationError("report evidence source metadata is absent")
+                raise schema.DebriefValidationError(ErrorCode.DEBRIEF_REPORT_SOURCE_METADATA_ABSENT)
             speaker = entry.participant_id
             if speaker_names is not None and speaker in speaker_names:
                 speaker = speaker_names[speaker]
@@ -356,13 +357,13 @@ def _pending_recovery(record_path: Path) -> bool:
 
 def read_debrief(record_path: Path) -> schema.DebriefReport:
     if _pending_recovery(record_path):
-        raise schema.DebriefValidationError("canonical debrief requires publication recovery")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_PUBLICATION_RECOVERY)
     try:
         return schema.DebriefReport.model_validate_json(
             record_path.with_name(REPORT_FILE_NAME).read_bytes()
         )
     except (OSError, ValueError):
-        raise schema.DebriefValidationError("canonical debrief is missing or invalid") from None
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_CANONICAL_INVALID) from None
 
 
 def _validate_report(
@@ -374,26 +375,26 @@ def _validate_report(
     draft = schema.DebriefDraft(items=report.items, findings=report.findings)
     sources.validate_draft(draft, sources=source_index, brief=brief)
     if report.source_count != len(snapshot.sources):
-        raise schema.DebriefValidationError("debrief source count differs from the snapshot")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_SOURCE_COUNT_MISMATCH)
     if {finding.objective_id for finding in report.findings} != set(_finding_ids(brief)):
-        raise schema.DebriefValidationError("debrief brief findings are incomplete")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_BRIEF_FINDINGS_INCOMPLETE)
     evidence_index: dict[str, schema.EvidenceSource] = {}
     for entry in report.evidence_sources:
         original = source_index.get(entry.id)
         if entry.id in evidence_index or original is None:
-            raise schema.DebriefValidationError("debrief evidence source ID is invalid")
+            raise schema.DebriefValidationError(ErrorCode.DEBRIEF_EVIDENCE_SOURCE_ID_INVALID)
         if (entry.text, entry.kind, entry.participant_id, entry.at) != (
             original.text,
             original.kind,
             original.participant_id,
             original.at,
         ):
-            raise schema.DebriefValidationError("debrief evidence source metadata differs")
+            raise schema.DebriefValidationError(ErrorCode.DEBRIEF_EVIDENCE_METADATA_DIFFERS)
         evidence_index[entry.id] = entry
     cited = {ref.entry_id for item in report.items for ref in item.evidence}
     cited.update(ref.entry_id for finding in report.findings for ref in finding.evidence)
     if not cited <= evidence_index.keys():
-        raise schema.DebriefValidationError("debrief cited evidence source metadata is absent")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_CITED_METADATA_ABSENT)
     if brief is not None:
         validate_brief_scope(
             brief, owner_id=report.owner_id, twin_id=report.twin_id, meeting_id=report.meeting_id
@@ -409,13 +410,13 @@ def _current_report(record_path: Path, report: schema.DebriefReport) -> None:
         report.context_sha256,
         report.correction_sha256,
     ):
-        raise schema.DebriefValidationError("debrief source or context hash changed")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_SOURCE_HASH_CHANGED)
     _validate_report(report, snapshot, context.brief if context is not None else None)
 
 
 def write_debrief(record_path: Path, report: schema.DebriefReport) -> None:
     if _pending_recovery(record_path):
-        raise schema.DebriefValidationError("canonical debrief requires publication recovery")
+        raise schema.DebriefValidationError(ErrorCode.DEBRIEF_PUBLICATION_RECOVERY)
     _current_report(record_path, report)
     markdown = render_debrief(
         report, speaker_names=describe_correction_speakers(record_path)
@@ -477,6 +478,6 @@ def debrief_report_status(
         return "stale"
     try:
         _validate_report(report, snapshot, context.brief if context is not None else None)
-    except ValueError:
+    except (FakeYouError, ValueError):
         return "invalid"
     return "available"

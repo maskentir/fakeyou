@@ -6,12 +6,10 @@ from contextlib import (
     ExitStack,
     asynccontextmanager,
     contextmanager,
-    suppress,
 )
 from dataclasses import dataclass, field
 from typing import Any
 
-import psycopg
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
 from langchain_core.tools import BaseTool
@@ -26,8 +24,7 @@ from fakeyou.agent import (
 )
 from fakeyou.audio import TurnAudioTap
 from fakeyou.brief import MeetingBrief
-from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation import (
     ConversationLoop,
     ConversationPhase,
@@ -37,6 +34,10 @@ from fakeyou.conversation import (
     ToolResultCallback,
     conversation_thread_id,
 )
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import configured_url, open_database, require_url
+from fakeyou.db.schema import require_current
+from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
 from fakeyou.faults import FaultReporter
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.journal import Journal
@@ -71,7 +72,6 @@ from fakeyou.visual_hydrate import create_visual_hydrate_middleware, create_visu
 from fakeyou.visual_store import VisualStore
 from fakeyou.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.voiceprint_match import VoiceprintMatcher
-from fakeyou.voiceprint_store import VoiceprintStore, ensure_voiceprint_schema
 
 
 @dataclass(slots=True)
@@ -81,9 +81,8 @@ class VoiceprintLive:
     embedder: SpeakerEmbedder
     min_seconds: float
     owners: Mapping[str, str]
-    slot_taps: dict[str, TurnAudioTap] = field(default_factory=dict)
-    connection: Any = None
     artifact: CalibrationArtifact | None = None
+    slot_taps: dict[str, TurnAudioTap] = field(default_factory=dict)
 
     def tap_for(self, stream_id: str) -> TurnAudioTap:
         if not stream_id:
@@ -97,61 +96,14 @@ class VoiceprintLive:
     def tap_for_slot(self, slot: int) -> TurnAudioTap:
         return self.tap_for(f"slot-{slot}")
 
-    def close(self) -> None:
-        connection, self.connection = self.connection, None
-        if connection is not None:
-            with suppress(Exception):
-                connection.close()
 
-
-def create_voiceprint_live(
+def build_voiceprint_live(
     settings: Settings,
     *,
-    connect: Callable[[], Any] | None = None,
-    embedder: SpeakerEmbedder | None = None,
-) -> VoiceprintLive | None:
-    if not settings.identity.voiceprint_enabled:
-        return None
-    if connect is None:
-        dsn = checkpoint_dsn(settings)
-        if dsn is None:
-            raise CliError("Set FAKEYOU_CHECKPOINT__URL in .env before enabling voiceprints.")
-        connection: Any = psycopg.connect(dsn)
-        owned = True
-    else:
-        connection = connect()
-        owned = False
-    try:
-        ensure_voiceprint_schema(connection)
-        resolved = embedder
-        if resolved is None:
-            if not settings.identity.voiceprint_model_path:
-                raise CliError(
-                    "Set FAKEYOU_IDENTITY__VOICEPRINT_MODEL_PATH in .env"
-                    " before enabling voiceprints."
-                )
-            resolved = load_embedder(
-                settings.identity.voiceprint_model_path, settings.identity.voiceprint_model_sha256
-            )
-    except Exception:
-        if owned:
-            failed, connection = connection, None
-            with suppress(Exception):
-                failed.close()
-        raise
-    store = VoiceprintStore(lambda: connection)
-    calibration_path = settings.identity.voiceprint_calibration_path
-    artifact: CalibrationArtifact | None = None
-    if calibration_path:
-        artifact = load_calibration_artifact(calibration_path)
-        if artifact is None:
-            if owned:
-                with suppress(Exception):
-                    connection.close()
-            raise CliError(
-                "Set FAKEYOU_IDENTITY__VOICEPRINT_CALIBRATION_PATH in .env"
-                " to a valid calibration artifact before enabling voiceprints."
-            )
+    store: VoiceprintRepository,
+    embedder: SpeakerEmbedder,
+    artifact: CalibrationArtifact | None,
+) -> VoiceprintLive:
     return VoiceprintLive(
         tap=TurnAudioTap(),
         matcher=VoiceprintMatcher(
@@ -159,12 +111,43 @@ def create_voiceprint_live(
             threshold=settings.identity.voiceprint_threshold,
             min_margin=settings.identity.voiceprint_min_margin,
         ),
-        embedder=resolved,
+        embedder=embedder,
         min_seconds=settings.identity.voiceprint_min_seconds,
         owners={},
-        connection=connection if owned else None,
         artifact=artifact,
     )
+
+
+@contextmanager
+def open_voiceprint(settings: Settings) -> Iterator[VoiceprintLive | None]:
+    if not settings.identity.voiceprint_enabled:
+        yield None
+        return
+    with open_database(settings) as engine:
+        require_current(engine)
+        embedder = _load_voiceprint_embedder(settings)
+        artifact = _load_voiceprint_artifact(settings)
+        yield build_voiceprint_live(
+            settings, store=VoiceprintStore(engine), embedder=embedder, artifact=artifact
+        )
+
+
+def _load_voiceprint_embedder(settings: Settings) -> SpeakerEmbedder:
+    if not settings.identity.voiceprint_model_path:
+        raise FakeYouError(ErrorCode.VOICEPRINT_MODEL_PATH_MISSING)
+    return load_embedder(
+        settings.identity.voiceprint_model_path, settings.identity.voiceprint_model_sha256
+    )
+
+
+def _load_voiceprint_artifact(settings: Settings) -> CalibrationArtifact | None:
+    calibration_path = settings.identity.voiceprint_calibration_path
+    if not calibration_path:
+        return None
+    artifact = load_calibration_artifact(calibration_path)
+    if artifact is None:
+        raise FakeYouError(ErrorCode.VOICEPRINT_CALIBRATION_INVALID)
+    return artifact
 
 
 def default_persona(settings: Settings) -> str:
@@ -222,7 +205,7 @@ async def open_conversation(
     )
     if profile is None:
         if brief is not None:
-            raise ValueError("a meeting brief requires a persona profile")
+            raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE)
         persona = default_persona(settings)
     else:
         tool_names = meeting_tool_names(profile, brief, memory_requested=graphiti is not None)
@@ -236,7 +219,7 @@ async def open_conversation(
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            open_checkpointer(settings.paths.checkpoint_path, dsn=checkpoint_dsn(settings))
+            open_checkpointer(require_url(configured_url(settings)))
         )
         tools: list[BaseTool] = []
         middleware: list[AgentMiddleware[Any, Any, Any]] = []

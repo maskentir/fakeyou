@@ -4,7 +4,7 @@ Diperbarui: 5 Oktober 2026. Status mencakup semua milestone yang sudah digabung 
 
 ## Posisi proyek sekarang
 
-Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint SQLite dan Postgres, browser tools, layanan suara, client memori, dan perangkat evaluasi. Muse menerima audio meeting nyata melalui layanan live dan menghasilkan transkrip final.
+Fondasi komponen sudah berjalan: agent LangChain/LangGraph, checkpoint PostgreSQL, browser tools, layanan suara, client memori, dan perangkat evaluasi. Muse menerima audio meeting nyata melalui layanan live dan menghasilkan transkrip final.
 
 Worker masuk sebagai guest, menunggu admission, mendengar lewat Muse, menjawab melalui TTS streaming, dan leave. [Acceptance ketiga](../reports/2026-10-01-refactor-acceptance.md) membuktikan startup, recall lintas sesi, konteks kata ganti, interupsi, dan stop tanpa suara terlambat; host mengonfirmasi jawaban terdengar utuh.
 
@@ -26,7 +26,7 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | --- | --- | --- |
 | Setup proyek | Python 3.12, dependency terkunci, lint, typing, build, Compose, dan CI GitHub sudah diperiksa tiap merge | Backend Kubernetes; acceptance dua meeting paralel |
 | Otak: LangChain + LangGraph | Agent native dan loop transkrip→agent→sintesis→playback, pemrosesan berurutan, checkpoint per owner/twin/meeting; brief, delegasi terbatas, dan debrief beralas sumber lulus acceptance live | Latency live (p50 5,05 dtk lawan target ≤3), gap kualitas replay |
-| Memori percakapan | Isolasi `thread_id`, pembukaan ulang SQLite, dan Postgres opsional teruji; lanjutan crash `--resume` di branch worker | Acceptance lanjutan crash di dua meeting paralel |
+| Memori percakapan | Isolasi `thread_id`, pembukaan ulang, dan round-trip checkpoint PostgreSQL teruji (tes Postgres nyata lewat `TEST_DATABASE_URL`); lanjutan crash `--resume` di branch worker | Acceptance lanjutan crash di dua meeting paralel |
 | Telinga: Muse + Pipecat | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live; capture 16 kHz mono; identitas speaker wajib di transkrip dengan observer dan kebijakan partisipasi | Overlap, dedupe reconnect, dan atribusi nama penuh |
 | Mulut: TTS streaming + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in; host mengonfirmasi jawaban utuh | Waktu PCM pertama dan performa lintas lebih banyak sesi |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
@@ -145,7 +145,7 @@ Perluas DeepEval dan tes integrasi dengan skenario percakapan, persona, memori, 
 
 Ukur latency ujung ke ujung, tingkat keberhasilan join, kualitas transkripsi, penghentian suara, durasi sesi, serta biaya per meeting. Tetapkan target setelah baseline diukur.
 
-Hubungkan PostgreSQL checkpointer sebelum menjalankan banyak worker; SQLite CLI saat ini memiliki batas concurrent writer yang tercatat dalam laporan regresi. Tambahkan isolasi browser/audio per meeting, pengelolaan resource, observability, kontrol start/stop/status, serta CI yang dieksekusi. API/dashboard dan kalender dibangun sesuai kebutuhan penggunaan setelah satu sesi stabil.
+Verifikasi PostgreSQL checkpointer dengan database nyata sebelum menjalankan banyak worker; checkpoint kini hanya PostgreSQL, sehingga batas concurrent writer SQLite yang tercatat dalam laporan regresi tidak lagi berlaku. Tambahkan isolasi browser/audio per meeting, pengelolaan resource, observability, kontrol start/stop/status, serta CI yang dieksekusi. API/dashboard dan kalender dibangun sesuai kebutuhan penggunaan setelah satu sesi stabil.
 
 **Selesai ketika:** skenario utama lulus di meeting terkontrol, sesi panjang dan beberapa worker tidak bercampur data/audio, serta restart tidak menggandakan chat atau suara.
 

@@ -14,6 +14,21 @@ jobs:
       DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
       LANGSMITH_TRACING: "false"
       GRAPHITI_TELEMETRY_ENABLED: "false"
+      TEST_DATABASE_URL: postgresql://fakeyou:ci-only@localhost:5432/fakeyou
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_DB: fakeyou
+          POSTGRES_USER: fakeyou
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fakeyou -d fakeyou"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
@@ -30,6 +45,6 @@ jobs:
       - run: uv run --no-sync deepeval test run evals/test_persona_eval.py
       - run: uv run --no-sync deepeval test run evals/test_replay_eval.py
       - run: uv build
-      - run: docker compose --profile production config --quiet
+      - run: docker compose config --quiet
         env:
           FAKEYOU_MEMORY__STORE__PASSWORD: ci-config-check-only

@@ -1,13 +1,14 @@
 from contextlib import asynccontextmanager
 
 import pytest
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from fakeyou.browser import open_direct_page
+from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.lifecycle import create_lifecycle_graph
 from fakeyou.meet import enable_meeting_microphone
 from fakeyou.runtime import run_meeting_session
 from fakeyou.session import SessionConfig
+from tests.fakes import DATABASE_URL
 
 MEETING_PAGE = """<!doctype html><html><body>
 <input placeholder="Your name"><button id="join">Ask to join</button>
@@ -22,7 +23,7 @@ document.querySelector('#join').onclick = () => {
 
 
 @pytest.mark.browser
-async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state(tmp_path) -> None:
+async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state() -> None:
     pages = []
 
     @asynccontextmanager
@@ -35,14 +36,13 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state(t
             pages.append(page)
             yield page
 
-    database = tmp_path / "meeting.sqlite"
     config = SessionConfig(
         owner_id="fixture-owner",
         twin_id="fixture-twin",
         meeting_id="fixture-meeting",
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Fixture Twin",
-        checkpoint_path=database,
+        database_url=DATABASE_URL,
         warmup_browser=False,
         headless=True,
         session_duration_seconds=0.2,
@@ -54,7 +54,7 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state(t
     assert result.phase == "ended"
     assert result.terminal_reason == "duration_limit_reached"
     assert pages[0].is_closed()
-    async with AsyncSqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(DATABASE_URL) as saver:
         state = await create_lifecycle_graph(saver).aget_state(
             {"configurable": {"thread_id": "fixture-twin:fixture-meeting"}}
         )

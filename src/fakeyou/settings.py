@@ -1,15 +1,25 @@
+import os
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, get_args, get_origin
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource
 
+from fakeyou.catalog.config import API_KEY_OF_ROLE, ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
 OptionalURL = Annotated[str | None, BeforeValidator(lambda value: None if value == "" else value)]
+
+
+def export_dotenv() -> None:
+    for key, value in dotenv_values(Path(".env")).items():
+        if value is not None:
+            os.environ.setdefault(key, value)
 
 
 class Section(BaseModel):
@@ -49,11 +59,10 @@ class IdentitySettings(Section):
 class PathSettings(Section):
     journal_dir: Path = Path(".runtime/journals")
     record_dir: Path = Path(".runtime/meetings")
-    checkpoint_path: Path = Path(".runtime/checkpoints.sqlite")
     browser_profile_dir: Path = Path(".runtime/profiles")
 
 
-class CheckpointSettings(Section):
+class DatabaseSettings(Section):
     url: SecretStr | None = None
 
 
@@ -302,7 +311,7 @@ class VisualSettings(Section):
 class Configuration(Section):
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     paths: PathSettings = Field(default_factory=PathSettings)
-    checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings)
+    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None
@@ -341,9 +350,7 @@ class Configuration(Section):
             for part in role.split("."):
                 value = getattr(value, part)
             if value is not None:
-                require_secret(
-                    value.api_key, "FAKEYOU_" + role.replace(".", "__").upper() + "__API_KEY"
-                )
+                require_secret(value.api_key, API_KEY_OF_ROLE[role])
 
 
 DEFAULTS = Configuration()
@@ -392,11 +399,11 @@ class Settings(Configuration, BaseSettings):
                     elif upper.startswith("FAKEYOU_") and not _known_env_path(
                         cls, key.lower().removeprefix("fakeyou_").split("__")
                     ):
-                        raise ValueError(f"Unknown configuration key: {upper}")
+                        raise FakeYouError(ErrorCode.CONFIG_UNKNOWN_KEY, name=upper)
         return init_settings, env_settings, dotenv_settings, file_secret_settings
 
 
-def require_secret(value: SecretStr | None, name: str) -> str:
+def require_secret(value: SecretStr | None, name: ConfigKey) -> str:
     if value is None or not value.get_secret_value().strip():
-        raise ValueError(f"Set {name} in .env before using this command.")
+        raise FakeYouError(ErrorCode.CONFIG_SECRET_MISSING, name=name)
     return value.get_secret_value()

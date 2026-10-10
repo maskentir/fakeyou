@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from graphiti_core.nodes import EpisodeType
 
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.correction_labels import LABELS_FILE_NAME, write_correction_labels
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarize_correction import correction_uuid, write_correction_bundle
@@ -584,9 +585,10 @@ async def test_ingest_corrections_rejects_stale_sidecar(tmp_path: Path) -> None:
     with record_path.open("a", encoding="utf-8") as handle:
         handle.write(said(200, "Late arrival.").model_dump_json() + "\n")
 
-    with pytest.raises(DiarizeError):
+    with pytest.raises(DiarizeError) as error:
         await ingest_corrections(memory, record_path, group_id="twin_group", meeting_id="meeting-1")
 
+    assert error.value.code is ErrorCode.DIARIZE_STALE
     assert memory.added == []
     assert not status_path(record_path).exists()
 
@@ -681,7 +683,7 @@ async def test_ingest_corrections_without_window_map_skips_invalidation(
 ) -> None:
     record_path = correction_record(tmp_path)
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
-    journal = Journal("meeting-1", stdout=False)
+    journal = Journal("meeting-1", echo=False)
     faults = FaultReporter(journal=journal)
 
     result = await ingest_corrections(
@@ -753,7 +755,7 @@ async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid
         raise RuntimeError("neo4j is down")
 
     memory.driver.execute_query.side_effect = failing
-    journal = Journal("meeting-1", stdout=False)
+    journal = Journal("meeting-1", echo=False)
     faults = FaultReporter(journal=journal)
 
     result = await ingest_corrections(

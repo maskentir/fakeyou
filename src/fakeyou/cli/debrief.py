@@ -10,8 +10,9 @@ from pydantic import TypeAdapter
 
 from fakeyou.assembly import stop_signal_handlers
 from fakeyou.brief import MeetingContext, context_path, validate_brief_scope
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.memory import load_operator_persona
+from fakeyou.cli.output import emit_json
 from fakeyou.correction_labels import describe_correction_speakers
 from fakeyou.debrief import (
     debrief_report_status,
@@ -24,7 +25,6 @@ from fakeyou.debrief_schema import DebriefReport, EvidenceSource
 from fakeyou.debrief_sources import chunk_sources, load_context_snapshot, load_record_snapshot
 from fakeyou.diarize_correction import correction_digest
 from fakeyou.ingestion_status import (
-    RecordLockError,
     read_status,
     record_lock,
     status_path,
@@ -59,11 +59,9 @@ def _validate_scope(
     status = read_status(status_path(record_path))
     if status is None:
         if context is None:
-            raise CliError(
-                "record ownership cannot be verified without context or ingestion status"
-            )
+            raise FakeYouError(ErrorCode.DEBRIEF_OWNERSHIP_UNVERIFIABLE)
     elif status.meeting_id != meeting_id or status.group_id != profile.memory_group:
-        raise CliError("meeting record scope does not match the operator persona")
+        raise FakeYouError(ErrorCode.DEBRIEF_SCOPE_MISMATCH)
 
 
 def _write_attempt(
@@ -103,12 +101,9 @@ async def debrief_meeting(
     profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not record_path.is_file():
-        raise CliError("no meeting record is available for debrief")
-    try:
-        with record_lock(record_path, purpose="debrief"):
-            await _debrief_locked(record_path, profile, meeting_id, force, settings)
-    except RecordLockError:
-        raise CliError("meeting record is locked by another operation") from None
+        raise FakeYouError(ErrorCode.DEBRIEF_RECORD_MISSING)
+    with record_lock(record_path, purpose="debrief"):
+        await _debrief_locked(record_path, profile, meeting_id, force, settings)
 
 
 def _is_anonymous(participant_id: str) -> bool:
@@ -127,7 +122,7 @@ async def _debrief_locked(
     journal = Journal(
         meeting_id,
         path=journal_path(settings.paths.journal_dir, meeting_id),
-        stdout=False,
+        echo=False,
     )
     record_digest: str | None = None
     context_digest: str | None = None
@@ -141,7 +136,7 @@ async def _debrief_locked(
         _validate_scope(record_path, context, profile, meeting_id)
         chunks = chunk_sources(snapshot.sources)
         if any(record_path.parent.glob("debrief.json.*.rollback")):
-            raise CliError("canonical debrief requires publication recovery")
+            raise FakeYouError(ErrorCode.DEBRIEF_PUBLICATION_RECOVERY)
         if not force and debrief_report_status(record_path, journal=journal) == "available":
             report = read_debrief(record_path)
             if (report.owner_id, report.twin_id, report.meeting_id) != (
@@ -149,7 +144,7 @@ async def _debrief_locked(
                 profile.twin_id,
                 meeting_id,
             ):
-                raise CliError("cached debrief scope does not match the operator persona")
+                raise FakeYouError(ErrorCode.DEBRIEF_CACHED_SCOPE_MISMATCH)
             rebuild_debrief_markdown(record_path)
             _print_result(record_path, cached=True)
             return
@@ -183,7 +178,7 @@ async def _debrief_locked(
             or current_context_digest != context_digest
             or correction_digest(record_path) != sidecar_digest
         ):
-            raise CliError("meeting sources changed during debrief generation")
+            raise FakeYouError(ErrorCode.DEBRIEF_SOURCES_CHANGED)
         cited = {reference.entry_id for item in draft.items for reference in item.evidence}
         cited.update(
             reference.entry_id for finding in draft.findings for reference in finding.evidence
@@ -288,24 +283,21 @@ async def _debrief_locked(
             journal=journal,
         )
         journal.record("debrief_failed", source="cli", error=type(error).__name__)
-        if isinstance(error, CliError):
+        if isinstance(error, FakeYouError):
             raise
-        raise CliError(f"debrief failed: {type(error).__name__}") from None
+        raise FakeYouError(ErrorCode.DEBRIEF_FAILED, reason=type(error).__name__) from None
     finally:
         journal.close()
 
 
 def _print_result(record_path: Path, *, cached: bool) -> None:
-    print(
-        json.dumps(
-            {
-                "meeting_id": record_path.parent.name,
-                "status": "completed",
-                "review_status": "unreviewed",
-                "cached": cached,
-                "json_path": str(record_path.parent / "debrief.json"),
-                "markdown_path": str(record_path.parent / "debrief.md"),
-            },
-            indent=2,
-        )
+    emit_json(
+        {
+            "meeting_id": record_path.parent.name,
+            "status": "completed",
+            "review_status": "unreviewed",
+            "cached": cached,
+            "json_path": str(record_path.parent / "debrief.json"),
+            "markdown_path": str(record_path.parent / "debrief.md"),
+        }
     )

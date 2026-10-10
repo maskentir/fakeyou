@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 import fakeyou.cli.memory as cli_memory
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.cli.main import build_parser
 from fakeyou.cli.memory import _finish_ingest, ingest_recorded_meeting
 from fakeyou.conversation import TranscriptEvent
@@ -22,8 +23,7 @@ from fakeyou.persona import PersonaProfile
 from fakeyou.record import MeetingRecord, meeting_record_path
 from fakeyou.settings import Settings
 from fakeyou.worker_backend import DockerWorkerBackend
-from tests.fakes import make_graphiti
-from tests.test_worker_backend import FINISHED_ROWS, FakeRunner, write_journal
+from tests.fakes import FINISHED_ROWS, FakeRunner, make_graphiti, write_journal
 
 PERSONA_DATA = {
     "owner_id": "settings-owner",
@@ -121,7 +121,7 @@ def test_finish_ingest_preserves_correction_progress(tmp_path: Path) -> None:
             correction_run="2026-10-09T12:00:00+00:00",
         ),
     )
-    faults = FaultReporter(journal=Journal("meeting-1", stdout=False))
+    faults = FaultReporter(journal=Journal("meeting-1", echo=False))
 
     ok = _finish_ingest(
         status_file,
@@ -233,7 +233,7 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
     _write_audio_slots(settings, "meeting-9")
 
     def failing(chunk: bytes, *, api_key: str, opener: Any = None) -> list[DiarizedTurn]:
-        raise DiarizeError("transcription request failed")
+        raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason="timeout")
 
     monkeypatch.setattr("fakeyou.cli.diarize.transcribe_chunk", failing)
     graphiti = make_graphiti()
@@ -254,7 +254,7 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
         if row.get("event") == "fault_recorded" and row.get("source") == "stt"
     ]
     assert len(faults) == 1
-    assert faults[0].get("detail") == "transcription request failed"
+    assert faults[0].get("detail") == "transcription request failed: timeout"
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     status = read_status(status_path(record_path))
     assert status is not None

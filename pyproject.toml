@@ -5,34 +5,45 @@ description = "Library-first foundation for a Google Meet digital twin"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.20,<2",
+    "anthropic>=1.9,<2",
     "cloakbrowser==0.5.11",
     "graphiti-core==0.30.2",
     "httpx2==2.13.1",
     "langchain==1.4.2",
     "langchain-anthropic>=1,<2",
+    "langchain-core>=1.6,<2",
     "langchain-google-genai>=4,<5",
     "langchain-mcp-adapters>=0.2,<0.3",
     "langchain-openai>=1,<2",
     "langgraph==1.2.12",
     "langgraph-checkpoint-postgres>=3,<4",
-    "langgraph-checkpoint-sqlite>=3,<4",
     "mcp>=1.26,<2",
+    "neo4j>=6.3,<7",
     "openai==3.19.2",
+    "pillow>=12.3,<13",
     "pipecat-ai[silero,webrtc]==1.12.0",
+    "playwright>=1.63,<2",
     "psycopg[binary,pool]>=3.2,<4",
+    "pydantic>=2.13,<3",
     "pydantic-settings>=2.10,<3",
     "python-dotenv>=1.2,<2",
+    "sqlalchemy>=2.0,<3",
 ]
 
 [project.optional-dependencies]
 audio = ["pipecat-ai[local]==1.12.0; sys_platform == 'linux'"]
 # Pinned to the last sherpa built against onnxruntime 1.24.x (pipecat's pin);
 # newer sherpa needs ORT >= 1.28 and breaks the resolver.
-voiceprint = ["sherpa-onnx==1.12.38"]
+# The macOS sherpa wheel is a thin wrapper that loads the onnxruntime dylib shipped by sherpa-onnx-core;
+# uv's universal lock does not carry that requirement, so it is declared here for darwin only.
+voiceprint = ["sherpa-onnx==1.12.38", "sherpa-onnx-core==1.12.38; sys_platform == 'darwin'"]
 
 [dependency-groups]
 dev = [
     "deepeval==4.2.6",
+    "deptry>=0.25,<1",
+    "import-linter>=2.15,<3",
     "mypy>=1.18,<2",
     "pytest>=8,<10",
     "pytest-asyncio>=1,<2",
@@ -63,7 +74,15 @@ markers = [
     "browser: launches a real CloakBrowser and local Playwright MCP process",
     "live: uses external model APIs or a running graph database",
     "container: runs the built meeting worker image through Docker Compose",
+    "postgres: uses the real Postgres named by TEST_DATABASE_URL",
 ]
+
+[tool.deptry]
+extend_exclude = ["evals"]
+known_first_party = ["fakeyou"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["langchain-anthropic", "langchain-google-genai", "langchain-openai"]
 
 [tool.mypy]
 python_version = "3.12"

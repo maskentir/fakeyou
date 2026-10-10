@@ -38,6 +38,7 @@ from evals.test_trust_eval import (
     write_trust_summary,
 )
 from fakeyou.brief import MeetingBrief, brief_digest
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.conversation import (
     TranscriptEvent,
     cap_spoken_reply,
@@ -874,7 +875,7 @@ async def test_live_brief_replay_captures_36_rated_pairs(tmp_path: Path) -> None
     settings = Settings()
     try:
         model = create_chat_model(settings)
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     assert settings.conversation.sentence_streaming is False
     fixture = load_brief_fixture()

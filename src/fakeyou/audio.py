@@ -36,6 +36,7 @@ from pipecat.transports.base_input import BaseInputTransport
 from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.attribution_probe import AttributionProbe
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.deaf import (
     CaptureActivity,
     DeafMonitor,
@@ -827,7 +828,7 @@ async def open_meeting_audio(
                 stt
                 if stt is not None
                 else create_muse_stt(
-                    api_key=require_secret(stt_settings.api_key, "FAKEYOU_STT__API_KEY"),
+                    api_key=require_secret(stt_settings.api_key, ConfigKey.STT_API_KEY),
                     sample_rate=CAPTURE_SAMPLE_RATE,
                     model=stt_settings.model,
                     url=stt_settings.url,
@@ -1012,7 +1013,7 @@ async def open_stream_audio(
                 stt
                 if stt is not None
                 else create_muse_stt(
-                    api_key=require_secret(stt_settings.api_key, "FAKEYOU_STT__API_KEY"),
+                    api_key=require_secret(stt_settings.api_key, ConfigKey.STT_API_KEY),
                     sample_rate=CAPTURE_SAMPLE_RATE,
                     model=stt_settings.model,
                     url=stt_settings.url,

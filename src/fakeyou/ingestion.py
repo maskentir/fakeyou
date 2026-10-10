@@ -9,6 +9,7 @@ from pathlib import Path
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.correction_labels import (
     correction_labels_valid,
     correction_speaker_name,
@@ -272,7 +273,7 @@ async def ingest_meeting(
             break
         window = windows[index]
         try:
-            timer_journal = journal or Journal("", stdout=False)
+            timer_journal = journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished="memory_episode_ingested",
                 failed="memory_episode_failed",
@@ -315,7 +316,7 @@ async def ingest_meeting(
         if not entry.caption.strip() or not entry.frame_ref.strip():
             continue
         try:
-            timer_journal = journal or Journal("", stdout=False)
+            timer_journal = journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished="memory_visual_ingested",
                 failed="memory_visual_failed",
@@ -399,7 +400,7 @@ async def ingest_corrections(
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
     corrected_at = payload.get("corrected_at")
     if not isinstance(corrected_at, str) or not corrected_at:
-        raise DiarizeError("diarization sidecar is invalid")
+        raise DiarizeError(ErrorCode.DIARIZE_SIDECAR_INVALID)
     stored = read_correction_labels(record_path)
     labeled = correction_labels_valid(record_path)
     labels: dict[str, str] = {}
@@ -468,7 +469,7 @@ async def ingest_corrections(
         window = fixed_windows[index]
         written_uuid: str | None = None
         try:
-            timer_journal = journal or Journal("", stdout=False)
+            timer_journal = journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished="memory_correction_ingested",
                 failed="memory_correction_failed",
@@ -617,11 +618,12 @@ async def _resume_point(
     return 0, head.uuid
 
 
+class EpisodeNameError(FakeYouError, ValueError):
+    pass
+
+
 def _next_window(name: str, meeting_id: str) -> int:
     match = re.fullmatch(rf"{re.escape(meeting_id)}:w(\d+)", name)
     if match is None:
-        raise ValueError(
-            f"invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; "
-            "run memory-forget --meeting with --keep-record before ingesting again"
-        )
+        raise EpisodeNameError(ErrorCode.INGESTION_EPISODE_NAME_INVALID, meeting_id=meeting_id)
     return int(match.group(1)) + 1

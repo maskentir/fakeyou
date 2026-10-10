@@ -10,8 +10,9 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.diarize import diarize_run, diarize_show
-from fakeyou.cli.errors import CliError
 from fakeyou.cli.main import build_parser
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarize_correction import write_correction_bundle
@@ -92,8 +93,10 @@ def _turns_payload(turns: list[tuple[int, int, str]]) -> bytes:
 def test_diarize_run_refuses_missing_api_key(settings: Settings) -> None:
     assert settings.stt.api_key is None
 
-    with pytest.raises(CliError, match="FAKEYOU_STT__API_KEY"):
+    with pytest.raises(FakeYouError, match="FAKEYOU_STT__API_KEY") as error:
         diarize_run("m1", settings=settings)
+
+    assert error.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 def test_diarize_run_maps_client_error_without_secret_text(settings: Settings) -> None:
@@ -103,11 +106,12 @@ def test_diarize_run_maps_client_error_without_secret_text(settings: Settings) -
     def opener(request: urllib.request.Request) -> _FakeResponse:
         return _FakeResponse(b"not-json{{{")
 
-    with pytest.raises(CliError) as error:
+    with pytest.raises(DiarizeError) as error:
         diarize_run("m1", settings=settings, opener=opener)
 
     assert SECRET_KEY not in str(error.value)
-    assert isinstance(error.value.__cause__, DiarizeError)
+    assert error.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID
+    assert isinstance(error.value.__cause__, ValueError)
 
 
 def test_diarize_run_refuses_concurrent_run_via_lease(settings: Settings) -> None:
@@ -118,8 +122,10 @@ def test_diarize_run_refuses_concurrent_run_via_lease(settings: Settings) -> Non
         raise AssertionError("locked run must not transcribe")
 
     with record_lock(record_path, purpose="meeting"):
-        with pytest.raises(CliError, match="locked"):
+        with pytest.raises(FakeYouError, match="locked") as error:
             diarize_run("m1", settings=settings, opener=opener)
+
+    assert error.value.code is ErrorCode.RECORD_LOCKED
 
 
 def test_diarize_run_releases_diarization_lease_on_success(settings: Settings) -> None:
@@ -140,8 +146,10 @@ def test_diarize_run_refuses_unequal_seq_start(settings: Settings) -> None:
     def opener(request: urllib.request.Request) -> _FakeResponse:
         raise AssertionError("misaligned run must not transcribe")
 
-    with pytest.raises(CliError, match="misaligned"):
+    with pytest.raises(FakeYouError, match="misaligned") as error:
         diarize_run("m1", settings=settings, opener=opener)
+
+    assert error.value.code is ErrorCode.DIARIZE_SLOT_MISALIGNED
 
 
 def test_diarize_run_refuses_nonzero_seq_start(settings: Settings) -> None:
@@ -151,11 +159,13 @@ def test_diarize_run_refuses_nonzero_seq_start(settings: Settings) -> None:
     def opener(request: urllib.request.Request) -> _FakeResponse:
         raise AssertionError("misaligned run must not transcribe")
 
-    with pytest.raises(CliError, match="zero"):
+    with pytest.raises(FakeYouError, match="zero") as error:
         diarize_run("m1", settings=settings, opener=opener)
 
+    assert error.value.code is ErrorCode.DIARIZE_SLOT_NOT_AT_ZERO
 
-def test_diarize_run_maps_empty_audio_dir_to_cli_error(settings: Settings) -> None:
+
+def test_diarize_run_maps_empty_audio_dir_to_input_unreadable(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path = meeting_record_path(settings.paths.record_dir, "m1")
     record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -165,11 +175,13 @@ def test_diarize_run_maps_empty_audio_dir_to_cli_error(settings: Settings) -> No
     def opener(request: urllib.request.Request) -> _FakeResponse:
         raise AssertionError("empty run must not transcribe")
 
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as error:
         diarize_run("m1", settings=settings, opener=opener)
 
+    assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
 
-def test_diarize_run_maps_missing_slot_wavs_to_cli_error(settings: Settings) -> None:
+
+def test_diarize_run_maps_missing_slot_wavs_to_input_unreadable(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, audio_dir = _write_session(settings, "m1", seq_starts={0: 0})
     (audio_dir / "slot-0.wav").unlink()
@@ -179,8 +191,9 @@ def test_diarize_run_maps_missing_slot_wavs_to_cli_error(settings: Settings) -> 
     def opener(request: urllib.request.Request) -> _FakeResponse:
         raise AssertionError("wav-less run must not transcribe")
 
-    with pytest.raises(CliError, match="no slot wav files"):
+    with pytest.raises(FakeYouError, match="no slot wav files") as error:
         diarize_run("m1", settings=settings, opener=opener)
+    assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert record_path.read_bytes() == before
 
 
@@ -286,7 +299,7 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
     assert all(size <= 5 * 60 * CAPTURE_SAMPLE_RATE * 2 + 44 + 4096 for size in sizes)
 
 
-def test_diarize_run_maps_corrupt_slot_wav_to_cli_error(settings: Settings) -> None:
+def test_diarize_run_maps_corrupt_slot_wav_to_input_unreadable(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, audio_dir = _write_session(settings, "m1", seq_starts={0: 0})
     (audio_dir / "slot-0.wav").write_bytes(b"not a wav file" * 8)
@@ -295,9 +308,10 @@ def test_diarize_run_maps_corrupt_slot_wav_to_cli_error(settings: Settings) -> N
     def opener(request: urllib.request.Request) -> _FakeResponse:
         raise AssertionError("corrupt run must not transcribe")
 
-    with pytest.raises(CliError) as error:
+    with pytest.raises(FakeYouError) as error:
         diarize_run("m1", settings=settings, opener=opener)
 
+    assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert isinstance(error.value.__cause__, wave.Error)
     assert record_path.read_bytes() == before
 
@@ -373,11 +387,11 @@ def test_diarize_show_exits_stale_when_record_changed(
     with pytest.raises(SystemExit) as exit:
         diarize_show("m1", settings=settings)
 
-    assert exit.value.code == 2
+    assert exit.value.code is ExitCode.INPUT_REJECTED
     assert "stale" in capsys.readouterr().out
 
 
-def test_diarize_show_maps_invalid_schema_to_cli_error_without_stale_label(
+def test_diarize_show_reports_invalid_schema_without_stale_label(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     record_path = _show_session(settings, "m1", [1000.0])
@@ -386,13 +400,14 @@ def test_diarize_show_maps_invalid_schema_to_cli_error_without_stale_label(
     payload["schema"] = "diarization_correction/v99"
     sidecar.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(CliError, match="schema"):
+    with pytest.raises(DiarizeError, match="schema") as error:
         diarize_show("m1", settings=settings)
 
+    assert error.value.code is ErrorCode.DIARIZE_SCHEMA_UNSUPPORTED
     assert "stale" not in capsys.readouterr().out
 
 
-def test_diarize_show_maps_invalid_turns_to_cli_error_without_stale_label(
+def test_diarize_show_reports_invalid_turns_without_stale_label(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     record_path = _show_session(settings, "m1", [1000.0])
@@ -401,9 +416,10 @@ def test_diarize_show_maps_invalid_turns_to_cli_error_without_stale_label(
     payload["turns"] = [{"start_ms": "zero", "end_ms": 1000, "corrected_uuid": "u"}]
     sidecar.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(CliError, match="turns are invalid"):
+    with pytest.raises(DiarizeError, match="turns are invalid") as error:
         diarize_show("m1", settings=settings)
 
+    assert error.value.code is ErrorCode.DIARIZE_TURNS_INVALID
     assert "stale" not in capsys.readouterr().out
 
 
@@ -412,8 +428,10 @@ def test_diarize_show_refuses_missing_sidecar(settings: Settings) -> None:
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(_show_line(0, 1000.0) + "\n", encoding="utf-8")
 
-    with pytest.raises(CliError, match="no diarization correction"):
+    with pytest.raises(FakeYouError, match="no diarization correction") as error:
         diarize_show("m1", settings=settings)
+
+    assert error.value.code is ErrorCode.DIARIZE_CORRECTION_MISSING
 
 
 def test_diarize_parser_registers_show() -> None:

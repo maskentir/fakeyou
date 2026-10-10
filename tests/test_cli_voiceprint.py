@@ -6,15 +6,18 @@ import random
 import re
 import struct
 import wave
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
+from sqlalchemy import Engine
 
 import fakeyou.cli.main as cli_main
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.voiceprint import (
     PROVISIONAL_SNR_FLOOR_DB,
     VOICEPRINT_MIN_RMS,
@@ -27,52 +30,19 @@ from fakeyou.cli.voiceprint import (
     voiceprint_purge_expired,
     voiceprint_verify,
 )
+from fakeyou.db.voiceprint_store import VoiceprintRecord, VoiceprintStore
 from fakeyou.settings import Settings
 from fakeyou.voiceprint_embed import SpeakerEmbedder
-from fakeyou.voiceprint_store import VoiceprintRecord, VoiceprintStore
-from tests.fakes import RecordingJournal
+from tests.fakes import InMemoryVoiceprints, RecordingJournal
+
+CONSENT_AT = datetime(2026, 10, 7, 10, 0, 0, tzinfo=UTC)
+ENROLLED_AT = datetime(2026, 10, 7, 10, 0, 1, tzinfo=UTC)
+LAST_USED_AT = datetime(2026, 10, 7, 10, 0, 2, tzinfo=UTC)
 
 
-class FakeStore(VoiceprintStore):
-    def __init__(self) -> None:
-        self.records: dict[str, VoiceprintRecord] = {}
-        self.touched: list[str] = []
-
-    def save(self, record: VoiceprintRecord) -> None:
-        self.records[record.person_id] = record
-
-    def load_all(self) -> list[VoiceprintRecord]:
-        return [self.records[key] for key in sorted(self.records)]
-
-    def delete(self, person_id: str) -> bool:
-        return self.records.pop(person_id, None) is not None
-
-    def purge_expired(self, now: datetime, retention_days: int) -> list[str]:
-        cutoff = now - timedelta(days=retention_days)
-        removed = [
-            person_id
-            for person_id, record in self.records.items()
-            if datetime.fromisoformat(record.last_used_at) < cutoff
-        ]
-        for person_id in removed:
-            del self.records[person_id]
-        return removed
-
-    def touch_used(self, person_id: str, now: datetime) -> None:
-        self.touched.append(person_id)
-        record = self.records[person_id]
-        self.records[person_id] = VoiceprintRecord(
-            person_id=record.person_id,
-            embedding=record.embedding,
-            dim=record.dim,
-            n_utterances=record.n_utterances,
-            consent_ts=record.consent_ts,
-            policy_version=record.policy_version,
-            is_negative=record.is_negative,
-            enrolled_at=record.enrolled_at,
-            last_used_at=now.isoformat(),
-            owner_name=record.owner_name,
-        )
+def saved(store: InMemoryVoiceprints, person_id: str) -> VoiceprintRecord:
+    [record] = [row for row in store.load_all() if row.person_id == person_id]
+    return record
 
 
 class ScriptedEmbedder(SpeakerEmbedder):
@@ -111,17 +81,17 @@ def stored_record(
     embedding: tuple[float, ...],
     *,
     is_negative: bool = False,
-    last_used_at: str = "2026-10-07T10:00:02+00:00",
+    last_used_at: datetime = LAST_USED_AT,
 ) -> VoiceprintRecord:
     return VoiceprintRecord(
         person_id=person_id,
         embedding=embedding,
         dim=len(embedding),
         n_utterances=3,
-        consent_ts="2026-10-07T10:00:00+00:00",
+        consent_ts=CONSENT_AT,
         policy_version="v1",
         is_negative=is_negative,
-        enrolled_at="2026-10-07T10:00:01+00:00",
+        enrolled_at=ENROLLED_AT,
         last_used_at=last_used_at,
     )
 
@@ -130,7 +100,7 @@ def test_enroll_three_valid_clips_stores_record_and_journals(
     settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clips = [write_tone_clip(tmp_path / f"clip-{index}.wav") for index in range(3)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
@@ -147,13 +117,13 @@ def test_enroll_three_valid_clips_stores_record_and_journals(
     [utterances] = embedder.calls
     assert len(utterances) == 3
     assert all(len(utterance) == 16000 * 3 for utterance in utterances)
-    record = store.records["alice"]
+    record = saved(store, "alice")
     assert record.n_utterances == 3
     assert record.policy_version == "v1"
     assert record.dim == 2
     assert record.embedding == (1.0, 0.0)
     assert record.is_negative is False
-    assert datetime.fromisoformat(record.consent_ts).tzinfo is not None
+    assert record.consent_ts.tzinfo is not None
     [row] = journal.events("voiceprint_recorded")
     assert row["person_id"] == "alice"
     assert row["n_utterances"] == 3
@@ -164,7 +134,7 @@ def test_enroll_three_valid_clips_stores_record_and_journals(
 
 def test_enroll_with_negative_flag_marks_record(settings: Settings, tmp_path: Path) -> None:
     clips = [write_tone_clip(tmp_path / f"clip-{index}.wav") for index in range(3)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(0.0, 1.0)])
 
@@ -178,20 +148,20 @@ def test_enroll_with_negative_flag_marks_record(settings: Settings, tmp_path: Pa
         embedder=embedder,
     )
 
-    assert store.records["twin-voice"].is_negative is True
+    assert saved(store, "twin-voice").is_negative is True
     [row] = journal.events("voiceprint_recorded")
     assert row["is_negative"] is True
 
 
 def test_enroll_with_two_clips_exits_2_without_side_effects(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    settings: Settings, tmp_path: Path
 ) -> None:
     clips = [write_tone_clip(tmp_path / f"clip-{index}.wav") for index in range(2)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
@@ -202,27 +172,26 @@ def test_enroll_with_two_clips_exits_2_without_side_effects(
             embedder=embedder,
         )
 
-    assert caught.value.code == 2
-    assert "clip" in capsys.readouterr().err.lower()
-    assert store.records == {}
+    assert caught.value.code is ErrorCode.VOICEPRINT_ENROLL_TOO_FEW_CLIPS
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == "enroll needs at least 3 clips, got 2"
+    assert store.load_all() == []
     assert journal.events("voiceprint_recorded") == []
     assert embedder.calls == []
 
 
-def test_enroll_with_silent_clip_exits_2(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_enroll_with_silent_clip_exits_2(settings: Settings, tmp_path: Path) -> None:
     assert VOICEPRINT_MIN_RMS == 0.01
     clips = [
         write_tone_clip(tmp_path / "clip-0.wav"),
         write_tone_clip(tmp_path / "clip-1.wav"),
         write_tone_clip(tmp_path / "clip-2.wav", amplitude=0.0),
     ]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
@@ -233,26 +202,25 @@ def test_enroll_with_silent_clip_exits_2(
             embedder=embedder,
         )
 
-    assert caught.value.code == 2
-    assert "silent" in capsys.readouterr().err.lower()
-    assert store.records == {}
+    assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_SILENT
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == "clip is silent: clip-2.wav rms 0.0000 below 0.01"
+    assert store.load_all() == []
     assert journal.events("voiceprint_recorded") == []
     assert embedder.calls == []
 
 
-def test_enroll_with_short_clip_exits_2(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_enroll_with_short_clip_exits_2(settings: Settings, tmp_path: Path) -> None:
     clips = [
         write_tone_clip(tmp_path / "clip-0.wav"),
         write_tone_clip(tmp_path / "clip-1.wav"),
         write_tone_clip(tmp_path / "clip-2.wav", seconds=1.0),
     ]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
@@ -263,24 +231,27 @@ def test_enroll_with_short_clip_exits_2(
             embedder=embedder,
         )
 
-    assert caught.value.code == 2
-    assert "short" in capsys.readouterr().err.lower()
-    assert store.records == {}
+    assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == (
+        "clip too short: clip-2.wav holds 1.00s of audio, need at least 3.0s"
+    )
+    assert store.load_all() == []
 
 
 def test_enroll_with_8khz_clip_exits_2_mentioning_format(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    settings: Settings, tmp_path: Path
 ) -> None:
     clips = [
         write_tone_clip(tmp_path / "clip-0.wav"),
         write_tone_clip(tmp_path / "clip-1.wav"),
         write_tone_clip(tmp_path / "clip-2.wav", rate=8000),
     ]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
@@ -291,13 +262,16 @@ def test_enroll_with_8khz_clip_exits_2_mentioning_format(
             embedder=embedder,
         )
 
-    assert caught.value.code == 2
-    assert "format" in capsys.readouterr().err.lower()
-    assert store.records == {}
+    assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == (
+        "unsupported audio format in clip-2.wav: need 16 kHz mono 16-bit WAV"
+    )
+    assert store.load_all() == []
 
 
 def test_enroll_with_non_wav_clip_exits_2_mentioning_format(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    settings: Settings, tmp_path: Path
 ) -> None:
     impostor = tmp_path / "clip-2.wav"
     impostor.write_bytes(b"this is not audio")
@@ -307,23 +281,26 @@ def test_enroll_with_non_wav_clip_exits_2_mentioning_format(
         impostor,
     ]
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
             False,
             settings=settings,
-            store=FakeStore(),
+            store=InMemoryVoiceprints(),
             journal=RecordingJournal(),
             embedder=ScriptedEmbedder([(1.0, 0.0)]),
         )
 
-    assert caught.value.code == 2
-    assert "format" in capsys.readouterr().err.lower()
+    assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == (
+        "unsupported audio format in clip-2.wav: need 16 kHz mono 16-bit WAV"
+    )
 
 
 def test_enroll_with_truncated_clip_exits_2_mentioning_format(
-    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    settings: Settings, tmp_path: Path
 ) -> None:
     broken = write_tone_clip(tmp_path / "clip-2.wav")
     raw = broken.read_bytes()
@@ -334,29 +311,33 @@ def test_enroll_with_truncated_clip_exits_2_mentioning_format(
         broken,
     ]
 
-    with pytest.raises(SystemExit) as caught:
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
             False,
             settings=settings,
-            store=FakeStore(),
+            store=InMemoryVoiceprints(),
             journal=RecordingJournal(),
             embedder=ScriptedEmbedder([(1.0, 0.0)]),
         )
 
-    assert caught.value.code == 2
-    assert "format" in capsys.readouterr().err.lower()
+    assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert str(caught.value) == (
+        "unsupported audio format in clip-2.wav: need 16 kHz mono 16-bit WAV"
+    )
 
 
 def test_verify_high_score_journals_verified_and_touches_print(
     settings: Settings, tmp_path: Path
 ) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     journal = RecordingJournal()
 
+    before = datetime.now(UTC)
     voiceprint_verify(
         "alice",
         str(clip),
@@ -370,12 +351,12 @@ def test_verify_high_score_journals_verified_and_touches_print(
     assert row["person_id"] == "alice"
     assert row["outcome"] == "verified"
     assert row["score"] == pytest.approx(1.0, abs=1e-6)
-    assert store.touched == ["alice"]
+    assert saved(store, "alice").last_used_at >= before
 
 
 def test_verify_low_score_journals_unknown(settings: Settings, tmp_path: Path) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     journal = RecordingJournal()
 
@@ -390,12 +371,12 @@ def test_verify_low_score_journals_unknown(settings: Settings, tmp_path: Path) -
 
     [row] = journal.events("voiceprint_decided")
     assert row["outcome"] == "unknown"
-    assert store.touched == []
+    assert saved(store, "alice").last_used_at == LAST_USED_AT
 
 
 def test_verify_close_runners_up_journals_conflict(settings: Settings, tmp_path: Path) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     store.save(stored_record("bob", (0.95, 0.3122)))
     journal = RecordingJournal()
@@ -411,14 +392,14 @@ def test_verify_close_runners_up_journals_conflict(settings: Settings, tmp_path:
 
     [row] = journal.events("voiceprint_decided")
     assert row["outcome"] == "conflict"
-    assert store.touched == []
+    assert saved(store, "alice").last_used_at == LAST_USED_AT
 
 
 def test_verify_negative_winner_journals_unknown_without_fault(
     settings: Settings, tmp_path: Path
 ) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     store.save(stored_record("twin-voice", (0.9, 0.4359), is_negative=True))
     journal = RecordingJournal()
@@ -435,13 +416,13 @@ def test_verify_negative_winner_journals_unknown_without_fault(
     [row] = journal.events("voiceprint_decided")
     assert row["outcome"] == "unknown"
     assert journal.events() == journal.events("voiceprint_decided")
-    assert sorted(store.records) == ["alice", "twin-voice"]
-    assert store.touched == []
+    assert [record.person_id for record in store.load_all()] == ["alice", "twin-voice"]
+    assert saved(store, "alice").last_used_at == LAST_USED_AT
 
 
 def test_verify_named_negative_print_journals_unknown(settings: Settings, tmp_path: Path) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("twin-voice", (0.9, 0.4359), is_negative=True))
     journal = RecordingJournal()
 
@@ -456,12 +437,12 @@ def test_verify_named_negative_print_journals_unknown(settings: Settings, tmp_pa
 
     [row] = journal.events("voiceprint_decided")
     assert row["outcome"] == "unknown"
-    assert store.touched == []
+    assert saved(store, "twin-voice").last_used_at == LAST_USED_AT
 
 
 def test_verify_missing_name_journals_unknown(settings: Settings, tmp_path: Path) -> None:
     clip = write_tone_clip(tmp_path / "probe.wav")
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     journal = RecordingJournal()
 
@@ -482,13 +463,13 @@ def test_verify_missing_name_journals_unknown(settings: Settings, tmp_path: Path
 def test_delete_present_print_clears_and_journals(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     journal = RecordingJournal()
 
     voiceprint_delete("alice", settings=settings, store=store, journal=journal)
 
-    assert store.records == {}
+    assert store.load_all() == []
     [row] = journal.events("voiceprint_cleared")
     assert row["person_id"] == "alice"
     assert json.loads(capsys.readouterr().out)["person_id"] == "alice"
@@ -497,16 +478,17 @@ def test_delete_present_print_clears_and_journals(
 def test_delete_missing_print_raises_without_journal(settings: Settings) -> None:
     journal = RecordingJournal()
 
-    with pytest.raises(CliError):
-        voiceprint_delete("ghost", settings=settings, store=FakeStore(), journal=journal)
+    with pytest.raises(FakeYouError, match='no voiceprint enrolled for "ghost"') as caught:
+        voiceprint_delete("ghost", settings=settings, store=InMemoryVoiceprints(), journal=journal)
 
+    assert caught.value.code is ErrorCode.VOICEPRINT_NOT_ENROLLED
     assert journal.events("voiceprint_cleared") == []
 
 
 def test_list_prints_records_without_embeddings(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     store.save(stored_record("alice", (1.0, 0.0)))
     store.save(stored_record("twin-voice", (0.0, 1.0), is_negative=True))
 
@@ -515,26 +497,55 @@ def test_list_prints_records_without_embeddings(
     rows = json.loads(capsys.readouterr().out)
     assert [row["person_id"] for row in rows] == ["alice", "twin-voice"]
     assert rows[1]["is_negative"] is True
+    assert rows[0]["enrolled_at"] == ENROLLED_AT.isoformat()
+    assert rows[0]["last_used_at"] == LAST_USED_AT.isoformat()
     assert all("embedding" not in row for row in rows)
 
 
 def test_purge_expired_journals_one_event_per_id(settings: Settings) -> None:
-    store = FakeStore()
-    store.save(stored_record("alice", (1.0, 0.0), last_used_at="2026-01-01T00:00:00+00:00"))
-    store.save(stored_record("bob", (0.0, 1.0), last_used_at=datetime.now(UTC).isoformat()))
+    store = InMemoryVoiceprints()
+    store.save(stored_record("alice", (1.0, 0.0), last_used_at=datetime(2026, 1, 1, tzinfo=UTC)))
+    store.save(stored_record("bob", (0.0, 1.0), last_used_at=datetime.now(UTC)))
     journal = RecordingJournal()
 
     voiceprint_purge_expired(settings=settings, store=store, journal=journal)
 
     assert [row["person_id"] for row in journal.events("voiceprint_expired")] == ["alice"]
-    assert sorted(store.records) == ["bob"]
+    assert [record.person_id for record in store.load_all()] == ["bob"]
 
 
-def test_list_without_store_and_without_dsn_raises(settings: Settings) -> None:
-    assert settings.checkpoint.url is None
+def test_list_without_store_and_without_database_url_raises(settings: Settings) -> None:
+    settings.database.url = None
 
-    with pytest.raises(CliError, match="FAKEYOU_CHECKPOINT__URL"):
+    with pytest.raises(FakeYouError) as caught:
         voiceprint_list(settings=settings, store=None)
+
+    assert caught.value.code is ErrorCode.DATABASE_URL_MISSING
+
+
+def test_list_against_unmigrated_database_raises(
+    settings: Settings, blank_database_url: str
+) -> None:
+    settings.database.url = SecretStr(blank_database_url)
+
+    with pytest.raises(FakeYouError) as caught:
+        voiceprint_list(settings=settings, store=None)
+
+    assert caught.value.code is ErrorCode.DATABASE_SCHEMA_EMPTY
+
+
+def test_list_reads_prints_from_migrated_database(
+    migrated_settings: Settings,
+    migrated_engine: Engine,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    VoiceprintStore(migrated_engine).save(stored_record("alice", (1.0, 0.0)))
+
+    voiceprint_list(settings=migrated_settings, store=None)
+
+    [row] = json.loads(capsys.readouterr().out)
+    assert row["person_id"] == "alice"
+    assert datetime.fromisoformat(row["last_used_at"]) == LAST_USED_AT
 
 
 def test_enroll_with_missing_clip_raises_without_journal(
@@ -547,17 +558,18 @@ def test_enroll_with_missing_clip_raises_without_journal(
     ]
     journal = RecordingJournal()
 
-    with pytest.raises(CliError, match="cannot be read"):
+    with pytest.raises(FakeYouError, match="cannot be read") as caught:
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
             False,
             settings=settings,
-            store=FakeStore(),
+            store=InMemoryVoiceprints(),
             journal=journal,
             embedder=ScriptedEmbedder([(1.0, 0.0)]),
         )
 
+    assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_UNREADABLE
     assert journal.events("voiceprint_recorded") == []
 
 
@@ -658,7 +670,7 @@ def gated_enroll(
     spontaneous: list[str],
     *,
     settings: Settings,
-    store: FakeStore,
+    store: InMemoryVoiceprints,
     journal: RecordingJournal,
     embedder: ScriptedEmbedder,
     challenge: str = CHALLENGE_DIGITS,
@@ -706,7 +718,7 @@ def test_enroll_matching_challenge_enrolls_with_owner_and_accept_journal(
 ) -> None:
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
@@ -720,7 +732,7 @@ def test_enroll_matching_challenge_enrolls_with_owner_and_accept_journal(
         embedder=embedder,
     )
 
-    record = store.records["alice"]
+    record = saved(store, "alice")
     assert record.owner_name == "Maya"
     assert record.n_utterances == 3
     [row] = journal.events("enrollment_accepted")
@@ -746,7 +758,7 @@ def test_enroll_transcript_two_edits_away_rejects_without_store(
         for index in range(2)
     ]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", seconds=3.0))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
@@ -766,7 +778,7 @@ def test_enroll_transcript_two_edits_away_rejects_without_store(
     body = json.loads(capsys.readouterr().out)
     assert body["enrolled"] is False
     assert "reason" in body
-    assert store.records == {}
+    assert store.load_all() == []
     assert embedder.calls == []
     [row] = journal.events("enrollment_rejected")
     assert row["challenge_id"] == CHALLENGE_ID
@@ -782,7 +794,7 @@ def test_enroll_short_total_duration_rejects(
         for index in range(2)
     ]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", seconds=3.0))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     with pytest.raises(SystemExit) as caught:
@@ -800,7 +812,7 @@ def test_enroll_short_total_duration_rejects(
     body = json.loads(capsys.readouterr().out)
     assert body["enrolled"] is False
     assert "30" in body["reason"]
-    assert store.records == {}
+    assert store.load_all() == []
     [row] = journal.events("enrollment_rejected")
     assert row["seconds"] < 30.0
     assert row["segments"] == {"read": 2, "spontaneous": 1}
@@ -812,7 +824,7 @@ def test_enroll_low_snr_rejects(
     assert PROVISIONAL_SNR_FLOOR_DB == 10.0
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav", noise=0.45))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     with pytest.raises(SystemExit) as caught:
@@ -830,7 +842,7 @@ def test_enroll_low_snr_rejects(
     body = json.loads(capsys.readouterr().out)
     assert body["enrolled"] is False
     assert "snr" in body["reason"].lower()
-    assert store.records == {}
+    assert store.load_all() == []
     [row] = journal.events("enrollment_rejected")
     assert row["snr_db"] < PROVISIONAL_SNR_FLOOR_DB
 
@@ -839,7 +851,7 @@ def test_enroll_without_spontaneous_rejects(
     settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(3)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     with pytest.raises(SystemExit) as caught:
@@ -857,7 +869,7 @@ def test_enroll_without_spontaneous_rejects(
     body = json.loads(capsys.readouterr().out)
     assert body["enrolled"] is False
     assert "spontaneous" in body["reason"].lower()
-    assert store.records == {}
+    assert store.load_all() == []
     [row] = journal.events("enrollment_rejected")
     assert row["segments"] == {"read": 3, "spontaneous": 0}
 
@@ -867,7 +879,7 @@ def test_enroll_single_edit_accepts(
 ) -> None:
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     gated_enroll(
@@ -881,7 +893,7 @@ def test_enroll_single_edit_accepts(
         transcript="12345679",
     )
 
-    assert store.records["alice"].owner_name == "Maya"
+    assert saved(store, "alice").owner_name == "Maya"
     assert len(journal.events("enrollment_accepted")) == 1
     capsys.readouterr()
 
@@ -891,7 +903,7 @@ def test_enroll_empty_normalized_challenge_rejects_without_store(
 ) -> None:
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     with pytest.raises(SystemExit) as caught:
@@ -911,7 +923,7 @@ def test_enroll_empty_normalized_challenge_rejects_without_store(
     body = json.loads(capsys.readouterr().out)
     assert body["enrolled"] is False
     assert "digit" in body["reason"].lower()
-    assert store.records == {}
+    assert store.load_all() == []
     [row] = journal.events("enrollment_rejected")
     assert row["challenge_id"] == CHALLENGE_ID
     assert journal.events("enrollment_accepted") == []
@@ -923,18 +935,19 @@ def test_enroll_partial_liveness_args_raises_without_journal(
     clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
     journal = RecordingJournal()
 
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError, match="gated enrollment needs") as caught:
         voiceprint_enroll(
             "alice",
             clips,
             False,
             settings=settings,
-            store=FakeStore(),
+            store=InMemoryVoiceprints(),
             journal=journal,
             embedder=ScriptedEmbedder([(1.0, 0.0)]),
             challenge_id=CHALLENGE_ID,
         )
 
+    assert caught.value.code is ErrorCode.VOICEPRINT_ENROLLMENT_GATE_INCOMPLETE
     assert journal.events() == []
 
 
@@ -942,10 +955,10 @@ def test_enroll_owner_name_without_challenge_flags_raises(
     settings: Settings, tmp_path: Path
 ) -> None:
     clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError, match="gated enrollment needs") as caught:
         voiceprint_enroll(
             "alice",
             clips,
@@ -957,13 +970,14 @@ def test_enroll_owner_name_without_challenge_flags_raises(
             owner_name="Maya",
         )
 
-    assert store.records == {}
+    assert caught.value.code is ErrorCode.VOICEPRINT_ENROLLMENT_GATE_INCOMPLETE
+    assert store.load_all() == []
     assert journal.events() == []
 
 
 def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Path) -> None:
     clips = [str(write_tone_clip(tmp_path / f"clip-{index}.wav")) for index in range(3)]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
 
     voiceprint_enroll(
         "alice",
@@ -975,7 +989,7 @@ def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Pat
         embedder=ScriptedEmbedder([(1.0, 0.0)]),
     )
 
-    assert store.records["alice"].owner_name == ""
+    assert saved(store, "alice").owner_name == ""
 
 
 def test_challenge_and_gated_enroll_parsers_map_to_handlers() -> None:
@@ -1107,7 +1121,7 @@ def test_enroll_worded_transcript_accepts(
 ) -> None:
     clips = [str(write_speechlike_clip(tmp_path / f"read-{index}.wav")) for index in range(2)]
     spontaneous = [str(write_speechlike_clip(tmp_path / "spontaneous-0.wav"))]
-    store = FakeStore()
+    store = InMemoryVoiceprints()
     journal = RecordingJournal()
 
     gated_enroll(
@@ -1121,6 +1135,6 @@ def test_enroll_worded_transcript_accepts(
         transcript=spoken_phrase(CHALLENGE_DIGITS),
     )
 
-    assert store.records["alice"].owner_name == "Maya"
+    assert saved(store, "alice").owner_name == "Maya"
     assert len(journal.events("enrollment_accepted")) == 1
     capsys.readouterr()

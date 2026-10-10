@@ -21,6 +21,7 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.settings import Settings, require_secret
 from fakeyou.voice import SPEECH_LANGUAGES, create_muse_stt
 from tests.fakes import FakeSTT
@@ -208,7 +209,7 @@ async def test_muse_endpointing_transcribes_realtime_wav() -> None:
         pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     try:
         api_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
     sample_rate, pcm = _read_wav(Path(audio_name))
     expected_text = _normalise(expected)

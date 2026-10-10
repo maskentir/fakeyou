@@ -17,6 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from playwright.async_api import BrowserContext, Page
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.ingestion_status import (
     LOCK_STALE_AFTER_SECONDS,
     LeaseError,
@@ -55,7 +56,7 @@ _DEVTOOLS_PORT_TIMEOUT_SECONDS = 30.0
 _DEVTOOLS_PORT_POLL_SECONDS = 0.25
 
 
-class ProfileInUseError(Exception):
+class ProfileInUseError(FakeYouError):
     pass
 
 
@@ -80,7 +81,7 @@ def profile_lock(
         ) as token:
             yield token
     except LeaseError as error:
-        raise ProfileInUseError(f"browser profile is in use: {error}") from None
+        raise ProfileInUseError(ErrorCode.BROWSER_PROFILE_IN_USE, reason=str(error)) from None
 
 
 def apply_browser_audio_policy() -> bool:
@@ -286,7 +287,7 @@ async def _read_devtools_endpoint(
                 return parsed
             detail = f"invalid DevToolsActivePort content: {raw.strip()!r}"
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Chrome DevTools endpoint is unavailable: {detail}")
+            raise FakeYouError(ErrorCode.BROWSER_DEVTOOLS_UNAVAILABLE, reason=detail)
         await asyncio.sleep(_DEVTOOLS_PORT_POLL_SECONDS)
 
 
@@ -301,7 +302,7 @@ async def open_browser_tools(
     mcp_script: Path = Path("node_modules/@playwright/mcp/cli.js"),
 ) -> AsyncIterator[list[BaseTool]]:
     if not await asyncio.to_thread(mcp_script.is_file):
-        raise FileNotFoundError("Playwright MCP is missing. Run npm ci from the project directory.")
+        raise FakeYouError(ErrorCode.BROWSER_MCP_MISSING)
 
     script_path = await asyncio.to_thread(mcp_script.resolve)
     output_path = await asyncio.to_thread(Path(".runtime/browser").resolve)

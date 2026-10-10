@@ -13,11 +13,14 @@ from graphiti_core.nodes import EpisodeType, EpisodicNode
 from neo4j.exceptions import ConstraintError
 from neo4j.time import DateTime as Neo4jDateTime
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.invariants import IDENTIFIER_PATTERN
+
 OWNER_NOTE_SOURCE = "owner note"
 
 NoteStatus = Literal["pending", "active", "superseded"]
 
-_GROUP_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_GROUP_PATTERN = re.compile(IDENTIFIER_PATTERN)
 
 _INTENT_CREATE_QUERY = (
     "CREATE (n:FakeyouOwnerNote {uuid: $uuid, group_id: $group_id, digest: $digest, "
@@ -91,7 +94,7 @@ class OwnerNoteResult:
     supersedes: str | None
 
 
-class NoteConflictError(Exception):
+class NoteConflictError(FakeYouError):
     pass
 
 
@@ -121,12 +124,12 @@ class _Operation:
 
 def _require_group(group_id: str) -> None:
     if not _GROUP_PATTERN.fullmatch(group_id):
-        raise ValueError("group_id must be 1-128 characters using letters, numbers, '_' or '-'")
+        raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
 
 
 def _require_aware(value: datetime, name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{name} must carry timezone")
+        raise FakeYouError(ErrorCode.NOTE_TIME_NOT_AWARE, name=name)
 
 
 def _digest(group_id: str, body: str, source_at: datetime, target: str | None) -> str:
@@ -139,7 +142,7 @@ def _record_text(record: Any, key: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"stored note holds invalid {key}")
+        raise FakeYouError(ErrorCode.NOTE_STORED_FIELD_INVALID, key=key)
     return value
 
 
@@ -148,9 +151,9 @@ def _record_moment(record: Any, key: str) -> datetime:
     if isinstance(value, Neo4jDateTime):
         value = value.to_native()
     if not isinstance(value, datetime):
-        raise ValueError(f"stored note holds invalid {key}")
+        raise FakeYouError(ErrorCode.NOTE_STORED_FIELD_INVALID, key=key)
     if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"stored note holds invalid {key}")
+        raise FakeYouError(ErrorCode.NOTE_STORED_FIELD_INVALID, key=key)
     return value
 
 
@@ -162,14 +165,14 @@ def _record_status(record: Any) -> NoteStatus:
         return "active"
     if value == "superseded":
         return "superseded"
-    raise ValueError("stored note holds invalid status")
+    raise FakeYouError(ErrorCode.NOTE_STORED_STATUS_INVALID)
 
 
 def _record_count(record: Any, key: str) -> int:
     value = record[key]
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    raise ValueError(f"stored note holds invalid {key}")
+    raise FakeYouError(ErrorCode.NOTE_STORED_FIELD_INVALID, key=key)
 
 
 def _stored_from_record(record: Any) -> _StoredNote:
@@ -177,7 +180,7 @@ def _stored_from_record(record: Any) -> _StoredNote:
     group_value = _record_text(record, "group_id")
     digest_value = _record_text(record, "digest")
     if not uuid_value or not group_value or not digest_value:
-        raise ValueError("stored note holds invalid identity")
+        raise FakeYouError(ErrorCode.NOTE_STORED_IDENTITY_INVALID)
     return _StoredNote(
         uuid=uuid_value,
         group_id=group_value,
@@ -200,7 +203,7 @@ async def _load_control(memory: Graphiti, group_id: str, uuid: str) -> _StoredNo
 async def _require_control(memory: Graphiti, group_id: str, uuid: str) -> _StoredNote:
     stored = await _load_control(memory, group_id, uuid)
     if stored is None:
-        raise ValueError("published note record is missing")
+        raise FakeYouError(ErrorCode.NOTE_RECORD_MISSING)
     return stored
 
 
@@ -215,18 +218,18 @@ async def _require_correction_target(
     try:
         episode = await EpisodicNode.get_by_uuid(memory.driver, target)
     except NodeNotFoundError:
-        raise ValueError("unknown correction target") from None
+        raise FakeYouError(ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN) from None
     if episode.group_id != group_id:
-        raise ValueError("unknown correction target")
+        raise FakeYouError(ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN)
     if episode.source_description != OWNER_NOTE_SOURCE:
-        raise ValueError("correction target must be an owner note")
+        raise FakeYouError(ErrorCode.NOTE_CORRECTION_TARGET_NOT_OWNER_NOTE)
     control = await _load_control(memory, group_id, target)
     if control is not None and control.status != "active":
-        raise NoteConflictError("correction target is no longer active")
+        raise NoteConflictError(ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE)
     _require_aware(episode.valid_at, "target source time")
     _require_aware(episode.created_at, "target recorded time")
     if effective <= episode.valid_at:
-        raise ValueError("correction source time must be newer than its target")
+        raise FakeYouError(ErrorCode.NOTE_CORRECTION_NOT_NEWER)
     return (
         episode.valid_at,
         episode.created_at,
@@ -268,14 +271,14 @@ async def _publish_note(memory: Graphiti, *, group_id: str, operation: _Operatio
                     tx, _PUBLISH_NOTE_QUERY, uuid=operation.uuid, group_id=group_id
                 )
                 if not rows:
-                    raise NoteConflictError("owner note is no longer pending")
+                    raise NoteConflictError(ErrorCode.NOTE_NOT_PENDING)
                 return
             locked = await _run_rows(
                 tx, _LOCK_TARGET_QUERY, target_uuid=operation.target, group_id=group_id
             )
             if locked:
                 if locked[0]["status"] != "active":
-                    raise NoteConflictError("correction target is no longer active")
+                    raise NoteConflictError(ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE)
                 rows = await _run_rows(
                     tx,
                     _PUBLISH_CORRECTION_QUERY,
@@ -284,14 +287,14 @@ async def _publish_note(memory: Graphiti, *, group_id: str, operation: _Operatio
                     target_uuid=operation.target,
                 )
                 if not rows:
-                    raise NoteConflictError("correction target is no longer active")
+                    raise NoteConflictError(ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE)
                 return
             if (
                 operation.target_source_at is None
                 or operation.target_recorded_at is None
                 or operation.target_digest is None
             ):
-                raise ValueError("correction target snapshot is missing")
+                raise FakeYouError(ErrorCode.NOTE_TARGET_SNAPSHOT_MISSING)
             rows = await _run_rows(
                 tx,
                 _PUBLISH_LEGACY_CORRECTION_QUERY,
@@ -303,11 +306,11 @@ async def _publish_note(memory: Graphiti, *, group_id: str, operation: _Operatio
                 target_digest=operation.target_digest,
             )
             if not rows:
-                raise NoteConflictError("owner note is no longer pending")
+                raise NoteConflictError(ErrorCode.NOTE_NOT_PENDING)
     except NoteConflictError:
         raise
     except ConstraintError as error:
-        raise NoteConflictError("concurrent correction already replaced this note") from error
+        raise NoteConflictError(ErrorCode.NOTE_CORRECTION_CONCURRENT) from error
 
 
 async def _result_for_active(
@@ -316,15 +319,15 @@ async def _result_for_active(
     try:
         episode = await EpisodicNode.get_by_uuid(memory.driver, stored.uuid)
     except NodeNotFoundError:
-        raise ValueError("published note episode is missing") from None
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_MISSING) from None
     if episode.group_id != group_id:
-        raise ValueError("episode is not in this persona's memory")
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY)
     edges: list[Any] = []
     if episode.entity_edges:
         edges = list(await EntityEdge.get_by_uuids(memory.driver, list(episode.entity_edges)))
     usable = _usable_edges(edges, group_id=group_id, uuid=stored.uuid)
     if not usable:
-        raise ValueError("published note has no readable facts")
+        raise FakeYouError(ErrorCode.NOTE_NO_READABLE_FACTS)
     return OwnerNoteResult(
         episode_uuid=stored.uuid,
         facts=tuple(edge.fact for edge in usable),
@@ -360,7 +363,7 @@ async def _advance_note(
     else:
         edges = await _extract(memory, group_id=group_id, operation=operation, name=episode.name)
     if not _usable_edges(edges, group_id=group_id, uuid=operation.uuid):
-        raise ValueError("owner note extraction produced no usable facts")
+        raise FakeYouError(ErrorCode.NOTE_NO_USABLE_FACTS)
     await _publish_note(memory, group_id=group_id, operation=operation)
     stored = await _require_control(memory, group_id, operation.uuid)
     return await _result_for_active(memory, group_id=group_id, stored=stored)
@@ -376,15 +379,15 @@ async def _resume_note(
     stored: _StoredNote,
 ) -> OwnerNoteResult:
     if stored.group_id != group_id:
-        raise NoteConflictError("note id already in use")
+        raise NoteConflictError(ErrorCode.NOTE_ID_IN_USE)
     if stored.status == "superseded":
-        raise NoteConflictError("owner note was already superseded")
+        raise NoteConflictError(ErrorCode.NOTE_ALREADY_SUPERSEDED)
     if source_at is not None and source_at != stored.source_at:
-        raise NoteConflictError("note id already in use with different payload")
+        raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
     if target != stored.target_uuid:
-        raise NoteConflictError("note id already in use with different payload")
+        raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
     if _digest(group_id, body, stored.source_at, target) != stored.digest:
-        raise NoteConflictError("note id already in use with different payload")
+        raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
     if stored.status == "active":
         return await _result_for_active(memory, group_id=group_id, stored=stored)
     target_source_at: datetime | None = None
@@ -422,12 +425,12 @@ async def remember_owner_note(
     _require_group(group_id)
     body = text.strip()
     if not body:
-        raise ValueError("owner note must not be blank")
+        raise FakeYouError(ErrorCode.NOTE_BODY_BLANK)
     if source_at is not None:
         _require_aware(source_at, "source_at")
     now = datetime.now(UTC)
     if source_at is not None and source_at > now:
-        raise ValueError("source_at must not be in the future")
+        raise FakeYouError(ErrorCode.NOTE_SOURCE_AT_FUTURE)
     target = str(supersedes) if supersedes is not None else None
     operation = str(note_id) if note_id is not None else str(uuid4())
     stored = await _load_control(memory, group_id, operation)
@@ -453,7 +456,7 @@ async def remember_owner_note(
     except NodeNotFoundError:
         pass
     else:
-        raise NoteConflictError("note id already in use") from None
+        raise NoteConflictError(ErrorCode.NOTE_ID_IN_USE) from None
     try:
         await memory.driver.execute_query(
             _INTENT_CREATE_QUERY,
@@ -465,7 +468,7 @@ async def remember_owner_note(
             target_uuid=target,
         )
     except ConstraintError as error:
-        raise NoteConflictError("note id already in use") from error
+        raise NoteConflictError(ErrorCode.NOTE_ID_IN_USE) from error
     return await _advance_note(
         memory,
         group_id=group_id,
@@ -494,7 +497,7 @@ async def read_note_states(
     for record in result.records:
         uuid_value = _record_text(record, "uuid")
         if uuid_value is None:
-            raise ValueError("stored note holds invalid identity")
+            raise FakeYouError(ErrorCode.NOTE_STORED_IDENTITY_INVALID)
         states[uuid_value] = _record_status(record)
     return states
 
@@ -506,13 +509,13 @@ async def ensure_note_indexes(memory: Graphiti) -> None:
 async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: str) -> None:
     _require_group(group_id)
     if not episode_uuid.strip():
-        raise ValueError("episode uuid must not be blank")
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_UUID_BLANK)
     try:
         episode = await EpisodicNode.get_by_uuid(memory.driver, episode_uuid)
     except NodeNotFoundError:
-        raise ValueError("episode is not in this persona's memory") from None
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY) from None
     if episode.group_id != group_id:
-        raise ValueError("episode is not in this persona's memory")
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY)
     control = await _load_control(memory, group_id, episode_uuid)
     result = await memory.driver.execute_query(
         _FORGET_CHAIN_QUERY, uuid=episode_uuid, group_id=group_id
@@ -523,7 +526,7 @@ async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: st
         incoming = _record_count(record, "incoming")
         pending_correctors = _record_count(record, "pending_correctors")
     if pending_correctors:
-        raise ValueError("owner note has a pending correction; forget the pending note first")
+        raise FakeYouError(ErrorCode.NOTE_HAS_PENDING_CORRECTION)
     if (
         control is not None
         and control.status != "pending"
@@ -534,9 +537,6 @@ async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: st
             or incoming > 0
         )
     ):
-        raise ValueError(
-            "owner note is part of a correction chain; "
-            "chain deletion needs a dedicated retention milestone"
-        )
+        raise FakeYouError(ErrorCode.NOTE_IN_CORRECTION_CHAIN)
     await memory.remove_episode(episode_uuid)
     await memory.driver.execute_query(_CONTROL_DELETE_QUERY, uuid=episode_uuid, group_id=group_id)

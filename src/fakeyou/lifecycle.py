@@ -8,23 +8,10 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-MeetingPhase = Literal["preparing", "lobby", "admitted", "disconnected", "leaving", "ended"]
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.taxonomy import TerminalReason
 
-TerminalReason = Literal[
-    "infra_failure",
-    "browser_failure",
-    "audio_failure",
-    "conversation_failure",
-    "stopped_by_owner",
-    "left_by_owner",
-    "denied_by_host",
-    "removed_by_host",
-    "ended_by_host",
-    "blocked_by_platform",
-    "lobby_timeout_reached",
-    "duration_limit_reached",
-    "alone_limit_reached",
-]
+MeetingPhase = Literal["preparing", "lobby", "admitted", "disconnected", "leaving", "ended"]
 
 LifecycleAttribution = Literal["host_action", "system_fault", "owner_action", "policy"]
 LifecycleEventKind = Literal[
@@ -258,13 +245,15 @@ class MeetingLifecycle:
             return
         for field in ("owner_id", "twin_id", "meeting_id"):
             if saved.values[field] != self.state[field]:
-                raise ValueError("checkpoint identity does not match the requested session")
+                raise FakeYouError(ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH)
         self.state = cast(MeetingLifecycleState, saved.values)
         phase = self.state["phase"]
         if phase != "ended" and (phase != "preparing" or self.state["external_effects"]):
             if not resume:
-                raise ValueError(
-                    f"cannot resume meeting {self.state['meeting_id']} in phase {phase}"
+                raise FakeYouError(
+                    ErrorCode.MEETING_CANNOT_RESUME_PHASE,
+                    meeting_id=self.state["meeting_id"],
+                    phase=phase,
                 )
             self.state = {
                 **initial_lifecycle_state(

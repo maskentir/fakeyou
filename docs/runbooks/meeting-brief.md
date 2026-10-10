@@ -69,11 +69,12 @@ record lock dibuka:
 - `--brief requires --converse`, `--brief requires --persona`,
   `--brief requires an explicit --meeting-id`: lengkapi flag.
 - `--brief cannot be read`: file tidak ada atau tidak dapat dibaca.
-- `--brief is invalid: ...`: schema, batas ukuran, atau scope salah.
-  Pesan scope `must match the session` berarti `owner_id`, `twin_id`,
-  atau `meeting_id` brief berbeda dari identitas sesi (`--owner-id`,
-  `--twin-id`, `--meeting-id`, atau default `.env`). Pesan error tidak
-  menampilkan teks brief.
+- `--brief is invalid: ...`: schema tidak valid.
+- `meeting brief must be at most N bytes`: ukuran brief melewati batas.
+- `meeting brief owner_id, twin_id, and meeting_id must match the session`:
+  `owner_id`, `twin_id`, atau `meeting_id` brief berbeda dari identitas sesi
+  (`--owner-id`, `--twin-id`, `--meeting-id`, atau default `.env`). Pesan error
+  tidak menampilkan teks brief.
 - `--memory is not allowed with a brief_only meeting brief`: hapus
   `--memory` atau ganti lingkup menjadi `persona_memory`.
 

@@ -724,7 +724,7 @@ async def test_registry_releases_session_after_silence() -> None:
 
 async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     registry, _ = _recording_registry(FakeClock().monotonic, journal=journal)
     await registry.feed(_chunk(slot=0, seq=0))
     await registry.feed(_chunk(slot=0, seq=2))
@@ -1086,7 +1086,7 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
         "dropped": 2,
     }
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload, payload, payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
     loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=3)
@@ -1148,7 +1148,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 
     async def run(per_stream: bool, tag: str):
         lines: list[str] = []
-        journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+        journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
         path = meeting_record_path(tmp_path, tag)
         record = MeetingRecord(path, now=lambda: now)
         conversation = _Conversation()
@@ -1254,7 +1254,7 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
         async def handle_transcript(self, event: TranscriptEvent) -> None:
             seen.append(event)
 
-    journal = Journal("meeting-9", emit=lambda line: None, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lambda line: None, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
@@ -1550,7 +1550,7 @@ async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path:
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
@@ -1589,7 +1589,7 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     binder = SlotBinder()
@@ -1645,7 +1645,7 @@ async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
         "dropped": 0,
     }
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
     loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
@@ -1693,7 +1693,7 @@ async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -
         "dropped": 0,
     }
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[steady, broken])
     registry, _ = _recording_registry(FakeClock().monotonic)
     loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
@@ -1949,7 +1949,7 @@ async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None
         "dropped": 0,
     }
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
     loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
@@ -1977,7 +1977,7 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     binder = SlotBinder()
@@ -2026,7 +2026,7 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     binder = SlotBinder()
@@ -2076,7 +2076,7 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     binder = SlotBinder()
@@ -2284,7 +2284,7 @@ async def test_drain_loop_journals_slot_rescue_once() -> None:
         }
 
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     registry, _ = _recording_registry(FakeClock().monotonic)
     page = meet_page([], evaluates=[payload(1), payload(1), payload(2)])
     loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
@@ -2305,7 +2305,7 @@ async def test_drain_loop_journals_released_slots_as_dropped() -> None:
         "released": [0, 2],
     }
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     registry, _ = _recording_registry(FakeClock().monotonic)
     page = meet_page([], evaluates=[payload])
     loop = CaptureDrainLoop(page, registry, journal=journal)
@@ -2327,7 +2327,7 @@ async def test_drain_loop_ignores_malformed_released() -> None:
         [0, "1", True, -1, 1.5, None, {"slot": 2}, 3],
     ]
     lines: list[str] = []
-    journal = Journal("meeting-9", emit=lines.append, stdout=False)
+    journal = Journal("meeting-9", emit=lines.append, echo=False)
     registry, _ = _recording_registry(FakeClock().monotonic)
     page = meet_page([], evaluates=[payload(case) for case in cases])
     loop = CaptureDrainLoop(page, registry, journal=journal)

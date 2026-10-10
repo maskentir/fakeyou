@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError, merge_short_turns, transcribe_chunk
 
 
@@ -102,6 +103,7 @@ def test_transcribe_chunk_http_error_becomes_diarize_error_without_key() -> None
         transcribe_chunk(b"RIFF" + bytes(60), api_key="secret-key", opener=opener)
 
     assert "secret-key" not in str(group.value)
+    assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
 
 
 def test_transcribe_chunk_url_error_becomes_diarize_error_without_key() -> None:
@@ -112,6 +114,7 @@ def test_transcribe_chunk_url_error_becomes_diarize_error_without_key() -> None:
         transcribe_chunk(b"RIFF" + bytes(60), api_key="secret-key", opener=opener)
 
     assert "secret-key" not in str(group.value)
+    assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
 
 
 @pytest.mark.parametrize(
@@ -126,6 +129,7 @@ def test_transcribe_chunk_malformed_body_becomes_diarize_error(payload: bytes) -
         transcribe_chunk(b"RIFF" + bytes(60), api_key="dummy-key-1", opener=opener)
 
     assert "dummy-key-1" not in str(group.value)
+    assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID
 
 
 def test_merge_short_turns_joins_tail_flanked_by_same_speaker() -> None:

@@ -4,12 +4,13 @@ import math
 import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
+from fakeyou.db.voiceprint_store import VoiceprintRepository
 from fakeyou.faults import Fault
 from fakeyou.verify import decide_verified
 from fakeyou.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder, cosine
-from fakeyou.voiceprint_store import VoiceprintStore
 
 if TYPE_CHECKING:
     from fakeyou.faults import FaultReporter
@@ -33,19 +34,19 @@ class VoiceScores:
     s2: float
     outcome: MatchOutcome
     owner_name: str | None = None
-    consent_ts: str | None = None
+    consent_ts: datetime | None = None
 
 
 class VoiceprintMatcher:
     def __init__(
-        self, store: VoiceprintStore, *, threshold: float = 0.60, min_margin: float = 0.15
+        self, store: VoiceprintRepository, *, threshold: float = 0.60, min_margin: float = 0.15
     ) -> None:
         self._store = store
         self._threshold = threshold
         self._min_margin = min_margin
 
     def match(self, embedding: Sequence[float]) -> VoiceScores:
-        ranked: list[tuple[float, str, str, str]] = []
+        ranked: list[tuple[float, str, str, datetime]] = []
         best_negative = EMPTY_SCORE
         has_negative = False
         for record in self._store.load_all():

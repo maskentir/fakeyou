@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+
 SAMPLE_RATE = 16000
 
 
@@ -51,15 +53,16 @@ def load_embedder(model_path: str, expected_sha256: str) -> SpeakerEmbedder:
     digest = hashlib.sha256(Path(model_path).read_bytes()).hexdigest()
     name = Path(model_path).name
     if digest != expected_sha256:
-        raise ValueError(
-            f"sha256 mismatch for model file {name}: expected {expected_sha256} got {digest}"
+        raise FakeYouError(
+            ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH,
+            name=name,
+            expected=expected_sha256,
+            digest=digest,
         )
     try:
         import sherpa_onnx
     except ImportError as exc:
-        raise RuntimeError(
-            'voiceprint support needs the voiceprint extra: pip install "fakeyou[voiceprint]"'
-        ) from exc
+        raise FakeYouError(ErrorCode.VOICEPRINT_EXTRA_MISSING) from exc
     config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
         model=model_path, num_threads=1, debug=False, provider="cpu"
     )

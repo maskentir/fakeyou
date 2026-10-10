@@ -28,7 +28,7 @@ def _pcm(byte: int, frames: int) -> bytes:
 
 
 def _writer(directory: Path, clock: FakeClock, lines: list[str]) -> SlotAudioWriter:
-    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
     return SlotAudioWriter(directory, monotonic=clock.monotonic, journal=journal)
 
 
@@ -211,7 +211,7 @@ def _wiring_chunk(slot: int, seq: int) -> StreamChunk:
 
 async def test_registry_with_recorder_writes_wav_sidecar_and_events(tmp_path: Path) -> None:
     lines: list[str] = []
-    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
     directory = tmp_path / "meeting-1" / "audio"
     writer = SlotAudioWriter(directory, monotonic=FakeClock().monotonic, journal=journal)
     registry = StreamRegistry(input_factory=_SilentInput, journal=journal, recorder=writer)
@@ -234,7 +234,7 @@ async def test_registry_without_recorder_writes_no_audio_files_or_events(
     tmp_path: Path,
 ) -> None:
     lines: list[str] = []
-    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
     registry = StreamRegistry(input_factory=_SilentInput, journal=journal)
     for seq in (0, 1, 3):
         await registry.feed(_wiring_chunk(0, seq))
@@ -252,7 +252,7 @@ async def test_registry_write_failure_records_fault_and_keeps_session(
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("read-only directory is writable for root")
     lines: list[str] = []
-    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
     directory = tmp_path / "audio"
     writer = SlotAudioWriter(directory, monotonic=FakeClock().monotonic, journal=journal)
     registry = StreamRegistry(input_factory=_SilentInput, journal=journal, recorder=writer)

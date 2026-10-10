@@ -9,6 +9,7 @@ import pytest
 
 from evals.runtime_evidence import finish_candidate
 from evals.test_trust_eval import contract_model, replay_trust, strategy_settings
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.settings import Settings
 
@@ -163,7 +164,7 @@ async def test_live_speaker_probe_measures_denial_rate(tmp_path: Path) -> None:
     settings = strategy_settings("prefetch")
     try:
         model = create_chat_model(settings)
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     fixture = load_probe_fixture()
     raw_target = os.environ.get("SPEAKER_ARTIFACT_DIR", "")

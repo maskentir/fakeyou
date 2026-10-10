@@ -7,8 +7,9 @@ from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 from fakeyou.invariants import PositiveSeconds, SessionId, TwinName
-from fakeyou.lifecycle import MeetingPhase, TerminalReason
+from fakeyou.lifecycle import MeetingPhase
 from fakeyou.settings import DEFAULTS
+from fakeyou.taxonomy import TerminalReason
 
 
 class MeetingAudio(Protocol):
@@ -77,8 +78,7 @@ class SessionConfig:
     deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
-    checkpoint_path: Path = DEFAULTS.paths.checkpoint_path
-    checkpoint_dsn: str | None = field(default=None, repr=False)
+    database_url: str | None = field(default=None, repr=False)
     browser_profile_dir: Path | None = None
     warmup_browser: bool = DEFAULTS.browser.warmup
     headless: bool = DEFAULTS.browser.headless

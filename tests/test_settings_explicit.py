@@ -1,8 +1,9 @@
 import os
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.settings import MemorySettings, Settings
 
 
@@ -16,14 +17,15 @@ def clean_environment(monkeypatch):
 @pytest.mark.parametrize("name", ["FAKEYOU_RELPY", "fakeyou_relpy", "FAKEYOU_REPLY__TYPO"])
 def test_unknown_process_keys_fail_even_when_empty(monkeypatch, name):
     monkeypatch.setenv(name, "")
-    with pytest.raises((ValueError, ValidationError), match="(?i)(relpy|typo)"):
+    with pytest.raises(FakeYouError, match="(?i)(relpy|typo)"):
         Settings(_env_file=None)
 
 
 def test_unknown_key_is_rejected_without_its_value(monkeypatch):
     monkeypatch.setenv("FAKEYOU_CHAT_API_KEY", "never-print-me")
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(FakeYouError) as error:
         Settings(_env_file=None)
+    assert error.value.code is ErrorCode.CONFIG_UNKNOWN_KEY
     assert str(error.value) == "Unknown configuration key: FAKEYOU_CHAT_API_KEY"
     assert "never-print-me" not in str(error.value)
 
@@ -41,7 +43,7 @@ def test_reply_budget_includes_retries_fallback_and_recall():
 def test_unknown_dotenv_keys_fail_even_when_empty(tmp_path, name):
     path = tmp_path / ".env"
     path.write_text(f"{name}=\n")
-    with pytest.raises(ValueError, match="(?i)(relpy|typo|dmi)"):
+    with pytest.raises(FakeYouError, match="(?i)(relpy|typo|dmi)"):
         Settings(_env_file=path)
 
 
@@ -64,8 +66,9 @@ def test_activated_role_never_borrows_a_key(role):
         _env_file=None, reply_fallback=OpenAIReply(max_retries=0), reply=OpenAIReply(max_retries=0)
     )
     settings.stt.api_key = SecretStr("other-role") if role != "stt" else None
-    with pytest.raises(ValueError, match="API_KEY"):
+    with pytest.raises(FakeYouError, match="API_KEY") as caught:
         settings.require_roles(role)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 def test_inspection_does_not_require_credentials(capsys):
@@ -144,9 +147,10 @@ async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeyp
         "create_graphiti_memory",
         lambda _, **_kwargs: pytest.fail("must validate before opening"),
     )
-    with pytest.raises(ValueError, match="EMBEDDING_DIM"):
+    with pytest.raises(FakeYouError, match="EMBEDDING_DIM") as caught:
         async with open_graphiti_memory(config):
             pytest.fail("must reject incompatible vector dimensions")
+    assert caught.value.code is ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH
 
 
 def test_preflight_preserves_all_active_role_urls_and_ports():
@@ -390,10 +394,11 @@ def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key
         "gemini-3.8-flash",
         "debrief-key",
     )
-    with pytest.raises(ValueError, match="FAKEYOU_DEBRIEF__API_KEY"):
+    with pytest.raises(FakeYouError, match="FAKEYOU_DEBRIEF__API_KEY") as caught:
         create_debrief_chat_model(
             Settings(_env_file=None, reply=reply, debrief={"provider": "anthropic"})
         )
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 @pytest.mark.parametrize(

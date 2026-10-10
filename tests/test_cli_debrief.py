@@ -17,7 +17,7 @@ from fakeyou.brief import (
     context_path,
     write_meeting_context,
 )
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.main import build_parser
 from fakeyou.debrief_schema import DebriefDraft
 from fakeyou.diarize_client import DiarizedTurn
@@ -47,7 +47,7 @@ async def test_debrief_cancellation_exits_nonzero_without_traceback(monkeypatch,
 @pytest.mark.parametrize("outcome", ["available", "stale", "missing", "invalid"])
 def test_session_report_has_independent_debrief_status(settings, monkeypatch, capsys, outcome):
     journal = Journal(
-        "debrief-test", path=journal_path(settings.paths.journal_dir, "debrief-test"), stdout=False
+        "debrief-test", path=journal_path(settings.paths.journal_dir, "debrief-test"), echo=False
     )
     journal.record(
         "session_finished", source="cli", terminal_reason="stopped_by_owner", exit_code=0
@@ -179,8 +179,9 @@ async def test_debrief_refuses_cross_scope_before_model(debrief_run, monkeypatch
     monkeypatch.setattr(
         cli_debrief, "create_debrief_chat_model", lambda settings: pytest.fail("scope")
     )
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_SCOPE_MISMATCH
     assert not (path.parent / "debrief.json").exists()
 
 
@@ -190,8 +191,9 @@ async def test_debrief_refuses_unscoped_record_before_model(debrief_run, monkeyp
     monkeypatch.setattr(
         cli_debrief, "create_debrief_chat_model", lambda settings: pytest.fail("scope")
     )
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_OWNERSHIP_UNVERIFIABLE
 
 
 async def test_debrief_pending_recovery_refuses_provider(debrief_run, monkeypatch):
@@ -200,16 +202,18 @@ async def test_debrief_pending_recovery_refuses_provider(debrief_run, monkeypatc
     monkeypatch.setattr(
         cli_debrief, "create_debrief_chat_model", lambda settings: pytest.fail("recovery")
     )
-    with pytest.raises(CliError, match="recovery"):
+    with pytest.raises(FakeYouError, match="recovery") as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_PUBLICATION_RECOVERY
 
 
 async def test_debrief_refuses_live_writer_and_releases_after_failure(debrief_run, monkeypatch):
     run, path, profile = debrief_run
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
     with record_lock(path, purpose="meeting"):
-        with pytest.raises(CliError):
+        with pytest.raises(FakeYouError) as caught:
             await run()
+        assert caught.value.code is ErrorCode.RECORD_LOCKED
     await run()
     assert (path.parent / "debrief.json").exists()
 
@@ -224,8 +228,9 @@ async def test_force_failure_preserves_existing_canonical_report(debrief_run, mo
         raise ValueError("provider failed")
 
     monkeypatch.setattr(cli_debrief, "generate_debrief", fail)
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as caught:
         await run(force=True)
+    assert caught.value.code is ErrorCode.DEBRIEF_FAILED
     assert (path.parent / "debrief.json").read_bytes() == previous
     assert json.loads((path.parent / "debrief-attempt.json").read_text())["status"] == "failed"
     with record_lock(path, purpose="debrief"):
@@ -257,8 +262,9 @@ async def test_debrief_corrupt_context_refuses_provider(debrief_run, monkeypatch
     monkeypatch.setattr(
         cli_debrief, "create_debrief_chat_model", lambda settings: pytest.fail("context")
     )
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_CONTEXT_INVALID
     assert not (path.parent / "debrief.json").exists()
 
 
@@ -306,8 +312,9 @@ async def test_debrief_enforces_total_response_deadline(debrief_run, settings, m
             cancelled.set()
 
     monkeypatch.setattr(cli_debrief, "generate_debrief", slow)
-    with pytest.raises(CliError, match="TimeoutError"):
+    with pytest.raises(FakeYouError, match="TimeoutError") as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_FAILED
     assert cancelled.is_set()
     assert not (path.parent / "debrief.json").exists()
     with record_lock(path, purpose="debrief"):
@@ -323,8 +330,9 @@ async def test_model_cannot_publish_after_record_changes(debrief_run, monkeypatc
         return DebriefDraft(items=(), findings=())
 
     monkeypatch.setattr(cli_debrief, "generate_debrief", mutate)
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as caught:
         await run()
+    assert caught.value.code is ErrorCode.DEBRIEF_SOURCES_CHANGED
     assert not (path.parent / "debrief.json").exists()
 
 
@@ -490,4 +498,4 @@ async def test_stale_sidecar_fallback_is_visible_in_journal(debrief_run, setting
         if row["event"] == "fault_recorded" and row["source"] == "meeting_record"
     ]
     assert len(fallbacks) >= 1
-    assert fallbacks[0]["detail"] == "StaleDiarizationError"
+    assert fallbacks[0]["detail"] == "diarization sidecar is stale: record changed since correction"

@@ -1,13 +1,8 @@
-import os
-from pathlib import Path
-
-from dotenv import dotenv_values
+from fakeyou.settings import export_dotenv
 
 
 def main() -> None:
-    for key, value in dotenv_values(Path(".env")).items():
-        if value is not None:
-            os.environ.setdefault(key, value)
+    export_dotenv()
     from fakeyou.cli.main import main as run_cli
 
     run_cli()

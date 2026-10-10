@@ -44,8 +44,11 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation import visual_refs_of
 from fakeyou.faults import FaultReporter
+from fakeyou.invariants import IDENTIFIER_PATTERN
 from fakeyou.journal import Journal
 from fakeyou.meet_action_ledger import MeetActionKind
 from fakeyou.owner_notes import (
@@ -156,8 +159,8 @@ def create_graphiti_memory(
 ) -> Graphiti:
     role = config.llm
     llm_endpoint = role.resolved_base_url
-    llm_key = require_secret(role.api_key, "FAKEYOU_MEMORY__LLM__API_KEY")
-    embedding_key = require_secret(config.embedder.api_key, "FAKEYOU_MEMORY__EMBEDDER__API_KEY")
+    llm_key = require_secret(role.api_key, ConfigKey.MEMORY_LLM_API_KEY)
+    embedding_key = require_secret(config.embedder.api_key, ConfigKey.MEMORY_EMBEDDER_API_KEY)
     llm_config = LLMConfig(
         api_key=llm_key,
         model=role.model,
@@ -198,7 +201,7 @@ def create_graphiti_memory(
     driver = Neo4jDriver(
         uri=config.store.uri,
         user=config.store.user,
-        password=require_secret(config.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD"),
+        password=require_secret(config.store.password, ConfigKey.MEMORY_STORE_PASSWORD),
         database=config.store.database,
     )
     try:
@@ -231,10 +234,7 @@ async def _finish_memory_task[T](task: asyncio.Task[T]) -> T:
 @asynccontextmanager
 async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti]:
     if config.embedder.dim != EMBEDDING_DIM:
-        raise ValueError(
-            "memory.embedder.dim must equal EMBEDDING_DIM loaded by Graphiti; "
-            "export EMBEDDING_DIM before startup"
-        )
+        raise FakeYouError(ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH)
     resources = AsyncExitStack()
     try:
         construction = asyncio.create_task(
@@ -297,8 +297,8 @@ def _fact_lines(fact: str) -> list[str]:
 def create_memory_tools(
     memory: Graphiti, *, group_id: str, recall: RecallSettings = DEFAULTS.memory.recall
 ) -> list[BaseTool]:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", group_id):
-        raise ValueError("group_id must be 1-128 characters using letters, numbers, '_' or '-'")
+    if not re.fullmatch(IDENTIFIER_PATTERN, group_id):
+        raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
     pending: list[tuple[str, str]] = []
 
     async def store_facts(facts: list[tuple[str, str]], reference_time: datetime) -> None:
@@ -511,7 +511,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         self._group_id = group_id
         self._recall = recall
         self._faults = faults
-        self._journal = journal or Journal("", stdout=False)
+        self._journal = journal or Journal("", echo=False)
         self._visual_caption = visual_caption
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
         self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
@@ -846,7 +846,7 @@ async def forget_episode(memory: Graphiti, *, group_id: str, episode_uuid: str) 
     except NodeNotFoundError:
         episode = None
     if episode is None or episode.group_id != group_id:
-        raise ValueError("episode is not in this persona's memory")
+        raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY)
     if episode.source_description == OWNER_NOTE_SOURCE:
         await forget_owner_note(memory, group_id=group_id, episode_uuid=episode_uuid)
         return

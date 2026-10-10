@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from fakeyou.brief import context_path
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.ingestion_status import (
     IngestionStatus,
     RecordLockError,
@@ -188,9 +189,10 @@ def test_record_lock_refuses_a_second_writer_while_held(tmp_path: Path) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
 
     with record_lock(record, purpose="meeting"):
-        with pytest.raises(RecordLockError, match="locked"):
+        with pytest.raises(RecordLockError, match="locked") as error:
             with record_lock(record, purpose="ingestion"):
                 pytest.fail("second writer must not acquire the lock")
+        assert error.value.code is ErrorCode.RECORD_LOCKED
         assert lock_path(record).exists()
     assert not lock_path(record).exists()
 
@@ -221,9 +223,10 @@ def test_record_lock_recovers_only_a_proven_dead_owner(tmp_path: Path) -> None:
     path.write_text(
         json.dumps({"pid": os.getpid(), "purpose": "meeting", "token": "live"}), encoding="utf-8"
     )
-    with pytest.raises(RecordLockError, match="locked"):
+    with pytest.raises(RecordLockError, match="locked") as error:
         with record_lock(record, purpose="ingestion"):
             pytest.fail("live owner must not be recovered")
+    assert error.value.code is ErrorCode.RECORD_LOCKED
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "live"
 
 
@@ -244,9 +247,10 @@ def test_record_lock_refuses_a_foreign_host_with_a_fresh_heartbeat(tmp_path: Pat
         encoding="utf-8",
     )
 
-    with pytest.raises(RecordLockError, match="locked"):
+    with pytest.raises(RecordLockError, match="locked") as error:
         with record_lock(record, purpose="ingestion", stale_after_seconds=60.0):
             pytest.fail("fresh foreign lease must not be taken over")
+    assert error.value.code is ErrorCode.RECORD_LOCKED
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "foreign"
 
 
@@ -326,9 +330,10 @@ def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
         monkeypatch.setattr(
             "fakeyou.ingestion_status.socket.gethostname", lambda: "other-container"
         )
-        with pytest.raises(RecordLockError, match="locked"):
+        with pytest.raises(RecordLockError, match="locked") as error:
             with record_lock(record, purpose="ingestion", stale_after_seconds=0.3):
                 pytest.fail("renewed lease must refuse a contender past the deadline")
+        assert error.value.code is ErrorCode.RECORD_LOCKED
 
 
 def test_record_lock_takes_over_a_foreign_host_without_a_heartbeat(tmp_path: Path) -> None:
@@ -363,7 +368,7 @@ def test_record_lock_lets_exactly_one_racer_take_a_stale_lease(tmp_path: Path) -
     )
     barrier = threading.Barrier(2)
     winners: list[str] = []
-    failures: list[str] = []
+    failures: list[ErrorCode] = []
 
     def race() -> None:
         barrier.wait(timeout=10)
@@ -371,8 +376,8 @@ def test_record_lock_lets_exactly_one_racer_take_a_stale_lease(tmp_path: Path) -
             with record_lock(record, purpose="meeting", stale_after_seconds=60.0) as token:
                 winners.append(token)
                 time.sleep(0.2)
-        except RecordLockError:
-            failures.append("locked")
+        except RecordLockError as error:
+            failures.append(error.code)
 
     threads = [threading.Thread(target=race) for _ in range(2)]
     for thread in threads:
@@ -382,7 +387,7 @@ def test_record_lock_lets_exactly_one_racer_take_a_stale_lease(tmp_path: Path) -
     assert [thread.is_alive() for thread in threads] == [False, False]
 
     assert len(winners) == 1
-    assert failures == ["locked"]
+    assert failures == [ErrorCode.RECORD_LOCKED]
     assert not path.exists()
 
 
@@ -404,9 +409,10 @@ def test_stale_takeover_blocks_second_acquirer_until_release(tmp_path: Path) -> 
     )
 
     with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
-        with pytest.raises(RecordLockError):
+        with pytest.raises(RecordLockError) as error:
             with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
                 pass
+        assert error.value.code is ErrorCode.RECORD_LOCKED
     with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
         assert json.loads(path.read_text(encoding="utf-8"))["token"] != "stale"
     assert not path.exists()
@@ -419,9 +425,10 @@ def test_lease_acquisition_fails_while_lock_file_held(tmp_path: Path) -> None:
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:
-        with pytest.raises(RecordLockError):
+        with pytest.raises(RecordLockError) as error:
             with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
                 pass
+        assert error.value.code is ErrorCode.RECORD_LOCKED
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -500,7 +507,8 @@ def test_record_lock_refuses_a_corrupt_lock_file(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{corrupt", encoding="utf-8")
 
-    with pytest.raises(RecordLockError, match="locked"):
+    with pytest.raises(RecordLockError, match="corrupt") as error:
         with record_lock(record, purpose="forget"):
             pytest.fail("corrupt lock must fail closed")
+    assert error.value.code is ErrorCode.RECORD_LOCK_CORRUPT
     assert path.read_text(encoding="utf-8") == "{corrupt"

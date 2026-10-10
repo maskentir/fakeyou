@@ -2,7 +2,8 @@ from typing import Annotated
 
 from pydantic import Field, StringConstraints
 
-SessionId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
+IDENTIFIER_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}"
+SessionId = Annotated[str, StringConstraints(pattern=rf"^{IDENTIFIER_PATTERN}$")]
 PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 TwinName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 

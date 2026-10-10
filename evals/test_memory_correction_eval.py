@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.diarize_client import DiarizedTurn
 from fakeyou.diarize_correction import write_correction_bundle
 from fakeyou.ingestion import ingest_corrections, ingest_meeting
@@ -449,7 +450,7 @@ async def test_live_memory_correction_gate(tmp_path: Path) -> None:
     record_path = write_fixture_record(tmp_path, fixture)
     try:
         config = memory_config(Settings())
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     group_id = f"memcorr-{uuid.uuid4().hex[:8]}"
     async with open_graphiti_memory(config) as memory:

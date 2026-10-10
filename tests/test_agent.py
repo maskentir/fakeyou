@@ -2,12 +2,12 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
 
 import fakeyou.assembly as assembly_module
 import fakeyou.providers as providers_module
 from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
 from fakeyou.assembly import open_conversation
+from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.persona import PersonaProfile
 from fakeyou.session import SessionConfig
 from tests.fakes import ToolCallingFakeModel
@@ -41,23 +41,24 @@ def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
     assert all(message.content != "alpha" for message in second["messages"])
 
 
-def test_agent_reopens_sqlite_checkpoint_for_same_thread(tmp_path) -> None:
-    database = tmp_path / "checkpoints.sqlite"
+@pytest.mark.asyncio
+async def test_agent_reopens_postgres_checkpoint_for_same_thread(
+    migrated_database_url: str,
+) -> None:
     config = {"configurable": {"thread_id": "durable-thread"}}
-
-    with SqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(migrated_database_url) as saver:
         first_agent = create_meeting_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="remembered")]),
             checkpointer=saver,
         )
-        first_agent.invoke({"messages": [{"role": "user", "content": "keep this"}]}, config)
+        await first_agent.ainvoke({"messages": [{"role": "user", "content": "keep this"}]}, config)
 
-    with SqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(migrated_database_url) as saver:
         second_agent = create_meeting_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="reopened")]),
             checkpointer=saver,
         )
-        result = second_agent.invoke(
+        result = await second_agent.ainvoke(
             {"messages": [{"role": "user", "content": "continue"}]}, config
         )
 

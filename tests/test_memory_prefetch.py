@@ -556,7 +556,7 @@ async def test_prefetch_journal_rows_carry_transcript_and_outcome(
 ) -> None:
     memory = stored_memory(monkeypatch)
     lines: list[str] = []
-    journal = Journal("m1", emit=lines.append, stdout=False)
+    journal = Journal("m1", emit=lines.append, echo=False)
     model = ToolCallingFakeModel(responses=[AIMessage(content="Unknown.")], seen=[])
     agent = create_meeting_agent(
         model,
@@ -578,7 +578,7 @@ async def test_cancelled_prefetch_closes_its_journal_request_without_a_fault(
 ) -> None:
     memory = stored_memory(monkeypatch, search_gate=asyncio.Event())
     lines: list[str] = []
-    journal = Journal("m1", emit=lines.append, stdout=False)
+    journal = Journal("m1", emit=lines.append, echo=False)
     faults = Faults()
     model = ToolCallingFakeModel(responses=[AIMessage(content="Never.")], seen=[])
     agent = create_meeting_agent(

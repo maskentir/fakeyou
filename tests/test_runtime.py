@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.lifecycle import MeetingLifecycle, create_lifecycle_graph, initial_lifecycle_state
 from fakeyou.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.participant_observer import OBSERVE_JS
@@ -150,7 +151,7 @@ async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
     assert result.terminal_reason == "ended_by_host"
     polls = [
         json.loads(line)
-        for line in capsys.readouterr().out.splitlines()
+        for line in capsys.readouterr().err.splitlines()
         if json.loads(line).get("event") == "monitor_polled"
     ]
     assert len(polls) == 1
@@ -254,9 +255,10 @@ async def test_run_meeting_session_rejects_resume_of_interrupted_session() -> No
     )
     browser = FakePageSession(meet_page([LOBBY]))
 
-    with pytest.raises(ValueError, match="cannot resume"):
+    with pytest.raises(FakeYouError, match="cannot resume") as caught:
         await _run(_config(), browser, saver, FakeClock())
 
+    assert caught.value.code is ErrorCode.MEETING_CANNOT_RESUME_PHASE
     assert browser.opened == 0
 
 
@@ -320,9 +322,10 @@ async def test_session_rejects_checkpoint_owned_by_another_owner() -> None:
     await _run(_config(), first, saver, FakeClock())
     other = FakePageSession(meet_page())
 
-    with pytest.raises(ValueError, match="identity"):
+    with pytest.raises(FakeYouError, match="identity") as caught:
         await _run(_config(owner_id="other-owner"), other, saver, FakeClock())
 
+    assert caught.value.code is ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH
     assert other.opened == 0
 
 
@@ -477,7 +480,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     )
     saver = FakeSaverSession()
     path = tmp_path / "events.jsonl"
-    journal = Journal("journal-meeting", path=path, stdout=False)
+    journal = Journal("journal-meeting", path=path, echo=False)
     await run_meeting_session(
         _config(),
         open_page=browser.open,

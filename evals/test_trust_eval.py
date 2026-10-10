@@ -32,6 +32,7 @@ from evals.runtime_evidence import (
     runtime_metadata,
 )
 from evals.test_replay_eval import _sanitized_role
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.conversation import TranscriptEvent, cap_spoken_reply
 from fakeyou.memory import RECALL_EMPTY_RESULT, create_memory_tools
 from fakeyou.persona import (
@@ -1234,7 +1235,7 @@ async def test_live_trust_replay_captures_87_rated_pairs(tmp_path: Path) -> None
     settings = Settings()
     try:
         model = create_chat_model(settings)
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     fixture = load_trust_fixture()
     raw_target = os.environ.get("TRUST_ARTIFACT_DIR", "")

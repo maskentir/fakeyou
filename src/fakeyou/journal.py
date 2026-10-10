@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -73,12 +74,12 @@ class Journal:
         emit: Callable[[str], None] | None = None,
         now: Callable[[], datetime] | None = None,
         path: str | Path | None = None,
-        stdout: bool = True,
+        echo: bool = True,
         max_bytes: int = 1_048_576,
     ) -> None:
         self._meeting_id = meeting_id
         self._emit = emit
-        self._stdout = stdout
+        self._echo = echo
         self._now = now or (lambda: datetime.now(UTC))
         self._path = Path(path) if path is not None else None
         self._max_bytes = max(0, max_bytes)
@@ -119,8 +120,8 @@ class Journal:
             try:
                 if self._emit is not None:
                     self._emit(line.rstrip("\n"))
-                elif self._stdout:
-                    print(line, end="", flush=True)
+                elif self._echo:
+                    print(line, end="", flush=True, file=sys.stderr)
             except BaseException:
                 pass
             return at

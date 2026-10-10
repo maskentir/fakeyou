@@ -12,17 +12,20 @@ from fakeyou.settings import VisualSettings
 from fakeyou.visual_caption import VisualCaptioner
 from fakeyou.visual_store import VisualStore
 from tests.fakes import (
+    CLIP_BOX,
     ENDED,
     IN_CALL,
     LINK,
+    PRESENT_SCAN,
     FakeClock,
     FakePageSession,
     FakeSaverSession,
+    FakeShotPage,
     RecordingJournal,
+    caption_model,
     meet_page,
+    shot_bytes,
 )
-from tests.test_visual_caption import caption_model
-from tests.test_visual_observer import CLIP_BOX, PRESENT_SCAN, FakeShotPage, shot_bytes
 
 
 def _config(**overrides: Any) -> SessionConfig:

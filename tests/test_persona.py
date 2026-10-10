@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from fakeyou.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.brief import MeetingBrief
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation import conversation_thread_id
 from fakeyou.memory import create_meet_action_tools, create_memory_tools
 from fakeyou.persona import (
@@ -131,8 +132,9 @@ async def test_load_persona_rejects_identity_mismatch(
 ) -> None:
     path = write_profile(tmp_path, json.dumps(profile_data()))
 
-    with pytest.raises(ValueError, match="owner_id and twin_id"):
+    with pytest.raises(FakeYouError, match="owner_id and twin_id") as caught:
         await load_persona(path, **identity(owner_id=owner_id, twin_id=twin_id))
+    assert caught.value.code is ErrorCode.PERSONA_IDENTITY_MISMATCH
 
 
 @pytest.mark.parametrize(
@@ -548,8 +550,9 @@ def test_brief_only_has_no_memory_tool(demo_profile: PersonaProfile, brief: Meet
 def test_brief_only_rejects_requested_memory(
     demo_profile: PersonaProfile, brief: MeetingBrief
 ) -> None:
-    with pytest.raises(ValueError, match="brief_only"):
+    with pytest.raises(FakeYouError, match="brief_only") as caught:
         meeting_tool_names(demo_profile, brief, memory_requested=True)
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
 
 
 @pytest.mark.parametrize("scope", [None, "persona_memory"])
@@ -835,8 +838,9 @@ def test_brief_only_with_meet_permission_still_rejects_requested_memory(
     meeting = revised(brief, knowledge_scope="brief_only", permissions=["meet_act", "meet_chat"])
     loaded = profile(allowed_tools=["recall_meeting_context", "meet_raise_hand", "meet_send_chat"])
 
-    with pytest.raises(ValueError, match="brief_only"):
+    with pytest.raises(FakeYouError, match="brief_only") as caught:
         meeting_tool_names(loaded, meeting, memory_requested=True)
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
     assert meeting_tool_names(loaded, meeting, memory_requested=False) == frozenset()
 
 
@@ -873,7 +877,7 @@ def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(tool: st
     from fakeyou.persona import MEET_REFUSAL_TEXT, refuse_meet_tool
 
     lines: list[str] = []
-    journal = Journal("meeting-1", emit=lines.append, stdout=False)
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
     faults = FaultReporter(journal=journal)
 
     result = refuse_meet_tool(tool, journal=journal)

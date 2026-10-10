@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import json
 from pathlib import Path
 from typing import Any
-
-from PIL import Image
 
 from fakeyou.settings import VisualSettings
 from fakeyou.visual_caption import VisualCaptioner
@@ -19,17 +16,15 @@ from fakeyou.visual_observer import (
     VisualObserver,
 )
 from fakeyou.visual_store import VisualStore, dhash_image
-from tests.fakes import RecordingJournal
-from tests.test_visual_caption import caption_model
+from tests.fakes import (
+    CLIP_BOX,
+    PRESENT_SCAN,
+    FakeShotPage,
+    RecordingJournal,
+    caption_model,
+    shot_bytes,
+)
 
-PRESENT_SCAN: dict[str, Any] = {
-    "labels": [
-        "Alex is presenting",
-        "Presentation",
-        "Unpin Alex's presentation from your main screen",
-    ],
-    "page_ms": 1700000000000.0,
-}
 ABSENT_SCAN: dict[str, Any] = {
     "labels": ["Alex", "Leave call"],
     "page_ms": 1700000000000.0,
@@ -38,52 +33,7 @@ PRESENTATION_ONLY_SCAN: dict[str, Any] = {
     "labels": ["Alex", "Presentation", "Leave call"],
     "page_ms": 1700000000000.0,
 }
-CLIP_BOX: dict[str, float] = {"x": 173.0, "y": 65.0, "width": 592.0, "height": 385.0}
 BANNER_BOX: dict[str, float] = {"x": 636.0, "y": 14.0, "width": 233.0, "height": 36.0}
-
-
-def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
-    image = Image.new("RGB", (64, 48), color)
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-class FakeShotPage:
-    def __init__(
-        self,
-        scans: list[Any],
-        boxes: list[Any] | None = None,
-        shots: list[bytes | Exception] | None = None,
-    ) -> None:
-        self._scans = list(scans)
-        self._boxes = list(boxes or [])
-        self._shots = list(shots or [])
-        self.shot_kwargs: list[dict[str, Any]] = []
-        self.evaluate_calls: list[str] = []
-
-    async def evaluate(self, script: str) -> Any:
-        self.evaluate_calls.append(script)
-        if script == VISUAL_SCAN_JS:
-            if not self._scans:
-                raise AssertionError("scan evaluate called more times than scripted")
-            if len(self._scans) > 1:
-                return self._scans.pop(0)
-            return self._scans[0]
-        if not self._boxes:
-            raise AssertionError("box evaluate called more times than scripted")
-        if len(self._boxes) > 1:
-            return self._boxes.pop(0)
-        return self._boxes[0]
-
-    async def screenshot(self, **kwargs: Any) -> bytes:
-        self.shot_kwargs.append(kwargs)
-        if not self._shots:
-            raise AssertionError("page screenshot called more times than scripted")
-        result = self._shots.pop(0)
-        if isinstance(result, Exception):
-            raise result
-        return result
 
 
 class BlockingShotPage:

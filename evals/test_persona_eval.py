@@ -11,13 +11,12 @@ from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall, ToolCall
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import SecretStr
 
 from fakeyou.agent import create_meeting_agent
 from fakeyou.memory import create_memory_tools
 from fakeyou.persona import PersonaProfile, build_system_prompt
 from fakeyou.providers import create_chat_model
-from fakeyou.settings import Settings, require_secret
+from fakeyou.settings import Settings
 from tests.fakes import OfflineJudge, ToolCallingFakeModel, make_graphiti, recall_call
 
 EXAMPLE_PROFILE = PersonaProfile.model_validate_json(
@@ -165,13 +164,10 @@ KNOWN_MODEL_LIMITATIONS = {
 )
 def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
-    try:
-        api_key = require_secret(
-            SecretStr(os.environ.get("EVAL_JUDGE_API_KEY", "")), "EVAL_JUDGE_API_KEY"
-        )
-        model = create_chat_model(settings)
-    except ValueError as error:
-        pytest.skip(str(error))
+    api_key = os.environ.get("EVAL_JUDGE_API_KEY", "")
+    if not api_key.strip():
+        pytest.skip("set EVAL_JUDGE_API_KEY to run the live persona judge")
+    model = create_chat_model(settings)
     live = LIVE_SCENARIOS[scenario]
     question, criteria = live["question"], live["criteria"]
     recalled_context = PERSONA_FIXTURE["contexts"][live["context"]]

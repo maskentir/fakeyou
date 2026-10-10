@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+
 _BASE_URL = "https://api.meta.ai/v1"
 _MODEL = "muse-voice-transcribe-1.0"
 _MODE = "DIARIZATION"
@@ -19,7 +21,7 @@ class DiarizedTurn:
     speaker: str
 
 
-class DiarizeError(Exception):
+class DiarizeError(FakeYouError):
     pass
 
 
@@ -58,7 +60,7 @@ def transcribe_chunk(
         with call(request) as response:
             raw = response.read()
     except (urllib.error.HTTPError, urllib.error.URLError) as error:
-        raise DiarizeError(f"transcription request failed: {error}") from error
+        raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason=str(error)) from error
     try:
         payload = json.loads(raw.decode("utf-8"))
         return [
@@ -66,7 +68,7 @@ def transcribe_chunk(
             for turn in payload["turns"]
         ]
     except (ValueError, KeyError, TypeError) as error:
-        raise DiarizeError("transcription response parse failed") from error
+        raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID) from error
 
 
 def merge_short_turns(

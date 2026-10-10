@@ -27,7 +27,7 @@ from fakeyou.brief import (
     context_path,
     write_meeting_context,
 )
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.debrief_schema import DebriefDraft, DebriefReport
 from fakeyou.debrief_sources import (
     chunk_sources,
@@ -199,7 +199,7 @@ def contract_results(fixture: dict) -> list[dict]:
                 meeting_id=meeting_id,
                 context_json=context_json,
                 status="completed" if report else "expected_failure",
-                error=None if report else "CliError",
+                error=None if report else "DebriefValidationError",
                 model_calls=report["chunk_count"] if report else 0,
                 record_sha256=hashlib.sha256(raw).hexdigest(),
                 raw_record=raw.decode(),
@@ -434,7 +434,7 @@ def _report_for_review(
             result["status"] != "expected_failure"
             or result["model_calls"] != 0
             or result["report_json"] is not None
-            or result["error"] != "CliError"
+            or result["error"] != "DebriefValidationError"
         ):
             raise ValueError("invalid preprovider failure")
         return None
@@ -845,7 +845,7 @@ async def replay_debriefs(
             report_json = report_path.read_text() if report_path.exists() else None
             expected_failure = (
                 case.get("expect") == "preprovider_failure"
-                and error == "CliError"
+                and error == "DebriefValidationError"
                 and counter.calls == 0
                 and report_json is None
             )
@@ -967,6 +967,16 @@ async def test_live_debrief_native_cli_corpus(tmp_path: Path) -> None:
         )
 
 
+INVALID_SOURCE_CODES = {
+    "missing": ErrorCode.DEBRIEF_RECORD_MISSING,
+    "corrupt": ErrorCode.DEBRIEF_RECORD_INVALID_LINE,
+    "oversized_entry": ErrorCode.DEBRIEF_SOURCE_EXCEEDS_CHUNK,
+    "too_many_chunks": ErrorCode.DEBRIEF_TOO_MANY_CHUNKS,
+    "lock": ErrorCode.RECORD_LOCKED,
+    "corrupt_context": ErrorCode.DEBRIEF_CONTEXT_INVALID,
+}
+
+
 @pytest.mark.parametrize(
     "invalid",
     ["missing", "corrupt", "oversized_entry", "too_many_chunks", "lock", "corrupt_context"],
@@ -1003,7 +1013,7 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
         patch.object(cli_debrief, "create_debrief_chat_model", provider_forbidden),
         patch.object(cli_debrief, "create_fallback_chat_model", provider_forbidden),
         record_lock(record, purpose="meeting") if invalid == "lock" else nullcontext(),
-        pytest.raises(CliError),
+        pytest.raises(FakeYouError) as caught,
     ):
         await cli_debrief.debrief_meeting(
             meeting_id=meeting_id,
@@ -1013,6 +1023,7 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
             force=False,
             settings=scoped,
         )
+    assert caught.value.code is INVALID_SOURCE_CODES[invalid]
     assert not (record.parent / "debrief.json").exists()
 
 

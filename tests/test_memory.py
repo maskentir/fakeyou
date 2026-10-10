@@ -11,6 +11,7 @@ from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory as memory_module
 from fakeyou import owner_notes
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.memory import (
     create_memory_tools,
     create_recall_error_middleware,
@@ -27,8 +28,9 @@ from tests.fakes import FakeSaga, make_graphiti
 
 @pytest.mark.parametrize("group_id", ["", "bad:group", "bad group", "x" * 129])
 def test_memory_tools_reject_invalid_group_ids(group_id: str) -> None:
-    with pytest.raises(ValueError, match="group_id"):
+    with pytest.raises(FakeYouError, match="group_id") as caught:
         create_memory_tools(make_graphiti(), group_id=group_id)
+    assert caught.value.code is ErrorCode.NOTE_GROUP_ID_INVALID
 
 
 async def test_memory_tools_keep_group_id_scoped(
@@ -699,8 +701,9 @@ async def test_forget_episode_only_removes_episodes_in_the_persona_group(
         await forget_episode(memory, group_id="team_alpha", episode_uuid="e1")
         assert memory.removed == ["e1"]
     else:
-        with pytest.raises(ValueError, match="not in this persona"):
+        with pytest.raises(FakeYouError, match="not in this persona") as caught:
             await forget_episode(memory, group_id="team_alpha", episode_uuid="e1")
+        assert caught.value.code is ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY
         assert memory.removed == []
 
 

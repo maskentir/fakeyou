@@ -11,7 +11,7 @@ Lihat [rencana pengembangan berikutnya](docs/plans/next-development.md), [status
 | Peran | Library | Status fondasi |
 | --- | --- | --- |
 | Penalaran | LangChain 1.4.2 | Native `create_agent`, injeksi model/tools/persona |
-| State percakapan | LangGraph 1.2.12 | Checkpoint SQLite default; PostgreSQL bila `FAKEYOU_CHECKPOINT__URL` diset |
+| State percakapan | LangGraph 1.2.12 | Checkpoint PostgreSQL; `FAKEYOU_DATABASE__URL` wajib diset |
 | Tangan dan mata | CloakBrowser 0.5.11 + Playwright MCP 0.0.82 | Satu sesi untuk navigasi, DOM, screenshot, input |
 | Telinga | Pipecat 1.12.0 `MetaSTTService` | Muse Voice Transcribe resmi, default Bahasa Indonesia |
 | Mulut | `OpenAISpeechSynthesizer` / `MiniMaxSpeechSynthesizer` + `PlaybackEngine` | TTS streaming PCM + `paplay` serial; model/voice dapat diganti |
@@ -23,7 +23,7 @@ Lihat [rencana pengembangan berikutnya](docs/plans/next-development.md), [status
 
 ## Setup
 
-Butuh uv, Node.js 22+, dan Docker untuk Neo4j. Python 3.12 dipilih melalui `.python-version`.
+Butuh uv, Node.js 22+, dan Docker untuk Neo4j dan PostgreSQL. Python 3.12 dipilih melalui `.python-version`.
 
 ```sh
 uv sync --locked --all-groups
@@ -89,10 +89,13 @@ docker compose run --rm meeting-worker fakeyou memory-reembed \
 Setel `FAKEYOU_MEMORY__EMBEDDER__BASE_URL=http://127.0.0.1:8080/v1`, `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL=http://embeddings/v1`, `FAKEYOU_MEMORY__EMBEDDER__API_KEY=local`, dan `FAKEYOU_MEMORY__EMBEDDER__DIM=384`. Tambahkan `EMBEDDING_DIM=384` dalam `.env`; command `fakeyou` memuatnya sebelum Graphiti di-import. Worker Compose mengekspor dimensi yang sama. Perubahan dimensi setelah Graphiti di-import ditolak saat memori dibuka. Vektor dari model embedding lain tidak sebanding, jadi setiap kali model embedding berganti jalankan `memory-reembed` untuk tiap persona; perintah ini menghitung ulang embedding entity dan fakta tanpa menghapus episode atau owner note. Service `embeddings` harus berjalan sebelum `join --memory` karena recall membutuhkan embedding query. Image default untuk arm64; di x86_64 setel `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE=ghcr.io/huggingface/text-embeddings-inference:cpu-1.9`.
 
 ```sh
-docker compose --profile production up -d --wait postgres
+docker compose up -d --wait postgres
+uv run fakeyou db upgrade
 ```
 
-PostgreSQL dipakai untuk checkpoint bila `FAKEYOU_CHECKPOINT__URL` diset (lihat `.env.example`); CLI tetap memakai SQLite untuk satu worker lokal, dan satu file SQLite tidak untuk banyak proses meeting. Worker Compose meneruskan URL lewat `FAKEYOU_COMPOSE_WORKER_CHECKPOINT_URL`. Service `postgres` ada di profil `production` dengan healthcheck; worker sengaja tanpa `depends_on` agar default SQLite tetap jalan, jadi nyalakan Postgres dulu bila URL diset. Migrasi memakai `AsyncPostgresSaver` dan `setup()` resmi.
+PostgreSQL menyimpan checkpoint percakapan untuk CLI dan worker. `FAKEYOU_DATABASE__URL` wajib diset di `.env` (lihat `.env.example`) dan harus berskema `postgresql://` atau `postgresql+psycopg://`. Worker Compose memakai URL yang sama dari dalam jaringan Compose lewat `FAKEYOU_COMPOSE_WORKER_DATABASE_URL`. Service `postgres` ikut dinyalakan tanpa profil dan memiliki healthcheck; worker menunggu healthcheck itu lewat `depends_on`. Semua proses memakai database yang sama, sehingga tidak ada file checkpoint lokal yang dibagi antar proses. Checkpoint LangGraph dimigrasi oleh LangGraph sendiri.
+
+Schema tabel `voiceprints` dikelola dengan Alembic (`src/fakeyou/db/migrations`). `fakeyou db upgrade` menerapkan migrasi sampai head. `fakeyou db status`, `db upgrade`, dan `db stamp` mencetak JSON berisi `current`, `head`, dan `differences`; `differences` kosong berarti skema database sama dengan model. Migrasi berjalan di bawah advisory lock, sehingga beberapa worker yang start bersamaan tidak saling menimpa. Database lama yang sudah punya tabel `voiceprints` tanpa riwayat migrasi perlu satu kali `fakeyou db stamp` setelah tabelnya dicek cocok dengan baseline; `db upgrade` menolak database seperti itu dan menunjuk perintah ini.
 
 ## Suara dan partisipasi
 
@@ -222,7 +225,7 @@ DEEPEVAL_TELEMETRY_OPT_OUT=YES uv run deepeval test run evals/test_replay_eval.p
 uv run pytest tests/test_browser.py tests/test_runtime_meeting.py -m browser
 uv run pytest tests/test_worker_image.py -m container
 uv build
-docker compose --profile production config --quiet
+docker compose config --quiet
 ```
 
 Tes default tidak menggunakan API berbayar atau membuka browser. Browser smoke test opt-in memakai browser asli pada halaman lokal untuk DOM, klik, dan screenshot. DeepEval default menggunakan respons terprogram untuk menguji wiring prompt, tool, dan argumen, bukan kualitas penalaran model live. Penilaian kualitas persona dengan model dan judge OpenAI dijalankan terpisah:
@@ -244,6 +247,7 @@ Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/ru
 ## Dokumen
 
 - [Arsitektur](docs/reference/architecture.md)
+- [Katalog error dan exit code](docs/reference/error-catalog.md)
 - [Kemampuan Digital Twin](docs/reference/capabilities.md)
 - [Lesson learned Amazon LMA, Attendee, Vexa](docs/reference/reference-lessons.md)
 - [Sumber dokumentasi library](docs/reference/library-sources.md)

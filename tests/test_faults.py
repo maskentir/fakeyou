@@ -171,7 +171,7 @@ def test_fault_count_survives_logging_failure() -> None:
 def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    journal = Journal("meeting-7", path=path, echo=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
 
     reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
@@ -192,7 +192,7 @@ def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clo
 def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = Journal("meeting-7", path=path, stdout=False, now=lambda: frozen)
+    journal = Journal("meeting-7", path=path, echo=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
     record_consumer_fault(
         reporter, None, source="stt", detail="transcript_consumer", error=ValueError("private")

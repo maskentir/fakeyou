@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import math
 import re
 import struct
+import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, create_autospec
@@ -22,6 +26,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 from neo4j import AsyncDriver
+from PIL import Image
 from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
@@ -33,11 +38,17 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.conversation import ConversationResponder, TranscriptEvent
+from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.journal import Journal
 from fakeyou.playback import PlaybackEvent
 from fakeyou.session import ConversationError, MeetingAudio, MeetingConversation, SessionResult
+from fakeyou.visual_observer import (
+    VISUAL_SCAN_JS,
+)
+from fakeyou.voiceprint_embed import SpeakerEmbedder
 
 LINK = "https://meet.google.com/abc-defg-hij"
+DATABASE_URL = "postgresql://fakeyou:test@localhost:5432/fakeyou"
 
 LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
 JOIN_NOW_LOBBY = '<input placeholder="Your name"><button>Join now</button>'
@@ -209,6 +220,33 @@ class FakeClock:
     async def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
         self.now += seconds
+
+
+class InMemoryVoiceprints:
+    def __init__(self, records: Iterable[VoiceprintRecord] = ()) -> None:
+        self._records = {record.person_id: record for record in records}
+
+    def save(self, record: VoiceprintRecord) -> None:
+        self._records[record.person_id] = record
+
+    def load_all(self) -> list[VoiceprintRecord]:
+        return [self._records[person_id] for person_id in sorted(self._records)]
+
+    def delete(self, person_id: str) -> bool:
+        return self._records.pop(person_id, None) is not None
+
+    def purge_expired(self, now: datetime, retention_days: int) -> list[str]:
+        cutoff = now - timedelta(days=retention_days)
+        expired = sorted(
+            person_id for person_id, record in self._records.items() if record.last_used_at < cutoff
+        )
+        for person_id in expired:
+            del self._records[person_id]
+        return expired
+
+    def touch_used(self, person_id: str, now: datetime) -> None:
+        if person_id in self._records:
+            self._records[person_id] = replace(self._records[person_id], last_used_at=now)
 
 
 class RecordingJournal(Journal):
@@ -748,3 +786,182 @@ def protocol_responder(responder: FakeResponder) -> ConversationResponder:
 
 def protocol_reply_audio(audio: FakeReplyAudio) -> MeetingAudio:
     return audio
+
+
+CONSENT_AT = datetime(2026, 10, 7, 10, 0, 0, tzinfo=UTC)
+
+ENROLLED_AT = datetime(2026, 10, 7, 10, 0, 1, tzinfo=UTC)
+
+LAST_USED_AT = datetime(2026, 10, 7, 10, 0, 2, tzinfo=UTC)
+
+
+class FakeEmbedder(SpeakerEmbedder):
+    def __init__(self, vector: tuple[float, ...]) -> None:
+        self._vector = vector
+        self.calls: list[list[tuple[float, ...]]] = []
+
+    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
+        self.calls.append([tuple(utterance) for utterance in utterances])
+        return self._vector
+
+
+def make_record(
+    person_id: str, embedding: tuple[float, ...], owner_name: str = ""
+) -> VoiceprintRecord:
+    return VoiceprintRecord(
+        person_id=person_id,
+        embedding=embedding,
+        dim=len(embedding),
+        n_utterances=3,
+        consent_ts=CONSENT_AT,
+        policy_version="v1",
+        is_negative=False,
+        enrolled_at=ENROLLED_AT,
+        last_used_at=LAST_USED_AT,
+        owner_name=owner_name,
+    )
+
+
+class FakeVisualModel(FakeMessagesListChatModel):
+    seen: list[list[BaseMessage]] = []
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        self.seen.append(list(messages))
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+def caption_model(text: str, total_tokens: int | None = 1100) -> FakeVisualModel:
+    usage: dict[str, Any] | None = None
+    if total_tokens is not None:
+        usage = {
+            "input_tokens": total_tokens - 100,
+            "output_tokens": 100,
+            "total_tokens": total_tokens,
+        }
+    return FakeVisualModel(responses=[AIMessage(content=text, usage_metadata=usage)])
+
+
+PRESENT_SCAN: dict[str, Any] = {
+    "labels": [
+        "Alex is presenting",
+        "Presentation",
+        "Unpin Alex's presentation from your main screen",
+    ],
+    "page_ms": 1700000000000.0,
+}
+
+CLIP_BOX: dict[str, float] = {"x": 173.0, "y": 65.0, "width": 592.0, "height": 385.0}
+
+
+def shot_bytes(color: tuple[int, int, int] = (10, 120, 200)) -> bytes:
+    image = Image.new("RGB", (64, 48), color)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class FakeShotPage:
+    def __init__(
+        self,
+        scans: list[Any],
+        boxes: list[Any] | None = None,
+        shots: list[bytes | Exception] | None = None,
+    ) -> None:
+        self._scans = list(scans)
+        self._boxes = list(boxes or [])
+        self._shots = list(shots or [])
+        self.shot_kwargs: list[dict[str, Any]] = []
+        self.evaluate_calls: list[str] = []
+
+    async def evaluate(self, script: str) -> Any:
+        self.evaluate_calls.append(script)
+        if script == VISUAL_SCAN_JS:
+            if not self._scans:
+                raise AssertionError("scan evaluate called more times than scripted")
+            if len(self._scans) > 1:
+                return self._scans.pop(0)
+            return self._scans[0]
+        if not self._boxes:
+            raise AssertionError("box evaluate called more times than scripted")
+        if len(self._boxes) > 1:
+            return self._boxes.pop(0)
+        return self._boxes[0]
+
+    async def screenshot(self, **kwargs: Any) -> bytes:
+        self.shot_kwargs.append(kwargs)
+        if not self._shots:
+            raise AssertionError("page screenshot called more times than scripted")
+        result = self._shots.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class FakeRunner:
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+        self.outputs: dict[str, str] = {}
+        self.sequences: dict[str, list[str]] = {}
+        self.failures: dict[str, tuple[int, str]] = {}
+        self.blowups: dict[str, Exception] = {}
+        self.default_output = ""
+
+    def expect(self, needle: str, output: str) -> None:
+        self.outputs[needle] = output
+
+    def expect_sequence(self, needle: str, outputs: list[str]) -> None:
+        self.sequences[needle] = list(outputs)
+
+    def fail_with(self, needle: str, returncode: int, stderr: str) -> None:
+        self.failures[needle] = (returncode, stderr)
+
+    def blow_up(self, needle: str, error: Exception) -> None:
+        self.blowups[needle] = error
+
+    def __call__(self, *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        command = [str(part) for part in args[0]]
+        self.commands.append(command)
+        text = " ".join(command)
+        for needle, error in self.blowups.items():
+            if needle in text:
+                raise error
+        for needle, outputs in self.sequences.items():
+            if needle in text and outputs:
+                return subprocess.CompletedProcess(command, 0, outputs.pop(0), "")
+        for needle, (returncode, stderr) in self.failures.items():
+            if needle in text:
+                return subprocess.CompletedProcess(command, returncode, "", stderr)
+        for needle, output in self.outputs.items():
+            if needle in text:
+                return subprocess.CompletedProcess(command, 0, output, "")
+        return subprocess.CompletedProcess(command, 0, self.default_output, "")
+
+
+def write_journal(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+FINISHED_ROWS = [
+    {
+        "event": "join_requested",
+        "meeting_id": "meeting-9",
+        "at": "2026-10-05T02:00:00+00:00",
+        "source": "runtime",
+    },
+    {
+        "event": "session_finished",
+        "meeting_id": "meeting-9",
+        "at": "2026-10-05T02:10:00+00:00",
+        "source": "cli",
+        "phase": "ended",
+        "terminal_reason": "ended_by_host",
+        "exit_code": 0,
+    },
+]

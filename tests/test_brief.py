@@ -22,6 +22,7 @@ from fakeyou.brief import (
     validate_brief_scope,
     write_meeting_context,
 )
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 
 EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples" / "meeting-brief.example.json"
 SCOPE = {"owner_id": "demo_owner", "twin_id": "demo_twin", "meeting_id": "brief-demo-1003"}
@@ -33,8 +34,9 @@ EXAMPLE_DIGEST = "71c10c101633d82d64ececefd02618147b7a9e326e60e37345260457e67a7f
 def test_context_snapshot_rejects_oversize_before_validation(tmp_path: Path) -> None:
     path = tmp_path / "meeting-context.json"
     path.write_bytes(b" " * (MAX_CONTEXT_BYTES + 1))
-    with pytest.raises(ValueError, match="at most"):
+    with pytest.raises(FakeYouError, match="at most") as caught:
         read_meeting_context(path)
+    assert caught.value.code is ErrorCode.MEETING_CONTEXT_TOO_LARGE
 
 
 def brief_data(**overrides: Any) -> dict[str, Any]:
@@ -83,21 +85,23 @@ def test_example_brief_loads_with_its_own_scope(brief: MeetingBrief) -> None:
 
 
 def test_meeting_scope_cannot_be_changed(brief: MeetingBrief) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(FakeYouError) as caught:
         validate_brief_scope(
             brief,
             owner_id=brief.owner_id,
             twin_id=brief.twin_id,
             meeting_id="another-meeting",
         )
+    assert caught.value.code is ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH
 
 
 @pytest.mark.parametrize("field", ["owner_id", "twin_id", "meeting_id"])
 def test_scope_mismatch_is_rejected_without_echoing_ids(brief: MeetingBrief, field: str) -> None:
     scope = {**SCOPE, field: "other-session"}
 
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(FakeYouError) as error:
         validate_brief_scope(brief, **scope)
+    assert error.value.code is ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH
 
     assert SCOPE[field] not in str(error.value)
     assert "other-session" not in str(error.value)
@@ -107,8 +111,9 @@ def test_scope_mismatch_is_rejected_without_echoing_ids(brief: MeetingBrief, fie
 def test_load_rejects_a_brief_for_another_scope(tmp_path: Path, field: str) -> None:
     path = write_brief_file(tmp_path, EXAMPLE_BRIEF.read_bytes())
 
-    with pytest.raises(ValueError):
+    with pytest.raises(FakeYouError) as caught:
         load_meeting_brief(path, **{**SCOPE, field: "other-session"})
+    assert caught.value.code is ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH
 
 
 def test_load_propagates_a_missing_file(tmp_path: Path) -> None:
@@ -296,9 +301,10 @@ def test_brief_of_exactly_the_byte_limit_is_accepted(tmp_path: Path, brief: Meet
 def test_oversize_brief_is_rejected_before_parsing(tmp_path: Path, content: bytes) -> None:
     path = write_brief_file(tmp_path, content)
 
-    with pytest.raises(ValueError, match=str(MAX_BRIEF_BYTES)) as error:
+    with pytest.raises(FakeYouError, match=str(MAX_BRIEF_BYTES)) as error:
         load_meeting_brief(path, **SCOPE)
 
+    assert error.value.code is ErrorCode.MEETING_BRIEF_TOO_LARGE
     assert not isinstance(error.value, ValidationError)
 
 
@@ -532,8 +538,9 @@ def test_a_different_snapshot_for_the_same_meeting_is_refused(
     write_meeting_context(path, previous)
     previous_bytes = path.read_bytes()
 
-    with pytest.raises(ValueError, match="differs"):
+    with pytest.raises(FakeYouError, match="differs") as caught:
         write_meeting_context(path, changed(brief))
+    assert caught.value.code is ErrorCode.MEETING_CONTEXT_DIFFERS
 
     assert path.read_bytes() == previous_bytes
     assert [child.name for child in tmp_path.iterdir()] == [CONTEXT_FILE_NAME]
@@ -609,8 +616,9 @@ def test_briefs_and_contexts_are_frozen(brief: MeetingBrief) -> None:
 
 
 def test_load_reads_a_bounded_prefix_of_an_endless_file() -> None:
-    with pytest.raises(ValueError, match="at most"):
+    with pytest.raises(FakeYouError, match="at most") as caught:
         load_meeting_brief(Path("/dev/zero"), **SCOPE)
+    assert caught.value.code is ErrorCode.MEETING_BRIEF_TOO_LARGE
 
 
 def test_contexts_for_another_brief_or_persona_are_not_equal(brief: MeetingBrief) -> None:

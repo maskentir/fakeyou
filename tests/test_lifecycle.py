@@ -2,9 +2,10 @@ from typing import Any
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.lifecycle import (
     MeetingLifecycle,
     create_lifecycle_graph,
@@ -184,28 +185,27 @@ def test_lifecycle_rejects_unknown_attribution() -> None:
         _send(graph, thread, "join_requested", "mystery")
 
 
-def test_lifecycle_state_survives_sqlite_reopen(tmp_path) -> None:
-    database = tmp_path / "lifecycle.sqlite"
+@pytest.mark.asyncio
+async def test_lifecycle_state_survives_postgres_reopen(migrated_database_url: str) -> None:
     config = {"configurable": {"thread_id": "durable-lifecycle"}}
-
-    with SqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(migrated_database_url) as saver:
         first = create_lifecycle_graph(checkpointer=saver)
-        first.invoke(
+        await first.ainvoke(
             {
                 **initial_lifecycle_state("owner-1", "twin-1", "meeting-1"),
                 "event": _event("join_requested"),
             },
             config,
         )
-        first.invoke({"event": _event("admitted", "host_action")}, config)
+        await first.ainvoke({"event": _event("admitted", "host_action")}, config)
 
-    with SqliteSaver.from_conn_string(str(database)) as saver:
+    async with open_checkpointer(migrated_database_url) as saver:
         second = create_lifecycle_graph(checkpointer=saver)
-        reopened = second.get_state(config)
+        reopened = await second.aget_state(config)
 
         assert reopened.values["phase"] == "admitted"
-        second.invoke({"event": _event("owner_stopped")}, config)
-        result = second.invoke({"event": _event("leave_sent")}, config)
+        await second.ainvoke({"event": _event("owner_stopped")}, config)
+        result = await second.ainvoke({"event": _event("leave_sent")}, config)
 
     assert result["phase"] == "ended"
     assert result["terminal_reason"] == "stopped_by_owner"
@@ -225,8 +225,9 @@ async def test_lifecycle_resume_restarts_a_crashed_thread_in_place() -> None:
     assert first.state["phase"] == "admitted"
 
     resumed = MeetingLifecycle("owner-1", "twin-1", "meeting-1", saver)
-    with pytest.raises(ValueError, match="cannot resume meeting"):
+    with pytest.raises(FakeYouError, match="cannot resume meeting") as caught:
         await resumed.initialize()
+    assert caught.value.code is ErrorCode.MEETING_CANNOT_RESUME_PHASE
 
     await resumed.initialize(resume=True)
 
@@ -260,5 +261,6 @@ async def test_lifecycle_resume_still_rejects_an_identity_mismatch() -> None:
     await first.send("join_requested", "owner_action", "test")
 
     resumed = MeetingLifecycle("owner-2", "twin-1", "meeting-1", saver)
-    with pytest.raises(ValueError, match="checkpoint identity does not match"):
+    with pytest.raises(FakeYouError, match="checkpoint identity does not match") as caught:
         await resumed.initialize(resume=True)
+    assert caught.value.code is ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH

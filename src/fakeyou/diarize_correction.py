@@ -6,6 +6,7 @@ from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.ingestion_status import write_atomically
 from fakeyou.record import RecordEntry, TranscriptEntry, load_meeting_record
@@ -48,7 +49,7 @@ def _rttm_line(file_id: str, turn: DiarizedTurn) -> str:
 def _check_speaker_labels(turns: list[DiarizedTurn]) -> None:
     for turn in turns:
         if not turn.speaker or any(char.isspace() for char in turn.speaker):
-            raise ValueError("speaker label must be a single token without whitespace")
+            raise FakeYouError(ErrorCode.DIARIZE_SPEAKER_LABEL_INVALID)
 
 
 def write_correction_bundle(
@@ -110,7 +111,7 @@ def _matching_uuid(turns: list[dict[str, object]], point: float, tolerance_ms: i
             or not isinstance(end, (int, float))
             or not isinstance(corrected, str)
         ):
-            raise DiarizeError("diarization sidecar turns are invalid")
+            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
         low = float(start) - tolerance_ms
         high = float(end) + tolerance_ms
         if not low <= point <= high:
@@ -133,20 +134,20 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except ValueError as error:
-        raise DiarizeError("diarization sidecar is invalid") from error
+        raise DiarizeError(ErrorCode.DIARIZE_SIDECAR_INVALID) from error
     if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
-        raise DiarizeError("diarization sidecar schema is unsupported")
+        raise DiarizeError(ErrorCode.DIARIZE_SCHEMA_UNSUPPORTED)
     expected = sha256(record_path.read_bytes()).hexdigest()
     if payload.get("record_sha256") != expected:
-        raise StaleDiarizationError("diarization sidecar is stale: record changed since correction")
+        raise StaleDiarizationError(ErrorCode.DIARIZE_STALE)
     turns = payload.get("turns")
     if not isinstance(turns, list):
-        raise DiarizeError("diarization sidecar turns are invalid")
+        raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
     offset = _session_start_page_ms(record_path)
     shifted: list[dict[str, object]] = []
     for turn in turns:
         if not isinstance(turn, dict):
-            raise DiarizeError("diarization sidecar turns are invalid")
+            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
         start = turn.get("start_ms")
         end = turn.get("end_ms")
         if (
@@ -155,7 +156,7 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
             or isinstance(end, bool)
             or not isinstance(end, (int, float))
         ):
-            raise DiarizeError("diarization sidecar turns are invalid")
+            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
         shifted.append({**turn, "start_ms": float(start) + offset, "end_ms": float(end) + offset})
     corrected: list[RecordEntry] = []
     for entry in entries:

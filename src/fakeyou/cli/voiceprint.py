@@ -3,7 +3,6 @@ import math
 import re
 import secrets
 import struct
-import sys
 import uuid
 import wave
 from collections.abc import Iterator
@@ -13,19 +12,16 @@ from importlib.resources import files
 from pathlib import Path
 from typing import NoReturn
 
-import psycopg
-
-from fakeyou.checkpoint import checkpoint_dsn
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.output import emit_json
+from fakeyou.db.engine import open_database
+from fakeyou.db.schema import require_current
+from fakeyou.db.voiceprint_store import VoiceprintRecord, VoiceprintRepository, VoiceprintStore
 from fakeyou.deaf import rms_level
 from fakeyou.journal import Journal, journal_path
 from fakeyou.settings import Settings
 from fakeyou.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
-from fakeyou.voiceprint_store import (
-    VoiceprintRecord,
-    VoiceprintStore,
-    ensure_voiceprint_schema,
-)
 
 VOICEPRINT_MIN_RMS = 0.01
 VOICEPRINT_SAMPLE_RATE = 16000
@@ -38,25 +34,16 @@ _SNR_FRAME = 320
 _SNR_CEILING_DB = 60.0
 
 
-def _reject(message: str) -> NoReturn:
-    print(f"fakeyou: error: {message}", file=sys.stderr)
-    raise SystemExit(2)
-
-
 @contextmanager
-def _open_store(settings: Settings, store: VoiceprintStore | None) -> Iterator[VoiceprintStore]:
+def _open_store(
+    settings: Settings, store: VoiceprintRepository | None
+) -> Iterator[VoiceprintRepository]:
     if store is not None:
         yield store
         return
-    dsn = checkpoint_dsn(settings)
-    if dsn is None:
-        raise CliError("Set FAKEYOU_CHECKPOINT__URL in .env before using this command.")
-    conn = psycopg.connect(dsn)
-    try:
-        ensure_voiceprint_schema(conn)
-        yield VoiceprintStore(lambda: conn)
-    finally:
-        conn.close()
+    with open_database(settings) as engine:
+        require_current(engine)
+        yield VoiceprintStore(engine)
 
 
 @contextmanager
@@ -87,20 +74,20 @@ def _read_clip_frames(path: str) -> tuple[str, bytes, int]:
     try:
         handle = wave.open(path, "rb")
     except FileNotFoundError:
-        raise CliError(f"clip cannot be read: {label}") from None
+        raise FakeYouError(ErrorCode.VOICEPRINT_CLIP_UNREADABLE, label=label) from None
     except (wave.Error, EOFError, OSError):
-        _reject(f"unsupported audio format in {label}: need 16 kHz mono 16-bit WAV")
+        raise FakeYouError(ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED, label=label) from None
     with handle:
         if (
             handle.getnchannels() != 1
             or handle.getsampwidth() != 2
             or handle.getframerate() != VOICEPRINT_SAMPLE_RATE
         ):
-            _reject(f"unsupported audio format in {label}: need 16 kHz mono 16-bit WAV")
+            raise FakeYouError(ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED, label=label)
         count = handle.getnframes()
         frames = handle.readframes(count)
         if len(frames) != count * 2:
-            _reject(f"unsupported audio format in {label}: need 16 kHz mono 16-bit WAV")
+            raise FakeYouError(ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED, label=label)
     return label, frames, count
 
 
@@ -193,18 +180,16 @@ def _reject_enrollment(
         seconds=round(seconds, 2),
         segments=segments,
     )
-    print(json.dumps({"enrolled": False, "reason": reason, "challenge_id": challenge_id}))
-    raise SystemExit(2)
+    emit_json({"enrolled": False, "reason": reason, "challenge_id": challenge_id})
+    raise SystemExit(ExitCode.INPUT_REJECTED)
 
 
 def voiceprint_challenge(meeting: str, *, settings: Settings) -> None:
-    print(
-        json.dumps(
-            {
-                "challenge": f"{secrets.randbelow(10**8):08d}",
-                "challenge_id": str(uuid.uuid4()),
-            }
-        )
+    emit_json(
+        {
+            "challenge": f"{secrets.randbelow(10**8):08d}",
+            "challenge_id": str(uuid.uuid4()),
+        }
     )
 
 
@@ -214,7 +199,7 @@ def voiceprint_enroll(
     negative: bool,
     *,
     settings: Settings,
-    store: VoiceprintStore | None = None,
+    store: VoiceprintRepository | None = None,
     journal: Journal | None = None,
     embedder: SpeakerEmbedder | None = None,
     challenge_id: str | None = None,
@@ -232,12 +217,12 @@ def voiceprint_enroll(
         or owner_name is not None
     )
     if gated and not (challenge_id and challenge and transcript and owner_name):
-        raise CliError(
-            "gated enrollment needs --challenge-id, --challenge, --transcript, and --owner-name"
-        )
+        raise FakeYouError(ErrorCode.VOICEPRINT_ENROLLMENT_GATE_INCOMPLETE)
     paths = list(clip) + spontaneous
     if len(paths) < MIN_ENROLL_CLIPS:
-        _reject(f"enroll needs at least {MIN_ENROLL_CLIPS} clips, got {len(paths)}")
+        raise FakeYouError(
+            ErrorCode.VOICEPRINT_ENROLL_TOO_FEW_CLIPS, minimum=MIN_ENROLL_CLIPS, count=len(paths)
+        )
     min_seconds = settings.identity.voiceprint_min_seconds
     utterances: list[list[float]] = []
     total_seconds = 0.0
@@ -245,13 +230,20 @@ def voiceprint_enroll(
         label, frames, count = _read_clip_frames(path)
         seconds = count / VOICEPRINT_SAMPLE_RATE
         if seconds < min_seconds:
-            _reject(
-                f"clip too short: {label} holds {seconds:.2f}s of audio,"
-                f" need at least {min_seconds:.1f}s"
+            raise FakeYouError(
+                ErrorCode.VOICEPRINT_CLIP_TOO_SHORT,
+                label=label,
+                seconds=seconds,
+                minimum=min_seconds,
             )
         level = rms_level(frames, channels=1)
         if level < VOICEPRINT_MIN_RMS:
-            _reject(f"clip is silent: {label} rms {level:.4f} below {VOICEPRINT_MIN_RMS}")
+            raise FakeYouError(
+                ErrorCode.VOICEPRINT_CLIP_SILENT,
+                label=label,
+                level=level,
+                threshold=VOICEPRINT_MIN_RMS,
+            )
         utterances.append(_to_utterance(frames, count))
         total_seconds += seconds
     if not gated:
@@ -260,7 +252,7 @@ def voiceprint_enroll(
             _open_journal(settings, journal) as owned_journal,
         ):
             embedding = _embedder_for(settings, embedder).embed(utterances)
-            stamp = datetime.now(UTC).isoformat()
+            stamp = datetime.now(UTC)
             owned_store.save(
                 VoiceprintRecord(
                     person_id=name,
@@ -282,15 +274,13 @@ def voiceprint_enroll(
                 n_utterances=len(utterances),
                 is_negative=negative,
             )
-        print(
-            json.dumps(
-                {
-                    "person_id": name,
-                    "n_utterances": len(utterances),
-                    "dim": len(embedding),
-                    "is_negative": negative,
-                }
-            )
+        emit_json(
+            {
+                "person_id": name,
+                "n_utterances": len(utterances),
+                "dim": len(embedding),
+                "is_negative": negative,
+            }
         )
         return
     assert challenge_id and challenge and transcript and owner_name
@@ -358,7 +348,7 @@ def voiceprint_enroll(
             )
         with _open_store(settings, store) as owned_store:
             embedding = _embedder_for(settings, embedder).embed(utterances)
-            stamp = datetime.now(UTC).isoformat()
+            stamp = datetime.now(UTC)
             owned_store.save(
                 VoiceprintRecord(
                     person_id=name,
@@ -389,17 +379,15 @@ def voiceprint_enroll(
             n_utterances=len(utterances),
             is_negative=negative,
         )
-    print(
-        json.dumps(
-            {
-                "person_id": name,
-                "n_utterances": len(utterances),
-                "dim": len(embedding),
-                "is_negative": negative,
-                "challenge_id": challenge_id,
-                "owner_name": owner_name,
-            }
-        )
+    emit_json(
+        {
+            "person_id": name,
+            "n_utterances": len(utterances),
+            "dim": len(embedding),
+            "is_negative": negative,
+            "challenge_id": challenge_id,
+            "owner_name": owner_name,
+        }
     )
 
 
@@ -408,7 +396,7 @@ def voiceprint_verify(
     clip: str,
     *,
     settings: Settings,
-    store: VoiceprintStore | None = None,
+    store: VoiceprintRepository | None = None,
     journal: Journal | None = None,
     embedder: SpeakerEmbedder | None = None,
 ) -> None:
@@ -458,15 +446,13 @@ def voiceprint_verify(
             score=rounded_score,
             margin=rounded_margin,
         )
-    print(
-        json.dumps(
-            {
-                "person_id": name,
-                "outcome": outcome,
-                "score": rounded_score,
-                "margin": rounded_margin,
-            }
-        )
+    emit_json(
+        {
+            "person_id": name,
+            "outcome": outcome,
+            "score": rounded_score,
+            "margin": rounded_margin,
+        }
     )
 
 
@@ -474,7 +460,7 @@ def voiceprint_delete(
     name: str,
     *,
     settings: Settings,
-    store: VoiceprintStore | None = None,
+    store: VoiceprintRepository | None = None,
     journal: Journal | None = None,
 ) -> None:
     with (
@@ -482,39 +468,37 @@ def voiceprint_delete(
         _open_journal(settings, journal) as owned_journal,
     ):
         if not owned_store.delete(name):
-            raise CliError(f'no voiceprint enrolled for "{name}"')
+            raise FakeYouError(ErrorCode.VOICEPRINT_NOT_ENROLLED, name=name)
         owned_journal.record("voiceprint_cleared", source="cli", person_id=name)
-    print(json.dumps({"person_id": name, "removed": True}))
+    emit_json({"person_id": name, "removed": True})
 
 
 def voiceprint_list(
     *,
     settings: Settings,
-    store: VoiceprintStore | None = None,
+    store: VoiceprintRepository | None = None,
 ) -> None:
     with _open_store(settings, store) as owned_store:
         prints = owned_store.load_all()
-    print(
-        json.dumps(
-            [
-                {
-                    "person_id": record.person_id,
-                    "dim": record.dim,
-                    "n_utterances": record.n_utterances,
-                    "is_negative": record.is_negative,
-                    "enrolled_at": record.enrolled_at,
-                    "last_used_at": record.last_used_at,
-                }
-                for record in prints
-            ]
-        )
+    emit_json(
+        [
+            {
+                "person_id": record.person_id,
+                "dim": record.dim,
+                "n_utterances": record.n_utterances,
+                "is_negative": record.is_negative,
+                "enrolled_at": record.enrolled_at.isoformat(),
+                "last_used_at": record.last_used_at.isoformat(),
+            }
+            for record in prints
+        ]
     )
 
 
 def voiceprint_purge_expired(
     *,
     settings: Settings,
-    store: VoiceprintStore | None = None,
+    store: VoiceprintRepository | None = None,
     journal: Journal | None = None,
 ) -> None:
     with (
@@ -526,4 +510,4 @@ def voiceprint_purge_expired(
         )
         for person_id in removed:
             owned_journal.record("voiceprint_expired", source="cli", person_id=person_id)
-    print(json.dumps({"removed": removed}))
+    emit_json({"removed": removed})

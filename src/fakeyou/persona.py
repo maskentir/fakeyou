@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstr
 
 from fakeyou.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
 from fakeyou.brief import KnowledgeScope, MeetingBrief
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.ingestion import TWIN_SPEAKER
 from fakeyou.invariants import SessionId, TwinName
 from fakeyou.journal import Journal
@@ -232,7 +233,7 @@ class PersonaProfile(BaseModel):
 async def load_persona(path: Path, *, owner_id: str, twin_id: str) -> PersonaProfile:
     profile = PersonaProfile.model_validate_json(await asyncio.to_thread(path.read_bytes))
     if (profile.owner_id, profile.twin_id) != (owner_id, twin_id):
-        raise ValueError("persona owner_id and twin_id must match the session identity")
+        raise FakeYouError(ErrorCode.PERSONA_IDENTITY_MISMATCH)
     return profile
 
 
@@ -274,7 +275,7 @@ def meeting_tool_names(
     profile: PersonaProfile, brief: MeetingBrief | None, *, memory_requested: bool
 ) -> frozenset[PersonaTool]:
     if memory_requested and brief is not None and brief.knowledge_scope == "brief_only":
-        raise ValueError("memory recall is not allowed with the brief_only knowledge scope")
+        raise FakeYouError(ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY)
     names: frozenset[PersonaTool] = frozenset()
     if memory_requested:
         names |= profile.allowed_tools - MEET_HAND_TOOLS - MEET_CHAT_TOOLS

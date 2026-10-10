@@ -9,8 +9,9 @@ import pytest
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import PurgeReport, visual_purge_expired
-from fakeyou.cli.errors import CliError
 from fakeyou.conversation import TranscriptEvent, _request_messages
 from fakeyou.lifecycle import MeetingLifecycle
 from fakeyou.meet import DEFAULT_MEET_SIGNALS
@@ -119,11 +120,13 @@ def test_text_kept_30d(settings: Settings, tmp_path: Path) -> None:
 
 
 def test_purge_rejects_bad_input(settings: Settings, tmp_path: Path) -> None:
-    with pytest.raises(CliError, match="positive"):
+    with pytest.raises(FakeYouError, match="positive") as rejected:
         visual_purge_expired(root=tmp_path, days=0, settings=settings)
-    with pytest.raises(SystemExit) as outcome:
+    assert rejected.value.code is ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE
+    with pytest.raises(FakeYouError) as missing:
         visual_purge_expired(root=tmp_path / "no-such-root", days=None, settings=settings)
-    assert outcome.value.code == 2
+    assert missing.value.code is ErrorCode.VISUAL_ROOT_MISSING
+    assert missing.value.exit_code is ExitCode.INPUT_REJECTED
 
 
 async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) -> None:

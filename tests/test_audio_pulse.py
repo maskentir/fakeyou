@@ -15,6 +15,7 @@ from playwright.async_api import Page
 
 from fakeyou.audio import open_meeting_audio
 from fakeyou.browser import open_direct_page
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
@@ -184,7 +185,7 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
     try:
         require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
         require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
-    except ValueError as error:
+    except FakeYouError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)
     if not expected_text:

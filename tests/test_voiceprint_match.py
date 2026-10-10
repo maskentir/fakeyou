@@ -4,6 +4,7 @@ import math
 import struct
 from collections.abc import Sequence
 
+from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.faults import FaultReporter
 from fakeyou.identity import SpeakerRegistry
 from fakeyou.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder
@@ -16,43 +17,7 @@ from fakeyou.voiceprint_match import (
     cut_turn_clip,
     score_turn_audio,
 )
-from fakeyou.voiceprint_store import VoiceprintRecord, VoiceprintStore
-from tests.fakes import RecordingJournal
-
-
-class FakeStore(VoiceprintStore):
-    def __init__(self, records: Sequence[VoiceprintRecord] = ()) -> None:
-        self._records = list(records)
-
-    def load_all(self) -> list[VoiceprintRecord]:
-        return list(self._records)
-
-
-class FakeEmbedder(SpeakerEmbedder):
-    def __init__(self, vector: tuple[float, ...]) -> None:
-        self._vector = vector
-        self.calls: list[list[tuple[float, ...]]] = []
-
-    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
-        self.calls.append([tuple(utterance) for utterance in utterances])
-        return self._vector
-
-
-def make_record(
-    person_id: str, embedding: tuple[float, ...], owner_name: str = ""
-) -> VoiceprintRecord:
-    return VoiceprintRecord(
-        person_id=person_id,
-        embedding=embedding,
-        dim=len(embedding),
-        n_utterances=3,
-        consent_ts="2026-10-07T10:00:00+00:00",
-        policy_version="v1",
-        is_negative=False,
-        enrolled_at="2026-10-07T10:00:01+00:00",
-        last_used_at="2026-10-07T10:00:02+00:00",
-        owner_name=owner_name,
-    )
+from tests.fakes import CONSENT_AT, FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
 
 
 def make_negative(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRecord:
@@ -73,7 +38,7 @@ def make_negative(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRec
 
 def test_match_above_threshold_with_margin_verifies_winner() -> None:
     matcher = VoiceprintMatcher(
-        FakeStore([make_record("alice", (1.0, 0.0)), make_record("bob", (0.0, 1.0))])
+        InMemoryVoiceprints([make_record("alice", (1.0, 0.0)), make_record("bob", (0.0, 1.0))])
     )
 
     scores = matcher.match((1.0, 0.0))
@@ -86,7 +51,9 @@ def test_match_above_threshold_with_margin_verifies_winner() -> None:
 
 def test_match_below_threshold_reports_unknown() -> None:
     matcher = VoiceprintMatcher(
-        FakeStore([make_record("alice", (1.0, 0.0, 0.0)), make_record("bob", (0.0, 1.0, 0.0))])
+        InMemoryVoiceprints(
+            [make_record("alice", (1.0, 0.0, 0.0)), make_record("bob", (0.0, 1.0, 0.0))]
+        )
     )
 
     scores = matcher.match((0.0, 0.0, 1.0))
@@ -98,7 +65,7 @@ def test_match_below_threshold_reports_unknown() -> None:
 
 def test_match_close_runners_up_reports_conflict() -> None:
     matcher = VoiceprintMatcher(
-        FakeStore([make_record("alice", (1.0, 0.0)), make_record("bob", (0.99, 0.1))])
+        InMemoryVoiceprints([make_record("alice", (1.0, 0.0)), make_record("bob", (0.99, 0.1))])
     )
 
     scores = matcher.match((1.0, 0.0))
@@ -111,7 +78,9 @@ def test_match_close_runners_up_reports_conflict() -> None:
 
 def test_match_negative_winner_reports_negative() -> None:
     matcher = VoiceprintMatcher(
-        FakeStore([make_record("alice", (1.0, 0.0)), make_negative("twin-voice", (0.0, 1.0))])
+        InMemoryVoiceprints(
+            [make_record("alice", (1.0, 0.0)), make_negative("twin-voice", (0.0, 1.0))]
+        )
     )
 
     scores = matcher.match((0.0, 1.0))
@@ -121,7 +90,7 @@ def test_match_negative_winner_reports_negative() -> None:
 
 
 def test_match_empty_store_reports_unknown_with_floor_scores() -> None:
-    matcher = VoiceprintMatcher(FakeStore([]))
+    matcher = VoiceprintMatcher(InMemoryVoiceprints())
 
     scores = matcher.match((1.0, 0.0))
 
@@ -286,7 +255,7 @@ def test_apply_unknown_speaker_uuid_notes_nothing_but_journals() -> None:
 
 def test_score_turn_audio_below_min_seconds_discards_without_scoring() -> None:
     embedder = FakeEmbedder((1.0, 0.0))
-    matcher = VoiceprintMatcher(FakeStore([make_record("alice", (1.0, 0.0))]))
+    matcher = VoiceprintMatcher(InMemoryVoiceprints([make_record("alice", (1.0, 0.0))]))
 
     assert score_turn_audio(b"\x00" * 95998, embedder, matcher, min_seconds=3.0) is None
 
@@ -295,7 +264,7 @@ def test_score_turn_audio_below_min_seconds_discards_without_scoring() -> None:
 
 def test_score_turn_audio_at_min_seconds_embeds_and_matches() -> None:
     embedder = FakeEmbedder((1.0, 0.0))
-    matcher = VoiceprintMatcher(FakeStore([make_record("alice", (1.0, 0.0))]))
+    matcher = VoiceprintMatcher(InMemoryVoiceprints([make_record("alice", (1.0, 0.0))]))
 
     scores = score_turn_audio(b"\x00" * 96000, embedder, matcher, min_seconds=3.0)
 
@@ -352,7 +321,7 @@ def test_short_segment_gets_exact_padding_clamped_at_audio_start() -> None:
 def test_identical_turn_scores_zero_difference_across_workers() -> None:
     audio = _turn_audio(6.0)
     matcher = VoiceprintMatcher(
-        FakeStore([make_record("alice", (0.0, 1.0)), make_record("bob", (1.0, 0.0))])
+        InMemoryVoiceprints([make_record("alice", (0.0, 1.0)), make_record("bob", (1.0, 0.0))])
     )
 
     worker_a = cut_turn_clip(audio, 1050.0, 2310.0)
@@ -370,7 +339,7 @@ def test_identical_turn_scores_zero_difference_across_workers() -> None:
 
 def test_match_threads_owner_name_and_consent_into_scores() -> None:
     matcher = VoiceprintMatcher(
-        FakeStore(
+        InMemoryVoiceprints(
             [
                 make_record("spk-1", (1.0, 0.0), owner_name="Maya"),
                 make_record("spk-2", (0.0, 1.0), owner_name="Rani"),
@@ -382,4 +351,4 @@ def test_match_threads_owner_name_and_consent_into_scores() -> None:
 
     assert scores.person_id == "spk-1"
     assert scores.owner_name == "Maya"
-    assert scores.consent_ts == "2026-10-07T10:00:00+00:00"
+    assert scores.consent_ts == CONSENT_AT

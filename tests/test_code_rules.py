@@ -2,10 +2,13 @@ import ast
 import io
 import json
 import re
+import string
 import tokenize
 from pathlib import Path
 
 import pytest
+
+from fakeyou.catalog.errors import CATALOG, ErrorCode
 
 ROOT = Path(__file__).resolve().parent.parent
 PYTHON_FILES = sorted(
@@ -28,6 +31,8 @@ CROSS_CUTTING_SUITES = {
     "taxonomy",
 }
 FORBIDDEN_FACTORY_PREFIXES = ("make_", "construct_", "new_", "get_", "fetch_", "init_")
+DATABASE_PACKAGE = ROOT / "src" / "fakeyou" / "db"
+PERSISTENCE_DRIVERS = ("alembic", "langgraph.checkpoint.postgres", "psycopg", "sqlalchemy")
 
 
 def _relative(path: Path) -> str:
@@ -113,3 +118,159 @@ def test_public_functions_use_the_factory_verb_table(function) -> None:
     if node.name.startswith("open_"):
         decorators = {ast.unparse(decorator) for decorator in node.decorator_list}
         assert decorators & {"asynccontextmanager", "contextmanager"}
+
+
+def _imported_modules(source: str) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _is_persistence_driver(module: str) -> bool:
+    return any(
+        module == driver or module.startswith(f"{driver}.") for driver in PERSISTENCE_DRIVERS
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [path for path in SOURCE_FILES if DATABASE_PACKAGE not in path.parents],
+    ids=_relative,
+)
+def test_persistence_drivers_are_imported_only_by_the_db_package(path: Path) -> None:
+    drivers = _imported_modules(path.read_text())
+
+    assert sorted(module for module in drivers if _is_persistence_driver(module)) == []
+
+
+@pytest.mark.parametrize("path", sorted(DATABASE_PACKAGE.rglob("*.py")), ids=_relative)
+def test_db_package_does_not_depend_on_the_cli(path: Path) -> None:
+    modules = _imported_modules(path.read_text())
+
+    assert sorted(module for module in modules if module.startswith("fakeyou.cli")) == []
+
+
+ERROR_CATALOG_FILE = ROOT / "src" / "fakeyou" / "catalog" / "errors.py"
+OUTPUT_FILE = ROOT / "src" / "fakeyou" / "cli" / "output.py"
+JOURNAL_FILE = ROOT / "src" / "fakeyou" / "journal.py"
+RETIRED_ERROR_NAMES = ("CliError", "PersistenceError", "FAILURE_EXIT_CODES")
+
+
+def _error_classes() -> frozenset[str]:
+    parents: dict[str, set[str]] = {}
+    for path in SOURCE_FILES:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ClassDef):
+                parents.setdefault(node.name, set()).update(
+                    ast.unparse(base) for base in node.bases
+                )
+    classes = {"FakeYouError"}
+    grew = True
+    while grew:
+        grew = False
+        for name, bases in parents.items():
+            if name not in classes and bases & classes:
+                classes.add(name)
+                grew = True
+    return frozenset(classes)
+
+
+def _template_fields(template: str) -> set[str]:
+    return {name for _, name, _, _ in string.Formatter().parse(template) if name is not None}
+
+
+ERROR_CLASSES = _error_classes()
+ERROR_CONSTRUCTIONS = [
+    (_relative(path), node)
+    for path in SOURCE_FILES
+    if path != ERROR_CATALOG_FILE
+    for node in ast.walk(ast.parse(path.read_text()))
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Name)
+    and node.func.id in ERROR_CLASSES
+]
+
+
+@pytest.mark.parametrize(
+    "site", ERROR_CONSTRUCTIONS, ids=lambda site: f"{site[0]}:{site[1].lineno}"
+)
+def test_error_construction_names_a_catalog_code_and_its_fields(
+    site: tuple[str, ast.Call],
+) -> None:
+    _location, call = site
+    first = call.args[0] if call.args else None
+
+    assert isinstance(first, ast.Attribute)
+    assert ast.unparse(first.value) == "ErrorCode"
+    code = ErrorCode[first.attr]
+    keywords = {keyword.arg for keyword in call.keywords}
+    assert None not in keywords
+    assert keywords == _template_fields(CATALOG[code].template)
+
+
+def test_every_error_code_is_constructed_somewhere_in_the_source() -> None:
+    used = {
+        node.attr
+        for path in SOURCE_FILES
+        if path != ERROR_CATALOG_FILE
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Attribute) and ast.unparse(node.value) == "ErrorCode"
+    }
+
+    assert used == {member.name for member in ErrorCode}
+
+
+def test_user_facing_failure_text_is_printed_only_by_the_output_module() -> None:
+    offenders = [
+        _relative(path)
+        for path in SOURCE_FILES
+        if path != OUTPUT_FILE and "fakeyou: error:" in path.read_text()
+    ]
+
+    assert offenders == []
+
+
+def test_print_calls_live_only_in_the_output_module_and_the_journal() -> None:
+    offenders = [
+        f"{_relative(path)}:{node.lineno}"
+        for path in SOURCE_FILES
+        if path not in {OUTPUT_FILE, JOURNAL_FILE}
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "print"
+    ]
+
+    assert offenders == []
+
+
+def test_system_exit_never_takes_a_bare_integer() -> None:
+    offenders = [
+        f"{_relative(path)}:{node.lineno}"
+        for path in SOURCE_FILES
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "SystemExit"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    ]
+
+    assert offenders == []
+
+
+@pytest.mark.parametrize("name", RETIRED_ERROR_NAMES)
+def test_retired_error_names_are_gone(name: str) -> None:
+    pattern = re.compile(rf"\b{name}\b")
+    offenders = [
+        _relative(path)
+        for folder in ("src", "tests", "evals")
+        for path in (ROOT / folder).rglob("*.py")
+        if path.resolve() != Path(__file__).resolve() and pattern.search(path.read_text())
+    ]
+
+    assert offenders == []

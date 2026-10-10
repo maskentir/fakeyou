@@ -18,6 +18,7 @@ from evals.test_memory_correction_eval import (
     token_present,
     write_fixture_record,
 )
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.ingestion import ingest_corrections, ingest_meeting
 from fakeyou.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.memory import (
@@ -344,7 +345,7 @@ async def test_live_shadow_dual_run(tmp_path: Path) -> None:
     record_shadow = write_fixture_record(tmp_path / "shadow", fixture)
     try:
         config = memory_config(Settings())
-    except ValueError as error:
+    except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     async with open_graphiti_memory(config) as memory:
         try:

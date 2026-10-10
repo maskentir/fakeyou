@@ -191,7 +191,7 @@ class _ToolActivity(AsyncCallbackHandler):
         self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
     ) -> None:
         name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
-        journal = self._journal or Journal("", stdout=False)
+        journal = self._journal or Journal("", echo=False)
         context = journal.timed(
             started="tool_started",
             finished="tool_finished",

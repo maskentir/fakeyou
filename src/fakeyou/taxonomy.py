@@ -56,3 +56,37 @@ EventVerb = Literal[
     "transitioned",
     "verified",
 ]
+TerminalReason = Literal[
+    "infra_failure",
+    "browser_failure",
+    "audio_failure",
+    "conversation_failure",
+    "stopped_by_owner",
+    "left_by_owner",
+    "denied_by_host",
+    "removed_by_host",
+    "ended_by_host",
+    "blocked_by_platform",
+    "lobby_timeout_reached",
+    "duration_limit_reached",
+    "alone_limit_reached",
+]
+ProviderFaultKind = Literal[
+    "payment_required",
+    "unauthorized",
+    "rate_limited",
+    "unavailable",
+    "timeout",
+    "bad_request",
+    "unknown",
+]
+HealthKind = Literal[
+    "no_audio_frames",
+    "no_transcripts",
+    "silent_capture",
+    "reconnect_unsupported",
+    "callback_failed",
+    "voiceprint_misbind",
+    "voiceprint_model_mismatch",
+]
+FaultKind = ProviderFaultKind | HealthKind

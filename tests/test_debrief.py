@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 
 import fakeyou.debrief as module
 from fakeyou.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.correction_labels import (
     correction_speaker_name,
     describe_correction_speakers,
@@ -179,19 +180,21 @@ async def test_no_brief_means_empty_findings() -> None:
 )
 async def test_invalid_native_schema_fails_without_repair(payload: dict[str, Any]) -> None:
     model = ToolCallingFakeModel(responses=[native_response(payload)])
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_SCHEMA_INVALID
     assert len(model.seen) == 2
 
 
 async def test_raw_text_is_never_a_debrief() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content='{"items": [], "findings": []}')])
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) == 2
 
 
@@ -206,10 +209,11 @@ async def test_external_tool_call_is_not_executed() -> None:
             )
         ]
     )
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) <= 2
 
 
@@ -218,10 +222,11 @@ async def test_each_chunk_is_validated_before_merge() -> None:
     model = ToolCallingFakeModel(
         responses=[native_response(DebriefDraft(items=(item(41),), findings=()))]
     )
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, entries), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
     assert len(model.seen) == 2
 
 
@@ -233,10 +238,11 @@ async def test_a_later_chunk_failure_never_returns_partial_draft() -> None:
             AIMessage(content="Failed extraction"),
         ]
     )
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, entries), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) == 4
 
 
@@ -328,8 +334,9 @@ def test_merge_rejects_more_than_100_distinct_items() -> None:
         DebriefDraft(items=tuple(item(text=f"Claim {i}") for i in range(100)), findings=()),
         DebriefDraft(items=(item(text="Overflow"),), findings=()),
     ]
-    with pytest.raises(DebriefValidationError, match="100"):
+    with pytest.raises(DebriefValidationError, match="100") as caught:
         module.merge_drafts(drafts)
+    assert caught.value.code is ErrorCode.DEBRIEF_MERGED_TOO_MANY_ITEMS
 
 
 def test_merge_rejects_evidence_overflow_instead_of_dropping_sources() -> None:
@@ -346,8 +353,9 @@ def test_merge_rejects_evidence_overflow_instead_of_dropping_sources() -> None:
         )
         for start in (1, 7)
     ]
-    with pytest.raises(DebriefValidationError, match="10"):
+    with pytest.raises(DebriefValidationError, match="10") as caught:
         module.merge_drafts(drafts)
+    assert caught.value.code is ErrorCode.DEBRIEF_MERGED_FINDING_TOO_MANY_REFS
 
 
 def test_render_preserves_source_metadata_and_escapes_participant_markup(record_path: Path) -> None:
@@ -418,10 +426,17 @@ def test_atomic_publish_failure_preserves_previous_canonical_report(
     assert module.debrief_report_status(record_path) == "available"
 
 
-@pytest.mark.parametrize("change", ["record", "context"])
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        ("record", ErrorCode.DEBRIEF_SOURCE_HASH_CHANGED),
+        ("context", ErrorCode.DEBRIEF_CONTEXT_INVALID),
+    ],
+)
 def test_publication_checks_freshness_before_replacing_previous_report(
     record_path: Path,
     change: str,
+    code: ErrorCode,
 ) -> None:
     report = report_for(record_path)
     module.write_debrief(record_path, report)
@@ -431,16 +446,18 @@ def test_publication_checks_freshness_before_replacing_previous_report(
         record_path.write_bytes(record_path.read_bytes() + b"\n")
     else:
         (record_path.parent / "meeting-context.json").write_text("{}")
-    with pytest.raises(ValueError):
+    with pytest.raises(DebriefValidationError) as caught:
         module.write_debrief(record_path, report)
+    assert caught.value.code is code
     assert canonical.read_bytes() == before
 
 
 def test_publication_rejects_fabricated_source_metadata(record_path: Path) -> None:
     report = report_for(record_path)
     wrong = report.evidence_sources[0].model_copy(update={"participant_id": "owner"})
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         module.write_debrief(record_path, report.model_copy(update={"evidence_sources": (wrong,)}))
+    assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_METADATA_DIFFERS
     assert not (record_path.parent / "debrief.json").exists()
 
 
@@ -531,11 +548,13 @@ def test_failed_rollback_preserves_old_backup_and_blocks_cache(
     assert len(backups) == 1
     assert backups[0].read_bytes() == before
     assert module.debrief_report_status(record_path) == "invalid"
-    with pytest.raises(DebriefValidationError, match="recovery"):
+    with pytest.raises(DebriefValidationError, match="recovery") as caught:
         module.read_debrief(record_path)
+    assert caught.value.code is ErrorCode.DEBRIEF_PUBLICATION_RECOVERY
     monkeypatch.setattr(module, "write_atomically", real_write)
-    with pytest.raises(DebriefValidationError, match="recovery"):
+    with pytest.raises(DebriefValidationError, match="recovery") as caught:
         module.write_debrief(record_path, previous)
+    assert caught.value.code is ErrorCode.DEBRIEF_PUBLICATION_RECOVERY
     assert backups[0].read_bytes() == before
 
 
@@ -586,8 +605,9 @@ def test_publish_rejects_source_changed_after_markdown_write(
             record_path.write_bytes(record_path.read_bytes() + b"\n")
 
     monkeypatch.setattr(module, "write_atomically", mutate_source)
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         module.write_debrief(record_path, report_for(record_path, model="new-model"))
+    assert caught.value.code is ErrorCode.DEBRIEF_SOURCE_HASH_CHANGED
     assert canonical.read_bytes() == before
 
 
@@ -614,10 +634,11 @@ async def test_multiple_native_outputs_fail_without_repair_or_text_parsing() -> 
         }
     )
     model = ToolCallingFakeModel(responses=[response])
-    with pytest.raises(DebriefValidationError):
+    with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
             model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
         )
+    assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_SCHEMA_INVALID
     assert len(model.seen) == 2
 
 
@@ -862,7 +883,7 @@ def test_status_check_reports_stale_sidecar_fallback_to_journal(record_path: Pat
     row = json.loads(lines[0])
     assert row["event"] == "fault_recorded"
     assert row["source"] == "meeting_record"
-    assert row["detail"] == "StaleDiarizationError"
+    assert row["detail"] == "diarization sidecar is stale: record changed since correction"
 
 
 @pytest.mark.parametrize("label", [FIXTURE["render_shown"], None])

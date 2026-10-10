@@ -13,8 +13,9 @@ from playwright.async_api import Page
 from fakeyou.attribution_probe import AttributionProbe, ProbeDrainLoop, load_probe_script
 from fakeyou.audio import MeetingAudioError
 from fakeyou.browser import open_direct_page, stable_fingerprint_seed
-from fakeyou.checkpoint import open_checkpointer
 from fakeyou.cleanup import close_safely
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import require_url
 from fakeyou.faults import FaultReporter
 from fakeyou.invariants import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME
 from fakeyou.journal import Journal
@@ -23,7 +24,6 @@ from fakeyou.lifecycle import (
     LifecycleEventKind,
     MeetingLifecycle,
     MeetingPhase,
-    TerminalReason,
 )
 from fakeyou.meet import (
     DEFAULT_MEET_SIGNALS,
@@ -68,6 +68,7 @@ from fakeyou.stream_capture import (
     SupportsCaptureRegistry,
     load_capture_script,
 )
+from fakeyou.taxonomy import TerminalReason
 from fakeyou.visual_caption import VisualCaption, VisualCaptioner
 from fakeyou.visual_observer import VisualObserver
 from fakeyou.visual_store import VisualFrame, VisualStore
@@ -857,7 +858,7 @@ async def run_meeting_session(
         saver = await resources.enter_async_context(
             saver_factory()
             if saver_factory is not None
-            else open_checkpointer(config.checkpoint_path, dsn=config.checkpoint_dsn)
+            else open_checkpointer(require_url(config.database_url))
         )
         lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
         await lifecycle.initialize(resume=config.resume)

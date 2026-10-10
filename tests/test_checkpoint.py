@@ -1,30 +1,24 @@
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import pytest
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from pydantic import SecretStr
+from sqlalchemy import Engine, inspect
 
-import fakeyou.checkpoint as checkpoint_module
-from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
+import fakeyou.db.checkpoint as checkpoint_module
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.diagnostics import check_setup
+from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.settings import Settings
 
-
-@pytest.mark.asyncio
-async def test_open_checkpointer_stays_sqlite_without_a_dsn(tmp_path: Path) -> None:
-    path = tmp_path / "nested" / "checkpoints.sqlite"
-
-    async with open_checkpointer(path) as saver:
-        assert isinstance(saver, AsyncSqliteSaver)
-
-    assert path.exists()
+LANGGRAPH_TABLES = {"checkpoint_blobs", "checkpoint_migrations", "checkpoint_writes", "checkpoints"}
 
 
 @pytest.mark.asyncio
-async def test_open_checkpointer_uses_postgres_when_a_dsn_is_configured(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_open_checkpointer_uses_postgres_and_runs_setup(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, Any] = {}
 
@@ -42,36 +36,48 @@ async def test_open_checkpointer_uses_postgres_when_a_dsn_is_configured(
 
     monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", FakePostgresSaver)
 
-    async with open_checkpointer(
-        tmp_path / "checkpoints.sqlite", dsn="postgresql://user:pass@localhost/db"
-    ) as saver:
+    async with open_checkpointer("postgresql://user:pass@localhost/db") as saver:
         assert isinstance(saver, FakePostgresSaver)
 
     assert calls["conn_string"] == "postgresql://user:pass@localhost/db"
     assert calls["setup"] is True
-    assert not (tmp_path / "checkpoints.sqlite").exists()
-
-
-def test_checkpoint_dsn_treats_missing_and_blank_urls_as_unset(settings: Settings) -> None:
-    assert checkpoint_dsn(settings) is None
-
-    settings.checkpoint.url = SecretStr("")
-    assert checkpoint_dsn(settings) is None
-
-    settings.checkpoint.url = SecretStr("postgresql://u:p@localhost/db")
-    assert checkpoint_dsn(settings) == "postgresql://u:p@localhost/db"
 
 
 @pytest.mark.asyncio
-async def test_open_checkpointer_treats_a_blank_dsn_as_sqlite(tmp_path: Path) -> None:
-    async with open_checkpointer(tmp_path / "checkpoints.sqlite", dsn="") as saver:
-        assert isinstance(saver, AsyncSqliteSaver)
+async def test_setup_creates_the_langgraph_tables_and_keeps_a_thread(
+    migrated_database_url: str, migrated_engine: Engine
+) -> None:
+    config = {"configurable": {"thread_id": "checkpoint-roundtrip", "checkpoint_ns": ""}}
+    checkpoint = empty_checkpoint()
+
+    async with open_checkpointer(migrated_database_url) as saver:
+        assert LANGGRAPH_TABLES <= set(inspect(migrated_engine).get_table_names())
+        await saver.aput(config, checkpoint, {"source": "input", "step": -1, "parents": {}}, {})
+
+    async with open_checkpointer(migrated_database_url) as saver:
+        stored = await saver.aget_tuple(config)
+
+    assert stored is not None
+    assert stored.checkpoint["id"] == checkpoint["id"]
 
 
-def test_check_masks_the_checkpoint_dsn(
+@pytest.mark.asyncio
+async def test_open_checkpointer_reports_an_unreachable_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", AsyncPostgresSaver)
+
+    with pytest.raises(FakeYouError) as raised:
+        async with open_checkpointer("postgresql://fakeyou:secret@127.0.0.1:1/fakeyou"):
+            pass
+
+    assert raised.value.code is ErrorCode.DATABASE_UNREACHABLE
+
+
+def test_check_masks_the_database_url(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    settings.checkpoint.url = SecretStr("postgresql://fakeyou:s3cret@localhost/fakeyou")
+    settings.database.url = SecretStr("postgresql://fakeyou:s3cret@localhost/fakeyou")
 
     check_setup(settings)
 
@@ -80,13 +86,10 @@ def test_check_masks_the_checkpoint_dsn(
     assert "**********" in report
 
 
-def test_checkpoint_dsn_loads_from_the_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FAKEYOU_CHECKPOINT__URL", "postgresql://fakeyou:x@localhost/fakeyou")
+def test_database_url_loads_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKEYOU_DATABASE__URL", "postgresql://fakeyou:x@localhost/fakeyou")
 
-    assert (
-        Settings(_env_file=None).checkpoint.url is not None
-        and Settings(_env_file=None).checkpoint.url.get_secret_value()
-        == "postgresql://fakeyou:x@localhost/fakeyou"
-    )
+    url = Settings(_env_file=None).database.url
+
+    assert url is not None
+    assert url.get_secret_value() == "postgresql://fakeyou:x@localhost/fakeyou"

@@ -8,8 +8,11 @@ from fakeyou.agent import (
 )
 from fakeyou.assembly import default_persona
 from fakeyou.browser import open_browser_tools
-from fakeyou.checkpoint import checkpoint_dsn, open_checkpointer
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.cli.output import emit_text
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import configured_url, require_url
+from fakeyou.invariants import IDENTIFIER_PATTERN
 from fakeyou.memory import (
     create_memory_tools,
     open_graphiti_memory,
@@ -23,12 +26,12 @@ from fakeyou.settings import (
 async def chat(
     message: str, thread: str, use_browser: bool, use_memory: bool, settings: Settings
 ) -> None:
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", thread):
-        raise CliError("--thread must be 1-128 characters using letters, numbers, '_' or '-'")
+    if not re.fullmatch(IDENTIFIER_PATTERN, thread):
+        raise FakeYouError(ErrorCode.CHAT_THREAD_INVALID)
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
-            open_checkpointer(settings.paths.checkpoint_path, dsn=checkpoint_dsn(settings))
+            open_checkpointer(require_url(configured_url(settings)))
         )
         tools: list[BaseTool] = []
         if use_memory:
@@ -63,4 +66,4 @@ async def chat(
         finally:
             if remember is not None:
                 await remember.ainvoke({"fact": "", "flush": True})
-        print(response["messages"][-1].content)
+        emit_text(response["messages"][-1].content)

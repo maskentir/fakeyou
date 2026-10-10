@@ -1,13 +1,15 @@
 import dataclasses
-import json
+import os
 from pathlib import Path
 
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.output import emit_json
 from fakeyou.settings import Settings
 from fakeyou.worker_backend import (
     DockerWorkerBackend,
     WorkerBackend,
-    WorkerError,
     WorkerStartRequest,
 )
 
@@ -20,6 +22,12 @@ def _backend(settings: Settings, backend: WorkerBackend | None) -> WorkerBackend
             journal_dir=settings.paths.journal_dir, record_dir=settings.paths.record_dir
         )
     )
+
+
+def _start_backend(settings: Settings, backend: WorkerBackend | None) -> WorkerBackend:
+    if backend is None and not os.environ.get(ConfigKey.COMPOSE_WORKER_DATABASE_URL, "").strip():
+        raise FakeYouError(ErrorCode.CONFIG_WORKER_DATABASE_URL_MISSING)
+    return _backend(settings, backend)
 
 
 def worker_start(
@@ -44,55 +52,46 @@ def worker_start(
     settings: Settings,
     backend: WorkerBackend | None = None,
 ) -> None:
-    try:
-        started = _backend(settings, backend).start(
-            WorkerStartRequest(
-                link=link,
-                meeting_id=meeting_id,
-                owner_id=owner_id,
-                twin_id=twin_id,
-                twin_name=twin_name,
-                lobby_timeout=lobby_timeout,
-                duration=duration,
-                profile_dir=profile_dir,
-                headless=headless,
-                audio=audio_enabled,
-                initial_speech=initial_speech,
-                conversation=conversation_enabled,
-                persona_path=persona_path,
-                brief_path=brief_path,
-                memory=memory,
-                wake_phrase=wake_phrase,
-                barge_in=barge_in,
-            )
+    started = _start_backend(settings, backend).start(
+        WorkerStartRequest(
+            link=link,
+            meeting_id=meeting_id,
+            owner_id=owner_id,
+            twin_id=twin_id,
+            twin_name=twin_name,
+            lobby_timeout=lobby_timeout,
+            duration=duration,
+            profile_dir=profile_dir,
+            headless=headless,
+            audio=audio_enabled,
+            initial_speech=initial_speech,
+            conversation=conversation_enabled,
+            persona_path=persona_path,
+            brief_path=brief_path,
+            memory=memory,
+            wake_phrase=wake_phrase,
+            barge_in=barge_in,
         )
-    except WorkerError as error:
-        raise CliError(str(error)) from None
-    print(json.dumps(dataclasses.asdict(started), indent=2))
+    )
+    emit_json(dataclasses.asdict(started))
 
 
 def worker_status(
     meeting_id: str | None, *, settings: Settings, backend: WorkerBackend | None = None
 ) -> None:
-    try:
-        if meeting_id is None:
-            states = _backend(settings, backend).status_all()
-            print(json.dumps([dataclasses.asdict(state) for state in states], indent=2))
-            return
-        state = _backend(settings, backend).status(meeting_id)
-    except WorkerError as error:
-        raise CliError(str(error)) from None
-    print(json.dumps(dataclasses.asdict(state), indent=2))
+    if meeting_id is None:
+        states = _backend(settings, backend).status_all()
+        emit_json([dataclasses.asdict(state) for state in states])
+        return
+    state = _backend(settings, backend).status(meeting_id)
+    emit_json(dataclasses.asdict(state))
 
 
 def worker_stop(
     meeting_id: str, *, timeout: float, settings: Settings, backend: WorkerBackend | None = None
 ) -> None:
-    try:
-        stopped = _backend(settings, backend).stop(meeting_id, timeout_seconds=timeout)
-    except WorkerError as error:
-        raise CliError(str(error)) from None
-    print(json.dumps(dataclasses.asdict(stopped), indent=2))
+    stopped = _backend(settings, backend).stop(meeting_id, timeout_seconds=timeout)
+    emit_json(dataclasses.asdict(stopped))
 
 
 def worker_ingest(
@@ -104,12 +103,9 @@ def worker_ingest(
     settings: Settings,
     backend: WorkerBackend | None = None,
 ) -> None:
-    try:
-        ingested = _backend(settings, backend).ingest(
-            meeting_id, persona_path=persona_path, owner_id=owner_id, twin_id=twin_id
-        )
-    except WorkerError as error:
-        raise CliError(str(error)) from None
-    print(json.dumps(dataclasses.asdict(ingested), indent=2))
+    ingested = _backend(settings, backend).ingest(
+        meeting_id, persona_path=persona_path, owner_id=owner_id, twin_id=twin_id
+    )
+    emit_json(dataclasses.asdict(ingested))
     if ingested.status != "completed":
-        raise SystemExit(1)
+        raise SystemExit(ExitCode.FAILURE)

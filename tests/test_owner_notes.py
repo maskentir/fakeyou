@@ -10,6 +10,7 @@ from graphiti_core.nodes import EpisodeType
 from neo4j.exceptions import ConstraintError
 
 import fakeyou.owner_notes as owner_notes_module
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.owner_notes import (
     OWNER_NOTE_SOURCE,
     NoteConflictError,
@@ -550,8 +551,9 @@ async def test_new_note_without_times_uses_now(note_store: NoteStore) -> None:
 
 async def test_blank_text_is_rejected_before_extraction(note_store: NoteStore) -> None:
     for text in ("", "   "):
-        with pytest.raises(ValueError, match="must not be blank"):
+        with pytest.raises(FakeYouError, match="must not be blank") as caught:
             await remember_owner_note(note_store.memory, group_id=GROUP, text=text)
+        assert caught.value.code is ErrorCode.NOTE_BODY_BLANK
 
     assert note_store.extraction_calls == 0
     assert note_store.controls == {}
@@ -560,15 +562,16 @@ async def test_blank_text_is_rejected_before_extraction(note_store: NoteStore) -
 
 @pytest.mark.parametrize("group_id", ["", "bad:group", "bad group", "x" * 129])
 async def test_invalid_group_is_rejected(note_store: NoteStore, group_id: str) -> None:
-    with pytest.raises(ValueError, match="group_id"):
+    with pytest.raises(FakeYouError, match="group_id") as caught:
         await remember_owner_note(note_store.memory, group_id=group_id, text=BODY)
 
+    assert caught.value.code is ErrorCode.NOTE_GROUP_ID_INVALID
     assert note_store.extraction_calls == 0
     assert note_store.controls == {}
 
 
 async def test_naive_source_time_is_rejected(note_store: NoteStore) -> None:
-    with pytest.raises(ValueError, match="timezone"):
+    with pytest.raises(FakeYouError, match="timezone") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -577,6 +580,7 @@ async def test_naive_source_time_is_rejected(note_store: NoteStore) -> None:
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_TIME_NOT_AWARE
     assert note_store.extraction_calls == 0
     assert note_store.controls == {}
 
@@ -584,7 +588,7 @@ async def test_naive_source_time_is_rejected(note_store: NoteStore) -> None:
 async def test_future_source_time_is_rejected(note_store: NoteStore) -> None:
     future = datetime.now(UTC) + timedelta(days=1)
 
-    with pytest.raises(ValueError, match="future"):
+    with pytest.raises(FakeYouError, match="future") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -593,6 +597,7 @@ async def test_future_source_time_is_rejected(note_store: NoteStore) -> None:
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_SOURCE_AT_FUTURE
     assert note_store.extraction_calls == 0
     assert note_store.controls == {}
 
@@ -602,7 +607,7 @@ async def test_note_id_taken_by_existing_episode_is_rejected(
 ) -> None:
     await _seed_legacy(note_store, NOTE_A, GROUP, BODY, OLDER_AT)
 
-    with pytest.raises(NoteConflictError, match="already in use"):
+    with pytest.raises(NoteConflictError, match="already in use") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -611,6 +616,7 @@ async def test_note_id_taken_by_existing_episode_is_rejected(
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_ID_IN_USE
     assert note_store.extraction_calls == 0
     assert str(NOTE_A) not in note_store.controls
 
@@ -699,7 +705,7 @@ async def test_same_id_with_different_text_is_rejected(
         note_id=NOTE_A,
     )
 
-    with pytest.raises(NoteConflictError, match="different payload"):
+    with pytest.raises(NoteConflictError, match="different payload") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -708,6 +714,7 @@ async def test_same_id_with_different_text_is_rejected(
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
     assert note_store.extraction_calls == 1
 
 
@@ -722,7 +729,7 @@ async def test_same_id_with_different_source_time_is_rejected(
         note_id=NOTE_A,
     )
 
-    with pytest.raises(NoteConflictError, match="different payload"):
+    with pytest.raises(NoteConflictError, match="different payload") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -731,6 +738,7 @@ async def test_same_id_with_different_source_time_is_rejected(
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
     assert note_store.extraction_calls == 1
 
 
@@ -753,7 +761,7 @@ async def test_same_id_with_different_target_is_rejected(
         supersedes=NOTE_A,
     )
 
-    with pytest.raises(NoteConflictError, match="different payload"):
+    with pytest.raises(NoteConflictError, match="different payload") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -762,6 +770,7 @@ async def test_same_id_with_different_target_is_rejected(
             note_id=NOTE_B,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
     assert note_store.extraction_calls == 2
 
 
@@ -834,7 +843,7 @@ async def test_correction_of_legacy_note_creates_superseded_record(
 
 
 async def test_correction_rejects_unknown_target(note_store: NoteStore) -> None:
-    with pytest.raises(ValueError, match="unknown correction target"):
+    with pytest.raises(FakeYouError, match="unknown correction target") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -844,6 +853,7 @@ async def test_correction_rejects_unknown_target(note_store: NoteStore) -> None:
             supersedes=uuid4(),
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN
     assert note_store.extraction_calls == 0
     assert note_store.controls == {}
 
@@ -859,7 +869,7 @@ async def test_correction_target_in_other_group_is_hidden(
         note_id=NOTE_A,
     )
 
-    with pytest.raises(ValueError, match="unknown correction target"):
+    with pytest.raises(FakeYouError, match="unknown correction target") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -869,6 +879,7 @@ async def test_correction_target_in_other_group_is_hidden(
             supersedes=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN
     assert note_store.extraction_calls == 1
     assert str(NOTE_B) not in note_store.controls
 
@@ -883,7 +894,7 @@ async def test_correction_rejects_transcript_target(note_store: NoteStore) -> No
         label="Google Meet m1 transcript",
     )
 
-    with pytest.raises(ValueError, match="must be an owner note"):
+    with pytest.raises(FakeYouError, match="must be an owner note") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -893,6 +904,7 @@ async def test_correction_rejects_transcript_target(note_store: NoteStore) -> No
             supersedes=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_NOT_OWNER_NOTE
     assert note_store.extraction_calls == 0
     assert str(NOTE_B) not in note_store.controls
 
@@ -914,7 +926,7 @@ async def test_correction_rejects_replaced_target(note_store: NoteStore) -> None
         supersedes=NOTE_A,
     )
 
-    with pytest.raises(NoteConflictError, match="no longer active"):
+    with pytest.raises(NoteConflictError, match="no longer active") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -924,6 +936,7 @@ async def test_correction_rejects_replaced_target(note_store: NoteStore) -> None
             supersedes=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE
     assert note_store.extraction_calls == 2
     assert str(NOTE_C) not in note_store.controls
 
@@ -939,7 +952,7 @@ async def test_correction_rejects_pending_target(note_store: NoteStore) -> None:
             note_id=NOTE_A,
         )
 
-    with pytest.raises(NoteConflictError, match="no longer active"):
+    with pytest.raises(NoteConflictError, match="no longer active") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -949,6 +962,7 @@ async def test_correction_rejects_pending_target(note_store: NoteStore) -> None:
             supersedes=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE
     assert str(NOTE_B) not in note_store.controls
 
 
@@ -967,7 +981,7 @@ async def test_correction_requires_newer_source_time(
         note_id=NOTE_A,
     )
 
-    with pytest.raises(ValueError, match="newer than its target"):
+    with pytest.raises(FakeYouError, match="newer than its target") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -977,6 +991,7 @@ async def test_correction_requires_newer_source_time(
             supersedes=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_CORRECTION_NOT_NEWER
     assert note_store.extraction_calls == 1
     assert str(NOTE_B) not in note_store.controls
 
@@ -984,7 +999,7 @@ async def test_correction_requires_newer_source_time(
 async def test_empty_extraction_never_publishes(note_store: NoteStore) -> None:
     note_store.extract_mode = "empty"
 
-    with pytest.raises(ValueError, match="no usable facts"):
+    with pytest.raises(FakeYouError, match="no usable facts") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -993,6 +1008,7 @@ async def test_empty_extraction_never_publishes(note_store: NoteStore) -> None:
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_NO_USABLE_FACTS
     states = await read_note_states(note_store.memory, group_id=GROUP, episode_uuids=[str(NOTE_A)])
     assert states == {str(NOTE_A): "pending"}
     note_store.extract_mode = "linked"
@@ -1016,7 +1032,7 @@ async def test_extraction_without_usable_evidence_never_publishes(
 ) -> None:
     note_store.extract_mode = mode
 
-    with pytest.raises(ValueError, match="no usable facts"):
+    with pytest.raises(FakeYouError, match="no usable facts") as caught:
         await remember_owner_note(
             note_store.memory,
             group_id=GROUP,
@@ -1025,6 +1041,7 @@ async def test_extraction_without_usable_evidence_never_publishes(
             note_id=NOTE_A,
         )
 
+    assert caught.value.code is ErrorCode.NOTE_NO_USABLE_FACTS
     states = await read_note_states(note_store.memory, group_id=GROUP, episode_uuids=[str(NOTE_A)])
     assert states == {str(NOTE_A): "pending"}
 
@@ -1278,10 +1295,12 @@ async def test_forget_blocks_correction_chain(note_store: NoteStore) -> None:
         supersedes=NOTE_A,
     )
 
-    with pytest.raises(ValueError, match="correction chain"):
+    with pytest.raises(FakeYouError, match="correction chain") as caught:
         await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_A))
-    with pytest.raises(ValueError, match="correction chain"):
+    assert caught.value.code is ErrorCode.NOTE_IN_CORRECTION_CHAIN
+    with pytest.raises(FakeYouError, match="correction chain") as caught:
         await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_B))
+    assert caught.value.code is ErrorCode.NOTE_IN_CORRECTION_CHAIN
 
     assert note_store.removed == []
     assert len(note_store.episodes) == 2
@@ -1309,8 +1328,9 @@ async def test_forget_blocks_target_with_pending_correction(
             supersedes=NOTE_A,
         )
 
-    with pytest.raises(ValueError, match="pending correction"):
+    with pytest.raises(FakeYouError, match="pending correction") as caught:
         await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_A))
+    assert caught.value.code is ErrorCode.NOTE_HAS_PENDING_CORRECTION
 
     await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_B))
     await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_A))
@@ -1356,9 +1376,10 @@ async def test_forget_rejects_foreign_group(note_store: NoteStore) -> None:
         note_id=NOTE_A,
     )
 
-    with pytest.raises(ValueError, match="not in this persona"):
+    with pytest.raises(FakeYouError, match="not in this persona") as caught:
         await forget_owner_note(note_store.memory, group_id=OTHER_GROUP, episode_uuid=str(NOTE_A))
 
+    assert caught.value.code is ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY
     assert note_store.removed == []
     assert str(NOTE_A) in note_store.episodes
 

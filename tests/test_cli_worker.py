@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 
 import fakeyou.cli.main as cli_main
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.worker import worker_start, worker_status, worker_stop
 from fakeyou.settings import Settings
 from fakeyou.worker_backend import WorkerStarted, WorkerState, WorkerStopped
@@ -99,6 +101,17 @@ def test_worker_start_maps_arguments_and_prints_ids(
     }
 
 
+def test_worker_start_requires_the_postgres_database_url(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FAKEYOU_COMPOSE_WORKER_DATABASE_URL", raising=False)
+
+    with pytest.raises(FakeYouError, match="FAKEYOU_COMPOSE_WORKER_DATABASE_URL") as caught:
+        worker_start(**start_arguments(), settings=settings)
+
+    assert caught.value.code is ErrorCode.CONFIG_WORKER_DATABASE_URL_MISSING
+
+
 def test_worker_status_prints_one_meeting_or_all(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -134,7 +147,7 @@ def test_worker_commands_never_print_secrets(
 ) -> None:
     from pydantic import SecretStr
 
-    settings.checkpoint.url = SecretStr("postgresql://fakeyou:s3cret@localhost/fakeyou")
+    settings.database.url = SecretStr("postgresql://fakeyou:s3cret@localhost/fakeyou")
     backend = FakeBackend()
 
     worker_start(**start_arguments(), settings=settings, backend=backend)
@@ -236,7 +249,7 @@ def test_worker_ingest_exits_nonzero_unless_completed(
             backend=backend,
         )
 
-    assert caught.value.code == 1
+    assert caught.value.code == ExitCode.FAILURE
     assert json.loads(capsys.readouterr().out)["status"] == "interrupted"
 
 

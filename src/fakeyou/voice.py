@@ -10,6 +10,7 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.services.openai.tts import VALID_VOICES
 from pipecat.transcriptions.language import Language
 
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.invariants import PCM_CHANNELS, PLAYBACK_SAMPLE_RATE
 from fakeyou.journal import Journal
 from fakeyou.provider_faults import classify_exception, classify_minimax_status
@@ -205,7 +206,7 @@ def create_speech_synthesizer(
     language: str = DEFAULTS.speech.language,
     journal: Journal | None = None,
 ) -> OpenAISpeechSynthesizer | MiniMaxSpeechSynthesizer:
-    api_key = require_secret(settings.api_key, "FAKEYOU_TTS__API_KEY")
+    api_key = require_secret(settings.api_key, ConfigKey.TTS_API_KEY)
     if isinstance(settings, MiniMaxTTS):
         return MiniMaxSpeechSynthesizer(
             api_key=api_key,
@@ -244,7 +245,7 @@ async def _journaled_stream(
 ) -> AsyncGenerator[bytes]:
     if not text.strip():
         raise ValueError("cannot synthesize blank text")
-    journal = journal or Journal("", stdout=False)
+    journal = journal or Journal("", echo=False)
     tags: dict[str, Any] = {"chars": len(text), "streaming": True}
     if sentence_index is not None:
         tags["sentence_index"] = sentence_index

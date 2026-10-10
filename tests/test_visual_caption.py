@@ -4,14 +4,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.callbacks import CallbackManagerForLLMRun
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.outputs import ChatResult
+from langchain_core.messages import AIMessage, HumanMessage
 from PIL import Image
 
 from fakeyou import providers
 from fakeyou.agent import create_visual_tools
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.providers import create_visual_chat_model
 from fakeyou.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
 from fakeyou.visual_caption import (
@@ -23,23 +21,9 @@ from fakeyou.visual_caption import (
     frame_ref,
 )
 from fakeyou.visual_store import VisualFrame, VisualStore, append_visual
-from tests.fakes import FakeClock, RecordingJournal
+from tests.fakes import FakeClock, FakeVisualModel, RecordingJournal, caption_model
 
 AT = "2026-10-09T03:10:00+00:00"
-
-
-class FakeVisualModel(FakeMessagesListChatModel):
-    seen: list[list[BaseMessage]] = []
-
-    def _generate(
-        self,
-        messages: list[BaseMessage],
-        stop: list[str] | None = None,
-        run_manager: CallbackManagerForLLMRun | None = None,
-        **kwargs: Any,
-    ) -> ChatResult:
-        self.seen.append(list(messages))
-        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
 def shot_file(directory: Path, name: str, width: int, height: int) -> Path:
@@ -58,17 +42,6 @@ def frame_for(directory: Path, frame_id: str, path: Path, sha: str, page_ms: flo
         thumb_path=str(directory / f"{frame_id}.thumb.jpg"),
         dhash=0,
     )
-
-
-def caption_model(text: str, total_tokens: int | None = 1100) -> FakeVisualModel:
-    usage: dict[str, Any] | None = None
-    if total_tokens is not None:
-        usage = {
-            "input_tokens": total_tokens - 100,
-            "output_tokens": 100,
-            "total_tokens": total_tokens,
-        }
-    return FakeVisualModel(responses=[AIMessage(content=text, usage_metadata=usage)])
 
 
 async def test_caption_called_once_per_hash(tmp_path: Path) -> None:
@@ -256,8 +229,9 @@ def test_visual_compatible_without_base_url_fails_fast() -> None:
         reply=OpenAIReply(api_key="test-visual-key"),
         visual=VisualSettings(provider="openai_compatible", model="qwen-3-vl"),
     )
-    with pytest.raises(ValueError, match="FAKEYOU_VISUAL__BASE_URL"):
+    with pytest.raises(FakeYouError, match="FAKEYOU_VISUAL__BASE_URL") as caught:
         create_visual_chat_model(settings)
+    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
 
 
 def test_visual_settings_defaults() -> None:

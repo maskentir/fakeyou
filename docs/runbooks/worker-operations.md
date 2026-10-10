@@ -19,11 +19,13 @@ yang terlihat dari dalam container.
 docker compose build meeting-worker
 ```
 
-Untuk dua worker paralel, nyalakan Postgres dulu lalu setel URL
-checkpoint (rincian di bagian Postgres):
+Checkpoint CLI dan worker disimpan di Postgres. Nyalakan Postgres dulu,
+terapkan migrasi schema, lalu setel URL checkpoint (rincian di bagian
+Postgres):
 
 ```sh
-docker compose --profile production up -d --wait postgres
+docker compose up -d --wait postgres
+uv run fakeyou db upgrade
 ```
 
 ## Start
@@ -101,9 +103,8 @@ meeting dijamin oleh ID yang sama di empat tempat: direktori record
 dan profil browser guest per twin per meeting. Setiap twin hanya
 menjawab meeting-nya.
 
-Dua worker paralel wajib memakai checkpoint Postgres. Satu file
-SQLite hanya untuk satu worker lokal; dua proses tidak boleh menulis
-satu file checkpoint yang sama.
+Semua worker dan CLI memakai checkpoint Postgres yang sama. Tidak ada
+file checkpoint lokal yang dibagi antar proses.
 
 ## Crash dan lanjutan
 
@@ -161,10 +162,11 @@ bukan status basi dari run sebelumnya.
 
 ## Checkpoint Postgres
 
-Bila `FAKEYOU_CHECKPOINT__URL` diset (lihat `.env.example`), CLI
-memakai `AsyncPostgresSaver` resmi beserta `setup()`; bila kosong,
-CLI memakai SQLite lokal. Worker Compose meneruskan URL lewat
-`FAKEYOU_COMPOSE_WORKER_CHECKPOINT_URL`:
+`FAKEYOU_DATABASE__URL` wajib diset di `.env` (lihat `.env.example`).
+CLI memakai `AsyncPostgresSaver` resmi beserta `setup()`, dan menolak
+berjalan bila URL kosong atau berskema selain `postgresql://` dan
+`postgresql+psycopg://`. Worker Compose meneruskan URL lewat
+`FAKEYOU_COMPOSE_WORKER_DATABASE_URL`:
 
 - CLI di host menjangkau Postgres lewat `localhost:5432` (port
   dipetakan ke loopback).
@@ -174,15 +176,15 @@ CLI memakai SQLite lokal. Worker Compose meneruskan URL lewat
 Contoh nilai (ganti password sesuai `.env`):
 
 ```sh
-FAKEYOU_CHECKPOINT__URL=postgresql://fakeyou:password@127.0.0.1:5432/fakeyou
-FAKEYOU_COMPOSE_WORKER_CHECKPOINT_URL=postgresql://fakeyou:password@postgres:5432/fakeyou
+FAKEYOU_DATABASE__URL=postgresql://fakeyou:password@127.0.0.1:5432/fakeyou
+FAKEYOU_COMPOSE_WORKER_DATABASE_URL=postgresql://fakeyou:password@postgres:5432/fakeyou
 ```
 
-Service `postgres` ada di profil `production` dengan healthcheck.
-Service worker sengaja tanpa `depends_on` agar default SQLite tetap
-jalan tanpa Postgres; bila URL diset, operator menyalakan Postgres
-dulu. Tes Postgres membiarkan service tetap jalan; itu disengaja,
-bukan kebocoran.
+Service `postgres` ikut dinyalakan tanpa profil dan memiliki healthcheck.
+Service worker menunggu healthcheck itu lewat `depends_on`. Tes
+container Postgres membiarkan service tetap jalan; itu disengaja,
+bukan kebocoran. Tes Postgres nyata memakai `TEST_DATABASE_URL`;
+tanpa variabel itu tes tersebut dilewati.
 
 ## Lock lease lintas container
 

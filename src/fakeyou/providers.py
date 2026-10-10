@@ -7,6 +7,8 @@ from graphiti_core import Graphiti
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.memory import (
     open_graphiti_memory,
     verify_memory_connection,
@@ -43,7 +45,7 @@ def preflight_hosts(
     return tuple(dict.fromkeys(target for target in targets if target))
 
 
-def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
+def _init_chat_model(role: ReplySettings, name: ConfigKey) -> BaseChatModel:
     options: dict[str, Any] = {"timeout": role.timeout_seconds, "max_retries": role.max_retries}
     options["base_url"] = role.resolved_base_url
     if (
@@ -64,20 +66,20 @@ def _init_chat_model(role: ReplySettings, name: str) -> BaseChatModel:
 
 def create_chat_model(settings: Settings) -> BaseChatModel:
     settings.require_roles("reply", "reply_fallback")
-    return _init_chat_model(settings.reply, "FAKEYOU_REPLY__API_KEY")
+    return _init_chat_model(settings.reply, ConfigKey.REPLY_API_KEY)
 
 
 def create_debrief_chat_model(settings: Settings) -> BaseChatModel:
     if settings.debrief is None:
         return create_chat_model(settings)
     settings.require_roles("debrief", "reply_fallback")
-    return _init_chat_model(settings.debrief, "FAKEYOU_DEBRIEF__API_KEY")
+    return _init_chat_model(settings.debrief, ConfigKey.DEBRIEF_API_KEY)
 
 
 def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
     if settings.reply_fallback is None:
         return None
-    return _init_chat_model(settings.reply_fallback, "FAKEYOU_REPLY_FALLBACK__API_KEY")
+    return _init_chat_model(settings.reply_fallback, ConfigKey.REPLY_FALLBACK_API_KEY)
 
 
 def create_visual_chat_model(settings: Settings) -> BaseChatModel:
@@ -101,11 +103,11 @@ def create_visual_chat_model(settings: Settings) -> BaseChatModel:
         role = GoogleReply(**values)
     elif provider == "openai_compatible":
         if visual.base_url is None:
-            raise ValueError("visual provider openai_compatible requires FAKEYOU_VISUAL__BASE_URL")
+            raise FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)
         role = CompatibleReply(**values)
     else:
-        raise ValueError(f"unsupported visual provider: {provider}")
-    return _init_chat_model(role, "FAKEYOU_REPLY__API_KEY")
+        raise FakeYouError(ErrorCode.VISUAL_PROVIDER_UNSUPPORTED, provider=provider)
+    return _init_chat_model(role, ConfigKey.REPLY_API_KEY)
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
@@ -113,7 +115,7 @@ MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
 
 def memory_config(settings: Settings) -> MemorySettings:
     settings.require_roles("memory.llm", "memory.embedder")
-    require_secret(settings.memory.store.password, "FAKEYOU_MEMORY__STORE__PASSWORD")
+    require_secret(settings.memory.store.password, ConfigKey.MEMORY_STORE_PASSWORD)
     return settings.memory
 
 

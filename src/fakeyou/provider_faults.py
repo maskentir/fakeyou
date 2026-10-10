@@ -1,22 +1,12 @@
 import asyncio
 import re
-from typing import Literal, get_args
+from typing import get_args
 
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
-from fakeyou.cli.errors import CliError
-from fakeyou.taxonomy import Subsystem
-
-ProviderFaultKind = Literal[
-    "payment_required",
-    "unauthorized",
-    "rate_limited",
-    "unavailable",
-    "timeout",
-    "bad_request",
-    "unknown",
-]
+from fakeyou.catalog.errors import FakeYouError
+from fakeyou.taxonomy import ProviderFaultKind, Subsystem
 
 ERROR_CATEGORY_KINDS: dict[str, tuple[ProviderFaultKind, bool]] = {
     "AUTHENTICATION": ("unauthorized", False),
@@ -144,7 +134,7 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
     categorized = category_fault(source, error)
     if categorized is not None:
         return categorized
-    if isinstance(error, CliError):
+    if isinstance(error, FakeYouError):
         return ProviderFault(source, "unknown", detail=str(error))
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)

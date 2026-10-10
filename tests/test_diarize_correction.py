@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarize_correction import (
     CorrectionBundle,
@@ -112,8 +113,9 @@ def test_write_correction_bundle_rejects_hostile_speaker_label(tmp_path: Path) -
         start_ms=0, end_ms=1000, speaker="A\nSPEAKER m1 1 0.000 1.000 <NA> <NA> X <NA>"
     )
 
-    with pytest.raises(ValueError, match="speaker"):
+    with pytest.raises(FakeYouError, match="speaker") as caught:
         write_correction_bundle(audio_dir, record_path, [hostile], clock=lambda: FIXED_NOW)
+    assert caught.value.code is ErrorCode.DIARIZE_SPEAKER_LABEL_INVALID
 
     assert not (record_path.parent / "diarization.rttm").exists()
     assert not (record_path.parent / "diarization.json").exists()
@@ -183,8 +185,10 @@ def test_load_corrected_record_rejects_changed_record_as_stale(tmp_path: Path) -
     with record_path.open("a", encoding="utf-8") as handle:
         handle.write(_transcript_line(9, 6100.0) + "\n")
 
-    with pytest.raises(DiarizeError, match="stale"):
+    with pytest.raises(DiarizeError, match="stale") as error:
         load_corrected_record(record_path)
+
+    assert error.value.code is ErrorCode.DIARIZE_STALE
 
 
 def test_stale_error_is_distinguishable_from_invalid_sidecar(tmp_path: Path) -> None:
@@ -195,8 +199,10 @@ def test_stale_error_is_distinguishable_from_invalid_sidecar(tmp_path: Path) -> 
     with record_path.open("a", encoding="utf-8") as handle:
         handle.write(_transcript_line(9, 6100.0) + "\n")
 
-    with pytest.raises(StaleDiarizationError, match="stale"):
+    with pytest.raises(StaleDiarizationError, match="stale") as error:
         load_corrected_record(record_path)
+
+    assert error.value.code is ErrorCode.DIARIZE_STALE
 
 
 def test_load_corrected_record_leaves_far_entries_unattached(tmp_path: Path) -> None:

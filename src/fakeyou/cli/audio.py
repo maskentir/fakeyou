@@ -1,20 +1,13 @@
-import json
 import shutil
-import sys
 import time
 from pathlib import Path
-from typing import NoReturn
 
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.cli.output import emit_json
 from fakeyou.settings import Settings
 from fakeyou.visual_retention import PurgeReport, purge_visual_files
 
 DAY_SECONDS = 86400
-
-
-def _reject(message: str) -> NoReturn:
-    print(f"fakeyou: error: {message}", file=sys.stderr)
-    raise SystemExit(2)
 
 
 def _directory_bytes(directory: Path) -> int:
@@ -31,10 +24,10 @@ def _audio_mtime(audio_dir: Path) -> float:
 def audio_purge_expired(*, root: Path | None, days: int | None, settings: Settings) -> None:
     resolved_days = settings.audio.retention_days if days is None else days
     if resolved_days <= 0:
-        raise CliError("--days must be positive")
+        raise FakeYouError(ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE)
     resolved_root = settings.paths.record_dir if root is None else root
     if not resolved_root.is_dir():
-        _reject(f"audio root is missing: {resolved_root}")
+        raise FakeYouError(ErrorCode.AUDIO_ROOT_MISSING, path=resolved_root)
     cutoff = time.time() - resolved_days * DAY_SECONDS
     removed: list[str] = []
     kept = 0
@@ -49,16 +42,16 @@ def audio_purge_expired(*, root: Path | None, days: int | None, settings: Settin
             removed.append(meeting.name)
         else:
             kept += 1
-    print(json.dumps({"removed": removed, "kept": kept, "freed_bytes": freed_bytes}))
+    emit_json({"removed": removed, "kept": kept, "freed_bytes": freed_bytes})
 
 
 def visual_purge_expired(*, root: Path | None, days: int | None, settings: Settings) -> PurgeReport:
     raw_days = settings.visual.retention_raw_days if days is None else days
     if raw_days <= 0:
-        raise CliError("--days must be positive")
+        raise FakeYouError(ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE)
     resolved_root = settings.paths.record_dir if root is None else root
     if not resolved_root.is_dir():
-        _reject(f"visual root is missing: {resolved_root}")
+        raise FakeYouError(ErrorCode.VISUAL_ROOT_MISSING, path=resolved_root)
     now = time.time()
     raw_cutoff = now - raw_days * DAY_SECONDS
     text_cutoff = now - settings.visual.retention_text_days * DAY_SECONDS
@@ -73,7 +66,5 @@ def visual_purge_expired(*, root: Path | None, days: int | None, settings: Setti
         total.removed.extend(partial.removed)
         total.kept += partial.kept
         total.freed_bytes += partial.freed_bytes
-    print(
-        json.dumps({"removed": total.removed, "kept": total.kept, "freed_bytes": total.freed_bytes})
-    )
+    emit_json({"removed": total.removed, "kept": total.kept, "freed_bytes": total.freed_bytes})
     return total

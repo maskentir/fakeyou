@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 import fakeyou.cli.main as cli_main
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.calibrate import (
     DCF_CFA,
     DCF_CMISS,
@@ -24,7 +26,6 @@ from fakeyou.cli.calibrate import (
     calibrate_eval,
     calibrate_lock,
 )
-from fakeyou.cli.errors import CliError
 from fakeyou.settings import Settings
 from fakeyou.verify import load_calibration_artifact
 
@@ -147,16 +148,17 @@ def test_lock_ignores_transcript_text(tmp_path: Path) -> None:
     assert Path(tagged_out).read_text() == Path(plain_out).read_text()
 
 
-def test_lock_unimodal_exits_3_without_artifact(tmp_path: Path) -> None:
+def test_lock_unimodal_exits_5_without_artifact(tmp_path: Path) -> None:
     journal = tmp_path / "flat.jsonl"
     trials = [_trial(f"flat-t{i:02d}", "target", 0.50 + 0.005 * i, 0.45) for i in range(10)]
     trials += [_trial(f"flat-n{i:02d}", "nontarget", 0.50 + 0.005 * i, 0.45) for i in range(10)]
     out = str(tmp_path / "artifact.json")
 
-    with pytest.raises(SystemExit) as failure:
+    with pytest.raises(FakeYouError) as failure:
         calibrate_lock([_write_journal(journal, trials)], out, settings=Settings())
 
-    assert failure.value.code == 3
+    assert failure.value.code is ErrorCode.CALIBRATE_THETA_OUTSIDE_VALLEY
+    assert failure.value.exit_code is ExitCode.CALIBRATION_REJECTED
     assert not Path(out).exists()
     assert not Path(out + ".speakers.json").exists()
 
@@ -180,17 +182,16 @@ def test_eval_disjoint_pass_prints_metrics_exit_0(
     assert metrics["n_verified"] == 190
 
 
-def test_lock_unwritable_out_exits_3_without_traceback(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_lock_unwritable_out_exits_1(tmp_path: Path) -> None:
     journal = tmp_path / "dev.jsonl"
     out = str(tmp_path / "missing-dir" / "artifact.json")
 
-    with pytest.raises(SystemExit) as failure:
+    with pytest.raises(FakeYouError) as failure:
         calibrate_lock([_write_journal(journal, _dev_trials())], out, settings=Settings())
 
-    assert failure.value.code == 3
-    assert "error" in capsys.readouterr().err
+    assert failure.value.code is ErrorCode.CALIBRATE_ARTIFACT_NOT_WRITTEN
+    assert failure.value.exit_code is ExitCode.FAILURE
+    assert str(failure.value) == f"artifact cannot be written: {out}"
     assert not Path(out).exists()
 
 
@@ -370,16 +371,18 @@ def test_lock_model_version_flag_recorded_in_artifact(tmp_path: Path) -> None:
     assert artifact.model_version == stamped
 
 
-def test_lock_garbage_model_version_exits_2(tmp_path: Path) -> None:
+def test_lock_garbage_model_version_fails_without_artifact(tmp_path: Path) -> None:
     first = tmp_path / "dev-a.jsonl"
     out = str(tmp_path / "artifact.json")
-    with pytest.raises(CliError):
+    with pytest.raises(FakeYouError) as failure:
         calibrate_lock(
             [_write_journal(first, _dev_trials())],
             out,
             settings=Settings(),
             model_version="not-a-digest",
         )
+    assert failure.value.code is ErrorCode.CALIBRATE_MODEL_DIGEST_MISSING
+    assert failure.value.exit_code is ExitCode.INPUT_REJECTED
     assert not Path(out).exists()
 
 

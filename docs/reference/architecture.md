@@ -20,8 +20,7 @@ flowchart LR
     Browser <--> MCP[Playwright MCP: DOM, screenshot, input]
     MCP <--> Adapter[LangChain MCP adapter]
     Adapter <--> Agent[LangChain agent / LangGraph]
-    Agent <--> Checkpoint[SQLite lokal]
-    Agent -. Integrasi berikutnya .-> Postgres[PostgreSQL: dependency dan Compose]
+    Agent <--> Checkpoint[PostgreSQL]
     Agent <--> Memory[Graphiti / Neo4j]
     Browser -. Media bridge berikutnya .-> Voice[Pipecat: Muse STT + TTS]
     Voice -. Teks dan audio .-> Agent

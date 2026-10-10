@@ -20,7 +20,6 @@ from pydantic import SecretStr
 import fakeyou.assembly as assembly
 import fakeyou.cli.chat as cli_chat
 import fakeyou.cli.diagnostics as cli_diagnostics
-import fakeyou.cli.errors as cli_errors
 import fakeyou.cli.join as cli_join
 import fakeyou.cli.main as cli_main
 import fakeyou.cli.memory as cli_memory
@@ -37,7 +36,11 @@ from fakeyou.brief import (
     read_meeting_context,
     write_meeting_context,
 )
+from fakeyou.browser import profile_lock
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.engine import configured_url, require_url
 from fakeyou.greetings import create_greeting_middleware
 from fakeyou.invariants import (
     AGENT_MIC_SOURCE_NAME,
@@ -62,7 +65,13 @@ from fakeyou.settings import (
     Settings,
 )
 from fakeyou.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
-from tests.fakes import FakeReplyAudio, ToolCallingFakeModel, make_graphiti, recall_call
+from tests.fakes import (
+    DATABASE_URL,
+    FakeReplyAudio,
+    ToolCallingFakeModel,
+    make_graphiti,
+    recall_call,
+)
 
 
 @pytest.mark.asyncio
@@ -372,7 +381,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
         "https://meet.google.com/abc-defg-hij",
     )
 
-    assert captured["config"].checkpoint_path == tmp_path / "checkpoints.sqlite"
+    assert captured["config"].database_url == DATABASE_URL
     assert isinstance(captured["faults"], FaultReporter)
     assert isinstance(captured["journal"], Journal)
     assert "preflight_hosts" not in captured
@@ -381,17 +390,14 @@ async def test_join_without_audio_still_wires_faults_and_journal(
 
 @pytest.mark.parametrize("audio_enabled,speech", [(False, "hello"), (True, " ")])
 async def test_join_rejects_invalid_speech_before_browser_start(join, audio_enabled, speech):
-    with pytest.raises(ValueError, match="--speak"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             audio_enabled=audio_enabled,
             initial_speech=speech,
         )
-
-
-def test_cli_error_is_value_error() -> None:
-    assert issubclass(cli_errors.CliError, ValueError)
+    assert caught.value.code is ErrorCode.MEETING_SPEAK_REQUIRES_AUDIO
 
 
 @pytest.mark.parametrize(
@@ -405,35 +411,44 @@ def test_cli_error_is_value_error() -> None:
     ],
 )
 async def test_join_rejects_invalid_link(join, link) -> None:
-    with pytest.raises(cli_errors.CliError, match="meet.google.com"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             link,
             meeting_id=None,
         )
+    assert caught.value.code is ErrorCode.MEETING_LINK_INVALID
 
 
 @pytest.mark.parametrize(
-    "lobby_timeout,duration",
-    [(0.0, None), (-1.0, None), (float("nan"), None), (None, 0.0), (None, -5.0)],
+    "lobby_timeout,duration,code",
+    [
+        (0.0, None, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
+        (-1.0, None, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
+        (float("nan"), None, ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE),
+        (None, 0.0, ErrorCode.MEETING_DURATION_NOT_POSITIVE),
+        (None, -5.0, ErrorCode.MEETING_DURATION_NOT_POSITIVE),
+    ],
 )
-async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration) -> None:
-    with pytest.raises(cli_errors.CliError, match="positive"):
+async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration, code) -> None:
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             lobby_timeout=lobby_timeout,
             duration=duration,
         )
+    assert caught.value.code is code
 
 
-async def test_join_audio_precondition_raises_cli_error(join, monkeypatch) -> None:
+async def test_join_audio_precondition_requires_the_worker(join, monkeypatch) -> None:
     monkeypatch.setenv("PULSE_SOURCE", "wrong-source")
-    with pytest.raises(cli_errors.CliError, match="--audio"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             audio_enabled=True,
         )
+    assert caught.value.code is ErrorCode.MEETING_AUDIO_REQUIRES_WORKER
 
 
 @pytest.mark.parametrize("thread", ["", "bad thread", "bad:thread", "x" * 129])
@@ -443,15 +458,16 @@ async def test_chat_rejects_invalid_thread(settings, monkeypatch, thread) -> Non
         "init_chat_model",
         lambda *_args, **_kwargs: pytest.fail("thread must be validated first"),
     )
-    with pytest.raises(cli_errors.CliError, match="thread"):
+    with pytest.raises(FakeYouError) as caught:
         await cli_chat.chat("hello", thread, False, False, settings)
+    assert caught.value.code is ErrorCode.CHAT_THREAD_INVALID
 
 
-def test_main_exits_1_on_cli_error(monkeypatch, capsys) -> None:
+def test_main_exits_2_on_input_error(monkeypatch, capsys) -> None:
     monkeypatch.setattr(sys, "argv", ["fakeyou", "join", "not-a-link"])
     with pytest.raises(SystemExit) as excinfo:
         cli_main.main()
-    assert excinfo.value.code == 1
+    assert excinfo.value.code == 2
     assert "meet.google.com" in capsys.readouterr().err
 
 
@@ -629,7 +645,7 @@ async def _join_with_audio(
     monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(value, dsn=None):
+    async def fake_saver(value, url=None):
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
@@ -734,7 +750,7 @@ async def test_join_audio_transcript_reaches_conversation(
         "settings-owner", "settings-twin", "meeting-9"
     )
     rows = [
-        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
+        json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{"')
     ]
     transitions = [row for row in rows if row["event"] == "conversation_transitioned"]
     assert len(transitions) == 3
@@ -763,42 +779,46 @@ async def test_audio_only_does_not_construct_responding_agent(
 
 
 async def test_conversation_option_requires_audio(join):
-    with pytest.raises(cli_errors.CliError, match="--converse requires --audio"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             conversation_enabled=True,
         )
+    assert caught.value.code is ErrorCode.MEETING_CONVERSE_REQUIRES_AUDIO
 
 
 @pytest.mark.asyncio
-async def test_join_memory_requires_audio(join) -> None:
-    with pytest.raises(cli_errors.CliError, match="--memory"):
+async def test_join_memory_requires_converse(join) -> None:
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             memory=True,
         )
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_REQUIRES_CONVERSE
 
 
 @pytest.mark.asyncio
 async def test_join_wake_phrase_requires_converse(join) -> None:
-    with pytest.raises(cli_errors.CliError, match="--wake-phrase"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             wake_phrase="hey fakeyou",
         )
+    assert caught.value.code is ErrorCode.MEETING_WAKE_PHRASE_REQUIRES_CONVERSE
 
 
 @pytest.mark.asyncio
 async def test_join_barge_in_requires_converse(join) -> None:
-    with pytest.raises(cli_errors.CliError, match="--barge-in"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
             meeting_id=None,
             barge_in=True,
         )
+    assert caught.value.code is ErrorCode.MEETING_BARGE_IN_REQUIRES_CONVERSE
 
 
 @pytest.mark.asyncio
@@ -915,7 +935,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     )
 
     rows = [
-        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith('{"')
+        json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{"')
     ]
     playback = [
         (row["event"], row["ends_with_question"], row["detail"])
@@ -1096,10 +1116,8 @@ def prepare_brief_join(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 async def seed_conversation_thread(settings: Settings, meeting_id: str) -> str:
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
     thread_id = conversation_thread_id("settings-owner", "settings-twin", meeting_id)
-    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
+    async with open_checkpointer(require_url(configured_url(settings))) as saver:
         agent = create_meeting_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
         )
@@ -1131,7 +1149,7 @@ async def _join_persona_conversation(
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
     @asynccontextmanager
-    async def memory_saver(_value, dsn=None):
+    async def memory_saver(_value, url=None):
         yield InMemorySaver()
 
     if not native_checkpointer:
@@ -1192,7 +1210,7 @@ async def _join_persona_conversation(
 
 
 async def test_join_persona_requires_converse(join, settings, tmp_path: Path) -> None:
-    with pytest.raises(cli_errors.CliError, match="--persona requires --converse"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -1203,12 +1221,14 @@ async def test_join_persona_requires_converse(join, settings, tmp_path: Path) ->
                 persona_path=write_persona(tmp_path),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_PERSONA_REQUIRES_CONVERSE
 
 
 async def test_join_memory_requires_persona(join, settings, tmp_path: Path, monkeypatch) -> None:
     forbid_resources(monkeypatch)
-    with pytest.raises(cli_errors.CliError, match="--memory requires --persona"):
+    with pytest.raises(FakeYouError) as caught:
         await join(MEET_LINK, **persona_join_arguments(tmp_path, settings, memory=True))
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_REQUIRES_PERSONA
 
 
 @pytest.mark.parametrize(
@@ -1221,7 +1241,7 @@ async def test_join_rejects_invalid_persona_before_resources(
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
-    with pytest.raises(ValueError, match="owner_id and twin_id|Extra inputs"):
+    with pytest.raises((FakeYouError, ValueError), match="owner_id and twin_id|Extra inputs"):
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -1234,6 +1254,28 @@ async def test_join_rejects_invalid_persona_before_resources(
     assert not settings.paths.journal_dir.exists()
 
 
+@pytest.mark.parametrize("overrides", [{"owner_id": "other-owner"}, {"twin_id": "other-twin"}])
+async def test_join_reports_a_foreign_persona_identity_with_its_code(
+    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict
+) -> None:
+    settings.stt.api_key = SecretStr("muse-key")
+    _enable_audio_platform(monkeypatch)
+    forbid_resources(monkeypatch)
+
+    with pytest.raises(FakeYouError, match="owner_id and twin_id") as caught:
+        await join(
+            MEET_LINK,
+            **persona_join_arguments(
+                tmp_path,
+                settings,
+                memory=True,
+                persona_path=write_persona(tmp_path, **overrides),
+            ),
+        )
+    assert caught.value.code is ErrorCode.PERSONA_IDENTITY_MISMATCH
+    assert not settings.paths.journal_dir.exists()
+
+
 async def test_join_memory_rejects_persona_without_recall_permission(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1241,7 +1283,7 @@ async def test_join_memory_rejects_persona_without_recall_permission(
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="recall_meeting_context"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -1251,6 +1293,7 @@ async def test_join_memory_rejects_persona_without_recall_permission(
                 persona_path=write_persona(tmp_path, allowed_tools=[]),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST
 
 
 async def test_join_rejects_unreadable_persona(
@@ -1260,11 +1303,12 @@ async def test_join_rejects_unreadable_persona(
     _enable_audio_platform(monkeypatch)
     forbid_resources(monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="--persona cannot be read"):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(tmp_path, settings, persona_path=tmp_path / "missing.json"),
         )
+    assert caught.value.code is ErrorCode.MEMORY_PERSONA_UNREADABLE
 
 
 @pytest.mark.parametrize("twin_name,expected", [(None, "Rani Twin"), ("Override", "Override")])
@@ -1411,7 +1455,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     outcome["conversation"].raise_if_failed()
     faults = [
         json.loads(line)
-        for line in capsys.readouterr().out.splitlines()
+        for line in capsys.readouterr().err.splitlines()
         if line.startswith('{"event":"fault_recorded"')
     ]
     assert [(fault["source"], fault["kind"]) for fault in faults] == [("memory", "unknown")]
@@ -1488,7 +1532,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
     )
 
     @asynccontextmanager
-    async def tracked_saver(_value, dsn=None):
+    async def tracked_saver(_value, url=None):
         saver_events.append("open")
         try:
             yield InMemorySaver()
@@ -1511,8 +1555,8 @@ async def test_join_memory_startup_failure_exits_before_browser(
     captured = capsys.readouterr()
     assert '"terminal_reason": "infra_failure"' in captured.out
     assert "memory unavailable: memory" in captured.out
-    assert f'"kind":"{kind}"' in captured.out
-    assert '"exit_code":3' in captured.out
+    assert f'"kind":"{kind}"' in captured.err
+    assert '"exit_code":3' in captured.err
 
 
 def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1677,19 +1721,38 @@ async def test_join_without_ingest_permission_never_writes_memory(
 
 
 @pytest.mark.parametrize(
-    "overrides,match",
+    "overrides,match,code",
     [
         (
             {"audio_enabled": False, "conversation_enabled": False, "persona_path": None},
             "--brief requires --converse",
+            ErrorCode.MEETING_BRIEF_REQUIRES_CONVERSE,
         ),
-        ({"persona_path": None}, "--brief requires --persona"),
-        ({"meeting_id": None}, "--brief requires an explicit --meeting-id"),
-        ({"meeting_id": ""}, "--brief requires an explicit --meeting-id"),
+        (
+            {"persona_path": None},
+            "--brief requires --persona",
+            ErrorCode.MEETING_BRIEF_REQUIRES_PERSONA,
+        ),
+        (
+            {"meeting_id": None},
+            "--brief requires an explicit --meeting-id",
+            ErrorCode.MEETING_BRIEF_REQUIRES_MEETING_ID,
+        ),
+        (
+            {"meeting_id": ""},
+            "--brief requires an explicit --meeting-id",
+            ErrorCode.MEETING_BRIEF_REQUIRES_MEETING_ID,
+        ),
     ],
 )
 async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict, match: str
+    join,
+    settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict,
+    match: str,
+    code: ErrorCode,
 ) -> None:
     forbid_resources(monkeypatch)
     arguments = persona_join_arguments(
@@ -1697,8 +1760,9 @@ async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
     )
     arguments.update(overrides)
 
-    with pytest.raises(cli_errors.CliError, match=match):
+    with pytest.raises(FakeYouError, match=match) as caught:
         await join(MEET_LINK, **arguments)
+    assert caught.value.code is code
     assert not settings.paths.journal_dir.exists()
     assert not settings.paths.record_dir.exists()
 
@@ -1708,7 +1772,7 @@ async def test_join_brief_only_refuses_memory_before_resources(
 ) -> None:
     prepare_brief_join(settings, monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="--memory.*brief_only"):
+    with pytest.raises(FakeYouError, match="--memory.*brief_only") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -1719,26 +1783,49 @@ async def test_join_brief_only_refuses_memory_before_resources(
                 brief_path=write_brief(tmp_path),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
     assert not settings.paths.journal_dir.exists()
     assert not settings.paths.record_dir.exists()
 
 
 @pytest.mark.parametrize(
-    "content,match",
+    "content,match,code",
     [
-        (None, "--brief cannot be read"),
-        ("oversize", "--brief is invalid: meeting brief must be at most"),
-        ({"owner_id": "other-owner"}, "--brief is invalid: .*must match the session"),
-        ({"twin_id": "other-twin"}, "--brief is invalid: .*must match the session"),
-        ({"meeting_id": "meeting-10"}, "--brief is invalid: .*must match the session"),
+        (None, "--brief cannot be read", ErrorCode.MEETING_BRIEF_UNREADABLE),
+        (
+            "oversize",
+            "meeting brief must be at most",
+            ErrorCode.MEETING_BRIEF_TOO_LARGE,
+        ),
+        (
+            {"owner_id": "other-owner"},
+            "meeting brief .*must match the session",
+            ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH,
+        ),
+        (
+            {"twin_id": "other-twin"},
+            "meeting brief .*must match the session",
+            ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH,
+        ),
+        (
+            {"meeting_id": "meeting-10"},
+            "meeting brief .*must match the session",
+            ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH,
+        ),
         (
             {"approved_facts": [{"id": "secret", "text": PRIVATE_MARKER * 40}]},
             "--brief is invalid",
+            ErrorCode.MEETING_BRIEF_SCHEMA_INVALID,
         ),
-        ({"permissions": [f"approve_{PRIVATE_MARKER}"]}, "--brief is invalid"),
+        (
+            {"permissions": [f"approve_{PRIVATE_MARKER}"]},
+            "--brief is invalid",
+            ErrorCode.MEETING_BRIEF_SCHEMA_INVALID,
+        ),
         (
             {PRIVATE_MARKER: "unknown key"},
             r"--brief is invalid: 1 validation error\(s\): extra_forbidden$",
+            ErrorCode.MEETING_BRIEF_SCHEMA_INVALID,
         ),
     ],
 )
@@ -1749,6 +1836,7 @@ async def test_join_rejects_an_unusable_brief_before_resources(
     monkeypatch: pytest.MonkeyPatch,
     content: dict | str | None,
     match: str,
+    code: ErrorCode,
 ) -> None:
     prepare_brief_join(settings, monkeypatch)
     if content is None:
@@ -1762,13 +1850,14 @@ async def test_join_rejects_an_unusable_brief_before_resources(
         assert isinstance(content, dict)
         brief_path = write_brief(tmp_path, **content)
 
-    with pytest.raises(cli_errors.CliError, match=match) as caught:
+    with pytest.raises(FakeYouError, match=match) as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
                 tmp_path, settings, persona_path=write_persona(tmp_path), brief_path=brief_path
             ),
         )
+    assert caught.value.code is code
     assert PRIVATE_MARKER not in str(caught.value)
     assert all(text not in str(caught.value) for text in BRIEF_TEXTS)
     assert not settings.paths.journal_dir.exists()
@@ -1807,7 +1896,6 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
     assert model.seen[0][0].content == created["persona"]
     assert audio.spoken == ["Hello."]
     assert read_meeting_context(context_file) == expected_context(brief, profile)
-    assert not settings.paths.checkpoint_path.exists()
     printed = printed_join_summary(capsys)
     assert printed["brief_sha256"] == brief_digest(brief)
     assert printed["context_path"] == str(context_file)
@@ -1951,11 +2039,15 @@ async def test_join_resume_reuses_history_without_replaying_answers(
 
 
 @pytest.mark.parametrize(
-    "change,match",
+    "change,match,code",
     [
-        ("persona", "meeting context differs.*new meeting ID"),
-        ("brief", "meeting context differs.*new meeting ID"),
-        ("without_brief", "meeting-9 was started with --brief"),
+        ("persona", "meeting context differs.*new meeting ID", ErrorCode.MEETING_CONTEXT_DIFFERS),
+        ("brief", "meeting context differs.*new meeting ID", ErrorCode.MEETING_CONTEXT_DIFFERS),
+        (
+            "without_brief",
+            "meeting-9 was started with --brief",
+            ErrorCode.MEETING_STARTED_WITH_BRIEF,
+        ),
     ],
 )
 async def test_join_rejects_a_changed_context_without_touching_meeting_files(
@@ -1965,6 +2057,7 @@ async def test_join_rejects_a_changed_context_without_touching_meeting_files(
     monkeypatch: pytest.MonkeyPatch,
     change: str,
     match: str,
+    code: ErrorCode,
 ) -> None:
     await _join_persona_conversation(
         tmp_path,
@@ -1992,8 +2085,9 @@ async def test_join_rejects_a_changed_context_without_touching_meeting_files(
     else:
         arguments["brief_path"] = None
 
-    with pytest.raises(cli_errors.CliError, match=match):
+    with pytest.raises(FakeYouError, match=match) as caught:
         await join(MEET_LINK, **arguments)
+    assert caught.value.code is code
     assert meeting_files(settings) == before
 
 
@@ -2023,13 +2117,14 @@ async def test_join_keeps_the_snapshot_when_the_source_brief_changes(
         original, profile
     )
     forbid_resources(monkeypatch)
-    with pytest.raises(cli_errors.CliError, match="meeting context differs"):
+    with pytest.raises(FakeYouError, match="meeting context differs") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
                 tmp_path, settings, persona_path=write_persona(tmp_path), brief_path=brief_path
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_CONTEXT_DIFFERS
 
 
 async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
@@ -2039,7 +2134,7 @@ async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
     before = meeting_files(settings)
     prepare_brief_join(settings, monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="conversation data.*new meeting ID"):
+    with pytest.raises(FakeYouError, match="conversation data.*new meeting ID") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -2049,6 +2144,7 @@ async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
                 brief_path=write_brief(tmp_path),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT
     assert meeting_files(settings) == before
     assert not meeting_context_file(settings).exists()
 
@@ -2060,7 +2156,7 @@ async def test_join_brief_refuses_a_checkpoint_thread_without_context(
     other_thread = await seed_conversation_thread(settings, "meeting-10")
     prepare_brief_join(settings, monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="conversation data.*new meeting ID"):
+    with pytest.raises(FakeYouError, match="conversation data.*new meeting ID") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -2070,6 +2166,7 @@ async def test_join_brief_refuses_a_checkpoint_thread_without_context(
                 brief_path=write_brief(tmp_path),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT
     assert await _thread_exists(settings, thread_id)
     assert await _thread_exists(settings, other_thread)
     assert meeting_files(settings) == {}
@@ -2085,7 +2182,7 @@ async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
     context_file.write_text("{corrupt", encoding="utf-8")
     prepare_brief_join(settings, monkeypatch)
 
-    with pytest.raises(cli_errors.CliError, match="meeting context .*corrupt"):
+    with pytest.raises(FakeYouError, match="meeting context .*corrupt") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -2095,20 +2192,23 @@ async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
                 brief_path=write_brief(tmp_path) if with_brief else None,
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_CONTEXT_UNREADABLE
     assert meeting_files(settings) == {"meeting-9/meeting-context.json": b"{corrupt"}
     assert not settings.paths.journal_dir.exists()
 
 
-async def test_join_brief_refuses_an_unreadable_checkpoint_before_resources(
+async def test_join_brief_refuses_an_unreachable_checkpoint_before_resources(
     join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    garbage = b"not a sqlite database" * 64
-    settings.paths.checkpoint_path.write_bytes(garbage)
+    @asynccontextmanager
+    async def unreachable(url):
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+        yield
+
+    monkeypatch.setattr(cli_join, "open_checkpointer", unreachable)
     prepare_brief_join(settings, monkeypatch)
 
-    with pytest.raises(
-        cli_errors.CliError, match="conversation checkpoint cannot be checked: DatabaseError"
-    ):
+    with pytest.raises(FakeYouError) as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -2118,8 +2218,59 @@ async def test_join_brief_refuses_an_unreadable_checkpoint_before_resources(
                 brief_path=write_brief(tmp_path),
             ),
         )
-    assert settings.paths.checkpoint_path.read_bytes() == garbage
+    unreachable_message = str(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
+    assert caught.value.code is ErrorCode.MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE
+    assert str(caught.value) == (
+        f"conversation checkpoint cannot be checked: {unreachable_message}"
+    )
     assert meeting_files(settings) == {}
+    assert not settings.paths.journal_dir.exists()
+
+
+async def test_join_resume_refuses_an_unreachable_lifecycle_checkpoint(
+    join, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @asynccontextmanager
+    async def unreachable(url):
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+        yield
+
+    monkeypatch.setattr(cli_join, "open_checkpointer", unreachable)
+    forbid_resources(monkeypatch)
+
+    with pytest.raises(FakeYouError) as caught:
+        await join(MEET_LINK, resume=True)
+    assert caught.value.code is ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE
+    unreachable_message = str(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
+    assert str(caught.value) == f"lifecycle checkpoint cannot be checked: {unreachable_message}"
+
+
+async def test_join_refuses_a_profile_already_in_use(
+    join, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forbid_resources(monkeypatch)
+    profile = tmp_path / "profile"
+
+    with profile_lock(profile):
+        with pytest.raises(
+            FakeYouError, match="browser profile is in use: lease is locked:"
+        ) as caught:
+            await join(MEET_LINK, profile_dir=str(profile))
+    assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
+
+
+async def test_join_refuses_a_locked_meeting_record(
+    join, settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.ingestion_status import record_lock
+
+    forbid_resources(monkeypatch)
+    record_path = meeting_record_path(settings.paths.record_dir, "meeting-1")
+
+    with record_lock(record_path, purpose="meeting"):
+        with pytest.raises(FakeYouError, match="meeting record is locked:") as caught:
+            await join(MEET_LINK)
+    assert caught.value.code is ErrorCode.RECORD_LOCKED
     assert not settings.paths.journal_dir.exists()
 
 
@@ -2135,7 +2286,7 @@ async def test_join_brief_snapshot_write_failure_starts_nothing(
 
     monkeypatch.setattr(os, "replace", reject_replace)
 
-    with pytest.raises(cli_errors.CliError, match="meeting context not written"):
+    with pytest.raises(FakeYouError, match="meeting context not written") as caught:
         await join(
             MEET_LINK,
             **persona_join_arguments(
@@ -2145,6 +2296,7 @@ async def test_join_brief_snapshot_write_failure_starts_nothing(
                 brief_path=write_brief(tmp_path),
             ),
         )
+    assert caught.value.code is ErrorCode.MEETING_CONTEXT_NOT_WRITTEN
     assert meeting_files(settings) == {}
     assert not settings.paths.journal_dir.exists()
 
@@ -2320,19 +2472,8 @@ async def test_join_brief_stop_during_playback_records_no_twin_speech(
     assert read_meeting_context(meeting_context_file(settings)) is not None
 
 
-@pytest.mark.parametrize(
-    "profile_data,with_graphiti,match",
-    [
-        (None, False, "requires a persona profile"),
-        (PERSONA_DATA, True, "brief_only"),
-    ],
-)
-async def test_open_conversation_rejects_an_unusable_brief_before_resources(
-    settings,
-    monkeypatch: pytest.MonkeyPatch,
-    profile_data: dict | None,
-    with_graphiti: bool,
-    match: str,
+async def test_open_conversation_rejects_a_brief_without_a_persona(
+    settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
@@ -2342,16 +2483,41 @@ async def test_open_conversation_rejects_an_unusable_brief_before_resources(
     )
     config = SimpleNamespace(owner_id="settings-owner", twin_id="settings-twin", meeting_id="m")
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(FakeYouError) as caught:
         async with assembly.open_conversation(
             settings,
             config,
-            profile=PersonaProfile.model_validate(profile_data) if profile_data else None,
-            graphiti=make_graphiti() if with_graphiti else None,
+            profile=None,
+            graphiti=None,
             brief=meeting_brief(),
             on_transition=lambda *_args: None,
         ):
             pytest.fail("conversation must not open")
+    assert caught.value.code is ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE
+
+
+async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
+    settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
+    )
+    monkeypatch.setattr(
+        assembly, "open_checkpointer", lambda *_a, **_k: pytest.fail("saver must stay closed")
+    )
+    config = SimpleNamespace(owner_id="settings-owner", twin_id="settings-twin", meeting_id="m")
+
+    with pytest.raises(FakeYouError, match="brief_only") as caught:
+        async with assembly.open_conversation(
+            settings,
+            config,
+            profile=PersonaProfile.model_validate(PERSONA_DATA),
+            graphiti=make_graphiti(),
+            brief=meeting_brief(),
+            on_transition=lambda *_args: None,
+        ):
+            pytest.fail("conversation must not open")
+    assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
 
 
 def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list[str]:
@@ -2460,7 +2626,7 @@ async def test_memory_add_rejects_future_source_before_opening_memory(
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(ValueError, match="future"):
+    with pytest.raises(FakeYouError, match="future") as caught:
         await cli_memory.add_owner_note(
             "A note.",
             persona_path=write_persona(tmp_path),
@@ -2469,20 +2635,21 @@ async def test_memory_add_rejects_future_source_before_opening_memory(
             settings=settings,
             source_at=datetime(2999, 1, 1, tzinfo=UTC),
         )
+    assert caught.value.code is ErrorCode.MEMORY_SOURCE_AT_FUTURE
     assert opened == []
 
 
-async def test_memory_add_maps_note_conflict_to_cli_error(
+async def test_memory_add_propagates_a_note_conflict(
     settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_persona_memory(monkeypatch, make_graphiti())
 
     async def conflicting(_memory, **_kwargs):
-        raise NoteConflictError("note id already in use with different payload")
+        raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
 
     monkeypatch.setattr(cli_memory, "remember_owner_note", conflicting)
 
-    with pytest.raises(cli_errors.CliError, match="already in use"):
+    with pytest.raises(FakeYouError, match="already in use") as caught:
         await cli_memory.add_owner_note(
             "A note.",
             persona_path=write_persona(tmp_path),
@@ -2490,6 +2657,7 @@ async def test_memory_add_maps_note_conflict_to_cli_error(
             twin_id=None,
             settings=settings,
         )
+    assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
 
 
 async def test_memory_correct_supersedes_target_note(
@@ -2590,18 +2758,23 @@ _CORRECT_SOURCE = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    "text,episode_uuid,source_at,identity,match",
+    "text,episode_uuid,source_at,code,match",
     [
-        ("  ", _CORRECT_TARGET, _CORRECT_SOURCE, {}, "blank"),
-        ("Fixed.", "not-a-uuid", _CORRECT_SOURCE, {}, "UUID"),
-        ("Fixed.", _CORRECT_TARGET, datetime(2999, 1, 1, tzinfo=UTC), {}, "future"),
-        ("Fixed.", _CORRECT_TARGET, datetime(2026, 9, 30, 6, 40), {}, "timezone"),
+        ("  ", _CORRECT_TARGET, _CORRECT_SOURCE, ErrorCode.MEMORY_NOTE_TEXT_BLANK, "blank"),
+        ("Fixed.", "not-a-uuid", _CORRECT_SOURCE, ErrorCode.MEMORY_EPISODE_NOT_UUID, "UUID"),
         (
             "Fixed.",
             _CORRECT_TARGET,
-            _CORRECT_SOURCE,
-            {"owner_id": "other-owner"},
-            "owner_id and twin_id",
+            datetime(2999, 1, 1, tzinfo=UTC),
+            ErrorCode.MEMORY_SOURCE_AT_FUTURE,
+            "future",
+        ),
+        (
+            "Fixed.",
+            _CORRECT_TARGET,
+            datetime(2026, 9, 30, 6, 40),
+            ErrorCode.MEMORY_SOURCE_AT_NAIVE,
+            "timezone",
         ),
     ],
 )
@@ -2612,42 +2785,72 @@ async def test_memory_correct_validates_before_opening_memory(
     text: str,
     episode_uuid: str,
     source_at: datetime,
-    identity: dict,
+    code: ErrorCode,
     match: str,
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(FakeYouError, match=match) as caught:
         await cli_memory.correct_owner_note(
             text,
             episode_uuid=episode_uuid,
             source_at=source_at,
             note_id=None,
             persona_path=write_persona(tmp_path),
-            owner_id=identity.get("owner_id"),
+            owner_id=None,
+            twin_id=None,
+            settings=settings,
+        )
+    assert caught.value.code is code
+    assert opened == []
+
+
+async def test_memory_correct_rejects_a_foreign_identity_before_opening_memory(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    with pytest.raises(FakeYouError, match="owner_id and twin_id"):
+        await cli_memory.correct_owner_note(
+            "Fixed.",
+            episode_uuid=_CORRECT_TARGET,
+            source_at=_CORRECT_SOURCE,
+            note_id=None,
+            persona_path=write_persona(tmp_path),
+            owner_id="other-owner",
             twin_id=None,
             settings=settings,
         )
     assert opened == []
 
 
-@pytest.mark.parametrize(
-    "text,identity,match",
-    [
-        ("  ", {}, "blank"),
-        ("A note.", {"owner_id": "other-owner"}, "owner_id and twin_id"),
-    ],
-)
 async def test_memory_add_validates_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, identity: dict, match: str
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(FakeYouError, match="blank") as caught:
         await cli_memory.add_owner_note(
-            text,
+            "  ",
             persona_path=write_persona(tmp_path),
-            owner_id=identity.get("owner_id"),
+            owner_id=None,
+            twin_id=None,
+            settings=settings,
+        )
+    assert caught.value.code is ErrorCode.MEMORY_NOTE_TEXT_BLANK
+    assert opened == []
+
+
+async def test_memory_add_rejects_a_foreign_identity_before_opening_memory(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    with pytest.raises(FakeYouError, match="owner_id and twin_id"):
+        await cli_memory.add_owner_note(
+            "A note.",
+            persona_path=write_persona(tmp_path),
+            owner_id="other-owner",
             twin_id=None,
             settings=settings,
         )
@@ -2691,8 +2894,6 @@ async def test_memory_forget_meeting_uses_persona_group(
 async def _forget_meeting_with_local_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, settings, keep_record: bool
 ) -> tuple[SimpleNamespace, str]:
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
@@ -2707,7 +2908,7 @@ async def _forget_meeting_with_local_files(
     await seed_conversation_thread(settings, "meeting-10")
     from fakeyou.lifecycle import MeetingLifecycle
 
-    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
+    async with open_checkpointer(require_url(configured_url(settings))) as saver:
         for meeting in ("meeting-9", "meeting-10"):
             lifecycle = MeetingLifecycle(profile.owner_id, profile.twin_id, meeting, saver)
             await lifecycle.initialize()
@@ -2730,9 +2931,7 @@ async def _forget_meeting_with_local_files(
 
 
 async def _thread_exists(settings: Settings, thread_id: str) -> bool:
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
-    async with AsyncSqliteSaver.from_conn_string(str(settings.paths.checkpoint_path)) as saver:
+    async with open_checkpointer(require_url(configured_url(settings))) as saver:
         return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
 
 
@@ -2820,12 +3019,8 @@ async def test_memory_forget_episode_uses_persona_group(
 
 
 @pytest.mark.parametrize(
-    "meeting_id,episode_uuid,match",
-    [
-        (None, None, "exactly one"),
-        ("meeting-9", "episode-7", "exactly one"),
-        ("bad meeting", None, "String should match pattern"),
-    ],
+    "meeting_id,episode_uuid",
+    [(None, None), ("meeting-9", "episode-7")],
 )
 async def test_memory_forget_validates_before_opening_memory(
     settings,
@@ -2833,17 +3028,34 @@ async def test_memory_forget_validates_before_opening_memory(
     monkeypatch: pytest.MonkeyPatch,
     meeting_id: str | None,
     episode_uuid: str | None,
-    match: str,
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(FakeYouError, match="exactly one") as caught:
         await cli_memory.forget_memory(
             persona_path=write_persona(tmp_path),
             owner_id=None,
             twin_id=None,
             meeting_id=meeting_id,
             episode_uuid=episode_uuid,
+            settings=settings,
+        )
+    assert caught.value.code is ErrorCode.MEMORY_FORGET_TARGET_REQUIRED
+    assert opened == []
+
+
+async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memory(
+    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened = fake_persona_memory(monkeypatch, make_graphiti())
+
+    with pytest.raises(ValueError, match="String should match pattern"):
+        await cli_memory.forget_memory(
+            persona_path=write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            meeting_id="bad meeting",
+            episode_uuid=None,
             settings=settings,
         )
     assert opened == []
@@ -3043,7 +3255,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     assert outcome["phase"] == "listening"
     faults = [
         json.loads(line)
-        for line in capsys.readouterr().out.splitlines()
+        for line in capsys.readouterr().err.splitlines()
         if line.startswith('{"event":"fault_recorded"')
     ]
     assert [(row["source"], row["kind"]) for row in faults] == [("memory", "timeout")]
@@ -3099,12 +3311,15 @@ def test_report_command_prints_summary_from_journal(
     assert report["result"]["terminal_reason"] == "stopped_by_owner"
 
 
-@pytest.mark.parametrize("meeting_id,match", [("missing", "no journal"), ("bad id", "pattern")])
-def test_report_command_rejects_unknown_or_invalid_meeting(
-    settings, tmp_path: Path, meeting_id: str, match: str
-) -> None:
-    with pytest.raises(ValueError, match=match):
-        cli_diagnostics.show_session_report(meeting_id, tmp_path, settings)
+def test_report_command_rejects_an_unknown_meeting(settings, tmp_path: Path) -> None:
+    with pytest.raises(FakeYouError, match="no journal") as caught:
+        cli_diagnostics.show_session_report("missing", tmp_path, settings)
+    assert caught.value.code is ErrorCode.DIAGNOSTICS_JOURNAL_MISSING
+
+
+def test_report_command_rejects_an_invalid_meeting_id(settings, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="pattern"):
+        cli_diagnostics.show_session_report("bad id", tmp_path, settings)
 
 
 def test_chat_model_uses_role_configuration(settings, monkeypatch):
@@ -3208,8 +3423,9 @@ def test_preflight_hosts_follow_the_configured_chat_endpoint(settings, endpoint)
 def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
     settings.tts = MiniMaxTTS()
     settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
-    with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
+    with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
         create_speech_synthesizer(settings.tts)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
     settings.tts.api_key = SecretStr("minimax-key")
     assert isinstance(create_speech_synthesizer(settings.tts), MiniMaxSpeechSynthesizer)
     assert providers.preflight_hosts(settings) == (
@@ -3221,8 +3437,9 @@ def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
 
 def test_openai_speech_requires_its_own_key(settings):
     settings.tts.api_key = None
-    with pytest.raises(ValueError, match="FAKEYOU_TTS__API_KEY"):
+    with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
         create_speech_synthesizer(settings.tts)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
 def test_check_reports_the_speech_provider_defaults(settings, capsys):
@@ -3312,8 +3529,7 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
     assert episode["group_id"] == profile.memory_group
     assert "Orchid" in episode["custom_extraction_instructions"]
     assert "'Rani Twin'" in episode["custom_extraction_instructions"]
-    output = capsys.readouterr().out.splitlines()
-    summary = json.loads(output[-1])
+    summary = json.loads(capsys.readouterr().out)
     assert (summary["meeting_id"], summary["ingested"], summary["completed"]) == (
         "meeting-9",
         1,
@@ -3352,7 +3568,7 @@ async def test_memory_ingest_command_requires_a_record(
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    with pytest.raises(cli_errors.CliError, match="no meeting record"):
+    with pytest.raises(FakeYouError, match="no meeting record") as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
             persona_path=write_persona(tmp_path),
@@ -3361,11 +3577,12 @@ async def test_memory_ingest_command_requires_a_record(
             twin_name=None,
             settings=settings,
         )
+    assert caught.value.code is ErrorCode.MEMORY_RECORD_MISSING
     assert opened == []
 
 
 async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: Path) -> None:
-    with pytest.raises(cli_errors.CliError, match="--keep-record"):
+    with pytest.raises(FakeYouError, match="--keep-record") as caught:
         await cli_memory.forget_memory(
             persona_path=write_persona(tmp_path),
             owner_id=None,
@@ -3375,6 +3592,7 @@ async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: 
             settings=settings,
             keep_record=True,
         )
+    assert caught.value.code is ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING
 
 
 async def test_join_passes_persona_vocabulary_as_speech_keywords(
@@ -3580,8 +3798,9 @@ async def test_join_rejects_persona_language_mismatch_before_resources(
     settings.stt.api_key = SecretStr("muse-key")
     forbid_resources(monkeypatch)
     persona = write_persona(tmp_path, language="en")
-    with pytest.raises(cli_errors.CliError, match="persona language"):
+    with pytest.raises(FakeYouError, match="persona language") as caught:
         await join(MEET_LINK, audio_enabled=True, conversation_enabled=True, persona_path=persona)
+    assert caught.value.code is ErrorCode.MEETING_PERSONA_LANGUAGE_MISMATCH
     assert not settings.paths.journal_dir.exists()
 
 
@@ -3659,6 +3878,7 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
     assert printed["record_error"] is None
     assert "memory-ingest --meeting meeting-9 --persona" in printed["resume_command"]
     assert "persona.json" in printed["resume_command"]
+    assert "--owner-id settings-owner --twin-id settings-twin" in printed["resume_command"]
 
 
 async def test_join_with_hanging_graphiti_leaves_without_ingesting(
@@ -3842,7 +4062,7 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
     assert status is not None
     assert status.status == "completed"
     assert status.record_sha256 == hashlib.sha256(record_path.read_bytes()).hexdigest()
-    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    summary = json.loads(capsys.readouterr().out)
     assert (summary["ingested"], summary["completed"]) == (1, True)
 
 
@@ -3886,7 +4106,14 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
         1,
         2,
     )
-    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    decoder = json.JSONDecoder()
+    remaining = capsys.readouterr().out.strip()
+    documents = []
+    while remaining:
+        document, end = decoder.raw_decode(remaining)
+        documents.append(document)
+        remaining = remaining[end:].strip()
+    summary = documents[-1]
     assert (summary["ingested"], summary["completed"]) == (2, True)
 
 
@@ -3996,7 +4223,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
 
     with record_lock(record_path, purpose="meeting"):
-        with pytest.raises(cli_errors.CliError, match="locked"):
+        with pytest.raises(FakeYouError, match="locked") as caught:
             await cli_memory.ingest_recorded_meeting(
                 meeting_id="meeting-9",
                 persona_path=write_persona(tmp_path),
@@ -4005,6 +4232,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
                 twin_name=None,
                 settings=settings,
             )
+    assert caught.value.code is ErrorCode.RECORD_LOCKED
     assert opened == []
     assert record_path.exists()
 
@@ -4077,7 +4305,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
         ),
     )
 
-    with pytest.raises(cli_errors.CliError, match="group"):
+    with pytest.raises(FakeYouError, match="group") as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
             persona_path=write_persona(tmp_path),
@@ -4086,6 +4314,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
             twin_name=None,
             settings=settings,
         )
+    assert caught.value.code is ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH
     assert opened == []
     status = read_status(path)
     assert status is not None
@@ -4163,7 +4392,7 @@ async def test_memory_ingest_empty_record_reports_zero_windows(
         settings=settings,
     )
 
-    summary = json.loads(capsys.readouterr().out.splitlines()[-1])
+    summary = json.loads(capsys.readouterr().out)
     assert (summary["windows"], summary["ingested"], summary["completed"]) == (0, 0, True)
     status = read_status(status_path(record_path))
     assert status is not None
@@ -4265,7 +4494,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
 
     with record_lock(record_path, purpose=lock_purpose):
-        with pytest.raises(cli_errors.CliError, match="locked"):
+        with pytest.raises(FakeYouError, match="locked") as caught:
             await cli_memory.forget_memory(
                 persona_path=write_persona(tmp_path),
                 owner_id=None,
@@ -4275,6 +4504,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
                 settings=settings,
                 keep_record=keep_record,
             )
+    assert caught.value.code is ErrorCode.RECORD_LOCKED
     assert opened == []
     assert record_path.exists()
     assert read_meeting_context(context_path(record_path)) == context
@@ -4282,5 +4512,6 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
 
 async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
     settings.conversation.participant_policy_enabled = True
-    with pytest.raises(cli_errors.CliError, match="wake-phrase"):
+    with pytest.raises(FakeYouError, match="wake-phrase") as caught:
         await join("https://meet.google.com/abc-defg-hij", meeting_id=None)
+    assert caught.value.code is ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES

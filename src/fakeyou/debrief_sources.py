@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import TypeAdapter, ValidationError
 
 from fakeyou.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.debrief_schema import DebriefDraft, DebriefValidationError, EvidenceRef
 from fakeyou.diarize_client import DiarizeError
 from fakeyou.diarize_correction import load_corrected_record
@@ -31,7 +32,7 @@ class SourceEntry:
 
     def __post_init__(self) -> None:
         if self.at.utcoffset() is None:
-            raise DebriefValidationError("source timestamp must be timezone aware")
+            raise DebriefValidationError(ErrorCode.DEBRIEF_SOURCE_TIME_NOT_AWARE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,7 @@ def load_record_snapshot(
     try:
         raw = path.read_bytes()
     except OSError:
-        raise DebriefValidationError("unable to read meeting record") from None
+        raise DebriefValidationError(ErrorCode.DEBRIEF_RECORD_UNREADABLE) from None
     sources: list[SourceEntry] = []
     transcripts: dict[str, TranscriptEntry] = {}
     visuals: dict[str, VisualEntry] = {}
@@ -82,15 +83,17 @@ def load_record_snapshot(
         try:
             entry = _RECORD_ENTRY.validate_json(line)
         except ValidationError:
-            raise DebriefValidationError(f"invalid meeting record at line {line_number}") from None
+            raise DebriefValidationError(
+                ErrorCode.DEBRIEF_RECORD_INVALID_LINE, line=line_number
+            ) from None
         if isinstance(entry, TranscriptEntry):
             if not entry.id.strip():
-                raise DebriefValidationError("transcript source id must not be blank") from None
+                raise DebriefValidationError(ErrorCode.DEBRIEF_TRANSCRIPT_ID_BLANK) from None
             previous = transcripts.get(entry.id)
             if previous is not None:
                 if previous != entry:
                     raise DebriefValidationError(
-                        "contradictory duplicate transcript source"
+                        ErrorCode.DEBRIEF_TRANSCRIPT_CONTRADICTORY
                     ) from None
                 continue
             transcripts[entry.id] = entry
@@ -117,11 +120,11 @@ def load_record_snapshot(
             )
         elif isinstance(entry, VisualEntry):
             if not entry.frame_ref.strip():
-                raise DebriefValidationError("visual source id must not be blank") from None
+                raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_ID_BLANK) from None
             previous_visual = visuals.get(entry.frame_ref)
             if previous_visual is not None:
                 if previous_visual != entry:
-                    raise DebriefValidationError("contradictory duplicate visual source") from None
+                    raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_CONTRADICTORY) from None
                 continue
             visuals[entry.frame_ref] = entry
             if entry.caption.strip():
@@ -135,7 +138,7 @@ def load_record_snapshot(
                     )
                 )
     if not sources:
-        raise DebriefValidationError("meeting record contains no usable speech sources") from None
+        raise DebriefValidationError(ErrorCode.DEBRIEF_NO_SPEECH_SOURCES) from None
     corrected = _corrected_speakers(path, faults, journal)
     if corrected:
         sources = [
@@ -154,15 +157,15 @@ def load_context_snapshot(path: Path) -> tuple[MeetingContext | None, str | None
     except FileNotFoundError:
         return None, None
     except OSError:
-        raise DebriefValidationError("unable to read meeting context") from None
+        raise DebriefValidationError(ErrorCode.DEBRIEF_CONTEXT_UNREADABLE) from None
     if len(raw) > MAX_CONTEXT_BYTES:
         raise DebriefValidationError(
-            f"meeting context must be at most {MAX_CONTEXT_BYTES} bytes"
+            ErrorCode.DEBRIEF_CONTEXT_TOO_LARGE, limit=MAX_CONTEXT_BYTES
         ) from None
     try:
         context = MeetingContext.model_validate_json(raw)
     except ValidationError:
-        raise DebriefValidationError("invalid meeting context") from None
+        raise DebriefValidationError(ErrorCode.DEBRIEF_CONTEXT_INVALID) from None
     return context, hashlib.sha256(raw).hexdigest()
 
 
@@ -174,11 +177,11 @@ def chunk_sources(
     overlap: int = 4,
 ) -> tuple[tuple[SourceEntry, ...], ...]:
     if not (1 <= max_entries <= 40 and 1 <= max_characters <= 16000 and 0 <= overlap <= 4):
-        raise DebriefValidationError("invalid debrief chunk limits")
+        raise DebriefValidationError(ErrorCode.DEBRIEF_CHUNK_LIMITS_INVALID)
     if not sources:
-        raise DebriefValidationError("no debrief sources to chunk")
+        raise DebriefValidationError(ErrorCode.DEBRIEF_NO_SOURCES)
     if any(len(entry.text) > max_characters for entry in sources):
-        raise DebriefValidationError("speech source exceeds the chunk character limit")
+        raise DebriefValidationError(ErrorCode.DEBRIEF_SOURCE_EXCEEDS_CHUNK)
     chunks: list[tuple[SourceEntry, ...]] = []
     start = 0
     while start < len(sources):
@@ -193,7 +196,7 @@ def chunk_sources(
             end += 1
         chunks.append(tuple(sources[start:end]))
         if len(chunks) > 20:
-            raise DebriefValidationError("meeting record exceeds the 20 chunk limit")
+            raise DebriefValidationError(ErrorCode.DEBRIEF_TOO_MANY_CHUNKS)
         if end == len(sources):
             break
         next_start = max(start + 1, end - overlap)
@@ -210,7 +213,7 @@ def chunk_sources(
 
 def validate_evidence(evidence: Sequence[EvidenceRef], sources: Mapping[str, SourceEntry]) -> None:
     if not evidence:
-        raise DebriefValidationError("missing evidence")
+        raise DebriefValidationError(ErrorCode.DEBRIEF_EVIDENCE_MISSING)
     for reference in evidence:
         source = sources.get(reference.entry_id)
         if (
@@ -219,7 +222,7 @@ def validate_evidence(evidence: Sequence[EvidenceRef], sources: Mapping[str, Sou
             or not reference.quote.strip()
             or reference.quote not in source.text
         ):
-            raise DebriefValidationError("invalid evidence reference")
+            raise DebriefValidationError(ErrorCode.DEBRIEF_EVIDENCE_INVALID)
 
 
 CLAIM_EDGE_PUNCTUATION = ".,!?;:\"'“”‘’()[]{}-–—… "
@@ -239,13 +242,13 @@ def validate_draft(
     try:
         draft = DebriefDraft.model_validate(draft.model_dump())
     except ValidationError:
-        raise DebriefValidationError("invalid debrief draft") from None
+        raise DebriefValidationError(ErrorCode.DEBRIEF_DRAFT_INVALID) from None
     for item in draft.items:
         validate_evidence(item.evidence, sources)
         quotes = [reference.quote for reference in item.evidence]
         for claim in (item.assignee_claim, item.due_text):
             if claim is not None and not _claim_in_quotes(claim, quotes):
-                raise DebriefValidationError("item claim is not in its evidence quotes")
+                raise DebriefValidationError(ErrorCode.DEBRIEF_CLAIM_NOT_IN_QUOTES)
     valid_ids = (
         {f"objective:{item.id}" for item in brief.objectives}
         | {f"question:{item.id}" for item in brief.questions}
@@ -254,10 +257,10 @@ def validate_draft(
     )
     for finding in draft.findings:
         if finding.objective_id not in valid_ids:
-            raise DebriefValidationError("finding does not belong to the meeting brief")
+            raise DebriefValidationError(ErrorCode.DEBRIEF_FINDING_NOT_IN_BRIEF)
         if finding.evidence or finding.status == "addressed":
             validate_evidence(finding.evidence, sources)
         if finding.status == "addressed" and not any(
             sources[reference.entry_id].kind == "participant" for reference in finding.evidence
         ):
-            raise DebriefValidationError("addressed finding needs participant evidence")
+            raise DebriefValidationError(ErrorCode.DEBRIEF_ADDRESSED_NEEDS_PARTICIPANT)

@@ -5,16 +5,24 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import httpx2
 import pytest
 from graphiti_core.embedder.client import EMBEDDING_DIM
+from langgraph.checkpoint.memory import InMemorySaver
 from openai import AsyncOpenAI
 from pydantic import SecretStr
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.engine import make_url
 
 import fakeyou.cli.join as cli_join
+import fakeyou.db.checkpoint as checkpoint_module
+from fakeyou.db.engine import create_engine_for_url
+from fakeyou.db.schema import upgrade
 from fakeyou.settings import (
     BrowserSettings,
+    DatabaseSettings,
     EmbedderSettings,
     IdentitySettings,
     MemorySettings,
@@ -25,7 +33,49 @@ from fakeyou.settings import (
     Settings,
     StoreSettings,
 )
-from tests.fakes import FakeAudio, PCMStream, RecordingJournal, SessionRun, make_graphiti
+from tests.fakes import (
+    DATABASE_URL,
+    FakeAudio,
+    PCMStream,
+    RecordingJournal,
+    SessionRun,
+    make_graphiti,
+)
+
+TEST_DATABASE_ENV = "TEST_DATABASE_URL"
+REAL_DATABASE_FIXTURE = "blank_database_url"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if isinstance(item, pytest.Function) and REAL_DATABASE_FIXTURE in item.fixturenames:
+            item.add_marker(pytest.mark.postgres)
+
+
+class MemoryPostgresSaver(InMemorySaver):
+    async def setup(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def postgres_checkpoints(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[dict[str, MemoryPostgresSaver]]:
+    savers: dict[str, MemoryPostgresSaver] = {}
+    real_database = REAL_DATABASE_FIXTURE in request.fixturenames
+    if real_database or request.node.get_closest_marker("container"):
+        yield savers
+        return
+
+    class FakeAsyncPostgresSaver:
+        @classmethod
+        @asynccontextmanager
+        async def from_conn_string(cls, conn_string: str) -> AsyncIterator[MemoryPostgresSaver]:
+            yield savers.setdefault(conn_string, MemoryPostgresSaver())
+
+    monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", FakeAsyncPostgresSaver)
+    yield savers
 
 
 @pytest.fixture
@@ -43,8 +93,8 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         **environment_options,
         reply=OpenAIReply(api_key=SecretStr("test-key"), model="model"),
         tts=OpenAITTS(api_key=SecretStr("tts-key")),
+        database=DatabaseSettings(url=SecretStr(DATABASE_URL)),
         paths=PathSettings(
-            checkpoint_path=tmp_path / "checkpoints.sqlite",
             journal_dir=tmp_path / "journals",
             record_dir=tmp_path / "meetings",
         ),
@@ -62,6 +112,55 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
             ),
         ),
     )
+
+
+@pytest.fixture
+def blank_database_url() -> Iterator[str]:
+    base_url = os.environ.get(TEST_DATABASE_ENV)
+    if not base_url:
+        pytest.skip(f"set {TEST_DATABASE_ENV} to run tests against a real PostgreSQL")
+    name = f"fakeyou_test_{uuid4().hex}"
+    admin = create_engine(
+        make_url(base_url).set(drivername="postgresql+psycopg", database="postgres"),
+        isolation_level="AUTOCOMMIT",
+    )
+    try:
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{name}"'))
+        yield (
+            make_url(base_url)
+            .set(drivername="postgresql", database=name)
+            .render_as_string(hide_password=False)
+        )
+    finally:
+        with admin.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+
+
+@pytest.fixture
+def migrated_database_url(blank_database_url: str) -> str:
+    engine = create_engine_for_url(blank_database_url)
+    try:
+        upgrade(engine)
+    finally:
+        engine.dispose()
+    return blank_database_url
+
+
+@pytest.fixture
+def migrated_engine(migrated_database_url: str) -> Iterator[Engine]:
+    engine = create_engine_for_url(migrated_database_url)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def migrated_settings(settings: Settings, migrated_database_url: str) -> Settings:
+    settings.database.url = SecretStr(migrated_database_url)
+    return settings
 
 
 @pytest.fixture

@@ -1,20 +1,8 @@
 from dataclasses import dataclass, replace
-from typing import Literal
 
 from fakeyou.journal import Journal
-from fakeyou.provider_faults import ProviderFault, ProviderFaultKind, trim_detail
-from fakeyou.taxonomy import Subsystem
-
-HealthKind = Literal[
-    "no_audio_frames",
-    "no_transcripts",
-    "silent_capture",
-    "reconnect_unsupported",
-    "callback_failed",
-    "voiceprint_misbind",
-    "voiceprint_model_mismatch",
-]
-FaultKind = ProviderFaultKind | HealthKind
+from fakeyou.provider_faults import ProviderFault, trim_detail
+from fakeyou.taxonomy import FaultKind, Subsystem
 
 _MAX_FAULT_RECORDS = 128
 

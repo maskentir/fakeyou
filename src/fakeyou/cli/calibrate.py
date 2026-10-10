@@ -4,12 +4,13 @@ import hashlib
 import json
 import math
 import statistics
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from fakeyou.cli.errors import CliError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.output import emit_json
 from fakeyou.settings import Settings
 from fakeyou.verify import load_calibration_artifact, model_digest
 
@@ -40,13 +41,8 @@ class Trial:
     twin: bool
 
 
-def _fail_lock(message: str) -> NoReturn:
-    print(f"fakeyou: error: {message}", file=sys.stderr)
-    raise SystemExit(3)
-
-
-def _fail_eval(payload: dict[str, Any], code: int) -> NoReturn:
-    print(json.dumps(payload))
+def _fail_eval(payload: dict[str, Any], code: ExitCode) -> NoReturn:
+    emit_json(payload)
     raise SystemExit(code)
 
 
@@ -68,26 +64,26 @@ def _trial_flag(value: Any, default: bool) -> bool | None:
 
 def _trial_of(payload: Any, origin: str) -> Trial:
     if not isinstance(payload, dict):
-        raise CliError(f"trial entry is not an object in {origin}")
+        raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_NOT_OBJECT, origin=origin)
     speaker = payload.get("speaker_id")
     if not isinstance(speaker, str) or not speaker:
-        raise CliError(f"trial entry lacks speaker_id in {origin}")
+        raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_SPEAKER_MISSING, origin=origin)
     label = payload.get("label")
     if label == "target":
         target = True
     elif label == "nontarget":
         target = False
     else:
-        raise CliError(f"trial entry has bad label in {origin}")
+        raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_LABEL_INVALID, origin=origin)
     s1 = _trial_number(payload.get("s1"))
     s2 = _trial_number(payload.get("s2"))
     if s1 is None or s2 is None:
-        raise CliError(f"trial entry has bad scores in {origin}")
+        raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_SCORES_INVALID, origin=origin)
     overlap = _trial_flag(payload.get("overlap"), False)
     claim_agree = _trial_flag(payload.get("claim_agree"), False)
     twin = _trial_flag(payload.get("twin"), False)
     if overlap is None or claim_agree is None or twin is None:
-        raise CliError(f"trial entry has bad flags in {origin}")
+        raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_FLAGS_INVALID, origin=origin)
     return Trial(
         speaker=speaker,
         target=target,
@@ -105,15 +101,18 @@ def _load_trials(paths: list[str]) -> list[Trial]:
         try:
             text = Path(path).read_text()
         except OSError:
-            raise CliError(f"journal cannot be read: {path}") from None
+            raise FakeYouError(ErrorCode.CALIBRATE_JOURNAL_UNREADABLE, path=path) from None
         for lineno, line in enumerate(text.splitlines(), 1):
             if not line.strip():
                 continue
+            origin = f"{path}:{lineno}"
             try:
                 payload = json.loads(line)
             except ValueError:
-                raise CliError(f"journal line is not JSON in {path}:{lineno}") from None
-            trials.append(_trial_of(payload, f"{path}:{lineno}"))
+                raise FakeYouError(
+                    ErrorCode.CALIBRATE_JOURNAL_LINE_INVALID, origin=origin
+                ) from None
+            trials.append(_trial_of(payload, origin))
     return trials
 
 
@@ -263,37 +262,37 @@ def calibrate_lock(
     model_version: str | None = None,
 ) -> None:
     if model_version is not None and model_digest(model_version) is None:
-        raise CliError(f"model version holds no sha256 digest: {model_version}")
+        raise FakeYouError(ErrorCode.CALIBRATE_MODEL_DIGEST_MISSING, model_version=model_version)
     trials = _load_trials(dev_journals)
     targets = [trial for trial in trials if trial.target]
     nontargets = [trial for trial in trials if not trial.target]
     if not targets or not nontargets:
-        _fail_lock("dev journals need both target and nontarget trials")
+        raise FakeYouError(ErrorCode.CALIBRATE_DEV_TRIALS_INCOMPLETE)
     stats = _snorm_stats(sorted(trial.s1 for trial in nontargets))
     if stats is None:
-        _fail_lock("dev cohort has no spread")
+        raise FakeYouError(ErrorCode.CALIBRATE_COHORT_NO_SPREAD)
     mean, std = stats
     links = [(trial.s1 - mean) / std for trial in trials]
     labels = [1.0 if trial.target else 0.0 for trial in trials]
     slope, bias = _fit_platt(links, labels)
     llrs = [slope * link + bias for link in links]
     if not _reliability_holds(llrs, labels):
-        _fail_lock("dev reliability exceeds bound")
+        raise FakeYouError(ErrorCode.CALIBRATE_RELIABILITY_EXCEEDS_BOUND)
     theta = _scan_theta(llrs, labels)
     if theta is None:
-        _fail_lock("dev scores show no operating point")
+        raise FakeYouError(ErrorCode.CALIBRATE_NO_OPERATING_POINT)
     if not _valley_holds(llrs, theta, LLR_BIN_WIDTH):
-        _fail_lock("theta sits outside a margin valley")
+        raise FakeYouError(ErrorCode.CALIBRATE_THETA_OUTSIDE_VALLEY)
     target_margins = [trial.s1 - trial.s2 for trial in targets]
     nontarget_margins = [trial.s1 - trial.s2 for trial in nontargets]
     worst_nontarget = max(nontarget_margins)
     best_target = min(target_margins)
     if worst_nontarget >= best_target:
-        _fail_lock("dev margins show no valley")
+        raise FakeYouError(ErrorCode.CALIBRATE_MARGINS_NO_VALLEY)
     floor = (worst_nontarget + best_target) / 2.0
     margins = target_margins + nontarget_margins
     if not _valley_holds(margins, floor, MARGIN_BIN_WIDTH):
-        _fail_lock("margin floor sits outside a margin valley")
+        raise FakeYouError(ErrorCode.CALIBRATE_MARGIN_FLOOR_OUTSIDE_VALLEY)
     report = _report_id(trials)
     payload = {
         "theta_llr": theta,
@@ -310,9 +309,9 @@ def calibrate_lock(
     try:
         Path(out).write_text(json.dumps(payload))
     except OSError:
-        _fail_lock(f"artifact cannot be written: {out}")
+        raise FakeYouError(ErrorCode.CALIBRATE_ARTIFACT_NOT_WRITTEN, path=out) from None
     summary = {"artifact": out, "theta_llr": theta, "margin_floor": floor, "report_id": report}
-    print(json.dumps(summary))
+    emit_json(summary)
 
 
 def _dev_speakers(artifact_path: str) -> list[str] | None:
@@ -356,23 +355,26 @@ def calibrate_eval(
 ) -> None:
     loaded = load_calibration_artifact(artifact)
     if loaded is None:
-        _fail_eval({"pass": False, "error": "invalid_artifact"}, 4)
+        _fail_eval({"pass": False, "error": "invalid_artifact"}, ExitCode.EVAL_GATE_FAILED)
     if model_version is not None:
         if loaded.model_version is None:
-            _fail_eval({"pass": False, "error": "model_unknown"}, 2)
+            _fail_eval({"pass": False, "error": "model_unknown"}, ExitCode.INPUT_REJECTED)
         claimed = model_digest(model_version)
         if claimed is None or claimed != model_digest(loaded.model_version):
-            _fail_eval({"pass": False, "error": "model_mismatch"}, 2)
+            _fail_eval({"pass": False, "error": "model_mismatch"}, ExitCode.INPUT_REJECTED)
     trials = _load_trials(eval_journals)
     dev = _dev_speakers(artifact)
     if dev is None:
-        _fail_eval({"pass": False, "error": "missing_dev_speakers"}, 2)
+        _fail_eval({"pass": False, "error": "missing_dev_speakers"}, ExitCode.INPUT_REJECTED)
     heard = sorted({trial.speaker for trial in trials} & set(dev))
     if heard:
-        _fail_eval({"pass": False, "error": "speaker_overlap", "overlap_speakers": heard}, 2)
+        _fail_eval(
+            {"pass": False, "error": "speaker_overlap", "overlap_speakers": heard},
+            ExitCode.INPUT_REJECTED,
+        )
     stats = _snorm_stats(list(loaded.snorm_cohort))
     if stats is None:
-        _fail_eval({"pass": False, "error": "degenerate_cohort"}, 4)
+        _fail_eval({"pass": False, "error": "degenerate_cohort"}, ExitCode.EVAL_GATE_FAILED)
     mean, std = stats
     llrs: list[float] = []
     flags: list[bool] = []
@@ -417,6 +419,6 @@ def calibrate_eval(
         "margin_floor": loaded.margin_floor,
         "report_id": loaded.report_id,
     }
-    print(json.dumps(metrics))
+    emit_json(metrics)
     if not passed:
-        raise SystemExit(4)
+        raise SystemExit(ExitCode.EVAL_GATE_FAILED)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import struct
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,34 +13,25 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 
 import fakeyou.cli.join as join_module
-from fakeyou.assembly import create_voiceprint_live
+from fakeyou.assembly import VoiceprintLive, build_voiceprint_live
 from fakeyou.cli.join import build_transcript_callback
+from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.identity import SpeakerRegistry
 from fakeyou.record import MeetingRecord, meeting_record_path
 from fakeyou.settings import Settings
+from fakeyou.verify import CalibrationArtifact
 from fakeyou.voice_activity import SlotBinder, VoiceAttribution
-from tests.fakes import RecordingJournal
-from tests.test_assembly_voiceprint import FakeConnection
-from tests.test_voiceprint_match import FakeEmbedder, make_record
+from tests.fakes import FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
 
 
-def program_print(conn: FakeConnection) -> None:
-    record = make_record("alice", (1.0, 0.0))
-    conn.results.append(
-        [
-            (
-                record.person_id,
-                struct.pack("<2f", *record.embedding),
-                record.dim,
-                record.n_utterances,
-                record.consent_ts,
-                record.policy_version,
-                record.is_negative,
-                record.enrolled_at,
-                record.last_used_at,
-                record.owner_name,
-            )
-        ]
+def build_live(
+    settings: Settings,
+    records: list[VoiceprintRecord],
+    embedder: FakeEmbedder,
+    artifact: CalibrationArtifact | None = None,
+) -> VoiceprintLive:
+    return build_voiceprint_live(
+        settings, store=InMemoryVoiceprints(records), embedder=embedder, artifact=artifact
     )
 
 
@@ -81,11 +71,7 @@ class _ScriptedVoiceActivity:
 async def test_final_scores_turn_and_notes_honest_margin(
     settings: Settings, tmp_path: Path
 ) -> None:
-    settings.identity.voiceprint_enabled = True
-    conn = FakeConnection()
-    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=FakeEmbedder((1.0, 0.0)))
-    assert live is not None
-    program_print(conn)
+    live = build_live(settings, [make_record("alice", (1.0, 0.0))], FakeEmbedder((1.0, 0.0)))
     await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
     registry, binder = bound_binder()
     journal = RecordingJournal()
@@ -115,16 +101,12 @@ async def test_final_scores_turn_and_notes_honest_margin(
     assert live.tap_for("slot-0").take_clip() == b""
     record.close()
     journal.close()
-    live.close()
 
 
 async def test_short_clip_skips_scoring_without_decision(
     settings: Settings, tmp_path: Path
 ) -> None:
-    settings.identity.voiceprint_enabled = True
-    conn = FakeConnection()
-    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=FakeEmbedder((1.0, 0.0)))
-    assert live is not None
+    live = build_live(settings, [], FakeEmbedder((1.0, 0.0)))
     await prime_turn_tap(live, "slot-0", b"\x02" * 320)
     registry, binder = bound_binder()
     journal = RecordingJournal()
@@ -151,16 +133,12 @@ async def test_short_clip_skips_scoring_without_decision(
     assert row.margin == 1.0
     record.close()
     journal.close()
-    live.close()
 
 
 async def test_skipped_final_discards_stale_tap_audio_per_stream(
     settings: Settings, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    settings.identity.voiceprint_enabled = True
-    conn = FakeConnection()
-    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=FakeEmbedder((1.0, 0.0)))
-    assert live is not None
+    live = build_live(settings, [], FakeEmbedder((1.0, 0.0)))
     registry = SpeakerRegistry()
     binder = SlotBinder(registry=registry)
     journal = RecordingJournal()
@@ -197,16 +175,12 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
     assert seen == [b"\x0b" * 3200]
     record.close()
     journal.close()
-    live.close()
 
 
 async def test_skipped_final_discards_stale_tap_audio_mixed(
     settings: Settings, tmp_path: Path, monkeypatch: Any
 ) -> None:
-    settings.identity.voiceprint_enabled = True
-    conn = FakeConnection()
-    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=FakeEmbedder((1.0, 0.0)))
-    assert live is not None
+    live = build_live(settings, [], FakeEmbedder((1.0, 0.0)))
     registry = SpeakerRegistry()
     voice_activity = _ScriptedVoiceActivity(
         [
@@ -244,7 +218,6 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
     assert seen == [b"\x0b" * 3200]
     record.close()
     journal.close()
-    live.close()
 
 
 async def test_disabled_voiceprint_never_scores(settings: Settings, tmp_path: Path) -> None:
@@ -276,44 +249,22 @@ async def test_disabled_voiceprint_never_scores(settings: Settings, tmp_path: Pa
 async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     settings: Settings, tmp_path: Path
 ) -> None:
-    settings.identity.voiceprint_enabled = True
-    artifact_path = tmp_path / "dev-lock.json"
-    artifact_path.write_text(
-        json.dumps(
-            {
-                "theta_llr": -10.0,
-                "margin_floor": -10.0,
-                "snorm_cohort": [0.0, 1.0],
-                "platt_a": 1.0,
-                "platt_b": 0.0,
-                "platt_version": "v1",
-                "report_id": "test",
-            }
-        )
+    artifact = CalibrationArtifact(
+        theta_llr=-10.0,
+        margin_floor=-10.0,
+        snorm_cohort=(0.0, 1.0),
+        platt_a=1.0,
+        platt_b=0.0,
+        platt_version="v1",
+        report_id="test",
     )
-    settings.identity.voiceprint_calibration_path = str(artifact_path)
-    conn = FakeConnection()
     embedder = FakeEmbedder((1.0, 0.0))
     embedder.model_id = "test-model"
-    live = create_voiceprint_live(settings, connect=lambda: conn, embedder=embedder)
-    assert live is not None
-    assert live.artifact is not None
-    owned = make_record("alice", (1.0, 0.0), owner_name="Maya")
-    conn.results.append(
-        [
-            (
-                owned.person_id,
-                struct.pack("<2f", *owned.embedding),
-                owned.dim,
-                owned.n_utterances,
-                owned.consent_ts,
-                owned.policy_version,
-                owned.is_negative,
-                owned.enrolled_at,
-                owned.last_used_at,
-                owned.owner_name,
-            )
-        ]
+    live = build_live(
+        settings,
+        [make_record("alice", (1.0, 0.0), owner_name="Maya")],
+        embedder,
+        artifact,
     )
     await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
     registry, binder = bound_binder()
@@ -344,7 +295,6 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     assert row.verified_name == "Maya"
     record.close()
     journal.close()
-    live.close()
     transcripts = [
         row
         for line in record_path.read_text(encoding="utf-8").splitlines()

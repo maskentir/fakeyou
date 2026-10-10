@@ -281,7 +281,7 @@ async def native_responder(
         raise ValueError("these evals require a spoken cap of at most two sentences")
 
     @asynccontextmanager
-    async def checkpointer(_path: Path, dsn: str | None = None) -> AsyncIterator[InMemorySaver]:
+    async def checkpointer(url: str) -> AsyncIterator[InMemorySaver]:
         yield InMemorySaver()
 
     config = SessionConfig(

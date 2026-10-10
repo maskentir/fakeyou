@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.settings import IdentitySettings
 from fakeyou.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
 
@@ -37,8 +38,9 @@ def test_cosine_orthogonal_vectors_is_zero() -> None:
 def test_load_embedder_rejects_wrong_sha256(tmp_path: Path) -> None:
     model = tmp_path / "tiny.onnx"
     model.write_bytes(b"not a model")
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(FakeYouError) as excinfo:
         load_embedder(str(model), "0" * 64)
+    assert excinfo.value.code is ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH
     assert "sha256" in str(excinfo.value)
     assert str(model) not in str(excinfo.value)
 
@@ -51,15 +53,16 @@ def test_embed_rejects_empty_utterances() -> None:
         embedder.embed([[]])
 
 
-def test_load_embedder_without_extra_raises_runtime_error(
+def test_load_embedder_without_extra_raises_a_catalog_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = tmp_path / "tiny.onnx"
     data = b"not a model"
     model.write_bytes(data)
     monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(FakeYouError) as excinfo:
         load_embedder(str(model), hashlib.sha256(data).hexdigest())
+    assert excinfo.value.code is ErrorCode.VOICEPRINT_EXTRA_MISSING
     message = str(excinfo.value)
     assert "voiceprint" in message
     assert "pip install" in message
@@ -87,7 +90,7 @@ def test_load_embedder_exposes_stable_model_id(
 def _load_test_embedder() -> SpeakerEmbedder:
     pytest.importorskip("sherpa_onnx")
     default_model = "/tmp/f2-spike/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"
-    model_path = os.environ.get("FAKEYOU_VOICEPRINT_TEST_MODEL", default_model)
+    model_path = os.environ.get("VOICEPRINT_TEST_MODEL", default_model)
     if not os.path.exists(model_path):
         pytest.skip("voiceprint test model not available")
     return load_embedder(model_path, IdentitySettings().voiceprint_model_sha256)

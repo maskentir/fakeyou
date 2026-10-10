@@ -7,8 +7,11 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fakeyou.cli.errors import CliError
-from fakeyou.diarize_client import DiarizedTurn, DiarizeError, merge_short_turns, transcribe_chunk
+from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.output import emit_text
+from fakeyou.diarize_client import DiarizedTurn, merge_short_turns, transcribe_chunk
 from fakeyou.diarize_correction import (
     JSON_FILE_NAME,
     StaleDiarizationError,
@@ -16,7 +19,7 @@ from fakeyou.diarize_correction import (
     write_correction_bundle,
 )
 from fakeyou.diarize_mix import mix_session_slots, split_chunks
-from fakeyou.ingestion_status import RecordLockError, record_lock
+from fakeyou.ingestion_status import record_lock
 from fakeyou.record import TranscriptEntry, load_meeting_record, meeting_record_path
 from fakeyou.settings import Settings
 
@@ -28,17 +31,17 @@ def _check_slot_alignment(audio_dir: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     slots = payload.get("slots") if isinstance(payload, dict) else None
     if not isinstance(slots, dict):
-        raise ValueError(f"slot alignment metadata is invalid: {path}")
+        raise FakeYouError(ErrorCode.DIARIZE_SLOT_METADATA_INVALID, path=path)
     starts: list[int] = []
     for entry in slots.values():
         start = entry.get("seq_start") if isinstance(entry, dict) else None
         if isinstance(start, bool) or not isinstance(start, int):
-            raise ValueError(f"slot alignment metadata is invalid: {path}")
+            raise FakeYouError(ErrorCode.DIARIZE_SLOT_METADATA_INVALID, path=path)
         starts.append(start)
     if len(set(starts)) > 1:
-        raise ValueError(f"slot audio is misaligned for diarization: {path}")
+        raise FakeYouError(ErrorCode.DIARIZE_SLOT_MISALIGNED, path=path)
     if any(start != 0 for start in starts):
-        raise ValueError(f"slot audio does not start at zero for diarization: {path}")
+        raise FakeYouError(ErrorCode.DIARIZE_SLOT_NOT_AT_ZERO, path=path)
 
 
 def _chunk_offset_ms(chunk: bytes) -> int:
@@ -85,16 +88,14 @@ def diarize_run(
     secret = settings.stt.api_key
     api_key = secret.get_secret_value() if secret is not None else ""
     if not api_key.strip():
-        raise CliError("set FAKEYOU_STT__API_KEY in .env before running diarization")
+        raise FakeYouError(ErrorCode.CONFIG_SECRET_MISSING, name=ConfigKey.STT_API_KEY)
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     audio_dir = record_path.parent / "audio"
     try:
         with record_lock(record_path, purpose="diarization"):
             _run_locked(record_path, audio_dir, api_key, opener)
-    except RecordLockError:
-        raise CliError(f"meeting is locked by another operation: {meeting_id}") from None
-    except (OSError, ValueError, DiarizeError, wave.Error) as error:
-        raise CliError(str(error)) from error
+    except (OSError, ValueError, wave.Error) as error:
+        raise FakeYouError(ErrorCode.DIARIZE_INPUT_UNREADABLE, reason=str(error)) from error
     return 0
 
 
@@ -110,7 +111,7 @@ def _sidecar_turn_count(record_path: Path) -> int:
 def diarize_show(meeting_id: str, *, settings: Settings) -> int:
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not (record_path.parent / JSON_FILE_NAME).exists():
-        raise CliError(f"no diarization correction for meeting: {meeting_id}")
+        raise FakeYouError(ErrorCode.DIARIZE_CORRECTION_MISSING, meeting_id=meeting_id)
     try:
         entries = load_corrected_record(record_path)
     except StaleDiarizationError as error:
@@ -121,15 +122,13 @@ def diarize_show(meeting_id: str, *, settings: Settings) -> int:
                 if isinstance(entry, TranscriptEntry)
             ]
         )
-        print(f"turns: {_sidecar_turn_count(record_path)}")
-        print(f"covered: 0/{total} transcript entries")
-        print(f"status: stale: {error}")
-        raise SystemExit(2) from None
-    except DiarizeError as error:
-        raise CliError(str(error)) from error
+        emit_text(f"turns: {_sidecar_turn_count(record_path)}")
+        emit_text(f"covered: 0/{total} transcript entries")
+        emit_text(f"status: stale: {error}")
+        raise SystemExit(ExitCode.INPUT_REJECTED) from None
     transcripts = [entry for entry in entries if isinstance(entry, TranscriptEntry)]
     covered = sum(1 for entry in transcripts if entry.corrected_speaker_uuid is not None)
-    print(f"turns: {_sidecar_turn_count(record_path)}")
-    print(f"covered: {covered}/{len(transcripts)} transcript entries")
-    print("status: ok")
+    emit_text(f"turns: {_sidecar_turn_count(record_path)}")
+    emit_text(f"covered: {covered}/{len(transcripts)} transcript entries")
+    emit_text("status: ok")
     return 0

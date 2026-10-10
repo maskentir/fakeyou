@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+
 IngestionState = Literal["not_requested", "pending", "completed", "interrupted", "failed"]
 LockPurpose = Literal["meeting", "ingestion", "forget", "debrief", "diarization"]
 
@@ -21,7 +23,7 @@ INGESTION_FILE_NAME = "ingestion.json"
 LOCK_STALE_AFTER_SECONDS = 60.0
 
 
-class LeaseError(Exception):
+class LeaseError(FakeYouError):
     pass
 
 
@@ -172,8 +174,12 @@ def record_lock(
             lock_path(record_path), purpose=purpose, stale_after_seconds=stale_after_seconds
         ) as token:
             yield token
-    except LeaseError:
-        raise RecordLockError(f"record is locked: {lock_path(record_path)}") from None
+    except LeaseError as error:
+        if error.code is ErrorCode.RECORD_LOCK_CORRUPT:
+            raise RecordLockError(
+                ErrorCode.RECORD_LOCK_CORRUPT, path=lock_path(record_path)
+            ) from None
+        raise RecordLockError(ErrorCode.RECORD_LOCKED, path=lock_path(record_path)) from None
 
 
 @contextmanager
@@ -184,7 +190,7 @@ def _acquisition_guard(path: Path) -> Iterator[int]:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         os.close(fd)
-        raise LeaseError(f"locked: {path}") from None
+        raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
     try:
         yield fd
     finally:
@@ -213,22 +219,24 @@ def file_lease(
     with _acquisition_guard(path) as fd:
         raw = _read_fd(fd)
         owner = _lock_owner(path) if raw else None
-        if raw and (owner is None or not _owner_recoverable(owner, stale_after_seconds)):
-            raise LeaseError(f"locked: {path}") from None
+        if raw and owner is None:
+            raise LeaseError(ErrorCode.RECORD_LOCK_CORRUPT, path=path) from None
+        if owner is not None and not _owner_recoverable(owner, stale_after_seconds):
+            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
         try:
             os.ftruncate(fd, 0)
             os.lseek(fd, 0, os.SEEK_SET)
             os.write(fd, _lease_payload(owner_payload))
             os.fsync(fd)
         except OSError:
-            raise LeaseError(f"locked: {path}") from None
+            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
         try:
             current = os.stat(path)
         except FileNotFoundError:
-            raise LeaseError(f"locked: {path}") from None
+            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
         written = os.fstat(fd)
         if (current.st_ino, current.st_dev) != (written.st_ino, written.st_dev):
-            raise LeaseError(f"locked: {path}") from None
+            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
     stop = threading.Event()
     heartbeat = threading.Thread(
         target=_refresh_lease,

@@ -314,7 +314,7 @@ async def test_capture_drain_starts_before_initial_speech(open_audio, session):
     journal = Journal(
         "meeting",
         emit=lambda line: session.events.append("journal:" + json.loads(line)["event"]),
-        stdout=False,
+        echo=False,
     )
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
     config = replace(session.config, per_stream_enabled=True)
