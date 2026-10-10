@@ -24,7 +24,7 @@ from fakeyou.orchestration.providers import create_chat_model, memory_config
 
 
 async def chat(
-    message: str, thread: str, use_browser: bool, use_memory: bool, settings: Settings
+    message: str, thread: str, *, use_browser: bool, use_memory: bool, settings: Settings
 ) -> None:
     if not re.fullmatch(IDENTIFIER_PATTERN, thread):
         raise FakeYouError(ErrorCode.CHAT_THREAD_INVALID)

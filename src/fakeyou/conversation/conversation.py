@@ -719,7 +719,7 @@ class ConversationLoop:
             return
         self._begin_pregen(text)
 
-    async def note_vad(self, active: bool) -> None:
+    async def note_vad(self, *, active: bool) -> None:
         if active:
             self._vad_stopped = False
             return
@@ -736,13 +736,13 @@ class ConversationLoop:
     def _begin_pregen(self, text: str) -> None:
         self._pregen_count += 1
         interim = TranscriptEvent(
-            f"pregen-{self._pregen_count}",
-            datetime.now(UTC).isoformat(),
-            "meeting_audio",
-            text,
-            False,
-            "unknown",
-            None,
+            id=f"pregen-{self._pregen_count}",
+            timestamp=datetime.now(UTC).isoformat(),
+            source="meeting_audio",
+            text=text,
+            finalized=False,
+            participant_id="unknown",
+            speaker_evidence_id=None,
         )
         words = normalize_words(text)
         request_id = f"{interim.id}:{self._generation}"

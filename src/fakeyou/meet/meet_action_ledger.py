@@ -193,6 +193,7 @@ class MeetActionLedger:
         action_id: str,
         kind: MeetActionKind,
         params_hash: str,
+        *,
         authorized: bool,
         chars: int | None = None,
     ) -> ActionIntent:
@@ -215,6 +216,7 @@ class MeetActionLedger:
         self,
         action_id: str,
         state: ActionState,
+        *,
         observed_before: bool | None = None,
         observed_after: bool | None = None,
         attempt: int | None = None,
@@ -288,8 +290,8 @@ async def execute_meet_action(
                     action_id,
                     kind,
                     params_hash_for(meeting_id, action_id, params),
-                    authorized,
-                    chars,
+                    authorized=authorized,
+                    chars=chars,
                 )
                 ledger.save()
                 if journal is not None:

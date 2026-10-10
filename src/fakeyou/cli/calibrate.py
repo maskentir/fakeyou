@@ -54,7 +54,7 @@ def _trial_number(value: Any) -> float | None:
     return float(value)
 
 
-def _trial_flag(value: Any, default: bool) -> bool | None:
+def _trial_flag(value: Any, *, default: bool) -> bool | None:
     if value is None:
         return default
     if isinstance(value, bool):
@@ -79,9 +79,9 @@ def _trial_of(payload: Any, origin: str) -> Trial:
     s2 = _trial_number(payload.get("s2"))
     if s1 is None or s2 is None:
         raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_SCORES_INVALID, origin=origin)
-    overlap = _trial_flag(payload.get("overlap"), False)
-    claim_agree = _trial_flag(payload.get("claim_agree"), False)
-    twin = _trial_flag(payload.get("twin"), False)
+    overlap = _trial_flag(payload.get("overlap"), default=False)
+    claim_agree = _trial_flag(payload.get("claim_agree"), default=False)
+    twin = _trial_flag(payload.get("twin"), default=False)
     if overlap is None or claim_agree is None or twin is None:
         raise FakeYouError(ErrorCode.CALIBRATE_TRIAL_FLAGS_INVALID, origin=origin)
     return Trial(

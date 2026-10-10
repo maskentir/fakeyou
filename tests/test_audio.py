@@ -858,7 +858,7 @@ async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
 
     seen: list[bool] = []
 
-    async def on_vad(active: bool) -> None:
+    async def on_vad(*, active: bool) -> None:
         seen.append(active)
 
     observer = _CaptureObserver(CaptureActivity(), on_vad=on_vad)
@@ -878,7 +878,7 @@ async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
 async def test_capture_observer_contains_on_vad_failure(journal) -> None:
     from pipecat.frames.frames import VADUserStoppedSpeakingFrame
 
-    async def on_vad(active: bool) -> None:
+    async def on_vad(*, active: bool) -> None:
         raise RuntimeError("vad consumer down")
 
     pushed: list = []
@@ -900,7 +900,7 @@ async def test_capture_observer_journals_first_probe_vad_failure_only(journal) -
 
     from pipecat.frames.frames import VADUserStartedSpeakingFrame
 
-    def failing_observe(_active: bool) -> None:
+    def failing_observe(*, active: bool) -> None:
         raise RuntimeError("probe gone")
 
     probe = SimpleNamespace(observe_vad=failing_observe)

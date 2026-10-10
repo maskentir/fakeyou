@@ -2012,7 +2012,7 @@ async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     assert journal_has(journal, "pregeneration_started")
@@ -2021,7 +2021,7 @@ async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
     assert audio.spoken == ["Yes I can."]
     assert len(responder.calls) == 1
     assert journal_has(journal, "pregeneration_finished", outcome="adopted")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.close()
@@ -2035,7 +2035,7 @@ async def test_note_vad_stays_silent_on_speech_start(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
-    await loop.note_vad(True)
+    await loop.note_vad(active=True)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     assert journal.events("pregeneration_started") == []
@@ -2049,7 +2049,7 @@ async def test_note_vad_stays_silent_without_interim(journal) -> None:
         responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
     )
     loop.bind(audio)
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     assert journal.events("pregeneration_started") == []
@@ -2064,7 +2064,7 @@ async def test_note_vad_fires_on_short_interim(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("see you")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     assert len(journal.events("pregeneration_started")) == 1
@@ -2079,7 +2079,7 @@ async def test_note_vad_stays_silent_on_empty_interim(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("  ")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     assert journal.events("pregeneration_started") == []
@@ -2092,7 +2092,7 @@ async def test_note_vad_stays_silent_when_disabled(journal) -> None:
     loop = ConversationLoop(responder, journal=journal, sentence_streaming=True)
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     assert journal.events("pregeneration_started") == []
@@ -2108,7 +2108,7 @@ async def test_note_vad_stays_silent_when_busy(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     assert journal.events("pregeneration_started") == []
@@ -2122,7 +2122,7 @@ async def test_post_stop_interim_starts_pregen_with_single_word(journal) -> None
         responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
     )
     loop.bind(audio)
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert responder.calls == []
     await loop.handle_interim("hello")
@@ -2140,7 +2140,7 @@ async def test_post_stop_interim_restarts_pregen_on_changed_words(journal) -> No
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me today")
@@ -2159,7 +2159,7 @@ async def test_post_stop_interim_keeps_pregen_on_identical_words(journal) -> Non
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me")
@@ -2177,7 +2177,7 @@ async def test_mid_speech_interim_starts_no_post_stop_pregen(journal) -> None:
         responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
     )
     loop.bind(audio)
-    await loop.note_vad(True)
+    await loop.note_vad(active=True)
     await loop.handle_interim("hello")
     await asyncio.sleep(0.05)
     assert responder.calls == []
@@ -2192,9 +2192,9 @@ async def test_vad_start_clears_post_stop_pregen_flag(journal) -> None:
         responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
     )
     loop.bind(audio)
-    await loop.note_vad(True)
-    await loop.note_vad(False)
-    await loop.note_vad(True)
+    await loop.note_vad(active=True)
+    await loop.note_vad(active=False)
+    await loop.note_vad(active=True)
     await loop.handle_interim("hello")
     await asyncio.sleep(0.05)
     assert responder.calls == []
@@ -2209,7 +2209,7 @@ async def test_final_clears_post_stop_pregen_flag(journal) -> None:
         responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
     )
     loop.bind(audio)
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await loop.handle_transcript(event("f1", "can you help me today", finalized=True))
     await loop.wait_idle()
     assert len(responder.calls) == 1
@@ -2231,7 +2231,7 @@ async def test_pregen_superseded_journal_carries_word_diff(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me today")
@@ -2328,7 +2328,7 @@ async def test_pregen_journal_diff_values_are_metadata_only(journal) -> None:
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     await loop.handle_interim("can you help me today")
     await asyncio.sleep(0.05)
@@ -2377,7 +2377,7 @@ async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     before = loop._pregen
@@ -2417,7 +2417,7 @@ async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> 
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     assert loop._pregen is not None
@@ -2444,7 +2444,7 @@ async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) 
     )
     loop.bind(audio)
     await loop.handle_interim("see you")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("see them")
@@ -2467,7 +2467,7 @@ async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(jou
     )
     loop.bind(audio)
     await loop.handle_interim("please can you help me today")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     assert loop._pregen is not None
@@ -2497,7 +2497,7 @@ async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(jo
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me today")
@@ -2520,7 +2520,7 @@ async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(jour
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
-    await loop.note_vad(False)
+    await loop.note_vad(active=False)
     await asyncio.sleep(0.05)
     assert len(responder.calls) == 1
     await loop.handle_interim("can you help me today")

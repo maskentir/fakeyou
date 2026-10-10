@@ -619,7 +619,7 @@ async def join_meeting(
 
                 def log_playback(event: PlaybackEvent) -> None:
                     if voice_activity is not None:
-                        voice_activity.observe_self_speech(event.kind == "playback_started")
+                        voice_activity.observe_self_speech(active=event.kind == "playback_started")
                     journal.record(
                         event.kind,
                         source="playback",
@@ -669,9 +669,9 @@ async def join_meeting(
                     if conversation is not None:
                         await conversation.handle_interim(frame.text)
 
-                async def vad(active: bool) -> None:
+                async def vad(*, active: bool) -> None:
                     if conversation is not None:
-                        await conversation.note_vad(active)
+                        await conversation.note_vad(active=active)
 
                 audio_recorder: SlotAudioWriter | None = None
                 if settings.audio.persist_enabled and settings.conversation.per_stream_enabled:

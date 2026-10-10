@@ -62,13 +62,41 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC", "T20", "RUF021", "FURB110", "PLC0207", "SIM114"]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "ASYNC",
+    "T20",
+    "RUF021",
+    "FURB110",
+    "PLC0207",
+    "SIM114",
+    "FBT",
+    "ARG",
+    "SLF",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "src/fakeyou/cli/output.py" = ["T201"]
 "src/fakeyou/observability/journal.py" = ["T201"]
-"tests/*" = ["T201"]
-"evals/*" = ["T201"]
+# Framework-imposed signatures: alembic include_object, langchain tool schema,
+# pipecat keyword caller, and the CLI dispatcher passing settings= to handlers.
+"src/fakeyou/db/tables.py" = ["FBT001", "ARG001"]
+"src/fakeyou/memory/memory.py" = ["FBT001", "FBT002"]
+"src/fakeyou/audio/audio.py" = ["ARG002"]
+"src/fakeyou/conversation/conversation.py" = ["ARG002"]
+# LangChain middleware hooks are keyword-dispatched; renaming breaks them.
+"src/fakeyou/debrief/debrief.py" = ["ARG001"]
+"src/fakeyou/foundation/greetings.py" = ["ARG002"]
+"src/fakeyou/memory/visual_hydrate.py" = ["ARG002"]
+"src/fakeyou/cli/calibrate.py" = ["ARG001"]
+"src/fakeyou/cli/voiceprint.py" = ["ARG001"]
+# P7 owns tests/evals shape; the P5 rules gate src only until then.
+"tests/*" = ["T201", "FBT", "ARG", "SLF"]
+"evals/*" = ["T201", "FBT", "ARG", "SLF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]

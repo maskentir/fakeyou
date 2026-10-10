@@ -61,9 +61,9 @@ def tracker_at(clock: FakeClock) -> VoiceActivityTracker:
 
 def speak(tracker: VoiceActivityTracker, clock: FakeClock, start: float, end: float) -> None:
     clock.now = start
-    tracker.observe_vad(True)
+    tracker.observe_vad(active=True)
     clock.now = end
-    tracker.observe_vad(False)
+    tracker.observe_vad(active=False)
 
 
 def test_voice_labels_run_past_z() -> None:
@@ -241,7 +241,7 @@ def test_tracker_only_counts_speech_since_previous_transcript() -> None:
 def test_tracker_splits_open_speech_between_transcripts() -> None:
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)
-    tracker.observe_vad(True)
+    tracker.observe_vad(active=True)
     clock.now = 12.0
     tracker.observe_batch(
         batch(12_000.0, [[10_500.0, 3, 0.3]]), sent_ms=12_000.0, received_ms=12_000.0
@@ -288,9 +288,9 @@ def test_tracker_ignores_twin_tile_and_local_slots() -> None:
 def test_tracker_refuses_new_label_while_twin_plays() -> None:
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)
-    tracker.observe_self_speech(True)
+    tracker.observe_self_speech(active=True)
     speak(tracker, clock, 10.0, 11.0)
-    tracker.observe_self_speech(False)
+    tracker.observe_self_speech(active=False)
     tracker.observe_batch(
         batch(11_000.0, [[10_300.0, 3, 0.3]]), sent_ms=11_000.0, received_ms=11_000.0
     )
@@ -629,9 +629,9 @@ def test_csrc_mode_reports_overlap_and_conflict_as_unknown() -> None:
 def test_csrc_mode_ignores_webaudio_taps_and_twin_playback() -> None:
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)
-    tracker.observe_self_speech(True)
+    tracker.observe_self_speech(active=True)
     speak(tracker, clock, 10.0, 11.0)
-    tracker.observe_self_speech(False)
+    tracker.observe_self_speech(active=False)
     tracker.observe_batch(
         {
             **frames_batch(11_000.0, [[10_300.0, 0, 0.3, [42, 111]]]),

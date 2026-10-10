@@ -32,8 +32,8 @@ def test_silent_audio_is_live_capture_without_proving_speech(activity):
 def test_transcripts_do_not_fake_capture_heartbeat(activity):
     capture, clock = activity
     clock[0] += 31
-    capture.observe_transcript(False)
-    capture.observe_transcript(True)
+    capture.observe_transcript(finalized=False)
+    capture.observe_transcript(finalized=True)
     assert capture.snapshot().frames_delivered == 0
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_audio_frames"
 
@@ -47,14 +47,14 @@ def test_stopped_capture_is_fault_even_without_speech(activity):
 
 def test_speech_without_final_becomes_stt_fault(activity):
     capture, clock = activity
-    capture.observe_speech(True)
+    capture.observe_speech(active=True)
     clock[0] += 1
-    capture.observe_speech(False)
+    capture.observe_speech(active=False)
     clock[0] += 120
     capture.observe_audio()
-    capture.observe_transcript(False)
+    capture.observe_transcript(finalized=False)
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_transcripts"
-    capture.observe_transcript(True)
+    capture.observe_transcript(finalized=True)
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "hearing"
 
 

@@ -61,7 +61,9 @@ async def probe_endpoint(
     started = time.monotonic()
     parts = _endpoint_parts(endpoint)
     if parts is None:
-        return ProbeResult(_safe_endpoint(endpoint), False, 0.0, "invalid endpoint")
+        return ProbeResult(
+            host=_safe_endpoint(endpoint), ok=False, latency_ms=0.0, detail="invalid endpoint"
+        )
     host, port, secure, verify_certificate = parts
     try:
         context = ssl_context if secure else None
@@ -81,9 +83,13 @@ async def probe_endpoint(
         raise
     except BaseException as error:
         detail = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
-        return ProbeResult(_safe_endpoint(endpoint), False, _elapsed(started), detail)
+        return ProbeResult(
+            host=_safe_endpoint(endpoint), ok=False, latency_ms=_elapsed(started), detail=detail
+        )
     detail = "tls handshake ok" if secure else "tcp connect ok"
-    return ProbeResult(_safe_endpoint(endpoint), True, _elapsed(started), detail)
+    return ProbeResult(
+        host=_safe_endpoint(endpoint), ok=True, latency_ms=_elapsed(started), detail=detail
+    )
 
 
 async def _connect_and_close(
@@ -175,10 +181,19 @@ async def run_preflight(
         if isinstance(outcome, ProbeResult):
             results.append(outcome)
         elif isinstance(outcome, asyncio.CancelledError):
-            results.append(ProbeResult(endpoint, False, budget_seconds * 1000, "budget exceeded"))
+            results.append(
+                ProbeResult(
+                    host=endpoint,
+                    ok=False,
+                    latency_ms=budget_seconds * 1000,
+                    detail="budget exceeded",
+                )
+            )
         elif isinstance(outcome, BaseException):
             detail = _trim(f"{type(outcome).__name__}: {outcome}")
-            results.append(ProbeResult(endpoint, False, 0.0, detail))
+            results.append(ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail=detail))
         else:
-            results.append(ProbeResult(endpoint, False, 0.0, "invalid probe result"))
+            results.append(
+                ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail="invalid probe result")
+            )
     return results

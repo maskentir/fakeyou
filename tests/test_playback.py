@@ -85,7 +85,7 @@ class _Muter:
         self.error = error
         self.calls: list[bool] = []
 
-    async def __call__(self, muted: bool) -> None:
+    async def __call__(self, *, muted: bool) -> None:
         self.calls.append(muted)
         if self.error is not None:
             raise self.error
@@ -444,7 +444,7 @@ async def test_pactl_muter_reports_missing_binary() -> None:
     apply = create_pactl_muter(sink="agent_output")
 
     with pytest.raises(PlaybackError, match="pactl"):
-        await apply(True)
+        await apply(muted=True)
 
 
 async def test_pactl_muter_toggles_sink_only(tmp_path, monkeypatch) -> None:
@@ -456,8 +456,8 @@ async def test_pactl_muter_toggles_sink_only(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_PACTL_CALLS", str(calls))
 
     apply = create_pactl_muter(sink="agent_output")
-    await apply(True)
-    await apply(False)
+    await apply(muted=True)
+    await apply(muted=False)
 
     assert calls.read_text().splitlines() == [
         "set-sink-mute agent_output 1",
@@ -473,7 +473,7 @@ async def test_pactl_muter_reaps_child_on_cancel(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_PACTL_PID", str(pid_file))
 
-    applying = asyncio.create_task(create_pactl_muter(sink="agent_output")(True))
+    applying = asyncio.create_task(create_pactl_muter(sink="agent_output")(muted=True))
     for _ in range(100):
         if pid_file.exists():
             break

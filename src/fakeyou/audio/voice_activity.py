@@ -170,7 +170,7 @@ class _Intervals:
         self.closed: deque[tuple[float, float]] = deque()
         self.open_since: float | None = None
 
-    def mark(self, active: bool, at_ms: float) -> None:
+    def mark(self, *, active: bool, at_ms: float) -> None:
         if active and self.open_since is None:
             self.open_since = at_ms
         elif not active and self.open_since is not None:
@@ -221,11 +221,11 @@ class VoiceActivityTracker:
     def now_ms(self) -> float:
         return self._monotonic() * 1000.0
 
-    def observe_vad(self, active: bool) -> None:
-        self._speech.mark(active, self.now_ms())
+    def observe_vad(self, *, active: bool) -> None:
+        self._speech.mark(active=active, at_ms=self.now_ms())
 
-    def observe_self_speech(self, active: bool) -> None:
-        self._self_speech.mark(active, self.now_ms())
+    def observe_self_speech(self, *, active: bool) -> None:
+        self._self_speech.mark(active=active, at_ms=self.now_ms())
 
     def observe_batch(
         self, batch: Mapping[str, Any], *, sent_ms: float, received_ms: float

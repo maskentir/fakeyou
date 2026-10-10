@@ -36,7 +36,11 @@ class SpeechSynthesizer(Protocol):
 
 
 PlayStream = Callable[[AsyncIterator[bytes]], Coroutine[Any, Any, None]]
-SetMuted = Callable[[bool], Coroutine[Any, Any, None]]
+
+
+class SetMuted(Protocol):
+    async def __call__(self, *, muted: bool) -> None: ...
+
 
 SYNTH_TIMEOUT_SECONDS = 45.0
 PLAYBACK_TIMEOUT_SECONDS = 120.0
@@ -124,7 +128,7 @@ def create_paplay_stream_runner(*, sink: str, rate: int) -> PlayStream:
 
 
 def create_pactl_muter(*, sink: str) -> SetMuted:
-    async def apply(muted: bool) -> None:
+    async def apply(*, muted: bool) -> None:
         value = "1" if muted else "0"
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -351,7 +355,7 @@ class PlaybackEngine:
         if self._muted:
             return
         try:
-            await self._set_muted(True)
+            await self._set_muted(muted=True)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -365,7 +369,7 @@ class PlaybackEngine:
         if not self._muted:
             return
         try:
-            await self._set_muted(False)
+            await self._set_muted(muted=False)
         except asyncio.CancelledError:
             raise
         except Exception as error:

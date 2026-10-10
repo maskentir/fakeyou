@@ -464,13 +464,13 @@ async def test_crash_resume_reconciles_through_observation_only(tmp_path: Path) 
     record = tmp_path / "meeting-ledger-4" / "record.jsonl"
     journal = RecordingJournal("meeting-ledger-4")
     ledger = MeetActionLedger.load(record, "meeting-ledger-4")
-    ledger.record("done-1", "raise_hand", "hash-done", True)
+    ledger.record("done-1", "raise_hand", "hash-done", authorized=True)
     ledger.mark("done-1", "observed_done", observed_before=False, observed_after=True)
-    ledger.record("refused-1", "lower_hand", "hash-refused", False)
+    ledger.record("refused-1", "lower_hand", "hash-refused", authorized=False)
     ledger.mark("refused-1", "refused")
-    ledger.record("crashed-1", "raise_hand", "hash-crashed", True)
+    ledger.record("crashed-1", "raise_hand", "hash-crashed", authorized=True)
     ledger.mark("crashed-1", "acted", observed_before=False, attempt=1)
-    ledger.record("pending-1", "send_chat", "hash-pending", True, chars=9)
+    ledger.record("pending-1", "send_chat", "hash-pending", authorized=True, chars=9)
     ledger.save()
     seen: list[str] = []
 
@@ -628,7 +628,7 @@ async def test_execute_succeeds_while_meeting_lock_is_held(tmp_path: Path) -> No
 async def test_reconcile_succeeds_while_meeting_lock_is_held(tmp_path: Path) -> None:
     record = tmp_path / "meeting-ledger-9" / "record.jsonl"
     ledger = MeetActionLedger.load(record, "meeting-ledger-9")
-    ledger.record("crashed-held", "raise_hand", "hash-held", True)
+    ledger.record("crashed-held", "raise_hand", "hash-held", authorized=True)
     ledger.mark("crashed-held", "acted", observed_before=False, attempt=1)
     ledger.save()
 

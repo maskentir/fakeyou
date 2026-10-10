@@ -677,7 +677,7 @@ def replay_voice_labels(fixture: Mapping[str, Any]) -> dict[str, Any]:
         if event["kind"] == "page":
             tracker.observe_batch(event["batch"], sent_ms=clock_ms[0], received_ms=clock_ms[0])
         elif event["kind"] == "vad":
-            tracker.observe_vad(bool(event["active"]))
+            tracker.observe_vad(active=bool(event["active"]))
         elif event["kind"] == "transcript":
             transcripts.append({"text": event["text"], "wall": len(attributions)})
             attributions.append(tracker.attribute())

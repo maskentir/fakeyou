@@ -12,7 +12,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import asynccontextmanager, suppress
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -68,6 +68,10 @@ from fakeyou.observability.provider_faults import category_fault, classify_excep
 STOP_DEADLINE_SECONDS = 8.0
 STT_CONTINUITY_BUFFER_SECONDS = 30
 TURN_TAP_MAX_SECONDS = 30.0
+
+
+class OnVad(Protocol):
+    async def __call__(self, *, active: bool) -> None: ...
 
 
 class MeetingAudioError(RuntimeError):
@@ -220,7 +224,7 @@ class _CaptureObserver(FrameProcessor):
         journal: Journal | None = None,
         probe: AttributionProbe | None = None,
         voice_activity: VoiceActivityTracker | None = None,
-        on_vad: Callable[[bool], Awaitable[None]] | None = None,
+        on_vad: OnVad | None = None,
     ) -> None:
         super().__init__()
         self._activity = activity
@@ -244,20 +248,20 @@ class _CaptureObserver(FrameProcessor):
                     channels = max(frame.num_channels, 1)
                     self._probe.observe_pcm(len(frame.audio) // 2 // channels)
             elif isinstance(frame, (VADUserStartedSpeakingFrame, UserSpeakingFrame)):
-                self._activity.observe_speech(True)
+                self._activity.observe_speech(active=True)
                 if isinstance(frame, VADUserStartedSpeakingFrame):
                     self._record("speech_started")
-                    self._observe_vad(True)
+                    self._observe_vad(active=True)
             elif isinstance(frame, VADUserStoppedSpeakingFrame):
-                self._activity.observe_speech(False)
+                self._activity.observe_speech(active=False)
                 self._record("speech_stopped")
-                self._observe_vad(False)
+                self._observe_vad(active=False)
             if self._on_vad is not None and isinstance(
                 frame, (VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame)
             ):
                 try:
                     async with asyncio.timeout(10):
-                        await self._on_vad(isinstance(frame, VADUserStartedSpeakingFrame))
+                        await self._on_vad(active=isinstance(frame, VADUserStartedSpeakingFrame))
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
@@ -274,13 +278,13 @@ class _CaptureObserver(FrameProcessor):
         if self._journal is not None:
             self._journal.record(event, source="audio")
 
-    def _observe_vad(self, active: bool) -> None:
+    def _observe_vad(self, *, active: bool) -> None:
         if self._voice_activity is not None:
-            self._voice_activity.observe_vad(active)
+            self._voice_activity.observe_vad(active=active)
         if self._probe is None:
             return
         try:
-            self._probe.observe_vad(active)
+            self._probe.observe_vad(active=active)
         except Exception as error:
             if not self._vad_probe_failed:
                 self._vad_probe_failed = True
@@ -436,7 +440,7 @@ class _TranscriptObserver(FrameProcessor):
                     finalized=False,
                 )
             )
-            self._activity.observe_transcript(transcript.finalized)
+            self._activity.observe_transcript(finalized=transcript.finalized)
             if transcript.finalized:
                 if self._journal is not None:
                     first = self._first_interim_at
@@ -545,7 +549,7 @@ class MeetingAudioSession:
         self._stop_task: asyncio.Task[None] | None = None
         runner_task.add_done_callback(self._runner_finished)
 
-    def _fail(self, message: str, *, cause: BaseException | None = None) -> None:
+    def fail(self, message: str, *, cause: BaseException | None = None) -> None:
         if self._failure is None:
             error = MeetingAudioError(message)
             if cause is not None:
@@ -562,9 +566,9 @@ class MeetingAudioSession:
             except Exception as error:
                 cause = error
         if not self._stopping:
-            self._fail("meeting audio pipeline stopped unexpectedly", cause=cause)
+            self.fail("meeting audio pipeline stopped unexpectedly", cause=cause)
         elif cause is not None:
-            self._fail("meeting audio pipeline failed", cause=cause)
+            self.fail("meeting audio pipeline failed", cause=cause)
 
     def raise_if_failed(self) -> None:
         if self._failure is not None:
@@ -612,7 +616,7 @@ class MeetingAudioSession:
                 "stt_reconnect_queued", source="stt", reason=reason, **self._reconnect_tags()
             )
 
-    def _quiet_for_reconnect(self, stamp: float, is_busy: bool) -> bool:
+    def _quiet_for_reconnect(self, stamp: float, *, is_busy: bool) -> bool:
         snapshot = self.activity.snapshot()
         quiet_since = (
             snapshot.last_speech_at if snapshot.last_speech_at is not None else snapshot.ready_at
@@ -635,7 +639,7 @@ class MeetingAudioSession:
             verdict = self._monitor.verdict(stamp)
             action = self._monitor.note_tick(stamp, verdict)
             if action == "terminal":
-                self._fail(f"persistent {verdict}")
+                self.fail(f"persistent {verdict}")
                 self.raise_if_failed()
             if action == "repair":
                 self.request_stt_reconnect(verdict)
@@ -643,7 +647,7 @@ class MeetingAudioSession:
                 self._reconnect_state == "idle"
                 and self._stt_idle_reconnect_seconds > 0
                 and not stt_socket_dead(self._stt)
-                and self._quiet_for_reconnect(stamp, is_busy)
+                and self._quiet_for_reconnect(stamp, is_busy=is_busy)
             ):
                 idle_of = getattr(self._stt, "idle_seconds", None)
                 idle = idle_of(stamp) if callable(idle_of) else None
@@ -653,12 +657,12 @@ class MeetingAudioSession:
                 return verdict
             if self._reconnect_since is not None and stamp - self._reconnect_since >= 120:
                 self._reconnect_state = "exhausted"
-                self._fail("STT reconnect deadline exceeded")
+                self.fail("STT reconnect deadline exceeded")
                 self.raise_if_failed()
             if self._stopping:
                 return verdict
             if not stt_socket_dead(self._stt):
-                if not self._quiet_for_reconnect(stamp, is_busy):
+                if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
                     return verdict
             if self._last_reconnect_at is not None and stamp - self._last_reconnect_at < 5:
                 return verdict
@@ -684,7 +688,7 @@ class MeetingAudioSession:
                     )
                 self._reconnect_state = "queued" if self._reconnect_attempts < 3 else "exhausted"
                 if self._reconnect_state == "exhausted":
-                    self._fail("STT reconnect attempts exhausted", cause=error)
+                    self.fail("STT reconnect attempts exhausted", cause=error)
                     self.raise_if_failed()
             else:
                 self._reconnect_state = "idle"
@@ -801,7 +805,7 @@ async def open_meeting_audio(
     playback: PlaybackEngine | None = None,
     on_playback_event: Callable[[PlaybackEvent], None] | None = None,
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: Callable[[bool], Awaitable[None]] | None = None,
+    on_vad: OnVad | None = None,
     activity: CaptureActivity | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
@@ -883,7 +887,7 @@ async def open_meeting_audio(
                         session.request_stt_reconnect("provider_fault")
                     return
                 if session is not None:
-                    session._fail("meeting audio provider failed", cause=detail)
+                    session.fail("meeting audio provider failed", cause=detail)
                 else:
                     early_failures.append(detail)
 
@@ -906,7 +910,7 @@ async def open_meeting_audio(
                 alone_leave_seconds=alone_leave_seconds,
             )
             for cause in early_failures:
-                session._fail("meeting audio provider failed", cause=cause)
+                session.fail("meeting audio provider failed", cause=cause)
         except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
@@ -915,7 +919,7 @@ async def open_meeting_audio(
         try:
             async with asyncio.timeout(25):
                 started_task = asyncio.create_task(started.wait())
-                failed_task = asyncio.create_task(session._failed.wait())
+                failed_task = asyncio.create_task(session.wait_failed())
                 try:
                     done, _ = await asyncio.wait(
                         {started_task, failed_task, runner_task},
@@ -982,7 +986,7 @@ async def open_stream_audio(
     playback: PlaybackEngine | None = None,
     on_playback_event: Callable[[PlaybackEvent], None] | None = None,
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: Callable[[bool], Awaitable[None]] | None = None,
+    on_vad: OnVad | None = None,
     activity: CaptureActivity | None = None,
     faults: FaultReporter | None = None,
     journal: Journal | None = None,
@@ -1076,7 +1080,7 @@ async def open_stream_audio(
                         session.request_stt_reconnect("provider_fault")
                     return
                 if session is not None:
-                    session._fail("meeting audio provider failed", cause=detail)
+                    session.fail("meeting audio provider failed", cause=detail)
                 else:
                     early_failures.append(detail)
 
@@ -1101,7 +1105,7 @@ async def open_stream_audio(
                 stt_idle_reconnect_seconds=stt_settings.idle_reconnect_seconds,
             )
             for cause in early_failures:
-                session._fail("meeting audio provider failed", cause=cause)
+                session.fail("meeting audio provider failed", cause=cause)
         except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
@@ -1110,7 +1114,7 @@ async def open_stream_audio(
         try:
             async with asyncio.timeout(25):
                 started_task = asyncio.create_task(started.wait())
-                failed_task = asyncio.create_task(session._failed.wait())
+                failed_task = asyncio.create_task(session.wait_failed())
                 try:
                     done, _ = await asyncio.wait(
                         {started_task, failed_task, runner_task},

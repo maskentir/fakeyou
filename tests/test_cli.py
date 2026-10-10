@@ -106,7 +106,7 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
     monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
     monkeypatch.setattr(cli_chat, "create_meeting_agent", create_agent)
 
-    await cli_chat.chat("hello", "thread", False, True, settings)
+    await cli_chat.chat("hello", "thread", use_browser=False, use_memory=True, settings=settings)
 
     assert memory.factory_thread != main_thread
     assert events == ["construct", "tools:test-group", "agent", "invoke", "close"]
@@ -135,7 +135,7 @@ async def test_chat_turn_flush_persists_a_lone_short_fact(
     monkeypatch.setattr(cli_chat, "create_memory_tools", create_tools)
     monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
-    await cli_chat.chat("hello", "thread", False, True, settings)
+    await cli_chat.chat("hello", "thread", use_browser=False, use_memory=True, settings=settings)
 
     assert len(memory.added) == 1
     assert "Budi: The demo moved to Thursday." in memory.added[0]["episode_body"]
@@ -165,7 +165,9 @@ async def test_chat_flushes_pending_facts_when_the_agent_raises(
     monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
     with pytest.raises(RuntimeError, match="agent exploded"):
-        await cli_chat.chat("hello", "thread", False, True, settings)
+        await cli_chat.chat(
+            "hello", "thread", use_browser=False, use_memory=True, settings=settings
+        )
 
     assert len(memory.added) == 1
     assert "Budi: The demo moved to Thursday." in memory.added[0]["episode_body"]
@@ -196,7 +198,9 @@ async def test_chat_surfaces_flush_failure_after_a_successful_turn(
     monkeypatch.setattr(cli_chat, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
     with pytest.raises(RuntimeError, match="episode store unavailable"):
-        await cli_chat.chat("hello", "thread", False, True, settings)
+        await cli_chat.chat(
+            "hello", "thread", use_browser=False, use_memory=True, settings=settings
+        )
 
 
 @pytest.mark.asyncio
@@ -459,7 +463,7 @@ async def test_chat_rejects_invalid_thread(settings, monkeypatch, thread) -> Non
         lambda *_args, **_kwargs: pytest.fail("thread must be validated first"),
     )
     with pytest.raises(FakeYouError) as caught:
-        await cli_chat.chat("hello", thread, False, False, settings)
+        await cli_chat.chat("hello", thread, use_browser=False, use_memory=False, settings=settings)
     assert caught.value.code is ErrorCode.CHAT_THREAD_INVALID
 
 

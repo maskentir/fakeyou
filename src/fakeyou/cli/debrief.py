@@ -99,6 +99,7 @@ async def debrief_meeting(
     persona_path: Path,
     owner_id: str | None,
     twin_id: str | None,
+    *,
     force: bool,
     settings: Settings,
 ) -> None:
@@ -108,7 +109,7 @@ async def debrief_meeting(
     if not record_path.is_file():
         raise FakeYouError(ErrorCode.DEBRIEF_RECORD_MISSING)
     with record_lock(record_path, purpose="debrief"):
-        await _debrief_locked(record_path, profile, meeting_id, force, settings)
+        await _debrief_locked(record_path, profile, meeting_id, force=force, settings=settings)
 
 
 def _is_anonymous(participant_id: str) -> bool:
@@ -122,7 +123,12 @@ def _is_anonymous(participant_id: str) -> bool:
 
 
 async def _debrief_locked(
-    record_path: Path, profile: PersonaProfile, meeting_id: str, force: bool, settings: Settings
+    record_path: Path,
+    profile: PersonaProfile,
+    meeting_id: str,
+    *,
+    force: bool,
+    settings: Settings,
 ) -> None:
     journal = Journal(
         meeting_id,

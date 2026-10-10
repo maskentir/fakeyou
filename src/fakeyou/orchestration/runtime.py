@@ -594,7 +594,7 @@ class _MeetingWorker:
             )
             self.probe_drain = None
 
-    async def start_capture_drain(self, enabled: bool = False) -> None:
+    async def start_capture_drain(self, *, enabled: bool = False) -> None:
         if not enabled or self.capture_drain is not None:
             return
         if isinstance(self.audio, SupportsCaptureRegistry):

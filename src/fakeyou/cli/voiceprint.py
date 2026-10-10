@@ -184,7 +184,7 @@ def _reject_enrollment(
     raise SystemExit(ExitCode.INPUT_REJECTED)
 
 
-def voiceprint_challenge(meeting: str, *, settings: Settings) -> None:
+def voiceprint_challenge(*, settings: Settings) -> None:
     emit_json(
         {
             "challenge": f"{secrets.randbelow(10**8):08d}",
@@ -196,8 +196,8 @@ def voiceprint_challenge(meeting: str, *, settings: Settings) -> None:
 def voiceprint_enroll(
     name: str,
     clip: list[str],
-    negative: bool,
     *,
+    negative: bool,
     settings: Settings,
     store: VoiceprintRepository | None = None,
     journal: Journal | None = None,

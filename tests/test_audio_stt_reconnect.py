@@ -173,7 +173,7 @@ async def test_dead_socket_reconnect_bypasses_quiet_gate(journal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
-    activity.observe_speech(True)
+    activity.observe_speech(active=True)
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     stt = FakeReconnectableSTT()
@@ -203,7 +203,7 @@ async def test_healthy_socket_reconnect_keeps_quiet_gate(journal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
-    activity.observe_speech(True)
+    activity.observe_speech(active=True)
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     stt = FakeReconnectableSTT()

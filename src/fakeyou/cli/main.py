@@ -319,7 +319,6 @@ def build_parser() -> argparse.ArgumentParser:
     voiceprint_challenge_parser = voiceprint_commands.add_parser(
         "challenge", help="Issue an enrollment liveness challenge", allow_abbrev=False
     )
-    voiceprint_challenge_parser.add_argument("--meeting", required=True)
     voiceprint_challenge_parser.set_defaults(handler=voiceprint_challenge)
     voiceprint_verify_parser = voiceprint_commands.add_parser(
         "verify", help="Verify an audio clip against a voiceprint", allow_abbrev=False

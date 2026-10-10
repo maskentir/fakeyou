@@ -51,7 +51,7 @@ class AttributionProbe:
         if sample_count > 0:
             self._samples += sample_count
 
-    def observe_vad(self, active: bool) -> None:
+    def observe_vad(self, *, active: bool) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         row = {
             "kind": "vad",

@@ -16,6 +16,7 @@ from pipecat.transports.base_transport import TransportParams
 from fakeyou.audio.audio import (
     MeetingAudioError,
     MeetingAudioSession,
+    OnVad,
     TurnAudioTap,
     open_stream_audio,
 )
@@ -592,7 +593,7 @@ async def open_stream_fleet(
     binder: SlotBinder,
     on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
     on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: Callable[[bool], Awaitable[None]] | None = None,
+    on_vad: OnVad | None = None,
     stt_factory: Callable[[int], FrameProcessor] | None = None,
     playback_factory: Callable[[int], PlaybackEngine] | None = None,
     turn_tap_factory: Callable[[int], TurnAudioTap] | None = None,

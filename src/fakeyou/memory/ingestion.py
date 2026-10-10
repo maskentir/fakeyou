@@ -401,7 +401,7 @@ async def ingest_corrections(
 ) -> CorrectionResult:
     sidecar = record_path.parent / JSON_FILE_NAME
     if not sidecar.exists():
-        return CorrectionResult(0, (), True)
+        return CorrectionResult(changed_windows=0, episodes=(), completed=True)
     live = load_meeting_record(record_path)
     corrected = load_corrected_record(record_path)
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -444,7 +444,7 @@ async def ingest_corrections(
                 ingested=0,
                 completed=True,
             )
-        return CorrectionResult(len(changed), (), True)
+        return CorrectionResult(changed_windows=len(changed), episodes=(), completed=True)
     now = datetime.now(UTC)
     base = existing
     if base is None:

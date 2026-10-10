@@ -264,7 +264,7 @@ async def verify_memory_connection(memory: Graphiti) -> None:
 
 
 def create_recall_error_middleware(faults: FaultReporter | None) -> ToolErrorMiddleware[Any, Any]:
-    def report_unavailable(error: Exception, request: ToolCallRequest) -> str:
+    def report_unavailable(error: Exception, _request: ToolCallRequest) -> str:
         if faults is not None:
             faults.record(classify_exception("memory", error))
         return RECALL_UNAVAILABLE_RESULT

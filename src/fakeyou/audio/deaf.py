@@ -66,7 +66,15 @@ class CaptureSnapshot:
 class CaptureActivity:
     def __init__(self, *, now: Callable[[], float] | None = None) -> None:
         self._now = now or time.monotonic
-        self._snapshot = CaptureSnapshot(False, 0, 0, None, None, None, 0)
+        self._snapshot = CaptureSnapshot(
+            available=False,
+            frames_delivered=0,
+            finals_delivered=0,
+            last_frame_at=None,
+            last_final_at=None,
+            ready_at=None,
+            interim_count=0,
+        )
 
     def mark_ready(self) -> None:
         self._snapshot.available = True
@@ -79,13 +87,13 @@ class CaptureActivity:
             self._snapshot.energetic_ms += max(duration_ms, 0.0)
             self._snapshot.last_energetic_at = self._snapshot.last_frame_at
 
-    def observe_speech(self, active: bool) -> None:
+    def observe_speech(self, *, active: bool) -> None:
         self._snapshot.speech_active = active
         self._snapshot.last_speech_at = self._now()
         if active and self._snapshot.pending_speech_at is None:
             self._snapshot.pending_speech_at = self._snapshot.last_speech_at
 
-    def observe_transcript(self, finalized: bool) -> None:
+    def observe_transcript(self, *, finalized: bool) -> None:
         stamp = self._now()
         if finalized:
             self._snapshot.finals_delivered += 1

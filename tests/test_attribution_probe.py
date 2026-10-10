@@ -102,9 +102,9 @@ def test_probe_audio_clock_stamps_vad_edges(tmp_path: Path) -> None:
     )
     probe.observe_pcm(16000)
     clock.now = 101.0
-    probe.observe_vad(True)
+    probe.observe_vad(active=True)
     probe.observe_pcm(32000)
-    probe.observe_vad(False)
+    probe.observe_vad(active=False)
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     assert [row["kind"] for row in rows] == ["vad", "vad"]
     assert rows[0]["active"] is True

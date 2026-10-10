@@ -107,7 +107,7 @@ def test_enroll_three_valid_clips_stores_record_and_journals(
     voiceprint_enroll(
         "alice",
         [str(path) for path in clips],
-        False,
+        negative=False,
         settings=settings,
         store=store,
         journal=journal,
@@ -141,7 +141,7 @@ def test_enroll_with_negative_flag_marks_record(settings: Settings, tmp_path: Pa
     voiceprint_enroll(
         "twin-voice",
         [str(path) for path in clips],
-        True,
+        negative=True,
         settings=settings,
         store=store,
         journal=journal,
@@ -165,7 +165,7 @@ def test_enroll_with_two_clips_exits_2_without_side_effects(
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=store,
             journal=journal,
@@ -195,7 +195,7 @@ def test_enroll_with_silent_clip_exits_2(settings: Settings, tmp_path: Path) -> 
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=store,
             journal=journal,
@@ -224,7 +224,7 @@ def test_enroll_with_short_clip_exits_2(settings: Settings, tmp_path: Path) -> N
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=store,
             journal=journal,
@@ -255,7 +255,7 @@ def test_enroll_with_8khz_clip_exits_2_mentioning_format(
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=store,
             journal=journal,
@@ -285,7 +285,7 @@ def test_enroll_with_non_wav_clip_exits_2_mentioning_format(
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=InMemoryVoiceprints(),
             journal=RecordingJournal(),
@@ -315,7 +315,7 @@ def test_enroll_with_truncated_clip_exits_2_mentioning_format(
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=InMemoryVoiceprints(),
             journal=RecordingJournal(),
@@ -562,7 +562,7 @@ def test_enroll_with_missing_clip_raises_without_journal(
         voiceprint_enroll(
             "alice",
             [str(path) for path in clips],
-            False,
+            negative=False,
             settings=settings,
             store=InMemoryVoiceprints(),
             journal=journal,
@@ -681,7 +681,7 @@ def gated_enroll(
     voiceprint_enroll(
         name,
         clips,
-        False,
+        negative=False,
         settings=settings,
         store=store,
         journal=journal,
@@ -697,9 +697,9 @@ def gated_enroll(
 def test_challenge_issues_unique_eight_digit_codes(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    voiceprint_challenge("meeting-1", settings=settings)
+    voiceprint_challenge(settings=settings)
     first = json.loads(capsys.readouterr().out)
-    voiceprint_challenge("meeting-1", settings=settings)
+    voiceprint_challenge(settings=settings)
     second = json.loads(capsys.readouterr().out)
 
     assert set(first) == {"challenge", "challenge_id"}
@@ -939,7 +939,7 @@ def test_enroll_partial_liveness_args_raises_without_journal(
         voiceprint_enroll(
             "alice",
             clips,
-            False,
+            negative=False,
             settings=settings,
             store=InMemoryVoiceprints(),
             journal=journal,
@@ -962,7 +962,7 @@ def test_enroll_owner_name_without_challenge_flags_raises(
         voiceprint_enroll(
             "alice",
             clips,
-            False,
+            negative=False,
             settings=settings,
             store=store,
             journal=journal,
@@ -982,7 +982,7 @@ def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Pat
     voiceprint_enroll(
         "alice",
         clips,
-        False,
+        negative=False,
         settings=settings,
         store=store,
         journal=RecordingJournal(),
@@ -995,9 +995,9 @@ def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Pat
 def test_challenge_and_gated_enroll_parsers_map_to_handlers() -> None:
     parser = cli_main.build_parser()
 
-    options = parser.parse_args(["voiceprint", "challenge", "--meeting", "meeting-1"])
+    options = parser.parse_args(["voiceprint", "challenge"])
     assert options.handler is voiceprint_challenge
-    assert options.meeting == "meeting-1"
+    assert not hasattr(options, "meeting")
 
     options = parser.parse_args(
         [
@@ -1156,6 +1156,6 @@ def test_enroll_empty_clip_rejected_even_with_zero_minimum(
     clips = [write_tone_clip(tmp_path / f"clip-{index}.wav", seconds=0.0) for index in range(3)]
 
     with pytest.raises(FakeYouError) as error:
-        voiceprint_enroll("alice", [str(path) for path in clips], False, settings=settings)
+        voiceprint_enroll("alice", [str(path) for path in clips], negative=False, settings=settings)
 
     assert error.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT
