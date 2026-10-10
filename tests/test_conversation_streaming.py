@@ -19,7 +19,13 @@ from fakeyou.conversation.session import ConversationError
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._conversation_support import event
-from tests.fakes import FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
+from tests.fakes import (
+    FakeReplyAudio,
+    FakeResponder,
+    RecordingJournal,
+    ToolCallingFakeModel,
+    recall_call,
+)
 
 
 class ScriptedStream:
@@ -131,7 +137,7 @@ def streamed_loop(agent, audio, journal, language="id", **kwargs):
     return loop
 
 
-async def test_streamed_reply_speaks_each_sentence_in_order(journal):
+async def test_streamed_reply_speaks_each_sentence_in_order(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
             ("chunk", "First sent", "model"),
@@ -158,7 +164,9 @@ async def test_streamed_reply_speaks_each_sentence_in_order(journal):
 
 
 @pytest.mark.parametrize("language", ["id", "en"])
-async def test_streamed_reply_matches_cap_across_languages(journal, language):
+async def test_streamed_reply_matches_cap_across_languages(
+    journal: RecordingJournal, language: str
+) -> None:
     agent = ScriptedAgent(
         [("chunk", "Morning update. All ", "model"), ("chunk", "systems ready.", "model")]
     )
@@ -173,7 +181,7 @@ async def test_streamed_reply_matches_cap_across_languages(journal, language):
     await loop.close()
 
 
-async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal):
+async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
             ("chunk", "", "model"),
@@ -192,7 +200,9 @@ async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal):
     await loop.close()
 
 
-async def test_streaming_responder_with_flag_off_uses_single_speak(journal):
+async def test_streaming_responder_with_flag_off_uses_single_speak(
+    journal: RecordingJournal,
+) -> None:
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
     responder = StreamingLangGraphResponder(agent, "thread", journal=journal)
@@ -208,7 +218,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(journal):
     await loop.close()
 
 
-async def test_flag_on_with_plain_responder_keeps_old_behavior():
+async def test_flag_on_with_plain_responder_keeps_old_behavior() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, generation=LoopGeneration(sentence_streaming=True))
     loop.bind(audio)
@@ -218,7 +228,9 @@ async def test_flag_on_with_plain_responder_keeps_old_behavior():
     await loop.close()
 
 
-async def test_streamed_reply_discards_partial_text_before_tool_end(journal):
+async def test_streamed_reply_discards_partial_text_before_tool_end(
+    journal: RecordingJournal,
+) -> None:
     agent = ScriptedAgent(
         [
             ("chunk", "Checking memor", "model"),
@@ -242,7 +254,7 @@ async def test_streamed_reply_discards_partial_text_before_tool_end(journal):
     await loop.close()
 
 
-async def test_streamed_reply_marks_answer_text_after_tool_end(journal):
+async def test_streamed_reply_marks_answer_text_after_tool_end(journal: RecordingJournal) -> None:
 
     agent = ScriptedAgent(
         [
@@ -261,7 +273,7 @@ async def test_streamed_reply_marks_answer_text_after_tool_end(journal):
     await loop.close()
 
 
-async def test_streamed_reply_survives_recall_failure(journal):
+async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal) -> None:
     from langchain_core.tools import tool
 
     @tool(description="Search long-term meeting memory for relevant context.")
@@ -291,7 +303,7 @@ async def test_streamed_reply_survives_recall_failure(journal):
     await loop.close()
 
 
-async def test_streamed_reply_uses_fallback_model(journal):
+async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> None:
     from langchain.agents.middleware import ModelFallbackMiddleware
 
     class FailingChatModel(ToolCallingFakeModel):
@@ -316,7 +328,9 @@ async def test_streamed_reply_uses_fallback_model(journal):
     await loop.close()
 
 
-async def test_streamed_reply_caps_third_sentence_and_stops_stream(journal):
+async def test_streamed_reply_caps_third_sentence_and_stops_stream(
+    journal: RecordingJournal,
+) -> None:
     agent = ScriptedAgent(
         [("chunk", "One. Two. Three.", "model"), ("chunk", " Four. Five.", "model")]
     )
@@ -333,7 +347,7 @@ async def test_streamed_reply_caps_third_sentence_and_stops_stream(journal):
     await loop.close()
 
 
-async def test_streamed_reply_without_remainder_records_no_cap(journal):
+async def test_streamed_reply_without_remainder_records_no_cap(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "One. Two.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
@@ -344,7 +358,7 @@ async def test_streamed_reply_without_remainder_records_no_cap(journal):
     await loop.close()
 
 
-async def test_streamed_empty_reply_moves_to_waiting(journal):
+async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
@@ -355,12 +369,12 @@ async def test_streamed_empty_reply_moves_to_waiting(journal):
     await loop.close()
 
 
-def test_streaming_responder_rejects_non_positive_cap():
+def test_streaming_responder_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
         StreamingLangGraphResponder(ScriptedAgent([]), "thread", max_sentences=0)
 
 
-async def test_new_transcript_mid_stream_drops_remainder(journal):
+async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJournal) -> None:
     ready = asyncio.Event()
     release = asyncio.Event()
     agent = ScriptedAgent(
@@ -388,7 +402,9 @@ async def test_new_transcript_mid_stream_drops_remainder(journal):
     await loop.close()
 
 
-async def test_interim_stop_between_sentences_speaks_nothing_further(journal):
+async def test_interim_stop_between_sentences_speaks_nothing_further(
+    journal: RecordingJournal,
+) -> None:
     ready = asyncio.Event()
     release = asyncio.Event()
     agent = ScriptedAgent(
@@ -417,7 +433,9 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(journal):
     await loop.close()
 
 
-async def test_close_during_stream_cancels_without_trailing_speech(journal):
+async def test_close_during_stream_cancels_without_trailing_speech(
+    journal: RecordingJournal,
+) -> None:
     ready = asyncio.Event()
     release = asyncio.Event()
     agent = ScriptedAgent(
@@ -437,7 +455,7 @@ async def test_close_during_stream_cancels_without_trailing_speech(journal):
     assert journal.events("agent_cancelled") != []
 
 
-async def test_streamed_journal_events_carry_metadata_only(journal):
+async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
@@ -465,7 +483,9 @@ async def test_streamed_journal_events_carry_metadata_only(journal):
     await loop.close()
 
 
-async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(journal):
+async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(
+    journal: RecordingJournal,
+) -> None:
     agent = ScriptedAgent(
         [("error", RuntimeError("stream unsupported"))],
         fallback_reply="Full reply one. Full reply two. Full reply three.",
@@ -482,7 +502,9 @@ async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(jou
     await loop.close()
 
 
-async def test_stream_failure_after_first_sentence_propagates_without_duplicate(journal):
+async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
+    journal: RecordingJournal,
+) -> None:
     agent = ScriptedAgent(
         [("chunk", "First done. ", "model"), ("error", RuntimeError("mid stream"))]
     )
@@ -497,7 +519,7 @@ async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
     await loop.close()
 
 
-async def test_streamed_speak_tags_each_sentence_with_its_index(journal):
+async def test_streamed_speak_tags_each_sentence_with_its_index(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
@@ -508,7 +530,7 @@ async def test_streamed_speak_tags_each_sentence_with_its_index(journal):
     await loop.close()
 
 
-async def test_stale_drop_terminates_turn_with_agent_cancelled(journal):
+async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
     ready = asyncio.Event()
     release = asyncio.Event()
     agent = ScriptedAgent(
@@ -538,7 +560,7 @@ async def test_stale_drop_terminates_turn_with_agent_cancelled(journal):
     await loop.close()
 
 
-async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal):
+async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
     ready = asyncio.Event()
     release = asyncio.Event()
     agent = ScriptedAgent(
@@ -563,7 +585,7 @@ async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal):
     await loop.close()
 
 
-def test_sentence_streaming_default_follows_settings_flag():
+def test_sentence_streaming_default_follows_settings_flag() -> None:
     import inspect
 
     from fakeyou.config.settings import DEFAULTS
@@ -573,7 +595,7 @@ def test_sentence_streaming_default_follows_settings_flag():
     assert params["sentence_streaming"].default == DEFAULTS.conversation.sentence_streaming
 
 
-async def test_streamed_speak_passes_transcript_id_to_session(journal):
+async def test_streamed_speak_passes_transcript_id_to_session(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
             ("chunk", "First sent", "model"),

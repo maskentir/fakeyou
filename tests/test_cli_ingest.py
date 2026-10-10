@@ -1,9 +1,11 @@
 import asyncio
 import json
 import signal
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -12,6 +14,7 @@ import fakeyou.cli.join as cli_join
 import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli._operator import OperatorIdentity
+from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.journal import journal_path
 from fakeyou.persistence.record import load_meeting_record, meeting_record_path
@@ -28,13 +31,14 @@ from tests._cli_support import (
     write_record,
 )
 from tests.fakes import (
+    SessionRun,
     ToolCallingFakeModel,
     make_graphiti,
 )
 
 
 async def test_join_defers_ingest_then_memory_ingest_writes_episode(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.memory.recall.strategy = "tool"
     from fakeyou.persistence.ingestion_status import read_status, status_path
@@ -84,7 +88,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
 
 
 async def test_join_without_ingest_permission_never_writes_memory(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = make_graphiti()
 
@@ -102,7 +106,7 @@ async def test_join_without_ingest_permission_never_writes_memory(
 
 
 async def test_join_resume_reuses_history_without_replaying_answers(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     brief_path = write_brief(tmp_path)
     first_model = ToolCallingFakeModel(responses=[AIMessage(content="Hello.")])
@@ -154,7 +158,7 @@ async def test_join_resume_reuses_history_without_replaying_answers(
 
 
 async def test_join_resume_refuses_an_unreachable_lifecycle_checkpoint(
-    join, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
     async def unreachable(url):
@@ -172,7 +176,7 @@ async def test_join_resume_refuses_an_unreachable_lifecycle_checkpoint(
 
 
 async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -194,7 +198,7 @@ async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
 
 
 async def test_memory_ingest_command_requires_a_record(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -210,7 +214,11 @@ async def test_memory_ingest_command_requires_a_record(
 
 
 async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import hashlib
 
@@ -252,7 +260,7 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
 
 
 async def test_join_with_hanging_graphiti_leaves_without_ingesting(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = make_graphiti()
     graphiti.gate = asyncio.Event()
@@ -277,7 +285,11 @@ async def test_join_with_hanging_graphiti_leaves_without_ingesting(
 
 
 async def test_join_without_ingest_intent_writes_not_requested(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -304,7 +316,12 @@ async def test_join_without_ingest_intent_writes_not_requested(
 
 
 async def test_join_record_finalize_failure_is_visible_and_exits_1(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import os
 
@@ -337,7 +354,11 @@ async def test_join_record_finalize_failure_is_visible_and_exits_1(
 
 
 async def test_join_ingest_requested_but_finalize_failed_reports_unknown(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import os
 
@@ -373,7 +394,10 @@ async def test_join_ingest_requested_but_finalize_failed_reports_unknown(
 
 
 async def test_memory_ingest_recovers_pending_without_hash_after_crash(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import hashlib
 
@@ -424,7 +448,10 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
 
 
 async def test_memory_ingest_failure_then_resumes_from_native_progress(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -474,7 +501,7 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
 
 
 async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -493,7 +520,7 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
 
 
 async def test_memory_ingest_persists_window_episode_uuids(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -518,7 +545,7 @@ async def test_memory_ingest_persists_window_episode_uuids(
 
 
 async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reingests(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path, write_status
 
@@ -564,7 +591,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
 
 
 async def test_memory_ingest_refuses_an_active_writer_lock(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import record_lock
 
@@ -586,7 +613,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
 
 
 async def test_memory_ingest_rejects_a_changed_record_hash(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.foundation.transcript import TranscriptEvent
     from fakeyou.persistence.ingestion_status import read_status, status_path
@@ -628,7 +655,7 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
 
 
 async def test_memory_ingest_rejects_a_foreign_group_status(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import (
         IngestionStatus,
@@ -672,7 +699,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
 
 
 async def test_memory_ingest_corrupt_status_starts_fresh(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -697,7 +724,7 @@ async def test_memory_ingest_corrupt_status_starts_fresh(
 
 
 async def test_memory_ingest_partial_record_is_not_completed(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -722,7 +749,10 @@ async def test_memory_ingest_partial_record_is_not_completed(
 
 
 async def test_memory_ingest_empty_record_reports_zero_windows(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
     from fakeyou.persistence.record import MeetingRecord
@@ -746,7 +776,7 @@ async def test_memory_ingest_empty_record_reports_zero_windows(
 
 
 async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -779,7 +809,7 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
 
 
 async def test_ingest_until_stopped_uses_the_caller_stop_event(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
     from tests.fakes import RecordingJournal

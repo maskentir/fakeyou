@@ -2,6 +2,8 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -143,7 +145,9 @@ async def test_run_meeting_session_enforces_duration_limit() -> None:
     assert result.terminal_reason == "duration_limit_reached"
 
 
-async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
+async def test_run_meeting_session_logs_slow_monitor_poll(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     clock = FakeClock()
 
     def advance_on_monitor_poll(reads):
@@ -166,7 +170,9 @@ async def test_run_meeting_session_logs_slow_monitor_poll(capsys) -> None:
     assert polls[0]["duration_ms"] == 2500
 
 
-async def test_run_meeting_session_skips_monitor_poll_log_when_fast(capsys) -> None:
+async def test_run_meeting_session_skips_monitor_poll_log_when_fast(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     browser = FakePageSession(meet_page([IN_CALL, IN_CALL, ENDED]))
 
     result = await _run(_config(), browser, FakeSaverSession(), FakeClock())
@@ -502,7 +508,7 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
 
 @pytest.mark.parametrize("field", ["owner_id", "twin_id", "meeting_id"])
 @pytest.mark.parametrize("value", ["", "../another-profile", "contains:separator"])
-def test_session_rejects_invalid_identity(field, value) -> None:
+def test_session_rejects_invalid_identity(field: str, value: str) -> None:
     with pytest.raises(ValueError, match="String should match pattern"):
         _config(**{field: value})
 
@@ -521,13 +527,13 @@ def test_session_rejects_invalid_identity(field, value) -> None:
     ],
 )
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
-def test_session_rejects_invalid_timing(field, value) -> None:
+def test_session_rejects_invalid_timing(field: str, value: float | int) -> None:
     expected = "finite number" if isinstance(value, float) else "greater than 0"
     with pytest.raises(ValueError, match=expected):
         _config(**{field: value})
 
 
-async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path):
+async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path: Path) -> None:
     from fakeyou.observability.journal import Journal, JournalFile
     from fakeyou.observability.report import read_journal
 
@@ -583,8 +589,13 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     ids=["denied", "blocked", "lobby_timed_out", "missing_name", "join_crash", "removed", "ended"],
 )
 async def test_run_meeting_session_reports_terminal_outcome(
-    contents, evaluates, counts, overrides, expected, detail
-):
+    contents: list[Any],
+    evaluates: list[Any],
+    counts: dict[str, Any],
+    overrides: dict[str, Any],
+    expected: str,
+    detail: str,
+) -> None:
     browser = FakePageSession(meet_page(contents, evaluates=evaluates, counts=counts))
     result = await _run(_config(**overrides), browser, FakeSaverSession(), FakeClock())
     assert result.phase == "ended"
@@ -593,7 +604,7 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert browser.closed == 1
 
 
-async def test_lobby_timeout_retries_twice_before_terminal(journal) -> None:
+async def test_lobby_timeout_retries_twice_before_terminal(journal: RecordingJournal) -> None:
     browser = FakePageSession(meet_page([LOBBY] * 15))
     clock = FakeClock()
     config = _config(lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0)
@@ -625,7 +636,7 @@ def _mining_payload():
     }
 
 
-async def test_run_meeting_session_collects_participant_evidence(tmp_path) -> None:
+async def test_run_meeting_session_collects_participant_evidence(tmp_path: Path) -> None:
     evidence = tmp_path / "meeting-1" / "participants.jsonl"
     page = meet_page(
         [IN_CALL, IN_CALL, IN_CALL, IN_CALL, ENDED],
@@ -662,7 +673,7 @@ async def test_run_meeting_session_collects_participant_evidence(tmp_path) -> No
     assert len(page.evaluate_calls) == calls_after_finish
 
 
-async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path) -> None:
+async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path: Path) -> None:
     evidence = tmp_path / "meeting-1" / "participants.jsonl"
     page = meet_page([IN_CALL, IN_CALL, ENDED])
     browser = FakePageSession(page)
@@ -676,7 +687,7 @@ async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path) -> Non
     assert not evidence.exists()
 
 
-async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path) -> None:
+async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path: Path) -> None:
     evidence = tmp_path / "meeting-1" / "participants.jsonl"
     stop = asyncio.Event()
     clock = FakeClock()

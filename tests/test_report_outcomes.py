@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import fakeyou.cli.diagnostics as cli_diagnostics
+from fakeyou.config.settings import Settings
 from fakeyou.observability.report import (
     build_session_report,
 )
@@ -202,7 +205,9 @@ def test_report_counts_cancel_requested_and_completed() -> None:
     }
 
 
-def test_diagnostics_report_surfaces_both_outcomes(tmp_path: Path, settings, capsys) -> None:
+def test_diagnostics_report_surfaces_both_outcomes(
+    tmp_path: Path, settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
     rows = [
         row(
             1,

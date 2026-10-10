@@ -40,7 +40,7 @@ def mining_result(*tiles, self_seen=False):
     }
 
 
-def test_empty_roster_yields_no_samples():
+def test_empty_roster_yields_no_samples() -> None:
     async def run():
         page = FakePage([mining_result()])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
@@ -54,7 +54,7 @@ def test_empty_roster_yields_no_samples():
     asyncio.run(run())
 
 
-def test_roster_and_active_speaker_snapshot():
+def test_roster_and_active_speaker_snapshot() -> None:
     async def run():
         page = FakePage(
             [
@@ -78,7 +78,7 @@ def test_roster_and_active_speaker_snapshot():
     asyncio.run(run())
 
 
-def test_duplicate_names_keep_distinct_ids():
+def test_duplicate_names_keep_distinct_ids() -> None:
     async def run():
         page = FakePage([mining_result(("a", "Sam", False, False), ("b", "Sam", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
@@ -92,7 +92,7 @@ def test_duplicate_names_keep_distinct_ids():
     asyncio.run(run())
 
 
-def test_participant_leave_keeps_history_but_drops_roster():
+def test_participant_leave_keeps_history_but_drops_roster() -> None:
     async def run():
         page = FakePage(
             [
@@ -112,7 +112,7 @@ def test_participant_leave_keeps_history_but_drops_roster():
     asyncio.run(run())
 
 
-def test_poll_exception_does_not_stop_observer():
+def test_poll_exception_does_not_stop_observer() -> None:
     async def run():
         page = FakePage(
             [
@@ -139,7 +139,7 @@ def test_poll_exception_does_not_stop_observer():
     asyncio.run(run())
 
 
-def test_close_is_idempotent_and_stops_polling():
+def test_close_is_idempotent_and_stops_polling() -> None:
     async def run():
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
@@ -154,7 +154,7 @@ def test_close_is_idempotent_and_stops_polling():
     asyncio.run(run())
 
 
-def test_epoch_reset_clears_timeline_and_roster():
+def test_epoch_reset_clears_timeline_and_roster() -> None:
     async def run():
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
@@ -173,7 +173,7 @@ def test_epoch_reset_clears_timeline_and_roster():
     asyncio.run(run())
 
 
-def test_evidence_appends_mining_record(tmp_path):
+def test_evidence_appends_mining_record(tmp_path: Path) -> None:
     path = Path(tmp_path) / "m1" / "participants.jsonl"
     append_participant_evidence(
         path,
@@ -192,7 +192,7 @@ def test_evidence_appends_mining_record(tmp_path):
     assert observer_epoch("m1", 2) == "m1:e2"
 
 
-def test_snapshot_is_immutable():
+def test_snapshot_is_immutable() -> None:
     async def run():
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)

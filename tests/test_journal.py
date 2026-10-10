@@ -1,5 +1,8 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
 
 from fakeyou.observability.journal import Journal, JournalFile
 
@@ -47,7 +50,7 @@ def test_record_never_raises_on_bad_fields() -> None:
     journal.record("", source="runtime")
 
 
-def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
+def test_request_lifecycle_has_correlation_and_elapsed(tmp_path: Path) -> None:
     journal = Journal("meeting-1", file=JournalFile(tmp_path / "events.jsonl"), echo=False)
 
     journal.request_started("req-1", source="tts", operation="synthesize", at=1.0)
@@ -59,7 +62,7 @@ def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
     assert rows[1]["duration_ms"] == 12.5
 
 
-def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
+def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     journal = Journal("meeting-1", file=JournalFile(path, max_bytes=180), echo=False)
 
@@ -78,7 +81,7 @@ def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
     assert "private" not in text
 
 
-def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
+def test_journal_should_omit_text_content_from_every_nested_event(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     journal = Journal("meeting-1", file=JournalFile(path), echo=False)
     for name in (
@@ -98,7 +101,9 @@ def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
     assert "private" not in path.read_text()
 
 
-def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
+def test_timed_should_correlate_success_and_preserve_result_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import fakeyou.observability.journal as module
 
     lines = []
@@ -120,7 +125,7 @@ def test_timed_should_correlate_success_and_preserve_result_fields(monkeypatch):
     assert rows[1]["bytes_out"] == 128
 
 
-def test_timed_should_record_failure_and_propagate_original_error():
+def test_timed_should_record_failure_and_propagate_original_error() -> None:
     import pytest
 
     from fakeyou.observability.provider_faults import ProviderFault

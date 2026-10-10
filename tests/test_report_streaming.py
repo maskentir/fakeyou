@@ -139,7 +139,7 @@ def test_negative_stream_latency_is_excluded_with_reasons() -> None:
     assert report["evidence"]["excluded"]["negative_latency"] == 2
 
 
-def test_report_counts_requests_with_unusable_durations_without_adding_time():
+def test_report_counts_requests_with_unusable_durations_without_adding_time() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
     rows += [
         row(
@@ -180,7 +180,7 @@ def test_report_counts_requests_with_unusable_durations_without_adding_time():
     assert report["evidence"] == {"excluded": {"nonfinite_duration": 1, "invalid_duration": 1}}
 
 
-def test_streamed_synthesis_links_to_own_turn_by_transcript():
+def test_streamed_synthesis_links_to_own_turn_by_transcript() -> None:
     rows = [
         row(0.0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="tA", text="first"),

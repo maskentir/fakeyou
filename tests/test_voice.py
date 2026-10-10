@@ -1,8 +1,10 @@
 import json
+from collections.abc import Callable
 from typing import cast
 
 import httpx2
 import pytest
+from openai import AsyncOpenAI
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
 
@@ -19,6 +21,7 @@ from fakeyou.audio.voice import (
 )
 from fakeyou.config.settings import DEFAULTS, MiniMaxTTS, OpenAITTS, STTMode
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
+from tests.fakes import RecordingJournal
 
 
 def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
@@ -52,7 +55,7 @@ async def test_tts_http_client_bounds_slow_streams() -> None:
     assert client.is_closed()
 
 
-async def test_synthesizer_streams_a_pcm_request(openai_client) -> None:
+async def test_synthesizer_streams_a_pcm_request(openai_client: Callable[..., AsyncOpenAI]) -> None:
     requests = []
     client = openai_client(requests=requests)
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
@@ -77,7 +80,9 @@ async def test_synthesizer_streams_a_pcm_request(openai_client) -> None:
     assert request.extensions["timeout"]["read"] == TTS_REQUEST_TIMEOUT_SECONDS
 
 
-async def test_synthesizer_rejects_blank_text_before_request(openai_client) -> None:
+async def test_synthesizer_rejects_blank_text_before_request(
+    openai_client: Callable[..., AsyncOpenAI],
+) -> None:
     requests = []
     client = openai_client(requests=requests)
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
@@ -111,7 +116,9 @@ def test_synthesizer_disables_sdk_retries() -> None:
     assert synthesizer._client.max_retries == 0
 
 
-async def test_synthesizer_timeout_raises_typed_provider_fault(openai_client) -> None:
+async def test_synthesizer_timeout_raises_typed_provider_fault(
+    openai_client: Callable[..., AsyncOpenAI],
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
@@ -130,7 +137,9 @@ async def test_synthesizer_timeout_raises_typed_provider_fault(openai_client) ->
     assert caught.value.__cause__ is not None
 
 
-async def test_synthesizer_payment_status_raises_typed_provider_fault(openai_client) -> None:
+async def test_synthesizer_payment_status_raises_typed_provider_fault(
+    openai_client: Callable[..., AsyncOpenAI],
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(api_key="k", client=openai_client(status=402))
@@ -147,7 +156,7 @@ async def test_synthesizer_payment_status_raises_typed_provider_fault(openai_cli
 
 
 async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
-    journal, openai_client
+    journal: RecordingJournal, openai_client: Callable[..., AsyncOpenAI]
 ) -> None:
 
     lines = journal.lines
@@ -178,7 +187,9 @@ async def test_synthesizer_stream_yields_chunks_with_correlated_journal(
     assert finished["streaming"] is True
 
 
-async def test_synthesizer_stream_failure_raises_typed_fault(journal, openai_client) -> None:
+async def test_synthesizer_stream_failure_raises_typed_fault(
+    journal: RecordingJournal, openai_client: Callable[..., AsyncOpenAI]
+) -> None:
 
     from fakeyou.observability.provider_faults import ProviderFault
 
@@ -242,7 +253,7 @@ async def test_minimax_synthesizer_streams_an_indonesian_pcm_request() -> None:
 
 
 async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
@@ -279,7 +290,9 @@ async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event
     ("status_code", "kind"),
     [(1002, "rate_limited"), (1004, "unauthorized"), (1008, "payment_required"), (9999, "unknown")],
 )
-async def test_minimax_error_status_raises_typed_provider_fault(status_code, kind) -> None:
+async def test_minimax_error_status_raises_typed_provider_fault(
+    status_code: int, kind: str
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -325,7 +338,9 @@ async def test_minimax_synthesizer_closes_only_its_own_client() -> None:
     await shared.aclose()
 
 
-async def test_first_pcm_is_reported_before_synthesis_finishes(openai_client, journal):
+async def test_first_pcm_is_reported_before_synthesis_finishes(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
@@ -341,7 +356,9 @@ async def test_first_pcm_is_reported_before_synthesis_finishes(openai_client, jo
         await synthesizer.aclose()
 
 
-async def test_first_pcm_event_carries_correlation_without_content(openai_client, journal):
+async def test_first_pcm_event_carries_correlation_without_content(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
@@ -371,7 +388,9 @@ async def test_first_pcm_event_carries_correlation_without_content(openai_client
     assert finished["first_chunk_ms"] == first["first_chunk_ms"]
 
 
-async def test_empty_chunks_are_skipped_before_first_pcm(openai_client, journal):
+async def test_empty_chunks_are_skipped_before_first_pcm(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"", b"\x00\x01", b""]), journal=journal
     )
@@ -387,7 +406,7 @@ async def test_empty_chunks_are_skipped_before_first_pcm(openai_client, journal)
     assert finished["first_chunk_ms"] == first["first_chunk_ms"]
 
 
-async def test_journaled_stream_skips_empty_chunks(journal):
+async def test_journaled_stream_skips_empty_chunks(journal: RecordingJournal) -> None:
     from fakeyou.audio.voice import _journaled_stream
 
     async def open_stream(text):
@@ -405,7 +424,9 @@ async def test_journaled_stream_skips_empty_chunks(journal):
     assert finished["bytes_out"] == 2
 
 
-async def test_empty_stream_records_no_first_pcm(openai_client, journal):
+async def test_empty_stream_records_no_first_pcm(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(client=openai_client(chunks=[b"", b""]), journal=journal)
     try:
         chunks = [chunk async for chunk in synthesizer.stream("Hello.")]
@@ -418,7 +439,9 @@ async def test_empty_stream_records_no_first_pcm(openai_client, journal):
     assert finished["first_chunk_ms"] is None
 
 
-async def test_failure_before_first_pcm_records_no_first_pcm(openai_client, journal):
+async def test_failure_before_first_pcm_records_no_first_pcm(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
@@ -435,7 +458,9 @@ async def test_failure_before_first_pcm_records_no_first_pcm(openai_client, jour
     assert len(journal.events("synthesis_failed")) == 1
 
 
-async def test_failure_after_first_pcm_keeps_the_first_pcm_proof(openai_client, journal):
+async def test_failure_after_first_pcm_keeps_the_first_pcm_proof(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = OpenAISpeechSynthesizer(
@@ -455,7 +480,9 @@ async def test_failure_after_first_pcm_keeps_the_first_pcm_proof(openai_client, 
     assert journal.events("synthesis_finished") == []
 
 
-async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(openai_client, journal):
+async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
@@ -470,7 +497,7 @@ async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(openai
     assert journal.events("synthesis_finished") == []
 
 
-async def test_minimax_first_pcm_is_reported_once(journal):
+async def test_minimax_first_pcm_is_reported_once(journal: RecordingJournal) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
@@ -505,7 +532,9 @@ def test_create_speech_synthesizer_picks_provider_defaults() -> None:
     assert (openai._model, openai._voice) == (DEFAULTS.tts.model, "nova")
 
 
-async def test_synthesizer_tags_sentence_synthesis_with_its_index(journal, openai_client) -> None:
+async def test_synthesizer_tags_sentence_synthesis_with_its_index(
+    journal: RecordingJournal, openai_client: Callable[..., AsyncOpenAI]
+) -> None:
     client = openai_client(chunks=[b"\x00" * 64, b"\x01" * 64])
     synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
 
@@ -526,7 +555,9 @@ async def test_synthesizer_tags_sentence_synthesis_with_its_index(journal, opena
     ]
 
 
-async def test_synthesizer_without_sentence_index_omits_the_tag(journal, openai_client) -> None:
+async def test_synthesizer_without_sentence_index_omits_the_tag(
+    journal: RecordingJournal, openai_client: Callable[..., AsyncOpenAI]
+) -> None:
     client = openai_client(chunks=[b"\x00" * 64])
     synthesizer = OpenAISpeechSynthesizer(api_key="k", client=client, journal=journal)
 
@@ -540,7 +571,9 @@ async def test_synthesizer_without_sentence_index_omits_the_tag(journal, openai_
         assert "sentence_index" not in row
 
 
-async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(journal) -> None:
+async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(
+    journal: RecordingJournal,
+) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
@@ -568,7 +601,9 @@ async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(journa
     )
 
 
-async def test_synthesis_tags_transcript_id_on_all_events(openai_client, journal):
+async def test_synthesis_tags_transcript_id_on_all_events(
+    openai_client: Callable[..., AsyncOpenAI], journal: RecordingJournal
+) -> None:
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )

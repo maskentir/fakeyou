@@ -1,6 +1,8 @@
 import asyncio
-from contextlib import asynccontextmanager
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,11 +13,11 @@ from fakeyou.audio.audio import MeetingAudioError
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import CallObservation, JoinResult, LeaveResult
 from fakeyou.observability.journal import Journal
-from tests.fakes import FakeAudio, FakeClock, FakeConversation
+from tests.fakes import FakeAudio, FakeClock, FakeConversation, RecordingJournal
 
 
 @pytest.fixture
-def session(tmp_path, monkeypatch):
+def session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     events = []
     stop = asyncio.Event()
 
@@ -64,7 +66,9 @@ def session(tmp_path, monkeypatch):
     )
 
 
-async def test_audio_is_ready_before_join_and_stops_before_leave(open_audio, session):
+async def test_audio_is_ready_before_join_and_stops_before_leave(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
 
     result = await runtime.run_meeting_session(
@@ -85,7 +89,11 @@ async def test_audio_is_ready_before_join_and_stops_before_leave(open_audio, ses
     ]
 
 
-async def test_denied_guest_stops_the_audio_opened_for_the_lobby(open_audio, session, monkeypatch):
+async def test_denied_guest_stops_the_audio_opened_for_the_lobby(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def denied(*args):
         session.events.append("denied")
         return JoinResult("denied", "denied")
@@ -101,7 +109,7 @@ async def test_denied_guest_stops_the_audio_opened_for_the_lobby(open_audio, ses
     assert session.events == ["audio_started", "denied", "audio_stopped", "browser_closed"]
 
 
-async def test_owner_stop_during_audio_startup_never_joins(session):
+async def test_owner_stop_during_audio_startup_never_joins(session: SimpleNamespace) -> None:
     @asynccontextmanager
     async def open_audio():
         try:
@@ -120,8 +128,8 @@ async def test_owner_stop_during_audio_startup_never_joins(session):
 
 @pytest.mark.parametrize("failure_at", ["startup", "monitor", "microphone"])
 async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
-    session, monkeypatch, failure_at
-):
+    session: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure_at: str
+) -> None:
     class FailedAudio(FakeAudio):
         def raise_if_failed(self):
             if failure_at == "monitor":
@@ -156,8 +164,11 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
 
 
 async def test_camera_failure_is_recorded_without_failing_session(
-    journal, open_audio, session, monkeypatch
-):
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from fakeyou.observability.faults import FaultReporter
 
     async def camera(*args):
@@ -177,7 +188,9 @@ async def test_camera_failure_is_recorded_without_failing_session(
     )
 
 
-async def test_session_duration_counts_from_admission(session, monkeypatch):
+async def test_session_duration_counts_from_admission(
+    session: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clock = FakeClock()
     admitted_at = []
 
@@ -224,7 +237,9 @@ async def test_session_duration_counts_from_admission(session, monkeypatch):
     assert clock.now - admitted_at[0] == 100.0
 
 
-async def test_conversation_binds_after_audio_and_closes_before_leave(open_audio, session):
+async def test_conversation_binds_after_audio_and_closes_before_leave(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
 
     conversation = FakeConversation(session.events)
@@ -248,7 +263,9 @@ async def test_conversation_binds_after_audio_and_closes_before_leave(open_audio
     ]
 
 
-async def test_conversation_failure_keeps_listening_until_owner_stop(open_audio, session):
+async def test_conversation_failure_keeps_listening_until_owner_stop(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
 
     conversation = FakeConversation(session.events, fail=True)
@@ -272,7 +289,9 @@ async def test_conversation_failure_keeps_listening_until_owner_stop(open_audio,
     ]
 
 
-async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session):
+async def test_owner_stop_interrupts_blocked_initial_speech(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     class BlockingAudio(FakeAudio):
         async def speak(self, text):
             self.events.append("greeting_started")
@@ -313,7 +332,9 @@ async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session)
     ]
 
 
-async def test_capture_drain_starts_before_initial_speech(open_audio, session):
+async def test_capture_drain_starts_before_initial_speech(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     import json
     from dataclasses import replace
 
@@ -341,7 +362,7 @@ async def test_capture_drain_starts_before_initial_speech(open_audio, session):
     )
 
 
-async def test_conversation_requires_audio(session):
+async def test_conversation_requires_audio(session: SimpleNamespace) -> None:
     with pytest.raises(ValueError, match="conversation requires meeting audio"):
         await runtime.run_meeting_session(
             session.config,
@@ -349,7 +370,11 @@ async def test_conversation_requires_audio(session):
         )
 
 
-async def test_conversation_never_binds_and_closes_after_denial(open_audio, session, monkeypatch):
+async def test_conversation_never_binds_and_closes_after_denial(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def denied(*args):
         return JoinResult("denied", "denied")
 
@@ -366,7 +391,7 @@ async def test_conversation_never_binds_and_closes_after_denial(open_audio, sess
     assert session.events == ["conversation_closed", "audio_stopped", "browser_closed"]
 
 
-async def test_conversation_closes_if_checkpoint_setup_fails(session):
+async def test_conversation_closes_if_checkpoint_setup_fails(session: SimpleNamespace) -> None:
     def broken_saver():
         raise RuntimeError("checkpoint unavailable")
 
@@ -392,8 +417,10 @@ async def test_conversation_closes_if_checkpoint_setup_fails(session):
 
 
 async def test_conversation_closes_before_audio_on_unexpected_monitor_error(
-    open_audio, session, monkeypatch
-):
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def broken_observation(*args):
         raise RuntimeError("browser observation failed")
 
@@ -442,7 +469,9 @@ class _ScriptedMaintenanceAudio(FakeAudio):
         return outcome
 
 
-async def test_finish_merges_fault_suffix_on_audio_failure(open_audio, session):
+async def test_finish_merges_fault_suffix_on_audio_failure(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     from fakeyou.observability.faults import FaultReporter
 
     reporter = _faulty_reporter()
@@ -464,7 +493,9 @@ async def test_finish_merges_fault_suffix_on_audio_failure(open_audio, session):
     assert isinstance(reporter, FaultReporter)
 
 
-async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
+async def test_finish_merges_fault_suffix_on_leave_path(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     reporter = _faulty_reporter()
 
     result = await runtime.run_meeting_session(
@@ -476,7 +507,11 @@ async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
     assert result.detail == "left [stt_degraded: timeoutx2]"
 
 
-async def test_empty_faults_leave_detail_byte_identical(journal, open_audio, session):
+async def test_empty_faults_leave_detail_byte_identical(
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+) -> None:
     from fakeyou.observability.faults import FaultReporter
 
     result = await runtime.run_meeting_session(
@@ -491,7 +526,11 @@ async def test_empty_faults_leave_detail_byte_identical(journal, open_audio, ses
     assert result.detail == "left"
 
 
-async def test_broken_reporter_never_changes_exit_path(journal, open_audio, session):
+async def test_broken_reporter_never_changes_exit_path(
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+) -> None:
     from fakeyou.observability.faults import FaultReporter
 
     class _BrokenReporter(FaultReporter):
@@ -518,7 +557,7 @@ async def test_broken_reporter_never_changes_exit_path(journal, open_audio, sess
     assert result.faults is None
 
 
-async def test_preflight_all_fail_refuses_before_browser(session):
+async def test_preflight_all_fail_refuses_before_browser(session: SimpleNamespace) -> None:
     from fakeyou.orchestration.preflight import ProbeResult
 
     opened = []
@@ -550,7 +589,9 @@ async def test_preflight_all_fail_refuses_before_browser(session):
     assert opened == []
 
 
-async def test_preflight_partial_failure_refuses_to_join(open_audio, session):
+async def test_preflight_partial_failure_refuses_to_join(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
     from fakeyou.orchestration.preflight import ProbeResult
 
     async def mixed():
@@ -569,7 +610,7 @@ async def test_preflight_partial_failure_refuses_to_join(open_audio, session):
     assert "admitted" not in session.events
 
 
-async def test_stop_during_preflight_returns_owner_stop(session):
+async def test_stop_during_preflight_returns_owner_stop(session: SimpleNamespace) -> None:
     opened = []
 
     @asynccontextmanager
@@ -592,7 +633,9 @@ async def test_stop_during_preflight_returns_owner_stop(session):
     assert opened == []
 
 
-async def test_deaf_grace_expiry_terminates_with_repair_first(session, monkeypatch):
+async def test_deaf_grace_expiry_terminates_with_repair_first(
+    session: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def observe(*args):
         return CallObservation("in_call", "in call")
 
@@ -621,7 +664,9 @@ async def test_deaf_grace_expiry_terminates_with_repair_first(session, monkeypat
     assert audios[0].tick_calls >= 2
 
 
-async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
+async def test_deaf_repair_then_hearing_avoids_terminal(
+    session: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     audios: list[_ScriptedMaintenanceAudio] = []
 
     async def observe(*args):
@@ -651,8 +696,11 @@ async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
 
 @pytest.mark.parametrize("leave_raises", [False, True])
 async def test_audio_failure_remains_primary_when_leave_also_fails(
-    open_audio, session, monkeypatch, leave_raises
-):
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    leave_raises: bool,
+) -> None:
     class CaptureStoppedAudio(FakeAudio):
         def raise_if_failed(self):
             raise MeetingAudioError("capture stopped")
@@ -673,8 +721,10 @@ async def test_audio_failure_remains_primary_when_leave_also_fails(
 
 
 async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_admission(
-    journal, open_audio, session
-):
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+) -> None:
     import json
 
     lines = journal.lines

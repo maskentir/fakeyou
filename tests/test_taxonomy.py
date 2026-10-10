@@ -54,7 +54,9 @@ def test_event_verbs_include_first_pcm_emission() -> None:
 
 
 @pytest.mark.parametrize("call", JOURNAL_CALLS, ids=_event_id)
-def test_journal_event_names_end_with_a_controlled_past_participle(call) -> None:
+def test_journal_event_names_end_with_a_controlled_past_participle(
+    call: tuple[str, int, str, ast.Call],
+) -> None:
     _file, _line, event, _node = call
     words = event.split("_")
 
@@ -64,7 +66,7 @@ def test_journal_event_names_end_with_a_controlled_past_participle(call) -> None
 
 
 @pytest.mark.parametrize("call", JOURNAL_CALLS, ids=_event_id)
-def test_journal_events_name_a_subsystem_source(call) -> None:
+def test_journal_events_name_a_subsystem_source(call: tuple[str, int, str, ast.Call]) -> None:
     file, _line, _event, node = call
     if isinstance(node.func, ast.Attribute) and (file, node.func.attr) in SOURCED_HELPERS:
         assert SOURCED_HELPERS[(file, node.func.attr)] in SUBSYSTEMS
@@ -82,7 +84,7 @@ def test_journal_events_name_a_subsystem_source(call) -> None:
 
 
 @pytest.mark.parametrize("call", JOURNAL_CALLS, ids=_event_id)
-def test_journal_events_carry_no_conversation_content(call) -> None:
+def test_journal_events_carry_no_conversation_content(call: tuple[str, int, str, ast.Call]) -> None:
     _file, _line, _event, node = call
 
     assert not {keyword.arg for keyword in node.keywords} & CONTENT_FIELDS

@@ -4,7 +4,7 @@ from fakeyou.observability.report import (
 from tests._report_support import answered_turn, row
 
 
-def test_report_attributes_parallel_and_stale_tool_results_by_transcript():
+def test_report_attributes_parallel_and_stale_tool_results_by_transcript() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),
@@ -63,7 +63,7 @@ def test_report_attributes_parallel_and_stale_tool_results_by_transcript():
     assert second["incomplete_request_count"] == 0
 
 
-def test_report_excludes_provider_events_with_unknown_or_missing_transcript():
+def test_report_excludes_provider_events_with_unknown_or_missing_transcript() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
     rows += [
         row(0.5, "request_started", source="llm", request_id="llm-x", transcript_id="ghost"),
@@ -95,7 +95,7 @@ def test_report_excludes_provider_events_with_unknown_or_missing_transcript():
     assert report["evidence"] == {"excluded": {"unknown_transcript": 1, "missing_transcript": 1}}
 
 
-def test_report_counts_unfinished_requests_as_incomplete():
+def test_report_counts_unfinished_requests_as_incomplete() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
     rows += [
         row(
@@ -125,7 +125,7 @@ def test_report_counts_unfinished_requests_as_incomplete():
     assert turn["incomplete_request_count"] == 2
 
 
-def test_report_keeps_provider_time_on_failed_and_cancelled_turns():
+def test_report_keeps_provider_time_on_failed_and_cancelled_turns() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),
@@ -159,7 +159,7 @@ def test_report_keeps_provider_time_on_failed_and_cancelled_turns():
     assert cancelled["incomplete_request_count"] == 1
 
 
-def test_report_separates_queue_wait_from_agent_work():
+def test_report_separates_queue_wait_from_agent_work() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),

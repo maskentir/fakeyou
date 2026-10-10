@@ -1,5 +1,6 @@
 import asyncio
 import struct
+from pathlib import Path
 
 import pytest
 from pipecat.frames.frames import EndFrame, InputAudioRawFrame, TranscriptionFrame
@@ -29,7 +30,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import MiniMaxTTS, OpenAITTS, STTSettings
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal, JournalFile
-from tests.fakes import FakeReconnectableSTT, FakeSTT
+from tests.fakes import FakeReconnectableSTT, FakeSTT, RecordingJournal
 
 
 class _Transport:
@@ -188,7 +189,7 @@ async def test_unexpected_worker_exit_is_reported() -> None:
 
 
 async def test_callback_failure_degrades_without_killing_session(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.audio.deaf import CaptureActivity
     from fakeyou.observability.faults import FaultReporter
@@ -248,7 +249,9 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
     assert "startup-secret" not in str(caught.value)
 
 
-async def test_native_transport_is_terminated_when_construction_fails(monkeypatch) -> None:
+async def test_native_transport_is_terminated_when_construction_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     terminated = False
 
     class _PyAudio:
@@ -285,7 +288,9 @@ async def test_native_transport_is_terminated_when_construction_fails(monkeypatc
     assert "secret" not in str(caught.value)
 
 
-async def test_native_transport_without_backend_still_reports_root_error(monkeypatch) -> None:
+async def test_native_transport_without_backend_still_reports_root_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _BackendlessTransport(_Transport):
         def input(self) -> FrameProcessor:
             raise ValueError("construction-error")
@@ -310,7 +315,7 @@ async def test_native_transport_without_backend_still_reports_root_error(monkeyp
     assert isinstance(caught.value.__cause__, ValueError)
 
 
-async def test_cancellation_during_startup_stops_runner(monkeypatch) -> None:
+async def test_cancellation_during_startup_stops_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     running = asyncio.Event()
     released = asyncio.Event()
     cancelled = False
@@ -355,7 +360,7 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch) -> None:
     assert cancelled
 
 
-async def test_error_handler_registered_before_add_workers(monkeypatch) -> None:
+async def test_error_handler_registered_before_add_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     order: list[str] = []
     original_add_handler = PipelineWorker.add_event_handler
 
@@ -432,7 +437,9 @@ async def test_runner_failure_chains_original_exception() -> None:
     assert "root-boom" in str(caught.value.__cause__)
 
 
-async def test_terminate_failure_does_not_mask_initialization_error(monkeypatch) -> None:
+async def test_terminate_failure_does_not_mask_initialization_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _RaisingPyAudio:
         def terminate(self) -> None:
             raise RuntimeError("terminate-boom")
@@ -557,7 +564,9 @@ async def test_default_playback_engine_closes_speech_client() -> None:
     assert owned.is_closed()
 
 
-async def test_terminate_failure_does_not_fail_clean_shutdown(monkeypatch) -> None:
+async def test_terminate_failure_does_not_fail_clean_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _RaisingPyAudio:
         def terminate(self) -> None:
             raise RuntimeError("terminate-boom")
@@ -655,7 +664,7 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
 
 
 async def test_permanent_error_records_before_kill_with_typed_cause(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
     from fakeyou.observability.provider_faults import ProviderFault
@@ -694,7 +703,7 @@ async def test_permanent_error_records_before_kill_with_typed_cause(
 
 
 async def test_nonpermanent_error_records_without_killing(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -728,7 +737,7 @@ async def test_nonpermanent_error_records_without_killing(
 
 
 async def test_uncategorized_error_falls_back_to_exception_classification(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     import httpx2
 
@@ -767,7 +776,7 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
 
 
 async def test_unsupported_stt_reconnect_records_without_attempts(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -798,7 +807,7 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
 
 
 async def test_supported_stt_reconnect_queues_request(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -826,7 +835,7 @@ async def test_supported_stt_reconnect_queues_request(
 
 
 async def test_stt_reconnect_lifecycle_is_journaled(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
 
     from fakeyou.audio.deaf import CaptureActivity
@@ -931,7 +940,7 @@ async def test_capture_observer_meters_frame_energy() -> None:
 
 
 async def test_capture_observer_journals_speech_boundaries(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
 
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
@@ -980,7 +989,7 @@ async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
     assert seen == [True, False]
 
 
-async def test_capture_observer_contains_on_vad_failure(journal) -> None:
+async def test_capture_observer_contains_on_vad_failure(journal: RecordingJournal) -> None:
     from pipecat.frames.frames import VADUserStoppedSpeakingFrame
 
     async def on_vad(*, active: bool) -> None:
@@ -1000,7 +1009,9 @@ async def test_capture_observer_contains_on_vad_failure(journal) -> None:
     assert journal.events()[-1]["event"] == "fault_recorded"
 
 
-async def test_capture_observer_journals_first_probe_vad_failure_only(journal) -> None:
+async def test_capture_observer_journals_first_probe_vad_failure_only(
+    journal: RecordingJournal,
+) -> None:
     from types import SimpleNamespace
 
     from pipecat.frames.frames import VADUserStartedSpeakingFrame
@@ -1048,7 +1059,7 @@ async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() 
     assert (failed.available, failed.ready_at) == (False, 400.0)
 
 
-async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path):
+async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path: Path) -> None:
     from fakeyou.observability.report import read_journal
 
     path = tmp_path / "events.jsonl"
@@ -1111,7 +1122,7 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         await session.stop()
 
 
-async def test_transcript_observer_journals_turn_stats(journal) -> None:
+async def test_transcript_observer_journals_turn_stats(journal: RecordingJournal) -> None:
     from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection
 

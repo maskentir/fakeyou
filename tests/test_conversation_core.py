@@ -24,10 +24,18 @@ from fakeyou.foundation.transcript import (
 )
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._conversation_support import event
-from tests.fakes import FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
+from tests.fakes import (
+    FakeReplyAudio,
+    FakeResponder,
+    RecordingJournal,
+    ToolCallingFakeModel,
+    recall_call,
+)
 
 
-async def test_new_final_cancels_waiting_model_and_answers_newest_once(journal):
+async def test_new_final_cancels_waiting_model_and_answers_newest_once(
+    journal: RecordingJournal,
+) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -62,7 +70,7 @@ async def test_new_final_cancels_waiting_model_and_answers_newest_once(journal):
     await loop.close()
 
 
-async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_text():
+async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_text() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder)
     await loop.handle_transcript(event("provisional", finalized=False))
@@ -79,7 +87,7 @@ async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_tex
     assert len(responder.calls) == 1
 
 
-async def test_close_cancels_model_and_prevents_later_speech():
+async def test_close_cancels_model_and_prevents_later_speech() -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
@@ -91,7 +99,7 @@ async def test_close_cancels_model_and_prevents_later_speech():
     assert audio.spoken == []
 
 
-async def test_model_timeout_is_observable_without_exposing_provider_error():
+async def test_model_timeout_is_observable_without_exposing_provider_error() -> None:
     loop = ConversationLoop(
         FakeResponder(asyncio.Event()), timing=LoopTiming(response_timeout_seconds=0.02)
     )
@@ -129,7 +137,7 @@ async def test_loop_speaks_capped_reply_head() -> None:
     await loop.close()
 
 
-async def test_observer_failure_preserves_model_and_speech():
+async def test_observer_failure_preserves_model_and_speech() -> None:
     def broken(*args):
         raise RuntimeError("private-provider-data")
 
@@ -143,7 +151,7 @@ async def test_observer_failure_preserves_model_and_speech():
     await loop.close()
 
 
-def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
+def test_frame_adapter_has_stable_event_identity_and_no_invented_participant() -> None:
     first = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
     replay = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
     next_utterance = TranscriptionFrame("hello", "", "2026-09-28T00:00:01Z", finalized=True)
@@ -165,7 +173,7 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
     assert transcript_event(first, "p1", "e1", CaptureContext("s0")).stream_id == "s0"
 
 
-def test_conversation_threads_include_all_session_identities():
+def test_conversation_threads_include_all_session_identities() -> None:
     first = conversation_thread_id("owner-a", "twin", "meeting")
     assert first == conversation_thread_id("owner-a", "twin", "meeting")
     assert first != conversation_thread_id("owner-b", "twin", "meeting")
@@ -173,7 +181,7 @@ def test_conversation_threads_include_all_session_identities():
     assert first != conversation_thread_id("owner-a", "twin", "meeting-2")
 
 
-async def test_langgraph_adapter_uses_native_checkpoint_history_and_message_ids():
+async def test_langgraph_adapter_uses_native_checkpoint_history_and_message_ids() -> None:
     agent = create_meeting_agent(
         FakeMessagesListChatModel(
             responses=[AIMessage(content="first answer"), AIMessage(content="second answer")]
@@ -203,7 +211,9 @@ async def test_langgraph_adapter_uses_native_checkpoint_history_and_message_ids(
         ToolMessage(content="raw tool result", tool_call_id="call"),
     ],
 )
-async def test_adapter_never_speaks_user_or_tool_output(message):
+async def test_adapter_never_speaks_user_or_tool_output(
+    message: HumanMessage | ToolMessage,
+) -> None:
     class Agent:
         async def ainvoke(self, request, config):
             return {"messages": [message]}
@@ -212,7 +222,7 @@ async def test_adapter_never_speaks_user_or_tool_output(message):
     assert await responder.respond([event("one")], lambda: None) == ""
 
 
-async def test_agent_error_raises_typed_provider_fault():
+async def test_agent_error_raises_typed_provider_fault() -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingAgent:
@@ -228,7 +238,7 @@ async def test_agent_error_raises_typed_provider_fault():
     assert caught.value.__cause__ is not None
 
 
-async def test_responder_error_still_fails_loop():
+async def test_responder_error_still_fails_loop() -> None:
     class Broken:
         async def respond(self, events, on_tool_start):
             raise RuntimeError("model exploded")
@@ -243,8 +253,8 @@ async def test_responder_error_still_fails_loop():
 
 
 async def test_loop_journals_turn_without_modifying_injected_responder(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
     from dataclasses import dataclass
 
     lines = journal.lines
@@ -278,7 +288,7 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
         ("One.Two.Three.", "One. Two."),
     ],
 )
-def test_voice_cap_uses_language_aware_sentence_boundaries(reply, expected):
+def test_voice_cap_uses_language_aware_sentence_boundaries(reply: str, expected: str) -> None:
     assert cap_spoken_reply(reply) == expected
 
 
@@ -292,8 +302,8 @@ def _recall_then_reply() -> ToolCallingFakeModel:
 
 
 async def test_responder_journals_tool_failures(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
 
     from langchain_core.tools import tool
 
@@ -316,7 +326,7 @@ async def test_responder_journals_tool_failures(
     assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")
 
 
-async def test_model_and_tool_events_carry_their_transcript(journal):
+async def test_model_and_tool_events_carry_their_transcript(journal: RecordingJournal) -> None:
     from langchain_core.tools import tool
 
     @tool(description="Search long-term meeting memory for relevant context.")
@@ -362,7 +372,9 @@ async def test_model_and_tool_events_carry_their_transcript(journal):
     assert "owner note" not in body
 
 
-async def test_failed_model_request_keeps_transcript_and_error_type(journal):
+async def test_failed_model_request_keeps_transcript_and_error_type(
+    journal: RecordingJournal,
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingChatModel(ToolCallingFakeModel):
@@ -385,7 +397,9 @@ async def test_failed_model_request_keeps_transcript_and_error_type(journal):
     assert "When is the demo?" not in "\n".join(journal.lines)
 
 
-async def test_cancelled_tool_run_keeps_transcript_without_content(journal):
+async def test_cancelled_tool_run_keeps_transcript_without_content(
+    journal: RecordingJournal,
+) -> None:
     from langchain_core.tools import tool
 
     gate = asyncio.Event()
@@ -434,7 +448,7 @@ class GatedAudio(FakeReplyAudio):
         await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
 
 
-async def test_interim_cancels_pre_pcm_child_without_answering(journal):
+async def test_interim_cancels_pre_pcm_child_without_answering(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
@@ -461,7 +475,7 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal):
     await loop.close()
 
 
-async def test_duplicate_final_and_interim_do_not_reschedule(journal):
+async def test_duplicate_final_and_interim_do_not_reschedule(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
@@ -490,7 +504,7 @@ async def test_duplicate_final_and_interim_do_not_reschedule(journal):
     await loop.close()
 
 
-async def test_close_cancels_active_turn_and_never_reschedules(journal):
+async def test_close_cancels_active_turn_and_never_reschedules(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -516,7 +530,7 @@ async def test_close_cancels_active_turn_and_never_reschedules(journal):
     assert journal.events("agent_failed") == []
 
 
-async def test_new_final_during_tts_drops_stale_audio(journal):
+async def test_new_final_during_tts_drops_stale_audio(journal: RecordingJournal) -> None:
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
@@ -535,7 +549,9 @@ async def test_new_final_during_tts_drops_stale_audio(journal):
     await loop.close()
 
 
-async def test_close_during_tts_speak_drops_audio_and_stays_closed(journal):
+async def test_close_during_tts_speak_drops_audio_and_stays_closed(
+    journal: RecordingJournal,
+) -> None:
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
@@ -552,7 +568,9 @@ async def test_close_during_tts_speak_drops_audio_and_stays_closed(journal):
     assert journal.events("agent_failed") == []
 
 
-async def test_cancelled_request_ids_do_not_attach_to_next_transcript(journal):
+async def test_cancelled_request_ids_do_not_attach_to_next_transcript(
+    journal: RecordingJournal,
+) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -572,7 +590,9 @@ async def test_cancelled_request_ids_do_not_attach_to_next_transcript(journal):
     await loop.close()
 
 
-async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(journal):
+async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(
+    journal: RecordingJournal,
+) -> None:
     from langchain_core.messages import HumanMessage, ToolMessage
     from langchain_core.tools import tool
 
@@ -670,7 +690,7 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
     assert entry.capture_ms == 55.5
 
 
-async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks():
+async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks() -> None:
     observed = []
 
     class Agent:
@@ -693,8 +713,8 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks():
 
 
 async def test_responder_reports_tool_results_to_journal_and_callback(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
 
     from langchain_core.tools import tool
 
@@ -733,7 +753,7 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
     assert "owner note" not in json.dumps(finished)
 
 
-async def test_cancelled_model_request_does_not_use_fallback(journal):
+async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJournal) -> None:
     from langchain.agents.middleware import ModelFallbackMiddleware
 
     entered = asyncio.Event()

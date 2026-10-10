@@ -1,3 +1,6 @@
+from collections.abc import Callable, Coroutine
+from typing import Any
+
 import pytest
 
 from fakeyou.meet.meet import (
@@ -559,8 +562,12 @@ def test_with_pinned_meet_locale_keeps_unusable_links() -> None:
     ["already_set", "transient_click", "failed_click", "failed_state", "failed_confirmation"],
 )
 async def test_media_toggle_preserves_state_and_reports_failure(
-    toggle, current, opposite, device, scenario
-):
+    toggle: Callable[..., Coroutine[Any, Any, bool]],
+    current: str,
+    opposite: str,
+    device: str,
+    scenario: str,
+) -> None:
     values = {}
     if scenario != "already_set":
         values["visible"] = {current: False}

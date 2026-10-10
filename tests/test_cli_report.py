@@ -7,6 +7,7 @@ import pytest
 import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
 
 
 def test_report_command_prints_summary_from_journal(
@@ -43,12 +44,12 @@ def test_report_command_prints_summary_from_journal(
     assert report["result"]["terminal_reason"] == "stopped_by_owner"
 
 
-def test_report_command_rejects_an_unknown_meeting(settings, tmp_path: Path) -> None:
+def test_report_command_rejects_an_unknown_meeting(settings: Settings, tmp_path: Path) -> None:
     with pytest.raises(FakeYouError, match="no journal") as caught:
         cli_diagnostics.show_session_report("missing", tmp_path, settings)
     assert caught.value.code is ErrorCode.DIAGNOSTICS_JOURNAL_MISSING
 
 
-def test_report_command_rejects_an_invalid_meeting_id(settings, tmp_path: Path) -> None:
+def test_report_command_rejects_an_invalid_meeting_id(settings: Settings, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="pattern"):
         cli_diagnostics.show_session_report("bad id", tmp_path, settings)

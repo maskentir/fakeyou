@@ -5,6 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly_module
 import fakeyou.orchestration.providers as providers_module
+from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
@@ -80,7 +81,7 @@ def _tagged_greeting(text: str) -> HumanMessage:
 
 
 async def test_production_agent_short_circuits_greeting_without_model(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="from model")])
     monkeypatch.setattr(providers_module, "init_chat_model", lambda *_args, **_kwargs: model)

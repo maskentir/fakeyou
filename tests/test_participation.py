@@ -6,7 +6,7 @@ from fakeyou.foundation.participation import (
 )
 
 
-def test_explicit_address_unknown_speaker_replies():
+def test_explicit_address_unknown_speaker_replies() -> None:
     context = ParticipationContext(
         addressed=True,
         followup=False,
@@ -20,7 +20,7 @@ def test_explicit_address_unknown_speaker_replies():
     assert decision.reason == "addressed"
 
 
-def test_explicit_address_ambiguous_clarifies():
+def test_explicit_address_ambiguous_clarifies() -> None:
     context = ParticipationContext(
         addressed=True,
         followup=False,
@@ -34,7 +34,7 @@ def test_explicit_address_ambiguous_clarifies():
     assert decision.reason == "addressed_ambiguous"
 
 
-def test_question_for_another_participant_stays_silent():
+def test_question_for_another_participant_stays_silent() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=False,
@@ -46,7 +46,7 @@ def test_question_for_another_participant_stays_silent():
     assert choose_participation(context).action == "silent"
 
 
-def test_twin_mentioned_in_quote_stays_silent():
+def test_twin_mentioned_in_quote_stays_silent() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=False,
@@ -58,7 +58,7 @@ def test_twin_mentioned_in_quote_stays_silent():
     assert choose_participation(context).action == "silent"
 
 
-def test_followup_same_speaker_replies():
+def test_followup_same_speaker_replies() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=True,
@@ -72,7 +72,7 @@ def test_followup_same_speaker_replies():
     assert decision.reason == "followup_same_speaker"
 
 
-def test_another_speaker_does_not_inherit_activation():
+def test_another_speaker_does_not_inherit_activation() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=True,
@@ -84,7 +84,7 @@ def test_another_speaker_does_not_inherit_activation():
     assert choose_participation(context).action == "silent"
 
 
-def test_expired_activation_followup_stays_silent():
+def test_expired_activation_followup_stays_silent() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=True,
@@ -96,7 +96,7 @@ def test_expired_activation_followup_stays_silent():
     assert choose_participation(context).action == "silent"
 
 
-def test_occupied_floor_stays_silent_even_when_addressed():
+def test_occupied_floor_stays_silent_even_when_addressed() -> None:
     context = ParticipationContext(
         addressed=True,
         followup=False,
@@ -110,7 +110,7 @@ def test_occupied_floor_stays_silent_even_when_addressed():
     assert decision.reason == "floor_occupied"
 
 
-def test_ambiguous_followup_same_speaker_clarifies():
+def test_ambiguous_followup_same_speaker_clarifies() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=True,
@@ -124,7 +124,7 @@ def test_ambiguous_followup_same_speaker_clarifies():
     assert decision.reason == "followup_ambiguous"
 
 
-def test_unknown_without_address_stays_silent():
+def test_unknown_without_address_stays_silent() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=False,
@@ -138,7 +138,7 @@ def test_unknown_without_address_stays_silent():
     assert decision.reason == "not_addressed"
 
 
-def test_same_participant_without_followup_stays_silent():
+def test_same_participant_without_followup_stays_silent() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=False,
@@ -150,7 +150,7 @@ def test_same_participant_without_followup_stays_silent():
     assert choose_participation(context).action == "silent"
 
 
-def test_decision_covers_all_contexts():
+def test_decision_covers_all_contexts() -> None:
     seen = set()
     for raw in range(64):
         flags = [(raw >> bit & 1) == 1 for bit in range(6)]
@@ -185,7 +185,7 @@ def test_decision_covers_all_contexts():
     assert seen == {"reply", "silent", "clarify"}
 
 
-def test_vocative_matches_name_at_utterance_start():
+def test_vocative_matches_name_at_utterance_start() -> None:
     assert is_vocative("Rani Twin, when is the demo?", ["Rani Twin"])
     assert is_vocative("rani twin when is the demo?", ["Rani Twin"])
     assert is_vocative("Twin: hello", ["Twin"])
@@ -197,13 +197,13 @@ def test_vocative_matches_name_at_utterance_start():
     assert not is_vocative("Rani Twin, hello", ["", "  "])
 
 
-def test_vocative_tries_every_alias():
+def test_vocative_tries_every_alias() -> None:
     assert is_vocative("Twin, hello", ["Rani Twin", "Twin"])
     assert is_vocative("Rani Twin, hello", ["Rani Twin", "Twin"])
     assert not is_vocative("Twinx, hello", ["Rani Twin", "Twin"])
 
 
-def test_same_observed_speaker_requires_two_equal_ids():
+def test_same_observed_speaker_requires_two_equal_ids() -> None:
     assert same_observed_speaker("a", "a")
     assert not same_observed_speaker(None, "a")
     assert not same_observed_speaker("a", "b")
@@ -212,7 +212,7 @@ def test_same_observed_speaker_requires_two_equal_ids():
     assert not same_observed_speaker("unknown", "a")
 
 
-def test_context_is_immutable():
+def test_context_is_immutable() -> None:
     context = ParticipationContext(
         addressed=True,
         followup=False,

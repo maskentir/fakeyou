@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
@@ -23,7 +24,7 @@ from fakeyou.memory.memory import (
     open_graphiti_memory,
     verify_memory_connection,
 )
-from tests.fakes import FakeSaga, make_graphiti
+from tests.fakes import FakeSaga, RecordingJournal, make_graphiti
 
 
 @pytest.mark.parametrize("group_id", ["", "bad:group", "bad group", "x" * 129])
@@ -34,7 +35,7 @@ def test_memory_tools_reject_invalid_group_ids(group_id: str) -> None:
 
 
 async def test_memory_tools_keep_group_id_scoped(
-    graphiti,
+    graphiti: MagicMock,
 ) -> None:
     memory = graphiti
     remember, recall = create_memory_tools(memory, group_id="team_alpha")
@@ -147,7 +148,7 @@ def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> Non
 
 
 async def test_open_graphiti_memory_is_lightweight(
-    graphiti, monkeypatch: pytest.MonkeyPatch
+    graphiti: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = graphiti
     monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
@@ -166,7 +167,7 @@ async def test_open_graphiti_memory_is_lightweight(
 
 
 async def test_ensure_indexes_builds_on_demand(
-    graphiti,
+    graphiti: MagicMock,
 ) -> None:
     memory = graphiti
 
@@ -538,7 +539,7 @@ async def test_recall_returns_empty_when_no_evidence_survives(
 
 
 async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
-    monkeypatch: pytest.MonkeyPatch, journal
+    monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -626,7 +627,7 @@ async def test_verify_memory_connection_requires_neo4j_driver() -> None:
 
 
 def test_recall_error_middleware_returns_unknown_and_records_fault(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -740,7 +741,7 @@ def test_owner_note_writes_live_in_owner_notes_without_a_memory_reexport() -> No
 
 
 async def test_ensure_indexes_initializes_note_controls(
-    graphiti, monkeypatch: pytest.MonkeyPatch
+    graphiti: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = graphiti
     calls: list[Any] = []
@@ -831,7 +832,9 @@ async def test_reembed_group_pages_through_entities_and_facts(
 
 @pytest.mark.parametrize("provider", ["openai", "openai_generic", "anthropic"])
 @pytest.mark.parametrize("fail_body", [False, True])
-async def test_memory_context_closes_owned_transports(provider, fail_body, monkeypatch):
+async def test_memory_context_closes_owned_transports(
+    provider: str, fail_body: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = MemorySettings.model_validate(
         {
             **_config().model_dump(),
@@ -887,8 +890,8 @@ async def test_memory_context_closes_owned_transports(provider, fail_body, monke
     ],
 )
 async def test_memory_context_closes_transports_on_partial_construction(
-    component, provider, monkeypatch
-):
+    component: str, provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from openai import AsyncOpenAI
 
     clients = []
@@ -939,7 +942,9 @@ async def test_memory_context_closes_transports_on_partial_construction(
             await client.close()
 
 
-async def test_memory_context_waits_for_construction_cleanup_when_cancelled(monkeypatch):
+async def test_memory_context_waits_for_construction_cleanup_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import threading
 
     started = asyncio.Event()
@@ -992,8 +997,8 @@ async def test_memory_context_waits_for_construction_cleanup_when_cancelled(monk
 
 @pytest.mark.parametrize("fail_construction", [False, True])
 async def test_memory_context_finishes_late_construction_after_repeated_cancellation(
-    monkeypatch, fail_construction
-):
+    monkeypatch: pytest.MonkeyPatch, fail_construction: bool
+) -> None:
     import threading
 
     started = asyncio.Event()
@@ -1065,7 +1070,9 @@ async def test_memory_context_finishes_late_construction_after_repeated_cancella
             await client.close()
 
 
-async def test_memory_context_finishes_disposal_after_repeated_cancellation(monkeypatch):
+async def test_memory_context_finishes_disposal_after_repeated_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from openai import AsyncOpenAI
 
     started = asyncio.Event()

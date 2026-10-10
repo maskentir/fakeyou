@@ -271,7 +271,7 @@ def _episode_sources(payload: dict, episode_id: str) -> list[dict]:
 
 
 @pytest.mark.live
-async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_path) -> None:
+async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_path: Path) -> None:
     config = _neo4j_config_or_skip()
     run = uuid4().hex[:10]
     project = f"Orchid{run}"
@@ -506,7 +506,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
 
 
 @pytest.mark.live
-async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> None:
+async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path) -> None:
     config = _neo4j_config_or_skip()
     run = uuid4().hex[:10]
     group_id = f"trust_roundtrip_{run}"

@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
 import pytest
@@ -10,7 +10,7 @@ from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
 
 
 @pytest.fixture
-def page():
+def page() -> MagicMock:
     result = MagicMock(spec=Page)
     result.locator.return_value.count = AsyncMock(return_value=0)
     result.get_by_role.return_value.evaluate_all = AsyncMock(return_value=[])
@@ -18,7 +18,7 @@ def page():
 
 
 @pytest.fixture
-def observe():
+def observe() -> AsyncMock:
     return AsyncMock(return_value=CallObservation("in_call", "call controls are visible"))
 
 
@@ -36,7 +36,9 @@ def show_dialog(page, text, *, visible=True, button_count=1):
     return dialog
 
 
-async def test_should_back_off_after_three_quiet_checks_and_reset_on_modal(page, observe):
+async def test_should_back_off_after_three_quiet_checks_and_reset_on_modal(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     assert (await watchdog.check()).next_check_seconds == 5
     assert (await watchdog.check()).next_check_seconds == 5
@@ -50,7 +52,9 @@ async def test_should_back_off_after_three_quiet_checks_and_reset_on_modal(page,
     assert result.participant_count is None
 
 
-async def test_should_require_two_identical_consecutive_lobby_observations(page, observe):
+async def test_should_require_two_identical_consecutive_lobby_observations(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     observe.side_effect = [
         CallObservation("lobby", "waiting"),
         CallObservation("lobby", "join controls"),
@@ -63,7 +67,9 @@ async def test_should_require_two_identical_consecutive_lobby_observations(page,
     assert states == ["unknown", "unknown", "lobby", "in_call", "unknown"]
 
 
-async def test_should_deduplicate_unknown_dialog_and_expire_once_without_clicking(page, observe):
+async def test_should_deduplicate_unknown_dialog_and_expire_once_without_clicking(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     dialog = show_dialog(page, "Grant account access Continue")
     now = [10.0]
     watchdog = UIWatchdog(cast(Page, page), observe=observe, monotonic=lambda: now[0])
@@ -78,7 +84,9 @@ async def test_should_deduplicate_unknown_dialog_and_expire_once_without_clickin
     dialog.button.click.assert_not_awaited()
 
 
-async def test_should_clear_recovered_dialog_and_alert_when_it_returns(page, observe):
+async def test_should_clear_recovered_dialog_and_alert_when_it_returns(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     show_dialog(page, "Sign in to continue")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
@@ -92,7 +100,9 @@ async def test_should_clear_recovered_dialog_and_alert_when_it_returns(page, obs
     assert (await watchdog.check()).events[0].kind == "manual_action_required"
 
 
-async def test_should_clear_replaced_dialog_and_report_new_modal(page, observe):
+async def test_should_clear_replaced_dialog_and_report_new_modal(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     dialog = show_dialog(page, "First unknown dialog")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
@@ -115,8 +125,8 @@ async def test_should_clear_replaced_dialog_and_report_new_modal(page, observe):
     ],
 )
 async def test_should_only_dismiss_explicit_harmless_notice(
-    page, observe, text, button_count, expected
-):
+    page: MagicMock, observe: AsyncMock, text: str, button_count: int, expected: str
+) -> None:
     dialog = show_dialog(page, text, button_count=button_count)
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
@@ -126,7 +136,9 @@ async def test_should_only_dismiss_explicit_harmless_notice(
         dialog.button.click.assert_not_awaited()
 
 
-async def test_should_escalate_when_allowlisted_dismissal_fails(page, observe):
+async def test_should_escalate_when_allowlisted_dismissal_fails(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     dialog = show_dialog(page, "This meeting is being recorded Got it")
     dialog.button.click.side_effect = RuntimeError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
@@ -139,7 +151,9 @@ CAMERA_NOT_FOUND_DIALOG = "close Close error Camera not found Make sure your cam
 
 
 @pytest.mark.parametrize("button_count", [1, 2, 3])
-async def test_should_dismiss_camera_not_found_dialog(page, observe, button_count):
+async def test_should_dismiss_camera_not_found_dialog(
+    page: MagicMock, observe: AsyncMock, button_count: int
+) -> None:
     dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG, button_count=button_count)
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
@@ -152,7 +166,9 @@ async def test_should_dismiss_camera_not_found_dialog(page, observe, button_coun
     dialog.button.click.assert_awaited_once()
 
 
-async def test_should_escalate_when_camera_dismissal_fails(page, observe):
+async def test_should_escalate_when_camera_dismissal_fails(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG)
     dialog.button.click.side_effect = RuntimeError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
@@ -161,7 +177,9 @@ async def test_should_escalate_when_camera_dismissal_fails(page, observe):
     assert [event.kind for event in result.events] == ["watchdog_failed", "manual_action_required"]
 
 
-async def test_should_not_claim_recovery_when_observation_fails(page, observe):
+async def test_should_not_claim_recovery_when_observation_fails(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     show_dialog(page, "Unknown dialog")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
@@ -172,13 +190,15 @@ async def test_should_not_claim_recovery_when_observation_fails(page, observe):
     assert result.next_check_seconds == 5
 
 
-async def test_should_ignore_hidden_dialogs(page, observe):
+async def test_should_ignore_hidden_dialogs(page: MagicMock, observe: AsyncMock) -> None:
     show_dialog(page, "Unknown dialog", visible=False)
     assert (await UIWatchdog(cast(Page, page), observe=observe).check()).events == ()
 
 
 @pytest.mark.parametrize("state", ["in_call", "removed", "ended"])
-async def test_should_preserve_call_observation_when_modal_scan_fails(page, observe, state):
+async def test_should_preserve_call_observation_when_modal_scan_fails(
+    page: MagicMock, observe: AsyncMock, state: str
+) -> None:
     observe.return_value = CallObservation(state, "definitive observation")
     page.locator.side_effect = RuntimeError("https://secret.example/token")
     result = await UIWatchdog(cast(Page, page), observe=observe).check()
@@ -198,12 +218,16 @@ async def test_should_preserve_call_observation_when_modal_scan_fails(page, obse
         ([], None),
     ],
 )
-async def test_should_only_count_explicit_unambiguous_people_labels(page, labels, expected):
+async def test_should_only_count_explicit_unambiguous_people_labels(
+    page: MagicMock, labels: list[Any], expected: int | None
+) -> None:
     page.get_by_role.return_value.evaluate_all.return_value = labels
     assert await read_participant_count(cast(Page, page)) == expected
 
 
-async def test_should_reset_modal_stability_when_content_changes(page, observe):
+async def test_should_reset_modal_stability_when_content_changes(
+    page: MagicMock, observe: AsyncMock
+) -> None:
     dialog = show_dialog(page, "First unknown dialog")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     assert (await watchdog.check()).events == ()
@@ -213,7 +237,7 @@ async def test_should_reset_modal_stability_when_content_changes(page, observe):
 
 
 @pytest.mark.browser
-async def test_should_read_visible_people_count_and_dismiss_only_safe_fixture_modal():
+async def test_should_read_visible_people_count_and_dismiss_only_safe_fixture_modal() -> None:
     async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         notice = """<button aria-label="Leave call">Leave</button>
             <button aria-label="People - 3 participants">People</button>

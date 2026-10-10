@@ -10,7 +10,7 @@ def roster(*parts):
     return {p.id: p for p in parts}
 
 
-def test_stable_single_speaker_observed():
+def test_stable_single_speaker_observed() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -21,7 +21,7 @@ def test_stable_single_speaker_observed():
     assert result.coverage >= 0.95
 
 
-def test_overlap_preserves_unknown():
+def test_overlap_preserves_unknown() -> None:
     people = roster(
         Participant("a", "Budi", "e1", False),
         Participant("b", "Rani", "e1", False),
@@ -33,7 +33,7 @@ def test_overlap_preserves_unknown():
     assert result.reason == "overlap"
 
 
-def test_speaker_switch_before_final_stays_unknown():
+def test_speaker_switch_before_final_stays_unknown() -> None:
     people = roster(
         Participant("a", "Budi", "e1", False),
         Participant("b", "Rani", "e1", False),
@@ -46,7 +46,7 @@ def test_speaker_switch_before_final_stays_unknown():
     assert result.reason == "speaker_switch"
 
 
-def test_self_only_stays_unknown():
+def test_self_only_stays_unknown() -> None:
     people = roster(Participant("self", "Rani Twin", "e1", True))
     samples = [SpeakerSample(t, "e1", ("self",)) for t in range(0, 1001, 250)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -55,7 +55,7 @@ def test_self_only_stays_unknown():
     assert result.reason == "self"
 
 
-def test_stale_gap_stays_unknown():
+def test_stale_gap_stays_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(0, "e1", ("a",)), SpeakerSample(1000, "e1", ("a",))]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -63,7 +63,7 @@ def test_stale_gap_stays_unknown():
     assert result.reason == "stale_gap"
 
 
-def test_duplicate_names_are_not_merged():
+def test_duplicate_names_are_not_merged() -> None:
     people = roster(
         Participant("a", "Sam", "e1", False),
         Participant("b", "Sam", "e1", False),
@@ -74,7 +74,7 @@ def test_duplicate_names_are_not_merged():
     assert result.participant_id == "b"
 
 
-def test_missing_roster_id_stays_unknown():
+def test_missing_roster_id_stays_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("gone",)) for t in range(0, 1001, 250)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -83,7 +83,7 @@ def test_missing_roster_id_stays_unknown():
     assert result.reason == "left_roster"
 
 
-def test_epoch_mismatch_stays_unknown():
+def test_epoch_mismatch_stays_unknown() -> None:
     people = roster(Participant("a", "Budi", "e2", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     result = attribute_speaker(SpeechWindow("t1", "e2", 0, 1000), samples, people)
@@ -91,7 +91,7 @@ def test_epoch_mismatch_stays_unknown():
     assert result.reason == "no_samples"
 
 
-def test_bad_clock_stays_unknown():
+def test_bad_clock_stays_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     reversed_window = attribute_speaker(SpeechWindow("t1", "e1", 1000, 0), samples, people)
@@ -102,7 +102,7 @@ def test_bad_clock_stays_unknown():
     assert nan_window.reason == "bad_clock"
 
 
-def test_reversed_and_duplicate_samples_match_sorted():
+def test_reversed_and_duplicate_samples_match_sorted() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     ordered = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     messy = list(reversed(ordered)) + [ordered[0], ordered[-1]]
@@ -112,7 +112,7 @@ def test_reversed_and_duplicate_samples_match_sorted():
     assert first.status == "observed"
 
 
-def test_unobserved_edges_hold_attribution():
+def test_unobserved_edges_hold_attribution() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(400, 601, 100)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -121,7 +121,7 @@ def test_unobserved_edges_hold_attribution():
     assert abs(result.coverage - 0.2) < 1e-9
 
 
-def test_dense_cluster_cannot_fake_missing_interval():
+def test_dense_cluster_cannot_fake_missing_interval() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(0, "e1", ("a",)) for _ in range(50)]
     samples += [SpeakerSample(1000, "e1", ("a",)) for _ in range(50)]
@@ -130,7 +130,7 @@ def test_dense_cluster_cannot_fake_missing_interval():
     assert result.reason == "stale_gap"
 
 
-def test_gap_boundary_five_hundred_passes_five_oh_one_fails():
+def test_gap_boundary_five_hundred_passes_five_oh_one_fails() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     passing = [SpeakerSample(t, "e1", ("a",)) for t in (0, 500, 1000)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), passing, people)
@@ -141,7 +141,7 @@ def test_gap_boundary_five_hundred_passes_five_oh_one_fails():
     assert result.reason == "stale_gap"
 
 
-def test_large_gap_in_long_window_fails_despite_high_coverage():
+def test_large_gap_in_long_window_fails_despite_high_coverage() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 6001, 250)]
     samples += [SpeakerSample(t, "e1", ("a",)) for t in range(6600, 12351, 250)]
@@ -150,7 +150,7 @@ def test_large_gap_in_long_window_fails_despite_high_coverage():
     assert result.reason == "stale_gap"
 
 
-def test_coverage_exactly_ninety_five_passes():
+def test_coverage_exactly_ninety_five_passes() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in (0, 250, 500, 750, 950)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -162,7 +162,7 @@ def test_coverage_exactly_ninety_five_passes():
     assert result.reason == "low_coverage"
 
 
-def test_conflicting_ids_at_same_moment_stay_unknown():
+def test_conflicting_ids_at_same_moment_stay_unknown() -> None:
     people = roster(
         Participant("a", "Budi", "e1", False),
         Participant("b", "Rani", "e1", False),
@@ -174,14 +174,14 @@ def test_conflicting_ids_at_same_moment_stay_unknown():
     assert result.reason == "conflict"
 
 
-def test_empty_samples_stay_unknown():
+def test_empty_samples_stay_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), [], people)
     assert result.status == "unknown"
     assert result.reason == "no_samples"
 
 
-def test_samples_outside_window_stay_unknown():
+def test_samples_outside_window_stay_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in (1500, 1750, 2000)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -189,7 +189,7 @@ def test_samples_outside_window_stay_unknown():
     assert result.reason == "unobserved_window"
 
 
-def test_nonfinite_sample_moments_are_ignored():
+def test_nonfinite_sample_moments_are_ignored() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     samples += [SpeakerSample(float("nan"), "e1", ("a",))]
@@ -198,7 +198,7 @@ def test_nonfinite_sample_moments_are_ignored():
     assert result.participant_id == "a"
 
 
-def test_empty_active_ids_stay_unknown():
+def test_empty_active_ids_stay_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in (0, 500, 1000)]
     samples.append(SpeakerSample(250, "e1", ()))
@@ -207,7 +207,7 @@ def test_empty_active_ids_stay_unknown():
     assert result.reason == "silence"
 
 
-def test_roster_epoch_mismatch_stays_unknown():
+def test_roster_epoch_mismatch_stays_unknown() -> None:
     people = roster(Participant("a", "Budi", "e2", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     result = attribute_speaker(SpeechWindow("t1", "e1", 0, 1000), samples, people)
@@ -215,7 +215,7 @@ def test_roster_epoch_mismatch_stays_unknown():
     assert result.reason == "left_roster"
 
 
-def test_resolver_does_not_mutate_inputs_and_types_are_frozen():
+def test_resolver_does_not_mutate_inputs_and_types_are_frozen() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     frozen_samples = list(samples)
@@ -236,7 +236,7 @@ def test_resolver_does_not_mutate_inputs_and_types_are_frozen():
             raise AssertionError("resolver types must be frozen")
 
 
-def test_zero_duration_and_negative_clocks_stay_unknown():
+def test_zero_duration_and_negative_clocks_stay_unknown() -> None:
     people = roster(Participant("a", "Budi", "e1", False))
     samples = [SpeakerSample(t, "e1", ("a",)) for t in range(0, 1001, 250)]
     for window in (

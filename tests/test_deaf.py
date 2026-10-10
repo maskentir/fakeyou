@@ -12,17 +12,20 @@ from fakeyou.audio.deaf import (
     rms_level,
 )
 from fakeyou.observability.faults import FaultReporter
+from tests.fakes import RecordingJournal
 
 
 @pytest.fixture
-def activity():
+def activity() -> tuple[CaptureActivity, list[float]]:
     clock = [1000.0]
     capture = CaptureActivity(now=lambda: clock[0])
     capture.mark_ready()
     return capture, clock
 
 
-def test_silent_audio_is_live_capture_without_proving_speech(activity):
+def test_silent_audio_is_live_capture_without_proving_speech(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 1000
     capture.observe_audio()
@@ -30,7 +33,9 @@ def test_silent_audio_is_live_capture_without_proving_speech(activity):
     assert capture.snapshot().frames_delivered == 1
 
 
-def test_transcripts_do_not_fake_capture_heartbeat(activity):
+def test_transcripts_do_not_fake_capture_heartbeat(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 31
     capture.observe_transcript(finalized=False)
@@ -39,14 +44,18 @@ def test_transcripts_do_not_fake_capture_heartbeat(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_audio_frames"
 
 
-def test_stopped_capture_is_fault_even_without_speech(activity):
+def test_stopped_capture_is_fault_even_without_speech(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     capture.observe_audio()
     clock[0] += 31
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "no_audio_frames"
 
 
-def test_speech_without_final_becomes_stt_fault(activity):
+def test_speech_without_final_becomes_stt_fault(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     capture.observe_speech(active=True)
     clock[0] += 1
@@ -59,7 +68,9 @@ def test_speech_without_final_becomes_stt_fault(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "hearing"
 
 
-def test_unknown_presence_never_implies_alone(activity):
+def test_unknown_presence_never_implies_alone(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 10000
     capture.observe_audio()
@@ -67,7 +78,9 @@ def test_unknown_presence_never_implies_alone(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_continuous_explicit_zero_presence_required_for_alone(activity):
+def test_continuous_explicit_zero_presence_required_for_alone(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     for offset in range(0, 601, 10):
         clock[0] = 1000 + offset
@@ -78,7 +91,7 @@ def test_continuous_explicit_zero_presence_required_for_alone(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_stale_presence_does_not_imply_alone(activity):
+def test_stale_presence_does_not_imply_alone(activity: tuple[CaptureActivity, list[float]]) -> None:
     capture, clock = activity
     capture.observe_presence(0)
     clock[0] += 600
@@ -88,7 +101,9 @@ def test_stale_presence_does_not_imply_alone(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_unknown_presence_keeps_recent_remote_presence_sticky(activity):
+def test_unknown_presence_keeps_recent_remote_presence_sticky(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     capture.observe_presence(2)
     clock[0] += 10
@@ -100,7 +115,9 @@ def test_unknown_presence_keeps_recent_remote_presence_sticky(activity):
     assert evaluate_deafness(snapshot, clock[0], deaf_grace_seconds=0) == "silent_capture"
 
 
-def test_capture_failure_grace_resets_after_recovery(activity):
+def test_capture_failure_grace_resets_after_recovery(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, _ = activity
     monitor = DeafMonitor(activity=capture)
     assert monitor.note_tick(1000, "no_audio_frames") == "no_audio_frames"
@@ -110,7 +127,9 @@ def test_capture_failure_grace_resets_after_recovery(activity):
     assert monitor.note_tick(1250, "no_audio_frames") == "terminal"
 
 
-def test_fault_reports_repeat_only_every_sixty_seconds(journal, activity):
+def test_fault_reports_repeat_only_every_sixty_seconds(
+    journal: RecordingJournal, activity: tuple[CaptureActivity, list[float]]
+) -> None:
     capture, _ = activity
     reporter = FaultReporter(journal=journal)
     monitor = DeafMonitor(
@@ -122,7 +141,7 @@ def test_fault_reports_repeat_only_every_sixty_seconds(journal, activity):
     assert reporter.total() == 2
 
 
-def test_unavailable_is_explicit(activity):
+def test_unavailable_is_explicit(activity: tuple[CaptureActivity, list[float]]) -> None:
     capture, clock = activity
     capture.mark_unavailable()
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "unavailable"
@@ -143,7 +162,9 @@ def test_audio_duration_ms_times_s16le_frames() -> None:
     assert audio_duration_ms(0, 16000, 1) == 0.0
 
 
-def test_observe_audio_separates_energetic_from_silent_frames(activity):
+def test_observe_audio_separates_energetic_from_silent_frames(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     capture.observe_audio(energy=0.0, duration_ms=20.0)
     capture.observe_audio(energy=0.05, duration_ms=20.0)
@@ -153,7 +174,9 @@ def test_observe_audio_separates_energetic_from_silent_frames(activity):
     assert snapshot.last_energetic_at == clock[0]
 
 
-def test_silence_with_witnesses_past_grace_is_capture_silent(activity):
+def test_silence_with_witnesses_past_grace_is_capture_silent(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 121
     capture.observe_audio(energy=0.0, duration_ms=20.0)
@@ -161,7 +184,9 @@ def test_silence_with_witnesses_past_grace_is_capture_silent(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent_capture"
 
 
-def test_capture_silent_requires_grace_frames_presence_and_no_energy(activity):
+def test_capture_silent_requires_grace_frames_presence_and_no_energy(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 121
     capture.observe_audio(energy=0.0, duration_ms=20.0)
@@ -171,7 +196,9 @@ def test_capture_silent_requires_grace_frames_presence_and_no_energy(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_capture_silent_ignores_stale_or_empty_presence(activity):
+def test_capture_silent_ignores_stale_or_empty_presence(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
     capture, clock = activity
     clock[0] += 121
     capture.observe_audio(energy=0.0, duration_ms=20.0)
@@ -185,7 +212,9 @@ def test_capture_silent_ignores_stale_or_empty_presence(activity):
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_capture_silent_records_once_restates_and_never_terminals(journal, activity):
+def test_capture_silent_records_once_restates_and_never_terminals(
+    journal: RecordingJournal, activity: tuple[CaptureActivity, list[float]]
+) -> None:
     capture, clock = activity
     lines = journal.lines
     reporter = FaultReporter(journal=journal)
@@ -202,7 +231,9 @@ def test_capture_silent_records_once_restates_and_never_terminals(journal, activ
     assert monitor.note_tick(2002, "silent_capture") == "silent_capture"
 
 
-def test_missing_capture_heartbeat_is_reported_as_fault(journal, activity):
+def test_missing_capture_heartbeat_is_reported_as_fault(
+    journal: RecordingJournal, activity: tuple[CaptureActivity, list[float]]
+) -> None:
     capture, clock = activity
     reporter = FaultReporter(journal=journal)
     monitor = DeafMonitor(

@@ -65,7 +65,7 @@ def test_report_summarizes_participation_and_policy() -> None:
     assert report["participation"]["observer_methods"] == {"dom_mining": 1}
 
 
-def test_report_counts_memory_prefetch_as_recall_for_its_transcript():
+def test_report_counts_memory_prefetch_as_recall_for_its_transcript() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),

@@ -13,7 +13,7 @@ from fakeyou.foundation.transcript import (
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._conversation_support import event
-from tests.fakes import FakeReplyAudio
+from tests.fakes import FakeReplyAudio, RecordingJournal
 
 
 class _StreamingResponder:
@@ -37,7 +37,9 @@ def journal_has(journal, name, **fields):
     )
 
 
-async def test_pregeneration_adopts_exact_match_without_second_call(journal) -> None:
+async def test_pregeneration_adopts_exact_match_without_second_call(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can.", "Let me check."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -58,7 +60,9 @@ async def test_pregeneration_adopts_exact_match_without_second_call(journal) -> 
     await loop.close()
 
 
-async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(journal) -> None:
+async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -77,7 +81,7 @@ async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(journal) 
     await loop.close()
 
 
-async def test_pregeneration_stays_off_by_default(journal) -> None:
+async def test_pregeneration_stays_off_by_default(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -96,7 +100,7 @@ async def test_pregeneration_stays_off_by_default(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
+async def test_note_vad_fires_pregen_and_adopts_exact_final(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -121,7 +125,7 @@ async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_stays_silent_on_speech_start(journal) -> None:
+async def test_note_vad_stays_silent_on_speech_start(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -138,7 +142,7 @@ async def test_note_vad_stays_silent_on_speech_start(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_stays_silent_without_interim(journal) -> None:
+async def test_note_vad_stays_silent_without_interim(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -154,7 +158,7 @@ async def test_note_vad_stays_silent_without_interim(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_fires_on_short_interim(journal) -> None:
+async def test_note_vad_fires_on_short_interim(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -171,7 +175,7 @@ async def test_note_vad_fires_on_short_interim(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_stays_silent_on_empty_interim(journal) -> None:
+async def test_note_vad_stays_silent_on_empty_interim(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -188,7 +192,7 @@ async def test_note_vad_stays_silent_on_empty_interim(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_stays_silent_when_disabled(journal) -> None:
+async def test_note_vad_stays_silent_when_disabled(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -205,7 +209,7 @@ async def test_note_vad_stays_silent_when_disabled(journal) -> None:
     await loop.close()
 
 
-async def test_note_vad_stays_silent_when_busy(journal) -> None:
+async def test_note_vad_stays_silent_when_busy(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     audio.speaking = True
@@ -223,7 +227,7 @@ async def test_note_vad_stays_silent_when_busy(journal) -> None:
     await loop.close()
 
 
-async def test_post_stop_interim_starts_pregen_with_single_word(journal) -> None:
+async def test_post_stop_interim_starts_pregen_with_single_word(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -242,7 +246,9 @@ async def test_post_stop_interim_starts_pregen_with_single_word(journal) -> None
     await loop.close()
 
 
-async def test_post_stop_interim_restarts_pregen_on_changed_words(journal) -> None:
+async def test_post_stop_interim_restarts_pregen_on_changed_words(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -263,7 +269,7 @@ async def test_post_stop_interim_restarts_pregen_on_changed_words(journal) -> No
     await loop.close()
 
 
-async def test_post_stop_interim_keeps_pregen_on_identical_words(journal) -> None:
+async def test_post_stop_interim_keeps_pregen_on_identical_words(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -284,7 +290,7 @@ async def test_post_stop_interim_keeps_pregen_on_identical_words(journal) -> Non
     await loop.close()
 
 
-async def test_mid_speech_interim_starts_no_post_stop_pregen(journal) -> None:
+async def test_mid_speech_interim_starts_no_post_stop_pregen(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -301,7 +307,7 @@ async def test_mid_speech_interim_starts_no_post_stop_pregen(journal) -> None:
     await loop.close()
 
 
-async def test_vad_start_clears_post_stop_pregen_flag(journal) -> None:
+async def test_vad_start_clears_post_stop_pregen_flag(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -320,7 +326,7 @@ async def test_vad_start_clears_post_stop_pregen_flag(journal) -> None:
     await loop.close()
 
 
-async def test_final_clears_post_stop_pregen_flag(journal) -> None:
+async def test_final_clears_post_stop_pregen_flag(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -343,7 +349,7 @@ async def test_final_clears_post_stop_pregen_flag(journal) -> None:
 _DIFF_KEYS = ("dist", "words_pre", "words_final", "norm_dist_bucket", "diff_class")
 
 
-async def test_pregen_superseded_journal_carries_word_diff(journal) -> None:
+async def test_pregen_superseded_journal_carries_word_diff(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -369,7 +375,7 @@ async def test_pregen_superseded_journal_carries_word_diff(journal) -> None:
     await loop.close()
 
 
-async def test_pregen_mismatched_journal_carries_word_diff(journal) -> None:
+async def test_pregen_mismatched_journal_carries_word_diff(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -395,7 +401,7 @@ async def test_pregen_mismatched_journal_carries_word_diff(journal) -> None:
     await loop.close()
 
 
-async def test_pregen_adopted_journal_carries_exact_diff(journal) -> None:
+async def test_pregen_adopted_journal_carries_exact_diff(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can.", "Let me check."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -424,7 +430,7 @@ class _FailingStreamResponder:
         raise RuntimeError("stream failed")
 
 
-async def test_pregen_error_discard_journal_carries_no_diff(journal) -> None:
+async def test_pregen_error_discard_journal_carries_no_diff(journal: RecordingJournal) -> None:
     responder = _FailingStreamResponder()
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -448,7 +454,7 @@ async def test_pregen_error_discard_journal_carries_no_diff(journal) -> None:
     await loop.close()
 
 
-async def test_pregen_journal_diff_values_are_metadata_only(journal) -> None:
+async def test_pregen_journal_diff_values_are_metadata_only(journal: RecordingJournal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -496,7 +502,7 @@ class _GatedStreamingResponder:
         yield "Yes I can."
 
 
-async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None:
+async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal: RecordingJournal) -> None:
     responder = _GatedStreamingResponder()
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -537,7 +543,9 @@ async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None
     await loop.close()
 
 
-async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> None:
+async def test_pregen_fuzzy_restart_restarts_on_single_substitution(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -564,7 +572,9 @@ async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> 
     await loop.close()
 
 
-async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) -> None:
+async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -587,7 +597,9 @@ async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) 
     await loop.close()
 
 
-async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(journal) -> None:
+async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -621,7 +633,9 @@ async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(jou
     await loop.close()
 
 
-async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(journal) -> None:
+async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -642,7 +656,9 @@ async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(jo
     await loop.close()
 
 
-async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(journal) -> None:
+async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(
+    journal: RecordingJournal,
+) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
@@ -675,7 +691,7 @@ async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(jour
     await loop.close()
 
 
-def test_pregen_fuzzy_restart_default_follows_settings_flag():
+def test_pregen_fuzzy_restart_default_follows_settings_flag() -> None:
     import inspect
 
     from fakeyou.config.settings import DEFAULTS

@@ -1,5 +1,7 @@
 import json
 import os
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -9,20 +11,22 @@ from fakeyou.config.settings import MemorySettings, Settings
 
 
 @pytest.fixture(autouse=True)
-def clean_environment(monkeypatch):
+def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in os.environ:
         if key.upper().startswith("FAKEYOU_"):
             monkeypatch.delenv(key)
 
 
 @pytest.mark.parametrize("name", ["FAKEYOU_RELPY", "fakeyou_relpy", "FAKEYOU_REPLY__TYPO"])
-def test_unknown_process_keys_fail_even_when_empty(monkeypatch, name):
+def test_unknown_process_keys_fail_even_when_empty(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
     monkeypatch.setenv(name, "")
     with pytest.raises(FakeYouError, match="(?i)(relpy|typo)"):
         Settings(_env_file=None)
 
 
-def test_unknown_key_is_rejected_without_its_value(monkeypatch):
+def test_unknown_key_is_rejected_without_its_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKEYOU_CHAT_API_KEY", "never-print-me")
     with pytest.raises(FakeYouError) as error:
         Settings(_env_file=None)
@@ -31,7 +35,7 @@ def test_unknown_key_is_rejected_without_its_value(monkeypatch):
     assert "never-print-me" not in str(error.value)
 
 
-def test_reply_budget_includes_retries_fallback_and_recall():
+def test_reply_budget_includes_retries_fallback_and_recall() -> None:
     with pytest.raises(ValueError, match="budget"):
         Settings(
             _env_file=None, reply={"provider": "openai", "timeout_seconds": 30, "max_retries": 2}
@@ -41,14 +45,16 @@ def test_reply_budget_includes_retries_fallback_and_recall():
 @pytest.mark.parametrize(
     "name", ["FAKEYOU_RELPY", "FAKEYOU_REPLY__TYPO", "fakeyou_memory__embedder__dmi"]
 )
-def test_unknown_dotenv_keys_fail_even_when_empty(tmp_path, name):
+def test_unknown_dotenv_keys_fail_even_when_empty(tmp_path: Path, name: str) -> None:
     path = tmp_path / ".env"
     path.write_text(f"{name}=\n")
     with pytest.raises(FakeYouError, match="(?i)(relpy|typo|dmi)"):
         Settings(_env_file=path)
 
 
-def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(monkeypatch, tmp_path):
+def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("fakeyou_compose_worker_uri", "ignored")
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated")
     path = tmp_path / ".env"
@@ -60,7 +66,7 @@ def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(monkeypa
 @pytest.mark.parametrize(
     "role", ["reply", "reply_fallback", "tts", "stt", "memory.llm", "memory.embedder"]
 )
-def test_activated_role_never_borrows_a_key(role):
+def test_activated_role_never_borrows_a_key(role: str) -> None:
     from fakeyou.config.settings import OpenAIReply
 
     settings = Settings(
@@ -72,7 +78,7 @@ def test_activated_role_never_borrows_a_key(role):
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
-def test_inspection_does_not_require_credentials(capsys):
+def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[str]) -> None:
     import json
 
     from fakeyou.cli.diagnostics import check_setup
@@ -113,12 +119,12 @@ _REPLY_MATCH = {
         {"provider": "ollama"},
     ],
 )
-def test_invalid_provider_configuration_is_rejected(reply):
+def test_invalid_provider_configuration_is_rejected(reply: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=_REPLY_MATCH[json.dumps(reply, sort_keys=True)]):
         Settings(_env_file=None, reply=reply)
 
 
-def test_google_reply_accepts_reasoning_effort_with_unchanged_default():
+def test_google_reply_accepts_reasoning_effort_with_unchanged_default() -> None:
     from fakeyou.config.settings import GoogleReply
 
     assert GoogleReply().reasoning_effort is None
@@ -129,7 +135,7 @@ def test_google_reply_accepts_reasoning_effort_with_unchanged_default():
     "tts",
     [{"provider": "openai", "voice": "unknown"}, {"provider": "minimax", "sample_rate": 16000}],
 )
-def test_invalid_voice_or_playback_rate_is_rejected(tts):
+def test_invalid_voice_or_playback_rate_is_rejected(tts: dict[str, Any]) -> None:
     expected = (
         "unsupported OpenAI voice"
         if tts["provider"] == "openai"
@@ -139,7 +145,7 @@ def test_invalid_voice_or_playback_rate_is_rejected(tts):
         Settings(_env_file=None, tts=tts)
 
 
-def test_fallback_and_recall_are_included_in_budget():
+def test_fallback_and_recall_are_included_in_budget() -> None:
     with pytest.raises(ValueError, match="budget"):
         Settings(_env_file=None, reply_fallback={"provider": "openai", "max_retries": 0})
     settings = Settings(
@@ -150,12 +156,16 @@ def test_fallback_and_recall_are_included_in_budget():
     assert settings.conversation.response_timeout_seconds == 60
 
 
-def test_empty_embedding_url_is_normalized_at_schema_boundary(monkeypatch):
+def test_empty_embedding_url_is_normalized_at_schema_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("FAKEYOU_MEMORY__EMBEDDER__BASE_URL", "")
     assert Settings(_env_file=None).memory.embedder.base_url is None
 
 
-async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeypatch):
+async def test_memory_rejects_dimension_different_from_imported_graphiti(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import fakeyou.memory.memory as module
     from fakeyou.memory.memory import open_graphiti_memory
 
@@ -177,7 +187,7 @@ async def test_memory_rejects_dimension_different_from_imported_graphiti(monkeyp
     assert caught.value.code is ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH
 
 
-def test_preflight_preserves_all_active_role_urls_and_ports():
+def test_preflight_preserves_all_active_role_urls_and_ports() -> None:
     from fakeyou.orchestration.providers import preflight_hosts
 
     settings = Settings(
@@ -199,7 +209,7 @@ def test_preflight_preserves_all_active_role_urls_and_ports():
     assert "https://api.openai.com/v1" in targets
 
 
-def test_anthropic_memory_client_uses_explicit_endpoint_and_key():
+def test_anthropic_memory_client_uses_explicit_endpoint_and_key() -> None:
     from graphiti_core.llm_client.anthropic_client import AnthropicClient
 
     from fakeyou.memory.memory import AnthropicReranker, create_graphiti_memory
@@ -224,7 +234,9 @@ def test_anthropic_memory_client_uses_explicit_endpoint_and_key():
     assert isinstance(memory.cross_encoder, AnthropicReranker)
 
 
-async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(monkeypatch):
+async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import json
 
     import httpx2
@@ -269,7 +281,7 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
     assert payload["voice_setting"]["voice_id"] == "explicit-voice"
 
 
-async def test_anthropic_reranker_orders_scores_and_rejects_incomplete_results():
+async def test_anthropic_reranker_orders_scores_and_rejects_incomplete_results() -> None:
     from unittest.mock import create_autospec
 
     from graphiti_core.llm_client.anthropic_client import AnthropicClient
@@ -288,7 +300,9 @@ async def test_anthropic_reranker_orders_scores_and_rejects_incomplete_results()
         await reranker.rank("agenda", ["first", "second"])
 
 
-async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monkeypatch):
+async def test_anthropic_memory_reranker_uses_only_its_configured_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import asyncio
     import json
 
@@ -364,8 +378,8 @@ async def test_anthropic_memory_reranker_uses_only_its_configured_transport(monk
     [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
 )
 def test_blank_reply_endpoint_ignores_library_destination_environment(
-    monkeypatch, provider, expected, role
-):
+    monkeypatch: pytest.MonkeyPatch, provider: str, expected: str, role: str
+) -> None:
     from fakeyou.orchestration.providers import (
         create_chat_model,
         create_fallback_chat_model,
@@ -390,7 +404,9 @@ def test_blank_reply_endpoint_ignores_library_destination_environment(
     assert expected in preflight_hosts(settings)
 
 
-def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(monkeypatch):
+def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from fakeyou.orchestration.providers import create_chat_model, preflight_hosts
 
     monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", "https://unconfigured.example.invalid")
@@ -408,7 +424,7 @@ def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(monkeypatch):
     assert "https://generativelanguage.googleapis.com" in preflight_hosts(settings)
 
 
-def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key():
+def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key() -> None:
     from fakeyou.orchestration.providers import create_debrief_chat_model
 
     reply = {"provider": "google", "model": "gemini-3.5-flash-lite", "api_key": "reply-key"}
@@ -434,8 +450,8 @@ def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key
     [("openai", "https://api.openai.com/v1"), ("anthropic", "https://api.anthropic.com")],
 )
 def test_blank_memory_endpoints_ignore_library_destination_environment(
-    monkeypatch, client, expected
-):
+    monkeypatch: pytest.MonkeyPatch, client: str, expected: str
+) -> None:
     from fakeyou.memory.memory import create_graphiti_memory
     from fakeyou.orchestration.providers import memory_config, preflight_hosts
 

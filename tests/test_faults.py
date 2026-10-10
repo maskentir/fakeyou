@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
@@ -200,7 +201,9 @@ def test_fault_count_survives_logging_failure() -> None:
     assert reporter.report()["faults"]["total"] == 2
 
 
-def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(tmp_path):
+def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
     journal = Journal("meeting-7", file=JournalFile(path), echo=False, now=lambda: frozen)
@@ -225,7 +228,7 @@ def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clo
     ]
 
 
-def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path):
+def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path: Path) -> None:
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
     journal = Journal("meeting-7", file=JournalFile(path), echo=False, now=lambda: frozen)

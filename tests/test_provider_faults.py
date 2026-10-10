@@ -40,7 +40,7 @@ def _status_error(status: int) -> APIStatusError:
         (302, "unknown", False),
     ],
 )
-def test_classify_http_status_matrix(status, kind, retryable) -> None:
+def test_classify_http_status_matrix(status: int, kind: str, retryable: bool) -> None:
     fault = classify_http("tts", status, "backend words")
 
     assert fault.source == "tts"
@@ -72,7 +72,9 @@ def test_classify_http_truncates_backend_detail() -> None:
         (ErrorCategory.UNKNOWN, "unknown", False),
     ],
 )
-def test_error_category_map_covers_all_nine_values(category, kind, retryable) -> None:
+def test_error_category_map_covers_all_nine_values(
+    category: ErrorCategory, kind: str, retryable: bool
+) -> None:
     assert ERROR_CATEGORY_KINDS[category.name] == (kind, retryable)
 
 
@@ -121,7 +123,7 @@ def test_httpx2_status_error_maps_through_http_table() -> None:
 
 
 @pytest.mark.parametrize("error", [httpx2.ConnectError("boom"), httpx2.NetworkError("gone")])
-def test_httpx2_network_errors_map_to_unavailable(error) -> None:
+def test_httpx2_network_errors_map_to_unavailable(error: httpx2.NetworkError) -> None:
     fault = classify_exception("stt", error)
 
     assert fault.kind == "unavailable"

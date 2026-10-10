@@ -4,7 +4,7 @@ from fakeyou.observability.report import (
 from tests._report_support import answered_turn, row
 
 
-def test_report_should_count_trailing_questions_without_retaining_reply_text():
+def test_report_should_count_trailing_questions_without_retaining_reply_text() -> None:
     report = build_session_report(
         [
             row(1, "playback_finished", ends_with_question=True),
@@ -17,7 +17,7 @@ def test_report_should_count_trailing_questions_without_retaining_reply_text():
     assert report["replies"] == {"spoken": 3, "interrupted": 1, "trailing_questions": 1}
 
 
-def test_interrupted_stream_with_pcm_still_reports_first_pcm_latency():
+def test_interrupted_stream_with_pcm_still_reports_first_pcm_latency() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="Explain it"),
@@ -59,7 +59,7 @@ def test_interrupted_stream_with_pcm_still_reports_first_pcm_latency():
     assert report["evidence"] == {"excluded": {}}
 
 
-def test_late_synthesis_finish_uses_its_request_mapping():
+def test_late_synthesis_finish_uses_its_request_mapping() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),
@@ -93,7 +93,7 @@ def test_late_synthesis_finish_uses_its_request_mapping():
     assert report["evidence"] == {"excluded": {"missing_timestamp": 2}}
 
 
-def test_synthesis_finished_without_chunk_proof_yields_no_pcm_latency():
+def test_synthesis_finished_without_chunk_proof_yields_no_pcm_latency() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
     rows[5] = row(4.6, "synthesis_finished", duration_ms=3000, first_chunk_ms=None)
 
@@ -105,14 +105,14 @@ def test_synthesis_finished_without_chunk_proof_yields_no_pcm_latency():
     assert turn["speech_stopped_to_first_pcm_seconds"] is None
 
 
-def test_clean_turn_reports_no_excluded_evidence():
+def test_clean_turn_reports_no_excluded_evidence() -> None:
     report = build_session_report(answered_turn(0, "t1", "The demo is on Friday."))
 
     assert report["evidence"] == {"excluded": {}}
     assert build_session_report([])["evidence"] == {"excluded": {}}
 
 
-def test_missing_timestamps_are_excluded_with_reasons():
+def test_missing_timestamps_are_excluded_with_reasons() -> None:
     report = build_session_report(
         [row(0.4, "transcript_finalized", transcript_id="t1", text="Hello")]
     )
@@ -127,7 +127,7 @@ def test_missing_timestamps_are_excluded_with_reasons():
     assert report["evidence"] == {"excluded": {"missing_timestamp": 6}}
 
 
-def test_negative_latency_is_excluded_with_reasons():
+def test_negative_latency_is_excluded_with_reasons() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="Explain it"),
@@ -155,7 +155,7 @@ def test_negative_latency_is_excluded_with_reasons():
     assert report["evidence"] == {"excluded": {"negative_latency": 1}}
 
 
-def test_nonfinite_durations_are_excluded_with_reasons():
+def test_nonfinite_durations_are_excluded_with_reasons() -> None:
     rows = []
     for offset, transcript_id, first_chunk_ms, duration_ms in [
         (0, "t1", float("inf"), 3000),
@@ -185,7 +185,7 @@ def test_nonfinite_durations_are_excluded_with_reasons():
     assert report["evidence"] == {"excluded": {"nonfinite_duration": 2, "missing_timestamp": 4}}
 
 
-def test_invalid_durations_are_excluded_with_reasons():
+def test_invalid_durations_are_excluded_with_reasons() -> None:
     cases = [(-1, 3000), (5000, 3000), ("soon", 3000), (900, -5), (True, 3000)]
     for index, (first_chunk_ms, duration_ms) in enumerate(cases):
         transcript_id = f"t{index}"
@@ -214,7 +214,7 @@ def test_invalid_durations_are_excluded_with_reasons():
         assert report["evidence"] == {"excluded": {"invalid_duration": 1, "missing_timestamp": 2}}
 
 
-def test_malformed_timestamps_do_not_break_the_report():
+def test_malformed_timestamps_do_not_break_the_report() -> None:
     rows = [
         {"event": "speech_stopped", "meeting_id": "m1", "at": "not-a-time", "source": "audio"},
         row(0.4, "transcript_finalized", transcript_id="t1", text="Hi"),
@@ -230,7 +230,7 @@ def test_malformed_timestamps_do_not_break_the_report():
     assert report["evidence"]["excluded"]["missing_timestamp"] == 3
 
 
-def test_synthesis_events_without_a_recorded_start_are_excluded():
+def test_synthesis_events_without_a_recorded_start_are_excluded() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="Explain it"),
@@ -263,7 +263,7 @@ def test_synthesis_events_without_a_recorded_start_are_excluded():
     assert report["evidence"]["excluded"]["missing_synthesis_start"] == 2
 
 
-def test_synthesis_start_without_an_answering_turn_is_ambiguous():
+def test_synthesis_start_without_an_answering_turn_is_ambiguous() -> None:
     rows = [
         row(0.4, "transcript_finalized", transcript_id="t1", text="Explain it"),
         row(0.5, "synthesis_started", source="tts", request_id="s1", streaming=True),
@@ -284,7 +284,7 @@ def test_synthesis_start_without_an_answering_turn_is_ambiguous():
     assert report["evidence"]["excluded"]["ambiguous_synthesis_request"] == 1
 
 
-def test_duplicate_synthesis_start_marks_the_request_ambiguous():
+def test_duplicate_synthesis_start_marks_the_request_ambiguous() -> None:
     rows = [
         row(0, "speech_stopped", source="audio"),
         row(0.4, "transcript_finalized", transcript_id="t1", text="First"),
@@ -315,7 +315,7 @@ def test_duplicate_synthesis_start_marks_the_request_ambiguous():
     assert report["evidence"]["excluded"]["ambiguous_synthesis_request"] == 1
 
 
-def test_report_correlates_model_time_to_its_transcript():
+def test_report_correlates_model_time_to_its_transcript() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
     rows += [
         row(0.5, "request_started", source="llm", request_id="llm-1", transcript_id="t1"),

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import time
 from contextlib import suppress
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -115,7 +116,7 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
 
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
-def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path) -> None:
+def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path: Path) -> None:
     from fakeyou.worker.worker_backend import DockerWorkerBackend, compose_override
 
     meeting_id = f"probe-{uuid4().hex[:8]}"

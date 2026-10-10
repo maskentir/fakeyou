@@ -1,6 +1,7 @@
 import asyncio
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from fakeyou.audio.playback import (
     create_paplay_stream_runner,
 )
 from fakeyou.observability.diagnostics import Diagnostics
+from tests.fakes import RecordingJournal
 
 
 class _Synth:
@@ -348,7 +350,9 @@ async def _collect(chunks):
         yield chunk
 
 
-async def test_paplay_stream_runner_pipes_chunks_and_argv(tmp_path, monkeypatch) -> None:
+async def test_paplay_stream_runner_pipes_chunks_and_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = tmp_path / "paplay"
     script.write_text(
         '#!/bin/sh\necho "$@" > "$FAKE_PAPLAY_ARGS"\ncat > "$FAKE_PAPLAY_STDIN"\nexit 0\n'
@@ -374,7 +378,9 @@ async def test_paplay_stream_runner_pipes_chunks_and_argv(tmp_path, monkeypatch)
     assert stdin_file.read_bytes() == b"\x01\x02\x03\x04"
 
 
-async def test_paplay_stream_runner_broken_pipe_is_fault(tmp_path, monkeypatch) -> None:
+async def test_paplay_stream_runner_broken_pipe_is_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = tmp_path / "paplay"
     script.write_text("#!/bin/sh\nexit 0\n")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -389,7 +395,7 @@ async def test_paplay_stream_runner_broken_pipe_is_fault(tmp_path, monkeypatch) 
 
 
 async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     script = tmp_path / "paplay"
     script.write_text("#!/bin/sh\ncat > /dev/null\nexit 0\n")
@@ -424,7 +430,9 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
         await processes[0].wait()
 
 
-async def test_paplay_stream_runner_cleans_up_source_failure(tmp_path, monkeypatch) -> None:
+async def test_paplay_stream_runner_cleans_up_source_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = tmp_path / "paplay"
     script.write_text('#!/bin/sh\necho $$ > "$FAKE_PAPLAY_PID"\nexec sleep 30\n')
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -462,7 +470,9 @@ async def test_pactl_muter_reports_missing_binary() -> None:
         await apply(muted=True)
 
 
-async def test_pactl_muter_toggles_sink_only(tmp_path, monkeypatch) -> None:
+async def test_pactl_muter_toggles_sink_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = tmp_path / "pactl"
     script.write_text('#!/bin/sh\necho "$@" >> "$FAKE_PACTL_CALLS"\nexit 0\n')
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -480,7 +490,9 @@ async def test_pactl_muter_toggles_sink_only(tmp_path, monkeypatch) -> None:
     ]
 
 
-async def test_pactl_muter_reaps_child_on_cancel(tmp_path, monkeypatch) -> None:
+async def test_pactl_muter_reaps_child_on_cancel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     script = tmp_path / "pactl"
     script.write_text('#!/bin/sh\necho $$ > "$FAKE_PACTL_PID"\nexec sleep 30\n')
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
@@ -529,7 +541,7 @@ async def test_stop_during_synthesis_drops_without_playing() -> None:
 
 
 async def test_speak_retry_is_journaled(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     import json
 
@@ -597,7 +609,7 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
 
 
 async def test_typed_synth_fault_records_and_engine_recovers(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.diagnostics import Diagnostics
     from fakeyou.observability.faults import FaultReporter
@@ -633,7 +645,7 @@ async def test_typed_synth_fault_records_and_engine_recovers(
 
 
 async def test_play_failure_records_and_worker_survives(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -784,7 +796,7 @@ async def test_streaming_speak_pipes_chunks_to_stream_player() -> None:
 
 
 async def test_streaming_play_failure_reports_and_engine_recovers(
-    journal,
+    journal: RecordingJournal,
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
 
@@ -819,7 +831,7 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
 
 
 @pytest.mark.parametrize("outcome", ["failure", "return", "cancel"])
-async def test_engine_closes_retained_stream_after_first_chunk(outcome):
+async def test_engine_closes_retained_stream_after_first_chunk(outcome: str) -> None:
     finalized = asyncio.Event()
     started = asyncio.Event()
     retained = []
@@ -856,7 +868,7 @@ async def test_engine_closes_retained_stream_after_first_chunk(outcome):
 
 
 @pytest.mark.parametrize("drop", ["stop", "cancel", "unmute_stop"])
-async def test_engine_closes_dropped_pcm_iterators(drop):
+async def test_engine_closes_dropped_pcm_iterators(drop: str) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -906,7 +918,7 @@ async def test_engine_closes_dropped_pcm_iterators(drop):
         await engine.close()
 
 
-async def test_engine_limits_stream_finalizer_to_cleanup_budget():
+async def test_engine_limits_stream_finalizer_to_cleanup_budget() -> None:
     finalized = asyncio.Event()
     retained = []
 
@@ -935,7 +947,7 @@ async def test_engine_limits_stream_finalizer_to_cleanup_budget():
             await chunks.aclose()
 
 
-async def test_engine_closes_dequeued_iterator_when_unmute_is_cancelled():
+async def test_engine_closes_dequeued_iterator_when_unmute_is_cancelled() -> None:
     entered = asyncio.Event()
 
     class Chunks:

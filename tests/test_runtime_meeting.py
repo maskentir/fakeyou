@@ -68,7 +68,7 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
 
 
 @pytest.mark.browser
-async def test_microphone_enable_checks_result_and_does_not_toggle_twice():
+async def test_microphone_enable_checks_result_and_does_not_toggle_twice() -> None:
     async with open_direct_page(headless=True) as page:
         await page.route(
             "https://meet.google.com/**",

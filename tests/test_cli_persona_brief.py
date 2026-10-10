@@ -1,10 +1,12 @@
 import asyncio
 import json
 import sys
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from langchain.agents.middleware import ToolErrorMiddleware
@@ -60,6 +62,7 @@ from tests._cli_support import (
 )
 from tests.fakes import (
     FakeReplyAudio,
+    SessionRun,
     ToolCallingFakeModel,
     make_graphiti,
     recall_call,
@@ -96,7 +99,9 @@ def prepare_brief_join(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> N
     forbid_resources(monkeypatch)
 
 
-async def test_join_persona_requires_converse(join, settings, tmp_path: Path) -> None:
+async def test_join_persona_requires_converse(
+    join: Callable[..., Any], settings: Settings, tmp_path: Path
+) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             MEET_LINK,
@@ -111,7 +116,9 @@ async def test_join_persona_requires_converse(join, settings, tmp_path: Path) ->
     assert caught.value.code is ErrorCode.MEETING_PERSONA_REQUIRES_CONVERSE
 
 
-async def test_join_memory_requires_persona(join, settings, tmp_path: Path, monkeypatch) -> None:
+async def test_join_memory_requires_persona(
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     forbid_resources(monkeypatch)
     with pytest.raises(FakeYouError) as caught:
         await join(MEET_LINK, **persona_join_arguments(tmp_path, settings, memory=True))
@@ -122,7 +129,11 @@ async def test_join_memory_requires_persona(join, settings, tmp_path: Path, monk
     "overrides", [{"owner_id": "other-owner"}, {"twin_id": "other-twin"}, {"unknown": "field"}]
 )
 async def test_join_rejects_invalid_persona_before_resources(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict,
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -143,7 +154,11 @@ async def test_join_rejects_invalid_persona_before_resources(
 
 @pytest.mark.parametrize("overrides", [{"owner_id": "other-owner"}, {"twin_id": "other-twin"}])
 async def test_join_reports_a_foreign_persona_identity_with_its_code(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrides: dict
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict,
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -164,7 +179,7 @@ async def test_join_reports_a_foreign_persona_identity_with_its_code(
 
 
 async def test_join_memory_rejects_persona_without_recall_permission(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -184,7 +199,7 @@ async def test_join_memory_rejects_persona_without_recall_permission(
 
 
 async def test_join_rejects_unreadable_persona(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -200,9 +215,9 @@ async def test_join_rejects_unreadable_persona(
 
 @pytest.mark.parametrize(("twin_name", "expected"), [(None, "Rani Twin"), ("Override", "Override")])
 async def test_join_persona_display_name_yields_to_explicit_twin_name(
-    session_run,
-    join,
-    settings,
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     twin_name: str | None,
@@ -228,7 +243,7 @@ async def test_join_persona_display_name_yields_to_explicit_twin_name(
 
 
 async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     created, audio, _outcome = await _join_persona_conversation(
         tmp_path,
@@ -251,7 +266,7 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
 
 
 async def test_join_persona_memory_exposes_only_profile_scoped_recall(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.memory.recall.strategy = "tool"
     profile = PersonaProfile.model_validate(PERSONA_DATA)
@@ -315,8 +330,8 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
 
 
 async def test_join_recall_failure_is_returned_as_unknown_without_failing_conversation(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -350,7 +365,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
 
 
 async def test_join_stop_during_recall_cancels_without_late_reply(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = make_graphiti(search_gate=asyncio.Event())
     model = recall_then_reply("A late answer.")
@@ -373,7 +388,7 @@ async def test_join_stop_during_recall_cancels_without_late_reply(
 
 
 async def test_join_persona_reply_keeps_two_sentence_cap(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     model = ToolCallingFakeModel(
         responses=[AIMessage(content="Sentence one. Sentence two. Sentence three.")]
@@ -440,7 +455,7 @@ def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
@@ -507,8 +522,8 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     ],
 )
 async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     overrides: dict,
@@ -529,7 +544,7 @@ async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
 
 
 async def test_join_brief_only_refuses_memory_before_resources(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepare_brief_join(settings, monkeypatch)
 
@@ -591,8 +606,8 @@ async def test_join_brief_only_refuses_memory_before_resources(
     ],
 )
 async def test_join_rejects_an_unusable_brief_before_resources(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     content: dict | str | None,
@@ -626,7 +641,11 @@ async def test_join_rejects_an_unusable_brief_before_resources(
 
 
 async def test_join_brief_only_snapshots_context_before_the_agent_runs(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     context_file = meeting_context_file(settings)
     observed: list[bool] = []
@@ -664,7 +683,7 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
 
 
 async def test_join_persona_memory_brief_exposes_only_profile_scoped_recall(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.memory.recall.strategy = "tool"
     graphiti = make_graphiti()
@@ -691,7 +710,7 @@ async def test_join_persona_memory_brief_exposes_only_profile_scoped_recall(
 
 
 async def test_join_persona_memory_brief_without_memory_omits_recall_rules(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     created, _audio, _outcome = await _join_persona_conversation(
         tmp_path,
@@ -714,7 +733,11 @@ async def test_join_persona_memory_brief_without_memory_omits_recall_rules(
 
 @pytest.mark.parametrize("reformatted", [False, True])
 async def test_join_brief_resume_reuses_the_matching_context_unchanged(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reformatted: bool
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reformatted: bool,
 ) -> None:
     brief_path = write_brief(tmp_path)
     await _join_persona_conversation(
@@ -760,8 +783,8 @@ async def test_join_brief_resume_reuses_the_matching_context_unchanged(
     ],
 )
 async def test_join_rejects_a_changed_context_without_touching_meeting_files(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     change: str,
@@ -801,7 +824,7 @@ async def test_join_rejects_a_changed_context_without_touching_meeting_files(
 
 
 async def test_join_keeps_the_snapshot_when_the_source_brief_changes(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     brief_path = write_brief(tmp_path)
     edited = [{"id": "demo-date", "text": "EDITED-FACT-MARKER"}]
@@ -837,7 +860,7 @@ async def test_join_keeps_the_snapshot_when_the_source_brief_changes(
 
 
 async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_ingest_windows(settings, "meeting-9", 1)
     before = meeting_files(settings)
@@ -859,7 +882,7 @@ async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
 
 
 async def test_join_brief_refuses_a_checkpoint_thread_without_context(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     thread_id = await seed_conversation_thread(settings, "meeting-9")
     other_thread = await seed_conversation_thread(settings, "meeting-10")
@@ -884,7 +907,11 @@ async def test_join_brief_refuses_a_checkpoint_thread_without_context(
 
 @pytest.mark.parametrize("with_brief", [True, False])
 async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_brief: bool
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_brief: bool,
 ) -> None:
     context_file = meeting_context_file(settings)
     context_file.parent.mkdir(parents=True)
@@ -907,7 +934,7 @@ async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
 
 
 async def test_join_brief_refuses_an_unreachable_checkpoint_before_resources(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
     async def unreachable(url):
@@ -937,7 +964,7 @@ async def test_join_brief_refuses_an_unreachable_checkpoint_before_resources(
 
 
 async def test_join_brief_snapshot_write_failure_starts_nothing(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import os
 
@@ -964,7 +991,11 @@ async def test_join_brief_snapshot_write_failure_starts_nothing(
 
 
 async def test_join_journals_brief_metadata_without_brief_text(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     await _join_persona_conversation(
         tmp_path,
@@ -1003,7 +1034,7 @@ async def test_join_journals_brief_metadata_without_brief_text(
 
 
 async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpointer(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     second_fact = "The synthetic vendor budget stays fixed."
     second = {
@@ -1068,7 +1099,7 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
 
 
 async def test_join_brief_stop_before_pcm_cancels_the_model_turn(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     started = asyncio.Event()
 
@@ -1099,7 +1130,7 @@ async def test_join_brief_stop_before_pcm_cancels_the_model_turn(
 
 
 async def test_join_brief_stop_during_playback_records_no_twin_speech(
-    join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class BlockingAudio(FakeReplyAudio):
         def __init__(self) -> None:
@@ -1135,7 +1166,7 @@ async def test_join_brief_stop_during_playback_records_no_twin_speech(
 
 
 async def test_open_conversation_rejects_a_brief_without_a_persona(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
@@ -1157,7 +1188,7 @@ async def test_open_conversation_rejects_a_brief_without_a_persona(
 
 
 async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
@@ -1183,8 +1214,8 @@ async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
 
 
 async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1218,7 +1249,10 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
 
 
 async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
@@ -1247,7 +1281,11 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
 
 
 async def test_join_passes_persona_vocabulary_as_speech_keywords(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: object())
     captured = await _join_with_audio(
@@ -1271,7 +1309,11 @@ async def test_join_passes_persona_vocabulary_as_speech_keywords(
 
 
 async def test_join_without_persona_has_no_speech_keywords(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = await _join_with_audio(
         tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
@@ -1281,8 +1323,8 @@ async def test_join_without_persona_has_no_speech_keywords(
 
 
 async def test_join_rejects_persona_language_mismatch_before_resources(
-    join, settings, tmp_path, monkeypatch
-):
+    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _enable_audio_platform(monkeypatch)
     settings.stt.api_key = SecretStr("muse-key")
     forbid_resources(monkeypatch)
@@ -1294,7 +1336,11 @@ async def test_join_rejects_persona_language_mismatch_before_resources(
 
 
 async def test_join_without_persona_writes_no_status(
-    session_run, join, settings, tmp_path: Path, capsys
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from fakeyou.persistence.ingestion_status import status_path
 

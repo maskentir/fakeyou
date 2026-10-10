@@ -62,7 +62,7 @@ async def test_join_retry_succeeds_after_transient_failures() -> None:
 
 
 @pytest.mark.parametrize("status", ["admitted", "denied", "blocked", "aborted"])
-async def test_join_retry_terminal_statuses_do_not_retry(status) -> None:
+async def test_join_retry_terminal_statuses_do_not_retry(status: str) -> None:
     attempt, calls = _scripted([status])
     clock = FakeClock()
     journal = RecordingJournal()

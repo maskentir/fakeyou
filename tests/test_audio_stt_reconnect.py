@@ -19,7 +19,7 @@ from fakeyou.audio.audio import (
 from fakeyou.audio.deaf import CaptureActivity
 from fakeyou.audio.voice import create_muse_stt
 from fakeyou.observability.diagnostics import Diagnostics
-from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT
+from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT, RecordingJournal
 
 
 class _FakeSocket:
@@ -170,7 +170,7 @@ def test_stt_socket_dead_reports_only_confirmed_dead_sockets() -> None:
     assert audio.stt_socket_dead(closing) is True
 
 
-async def test_dead_socket_reconnect_bypasses_quiet_gate(journal) -> None:
+async def test_dead_socket_reconnect_bypasses_quiet_gate(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
@@ -196,7 +196,7 @@ async def test_dead_socket_reconnect_bypasses_quiet_gate(journal) -> None:
     assert session.reconnect_state() == "idle"
 
 
-async def test_healthy_socket_reconnect_keeps_quiet_gate(journal) -> None:
+async def test_healthy_socket_reconnect_keeps_quiet_gate(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
@@ -222,7 +222,7 @@ async def test_healthy_socket_reconnect_keeps_quiet_gate(journal) -> None:
     assert session.reconnect_state() == "queued"
 
 
-async def test_reconnect_journal_events_carry_stream_id(journal) -> None:
+async def test_reconnect_journal_events_carry_stream_id(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
@@ -252,7 +252,7 @@ async def test_reconnect_journal_events_carry_stream_id(journal) -> None:
     assert finished[0]["stream_id"] == "slot-2"
 
 
-async def test_reconnect_failed_journal_event_carries_stream_id(journal) -> None:
+async def test_reconnect_failed_journal_event_carries_stream_id(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
@@ -279,7 +279,7 @@ async def test_reconnect_failed_journal_event_carries_stream_id(journal) -> None
     assert session.reconnect_state() == "queued"
 
 
-async def test_reconnect_journal_events_omit_missing_stream_id(journal) -> None:
+async def test_reconnect_journal_events_omit_missing_stream_id(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
@@ -359,7 +359,7 @@ async def test_stale_queued_reconnect_deadline_fails_without_admit() -> None:
     assert session.reconnect_state() == "exhausted"
 
 
-async def test_admit_resets_stale_queued_reconnect_epoch(journal) -> None:
+async def test_admit_resets_stale_queued_reconnect_epoch(journal: RecordingJournal) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     gate = asyncio.Event()

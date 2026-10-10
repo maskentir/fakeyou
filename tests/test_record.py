@@ -15,6 +15,7 @@ from fakeyou.persistence.record import (
     meeting_record_path,
     repaired_order,
 )
+from tests.fakes import RecordingJournal
 
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 
@@ -101,7 +102,9 @@ def test_record_keeps_only_new_final_nonblank_transcripts(tmp_path: Path) -> Non
     assert len(entries) == 1
 
 
-def test_record_write_failure_is_reported_once_without_raising(journal, tmp_path: Path) -> None:
+def test_record_write_failure_is_reported_once_without_raising(
+    journal: RecordingJournal, tmp_path: Path
+) -> None:
     record = open_record(tmp_path, faults=FaultReporter(journal=journal))
     record.close()
 

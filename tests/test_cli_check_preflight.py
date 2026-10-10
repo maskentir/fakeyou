@@ -1,7 +1,9 @@
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -30,9 +32,12 @@ from fakeyou.foundation.invariants import (
 )
 from fakeyou.orchestration.assembly import LoopBehavior
 from tests._cli_support import BASE_HOSTS, _join_with_audio, with_muse_fallback
+from tests.fakes import SessionRun
 
 
-def test_main_exits_2_on_input_error(monkeypatch, capsys) -> None:
+def test_main_exits_2_on_input_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(sys, "argv", ["fakeyou", "join", "not-a-link"])
     with pytest.raises(SystemExit) as excinfo:
         cli_main.main()
@@ -66,7 +71,7 @@ def test_main_exits_2_on_input_error(monkeypatch, capsys) -> None:
     ],
 )
 def test_main_dispatches_parsed_options_to_the_command_handler(
-    monkeypatch, argv, handler, expected
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], handler: str, expected: dict[str, Any]
 ) -> None:
     calls: list[dict] = []
 
@@ -126,7 +131,11 @@ def test_default_pa_pins_audio_constants() -> None:
 
 @pytest.mark.asyncio
 async def test_join_audio_wires_journal_and_preflight_hosts(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = await _join_with_audio(
         tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
@@ -140,8 +149,8 @@ async def test_join_audio_wires_journal_and_preflight_hosts(
 
 @pytest.mark.asyncio
 async def test_join_without_audio_skips_preflight(
-    session_run,
-    join,
+    session_run: SessionRun,
+    join: Callable[..., Any],
 ) -> None:
     captured = session_run
 
@@ -164,7 +173,9 @@ def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     return calls
 
 
-def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsys) -> None:
+def test_main_reports_unavailable_memory_with_infra_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     async def unavailable(*_args, **_kwargs):
@@ -179,7 +190,9 @@ def test_main_reports_unavailable_memory_with_infra_exit_code(monkeypatch, capsy
     assert "memory unavailable" in capsys.readouterr().err
 
 
-def test_chat_model_uses_role_configuration(settings, monkeypatch):
+def test_chat_model_uses_role_configuration(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = record_chat_model_calls(monkeypatch)
     settings.reply = CompatibleReply(
         model="muse-spark-1.3",
@@ -203,7 +216,9 @@ def test_chat_model_uses_role_configuration(settings, monkeypatch):
     ]
 
 
-def test_chat_model_forwards_google_reasoning_effort(settings, monkeypatch):
+def test_chat_model_forwards_google_reasoning_effort(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = record_chat_model_calls(monkeypatch)
     settings.reply = GoogleReply(
         model="gemini-3.8-flash",
@@ -226,7 +241,9 @@ def test_chat_model_forwards_google_reasoning_effort(settings, monkeypatch):
     ]
 
 
-def test_chat_model_passes_provider_request_fields_as_extra_body(settings, monkeypatch):
+def test_chat_model_passes_provider_request_fields_as_extra_body(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = record_chat_model_calls(monkeypatch)
     settings.reply = CompatibleReply(
         model="MiniMax-M3",
@@ -244,14 +261,18 @@ def test_chat_model_passes_provider_request_fields_as_extra_body(settings, monke
     ]
 
 
-def test_settings_read_extra_body_as_json(settings, monkeypatch):
+def test_settings_read_extra_body_as_json(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
     monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
     monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
     assert Settings(_env_file=None).reply.extra_body == {"reasoning_split": True}
 
 
-def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch):
+def test_chat_model_uses_its_own_key_and_explicit_provider(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = record_chat_model_calls(monkeypatch)
     providers.create_chat_model(settings)
     assert calls == [
@@ -272,12 +293,14 @@ def test_chat_model_uses_its_own_key_and_explicit_provider(settings, monkeypatch
     "endpoint",
     ["http://127.0.0.1:8080/v1", "https://api.meta.ai:8443/v1", "https://api.anthropic.com"],
 )
-def test_preflight_hosts_follow_the_configured_chat_endpoint(settings, endpoint):
+def test_preflight_hosts_follow_the_configured_chat_endpoint(
+    settings: Settings, endpoint: str
+) -> None:
     settings.reply.base_url = endpoint
     assert providers.preflight_hosts(settings) == (*BASE_HOSTS, endpoint)
 
 
-def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
+def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings: Settings) -> None:
     settings.tts = MiniMaxTTS()
     settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
     with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
@@ -292,20 +315,24 @@ def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings):
     )
 
 
-def test_openai_speech_requires_its_own_key(settings):
+def test_openai_speech_requires_its_own_key(settings: Settings) -> None:
     settings.tts.api_key = None
     with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
         create_speech_synthesizer(settings.tts)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
-def test_check_reports_the_speech_provider_defaults(settings, capsys):
+def test_check_reports_the_speech_provider_defaults(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
     settings.tts = MiniMaxTTS()
     cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)["tts"] == settings.tts.model_dump(mode="json")
 
 
-def test_check_reports_models_per_role(settings, capsys):
+def test_check_reports_models_per_role(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
     cli_diagnostics.check_setup(settings)
     report = capsys.readouterr().out
     assert json.loads(report) == settings.model_dump(mode="json")
@@ -313,7 +340,9 @@ def test_check_reports_models_per_role(settings, capsys):
     assert "memory-key" not in report
 
 
-def test_primary_and_fallback_use_explicit_retry_budgets(settings, monkeypatch):
+def test_primary_and_fallback_use_explicit_retry_budgets(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = record_chat_model_calls(monkeypatch)
     settings = with_muse_fallback(settings)
     providers.create_chat_model(settings)
@@ -322,12 +351,12 @@ def test_primary_and_fallback_use_explicit_retry_budgets(settings, monkeypatch):
     assert [args for args, _kwargs in calls] == [("model",), ("muse-spark-1.2",)]
 
 
-def test_fallback_chat_model_is_optional(settings) -> None:
+def test_fallback_chat_model_is_optional(settings: Settings) -> None:
     assert providers.create_fallback_chat_model(settings) is None
 
 
 async def test_conversation_adds_model_fallback_middleware_when_configured(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from langchain.agents.middleware import ModelFallbackMiddleware
 
@@ -357,7 +386,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 
 
 async def test_open_conversation_wires_sentence_streaming_flag(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
 
@@ -399,7 +428,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
     assert seen["kwargs"]["generation"].sentence_streaming is True
 
 
-def test_preflight_probes_the_fallback_endpoint(settings):
+def test_preflight_probes_the_fallback_endpoint(settings: Settings) -> None:
     settings = with_muse_fallback(settings)
     settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"
     assert providers.preflight_hosts(settings) == (
@@ -408,7 +437,9 @@ def test_preflight_probes_the_fallback_endpoint(settings):
     )
 
 
-def test_check_reports_the_fallback_model(settings, capsys):
+def test_check_reports_the_fallback_model(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
     settings = with_muse_fallback(settings)
     cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)[
@@ -416,12 +447,16 @@ def test_check_reports_the_fallback_model(settings, capsys):
     ] == settings.reply_fallback.model_dump(mode="json")
 
 
-def test_check_reports_no_fallback_by_default(settings, capsys):
+def test_check_reports_no_fallback_by_default(
+    settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
     cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)["reply_fallback"] is None
 
 
-def test_ctrl_c_is_reported_as_an_operation_interruption(monkeypatch, capsys) -> None:
+def test_ctrl_c_is_reported_as_an_operation_interruption(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def interrupted(**_kwargs):
         raise KeyboardInterrupt
 
@@ -436,7 +471,7 @@ def test_ctrl_c_is_reported_as_an_operation_interruption(monkeypatch, capsys) ->
 
 
 def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
-    monkeypatch, capsys
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def interrupted_settings(*_args, **_kwargs):
         raise KeyboardInterrupt

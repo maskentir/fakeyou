@@ -21,10 +21,10 @@ from fakeyou.foundation.transcript import (
 )
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._conversation_support import event
-from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder
+from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, RecordingJournal
 
 
-async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
+async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder,
@@ -40,7 +40,7 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
     await loop.close()
 
 
-async def test_wake_phrase_activates_window_case_insensitively():
+async def test_wake_phrase_activates_window_case_insensitively() -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder,
@@ -64,7 +64,7 @@ async def test_wake_phrase_activates_window_case_insensitively():
     await loop.close()
 
 
-async def test_wake_phrase_inside_window_extends_activation():
+async def test_wake_phrase_inside_window_extends_activation() -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder,
@@ -84,14 +84,14 @@ async def test_wake_phrase_inside_window_extends_activation():
     await loop.close()
 
 
-def test_activation_window_rejects_nonpositive_values():
+def test_activation_window_rejects_nonpositive_values() -> None:
     with pytest.raises(ValueError, match="activation window"):
         ConversationLoop(FakeResponder(), timing=LoopTiming(activation_seconds=0))
     with pytest.raises(ValueError, match="activation window"):
         ConversationLoop(FakeResponder(), timing=LoopTiming(activation_seconds=float("inf")))
 
 
-async def test_barge_in_stops_playback_only_while_speaking():
+async def test_barge_in_stops_playback_only_while_speaking() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, interaction=LoopInteraction(barge_in=True))
     loop.bind(audio)
@@ -106,7 +106,7 @@ async def test_barge_in_stops_playback_only_while_speaking():
     await loop.close()
 
 
-async def test_barge_in_disabled_never_stops_playback():
+async def test_barge_in_disabled_never_stops_playback() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder)
     loop.bind(audio)
@@ -118,8 +118,8 @@ async def test_barge_in_disabled_never_stops_playback():
 
 
 async def test_interim_speech_interrupts_playback_after_enough_words(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
     import json
 
     lines = journal.lines
@@ -142,7 +142,7 @@ async def test_interim_speech_interrupts_playback_after_enough_words(
     assert (row["trigger"], row["words"]) == ("interim", 3)
 
 
-async def test_interim_speech_is_ignored_without_barge_in_or_playback():
+async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     quiet = ConversationLoop(FakeResponder())
@@ -158,7 +158,7 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback():
     assert idle_audio.stops == 0
 
 
-async def test_interim_barge_in_respects_wake_phrases():
+async def test_interim_barge_in_respects_wake_phrases() -> None:
     clock = FakeClock()
     audio = FakeReplyAudio()
     audio.speaking = True
@@ -181,8 +181,8 @@ async def test_interim_barge_in_respects_wake_phrases():
 
 
 async def test_final_barge_in_is_journaled_with_its_trigger(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
     import json
 
     lines = journal.lines
@@ -203,8 +203,8 @@ async def test_final_barge_in_is_journaled_with_its_trigger(
 
 
 async def test_one_interruption_is_journaled_and_stopped_once(
-    journal,
-):
+    journal: RecordingJournal,
+) -> None:
 
     lines = journal.lines
     audio = FakeReplyAudio()
@@ -223,7 +223,7 @@ async def test_one_interruption_is_journaled_and_stopped_once(
     assert len([line for line in lines if '"barge_in_detected"' in line]) == 1
 
 
-async def test_interim_barge_in_rearms_for_the_next_reply():
+async def test_interim_barge_in_rearms_for_the_next_reply() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     loop = ConversationLoop(FakeResponder(), interaction=LoopInteraction(barge_in=True))
@@ -241,7 +241,9 @@ async def test_interim_barge_in_rearms_for_the_next_reply():
     await loop.close()
 
 
-async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
+async def test_local_transport_cancel_closes_loopback_without_fallback(
+    journal: RecordingJournal,
+) -> None:
     from langchain_openai import ChatOpenAI
 
     arrived = asyncio.Event()
@@ -296,7 +298,7 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
         await server.wait_closed()
 
 
-def test_policy_requires_configured_aliases():
+def test_policy_requires_configured_aliases() -> None:
     responder = FakeResponder()
     with pytest.raises(ValueError, match="twin aliases"):
         ConversationLoop(responder, interaction=LoopInteraction(participant_policy_enabled=True))
@@ -307,7 +309,7 @@ def test_policy_requires_configured_aliases():
         )
 
 
-async def test_policy_silent_makes_zero_responder_calls(journal):
+async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
@@ -328,7 +330,7 @@ async def test_policy_silent_makes_zero_responder_calls(journal):
     await loop.close()
 
 
-async def test_policy_keeps_barge_in_on_speech_onset(journal):
+async def test_policy_keeps_barge_in_on_speech_onset(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
@@ -349,7 +351,7 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal):
     await loop.close()
 
 
-async def test_policy_answers_vocative_and_ignores_quote_mention(journal):
+async def test_policy_answers_vocative_and_ignores_quote_mention(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
@@ -370,7 +372,9 @@ async def test_policy_answers_vocative_and_ignores_quote_mention(journal):
     await loop.close()
 
 
-async def test_policy_unknown_followup_does_not_inherit_activation(journal):
+async def test_policy_unknown_followup_does_not_inherit_activation(
+    journal: RecordingJournal,
+) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     clock = FakeClock()
     loop = ConversationLoop(
@@ -398,7 +402,9 @@ async def test_policy_unknown_followup_does_not_inherit_activation(journal):
     await loop.close()
 
 
-async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(journal):
+async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(
+    journal: RecordingJournal,
+) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     clock = FakeClock()
     loop = ConversationLoop(
@@ -419,7 +425,7 @@ async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(journ
     await loop.close()
 
 
-async def test_policy_other_known_speaker_followup_stays_silent(journal):
+async def test_policy_other_known_speaker_followup_stays_silent(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     clock = FakeClock()
     loop = ConversationLoop(
@@ -454,7 +460,7 @@ async def test_policy_other_known_speaker_followup_stays_silent(journal):
     await loop.close()
 
 
-async def test_policy_same_speaker_followup_replies(journal):
+async def test_policy_same_speaker_followup_replies(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     clock = FakeClock()
     loop = ConversationLoop(
@@ -492,7 +498,7 @@ async def test_policy_same_speaker_followup_replies(journal):
     await loop.close()
 
 
-def test_request_messages_carry_speaker_identity_without_owner_data():
+def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
     addressed = TranscriptEvent(
         "t1",
         datetime.now(UTC).isoformat(),
@@ -546,7 +552,7 @@ async def test_isolated_bare_ack_still_gets_a_reply(text: str) -> None:
     await loop.close()
 
 
-async def test_bare_ack_run_suppresses_after_first(journal) -> None:
+async def test_bare_ack_run_suppresses_after_first(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -563,7 +569,7 @@ async def test_bare_ack_run_suppresses_after_first(journal) -> None:
     await loop.close()
 
 
-async def test_ack_suppression_journals_a_silent_decision(journal) -> None:
+async def test_ack_suppression_journals_a_silent_decision(journal: RecordingJournal) -> None:
     loop = ConversationLoop(FakeResponder(), diagnostics=Diagnostics(journal=journal))
     loop.bind(FakeReplyAudio())
     first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
@@ -581,7 +587,9 @@ async def test_ack_suppression_journals_a_silent_decision(journal) -> None:
 
 
 @pytest.mark.parametrize("text", ACK_CASES["replies"])
-async def test_substantive_text_replies_inside_ack_runs(journal, text: str) -> None:
+async def test_substantive_text_replies_inside_ack_runs(
+    journal: RecordingJournal, text: str
+) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -596,7 +604,7 @@ async def test_substantive_text_replies_inside_ack_runs(journal, text: str) -> N
     await loop.close()
 
 
-async def test_substantive_text_breaks_the_ack_run(journal) -> None:
+async def test_substantive_text_breaks_the_ack_run(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -621,7 +629,7 @@ async def test_substantive_text_breaks_the_ack_run(journal) -> None:
     await loop.close()
 
 
-async def test_vocative_text_replies_inside_ack_runs(journal) -> None:
+async def test_vocative_text_replies_inside_ack_runs(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
@@ -637,7 +645,9 @@ async def test_vocative_text_replies_inside_ack_runs(journal) -> None:
     await loop.close()
 
 
-async def test_addressed_text_replies_inside_wake_window_ack_runs(journal) -> None:
+async def test_addressed_text_replies_inside_wake_window_ack_runs(
+    journal: RecordingJournal,
+) -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
         responder,

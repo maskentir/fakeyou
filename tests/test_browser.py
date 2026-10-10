@@ -1,7 +1,9 @@
 import asyncio
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,7 +41,7 @@ def test_browser_launch_args_include_automation_hardening() -> None:
 
 
 @pytest.fixture
-def cloak_ignore_args():
+def cloak_ignore_args() -> Iterator[Any]:
     from cloakbrowser import config as cloakbrowser_config
 
     saved = list(cloakbrowser_config.IGNORE_DEFAULT_ARGS)

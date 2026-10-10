@@ -17,6 +17,7 @@ from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.memory import CorrectionTarget
 from fakeyou.config.settings import (
     EmbedderSettings,
+    Settings,
 )
 from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.db.checkpoint import open_checkpointer
@@ -47,7 +48,7 @@ from tests.fakes import (
 
 @pytest.mark.asyncio
 async def test_memory_init_builds_indexes(
-    settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     events: list[str] = []
     memory = make_graphiti()
@@ -63,7 +64,7 @@ async def test_memory_init_builds_indexes(
 
 @pytest.mark.asyncio
 async def test_memory_init_closes_memory_when_index_setup_fails(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     memory = make_graphiti(fail_build=True)
@@ -78,7 +79,10 @@ async def test_memory_init_closes_memory_when_index_setup_fails(
 
 
 async def test_memory_add_stores_owner_note_in_persona_group(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
@@ -131,7 +135,10 @@ async def test_memory_add_stores_owner_note_in_persona_group(
 
 
 async def test_memory_add_generates_and_reports_note_id_before_extraction(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
@@ -161,7 +168,7 @@ async def test_memory_add_generates_and_reports_note_id_before_extraction(
 
 
 async def test_memory_add_rejects_future_source_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -177,7 +184,7 @@ async def test_memory_add_rejects_future_source_before_opening_memory(
 
 
 async def test_memory_add_propagates_a_note_conflict(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -196,7 +203,10 @@ async def test_memory_add_propagates_a_note_conflict(
 
 
 async def test_memory_correct_supersedes_target_note(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
@@ -249,7 +259,10 @@ async def test_memory_correct_supersedes_target_note(
 
 
 async def test_memory_correct_generates_note_id_when_missing(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_persona_memory(monkeypatch, make_graphiti())
     seen: list[dict] = []
@@ -308,7 +321,7 @@ _CORRECT_SOURCE = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     ],
 )
 async def test_memory_correct_validates_before_opening_memory(
-    settings,
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     text: str,
@@ -332,7 +345,7 @@ async def test_memory_correct_validates_before_opening_memory(
 
 
 async def test_memory_correct_rejects_a_foreign_identity_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -348,7 +361,7 @@ async def test_memory_correct_rejects_a_foreign_identity_before_opening_memory(
 
 
 async def test_memory_add_validates_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -363,7 +376,7 @@ async def test_memory_add_validates_before_opening_memory(
 
 
 async def test_memory_add_rejects_a_foreign_identity_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -377,7 +390,10 @@ async def test_memory_add_rejects_a_foreign_identity_before_opening_memory(
 
 
 async def test_memory_forget_meeting_uses_persona_group(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
@@ -446,7 +462,10 @@ async def _forget_meeting_with_local_files(
 
 
 async def test_memory_forget_meeting_removes_record_journal_and_thread(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings, thread_id = await _forget_meeting_with_local_files(
         tmp_path, monkeypatch, keep_record=False, settings=settings
@@ -469,7 +488,10 @@ async def test_memory_forget_meeting_removes_record_journal_and_thread(
 
 
 async def test_memory_forget_meeting_keep_record_only_removes_episodes(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings, thread_id = await _forget_meeting_with_local_files(
         tmp_path, monkeypatch, keep_record=True, settings=settings
@@ -487,7 +509,7 @@ async def test_memory_forget_meeting_keep_record_only_removes_episodes(
 
 @pytest.mark.parametrize("keep_record", [False, True])
 async def test_memory_forget_keeps_the_meeting_context_only_with_the_record(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool
 ) -> None:
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     context_file = meeting_context_file(settings)
@@ -504,7 +526,7 @@ async def test_memory_forget_keeps_the_meeting_context_only_with_the_record(
 
 
 async def test_memory_forget_episode_uses_persona_group(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
@@ -531,7 +553,7 @@ async def test_memory_forget_episode_uses_persona_group(
     [(None, None), ("meeting-9", "episode-7")],
 )
 async def test_memory_forget_validates_before_opening_memory(
-    settings,
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     meeting_id: str | None,
@@ -551,7 +573,7 @@ async def test_memory_forget_validates_before_opening_memory(
 
 
 async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memory(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
@@ -718,7 +740,7 @@ def test_memory_commands_reject_invalid_source_or_note_id_at_parse_time(
     assert caught.value.code == 2
 
 
-def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
+def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
@@ -729,7 +751,7 @@ def test_memory_forget_rejects_both_targets_at_parse_time(monkeypatch) -> None:
     assert caught.value.code == 2
 
 
-def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings):
+def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings: Settings) -> None:
     settings.memory.embedder = EmbedderSettings(base_url="", api_key=SecretStr("local"))
     assert settings.memory.embedder.base_url is None
     assert (
@@ -737,7 +759,7 @@ def test_memory_config_treats_a_blank_embedding_endpoint_as_the_default(settings
     )
 
 
-def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> None:
+def test_memory_config_routes_embeddings_and_extraction_separately(settings: Settings) -> None:
     settings.memory.embedder.base_url = "http://embeddings/v1"
     settings.memory.embedder.api_key = SecretStr("local")
     settings.memory.embedder.dim = 768
@@ -761,7 +783,9 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings) -> 
     )
 
 
-async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: Path) -> None:
+async def test_memory_forget_keep_record_requires_a_meeting(
+    settings: Settings, tmp_path: Path
+) -> None:
     with pytest.raises(FakeYouError, match="--keep-record") as caught:
         await cli_memory.forget_memory(
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
@@ -774,8 +798,8 @@ async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: 
 
 
 async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings(
-    settings, tmp_path, monkeypatch
-):
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from fakeyou.orchestration.lifecycle import meeting_thread_id
 
     settings, thread_id = await _forget_meeting_with_local_files(
@@ -791,7 +815,11 @@ async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings
 @pytest.mark.parametrize("lock_purpose", ["meeting", "ingestion", "debrief"])
 @pytest.mark.parametrize("keep_record", [False, True])
 async def test_memory_forget_meeting_refuses_an_active_lock(
-    settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep_record: bool, lock_purpose: str
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep_record: bool,
+    lock_purpose: str,
 ) -> None:
     from fakeyou.persistence.ingestion_status import record_lock
 

@@ -2,9 +2,11 @@ import asyncio
 import json
 import signal
 import sys
+from collections.abc import Callable
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -18,6 +20,7 @@ import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA
 from fakeyou.conversation.conversation import ConversationLoop, conversation_thread_id
 from fakeyou.conversation.session import SessionResult
@@ -35,14 +38,15 @@ from tests._cli_support import (
 )
 from tests.fakes import (
     DATABASE_URL,
+    SessionRun,
     make_graphiti,
 )
 
 
 @pytest.mark.asyncio
 async def test_join_builds_session_config_and_prints_result(
-    session_run,
-    join,
+    session_run: SessionRun,
+    join: Callable[..., Any],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     captured = session_run
@@ -81,8 +85,8 @@ async def test_join_builds_session_config_and_prints_result(
 
 @pytest.mark.asyncio
 async def test_join_falls_back_to_settings_and_generates_meeting_id(
-    session_run,
-    join,
+    session_run: SessionRun,
+    join: Callable[..., Any],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     captured = session_run
@@ -126,8 +130,8 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
     ],
 )
 async def test_join_exit_code_matches_terminal_reason(
-    session_run,
-    join,
+    session_run: SessionRun,
+    join: Callable[..., Any],
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     terminal_reason: str,
@@ -156,8 +160,8 @@ async def test_join_exit_code_matches_terminal_reason(
 
 
 async def test_join_result_carries_terminal_fault_report(
-    session_run,
-    join,
+    session_run: SessionRun,
+    join: Callable[..., Any],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     report = {"faults": {"kinds": [{"kind": "timeout", "count": 2}], "total": 2}}
@@ -174,7 +178,7 @@ async def test_join_result_carries_terminal_fault_report(
 
 
 async def test_join_without_audio_still_wires_faults_and_journal(
-    session_run, join, tmp_path: Path
+    session_run: SessionRun, join: Callable[..., Any], tmp_path: Path
 ) -> None:
     from fakeyou.observability.faults import FaultReporter
     from fakeyou.observability.journal import Journal
@@ -197,7 +201,9 @@ async def test_join_without_audio_still_wires_faults_and_journal(
 
 
 @pytest.mark.parametrize(("audio_enabled", "speech"), [(False, "hello"), (True, " ")])
-async def test_join_rejects_invalid_speech_before_browser_start(join, audio_enabled, speech):
+async def test_join_rejects_invalid_speech_before_browser_start(
+    join: Callable[..., Any], audio_enabled: bool, speech: str
+) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -218,7 +224,7 @@ async def test_join_rejects_invalid_speech_before_browser_start(join, audio_enab
         "https://meet.google.com/",
     ],
 )
-async def test_join_rejects_invalid_link(join, link) -> None:
+async def test_join_rejects_invalid_link(join: Callable[..., Any], link: str) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             link,
@@ -237,7 +243,12 @@ async def test_join_rejects_invalid_link(join, link) -> None:
         (None, -5.0, ErrorCode.MEETING_DURATION_NOT_POSITIVE),
     ],
 )
-async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration, code) -> None:
+async def test_join_rejects_nonpositive_timeouts(
+    join: Callable[..., Any],
+    lobby_timeout: float | None,
+    duration: float | None,
+    code: ErrorCode,
+) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -248,7 +259,9 @@ async def test_join_rejects_nonpositive_timeouts(join, lobby_timeout, duration, 
     assert caught.value.code is code
 
 
-async def test_join_audio_precondition_requires_the_worker(join, monkeypatch) -> None:
+async def test_join_audio_precondition_requires_the_worker(
+    join: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("PULSE_SOURCE", "wrong-source")
     with pytest.raises(FakeYouError) as caught:
         await join(
@@ -259,7 +272,9 @@ async def test_join_audio_precondition_requires_the_worker(join, monkeypatch) ->
     assert caught.value.code is ErrorCode.MEETING_AUDIO_REQUIRES_WORKER
 
 
-async def test_join_headless_override(session_run, join, settings) -> None:
+async def test_join_headless_override(
+    session_run: SessionRun, join: Callable[..., Any], settings: Settings
+) -> None:
     captured = session_run
 
     session_run.result.update(
@@ -286,7 +301,7 @@ async def test_join_headless_override(session_run, join, settings) -> None:
     assert captured["config"].headless is False
 
 
-def test_join_owner_id_flag(monkeypatch) -> None:
+def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
     async def fake_join(link, **kwargs):
@@ -308,7 +323,9 @@ def test_join_owner_id_flag(monkeypatch) -> None:
 @pytest.mark.parametrize(
     "command", ["join", "memory-add", "memory-forget", "memory-ingest", "memory-reembed"]
 )
-def test_cli_rejects_owner_alias(command, capsys, monkeypatch) -> None:
+def test_cli_rejects_owner_alias(
+    command: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     arguments = {
         "join": ["https://meet.google.com/abc-defg-hij"],
         "memory-add": ["A note.", "--persona", "p.json"],
@@ -324,7 +341,9 @@ def test_cli_rejects_owner_alias(command, capsys, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(("argv", "expected"), [(["--headless"], True), ([], None)])
-def test_join_headless_flag(monkeypatch, argv, expected) -> None:
+def test_join_headless_flag(
+    monkeypatch: pytest.MonkeyPatch, argv: list[Any], expected: bool | None
+) -> None:
     captured: dict = {}
 
     async def fake_join(link, **kwargs):
@@ -342,7 +361,11 @@ def test_join_headless_flag(monkeypatch, argv, expected) -> None:
 
 @pytest.mark.asyncio
 async def test_join_audio_builds_conversation_with_meeting_thread(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created: dict = {}
 
@@ -376,9 +399,9 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
 
 @pytest.mark.asyncio
 async def test_join_audio_transcript_reaches_conversation(
-    session_run,
-    join,
-    settings,
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
@@ -439,8 +462,12 @@ async def test_join_audio_transcript_reaches_conversation(
 
 
 async def test_audio_only_does_not_construct_responding_agent(
-    session_run, join, settings, tmp_path, monkeypatch
-):
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         assembly,
         "create_meeting_agent",
@@ -452,7 +479,7 @@ async def test_audio_only_does_not_construct_responding_agent(
     assert captured["conversation"] is None
 
 
-async def test_conversation_option_requires_audio(join):
+async def test_conversation_option_requires_audio(join: Callable[..., Any]) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -463,7 +490,7 @@ async def test_conversation_option_requires_audio(join):
 
 
 @pytest.mark.asyncio
-async def test_join_memory_requires_converse(join) -> None:
+async def test_join_memory_requires_converse(join: Callable[..., Any]) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -474,7 +501,7 @@ async def test_join_memory_requires_converse(join) -> None:
 
 
 @pytest.mark.asyncio
-async def test_join_wake_phrase_requires_converse(join) -> None:
+async def test_join_wake_phrase_requires_converse(join: Callable[..., Any]) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -485,7 +512,7 @@ async def test_join_wake_phrase_requires_converse(join) -> None:
 
 
 @pytest.mark.asyncio
-async def test_join_barge_in_requires_converse(join) -> None:
+async def test_join_barge_in_requires_converse(join: Callable[..., Any]) -> None:
     with pytest.raises(FakeYouError) as caught:
         await join(
             "https://meet.google.com/abc-defg-hij",
@@ -497,7 +524,11 @@ async def test_join_barge_in_requires_converse(join) -> None:
 
 @pytest.mark.asyncio
 async def test_join_wake_phrase_gates_agent_replies(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent_calls = []
 
@@ -539,7 +570,11 @@ async def test_join_wake_phrase_gates_agent_replies(
 
 @pytest.mark.asyncio
 async def test_join_barge_in_stops_speaking_session(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stops = []
 
@@ -588,9 +623,9 @@ async def test_join_barge_in_stops_speaking_session(
 
 @pytest.mark.asyncio
 async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
-    session_run,
-    join,
-    settings,
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
@@ -638,8 +673,8 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     ],
 )
 async def test_join_memory_startup_failure_exits_before_browser(
-    join,
-    settings,
+    join: Callable[..., Any],
+    settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -691,7 +726,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
 
 
 async def test_join_refuses_a_profile_already_in_use(
-    join, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     forbid_resources(monkeypatch)
     profile = tmp_path / "profile"
@@ -705,7 +740,7 @@ async def test_join_refuses_a_profile_already_in_use(
 
 
 async def test_join_refuses_a_locked_meeting_record(
-    join, settings, monkeypatch: pytest.MonkeyPatch
+    join: Callable[..., Any], settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.persistence.ingestion_status import record_lock
 
@@ -719,7 +754,9 @@ async def test_join_refuses_a_locked_meeting_record(
     assert not settings.paths.journal_dir.exists()
 
 
-async def test_join_journals_session_result(session_run, join, tmp_path: Path) -> None:
+async def test_join_journals_session_result(
+    session_run: SessionRun, join: Callable[..., Any], tmp_path: Path
+) -> None:
     session_run.result.update(
         {"phase": "ended", "terminal_reason": "infra_failure", "detail": "dns"}
     )
@@ -738,7 +775,11 @@ async def test_join_journals_session_result(session_run, join, tmp_path: Path) -
 
 
 async def test_join_routes_interim_transcripts_to_barge_in(
-    session_run, join, settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_run: SessionRun,
+    join: Callable[..., Any],
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stops: list[bool] = []
 
@@ -776,7 +817,9 @@ async def test_join_routes_interim_transcripts_to_barge_in(
     assert stops == [True]
 
 
-async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
+async def test_join_rejects_policy_without_wake_phrase(
+    join: Callable[..., Any], settings: Settings
+) -> None:
     settings.conversation.participant_policy_enabled = True
     with pytest.raises(FakeYouError, match="wake-phrase") as caught:
         await join("https://meet.google.com/abc-defg-hij", meeting_id=None)
@@ -785,7 +828,7 @@ async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
 
 @pytest.mark.asyncio
 async def test_join_preserves_infra_catalog_error_from_session(
-    session_run, join, capsys: pytest.CaptureFixture[str]
+    session_run: SessionRun, join: Callable[..., Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
     async def failing(_config: object, **_kwargs: object) -> object:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
@@ -805,7 +848,7 @@ async def test_join_preserves_infra_catalog_error_from_session(
 
 @pytest.mark.asyncio
 async def test_join_preserves_failure_catalog_error_from_session(
-    session_run, join, capsys: pytest.CaptureFixture[str]
+    session_run: SessionRun, join: Callable[..., Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
     async def failing(_config: object, **_kwargs: object) -> object:
         raise FakeYouError(ErrorCode.OPERATION_INTERRUPTED)

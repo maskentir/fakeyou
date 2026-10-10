@@ -73,7 +73,7 @@ def test_wav_validation_rejects_wrong_sample_rate(tmp_path: Path) -> None:
 
 
 async def test_endpointing_harness_uses_configured_muse_model_url_and_language(
-    settings: Settings, monkeypatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     configured = settings.model_copy(
         update={

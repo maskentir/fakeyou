@@ -7,6 +7,7 @@ import fakeyou.cli.chat as cli_chat
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
 from tests.fakes import (
     make_graphiti,
 )
@@ -14,7 +15,7 @@ from tests.fakes import (
 
 @pytest.mark.asyncio
 async def test_chat_waits_for_memory_ready_before_exposing_tools(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
     main_thread = threading.get_ident()
@@ -52,7 +53,7 @@ async def test_chat_waits_for_memory_ready_before_exposing_tools(
 
 @pytest.mark.asyncio
 async def test_chat_turn_flush_persists_a_lone_short_fact(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = make_graphiti()
     captured: dict = {}
@@ -81,7 +82,7 @@ async def test_chat_turn_flush_persists_a_lone_short_fact(
 
 @pytest.mark.asyncio
 async def test_chat_flushes_pending_facts_when_the_agent_raises(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = make_graphiti()
     captured: dict = {}
@@ -113,7 +114,7 @@ async def test_chat_flushes_pending_facts_when_the_agent_raises(
 
 @pytest.mark.asyncio
 async def test_chat_surfaces_flush_failure_after_a_successful_turn(
-    settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     memory = make_graphiti()
     memory.errors = {0: RuntimeError("episode store unavailable")}
@@ -142,7 +143,9 @@ async def test_chat_surfaces_flush_failure_after_a_successful_turn(
 
 
 @pytest.mark.parametrize("thread", ["", "bad thread", "bad:thread", "x" * 129])
-async def test_chat_rejects_invalid_thread(settings, monkeypatch, thread) -> None:
+async def test_chat_rejects_invalid_thread(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, thread: str
+) -> None:
     monkeypatch.setattr(
         providers,
         "init_chat_model",

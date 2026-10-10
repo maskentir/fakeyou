@@ -109,7 +109,9 @@ PUBLIC_FUNCTIONS = _public_functions()
 
 
 @pytest.mark.parametrize("function", PUBLIC_FUNCTIONS, ids=lambda item: item[0])
-def test_public_functions_use_the_factory_verb_table(function) -> None:
+def test_public_functions_use_the_factory_verb_table(
+    function: tuple[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> None:
     _name, node = function
 
     assert not node.name.startswith(FORBIDDEN_FACTORY_PREFIXES)
