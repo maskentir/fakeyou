@@ -187,7 +187,7 @@ async def click_when_ready(
         try:
             await target.click(timeout=_CLICK_TIMEOUT_MS)
         except Exception as error:
-            last_error = str(error)
+            last_error = type(error).__name__
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
             continue
         return None
@@ -204,7 +204,7 @@ async def _dismiss_media_dialog(
         if await locator.count() == 0:
             return None
     except Exception as error:
-        return f"finding {signals.continue_without_media!r} failed: {error}"
+        return f"finding {signals.continue_without_media!r} failed: ({type(error).__name__})"
     return await click_when_ready(
         partial(page.locator, f'text="{signals.continue_without_media}"'),
         signals.continue_without_media,
@@ -222,7 +222,7 @@ async def _enter_twin_name(
     try:
         found = await field.count()
     except Exception as error:
-        return f"finding the name field failed: {error}"
+        return f"finding the name field failed: ({type(error).__name__})"
     if found == 0:
         return f"name field {signals.name_field!r} not found on the lobby page"
     failure = await click_when_ready(
@@ -236,7 +236,7 @@ async def _enter_twin_name(
     try:
         await page.keyboard.type(twin_name, delay=TYPE_DELAY_MS)
     except Exception as error:
-        return f"typing the twin name failed: {error}"
+        return f"typing the twin name failed: ({type(error).__name__})"
     return None
 
 
@@ -299,7 +299,10 @@ async def request_guest_join(
         try:
             content = await page.content()
         except Exception as error:
-            return JoinResult(status="failed", detail=f"reading lobby page content failed: {error}")
+            return JoinResult(
+                status="failed",
+                detail=f"reading lobby page content failed: ({type(error).__name__})",
+            )
         if _is_explicit_denial(content):
             return JoinResult(status="denied", detail="guest request to join was denied")
         if signals.denied in content:
@@ -404,7 +407,9 @@ async def leave_meeting(
     try:
         found = await locator.count()
     except Exception as error:
-        return LeaveResult(status="failed", detail=f"finding the leave button failed: {error}")
+        return LeaveResult(
+            status="failed", detail=f"finding the leave button failed: ({type(error).__name__})"
+        )
     if found == 0:
         observation = await observe_call_state(page, signals)
         if observation.state in ("removed", "ended", "lobby"):

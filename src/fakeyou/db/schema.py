@@ -34,7 +34,7 @@ class SchemaStatus:
 def head_revision() -> str:
     heads = ScriptDirectory.from_config(_script_config()).get_heads()
     if len(heads) != 1:
-        raise RuntimeError(f"expected exactly one migration head, found {len(heads)}")
+        raise FakeYouError(ErrorCode.DATABASE_SCHEMA_HEADS_INVALID, count=len(heads))
     return heads[0]
 
 

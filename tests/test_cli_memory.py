@@ -10,13 +10,14 @@ from pydantic import SecretStr
 
 import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.main import build_parser
 from fakeyou.cli.memory import _finish_ingest, ingest_recorded_meeting
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.ingestion import ingest_corrections
+from fakeyou.memory.ingestion import EpisodeNameError, ingest_corrections
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
@@ -392,3 +393,32 @@ def test_worker_ingest_routes_through_memory_ingest_without_skip(tmp_path: Path)
     tail = run[run.index("fakeyou") + 1 :]
     assert tail[0] == "memory-ingest"
     assert "--no-correct" not in tail
+
+
+async def test_ingest_episode_name_error_keeps_hint_on_stderr(
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_record(settings, "meeting-9")
+    _fake_memory(monkeypatch, make_graphiti())
+
+    async def failing(*args: Any, **kwargs: Any) -> Any:
+        raise EpisodeNameError(ErrorCode.INGESTION_EPISODE_NAME_INVALID, meeting_id="meeting-9")
+
+    monkeypatch.setattr(cli_memory, "ingest_until_stopped", failing)
+
+    with pytest.raises(SystemExit) as exit:
+        await ingest_recorded_meeting(
+            meeting_id="meeting-9",
+            persona_path=_write_persona(tmp_path),
+            owner_id=None,
+            twin_id=None,
+            twin_name=None,
+            no_correct=True,
+            settings=settings,
+        )
+
+    assert exit.value.code == ExitCode.FAILURE
+    assert "--keep-record" in capsys.readouterr().err

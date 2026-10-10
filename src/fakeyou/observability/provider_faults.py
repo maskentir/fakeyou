@@ -144,6 +144,4 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
         return classify_http(source, error.response.status_code)
     if isinstance(error, (APIConnectionError, httpx2.ConnectError, httpx2.NetworkError)):
         return ProviderFault(source, "unavailable", retryable=True)
-    if isinstance(error, ValueError):
-        return ProviderFault(source, "unknown", detail=f"ValueError: {error}")
     return ProviderFault(source, "unknown", detail=type(error).__name__)

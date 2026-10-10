@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from graphiti_core.nodes import EpisodeType
 
-from fakeyou.catalog.errors import ErrorCode
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.diarization.correction_labels import LABELS_FILE_NAME, write_correction_labels
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
@@ -1298,3 +1298,14 @@ async def test_forget_meeting_cleans_visuals(monkeypatch: pytest.MonkeyPatch) ->
     assert sorted(second.removed) == sorted(uuids)
     assert f"uuid-{visual_episode_name('meeting-1', 0)}" in second.removed
     assert deleted == [saga]
+
+
+async def test_forget_meeting_reports_episode_that_survives_removal() -> None:
+    from fakeyou.memory.memory import forget_meeting
+
+    memory = make_graphiti(existing=[SimpleNamespace(uuid="episode-stuck")])
+
+    with pytest.raises(FakeYouError, match="survived removal") as error:
+        await forget_meeting(memory, group_id="twin_group", meeting_id="meeting-1")
+
+    assert error.value.code is ErrorCode.MEMORY_FORGET_INCOMPLETE

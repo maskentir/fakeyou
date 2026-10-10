@@ -85,17 +85,24 @@ class ProbeDrainLoop:
         self._poll_interval = poll_interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self.polls = 0
+        self.poll_failures = 0
+        self.last_poll_error: str | None = None
 
     async def poll(self) -> bool:
+        self.polls += 1
         try:
             before_ms = self._probe.monotonic() * 1000.0
             batch = await self._page.evaluate(PROBE_DRAIN_JS)
             after_ms = self._probe.monotonic() * 1000.0
             if not isinstance(batch, Mapping):
+                self.poll_failures += 1
                 return False
             self._probe.append_page_batch(batch, mono_ms=(before_ms + after_ms) / 2.0)
             return True
-        except Exception:
+        except Exception as error:
+            self.poll_failures += 1
+            self.last_poll_error = type(error).__name__
             return False
 
     async def start(self) -> None:

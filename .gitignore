@@ -15,3 +15,5 @@ dist/
 node_modules/
 .runtime/
 .DS_Store
+
+tmp/

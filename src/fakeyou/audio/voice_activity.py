@@ -439,17 +439,24 @@ class VoiceActivityLoop:
         self._poll_interval = poll_interval_seconds
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self.polls = 0
+        self.poll_failures = 0
+        self.last_poll_error: str | None = None
 
     async def poll(self) -> bool:
+        self.polls += 1
         try:
             sent = self._tracker.now_ms()
             batch = await self._page.evaluate(VOICE_ACTIVITY_DRAIN_JS)
             received = self._tracker.now_ms()
             if not isinstance(batch, Mapping):
+                self.poll_failures += 1
                 return False
             self._tracker.observe_batch(batch, sent_ms=sent, received_ms=received)
             return True
-        except Exception:
+        except Exception as error:
+            self.poll_failures += 1
+            self.last_poll_error = type(error).__name__
             return False
 
     async def start(self) -> None:

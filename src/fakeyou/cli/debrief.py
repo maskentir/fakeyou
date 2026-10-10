@@ -31,6 +31,7 @@ from fakeyou.diarization.diarize_correction import correction_digest
 from fakeyou.foundation.invariants import SessionId
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.providers import create_debrief_chat_model, create_fallback_chat_model
 from fakeyou.persistence.brief import MeetingContext, context_path, validate_brief_scope
@@ -287,9 +288,9 @@ async def _debrief_locked(
             journal=journal,
         )
         journal.record("debrief_failed", source="cli", error=type(error).__name__)
-        if isinstance(error, FakeYouError):
+        if isinstance(error, (FakeYouError, ProviderFault)):
             raise
-        raise FakeYouError(ErrorCode.DEBRIEF_FAILED, reason=type(error).__name__) from None
+        raise FakeYouError(ErrorCode.DEBRIEF_FAILED, reason=type(error).__name__) from error
     finally:
         journal.close()
 

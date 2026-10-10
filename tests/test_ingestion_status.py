@@ -13,6 +13,7 @@ from fakeyou.catalog.errors import ErrorCode
 from fakeyou.persistence.brief import context_path
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
+    LeaseError,
     RecordLockError,
     hash_meeting_record,
     lock_path,
@@ -512,3 +513,12 @@ def test_record_lock_refuses_a_corrupt_lock_file(tmp_path: Path) -> None:
             pytest.fail("corrupt lock must fail closed")
     assert error.value.code is ErrorCode.RECORD_LOCK_CORRUPT
     assert path.read_text(encoding="utf-8") == "{corrupt"
+
+
+def test_errors_raised_inside_a_record_lock_body_keep_their_own_code(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-record.jsonl"
+
+    with pytest.raises(LeaseError) as caught, record_lock(record, purpose="debrief"):
+        raise LeaseError(ErrorCode.LEASE_LOCKED, path=tmp_path)
+
+    assert caught.value.code is ErrorCode.LEASE_LOCKED

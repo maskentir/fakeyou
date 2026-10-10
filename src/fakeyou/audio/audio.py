@@ -51,6 +51,7 @@ from fakeyou.audio.playback import (
 from fakeyou.audio.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
 from fakeyou.audio.voice_activity import VoiceActivityTracker
 from fakeyou.catalog.config import ConfigKey
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS, STTSettings, TTSSettings, VADSettings, require_secret
 from fakeyou.foundation.attribution_probe import AttributionProbe
 from fakeyou.foundation.invariants import (
@@ -227,6 +228,7 @@ class _CaptureObserver(FrameProcessor):
         self._probe = probe
         self._voice_activity = voice_activity
         self._on_vad = on_vad
+        self._vad_probe_failed = False
 
     async def process_frame(self, frame: Any, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -279,8 +281,15 @@ class _CaptureObserver(FrameProcessor):
             return
         try:
             self._probe.observe_vad(active)
-        except Exception:
-            pass
+        except Exception as error:
+            if not self._vad_probe_failed:
+                self._vad_probe_failed = True
+                if self._journal is not None:
+                    self._journal.record(
+                        "vad_observe_failed",
+                        source="audio",
+                        error_type=type(error).__name__,
+                    )
 
 
 class PreRollBuffer(FrameProcessor):
@@ -898,7 +907,7 @@ async def open_meeting_audio(
             )
             for cause in early_failures:
                 session._fail("meeting audio provider failed", cause=cause)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
             raise MeetingAudioError("meeting audio initialization failed") from error
@@ -1093,7 +1102,7 @@ async def open_stream_audio(
             )
             for cause in early_failures:
                 session._fail("meeting audio provider failed", cause=cause)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
             raise MeetingAudioError("meeting audio initialization failed") from error

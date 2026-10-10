@@ -62,6 +62,7 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | `database.schema_unversioned` | `DATABASE_SCHEMA_UNVERSIONED` | FAILURE | `` voiceprints exists without migration history; check that it matches the baseline and run `fakeyou db stamp` to adopt it `` |
 | `database.stamp_refused` | `DATABASE_STAMP_REFUSED` | FAILURE | `voiceprints does not match the baseline migration: {differences}; refusing to record it as applied` |
 | `database.schema_empty` | `DATABASE_SCHEMA_EMPTY` | FAILURE | `` database has no migrations applied, expected {expected}; run `fakeyou db upgrade` `` |
+| `database.schema_heads_invalid` | `DATABASE_SCHEMA_HEADS_INVALID` | FAILURE | `expected exactly one migration head, found {count}` |
 
 ### config
 
@@ -180,6 +181,7 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | `memory.ingestion_group_mismatch` | `MEMORY_INGESTION_GROUP_MISMATCH` | INPUT_REJECTED | `persona group does not match the ingestion status group` |
 | `memory.forget_target_required` | `MEMORY_FORGET_TARGET_REQUIRED` | INPUT_REJECTED | `memory-forget requires exactly one of --meeting or --episode` |
 | `memory.keep_record_requires_meeting` | `MEMORY_KEEP_RECORD_REQUIRES_MEETING` | INPUT_REJECTED | `--keep-record only applies to --meeting` |
+| `memory.forget_incomplete` | `MEMORY_FORGET_INCOMPLETE` | FAILURE | `episode {uuid} survived removal during forget` |
 | `memory.unavailable` | `MEMORY_UNAVAILABLE` | INFRA_FAILURE | `memory unavailable: {reason}` |
 
 ### note

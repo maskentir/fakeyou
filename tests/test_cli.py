@@ -27,7 +27,7 @@ import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
 from fakeyou.config.settings import (
     DEFAULTS,
     CompatibleReply,
@@ -4525,3 +4525,73 @@ async def test_join_rejects_policy_without_wake_phrase(join, settings) -> None:
     with pytest.raises(FakeYouError, match="wake-phrase") as caught:
         await join("https://meet.google.com/abc-defg-hij", meeting_id=None)
     assert caught.value.code is ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES
+
+
+def test_ctrl_c_is_reported_as_an_operation_interruption(monkeypatch, capsys) -> None:
+    def interrupted(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main, "show_session_report", interrupted)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting", "m1"])
+
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == CATALOG[ErrorCode.OPERATION_INTERRUPTED].exit_code
+    assert "operation interrupted" in capsys.readouterr().err
+
+
+def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
+    monkeypatch, capsys
+) -> None:
+    def interrupted_settings(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main, "Settings", interrupted_settings)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting", "m1"])
+
+    with pytest.raises(SystemExit) as caught:
+        cli_main.main()
+
+    assert caught.value.code == CATALOG[ErrorCode.OPERATION_INTERRUPTED].exit_code
+    assert "operation interrupted" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_join_preserves_infra_catalog_error_from_session(
+    session_run, join, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def failing(_config: object, **_kwargs: object) -> object:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+
+    session_run.effect = failing
+
+    with pytest.raises(SystemExit) as caught:
+        await join("https://meet.google.com/abc-defg-hij")
+
+    assert caught.value.code == CATALOG[ErrorCode.DATABASE_UNREACHABLE].exit_code
+    printed = printed_join_summary(capsys)
+    assert printed["error_code"] == ErrorCode.DATABASE_UNREACHABLE.value
+    assert printed["terminal_reason"] == "infra_failure"
+    assert printed["detail"] == str(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
+    assert printed["session_outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_join_preserves_failure_catalog_error_from_session(
+    session_run, join, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def failing(_config: object, **_kwargs: object) -> object:
+        raise FakeYouError(ErrorCode.OPERATION_INTERRUPTED)
+
+    session_run.effect = failing
+
+    with pytest.raises(SystemExit) as caught:
+        await join("https://meet.google.com/abc-defg-hij")
+
+    assert caught.value.code == CATALOG[ErrorCode.OPERATION_INTERRUPTED].exit_code
+    printed = printed_join_summary(capsys)
+    assert printed["error_code"] == ErrorCode.OPERATION_INTERRUPTED.value
+    assert printed["terminal_reason"] == "browser_failure"
+    assert printed["detail"] == str(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
+    assert printed["session_outcome"] == "failed"

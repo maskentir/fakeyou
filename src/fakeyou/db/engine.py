@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DisconnectionError, OperationalError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
@@ -41,7 +41,7 @@ def open_database(settings: Settings) -> Iterator[Engine]:
     engine = create_engine_for_url(require_url(configured_url(settings)))
     try:
         yield engine
-    except OperationalError as error:
+    except (OperationalError, DisconnectionError) as error:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
     finally:
         engine.dispose()

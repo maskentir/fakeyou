@@ -14,9 +14,11 @@ from fakeyou.meet.browser import (
     open_direct_page,
     patch_preferences_for_3p_cookies,
     profile_is_fresh,
+    profile_lock,
     stable_fingerprint_seed,
     warmup_profile,
 )
+from fakeyou.persistence.ingestion_status import LeaseError
 from tests.fakes import FakeBrowserContext, FakeWarmupContext, FakeWarmupPage
 
 
@@ -387,6 +389,8 @@ async def test_devtools_endpoint_times_out_without_file(tmp_path: Path) -> None:
     with pytest.raises(FakeYouError, match="DevTools endpoint is unavailable") as error:
         await browser_module._read_devtools_endpoint(str(tmp_path), timeout_seconds=0.0)
     assert error.value.code is ErrorCode.BROWSER_DEVTOOLS_UNAVAILABLE
+    assert "(FileNotFoundError)" in str(error.value)
+    assert str(tmp_path) not in str(error.value)
 
 
 @pytest.mark.browser
@@ -447,3 +451,34 @@ async def test_open_direct_page_drives_humanized_page() -> None:
     async with open_direct_page(headless=True) as page:
         await page.goto("about:blank")
         assert await page.evaluate("(() => 1 + 1)()") == 2
+
+
+def test_errors_raised_inside_a_profile_lock_body_are_not_reported_as_profile_conflicts(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(LeaseError) as caught, profile_lock(tmp_path / "profile"):
+        raise LeaseError(ErrorCode.LEASE_LOCKED, path=tmp_path)
+
+    assert caught.value.code is ErrorCode.LEASE_LOCKED
+
+
+def test_a_held_profile_lock_is_reported_as_a_profile_in_use(tmp_path: Path) -> None:
+    profile = tmp_path / "profile"
+
+    with profile_lock(profile), pytest.raises(FakeYouError) as caught, profile_lock(profile):
+        pass
+
+    assert caught.value.code is ErrorCode.BROWSER_PROFILE_IN_USE
+
+
+def test_corrupt_preferences_are_backed_up_before_the_cookie_patch(tmp_path: Path) -> None:
+    prefs_path = tmp_path / "Default" / "Preferences"
+    prefs_path.parent.mkdir(parents=True, exist_ok=True)
+    prefs_path.write_text("{not json")
+
+    patch_preferences_for_3p_cookies(str(tmp_path))
+
+    backups = list(prefs_path.parent.glob("Preferences.corrupt-*"))
+    assert [backup.read_text() for backup in backups] == ["{not json"]
+    exceptions = json.loads(prefs_path.read_text())["profile"]["content_settings"]["exceptions"]
+    assert "cookies" in exceptions

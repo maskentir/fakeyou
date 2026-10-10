@@ -15,7 +15,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli._operator import load_operator_persona
 from fakeyou.cli.diarize import diarize_run
-from fakeyou.cli.output import emit_json, emit_progress, emit_text
+from fakeyou.cli.output import emit_error, emit_json, emit_progress, emit_text
 from fakeyou.config.settings import (
     Settings,
 )
@@ -342,6 +342,8 @@ async def ingest_recorded_meeting(
                         )
                     except ValueError as error:
                         faults.record(classify_exception("memory_ingest", error))
+                        if isinstance(error, FakeYouError):
+                            emit_error(error)
                         _finish_ingest(
                             status_file,
                             meeting_id=meeting_id,

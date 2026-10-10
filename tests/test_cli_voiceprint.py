@@ -1138,3 +1138,24 @@ def test_enroll_worded_transcript_accepts(
     assert saved(store, "alice").owner_name == "Maya"
     assert len(journal.events("enrollment_accepted")) == 1
     capsys.readouterr()
+
+
+def test_verify_empty_clip_rejected_as_too_short(settings: Settings, tmp_path: Path) -> None:
+    clip = write_tone_clip(tmp_path / "empty.wav", seconds=0.0)
+
+    with pytest.raises(FakeYouError) as error:
+        voiceprint_verify("alice", str(clip), settings=settings)
+
+    assert error.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT
+
+
+def test_enroll_empty_clip_rejected_even_with_zero_minimum(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings.identity.voiceprint_min_seconds = 0.0
+    clips = [write_tone_clip(tmp_path / f"clip-{index}.wav", seconds=0.0) for index in range(3)]
+
+    with pytest.raises(FakeYouError) as error:
+        voiceprint_enroll("alice", [str(path) for path in clips], False, settings=settings)
+
+    assert error.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT

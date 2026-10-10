@@ -1,3 +1,5 @@
+import re
+from pathlib import Path
 from typing import Any, get_args
 
 import pytest
@@ -74,3 +76,22 @@ def test_api_key_roles_match_the_environment_name_settings_derives(
     )
 
     assert key.value == derived
+
+
+def _setting_env_keys(model: type[BaseModel], prefix: str = ENV_PREFIX) -> set[str]:
+    keys: set[str] = set()
+    for name, field in model.model_fields.items():
+        members = _section_models(field.annotation)
+        if members:
+            for member in members:
+                keys |= _setting_env_keys(member, f"{prefix}{name}{NESTED_DELIMITER}")
+        else:
+            keys.add(f"{prefix}{name}".upper())
+    return keys
+
+
+def test_env_example_documents_every_setting() -> None:
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
+    documented = set(re.findall(r"^#?\s*(FAKEYOU_[A-Z0-9_]+)=", example, re.MULTILINE))
+
+    assert _setting_env_keys(Settings) - documented == set()

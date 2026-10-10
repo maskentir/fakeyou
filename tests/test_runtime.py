@@ -252,6 +252,24 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
     assert details[0]["error_type"] == "RuntimeError"
 
 
+async def test_run_meeting_session_reraises_catalog_errors_unmangled() -> None:
+    clock = FakeClock()
+
+    def failing_open(*args: object, **kwargs: object) -> object:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+
+    with pytest.raises(FakeYouError) as error:
+        await run_meeting_session(
+            _config(),
+            open_page=failing_open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        )
+
+    assert error.value.code is ErrorCode.DATABASE_UNREACHABLE
+
+
 async def test_run_meeting_session_tolerates_single_observation_blip() -> None:
     browser = FakePageSession(meet_page([IN_CALL, RuntimeError("boom"), IN_CALL, ENDED]))
 

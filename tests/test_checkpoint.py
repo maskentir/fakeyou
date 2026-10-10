@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import Any
 
+import psycopg
 import pytest
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -69,6 +70,26 @@ async def test_open_checkpointer_reports_an_unreachable_database(
 
     with pytest.raises(FakeYouError) as raised:
         async with open_checkpointer("postgresql://fakeyou:secret@127.0.0.1:1/fakeyou"):
+            pass
+
+    assert raised.value.code is ErrorCode.DATABASE_UNREACHABLE
+
+
+@pytest.mark.asyncio
+async def test_open_checkpointer_maps_driver_errors_to_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingSaver:
+        @classmethod
+        @asynccontextmanager
+        async def from_conn_string(cls, _conn_string: str):
+            raise psycopg.ProgrammingError("boom")
+            yield cls()
+
+    monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", FailingSaver)
+
+    with pytest.raises(FakeYouError) as raised:
+        async with open_checkpointer("postgresql://localhost/db"):
             pass
 
     assert raised.value.code is ErrorCode.DATABASE_UNREACHABLE

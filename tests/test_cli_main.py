@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.entry import main as entry_main
 from fakeyou.cli.main import main
 
 
@@ -63,15 +64,15 @@ def test_handler_validation_error_reports_input_invalid_with_exit_two(
     assert "fakeyou: error: invalid input: " in capsys.readouterr().err
 
 
-def test_main_exports_dotenv_before_parsing(
+def test_entry_exports_dotenv_and_the_embedding_dimension_before_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / ".env").write_text("EMBEDDING_DIM=384\n")
+    (tmp_path / ".env").write_text("FAKEYOU_MEMORY__EMBEDDER__DIM=384\n")
     monkeypatch.chdir(tmp_path)
     _scrub_process_configuration(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "--help"])
     with pytest.raises(SystemExit) as caught:
-        main()
+        entry_main()
     assert caught.value.code == 0
     assert os.environ["EMBEDDING_DIM"] == "384"
     capsys.readouterr()

@@ -118,6 +118,9 @@ class ParticipantObserver:
         self._roster: dict[str, Participant] = {}
         self._task: asyncio.Task[None] | None = None
         self._closed = False
+        self.polls = 0
+        self.poll_failures = 0
+        self.last_poll_error: str | None = None
 
     @property
     def epoch(self) -> str:
@@ -149,13 +152,15 @@ class ParticipantObserver:
     async def _poll_loop(self) -> None:
         while True:
             started = self._monotonic()
+            self.polls += 1
             try:
                 raw = await self._page.evaluate(OBSERVE_JS)
                 self._ingest(raw, started)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as error:
+                self.poll_failures += 1
+                self.last_poll_error = type(error).__name__
             elapsed = self._monotonic() - started
             await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
 

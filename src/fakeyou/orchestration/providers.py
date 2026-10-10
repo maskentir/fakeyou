@@ -83,14 +83,13 @@ def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
 
 
 def create_visual_chat_model(settings: Settings) -> BaseChatModel:
-    settings.require_roles("reply")
+    settings.require_roles("visual")
     visual = settings.visual
-    reply = settings.reply
     values: dict[str, Any] = {
         "model": visual.model,
-        "api_key": reply.api_key,
+        "api_key": visual.api_key,
         "timeout_seconds": visual.timeout_seconds,
-        "max_retries": reply.max_retries,
+        "max_retries": visual.max_retries,
     }
     if visual.base_url is not None:
         values["base_url"] = visual.base_url
@@ -107,7 +106,7 @@ def create_visual_chat_model(settings: Settings) -> BaseChatModel:
         role = CompatibleReply(**values)
     else:
         raise FakeYouError(ErrorCode.VISUAL_PROVIDER_UNSUPPORTED, provider=provider)
-    return _init_chat_model(role, ConfigKey.REPLY_API_KEY)
+    return _init_chat_model(role, ConfigKey.VISUAL_API_KEY)
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0

@@ -17,5 +17,5 @@ async def open_checkpointer(url: str) -> AsyncIterator[BaseCheckpointSaver[Any]]
         async with AsyncPostgresSaver.from_conn_string(url) as saver:
             await saver.setup()
             yield saver
-    except psycopg.OperationalError as error:
+    except psycopg.Error as error:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error

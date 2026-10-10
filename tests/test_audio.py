@@ -18,6 +18,7 @@ from fakeyou.audio.audio import (
     open_meeting_audio,
 )
 from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import MiniMaxTTS, OpenAITTS, STTSettings
 from fakeyou.observability.journal import Journal
 from tests.fakes import FakeReconnectableSTT, FakeSTT
@@ -894,6 +895,29 @@ async def test_capture_observer_contains_on_vad_failure(journal) -> None:
     assert journal.events()[-1]["event"] == "fault_recorded"
 
 
+async def test_capture_observer_journals_first_probe_vad_failure_only(journal) -> None:
+    from types import SimpleNamespace
+
+    from pipecat.frames.frames import VADUserStartedSpeakingFrame
+
+    def failing_observe(_active: bool) -> None:
+        raise RuntimeError("probe gone")
+
+    probe = SimpleNamespace(observe_vad=failing_observe)
+    observer = _CaptureObserver(CaptureActivity(), journal=journal, probe=probe)
+
+    async def sink(frame, direction):
+        return None
+
+    observer.push_frame = sink
+    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    rows = journal.events("vad_observe_failed")
+    assert len(rows) == 1
+    assert rows[0]["error_type"] == "RuntimeError"
+
+
 async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() -> None:
     clock = [100.0]
     activity = CaptureActivity(now=lambda: clock[0])
@@ -1322,3 +1346,21 @@ async def test_turn_tap_keep_open_second_take_is_byte_identical() -> None:
 
     assert first_clip == second_clip
     assert first_clip == b"".join(_tap_stream_frame(index) for index in range(80, 260))
+
+
+async def test_missing_muse_key_is_reported_as_configuration_not_audio_failure() -> None:
+    async def ignore_transcript(frame: TranscriptionFrame) -> None:
+        del frame
+
+    with pytest.raises(FakeYouError) as caught:
+        async with open_meeting_audio(
+            stt_settings=STTSettings(api_key=None),
+            tts_settings=OpenAITTS(api_key="openai-secret"),
+            on_transcript=ignore_transcript,
+            transport=_Transport(),
+            stt=None,
+            playback=_Playback(),
+        ):
+            pass
+
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING

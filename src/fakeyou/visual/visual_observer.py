@@ -170,6 +170,11 @@ class VisualObserver:
         self._task: asyncio.Task[None] | None = None
         self._eager: set[asyncio.Task[None]] = set()
         self._closed = False
+        self.polls = 0
+        self.poll_failures = 0
+        self.last_poll_error: str | None = None
+        self.caption_failures = 0
+        self.last_caption_error: str | None = None
 
     @property
     def presenting(self) -> bool:
@@ -224,12 +229,14 @@ class VisualObserver:
     async def _poll_loop(self) -> None:
         while True:
             started = self._monotonic()
+            self.polls += 1
             try:
                 await self.poll()
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                pass
+            except Exception as error:
+                self.poll_failures += 1
+                self.last_poll_error = type(error).__name__
             elapsed = self._monotonic() - started
             await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
 
@@ -241,7 +248,8 @@ class VisualObserver:
             caption = await captioner.caption_frame(frame)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
+            self._record_caption_failure(type(error).__name__, stage="caption")
             return
         if caption is None:
             return
@@ -250,8 +258,19 @@ class VisualObserver:
             return
         try:
             callback(frame, caption)
-        except Exception:
-            pass
+        except Exception as error:
+            self._record_caption_failure(type(error).__name__, stage="emit")
+
+    def _record_caption_failure(self, error_type: str, *, stage: str) -> None:
+        self.caption_failures += 1
+        self.last_caption_error = error_type
+        if self._journal is not None:
+            self._journal.record(
+                "visual_caption_failed",
+                source="browser",
+                stage=stage,
+                error_type=error_type,
+            )
 
     def _schedule_eager_caption(self, frame: VisualFrame) -> None:
         if self._captioner is None:

@@ -18,6 +18,7 @@ from fakeyou.diarization.diarize_client import DiarizedTurn
 from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.memory.persona import PersonaProfile, persona_digest
 from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.persistence.brief import (
     MeetingBrief,
     MeetingContext,
@@ -259,6 +260,18 @@ async def test_attempt_write_failure_preserves_cancellation(debrief_run, monkeyp
     assert not (path.parent / "debrief.json").exists()
     with record_lock(path, purpose="debrief"):
         pass
+
+
+async def test_provider_faults_keep_their_identity_through_debrief(debrief_run, monkeypatch):
+    run, path, profile = debrief_run
+
+    def unavailable(settings):
+        raise ProviderFault("llm", "unavailable")
+
+    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", unavailable)
+    with pytest.raises(ProviderFault) as caught:
+        await run()
+    assert caught.value.kind == "unavailable"
 
 
 async def test_debrief_corrupt_context_refuses_provider(debrief_run, monkeypatch):

@@ -22,6 +22,7 @@ from fakeyou.audio.voice_activity import (
     VoiceActivityTracker,
     load_voice_activity_script,
 )
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
@@ -542,6 +543,13 @@ class _MeetingWorker:
     async def close_participant_observer(self) -> None:
         if self.observer is not None:
             await close_safely(self.observer.close, source="browser", faults=self.faults)
+            self.record(
+                "participant_observer_stopped",
+                source="runtime",
+                polls=self.observer.polls,
+                poll_failures=self.observer.poll_failures,
+                last_poll_error=self.observer.last_poll_error,
+            )
             self.observer = None
 
     async def start_probe_drain(self) -> None:
@@ -565,11 +573,25 @@ class _MeetingWorker:
     async def close_voice_activity(self) -> None:
         if self.voice_loop is not None:
             await close_safely(self.voice_loop.close, source="browser", faults=self.faults)
+            self.record(
+                "voice_activity_stopped",
+                source="runtime",
+                polls=self.voice_loop.polls,
+                poll_failures=self.voice_loop.poll_failures,
+                last_poll_error=self.voice_loop.last_poll_error,
+            )
             self.voice_loop = None
 
     async def close_probe_drain(self) -> None:
         if self.probe_drain is not None:
             await close_safely(self.probe_drain.close, source="browser", faults=self.faults)
+            self.record(
+                "attribution_probe_stopped",
+                source="runtime",
+                polls=self.probe_drain.polls,
+                poll_failures=self.probe_drain.poll_failures,
+                last_poll_error=self.probe_drain.last_poll_error,
+            )
             self.probe_drain = None
 
     async def start_capture_drain(self, enabled: bool = False) -> None:
@@ -614,6 +636,14 @@ class _MeetingWorker:
     async def close_visual_observer(self) -> None:
         if self.visual_observer is not None:
             await close_safely(self.visual_observer.close, source="browser", faults=self.faults)
+            self.record(
+                "visual_observer_stopped",
+                source="runtime",
+                polls=self.visual_observer.polls,
+                poll_failures=self.visual_observer.poll_failures,
+                last_poll_error=self.visual_observer.last_poll_error,
+                caption_failures=self.visual_observer.caption_failures,
+            )
             self.visual_observer = None
 
     async def monitor(self, admitted_at: float) -> str:
@@ -963,6 +993,8 @@ async def run_meeting_session(
                 await lifecycle.send(
                     "cancelled", "owner_action", "session task cancelled; closing browser"
                 )
+                raise
+            except FakeYouError:
                 raise
             except ConversationError as error:
                 detail = f"conversation failed ({type(error).__name__})"

@@ -362,6 +362,7 @@ async def test_voice_activity_loop_feeds_tracker_and_survives_failures() -> None
     assert await loop.poll() is True
     assert await loop.poll() is False
     assert await loop.poll() is False
+    assert (loop.polls, loop.poll_failures, loop.last_poll_error) == (3, 2, "RuntimeError")
     assert page.evaluate_calls == [VOICE_ACTIVITY_DRAIN_JS] * 3
 
 
@@ -409,6 +410,10 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
     assert result.phase == "ended"
     assert page.init_scripts == [load_voice_activity_script()]
     assert journal.events("voice_activity_started")
+    [stopped] = journal.events("voice_activity_stopped")
+    assert stopped["polls"] >= 1
+    assert stopped["poll_failures"] == 0
+    assert stopped["last_poll_error"] is None
 
 
 def test_ingestion_names_voice_labels_as_unverified() -> None:

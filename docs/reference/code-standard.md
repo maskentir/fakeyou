@@ -15,9 +15,10 @@ Kode domain tinggal di paket domain, bukan modul datar. Paket `cli` adalah adapt
 
 Error yang sampai ke pengguna berupa `FakeYouError` dengan kode dari `ErrorCode`. Pesan dirender dari template katalog; daftar kode dan exit code ada di [katalog error](error-catalog.md).
 
-- Tanpa `except` buta: tangkap exception spesifik yang memang bisa terjadi.
+- Tanpa `except` buta: tangkap exception spesifik yang memang bisa terjadi. Pengecualian hanya untuk tiga kasus, masing-masing wajib meninggalkan jejak observability (fault record, counter, baris journal, atau hasil terminal): sink observability (`Journal`, `FaultReporter`) yang tidak boleh raise, path teardown/close best-effort, dan panggilan eksternal yang terkungkung (browser/playwright, LLM, driver database) yang tipe exception-nya tidak bisa dispesifikkan secara jujur.
 - Boundary `try` hanya di entrypoint CLI dan worker; boundary harus meneruskan `FakeYouError` tanpa mengubah kode.
-- Tanpa silent swallow: tidak ada `except` yang diam-diam `pass`, `continue`, atau mengembalikan nilai kosong tanpa jejak observability.
+- Tanpa silent swallow: tidak ada `except` yang diam-diam `pass`, `continue`, atau mengembalikan nilai kosong tanpa jejak observability. Detail error untuk pengguna hanya memakai nama tipe, bukan teks mentah exception; teks lengkap masuk journal.
+- Kode katalog baru hanya untuk error yang bisa dialami pengguna; pelanggaran kontrak internal tetap builtin + traceback (contoh: transisi lifecycle invalid, guard `embed` yang sudah divalidasi di boundary).
 - Rantai exception baru dengan `from`.
 - Pelanggaran kontrak internal memakai builtin exception dengan pesan literal dan tampil sebagai traceback, bukan kode katalog.
 - `ValueError` dari validator pydantic dan konverter argparse dipertahankan karena framework mensyaratkannya.
@@ -69,4 +70,4 @@ Setiap fase memperbarui `README`, runbook, dan referensi agar cocok dengan kode.
 | `TEST_DATABASE_URL=... uv run pytest` | suite penuh dengan PostgreSQL |
 | `docker compose --profile audio build meeting-worker` + `pytest -m container` | image dan tes container |
 
-Perluasan seleksi ruff mengikuti fase: P4 mengaktifkan `BLE` dan `S`; P5 mengaktifkan `C90`, `PLR`, `ARG`, `FBT`, dan `SLF`; P6 mengaktifkan sisa `TRY` dan `EM` untuk kode baru. Aturan yang sudah aktif hari ini adalah `E`, `F`, `I`, `UP`, `B`, `ASYNC`, `T20`, `RUF021`, `FURB110`, `PLC0207`, dan `SIM114`.
+Perluasan seleksi ruff mengikuti fase: P5 mengaktifkan `C90`, `PLR`, `ARG`, `FBT`, dan `SLF`; P6 mengaktifkan sisa `TRY` dan `EM` untuk kode baru. Aturan yang sudah aktif hari ini adalah `E`, `F`, `I`, `UP`, `B`, `ASYNC`, `T20`, `RUF021`, `FURB110`, `PLC0207`, dan `SIM114`. `BLE` dan `S` dievaluasi pada P4 dan sengaja tidak diaktifkan: `BLE` menandai 82 situs yang setelah triase semuanya broad secara sah (ketiga kasus di atas) sehingga gate-nya hanya menambah puluhan `noqa`; `S` memberi false positive pada nama enum dan menandai pola yang sudah diputuskan (`assert` invarian, `sha1` fingerprint non-keamanan, `urlopen` dengan base URL konfigurasi).

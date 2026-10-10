@@ -23,6 +23,7 @@ from fakeyou.persistence.ingestion_status import (
     LOCK_STALE_AFTER_SECONDS,
     LeaseError,
     file_lease,
+    leased,
 )
 
 BROWSER_LAUNCH_ARGS = (
@@ -69,19 +70,21 @@ def profile_lock_path(profile_dir: Path) -> Path:
     return resolved.parent / f"{resolved.name}.lock"
 
 
+def _profile_in_use(error: LeaseError) -> ProfileInUseError:
+    return ProfileInUseError(ErrorCode.BROWSER_PROFILE_IN_USE, reason=str(error))
+
+
 @contextmanager
 def profile_lock(
     profile_dir: Path, *, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
 ) -> Iterator[str]:
-    try:
-        with file_lease(
-            profile_lock_path(profile_dir),
-            purpose="meeting",
-            stale_after_seconds=stale_after_seconds,
-        ) as token:
-            yield token
-    except LeaseError as error:
-        raise ProfileInUseError(ErrorCode.BROWSER_PROFILE_IN_USE, reason=str(error)) from None
+    lease = file_lease(
+        profile_lock_path(profile_dir),
+        purpose="meeting",
+        stale_after_seconds=stale_after_seconds,
+    )
+    with leased(lease, _profile_in_use) as token:
+        yield token
 
 
 def apply_browser_audio_policy() -> bool:
@@ -117,17 +120,23 @@ def stable_fingerprint_seed(stable_id: str) -> int:
     return 10000 + (int.from_bytes(digest[:4], "big") % 90000)
 
 
+def _load_preferences(prefs_path: Path) -> dict[str, Any]:
+    if not prefs_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(prefs_path.read_bytes())
+    except ValueError:
+        loaded = None
+    if isinstance(loaded, dict):
+        return loaded
+    prefs_path.rename(prefs_path.with_name(f"Preferences.corrupt-{time.time_ns()}"))
+    return {}
+
+
 def patch_preferences_for_3p_cookies(profile_dir: str) -> int:
     prefs_path = Path(profile_dir) / "Default" / "Preferences"
     prefs_path.parent.mkdir(parents=True, exist_ok=True)
-    prefs: dict[str, Any] = {}
-    if prefs_path.is_file():
-        try:
-            loaded = json.loads(prefs_path.read_text())
-        except (ValueError, OSError):
-            loaded = {}
-        if isinstance(loaded, dict):
-            prefs = loaded
+    prefs = _load_preferences(prefs_path)
     now = time.time_ns() // 1000 + _CHROME_EPOCH_OFFSET_US
     cookies_node: dict[str, Any] = (
         prefs.setdefault("profile", {})
@@ -280,7 +289,7 @@ async def _read_devtools_endpoint(
         try:
             raw = await asyncio.to_thread(path.read_text)
         except Exception as error:
-            detail = f"reading DevToolsActivePort failed: {error}"
+            detail = f"reading DevToolsActivePort failed: ({type(error).__name__})"
         else:
             parsed = _parse_devtools_address(raw)
             if parsed is not None:

@@ -524,6 +524,7 @@ async def join_meeting(
             conversation: ConversationLoop | None = None
             graphiti: Graphiti | None = None
             session_result: SessionResult | None = None
+            pending_error: FakeYouError | None = None
             async with AsyncExitStack() as resources:
                 journal = Journal(
                     resolved_meeting_id,
@@ -740,21 +741,34 @@ async def join_meeting(
                 )
                 if session_result is None:
                     with stop_signal_handlers(stop):
-                        session_result = await run_meeting_session(
-                            config,
-                            stop=stop,
-                            open_audio=audio_factory,
-                            initial_speech=initial_speech,
-                            conversation=conversation,
-                            faults=faults,
-                            journal=journal,
-                            voice_activity=voice_activity,
-                            meet_dispatcher=meet_dispatcher,
-                            visual_store=visual_store,
-                            visual_captioner=visual_captioner,
-                            visual_on_caption=visual_on_caption,
-                            **preflight_kwargs,
-                        )
+                        try:
+                            session_result = await run_meeting_session(
+                                config,
+                                stop=stop,
+                                open_audio=audio_factory,
+                                initial_speech=initial_speech,
+                                conversation=conversation,
+                                faults=faults,
+                                journal=journal,
+                                voice_activity=voice_activity,
+                                meet_dispatcher=meet_dispatcher,
+                                visual_store=visual_store,
+                                visual_captioner=visual_captioner,
+                                visual_on_caption=visual_on_caption,
+                                **preflight_kwargs,
+                            )
+                        except FakeYouError as error:
+                            pending_error = error
+                            session_result = SessionResult(
+                                "ended",
+                                (
+                                    "infra_failure"
+                                    if error.exit_code is ExitCode.INFRA_FAILURE
+                                    else "browser_failure"
+                                ),
+                                str(error),
+                                faults.report(),
+                            )
                 result = session_result
                 exit_code = (
                     ExitCode.FAILURE
@@ -806,6 +820,8 @@ async def join_meeting(
                 final_exit = exit_code
                 if record_error is not None and final_exit == 0:
                     final_exit = ExitCode.FAILURE
+                if pending_error is not None:
+                    final_exit = pending_error.exit_code
                 journal.record(
                     "cli_exited",
                     source="cli",
@@ -830,6 +846,7 @@ async def join_meeting(
             "phase": result.phase,
             "terminal_reason": result.terminal_reason,
             "detail": result.detail,
+            "error_code": pending_error.code.value if pending_error is not None else None,
             "faults": result.faults,
             "session_outcome": "completed" if exit_code == 0 else "failed",
             "ingestion_outcome": ingestion_outcome,

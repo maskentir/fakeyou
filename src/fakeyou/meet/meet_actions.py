@@ -197,7 +197,7 @@ async def send_chat(
         except Exception as error:
             return MeetActionResult(
                 outcome="failed",
-                detail=f"chat input never appeared: {error} (chars={chars})",
+                detail=f"chat input never appeared: {type(error).__name__} (chars={chars})",
             )
     failure = await click_when_ready(
         partial(page.locator, CHAT_INPUT_SELECTOR),

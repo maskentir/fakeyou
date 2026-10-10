@@ -289,6 +289,7 @@ async def test_probe_drain_loop_appends_batches(tmp_path: Path) -> None:
     loop = ProbeDrainLoop(page, probe)
     assert await loop.poll() is True
     assert await loop.poll() is False
+    assert (loop.polls, loop.poll_failures, loop.last_poll_error) == (2, 1, None)
     assert page.evaluate_calls == [PROBE_DRAIN_JS, PROBE_DRAIN_JS]
     rows = [json.loads(line) for line in probe_path_text(tmp_path).splitlines() if line]
     assert len(rows) == 1
@@ -537,6 +538,7 @@ async def test_probe_drain_loop_survives_append_failure(
     monkeypatch.setattr(probe, "append_page_batch", failing)
     loop = ProbeDrainLoop(page, probe)
     assert await loop.poll() is False
+    assert (loop.polls, loop.poll_failures, loop.last_poll_error) == (1, 1, "OSError")
 
 
 async def test_poll_stamps_mono_at_drain_midpoint(tmp_path: Path) -> None:

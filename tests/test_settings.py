@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -100,9 +101,15 @@ def test_importing_fakeyou_disables_implicit_dotenv_loading(tmp_path):
     assert result.stdout.splitlines()[-1] == "None"
 
 
-@pytest.mark.parametrize("process_value,expected", [(None, "384"), ("512", "512")])
-def test_cli_entry_exports_dotenv_before_graphiti_loads(tmp_path, process_value, expected):
-    (tmp_path / ".env").write_text("EMBEDDING_DIM=384\n")
+@pytest.mark.parametrize(
+    "process_value,expected",
+    [(None, "384"), ("512", "512")],
+    ids=["dotenv", "process-overrides-dotenv"],
+)
+def test_cli_entry_exports_the_embedding_dimension_before_graphiti_loads(
+    tmp_path, process_value, expected
+):
+    (tmp_path / ".env").write_text("FAKEYOU_MEMORY__EMBEDDER__DIM=384\n")
     script = (
         "import sys\n"
         "from fakeyou.cli.entry import main\n"
@@ -120,7 +127,7 @@ def test_cli_entry_exports_dotenv_before_graphiti_loads(tmp_path, process_value,
         if key not in {"EMBEDDING_DIM", "PYTHON_DOTENV_DISABLED"} and not key.startswith("FAKEYOU_")
     }
     if process_value is not None:
-        environment["EMBEDDING_DIM"] = process_value
+        environment["FAKEYOU_MEMORY__EMBEDDER__DIM"] = process_value
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=tmp_path,
@@ -191,3 +198,19 @@ def test_voiceprint_defaults_follow_identity_settings() -> None:
     )
     assert DEFAULTS.identity.voiceprint_policy_version == "v1"
     assert IdentitySettings() == DEFAULTS.identity
+
+
+def test_env_example_is_valid_when_its_optional_blocks_are_enabled(tmp_path, monkeypatch):
+    example = Path(__file__).resolve().parent.parent / ".env.example"
+    enabled = []
+    for line in example.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"#\s*(FAKEYOU_[A-Z0-9_]+=.*)", line)
+        if match and "EXTRA_BODY" not in match.group(1):
+            enabled.append(match.group(1))
+        else:
+            enabled.append(line)
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(enabled) + "\n", encoding="utf-8")
+    monkeypatch.setenv("FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS", "300")
+
+    Settings(_env_file=env_file)

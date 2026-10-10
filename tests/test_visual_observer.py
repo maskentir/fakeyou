@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from fakeyou.config.settings import VisualSettings
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_observer import (
@@ -119,6 +121,59 @@ async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
 
     assert len(model.seen) == 1
     assert received == [(frame.frame_id, "A launch timeline.")]
+    await observer.close()
+
+
+async def test_caption_failure_is_journaled_and_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    model = caption_model("A launch timeline.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    observer = VisualObserver(page, store, journal=journal, captioner=captioner)
+
+    async def failing(_frame: object) -> object:
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(captioner, "caption_frame", failing)
+    assert await observer.poll() is None
+    assert await observer.poll() is not None
+    await observer.drain_eager()
+
+    assert observer.caption_failures == 1
+    assert observer.last_caption_error == "RuntimeError"
+    [row] = journal.events("visual_caption_failed")
+    assert row["stage"] == "caption"
+    assert row["error_type"] == "RuntimeError"
+    await observer.close()
+
+
+async def test_caption_emit_failure_is_journaled_and_counted(tmp_path: Path) -> None:
+    png = shot_bytes()
+    page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[png])
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    model = caption_model("A launch timeline.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+
+    def failing_emit(_frame: object, _caption: object) -> None:
+        raise RuntimeError("record gone")
+
+    observer = VisualObserver(
+        page, store, journal=journal, captioner=captioner, on_caption=failing_emit
+    )
+    assert await observer.poll() is None
+    assert await observer.poll() is not None
+    await observer.drain_eager()
+
+    assert observer.caption_failures == 1
+    assert observer.last_caption_error == "RuntimeError"
+    [row] = journal.events("visual_caption_failed")
+    assert row["stage"] == "emit"
+    assert row["error_type"] == "RuntimeError"
     await observer.close()
 
 

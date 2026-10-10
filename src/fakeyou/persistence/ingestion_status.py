@@ -4,9 +4,10 @@ import os
 import socket
 import threading
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from datetime import UTC, datetime
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
@@ -163,23 +164,36 @@ def _process_alive(pid: int) -> bool:
 
 
 @contextmanager
+def leased(
+    lease: AbstractContextManager[str], translate: Callable[[LeaseError], Exception]
+) -> Iterator[str]:
+    stack = ExitStack()
+    try:
+        token = stack.enter_context(lease)
+    except LeaseError as error:
+        raise translate(error) from error
+    with stack:
+        yield token
+
+
+def _record_lock_error(error: LeaseError, *, record_path: Path) -> RecordLockError:
+    if error.code is ErrorCode.RECORD_LOCK_CORRUPT:
+        return RecordLockError(ErrorCode.RECORD_LOCK_CORRUPT, path=lock_path(record_path))
+    return RecordLockError(ErrorCode.RECORD_LOCKED, path=lock_path(record_path))
+
+
+@contextmanager
 def record_lock(
     record_path: Path,
     *,
     purpose: LockPurpose,
     stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS,
 ) -> Iterator[str]:
-    try:
-        with file_lease(
-            lock_path(record_path), purpose=purpose, stale_after_seconds=stale_after_seconds
-        ) as token:
-            yield token
-    except LeaseError as error:
-        if error.code is ErrorCode.RECORD_LOCK_CORRUPT:
-            raise RecordLockError(
-                ErrorCode.RECORD_LOCK_CORRUPT, path=lock_path(record_path)
-            ) from None
-        raise RecordLockError(ErrorCode.RECORD_LOCKED, path=lock_path(record_path)) from None
+    lease = file_lease(
+        lock_path(record_path), purpose=purpose, stale_after_seconds=stale_after_seconds
+    )
+    with leased(lease, partial(_record_lock_error, record_path=record_path)) as token:
+        yield token
 
 
 @contextmanager

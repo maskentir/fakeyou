@@ -82,6 +82,7 @@ class ErrorCode(StrEnum):
     MEMORY_INGESTION_GROUP_MISMATCH = "memory.ingestion_group_mismatch"
     MEMORY_FORGET_TARGET_REQUIRED = "memory.forget_target_required"
     MEMORY_KEEP_RECORD_REQUIRES_MEETING = "memory.keep_record_requires_meeting"
+    MEMORY_FORGET_INCOMPLETE = "memory.forget_incomplete"
     NOTE_CORRECTION_TARGET_INACTIVE = "note.correction_target_inactive"
     NOTE_NOT_PENDING = "note.not_pending"
     NOTE_CORRECTION_CONCURRENT = "note.correction_concurrent"
@@ -152,6 +153,7 @@ class ErrorCode(StrEnum):
     BROWSER_DEVTOOLS_UNAVAILABLE = "browser.devtools_unavailable"
     BROWSER_MCP_MISSING = "browser.mcp_missing"
     DATABASE_SCHEMA_EMPTY = "database.schema_empty"
+    DATABASE_SCHEMA_HEADS_INVALID = "database.schema_heads_invalid"
     MEETING_BRIEF_REQUIRES_PROFILE = "meeting.brief_requires_profile"
     NOTE_GROUP_ID_INVALID = "note.group_id_invalid"
     NOTE_ID_NOT_UUID = "note.id_not_uuid"
@@ -456,6 +458,7 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING: ErrorSpec(
         "--keep-record only applies to --meeting", ExitCode.INPUT_REJECTED
     ),
+    ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
     ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),
     ErrorCode.NOTE_CORRECTION_CONCURRENT: ErrorSpec(
@@ -622,6 +625,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.DATABASE_SCHEMA_EMPTY: ErrorSpec(
         "database has no migrations applied, expected {expected}; run `" + Command.DB_UPGRADE + "`"
+    ),
+    ErrorCode.DATABASE_SCHEMA_HEADS_INVALID: ErrorSpec(
+        "expected exactly one migration head, found {count}"
     ),
     ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE: ErrorSpec(
         "a meeting brief requires a persona profile", ExitCode.INPUT_REJECTED

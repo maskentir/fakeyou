@@ -680,8 +680,9 @@ async def test_forget_meeting_stops_when_an_episode_survives_removal(
 
     memory.remove_episode = remove_without_effect
 
-    with pytest.raises(RuntimeError, match="stuck"):
+    with pytest.raises(FakeYouError, match="stuck") as caught:
         await forget_meeting(memory, group_id="team_alpha", meeting_id="meeting-1")
+    assert caught.value.code is ErrorCode.MEMORY_FORGET_INCOMPLETE
 
 
 @pytest.mark.parametrize("group_id,allowed", [("team_alpha", True), ("team_beta", False)])

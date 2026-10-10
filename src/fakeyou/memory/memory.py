@@ -801,7 +801,7 @@ async def forget_meeting(memory: Graphiti, *, group_id: str, meeting_id: str) ->
     ):
         for episode in episodes:
             if episode.uuid in removed:
-                raise RuntimeError(f"episode {episode.uuid} survived removal")
+                raise FakeYouError(ErrorCode.MEMORY_FORGET_INCOMPLETE, uuid=episode.uuid)
             await memory.remove_episode(episode.uuid)
             removed.add(episode.uuid)
     for node in await SagaNode.get_by_group_ids(memory.driver, [group_id]):

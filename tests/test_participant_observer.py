@@ -121,7 +121,9 @@ def test_poll_exception_does_not_stop_observer():
                 mining_result(("a", "Budi", False, True)),
             ]
         )
-        observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
+        observer = ParticipantObserver(
+            page, epoch="e1", monotonic=lambda: 100.0, poll_interval_seconds=0.01
+        )
         await observer.start()
         await asyncio.sleep(0.9)
         samples, roster = observer.snapshot()
@@ -130,6 +132,9 @@ def test_poll_exception_does_not_stop_observer():
             "a",
         }
         assert samples[-1].active_ids == ("a",)
+        assert observer.polls >= 3
+        assert observer.poll_failures == 1
+        assert observer.last_poll_error == "RuntimeError"
 
     asyncio.run(run())
 

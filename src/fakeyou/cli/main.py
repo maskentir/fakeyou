@@ -35,7 +35,7 @@ from fakeyou.cli.voiceprint import (
     voiceprint_verify,
 )
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
-from fakeyou.config.settings import Settings, export_dotenv
+from fakeyou.config.settings import Settings
 from fakeyou.observability.provider_faults import ProviderFault
 
 _SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
@@ -386,7 +386,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    export_dotenv()
     parsed = vars(build_parser().parse_args())
     handler = parsed.pop("handler")
     options = {
@@ -400,11 +399,13 @@ def main() -> None:
         _report(error)
     except ValidationError as error:
         _report(FakeYouError(ErrorCode.CONFIG_INVALID, reason=_describe(error)))
+    except KeyboardInterrupt:
+        _report(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
     try:
         outcome = handler(**options, settings=settings)
         if inspect.iscoroutine(outcome):
             asyncio.run(outcome)
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         _report(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
     except FakeYouError as error:
         _report(error)
@@ -424,7 +425,3 @@ def _describe(error: ValidationError) -> str:
         f"{'.'.join(str(part) for part in issue['loc']) or 'input'}: {issue['msg']}"
         for issue in error.errors(include_url=False, include_input=False)
     )
-
-
-if __name__ == "__main__":
-    main()

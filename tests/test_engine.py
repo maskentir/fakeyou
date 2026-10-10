@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy.exc import DisconnectionError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
@@ -100,3 +101,13 @@ def test_open_database_reports_an_unreachable_server_without_the_password(
     assert error.value.__cause__ is not None
     assert "secret" not in str(error.value)
     assert "secret" not in str(error.value.__cause__)
+
+
+def test_open_database_maps_a_dropped_connection_to_unreachable(settings: Settings) -> None:
+    settings.database.url = SecretStr("postgresql://fakeyou:secret@127.0.0.1:1/fakeyou")
+
+    with pytest.raises(FakeYouError) as error:
+        with open_database(settings):
+            raise DisconnectionError("server closed the connection")
+
+    assert error.value.code is ErrorCode.DATABASE_UNREACHABLE

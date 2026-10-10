@@ -66,6 +66,24 @@ def test_head_revision_is_the_revision_declared_by_the_baseline_migration() -> N
     assert head_revision() == baseline.revision
 
 
+def test_head_revision_rejects_branching_heads(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BranchedDirectory:
+        @staticmethod
+        def from_config(_config: object) -> _BranchedDirectory:
+            return _BranchedDirectory()
+
+        @staticmethod
+        def get_heads() -> list[str]:
+            return ["aaa", "bbb"]
+
+    monkeypatch.setattr("fakeyou.db.schema.ScriptDirectory", _BranchedDirectory)
+
+    with pytest.raises(FakeYouError, match="found 2") as error:
+        head_revision()
+
+    assert error.value.code is ErrorCode.DATABASE_SCHEMA_HEADS_INVALID
+
+
 def test_migration_files_live_inside_the_package() -> None:
     assert (MIGRATIONS_DIR / "env.py").is_file()
     assert (MIGRATIONS_DIR / "script.py.mako").is_file()

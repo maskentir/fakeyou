@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
@@ -22,6 +23,7 @@ from fakeyou.persistence.ingestion_status import (
     LeaseError,
     RecordLockError,
     file_lease,
+    leased,
     write_atomically,
 )
 
@@ -95,14 +97,15 @@ def ledger_lock_path(record_path: Path) -> Path:
     return record_path.parent / LEDGER_LOCK_FILE_NAME
 
 
+def _ledger_locked(_error: LeaseError, *, path: Path) -> RecordLockError:
+    return RecordLockError(ErrorCode.ACTION_LEDGER_LOCKED, path=path)
+
+
 @contextmanager
 def ledger_lock(record_path: Path) -> Iterator[str]:
-    try:
-        with file_lease(ledger_lock_path(record_path), purpose="meeting") as token:
-            yield token
-    except LeaseError:
-        path = ledger_lock_path(record_path)
-        raise RecordLockError(ErrorCode.ACTION_LEDGER_LOCKED, path=path) from None
+    path = ledger_lock_path(record_path)
+    with leased(file_lease(path, purpose="meeting"), partial(_ledger_locked, path=path)) as token:
+        yield token
 
 
 def action_id_for(meeting_id: str, seq: int, tool_call_id: str | None = None) -> str:

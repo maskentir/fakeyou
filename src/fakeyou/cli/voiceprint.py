@@ -229,7 +229,7 @@ def voiceprint_enroll(
     for path in paths:
         label, frames, count = _read_clip_frames(path)
         seconds = count / VOICEPRINT_SAMPLE_RATE
-        if seconds < min_seconds:
+        if count == 0 or seconds < min_seconds:
             raise FakeYouError(
                 ErrorCode.VOICEPRINT_CLIP_TOO_SHORT,
                 label=label,
@@ -400,7 +400,15 @@ def voiceprint_verify(
     journal: Journal | None = None,
     embedder: SpeakerEmbedder | None = None,
 ) -> None:
-    _label, frames, count = _read_clip_frames(clip)
+    label, frames, count = _read_clip_frames(clip)
+    seconds = count / VOICEPRINT_SAMPLE_RATE
+    if count == 0 or seconds < settings.identity.voiceprint_min_seconds:
+        raise FakeYouError(
+            ErrorCode.VOICEPRINT_CLIP_TOO_SHORT,
+            label=label,
+            seconds=seconds,
+            minimum=settings.identity.voiceprint_min_seconds,
+        )
     utterance = _to_utterance(frames, count)
     with (
         _open_store(settings, store) as owned_store,

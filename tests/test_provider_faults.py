@@ -142,12 +142,12 @@ def test_plain_timeout_error_maps_once() -> None:
     assert fault.retryable is True
 
 
-def test_unknown_error_carries_class_name_and_message() -> None:
+def test_unknown_error_carries_class_name_only() -> None:
     fault = classify_exception("agent", ValueError("weird shape"))
 
     assert fault.kind == "unknown"
     assert fault.retryable is False
-    assert fault.detail == "ValueError: weird shape"
+    assert fault.detail == "ValueError"
 
 
 def test_cancelled_error_is_never_classified() -> None:

@@ -161,6 +161,8 @@ async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
 
     assert result.status == "failed"
     assert "lobby page content" in result.detail
+    assert "(RuntimeError)" in result.detail
+    assert "lobby gone" not in result.detail
 
 
 async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
@@ -401,6 +403,24 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
     assert failure is None
     assert calls["wait_for"] == {"state": "visible", "timeout": 2000}
     assert calls["click"] == {"timeout": 5000}
+
+
+async def test_click_when_ready_reports_error_type_name_only() -> None:
+    class _FailingLocator:
+        @property
+        def first(self):
+            return self
+
+        async def wait_for(self, **_kwargs):
+            return None
+
+        async def click(self, **_kwargs):
+            raise RuntimeError("boom secret-token")
+
+    failure = await click_when_ready(_FailingLocator, "join button", FakeClock().sleep, 1)
+
+    assert failure == "clicking 'join button' failed after 1 attempts: RuntimeError"
+    assert "secret-token" not in (failure or "")
 
 
 @pytest.mark.parametrize(
