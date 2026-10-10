@@ -11,6 +11,7 @@ from fakeyou.audio.deaf import CaptureActivity
 from fakeyou.audio.probe_replay import (
     LABEL_STABILITY_GATE,
     OVERLAP_UNKNOWN_GATE,
+    SpeakerAliases,
     replay_voice_labels,
     voice_fixture_from_probe,
 )
@@ -26,10 +27,10 @@ from fakeyou.audio.voice_activity import (
 )
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.memory.ingestion import extraction_instructions, meeting_windows
 from fakeyou.observability.report import build_session_report
-from fakeyou.orchestration.runtime import run_meeting_session
+from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.persistence.record import TranscriptEntry
 from tests.fakes import (
     IN_CALL,
@@ -399,13 +400,15 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
     journal = RecordingJournal("m")
     result = await run_meeting_session(
         config,
-        stop=stop,
-        open_page=FakePageSession(page).open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
-        voice_activity=tracker,
+        SessionWiring(
+            stop=stop,
+            open_page=FakePageSession(page).open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+            voice_activity=tracker,
+        ),
     )
     assert result.phase == "ended"
     assert page.init_scripts == [load_voice_activity_script()]
@@ -489,7 +492,7 @@ async def test_voice_script_taps_remote_audio_and_skips_local_microphone() -> No
         " ctx.resume();"
         "})();"
     )
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(fake_microphone)
         await page.add_init_script(load_voice_activity_script())
         await page.route(
@@ -742,7 +745,7 @@ def test_voice_fixture_carries_encoded_frames(tmp_path: Path) -> None:
     truth = tmp_path / "truth.json"
     truth.write_text("[]", encoding="utf-8")
     fixture = voice_fixture_from_probe(
-        probe, record, truth, twin_name="Twin", aliases={}, persons={}
+        probe, record, truth, twin_name="Twin", speakers=SpeakerAliases({}, {})
     )
     assert fixture["events"][0]["batch"]["frames"] == [[900.0, 1, 0.4, [42, 7]]]
 

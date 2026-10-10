@@ -122,6 +122,22 @@ class _Operation:
     target_digest: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class NoteIdentity:
+    note_id: UUID | None = None
+    supersedes: UUID | None = None
+
+
+DEFAULT_NOTE_IDENTITY = NoteIdentity()
+
+
+@dataclass(frozen=True, slots=True)
+class _NoteAttempt:
+    body: str
+    source_at: datetime | None
+    target: str | None
+
+
 def _require_group(group_id: str) -> None:
     if not _GROUP_PATTERN.fullmatch(group_id):
         raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
@@ -373,39 +389,37 @@ async def _resume_note(
     memory: Graphiti,
     *,
     group_id: str,
-    body: str,
-    source_at: datetime | None,
-    target: str | None,
+    attempt: _NoteAttempt,
     stored: _StoredNote,
 ) -> OwnerNoteResult:
     if stored.group_id != group_id:
         raise NoteConflictError(ErrorCode.NOTE_ID_IN_USE)
     if stored.status == "superseded":
         raise NoteConflictError(ErrorCode.NOTE_ALREADY_SUPERSEDED)
-    if source_at is not None and source_at != stored.source_at:
+    if attempt.source_at is not None and attempt.source_at != stored.source_at:
         raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
-    if target != stored.target_uuid:
+    if attempt.target != stored.target_uuid:
         raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
-    if _digest(group_id, body, stored.source_at, target) != stored.digest:
+    if _digest(group_id, attempt.body, stored.source_at, attempt.target) != stored.digest:
         raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
     if stored.status == "active":
         return await _result_for_active(memory, group_id=group_id, stored=stored)
     target_source_at: datetime | None = None
     target_recorded_at: datetime | None = None
     target_digest: str | None = None
-    if target is not None:
+    if attempt.target is not None:
         target_source_at, target_recorded_at, target_digest = await _require_correction_target(
-            memory, group_id=group_id, target=target, effective=stored.source_at
+            memory, group_id=group_id, target=attempt.target, effective=stored.source_at
         )
     return await _advance_note(
         memory,
         group_id=group_id,
         operation=_Operation(
             uuid=stored.uuid,
-            body=body,
+            body=attempt.body,
             source_at=stored.source_at,
             recorded_at=stored.recorded_at,
-            target=target,
+            target=attempt.target,
             target_source_at=target_source_at,
             target_recorded_at=target_recorded_at,
             target_digest=target_digest,
@@ -419,8 +433,7 @@ async def remember_owner_note(
     group_id: str,
     text: str,
     source_at: datetime | None = None,
-    note_id: UUID | None = None,
-    supersedes: UUID | None = None,
+    identity: NoteIdentity = DEFAULT_NOTE_IDENTITY,
 ) -> OwnerNoteResult:
     _require_group(group_id)
     body = text.strip()
@@ -431,16 +444,14 @@ async def remember_owner_note(
     now = datetime.now(UTC)
     if source_at is not None and source_at > now:
         raise FakeYouError(ErrorCode.NOTE_SOURCE_AT_FUTURE)
-    target = str(supersedes) if supersedes is not None else None
-    operation = str(note_id) if note_id is not None else str(uuid4())
+    target = str(identity.supersedes) if identity.supersedes is not None else None
+    operation = str(identity.note_id) if identity.note_id is not None else str(uuid4())
     stored = await _load_control(memory, group_id, operation)
     if stored is not None:
         return await _resume_note(
             memory,
             group_id=group_id,
-            body=body,
-            source_at=source_at,
-            target=target,
+            attempt=_NoteAttempt(body, source_at, target),
             stored=stored,
         )
     effective = now if source_at is None else source_at

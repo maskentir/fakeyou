@@ -4,7 +4,7 @@ from unittest.mock import DEFAULT, AsyncMock, MagicMock
 import pytest
 from playwright.async_api import Page
 
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import CallObservation
 from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
 
@@ -214,7 +214,7 @@ async def test_should_reset_modal_stability_when_content_changes(page, observe):
 
 @pytest.mark.browser
 async def test_should_read_visible_people_count_and_dismiss_only_safe_fixture_modal():
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         notice = """<button aria-label="Leave call">Leave</button>
             <button aria-label="People - 3 participants">People</button>
             <button style="display:none" aria-label="People - 99 participants">Hidden</button>

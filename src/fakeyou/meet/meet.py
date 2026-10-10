@@ -270,71 +270,116 @@ async def _click_join(
         await sleep(1.0)
 
 
+@dataclass(frozen=True, slots=True)
+class JoinPolling:
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    monotonic: Callable[[], float] = time.monotonic
+    abort: Callable[[], bool] | None = None
+
+
+DEFAULT_JOIN_POLLING = JoinPolling()
+
+
+async def _prepare_lobby(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    polling: JoinPolling,
+    init_scripts: Sequence[str],
+) -> str | None:
+    failure = await _open_meeting_page(page, request.link, init_scripts)
+    if failure is not None:
+        return failure
+    failure = await _dismiss_media_dialog(page, signals, polling.sleep)
+    if failure is not None:
+        return failure
+    failure = await _enter_twin_name(page, request.twin_name, signals, polling.sleep)
+    if failure is not None:
+        return failure
+    return await _click_join(
+        page, signals, request.button_timeout_seconds, polling.sleep, polling.monotonic
+    )
+
+
+async def _poll_content(page: Page, abort: Callable[[], bool] | None) -> str | JoinResult:
+    if abort is not None and abort():
+        return JoinResult(status="aborted", detail="stop requested while waiting for admission")
+    try:
+        return await page.content()
+    except Exception as error:
+        return JoinResult(
+            status="failed",
+            detail=f"reading lobby page content failed: ({type(error).__name__})",
+        )
+
+
+async def _poll_captcha(
+    page: Page,
+    polling: JoinPolling,
+    captcha_since: float | None,
+    request: GuestJoinRequest,
+) -> tuple[JoinResult | None, float | None]:
+    if not await _has_live_captcha(page):
+        return JoinResult(status="blocked", detail="platform blocked the guest"), captcha_since
+    now = polling.monotonic()
+    if captcha_since is None:
+        captcha_since = now
+    if now - captcha_since < request.captcha_grace_seconds:
+        await polling.sleep(request.poll_interval_seconds)
+        return None, captcha_since
+    return (
+        JoinResult(
+            status="blocked",
+            detail="captcha challenge went unsolved; platform blocked the guest",
+        ),
+        captcha_since,
+    )
+
+
+async def _timeout_outcome(
+    page: Page, content: str, signals: MeetSignals, request: GuestJoinRequest
+) -> JoinResult:
+    if _is_waiting(content):
+        detail = f"still waiting for admission after {request.lobby_timeout_seconds} seconds"
+    else:
+        detail = f"no admission within {request.lobby_timeout_seconds} seconds"
+    try:
+        rechecked = await page.content()
+    except Exception:
+        return JoinResult(status="timeout", detail=detail)
+    if _is_in_call(rechecked, signals):
+        return JoinResult(status="admitted", detail="guest admitted to the call")
+    return JoinResult(status="timeout", detail=detail)
+
+
 async def request_guest_join(
     page: Page,
     request: GuestJoinRequest,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    monotonic: Callable[[], float] = time.monotonic,
-    abort: Callable[[], bool] | None = None,
+    polling: JoinPolling = DEFAULT_JOIN_POLLING,
     init_scripts: Sequence[str] = (),
 ) -> JoinResult:
-    failure = await _open_meeting_page(page, request.link, init_scripts)
+    failure = await _prepare_lobby(page, request, signals, polling, init_scripts)
     if failure is not None:
         return JoinResult(status="failed", detail=failure)
-    failure = await _dismiss_media_dialog(page, signals, sleep)
-    if failure is not None:
-        return JoinResult(status="failed", detail=failure)
-    failure = await _enter_twin_name(page, request.twin_name, signals, sleep)
-    if failure is not None:
-        return JoinResult(status="failed", detail=failure)
-    failure = await _click_join(page, signals, request.button_timeout_seconds, sleep, monotonic)
-    if failure is not None:
-        return JoinResult(status="failed", detail=failure)
-    deadline = monotonic() + request.lobby_timeout_seconds
+    deadline = polling.monotonic() + request.lobby_timeout_seconds
     captcha_since: float | None = None
     while True:
-        if abort is not None and abort():
-            return JoinResult(status="aborted", detail="stop requested while waiting for admission")
-        try:
-            content = await page.content()
-        except Exception as error:
-            return JoinResult(
-                status="failed",
-                detail=f"reading lobby page content failed: ({type(error).__name__})",
-            )
+        content = await _poll_content(page, polling.abort)
+        if isinstance(content, JoinResult):
+            return content
         if _is_explicit_denial(content):
             return JoinResult(status="denied", detail="guest request to join was denied")
         if signals.denied in content:
-            if await _has_live_captcha(page):
-                now = monotonic()
-                if captcha_since is None:
-                    captcha_since = now
-                if now - captcha_since < request.captcha_grace_seconds:
-                    await sleep(request.poll_interval_seconds)
-                    continue
-                return JoinResult(
-                    status="blocked",
-                    detail="captcha challenge went unsolved; platform blocked the guest",
-                )
-            return JoinResult(status="blocked", detail="platform blocked the guest")
+            outcome, captcha_since = await _poll_captcha(page, polling, captcha_since, request)
+            if outcome is None:
+                continue
+            return outcome
         if _is_in_call(content, signals):
             return JoinResult(status="admitted", detail="guest admitted to the call")
-        if monotonic() >= deadline:
-            if _is_waiting(content):
-                detail = (
-                    f"still waiting for admission after {request.lobby_timeout_seconds} seconds"
-                )
-            else:
-                detail = f"no admission within {request.lobby_timeout_seconds} seconds"
-            try:
-                rechecked = await page.content()
-            except Exception:
-                return JoinResult(status="timeout", detail=detail)
-            if _is_in_call(rechecked, signals):
-                return JoinResult(status="admitted", detail="guest admitted to the call")
-            return JoinResult(status="timeout", detail=detail)
-        await sleep(request.poll_interval_seconds)
+        if polling.monotonic() >= deadline:
+            return await _timeout_outcome(page, content, signals, request)
+        await polling.sleep(request.poll_interval_seconds)
 
 
 async def observe_call_state(
@@ -362,7 +407,9 @@ async def enable_meeting_microphone(
     disabled = (
         'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
     )
-    return await toggle_control(page, enabled, disabled, "microphone", "enabled", sleep)
+    return await toggle_control(
+        page, ToggleSelectors(enabled, disabled), "microphone", "enabled", sleep
+    )
 
 
 async def disable_meeting_camera(
@@ -370,27 +417,34 @@ async def disable_meeting_camera(
 ) -> bool:
     on = 'button[aria-label^="Turn off camera" i]'
     off = 'button[aria-label^="Turn on camera" i]'
-    return await toggle_control(page, off, on, "camera", "disabled", sleep)
+    return await toggle_control(page, ToggleSelectors(off, on), "camera", "disabled", sleep)
+
+
+@dataclass(frozen=True, slots=True)
+class ToggleSelectors:
+    desired: str
+    toggle: str
 
 
 async def toggle_control(
     page: Page,
-    desired: str,
-    toggle: str,
+    selectors: ToggleSelectors,
     control: str,
     state: str,
     sleep: Callable[[float], Awaitable[None]],
 ) -> bool:
     try:
-        if await page.locator(desired).first.is_visible():
+        if await page.locator(selectors.desired).first.is_visible():
             return True
     except Exception as error:
         raise RuntimeError(f"checking {control} state failed: {error}") from error
-    failure = await click_when_ready(partial(page.locator, toggle), f"{control} button", sleep)
+    failure = await click_when_ready(
+        partial(page.locator, selectors.toggle), f"{control} button", sleep
+    )
     if failure is not None:
         raise RuntimeError(failure)
     try:
-        await page.locator(desired).first.wait_for(state="visible", timeout=10000)
+        await page.locator(selectors.desired).first.wait_for(state="visible", timeout=10000)
     except Exception as error:
         raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
     return True

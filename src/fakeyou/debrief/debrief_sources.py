@@ -67,6 +67,78 @@ def _corrected_speakers(
     }
 
 
+def _parse_record_entry(line: bytes, line_number: int) -> RecordEntry:
+    try:
+        return _RECORD_ENTRY.validate_json(line)
+    except ValidationError:
+        raise DebriefValidationError(
+            ErrorCode.DEBRIEF_RECORD_INVALID_LINE, line=line_number
+        ) from None
+
+
+def _append_transcript(
+    sources: list[SourceEntry],
+    transcripts: dict[str, TranscriptEntry],
+    entry: TranscriptEntry,
+) -> None:
+    if not entry.id.strip():
+        raise DebriefValidationError(ErrorCode.DEBRIEF_TRANSCRIPT_ID_BLANK) from None
+    previous = transcripts.get(entry.id)
+    if previous is not None:
+        if previous != entry:
+            raise DebriefValidationError(ErrorCode.DEBRIEF_TRANSCRIPT_CONTRADICTORY) from None
+        return
+    transcripts[entry.id] = entry
+    if entry.text.strip():
+        sources.append(
+            SourceEntry(
+                id=f"transcript:{entry.id}",
+                text=entry.text,
+                kind="participant",
+                participant_id=entry.participant_id,
+                at=entry.at,
+                display_claim=entry.display_claim,
+            )
+        )
+
+
+def _append_twin(sources: list[SourceEntry], entry: TwinSpeechEntry, line_number: int) -> None:
+    if not entry.text.strip():
+        return
+    sources.append(
+        SourceEntry(
+            id=f"twin_speech:{line_number}",
+            text=entry.text,
+            kind="twin",
+            participant_id="twin",
+            at=entry.at,
+        )
+    )
+
+
+def _append_visual(
+    sources: list[SourceEntry], visuals: dict[str, VisualEntry], entry: VisualEntry
+) -> None:
+    if not entry.frame_ref.strip():
+        raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_ID_BLANK) from None
+    previous = visuals.get(entry.frame_ref)
+    if previous is not None:
+        if previous != entry:
+            raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_CONTRADICTORY) from None
+        return
+    visuals[entry.frame_ref] = entry
+    if entry.caption.strip():
+        sources.append(
+            SourceEntry(
+                id=entry.frame_ref,
+                text=entry.caption,
+                kind="visual",
+                participant_id="shared_screen",
+                at=entry.captured_at,
+            )
+        )
+
+
 def load_record_snapshot(
     path: Path, *, faults: FaultReporter | None = None, journal: Journal | None = None
 ) -> RecordSnapshot:
@@ -80,63 +152,13 @@ def load_record_snapshot(
     for line_number, line in enumerate(raw.splitlines(), start=1):
         if not line.strip():
             continue
-        try:
-            entry = _RECORD_ENTRY.validate_json(line)
-        except ValidationError:
-            raise DebriefValidationError(
-                ErrorCode.DEBRIEF_RECORD_INVALID_LINE, line=line_number
-            ) from None
+        entry = _parse_record_entry(line, line_number)
         if isinstance(entry, TranscriptEntry):
-            if not entry.id.strip():
-                raise DebriefValidationError(ErrorCode.DEBRIEF_TRANSCRIPT_ID_BLANK) from None
-            previous = transcripts.get(entry.id)
-            if previous is not None:
-                if previous != entry:
-                    raise DebriefValidationError(
-                        ErrorCode.DEBRIEF_TRANSCRIPT_CONTRADICTORY
-                    ) from None
-                continue
-            transcripts[entry.id] = entry
-            if entry.text.strip():
-                sources.append(
-                    SourceEntry(
-                        id=f"transcript:{entry.id}",
-                        text=entry.text,
-                        kind="participant",
-                        participant_id=entry.participant_id,
-                        at=entry.at,
-                        display_claim=entry.display_claim,
-                    )
-                )
-        elif isinstance(entry, TwinSpeechEntry) and entry.text.strip():
-            sources.append(
-                SourceEntry(
-                    id=f"twin_speech:{line_number}",
-                    text=entry.text,
-                    kind="twin",
-                    participant_id="twin",
-                    at=entry.at,
-                )
-            )
+            _append_transcript(sources, transcripts, entry)
+        elif isinstance(entry, TwinSpeechEntry):
+            _append_twin(sources, entry, line_number)
         elif isinstance(entry, VisualEntry):
-            if not entry.frame_ref.strip():
-                raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_ID_BLANK) from None
-            previous_visual = visuals.get(entry.frame_ref)
-            if previous_visual is not None:
-                if previous_visual != entry:
-                    raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_CONTRADICTORY) from None
-                continue
-            visuals[entry.frame_ref] = entry
-            if entry.caption.strip():
-                sources.append(
-                    SourceEntry(
-                        id=entry.frame_ref,
-                        text=entry.caption,
-                        kind="visual",
-                        participant_id="shared_screen",
-                        at=entry.captured_at,
-                    )
-                )
+            _append_visual(sources, visuals, entry)
     if not sources:
         raise DebriefValidationError(ErrorCode.DEBRIEF_NO_SPEECH_SOURCES) from None
     corrected = _corrected_speakers(path, faults, journal)

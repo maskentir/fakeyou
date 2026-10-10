@@ -9,12 +9,16 @@ from fakeyou.audio.audio import (
     ManagedMuseSTT,
     MeetingAudioError,
     MeetingAudioSession,
+    SessionCapture,
+    SessionPipeline,
+    SessionRuntime,
     run_stt_reconnect,
     stt_ready,
     stt_reconnect_supported,
 )
 from fakeyou.audio.deaf import CaptureActivity
 from fakeyou.audio.voice import create_muse_stt
+from fakeyou.observability.diagnostics import Diagnostics
 from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT
 
 
@@ -53,14 +57,11 @@ def _quiet_session(
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        now=lambda: clock[0],
-        stt_idle_reconnect_seconds=stt_idle_reconnect_seconds,
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        runtime=SessionRuntime(
+            now=lambda: clock[0], stt_idle_reconnect_seconds=stt_idle_reconnect_seconds
+        ),
     )
     clock[0] += 10.0
     activity.observe_audio()
@@ -179,14 +180,10 @@ async def test_dead_socket_reconnect_bypasses_quiet_gate(journal) -> None:
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -209,14 +206,10 @@ async def test_healthy_socket_reconnect_keeps_quiet_gate(journal) -> None:
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.OPEN)
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -237,15 +230,10 @@ async def test_reconnect_journal_events_carry_stream_id(journal) -> None:
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
-        stream_id="slot-2",
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0], stream_id="slot-2"),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -271,15 +259,10 @@ async def test_reconnect_failed_journal_event_carries_stream_id(journal) -> None
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=_FailingReconnectSTT(),
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
-        stream_id="slot-1",
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=_FailingReconnectSTT(), activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0], stream_id="slot-1"),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -304,14 +287,10 @@ async def test_reconnect_journal_events_omit_missing_stream_id(journal) -> None:
     runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -364,13 +343,9 @@ async def test_stale_queued_reconnect_deadline_fails_without_admit() -> None:
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        now=lambda: clock[0],
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
         session.request_stt_reconnect("native_request")
@@ -392,14 +367,10 @@ async def test_admit_resets_stale_queued_reconnect_epoch(journal) -> None:
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        object(),
-        object(),
-        runner_task,
-        _Playback(),
-        stt=stt,
-        activity=activity,
-        journal=journal,
-        now=lambda: clock[0],
+        SessionPipeline(object(), object(), runner_task, _Playback()),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
         session.request_stt_reconnect("native_request")

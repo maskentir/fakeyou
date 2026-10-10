@@ -5,12 +5,15 @@ import stat
 import pytest
 
 from fakeyou.audio.playback import (
+    PlaybackBackend,
     PlaybackEngine,
     PlaybackError,
     PlaybackEvent,
+    PlaybackTiming,
     create_pactl_muter,
     create_paplay_stream_runner,
 )
+from fakeyou.observability.diagnostics import Diagnostics
 
 
 class _Synth:
@@ -91,13 +94,25 @@ class _Muter:
             raise self.error
 
 
-def _engine(synth, player, muter, events, **overrides):
+def _engine(
+    synth,
+    player,
+    muter,
+    events,
+    tail_seconds=0.5,
+    stream_audio=None,
+    journal=None,
+    faults=None,
+    cleanup_timeout_seconds=5.0,
+):
     return PlaybackEngine(
         synth,
-        stream_audio=overrides.pop("stream_audio", player),
-        set_muted=muter,
+        PlaybackBackend(muter, stream_audio if stream_audio is not None else player),
         on_event=events.append,
-        **overrides,
+        timing=PlaybackTiming(
+            tail_seconds=tail_seconds, cleanup_timeout_seconds=cleanup_timeout_seconds
+        ),
+        diagnostics=Diagnostics(faults=faults, journal=journal),
     )
 
 
@@ -584,21 +599,23 @@ async def test_external_cancel_during_synthesis_propagates() -> None:
 async def test_typed_synth_fault_records_and_engine_recovers(
     journal,
 ) -> None:
+    from fakeyou.observability.diagnostics import Diagnostics
     from fakeyou.observability.faults import FaultReporter
-    from fakeyou.observability.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
 
     reporter = FaultReporter(journal=journal)
-    synth = _Synth(error=ProviderFault("tts", "timeout", detail="slow", retryable=True))
+    synth = _Synth(
+        error=ProviderFault("tts", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
     player = _Player()
     muter = _Muter()
     events: list[PlaybackEvent] = []
     engine = PlaybackEngine(
         synth,
-        stream_audio=player,
-        set_muted=muter,
+        PlaybackBackend(muter, player),
         on_event=events.append,
-        tail_seconds=0,
-        faults=reporter,
+        timing=PlaybackTiming(tail_seconds=0),
+        diagnostics=Diagnostics(faults=reporter),
     )
 
     try:
@@ -627,11 +644,10 @@ async def test_play_failure_records_and_worker_survives(
     events: list[PlaybackEvent] = []
     engine = PlaybackEngine(
         synth,
-        stream_audio=player,
-        set_muted=muter,
+        PlaybackBackend(muter, player),
         on_event=events.append,
-        tail_seconds=0,
-        faults=reporter,
+        timing=PlaybackTiming(tail_seconds=0),
+        diagnostics=Diagnostics(faults=reporter),
     )
 
     try:

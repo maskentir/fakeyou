@@ -37,10 +37,11 @@ from fakeyou.db.engine import require_url
 from fakeyou.foundation.attribution_probe import AttributionProbe, ProbeDrainLoop, load_probe_script
 from fakeyou.foundation.invariants import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME
 from fakeyou.foundation.taxonomy import MeetingPhase, TerminalReason
-from fakeyou.meet.browser import open_direct_page, stable_fingerprint_seed
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
     DEFAULT_MEET_SIGNALS,
     GuestJoinRequest,
+    JoinPolling,
     JoinResult,
     JoinStatus,
     MeetSignals,
@@ -50,7 +51,13 @@ from fakeyou.meet.meet import (
     observe_call_state,
     request_guest_join,
 )
-from fakeyou.meet.meet_action_ledger import MeetActionKind, execute_meet_action
+from fakeyou.meet.meet_action_ledger import (
+    MeetActionAddress,
+    MeetActionCall,
+    MeetActionEffects,
+    MeetActionKind,
+    execute_meet_action,
+)
 from fakeyou.meet.meet_actions import (
     DEFAULT_MEET_ACTION_SIGNALS,
     MeetActionResult,
@@ -64,7 +71,7 @@ from fakeyou.meet.participant_observer import (
     append_participant_evidence,
     observer_epoch,
 )
-from fakeyou.meet.watchdog import UIWatchdog
+from fakeyou.meet.watchdog import UIWatchdog, WatchdogCheck
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
@@ -76,7 +83,7 @@ from fakeyou.orchestration.lifecycle import (
 )
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.visual.visual_caption import VisualCaption, VisualCaptioner
-from fakeyou.visual.visual_observer import VisualObserver
+from fakeyou.visual.visual_observer import CaptionSink, PollSchedule, VisualObserver
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
 
 
@@ -128,16 +135,21 @@ def _terminal_result(
 _JOIN_RETRYABLE_STATUSES: tuple[JoinStatus, ...] = ("timeout", "failed")
 
 
+@dataclass(frozen=True, slots=True)
+class JoinRetryPolicy:
+    max_attempts: int
+    base_seconds: float
+    cap_seconds: float
+    rng: Callable[[float, float], float] = random.uniform
+
+
 async def run_join_with_retry(
     attempt: Callable[[], Awaitable[JoinResult]],
     *,
-    max_attempts: int,
-    base_seconds: float,
-    cap_seconds: float,
+    policy: JoinRetryPolicy,
     sleep: Callable[[float], Awaitable[None]],
     record: Callable[..., None],
     should_stop: Callable[[], bool],
-    rng: Callable[[float, float], float] = random.uniform,
 ) -> tuple[JoinResult, int]:
     attempts = 0
     while True:
@@ -145,13 +157,13 @@ async def run_join_with_retry(
         attempts += 1
         if result.status not in _JOIN_RETRYABLE_STATUSES:
             return result, attempts
-        if attempts >= max_attempts:
+        if attempts >= policy.max_attempts:
             return result, attempts
         if should_stop():
             stopped = JoinResult(status="aborted", detail="owner stopped before join retry")
             return stopped, attempts
-        bound = min(cap_seconds, base_seconds * (2.0 ** (attempts - 1)))
-        delay = rng(0.0, bound)
+        bound = min(policy.cap_seconds, policy.base_seconds * (2.0 ** (attempts - 1)))
+        delay = policy.rng(0.0, bound)
         record(
             "join_retried",
             source="runtime",
@@ -301,15 +313,10 @@ class MeetActionDispatcher:
             outcome = await _until_stopped(
                 execute_meet_action(
                     self._record_path,
-                    meeting_id=self._meeting_id,
-                    kind=kind,
-                    act=act,
-                    observe=observe,
-                    tool_call_id=action_id,
-                    params=params,
-                    chars=chars,
-                    authorized=True,
-                    journal=self._journal,
+                    MeetActionAddress(self._meeting_id, action_id),
+                    MeetActionCall(kind, params, chars),
+                    MeetActionEffects(act, observe),
+                    self._journal,
                 ),
                 stop,
             )
@@ -318,6 +325,14 @@ class MeetActionDispatcher:
             return
         if outcome is None:
             self._reject(kind, action_id, "stale_cancelled")
+
+
+@dataclass(slots=True)
+class _MonitorScan:
+    next_scan: float
+    remote_participants: int | None
+    presence_at: float
+    observation_errors: int
 
 
 @dataclass
@@ -407,6 +422,13 @@ class _MeetingWorker:
         finally:
             self.audio = None
 
+    async def _start_capture_guarded(self, *, enabled: bool) -> None:
+        try:
+            await self.start_capture_drain(enabled=enabled)
+        except Exception as error:
+            if self.faults is not None:
+                self.faults.record(classify_exception("browser", error, operation="stream_capture"))
+
     async def run_admitted(self, audio: MeetingAudio, admitted_at: float) -> str:
         audio.raise_if_failed()
         if isinstance(audio, SupportsAdmission):
@@ -424,11 +446,7 @@ class _MeetingWorker:
             )
         self.record("microphone_enabled", source="runtime")
         audio.raise_if_failed()
-        try:
-            await self.start_capture_drain(enabled=self.config.per_stream_enabled)
-        except Exception as error:
-            if self.faults is not None:
-                self.faults.record(classify_exception("browser", error, operation="stream_capture"))
+        await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
         if self.initial_speech:
             await _until_stopped(audio.speak(self.initial_speech), self.stop)
         if self.stop.is_set():
@@ -471,9 +489,7 @@ class _MeetingWorker:
                     self.page,
                     request,
                     self.signals,
-                    self.sleep,
-                    self.monotonic,
-                    self.stop.is_set,
+                    JoinPolling(self.sleep, self.monotonic, self.stop.is_set),
                     probe_scripts,
                 ),
                 self.stop,
@@ -487,9 +503,11 @@ class _MeetingWorker:
 
         result, attempts = await run_join_with_retry(
             attempt,
-            max_attempts=self.config.join_max_attempts,
-            base_seconds=self.config.join_retry_base_seconds,
-            cap_seconds=self.config.join_retry_cap_seconds,
+            policy=JoinRetryPolicy(
+                self.config.join_max_attempts,
+                self.config.join_retry_base_seconds,
+                self.config.join_retry_cap_seconds,
+            ),
             sleep=backoff_sleep,
             record=self.record,
             should_stop=self.stop.is_set,
@@ -625,9 +643,8 @@ class _MeetingWorker:
             self.page,
             self.visual_store,
             journal=self.journal,
-            monotonic=self.monotonic,
-            captioner=self.visual_captioner,
-            on_caption=self.visual_on_caption,
+            schedule=PollSchedule(monotonic=self.monotonic),
+            captions=CaptionSink(self.visual_captioner, self.visual_on_caption),
         )
         await self.visual_observer.start()
         self.record("visual_observer_started", source="runtime")
@@ -645,43 +662,20 @@ class _MeetingWorker:
             )
             self.visual_observer = None
 
+    async def _start_guarded(self, starter: Callable[[], Awaitable[None]], operation: str) -> None:
+        try:
+            await starter()
+        except Exception as error:
+            if self.faults is not None:
+                self.faults.record(classify_exception("browser", error, operation=operation))
+
     async def monitor(self, admitted_at: float) -> str:
         try:
-            try:
-                await self.start_participant_observer()
-            except Exception as error:
-                if self.faults is not None:
-                    self.faults.record(
-                        classify_exception("browser", error, operation="participant_observer")
-                    )
-            try:
-                await self.start_probe_drain()
-            except Exception as error:
-                if self.faults is not None:
-                    self.faults.record(
-                        classify_exception("browser", error, operation="attribution_probe")
-                    )
-            try:
-                await self.start_capture_drain(enabled=self.config.per_stream_enabled)
-            except Exception as error:
-                if self.faults is not None:
-                    self.faults.record(
-                        classify_exception("browser", error, operation="stream_capture")
-                    )
-            try:
-                await self.start_voice_activity()
-            except Exception as error:
-                if self.faults is not None:
-                    self.faults.record(
-                        classify_exception("browser", error, operation="voice_activity")
-                    )
-            try:
-                await self.start_visual_observer()
-            except Exception as error:
-                if self.faults is not None:
-                    self.faults.record(
-                        classify_exception("browser", error, operation="visual_observer")
-                    )
+            await self._start_guarded(self.start_participant_observer, "participant_observer")
+            await self._start_guarded(self.start_probe_drain, "attribution_probe")
+            await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
+            await self._start_guarded(self.start_voice_activity, "voice_activity")
+            await self._start_guarded(self.start_visual_observer, "visual_observer")
             return await self._monitor_loop(admitted_at)
         finally:
             await self.close_visual_observer()
@@ -690,107 +684,148 @@ class _MeetingWorker:
             await self.close_capture_drain()
             await self.close_participant_observer()
 
+    async def _poll_stop(self, deadline: float) -> str | None:
+        if self.stop.is_set():
+            return await self.finish("owner_stopped", "owner_action", "owner requested stop")
+        if self.monotonic() >= deadline:
+            return await self.finish("duration_reached", "policy", "session duration reached")
+        return None
+
+    async def _service_conversation(self) -> None:
+        if self.conversation is not None:
+            try:
+                self.conversation.raise_if_failed()
+            except ConversationError as error:
+                await self.disable_conversation(error)
+
+    async def _service_audio(
+        self, remote_participants: int | None, presence_at: float
+    ) -> str | None:
+        if self.audio is None:
+            return None
+        self.audio.raise_if_failed()
+        if not isinstance(self.audio, SupportsMaintenance):
+            return None
+        verdict = await _until_stopped(
+            self.audio.maintenance_tick(
+                is_busy=self.conversation is not None and self.conversation.is_busy,
+                remote_participants=remote_participants
+                if self.monotonic() - presence_at <= 30
+                else None,
+            ),
+            self.stop,
+        )
+        if verdict == "alone":
+            return await self.finish(
+                "participants_left",
+                "policy",
+                "No remote participants for the presence window",
+            )
+        return None
+
+    def _note_slow_poll(self, poll_seconds: float) -> None:
+        if poll_seconds >= 1.0 and self.journal is not None:
+            self.journal.record("monitor_polled", source="runtime", duration_ms=poll_seconds * 1000)
+
+    async def _track_observation(self, scan: _MonitorScan, checked: WatchdogCheck) -> str | None:
+        if not checked.observation_failed:
+            scan.observation_errors = 0
+            return None
+        scan.observation_errors += 1
+        if scan.observation_errors < 2:
+            return None
+        cause = next(
+            (event.detail for event in checked.events if event.kind == "watchdog_failed"),
+            "unknown",
+        )
+        return await self.finish(
+            "browser_failed",
+            "system_fault",
+            f"Meeting UI observation failed: {cause}",
+        )
+
+    async def _record_scan_events(
+        self, scan: _MonitorScan, checked: WatchdogCheck, now: float
+    ) -> str | None:
+        scan.next_scan = now + checked.next_check_seconds * self.config.monitor_interval_seconds / 5
+        scan.remote_participants = (
+            max(0, checked.participant_count - 1) if checked.participant_count is not None else None
+        )
+        scan.presence_at = self.monotonic()
+        for event in checked.events:
+            self.record(
+                event.kind,
+                source="browser",
+                fingerprint=event.fingerprint,
+                detail=event.detail,
+                ttl_ms=None if event.ttl_seconds is None else event.ttl_seconds * 1000,
+            )
+            if event.kind == "manual_action_expired":
+                return await self.finish(
+                    "browser_failed", "system_fault", "Meeting UI needs manual intervention"
+                )
+        return None
+
+    async def _apply_observation(self, checked: WatchdogCheck) -> str | None:
+        observation = checked.observation
+        if observation.state in ("removed", "ended"):
+            kind: LifecycleEventKind = (
+                "removed" if observation.state == "removed" else "meeting_ended"
+            )
+            await self.lifecycle.send(kind, "host_action", observation.detail)
+            return observation.detail
+        phase = self.lifecycle.state["phase"]
+        if observation.state == "lobby" and phase == "admitted":
+            await self.lifecycle.send("connection_lost", "system_fault", observation.detail)
+        elif observation.state == "in_call" and phase == "disconnected":
+            await self.lifecycle.send("reconnected", "system_fault", observation.detail)
+        return None
+
+    async def _scan_once(
+        self, watchdog: UIWatchdog, scan: _MonitorScan, now: float
+    ) -> tuple[str | None, bool]:
+        poll_started = self.monotonic()
+        checked = await _until_stopped(watchdog.check(), self.stop)
+        if checked is None:
+            return None, True
+        self._note_slow_poll(self.monotonic() - poll_started)
+        finished = await self._track_observation(scan, checked)
+        if finished is not None:
+            return finished, False
+        finished = await self._record_scan_events(scan, checked, now)
+        if finished is not None:
+            return finished, False
+        return await self._apply_observation(checked), False
+
     async def _monitor_loop(self, admitted_at: float) -> str:
         deadline = admitted_at + self.config.session_duration_seconds
         watchdog = UIWatchdog(
             self.page, signals=self.signals, observe=observe_call_state, monotonic=self.monotonic
         )
-        next_scan = admitted_at
-        remote_participants: int | None = None
-        presence_at = admitted_at
-        observation_errors = 0
+        scan = _MonitorScan(
+            next_scan=admitted_at,
+            remote_participants=None,
+            presence_at=admitted_at,
+            observation_errors=0,
+        )
         while True:
-            if self.stop.is_set():
-                return await self.finish("owner_stopped", "owner_action", "owner requested stop")
-            if self.monotonic() >= deadline:
-                return await self.finish("duration_reached", "policy", "session duration reached")
-            if self.conversation is not None:
-                try:
-                    self.conversation.raise_if_failed()
-                except ConversationError as error:
-                    await self.disable_conversation(error)
-            if self.audio is not None:
-                self.audio.raise_if_failed()
-                if isinstance(self.audio, SupportsMaintenance):
-                    verdict = await _until_stopped(
-                        self.audio.maintenance_tick(
-                            is_busy=self.conversation is not None and self.conversation.is_busy,
-                            remote_participants=remote_participants
-                            if self.monotonic() - presence_at <= 30
-                            else None,
-                        ),
-                        self.stop,
-                    )
-                    if verdict == "alone":
-                        return await self.finish(
-                            "participants_left",
-                            "policy",
-                            "No remote participants for the presence window",
-                        )
+            finished = await self._poll_stop(deadline)
+            if finished is not None:
+                return finished
+            await self._service_conversation()
+            finished = await self._service_audio(scan.remote_participants, scan.presence_at)
+            if finished is not None:
+                return finished
             now = self.monotonic()
-            if now >= next_scan:
-                poll_started = self.monotonic()
-                checked = await _until_stopped(watchdog.check(), self.stop)
-                if checked is None:
+            if now >= scan.next_scan:
+                finished, recheck = await self._scan_once(watchdog, scan, now)
+                if finished is not None:
+                    return finished
+                if recheck:
                     continue
-                poll_seconds = self.monotonic() - poll_started
-                if poll_seconds >= 1.0:
-                    if self.journal is not None:
-                        self.journal.record(
-                            "monitor_polled", source="runtime", duration_ms=poll_seconds * 1000
-                        )
-                if checked.observation_failed:
-                    observation_errors += 1
-                    if observation_errors >= 2:
-                        cause = next(
-                            (
-                                event.detail
-                                for event in checked.events
-                                if event.kind == "watchdog_failed"
-                            ),
-                            "unknown",
-                        )
-                        return await self.finish(
-                            "browser_failed",
-                            "system_fault",
-                            f"Meeting UI observation failed: {cause}",
-                        )
-                else:
-                    observation_errors = 0
-                next_scan = (
-                    now + checked.next_check_seconds * self.config.monitor_interval_seconds / 5
-                )
-                remote_participants = (
-                    max(0, checked.participant_count - 1)
-                    if checked.participant_count is not None
-                    else None
-                )
-                presence_at = self.monotonic()
-                for event in checked.events:
-                    self.record(
-                        event.kind,
-                        source="browser",
-                        fingerprint=event.fingerprint,
-                        detail=event.detail,
-                        ttl_ms=None if event.ttl_seconds is None else event.ttl_seconds * 1000,
-                    )
-                    if event.kind == "manual_action_expired":
-                        return await self.finish(
-                            "browser_failed", "system_fault", "Meeting UI needs manual intervention"
-                        )
-                observation = checked.observation
-                if observation.state in ("removed", "ended"):
-                    kind: LifecycleEventKind = (
-                        "removed" if observation.state == "removed" else "meeting_ended"
-                    )
-                    await self.lifecycle.send(kind, "host_action", observation.detail)
-                    return observation.detail
-                phase = self.lifecycle.state["phase"]
-                if observation.state == "lobby" and phase == "admitted":
-                    await self.lifecycle.send("connection_lost", "system_fault", observation.detail)
-                elif observation.state == "in_call" and phase == "disconnected":
-                    await self.lifecycle.send("reconnected", "system_fault", observation.detail)
-            await self.wait(min(1.0, next_scan - self.monotonic(), deadline - self.monotonic()))
+            await self.wait(
+                min(1.0, scan.next_scan - self.monotonic(), deadline - self.monotonic())
+            )
 
     async def disable_conversation(self, error: ConversationError) -> None:
         if self.faults is not None and error.__cause__ is None:
@@ -850,172 +885,302 @@ class _MeetingWorker:
         return detail if kind in ("audio_failed", "conversation_failed") else left.detail
 
 
-async def run_meeting_session(
-    config: SessionConfig,
-    *,
-    stop: asyncio.Event | None = None,
-    signals: MeetSignals = DEFAULT_MEET_SIGNALS,
-    open_page: Callable[..., AbstractAsyncContextManager[Page]] = open_direct_page,
-    saver_factory: Callable[[], AbstractAsyncContextManager[BaseCheckpointSaver[Any]]]
-    | None = None,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    monotonic: Callable[[], float] = time.monotonic,
-    open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None,
-    initial_speech: str | None = None,
-    conversation: MeetingConversation | None = None,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
-    preflight: Callable[[], Coroutine[Any, Any, list[ProbeResult]]] | None = None,
-    preflight_hosts: tuple[str, ...] | None = None,
-    preflight_budget_seconds: float | None = None,
-    voice_activity: VoiceActivityTracker | None = None,
-    meet_dispatcher: MeetActionDispatcher | None = None,
-    visual_store: VisualStore | None = None,
-    visual_captioner: VisualCaptioner | None = None,
-    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None,
-) -> SessionResult:
-    if initial_speech is not None and open_audio is None:
+@dataclass(slots=True)
+class SessionWiring:
+    stop: asyncio.Event | None = None
+    signals: MeetSignals = DEFAULT_MEET_SIGNALS
+    open_page: Callable[..., AbstractAsyncContextManager[Page]] = open_direct_page
+    saver_factory: Callable[[], AbstractAsyncContextManager[BaseCheckpointSaver[Any]]] | None = None
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    monotonic: Callable[[], float] = time.monotonic
+    open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
+    initial_speech: str | None = None
+    conversation: MeetingConversation | None = None
+    faults: FaultReporter | None = None
+    journal: Journal | None = None
+    preflight: Callable[[], Coroutine[Any, Any, list[ProbeResult]]] | None = None
+    preflight_hosts: tuple[str, ...] | None = None
+    preflight_budget_seconds: float | None = None
+    voice_activity: VoiceActivityTracker | None = None
+    meet_dispatcher: MeetActionDispatcher | None = None
+    visual_store: VisualStore | None = None
+    visual_captioner: VisualCaptioner | None = None
+    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
+
+
+_PreflightFactory = Callable[[], Coroutine[Any, Any, list[ProbeResult]]]
+
+
+def _validate_session_audio(hooks: SessionWiring) -> None:
+    if hooks.initial_speech is not None and hooks.open_audio is None:
         raise ValueError("initial speech requires meeting audio")
-    if conversation is not None and open_audio is None:
+    if hooks.conversation is not None and hooks.open_audio is None:
         raise ValueError("conversation requires meeting audio")
-    journal = journal or (faults.journal if faults is not None else Journal(config.meeting_id))
-    stop_event = stop if stop is not None else asyncio.Event()
-    async with _session_resources(faults) as resources:
-        if conversation is not None:
-            resources.push_async_callback(conversation.close)
+
+
+def _resolve_journal(hooks: SessionWiring, config: SessionConfig) -> Journal:
+    if hooks.journal is not None:
+        return hooks.journal
+    if hooks.faults is not None:
+        return hooks.faults.journal
+    return Journal(config.meeting_id)
+
+
+def _resolve_preflight(
+    preflight: _PreflightFactory | None, hosts: tuple[str, ...] | None, budget: float
+) -> _PreflightFactory | None:
+    if preflight is None and hosts is not None:
+        resolved_hosts = hosts
+
+        async def from_hosts(hosts: tuple[str, ...] = resolved_hosts) -> list[ProbeResult]:
+            return await run_preflight(hosts, budget_seconds=budget)
+
+        return from_hosts
+    return preflight
+
+
+async def _collect_preflight_probes(
+    preflight: _PreflightFactory,
+    budget: float,
+    stop_event: asyncio.Event,
+    faults: FaultReporter | None,
+) -> list[ProbeResult] | None:
+    try:
+        async with asyncio.timeout(budget):
+            return await _until_stopped(preflight(), stop_event)
+    except Exception as error:
+        if faults is not None:
+            faults.record(classify_exception("preflight", error))
+        return []
+
+
+async def _report_preflight_failure(
+    lifecycle: MeetingLifecycle,
+    faults: FaultReporter | None,
+    probes: list[ProbeResult],
+) -> str:
+    failed_hosts = ", ".join(probe.host for probe in probes if not probe.ok)
+    detail = f"preflight_unreachable: {failed_hosts or 'probe failed'}"
+    if faults is not None:
+        faults.record(ProviderFault("preflight", "unavailable", retryable=True))
+    await lifecycle.send("infra_failed", "system_fault", detail)
+    return detail
+
+
+async def _run_preflight_phase(
+    lifecycle: MeetingLifecycle,
+    stop_event: asyncio.Event,
+    faults: FaultReporter | None,
+    preflight: _PreflightFactory | None,
+    budget: float,
+) -> str | None:
+    if preflight is None:
+        return None
+    probes = await _collect_preflight_probes(preflight, budget, stop_event, faults)
+    if probes is None or stop_event.is_set():
+        await lifecycle.send("owner_stopped", "owner_action", "Owner stopped preflight")
+        return "Owner stopped preflight"
+    if not probes or not all(probe.ok for probe in probes):
+        return await _report_preflight_failure(lifecycle, faults, probes)
+    return None
+
+
+async def _open_session_page(
+    resources: AsyncExitStack,
+    config: SessionConfig,
+    open_page: Callable[..., AbstractAsyncContextManager[Page]],
+    open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None,
+    stop_event: asyncio.Event,
+) -> Page | None:
+    return await _until_stopped(
+        resources.enter_async_context(
+            open_page(
+                launch=BrowserLaunch(
+                    headless=config.headless,
+                    license_key=config.license_key,
+                    fingerprint_seed=stable_fingerprint_seed(config.twin_id),
+                    profile_dir=config.browser_profile_dir,
+                    warmup=config.warmup_browser,
+                ),
+                **(
+                    {
+                        "environment": {
+                            "PULSE_SOURCE": AGENT_MIC_SOURCE_NAME,
+                            "PULSE_SINK": MEETING_SINK_NAME,
+                        }
+                    }
+                    if open_audio is not None
+                    else {}
+                ),
+            )
+        ),
+        stop_event,
+    )
+
+
+async def _run_session_worker(
+    worker: _MeetingWorker, meet_dispatcher: MeetActionDispatcher | None
+) -> str:
+    try:
+        return await worker.run()
+    finally:
+        if meet_dispatcher is not None:
+            meet_dispatcher.close()
+
+
+async def _launch_session_browser(
+    config: SessionConfig,
+    hooks: SessionWiring,
+    stop_event: asyncio.Event,
+    resources: AsyncExitStack,
+    lifecycle: MeetingLifecycle,
+) -> str:
+    page = await _open_session_page(
+        resources, config, hooks.open_page, hooks.open_audio, stop_event
+    )
+    if page is None:
+        detail = "owner stopped browser startup"
+        await lifecycle.send("owner_stopped", "owner_action", detail)
+        return detail
+    if hooks.meet_dispatcher is not None and config.meet_actions_enabled:
+        hooks.meet_dispatcher.bind_page(
+            page, sleep=hooks.sleep, monotonic=hooks.monotonic, stop=stop_event
+        )
+    worker = _MeetingWorker(
+        config,
+        lifecycle,
+        page,
+        stop_event,
+        hooks.signals,
+        hooks.sleep,
+        hooks.monotonic,
+        hooks.open_audio,
+        hooks.initial_speech,
+        hooks.conversation,
+        faults=hooks.faults,
+        journal=_resolve_journal(hooks, config),
+        voice_activity=hooks.voice_activity,
+        visual_store=hooks.visual_store,
+        visual_captioner=hooks.visual_captioner,
+        visual_on_caption=hooks.visual_on_caption,
+    )
+    return await _run_session_worker(worker, hooks.meet_dispatcher)
+
+
+async def _startup_session(
+    config: SessionConfig,
+    hooks: SessionWiring,
+    stop_event: asyncio.Event,
+    resources: AsyncExitStack,
+    lifecycle: MeetingLifecycle,
+) -> str:
+    if stop_event.is_set():
+        detail = "owner requested stop before startup"
+        await lifecycle.send("owner_stopped", "owner_action", detail)
+        return detail
+    budget = (
+        hooks.preflight_budget_seconds
+        if hooks.preflight_budget_seconds is not None
+        else config.preflight_budget_seconds
+    )
+    preflight = _resolve_preflight(hooks.preflight, hooks.preflight_hosts, budget)
+    ended_detail = await _run_preflight_phase(
+        lifecycle, stop_event, hooks.faults, preflight, budget
+    )
+    if ended_detail is None and lifecycle.state["phase"] != "ended":
+        return await _launch_session_browser(config, hooks, stop_event, resources, lifecycle)
+    return ended_detail or "session already ended"
+
+
+async def _record_session_failure(
+    lifecycle: MeetingLifecycle,
+    journal: Journal,
+    kind: LifecycleEventKind,
+    error: Exception,
+    label: str,
+) -> str:
+    detail = f"{label} ({type(error).__name__})"
+    journal.record(
+        f"{kind.removesuffix('_failed')}_error_recorded",
+        source="runtime",
+        error=str(error),
+        error_type=type(error).__name__,
+    )
+    await lifecycle.send(kind, "system_fault", detail)
+    return detail
+
+
+async def _record_conversation_failure(
+    lifecycle: MeetingLifecycle, journal: Journal, error: ConversationError
+) -> str:
+    detail = f"conversation failed ({type(error).__name__})"
+    journal.record(
+        "conversation_error_recorded",
+        source="runtime",
+        error=str(error),
+        error_type=type(error).__name__,
+    )
+    await lifecycle.send("conversation_failed", "system_fault", detail)
+    return detail
+
+
+async def _record_browser_failure(
+    lifecycle: MeetingLifecycle, journal: Journal, error: Exception
+) -> str:
+    detail = f"browser session failed ({type(error).__name__})"
+    journal.record(
+        "browser_error_recorded",
+        source="runtime",
+        error=str(error),
+        error_type=type(error).__name__,
+    )
+    await lifecycle.send("browser_failed", "system_fault", detail)
+    return detail
+
+
+async def _drive_session(
+    config: SessionConfig,
+    hooks: SessionWiring,
+    stop_event: asyncio.Event,
+    resources: AsyncExitStack,
+    lifecycle: MeetingLifecycle,
+) -> str:
+    journal = _resolve_journal(hooks, config)
+    if lifecycle.state["phase"] == "ended":
+        return "session already ended"
+    try:
+        return await _startup_session(config, hooks, stop_event, resources, lifecycle)
+    except asyncio.CancelledError:
+        await lifecycle.send("cancelled", "owner_action", "session task cancelled; closing browser")
+        raise
+    except FakeYouError:
+        raise
+    except ConversationError as error:
+        return await _record_conversation_failure(lifecycle, journal, error)
+    except Exception as error:
+        return await _record_browser_failure(lifecycle, journal, error)
+
+
+async def run_meeting_session(
+    config: SessionConfig, wiring: SessionWiring | None = None
+) -> SessionResult:
+    hooks = wiring if wiring is not None else SessionWiring()
+    _validate_session_audio(hooks)
+    stop_event = hooks.stop if hooks.stop is not None else asyncio.Event()
+    async with _session_resources(hooks.faults) as resources:
+        if hooks.conversation is not None:
+            resources.push_async_callback(hooks.conversation.close)
         saver = await resources.enter_async_context(
-            saver_factory()
-            if saver_factory is not None
+            hooks.saver_factory()
+            if hooks.saver_factory is not None
             else open_checkpointer(require_url(config.database_url))
         )
         lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
         await lifecycle.initialize(resume=config.resume)
-        detail = "session already ended"
-        if lifecycle.state["phase"] != "ended":
-            try:
-                if stop_event.is_set():
-                    detail = "owner requested stop before startup"
-                    await lifecycle.send("owner_stopped", "owner_action", detail)
-                else:
-                    budget = (
-                        preflight_budget_seconds
-                        if preflight_budget_seconds is not None
-                        else config.preflight_budget_seconds
-                    )
-                    if preflight is None and preflight_hosts is not None:
-                        hosts = preflight_hosts
-
-                        async def from_hosts(
-                            hosts: tuple[str, ...] = hosts,
-                        ) -> list[ProbeResult]:
-                            return await run_preflight(hosts, budget_seconds=budget)
-
-                        preflight = from_hosts
-                    if preflight is not None:
-                        probes: list[ProbeResult] | None
-                        try:
-                            async with asyncio.timeout(budget):
-                                probes = await _until_stopped(preflight(), stop_event)
-                        except Exception as error:
-                            probes = []
-                            if faults is not None:
-                                faults.record(classify_exception("preflight", error))
-                        if probes is None or stop_event.is_set():
-                            detail = "Owner stopped preflight"
-                            await lifecycle.send(
-                                "owner_stopped", "owner_action", "Owner stopped preflight"
-                            )
-                        elif not probes or not all(probe.ok for probe in probes):
-                            failed_hosts = ", ".join(probe.host for probe in probes if not probe.ok)
-                            detail = f"preflight_unreachable: {failed_hosts or 'probe failed'}"
-                            if faults is not None:
-                                faults.record(
-                                    ProviderFault("preflight", "unavailable", retryable=True)
-                                )
-                            await lifecycle.send("infra_failed", "system_fault", detail)
-                    junction_phase: MeetingPhase = lifecycle.state["phase"]
-                    if junction_phase != "ended":
-                        page = await _until_stopped(
-                            resources.enter_async_context(
-                                open_page(
-                                    headless=config.headless,
-                                    license_key=config.license_key,
-                                    fingerprint_seed=stable_fingerprint_seed(config.twin_id),
-                                    profile_dir=config.browser_profile_dir,
-                                    warmup=config.warmup_browser,
-                                    **(
-                                        {
-                                            "environment": {
-                                                "PULSE_SOURCE": AGENT_MIC_SOURCE_NAME,
-                                                "PULSE_SINK": MEETING_SINK_NAME,
-                                            }
-                                        }
-                                        if open_audio is not None
-                                        else {}
-                                    ),
-                                )
-                            ),
-                            stop_event,
-                        )
-                        if page is None:
-                            detail = "owner stopped browser startup"
-                            await lifecycle.send("owner_stopped", "owner_action", detail)
-                        else:
-                            if meet_dispatcher is not None and config.meet_actions_enabled:
-                                meet_dispatcher.bind_page(
-                                    page, sleep=sleep, monotonic=monotonic, stop=stop_event
-                                )
-                            worker = _MeetingWorker(
-                                config,
-                                lifecycle,
-                                page,
-                                stop_event,
-                                signals,
-                                sleep,
-                                monotonic,
-                                open_audio,
-                                initial_speech,
-                                conversation,
-                                faults=faults,
-                                journal=journal,
-                                voice_activity=voice_activity,
-                                visual_store=visual_store,
-                                visual_captioner=visual_captioner,
-                                visual_on_caption=visual_on_caption,
-                            )
-                            try:
-                                detail = await worker.run()
-                            finally:
-                                if meet_dispatcher is not None:
-                                    meet_dispatcher.close()
-            except asyncio.CancelledError:
-                await lifecycle.send(
-                    "cancelled", "owner_action", "session task cancelled; closing browser"
-                )
-                raise
-            except FakeYouError:
-                raise
-            except ConversationError as error:
-                detail = f"conversation failed ({type(error).__name__})"
-                journal.record(
-                    "conversation_error_recorded",
-                    source="runtime",
-                    error=str(error),
-                    error_type=type(error).__name__,
-                )
-                await lifecycle.send("conversation_failed", "system_fault", detail)
-            except Exception as error:
-                detail = f"browser session failed ({type(error).__name__})"
-                journal.record(
-                    "browser_error_recorded",
-                    source="runtime",
-                    error=str(error),
-                    error_type=type(error).__name__,
-                )
-                await lifecycle.send("browser_failed", "system_fault", detail)
+        detail = await _drive_session(config, hooks, stop_event, resources, lifecycle)
     return _terminal_result(
         lifecycle.state["phase"],
         lifecycle.state["terminal_reason"],
         detail,
-        faults,
+        hooks.faults,
     )

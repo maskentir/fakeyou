@@ -3,12 +3,13 @@ import asyncio
 import inspect
 from datetime import datetime
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 from uuid import UUID
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.audio import audio_purge_expired
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
@@ -16,8 +17,9 @@ from fakeyou.cli.db import db_stamp, db_status, db_upgrade
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
 from fakeyou.cli.diarize import diarize_run, diarize_show
-from fakeyou.cli.join import join_meeting
+from fakeyou.cli.join import JoinOptions, join_meeting
 from fakeyou.cli.memory import (
+    CorrectionTarget,
     add_owner_note,
     correct_owner_note,
     forget_memory,
@@ -27,6 +29,8 @@ from fakeyou.cli.memory import (
 )
 from fakeyou.cli.output import emit_error
 from fakeyou.cli.voiceprint import (
+    EnrollSubject,
+    LivenessGate,
     voiceprint_challenge,
     voiceprint_delete,
     voiceprint_enroll,
@@ -37,6 +41,7 @@ from fakeyou.cli.voiceprint import (
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
 from fakeyou.config.settings import Settings
 from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.worker.worker_backend import WorkerStartRequest
 
 _SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 
@@ -384,6 +389,68 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _bundle_options(options: dict[str, Any]) -> None:
+    if "persona_path" in options and "owner_id" in options and "twin_id" in options:
+        options["identity"] = OperatorIdentity(
+            options.pop("persona_path"), options.pop("owner_id"), options.pop("twin_id")
+        )
+    if "name" in options and "negative" in options:
+        options["subject"] = EnrollSubject(options.pop("name"), options.pop("negative"))
+    if "episode_uuid" in options and "note_id" in options:
+        options["target"] = CorrectionTarget(options.pop("episode_uuid"), options.pop("note_id"))
+    gate_keys = ("challenge_id", "challenge", "transcript", "owner_name", "spontaneous_clip")
+    if all(key in options for key in gate_keys):
+        options["gate"] = LivenessGate(
+            options.pop("challenge_id"),
+            options.pop("challenge"),
+            options.pop("transcript"),
+            options.pop("owner_name"),
+            tuple(options.pop("spontaneous_clip") or ()),
+        )
+    if "link" in options and "resume" not in options and "identity" in options:
+        identity = options.pop("identity")
+        options["request"] = WorkerStartRequest(
+            link=options.pop("link"),
+            meeting_id=options.pop("meeting_id"),
+            owner_id=identity.owner_id,
+            twin_id=identity.twin_id,
+            twin_name=options.pop("twin_name"),
+            lobby_timeout=options.pop("lobby_timeout"),
+            duration=options.pop("duration"),
+            profile_dir=options.pop("profile_dir"),
+            headless=options.pop("headless"),
+            audio=options.pop("audio_enabled"),
+            initial_speech=options.pop("initial_speech"),
+            conversation=options.pop("conversation_enabled"),
+            persona_path=identity.persona_path,
+            brief_path=options.pop("brief_path"),
+            memory=options.pop("memory"),
+            wake_phrase=options.pop("wake_phrase"),
+            barge_in=options.pop("barge_in"),
+        )
+
+
+def _bundle_join_options(options: dict[str, Any]) -> None:
+    if "link" in options and "resume" in options and "identity" in options:
+        options["options"] = JoinOptions(
+            identity=options.pop("identity"),
+            twin_name=options.pop("twin_name"),
+            meeting_id=options.pop("meeting_id"),
+            lobby_timeout=options.pop("lobby_timeout"),
+            duration=options.pop("duration"),
+            profile_dir=options.pop("profile_dir"),
+            audio_enabled=options.pop("audio_enabled"),
+            initial_speech=options.pop("initial_speech"),
+            headless=options.pop("headless"),
+            memory=options.pop("memory"),
+            conversation_enabled=options.pop("conversation_enabled"),
+            wake_phrase=options.pop("wake_phrase"),
+            barge_in=options.pop("barge_in"),
+            brief_path=options.pop("brief_path"),
+            resume=options.pop("resume"),
+        )
+
+
 def main() -> None:
     parsed = vars(build_parser().parse_args())
     handler = parsed.pop("handler")
@@ -392,6 +459,8 @@ def main() -> None:
         for name, value in parsed.items()
         if name != "command" and not name.endswith("_command")
     }
+    _bundle_options(options)
+    _bundle_join_options(options)
     try:
         settings = Settings()
     except FakeYouError as error:

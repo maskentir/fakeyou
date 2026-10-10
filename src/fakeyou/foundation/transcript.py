@@ -23,19 +23,28 @@ class TranscriptEvent:
     visual_refs: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureContext:
+    stream_id: str = ""
+    capture_ms: float = 0.0
+    display_claim: str | None = None
+    visual_refs: tuple[str, ...] = ()
+
+
+DEFAULT_CAPTURE_CONTEXT = CaptureContext()
+
+
 def transcript_event(
     frame: TranscriptionFrame,
     participant_id: str,
     speaker_evidence_id: str | None,
-    stream_id: str = "",
-    capture_ms: float = 0.0,
-    display_claim: str | None = None,
-    visual_refs: Sequence[str] = (),
+    capture: CaptureContext = DEFAULT_CAPTURE_CONTEXT,
 ) -> TranscriptEvent:
     source = "meeting_audio"
     timestamp = frame.timestamp or datetime.now(UTC).isoformat()
     identity = json.dumps(
-        [source, frame.timestamp or frame.id, frame.text, stream_id], ensure_ascii=False
+        [source, frame.timestamp or frame.id, frame.text, capture.stream_id],
+        ensure_ascii=False,
     )
     return TranscriptEvent(
         id=hashlib.sha256(identity.encode()).hexdigest(),
@@ -45,10 +54,10 @@ def transcript_event(
         finalized=bool(frame.finalized),
         participant_id=participant_id,
         speaker_evidence_id=speaker_evidence_id,
-        stream_id=stream_id,
-        capture_ms=capture_ms,
-        display_claim=display_claim,
-        visual_refs=tuple(visual_refs),
+        stream_id=capture.stream_id,
+        capture_ms=capture.capture_ms,
+        display_claim=capture.display_claim,
+        visual_refs=capture.visual_refs,
     )
 
 

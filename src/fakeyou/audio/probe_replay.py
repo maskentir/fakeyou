@@ -1,6 +1,7 @@
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from math import ceil, isfinite
 from pathlib import Path
@@ -14,6 +15,18 @@ CSRC_LEAD_WINDOW_MS = 1000.0
 NAME_PRECISION_GATE = 0.98
 OVERLAP_UNKNOWN_GATE = 0.95
 LABEL_STABILITY_GATE = 0.95
+
+
+@dataclass(frozen=True, slots=True)
+class MonoWindow:
+    start_ms: float
+    end_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class SpeakerAliases:
+    aliases: Mapping[str, str]
+    persons: Mapping[str, str]
 
 
 def align_turns(
@@ -115,8 +128,7 @@ def active_sources_in_window(
 def dominant_sources_in_window(
     samples: Sequence[Mapping[str, Any]],
     anchors: Sequence[tuple[float, float]],
-    start_mono_ms: float,
-    end_mono_ms: float,
+    window: MonoWindow,
     threshold: float = SOURCE_ACTIVE_THRESHOLD,
     margin: float = DOMINANT_MARGIN,
 ) -> set[int]:
@@ -127,7 +139,7 @@ def dominant_sources_in_window(
         except (KeyError, TypeError, ValueError):
             continue
         at_mono = page_to_mono(page_ms, anchors)
-        if not start_mono_ms <= at_mono <= end_mono_ms:
+        if not window.start_ms <= at_mono <= window.end_ms:
             continue
         sources = sample.get("sources")
         if not isinstance(sources, list):
@@ -165,7 +177,9 @@ def source_sets_by_speaker(
         if margin is None:
             active = active_sources_in_window(samples, anchors, start, end, threshold)
         else:
-            active = dominant_sources_in_window(samples, anchors, start, end, threshold, margin)
+            active = dominant_sources_in_window(
+                samples, anchors, MonoWindow(start, end), threshold, margin
+            )
         sets.setdefault(speaker, set()).update(active)
     return {speaker: tuple(sorted(sources)) for speaker, sources in sets.items()}
 
@@ -185,7 +199,9 @@ def reference_precision(
         end = float(window["end_mono_ms"])
         if margin is None:
             return active_sources_in_window(samples, anchors, start, end, threshold)
-        return dominant_sources_in_window(samples, anchors, start, end, threshold, margin)
+        return dominant_sources_in_window(
+            samples, anchors, MonoWindow(start, end), threshold, margin
+        )
 
     votes: dict[int, dict[str, int]] = {}
     for window in solo:
@@ -361,61 +377,83 @@ def merge_levels(entries: Sequence[Any]) -> list[dict[str, Any]]:
     return merged
 
 
-def summarize_probe_session(
-    probe_path: Path, record_path: Path, truth_path: Path
-) -> dict[str, Any]:
+def _accumulate_page_row(
+    row: Mapping[str, Any],
+    samples: list[Mapping[str, Any]],
+    snapshots: list[Mapping[str, Any]],
+    anchors: list[tuple[float, float]],
+) -> None:
+    try:
+        anchors.append((float(row["page_ms"]), float(row["mono_ms"])))
+    except (KeyError, TypeError, ValueError):
+        return
+    batch_samples = row.get("samples")
+    if isinstance(batch_samples, list):
+        samples.extend(entry for entry in batch_samples if isinstance(entry, Mapping))
+    batch_levels = row.get("levels")
+    if isinstance(batch_levels, list):
+        samples.extend(merge_levels(batch_levels))
+    batch_roster = row.get("roster")
+    if isinstance(batch_roster, list):
+        snapshots.extend(entry for entry in batch_roster if isinstance(entry, Mapping))
+
+
+def _read_probe_rows(
+    probe_path: Path,
+) -> tuple[
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    list[tuple[float, float]],
+    int,
+]:
     vad_edges: list[Mapping[str, Any]] = []
     samples: list[Mapping[str, Any]] = []
     snapshots: list[Mapping[str, Any]] = []
     anchors: list[tuple[float, float]] = []
-    skipped_probe = 0
+    skipped = 0
     for line in probe_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            skipped_probe += 1
+            skipped += 1
             continue
         if not isinstance(row, Mapping):
-            skipped_probe += 1
+            skipped += 1
             continue
         if row.get("kind") == "vad":
             vad_edges.append(row)
         elif row.get("kind") == "page":
-            try:
-                anchors.append((float(row["page_ms"]), float(row["mono_ms"])))
-            except (KeyError, TypeError, ValueError):
-                continue
-            batch_samples = row.get("samples")
-            if isinstance(batch_samples, list):
-                samples.extend(entry for entry in batch_samples if isinstance(entry, Mapping))
-            batch_levels = row.get("levels")
-            if isinstance(batch_levels, list):
-                samples.extend(merge_levels(batch_levels))
-            batch_roster = row.get("roster")
-            if isinstance(batch_roster, list):
-                snapshots.extend(entry for entry in batch_roster if isinstance(entry, Mapping))
+            _accumulate_page_row(row, samples, snapshots, anchors)
+    return vad_edges, samples, snapshots, anchors, skipped
+
+
+def _read_record_transcripts(record_path: Path) -> tuple[list[dict[str, Any]], int]:
     transcripts: list[dict[str, Any]] = []
-    skipped_record = 0
+    skipped = 0
     for line in record_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
-            skipped_record += 1
+            skipped += 1
             continue
         if not isinstance(row, Mapping):
-            skipped_record += 1
+            skipped += 1
             continue
         if row.get("kind") == "transcript":
             transcripts.append({"text": row.get("text", ""), "wall": row.get("spoken_at")})
-    turns = json.loads(truth_path.read_text(encoding="utf-8"))
-    aligned = align_turns(transcripts, turns)
+    return transcripts, skipped
+
+
+def _replay_windows(
+    aligned: list[dict[str, Any]], vad_edges: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     windows = _vad_windows(vad_edges)
     replay_windows: list[dict[str, Any]] = []
-    lags: list[float] = []
     for entry in aligned:
         window = _window_for_transcript(windows, _parse_wall(entry.get("wall")))
         if window is None:
@@ -428,6 +466,15 @@ def summarize_probe_session(
                 "end_mono_ms": window["end_mono_ms"],
             }
         )
+    return replay_windows
+
+
+def _solo_lags(
+    samples: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    replay_windows: Sequence[Mapping[str, Any]],
+) -> list[float]:
+    lags: list[float] = []
     for window in replay_windows:
         if window["kind"] != "solo":
             continue
@@ -439,33 +486,17 @@ def summarize_probe_session(
         lag = csrc_lag_ms(scoped, anchors, vad_start_mono_ms=window["start_mono_ms"])
         if lag is not None:
             lags.append(lag)
-    reference = reference_precision(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
-    source_sets = source_sets_by_speaker(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
-    markers: dict[str, dict[str, Any]] = {}
-    for candidate in ("es310d", "knownClass"):
-        correct = 0
-        denominator = 0
-        for window in replay_windows:
-            if window["kind"] != "solo":
-                continue
-            scoped = _snapshots_in_window(
-                snapshots, anchors, window["start_mono_ms"], window["end_mono_ms"]
-            )
-            if not scoped:
-                continue
-            denominator += 1
-            lit: set[str] = set()
-            for snapshot in scoped:
-                lit |= _lit_names(snapshot, candidate)
-            if lit == {str(window["speaker"])}:
-                correct += 1
-        markers[candidate] = {
-            "accuracy": (correct / denominator) if denominator else None,
-            "denominator": denominator,
-        }
-    keeps = 0
-    unique = 0
-    mute_denominator = 0
+    return lags
+
+
+def _marker_accuracy(
+    snapshots: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    replay_windows: Sequence[Mapping[str, Any]],
+    candidate: str,
+) -> dict[str, Any]:
+    correct = 0
+    denominator = 0
     for window in replay_windows:
         if window["kind"] != "solo":
             continue
@@ -474,12 +505,59 @@ def summarize_probe_session(
         )
         if not scoped:
             continue
-        mute_denominator += 1
+        denominator += 1
+        lit: set[str] = set()
+        for snapshot in scoped:
+            lit |= _lit_names(snapshot, candidate)
+        if lit == {str(window["speaker"])}:
+            correct += 1
+    return {
+        "accuracy": (correct / denominator) if denominator else None,
+        "denominator": denominator,
+    }
+
+
+def _mute_stats(
+    snapshots: Sequence[Mapping[str, Any]],
+    anchors: Sequence[tuple[float, float]],
+    replay_windows: Sequence[Mapping[str, Any]],
+) -> tuple[int, int, int]:
+    keeps = 0
+    unique = 0
+    denominator = 0
+    for window in replay_windows:
+        if window["kind"] != "solo":
+            continue
+        scoped = _snapshots_in_window(
+            snapshots, anchors, window["start_mono_ms"], window["end_mono_ms"]
+        )
+        if not scoped:
+            continue
+        denominator += 1
         speaker = str(window["speaker"])
         if any(speaker in _unmuted_names(snapshot) for snapshot in scoped):
             keeps += 1
         if all(_unmuted_names(snapshot) == {speaker} for snapshot in scoped):
             unique += 1
+    return keeps, unique, denominator
+
+
+def summarize_probe_session(
+    probe_path: Path, record_path: Path, truth_path: Path
+) -> dict[str, Any]:
+    vad_edges, samples, snapshots, anchors, skipped_probe = _read_probe_rows(probe_path)
+    transcripts, skipped_record = _read_record_transcripts(record_path)
+    turns = json.loads(truth_path.read_text(encoding="utf-8"))
+    aligned = align_turns(transcripts, turns)
+    replay_windows = _replay_windows(aligned, vad_edges)
+    lags = _solo_lags(samples, anchors, replay_windows)
+    reference = reference_precision(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
+    source_sets = source_sets_by_speaker(samples, anchors, replay_windows, margin=DOMINANT_MARGIN)
+    markers = {
+        candidate: _marker_accuracy(snapshots, anchors, replay_windows, candidate)
+        for candidate in ("es310d", "knownClass")
+    }
+    keeps, unique, mute_denominator = _mute_stats(snapshots, anchors, replay_windows)
     stability = _label_stability(samples, anchors, replay_windows)
     precision = reference["precision"]
     overlap_rate = reference["overlap_unknown_rate"]
@@ -538,8 +616,7 @@ def _label_stability(
         active = dominant_sources_in_window(
             samples,
             anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
+            MonoWindow(float(window["start_mono_ms"]), float(window["end_mono_ms"])),
             SOURCE_ACTIVE_THRESHOLD,
             margin,
         )
@@ -557,8 +634,7 @@ def _label_stability(
         active = dominant_sources_in_window(
             samples,
             anchors,
-            float(window["start_mono_ms"]),
-            float(window["end_mono_ms"]),
+            MonoWindow(float(window["start_mono_ms"]), float(window["end_mono_ms"])),
             SOURCE_ACTIVE_THRESHOLD,
             margin,
         )
@@ -590,8 +666,7 @@ def voice_fixture_from_probe(
     truth_path: Path,
     *,
     twin_name: str,
-    aliases: Mapping[str, str],
-    persons: Mapping[str, str],
+    speakers: SpeakerAliases,
 ) -> dict[str, Any]:
     probe_rows = _load_rows(probe_path)
     pages = [row for row in probe_rows if row.get("kind") == "page"]
@@ -636,7 +711,7 @@ def voice_fixture_from_probe(
             batch["participants"] = [
                 {
                     "id": devices.setdefault(str(tile["id"]), f"devices/{len(devices) + 1}"),
-                    "name": aliases.get(str(tile.get("name", "")), "Participant"),
+                    "name": speakers.aliases.get(str(tile.get("name", "")), "Participant"),
                 }
                 for tile in tiles or []
                 if isinstance(tile, Mapping) and tile.get("id")
@@ -657,8 +732,10 @@ def voice_fixture_from_probe(
     truth = [
         {
             **turn,
-            "speaker": aliases.get(str(turn.get("speaker", "")), "Participant"),
-            "person": persons.get(aliases.get(str(turn.get("speaker", "")), ""), "unknown"),
+            "speaker": speakers.aliases.get(str(turn.get("speaker", "")), "Participant"),
+            "person": speakers.persons.get(
+                speakers.aliases.get(str(turn.get("speaker", "")), ""), "unknown"
+            ),
         }
         for turn in json.loads(truth_path.read_text(encoding="utf-8"))
     ]

@@ -77,6 +77,8 @@ select = [
     "FBT",
     "ARG",
     "SLF",
+    "C901",
+    "PLR0913",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -95,8 +97,8 @@ select = [
 "src/fakeyou/cli/calibrate.py" = ["ARG001"]
 "src/fakeyou/cli/voiceprint.py" = ["ARG001"]
 # P7 owns tests/evals shape; the P5 rules gate src only until then.
-"tests/*" = ["T201", "FBT", "ARG", "SLF"]
-"evals/*" = ["T201", "FBT", "ARG", "SLF"]
+"tests/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]
+"evals/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]

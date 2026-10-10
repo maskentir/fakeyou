@@ -13,7 +13,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn
 from fakeyou.diarization.diarize_correction import write_correction_bundle
-from fakeyou.memory.ingestion import ingest_corrections, ingest_meeting
+from fakeyou.memory.ingestion import MeetingScope, ingest_corrections, ingest_meeting
 from fakeyou.memory.memory import (
     RECALL_EMPTY_RESULT,
     ensure_indexes,
@@ -206,9 +206,7 @@ async def run_memory_correction(
     )
     queries = [dict(item) for item in fixture["queries"]]
     pre_answers = await answer_queries(memory, queries, group_id=group_id)
-    corrected = await ingest_corrections(
-        memory, record_path, group_id=group_id, meeting_id=meeting_id
-    )
+    corrected = await ingest_corrections(memory, record_path, MeetingScope(group_id, meeting_id))
     post_answers = await answer_queries(memory, queries, group_id=group_id)
     changed_index = next(int(window["index"]) for window in fixture["windows"] if window["changed"])
     changed = await memory.get_nodes_and_edges_by_episode([ingested.episode_uuids[changed_index]])

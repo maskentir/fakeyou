@@ -10,6 +10,7 @@ from playwright.async_api import Page
 from fakeyou.meet.meet import (
     NAME_FIELD_ATTEMPTS,
     TYPE_DELAY_MS,
+    ToggleSelectors,
     click_when_ready,
     observe_call_state,
     toggle_control,
@@ -102,10 +103,15 @@ async def _settled_visible(
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class HandPrefixes:
+    desired_prefix: str
+    toggle_prefix: str
+
+
 async def _set_hand_state(
     page: Page,
-    desired_prefix: str,
-    toggle_prefix: str,
+    prefixes: HandPrefixes,
     state: str,
     sleep: Callable[[float], Awaitable[None]],
     monotonic: Callable[[], float],
@@ -113,11 +119,11 @@ async def _set_hand_state(
     gate = await _refused_unless_admitted(page)
     if gate is not None:
         return gate
-    desired = _button_prefix_selector(desired_prefix)
-    toggle = _button_prefix_selector(toggle_prefix)
+    desired = _button_prefix_selector(prefixes.desired_prefix)
+    toggle = _button_prefix_selector(prefixes.toggle_prefix)
     if await _settled_visible(page, desired, "hand", sleep, monotonic):
         return MeetActionResult(outcome="succeeded", detail=f"hand already {state}")
-    await toggle_control(page, desired, toggle, "hand", state, sleep)
+    await toggle_control(page, ToggleSelectors(desired, toggle), "hand", state, sleep)
     return MeetActionResult(outcome="succeeded", detail=f"hand {state}")
 
 
@@ -128,7 +134,7 @@ async def raise_hand(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> MeetActionResult:
     return await _set_hand_state(
-        page, signals.lower_hand, signals.raise_hand, "raised", sleep, monotonic
+        page, HandPrefixes(signals.lower_hand, signals.raise_hand), "raised", sleep, monotonic
     )
 
 
@@ -139,7 +145,7 @@ async def lower_hand(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> MeetActionResult:
     return await _set_hand_state(
-        page, signals.raise_hand, signals.lower_hand, "lowered", sleep, monotonic
+        page, HandPrefixes(signals.raise_hand, signals.lower_hand), "lowered", sleep, monotonic
     )
 
 

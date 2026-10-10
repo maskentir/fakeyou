@@ -1,6 +1,7 @@
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import aclosing
+from dataclasses import dataclass
 from typing import Any, cast, get_args
 
 import httpx2
@@ -11,9 +12,16 @@ from pipecat.services.openai.tts import VALID_VOICES
 from pipecat.transcriptions.language import Language
 
 from fakeyou.catalog.config import ConfigKey
-from fakeyou.config.settings import DEFAULTS, MiniMaxTTS, STTMode, TTSSettings, require_secret
+from fakeyou.config.settings import (
+    DEFAULTS,
+    MiniMaxTTS,
+    OpenAITTS,
+    STTMode,
+    TTSSettings,
+    require_secret,
+)
 from fakeyou.foundation.invariants import PCM_CHANNELS, PLAYBACK_SAMPLE_RATE
-from fakeyou.observability.journal import Journal
+from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import classify_exception, classify_minimax_status
 
 TTS_HTTP_TIMEOUT = httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
@@ -33,29 +41,43 @@ def tts_voice_instructions(language: str) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class MuseSTTOptions:
+    language: Language | str | None = Language.ID
+    language_bias: Sequence[Language] | None = None
+    keywords: Sequence[str] | None = None
+    mode: STTMode = DEFAULTS.stt.mode
+    model: str = DEFAULTS.stt.model
+
+
+DEFAULT_MUSE_STT_OPTIONS = MuseSTTOptions()
+
+
 def create_muse_stt(
     *,
     api_key: str,
-    language: Language | str | None = Language.ID,
-    language_bias: Sequence[Language] | None = None,
-    keywords: Sequence[str] | None = None,
-    mode: STTMode = DEFAULTS.stt.mode,
-    model: str = DEFAULTS.stt.model,
+    options: MuseSTTOptions = DEFAULT_MUSE_STT_OPTIONS,
     url: str = DEFAULTS.stt.url,
     sample_rate: int | None = None,
     service_class: type[MetaSTTService] = MetaSTTService,
 ) -> MetaSTTService:
-    if mode not in get_args(STTMode):
-        raise ValueError(f"unsupported Muse mode: {mode}")
+    if options.mode not in get_args(STTMode):
+        raise ValueError(f"unsupported Muse mode: {options.mode}")
     settings = MetaSTTService.Settings(
-        model=model,
-        language=language,
-        language_bias=list(language_bias) if language_bias is not None else None,
-        keywords=list(keywords) if keywords is not None else None,
-        mode=mode,
+        model=options.model,
+        language=options.language,
+        language_bias=list(options.language_bias) if options.language_bias is not None else None,
+        keywords=list(options.keywords) if options.keywords is not None else None,
+        mode=options.mode,
         emit_audio_progress=False,
     )
     return service_class(api_key=api_key, url=url, sample_rate=sample_rate, settings=settings)
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIVoiceStyle:
+    instructions: str | None = None
+    speed: float | None = None
 
 
 class OpenAISpeechSynthesizer:
@@ -63,24 +85,27 @@ class OpenAISpeechSynthesizer:
         self,
         *,
         api_key: str | None = None,
-        base_url: str = DEFAULTS.tts.base_url,
-        voice: str = DEFAULTS.tts.voice,
-        model: str = DEFAULTS.tts.model,
-        instructions: str | None = tts_voice_instructions(DEFAULTS.speech.language),
-        speed: float | None = None,
+        settings: OpenAITTS | None = None,
+        style: OpenAIVoiceStyle | None = None,
         client: AsyncOpenAI | None = None,
         journal: Journal | None = None,
     ) -> None:
-        if voice not in VALID_VOICES:
-            raise ValueError(f"unsupported OpenAI voice: {voice}")
-        self._voice = voice
-        self._model = model
-        self._instructions = instructions
-        self._speed = speed
+        resolved = settings if settings is not None else OpenAITTS()
+        if resolved.voice not in VALID_VOICES:
+            raise ValueError(f"unsupported OpenAI voice: {resolved.voice}")
+        applied = (
+            style
+            if style is not None
+            else OpenAIVoiceStyle(tts_voice_instructions(DEFAULTS.speech.language))
+        )
+        self._voice = resolved.voice
+        self._model = resolved.model
+        self._instructions = applied.instructions
+        self._speed = applied.speed
         self._journal = journal
         self._owns_client = client is None
         self._client = client or AsyncOpenAI(
-            api_key=api_key, base_url=base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
+            api_key=api_key, base_url=resolved.base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
         )
 
     def stream(
@@ -132,18 +157,17 @@ class MiniMaxSpeechSynthesizer:
         self,
         *,
         api_key: str,
-        voice: str = MiniMaxTTS().voice,
-        model: str = MiniMaxTTS().model,
+        settings: MiniMaxTTS | None = None,
         language_boost: str = SPEECH_LANGUAGES[DEFAULTS.speech.language][2],
-        url: str = MiniMaxTTS().base_url,
         client: httpx2.AsyncClient | None = None,
         journal: Journal | None = None,
     ) -> None:
+        resolved = settings if settings is not None else MiniMaxTTS()
         self._headers = {"Authorization": f"Bearer {api_key}"}
-        self._voice = voice
-        self._model = model
+        self._voice = resolved.voice
+        self._model = resolved.model
         self._language_boost = language_boost
-        self._url = url
+        self._url = resolved.base_url
         self._journal = journal
         self._owns_client = client is None
         self._client = client or httpx2.AsyncClient(timeout=TTS_HTTP_TIMEOUT)
@@ -210,18 +234,14 @@ def create_speech_synthesizer(
     if isinstance(settings, MiniMaxTTS):
         return MiniMaxSpeechSynthesizer(
             api_key=api_key,
-            voice=settings.voice,
-            model=settings.model,
-            url=settings.base_url,
+            settings=settings,
             language_boost=SPEECH_LANGUAGES[language][2],
             journal=journal,
         )
     return OpenAISpeechSynthesizer(
         api_key=api_key,
-        voice=settings.voice,
-        model=settings.model,
-        base_url=settings.base_url,
-        instructions=tts_voice_instructions(language),
+        settings=settings,
+        style=OpenAIVoiceStyle(instructions=tts_voice_instructions(language)),
         journal=journal,
     )
 
@@ -233,6 +253,25 @@ def _minimax_audio(body: dict[str, Any]) -> bytes | None:
         raise classify_minimax_status("tts", code, status.get("status_msg"))
     audio = (body.get("data") or {}).get("audio")
     return bytes.fromhex(audio) if audio else None
+
+
+def _record_first_pcm(
+    journal: Journal,
+    timing: JournalTiming,
+    sentence_index: int | None,
+    transcript_id: str | None,
+) -> None:
+    timing.fields["first_chunk_ms"] = timing.elapsed_ms
+    pcm: dict[str, Any] = {
+        "request_id": timing.fields["request_id"],
+        "first_chunk_ms": timing.fields["first_chunk_ms"],
+        "bytes_out": timing.fields["bytes_out"],
+    }
+    if sentence_index is not None:
+        pcm["sentence_index"] = sentence_index
+    if transcript_id is not None:
+        pcm["transcript_id"] = transcript_id
+    journal.record("synthesis_pcm_emitted", source="tts", **pcm)
 
 
 async def _journaled_stream(
@@ -266,17 +305,7 @@ async def _journaled_stream(
                         continue
                     timing.fields["bytes_out"] += len(chunk)
                     if timing.fields["first_chunk_ms"] is None:
-                        timing.fields["first_chunk_ms"] = timing.elapsed_ms
-                        pcm: dict[str, Any] = {
-                            "request_id": timing.fields["request_id"],
-                            "first_chunk_ms": timing.fields["first_chunk_ms"],
-                            "bytes_out": timing.fields["bytes_out"],
-                        }
-                        if sentence_index is not None:
-                            pcm["sentence_index"] = sentence_index
-                        if transcript_id is not None:
-                            pcm["transcript_id"] = transcript_id
-                        journal.record("synthesis_pcm_emitted", source="tts", **pcm)
+                        _record_first_pcm(journal, timing, sentence_index, transcript_id)
                     yield chunk
         except Exception as error:
             fault = classify_exception("tts", error)

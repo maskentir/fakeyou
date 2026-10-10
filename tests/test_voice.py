@@ -11,6 +11,7 @@ from fakeyou.audio.voice import (
     TTS_HTTP_TIMEOUT,
     TTS_REQUEST_TIMEOUT_SECONDS,
     MiniMaxSpeechSynthesizer,
+    MuseSTTOptions,
     OpenAISpeechSynthesizer,
     create_muse_stt,
     create_speech_synthesizer,
@@ -23,8 +24,7 @@ from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
     service = create_muse_stt(
         api_key="test-meta-key",
-        language=Language.ID,
-        keywords=["Jemboed"],
+        options=MuseSTTOptions(language=Language.ID, keywords=["Jemboed"]),
     )
 
     assert isinstance(service, MetaSTTService)
@@ -36,7 +36,9 @@ def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
 
 def test_create_muse_stt_rejects_unknown_mode_before_connecting() -> None:
     with pytest.raises(ValueError, match="unsupported Muse mode"):
-        create_muse_stt(api_key="test-meta-key", mode=cast(STTMode, "UNKNOWN"))
+        create_muse_stt(
+            api_key="test-meta-key", options=MuseSTTOptions(mode=cast(STTMode, "UNKNOWN"))
+        )
 
 
 async def test_tts_http_client_bounds_slow_streams() -> None:
@@ -90,7 +92,7 @@ async def test_synthesizer_rejects_blank_text_before_request(openai_client) -> N
 
 def test_synthesizer_rejects_unknown_voice_before_connecting() -> None:
     with pytest.raises(ValueError, match="unsupported OpenAI voice"):
-        OpenAISpeechSynthesizer(api_key="test-openai-key", voice="robot")
+        OpenAISpeechSynthesizer(api_key="test-openai-key", settings=OpenAITTS(voice="robot"))
 
 
 async def test_synthesizer_closes_owned_http_client() -> None:

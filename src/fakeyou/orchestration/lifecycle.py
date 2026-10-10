@@ -160,13 +160,9 @@ def build_evidence(
     }
 
 
-def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
-    event = state.get("event")
-    if event is None:
-        return {}
-    if event["attribution"] not in _ATTRIBUTIONS:
-        raise ValueError(f"unknown lifecycle attribution: {event['attribution']}")
-    phase = state["phase"]
+def _early_lifecycle_update(
+    state: MeetingLifecycleState, phase: MeetingPhase, event: LifecycleEvent
+) -> LifecycleUpdate | None:
     if phase == "ended":
         return {"event": None}
     if event["kind"] == "cancelled":
@@ -188,18 +184,41 @@ def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
             "evidence": [build_evidence(phase, previous, event)],
             "event": None,
         }
-    transition = _TRANSITIONS.get((phase, event["kind"]))
-    if transition is None:
-        raise ValueError(f"invalid lifecycle event {event['kind']!r} for phase {phase!r}")
-    to_phase, reason = transition.phase, transition.reason
+    return None
+
+
+def _resolve_terminal_reason(
+    state: MeetingLifecycleState,
+    phase: MeetingPhase,
+    event: LifecycleEvent,
+    transition: _Transition,
+) -> TerminalReason | None:
     if phase == "leaving" and event["kind"] == "leave_sent":
-        reason = state["pending_reason"] or "left_by_owner"
-    elif (
+        return state["pending_reason"] or "left_by_owner"
+    if (
         phase == "leaving"
         and event["kind"] == "browser_failed"
         and state["pending_reason"] in ("audio_failure", "conversation_failure")
     ):
-        reason = state["pending_reason"]
+        return state["pending_reason"]
+    return transition.reason
+
+
+def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
+    event = state.get("event")
+    if event is None:
+        return {}
+    if event["attribution"] not in _ATTRIBUTIONS:
+        raise ValueError(f"unknown lifecycle attribution: {event['attribution']}")
+    phase = state["phase"]
+    early = _early_lifecycle_update(state, phase, event)
+    if early is not None:
+        return early
+    transition = _TRANSITIONS.get((phase, event["kind"]))
+    if transition is None:
+        raise ValueError(f"invalid lifecycle event {event['kind']!r} for phase {phase!r}")
+    to_phase = transition.phase
+    reason = _resolve_terminal_reason(state, phase, event, transition)
     update: LifecycleUpdate = {
         "phase": to_phase,
         "evidence": [build_evidence(phase, to_phase, event)],

@@ -16,7 +16,7 @@ from fakeyou.orchestration.lifecycle import (
     create_lifecycle_graph,
     initial_lifecycle_state,
 )
-from fakeyou.orchestration.runtime import _MeetingWorker, run_meeting_session
+from fakeyou.orchestration.runtime import SessionWiring, _MeetingWorker, run_meeting_session
 from tests.fakes import (
     ASK_SELECTOR,
     DENIED,
@@ -91,11 +91,13 @@ def _config(**overrides):
 async def _run(config, browser, saver, clock, stop=None):
     return await run_meeting_session(
         config,
-        stop=stop,
-        open_page=browser.open,
-        saver_factory=saver.factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        SessionWiring(
+            stop=stop,
+            open_page=browser.open,
+            saver_factory=saver.factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        ),
     )
 
 
@@ -234,11 +236,13 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
 
     result = await run_meeting_session(
         _config(),
-        open_page=failing_open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=failing_open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
 
     assert result.phase == "ended"
@@ -261,10 +265,12 @@ async def test_run_meeting_session_reraises_catalog_errors_unmangled() -> None:
     with pytest.raises(FakeYouError) as error:
         await run_meeting_session(
             _config(),
-            open_page=failing_open,
-            saver_factory=FakeSaverSession().factory,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
+            SessionWiring(
+                open_page=failing_open,
+                saver_factory=FakeSaverSession().factory,
+                sleep=clock.sleep,
+                monotonic=clock.monotonic,
+            ),
         )
 
     assert error.value.code is ErrorCode.DATABASE_UNREACHABLE
@@ -321,7 +327,9 @@ async def test_browser_startup_failure_is_persisted_as_terminal() -> None:
         raise RuntimeError("browser launch failed")
         yield
 
-    result = await run_meeting_session(_config(), open_page=fail_open, saver_factory=saver.factory)
+    result = await run_meeting_session(
+        _config(), SessionWiring(open_page=fail_open, saver_factory=saver.factory)
+    )
 
     assert result.terminal_reason == "browser_failure"
     state = await create_lifecycle_graph(saver.saver).aget_state(
@@ -344,7 +352,7 @@ async def test_stop_arriving_with_browser_startup_does_not_request_join() -> Non
             yield opened
 
     result = await run_meeting_session(
-        _config(), stop=stop, open_page=open_then_stop, saver_factory=saver.factory
+        _config(), SessionWiring(stop=stop, open_page=open_then_stop, saver_factory=saver.factory)
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -422,10 +430,12 @@ async def test_repeated_cancellation_preserves_terminal_checkpoint() -> None:
     running = asyncio.create_task(
         run_meeting_session(
             _config(monitor_interval_seconds=0.01),
-            open_page=browser.open,
-            saver_factory=saver.factory,
-            sleep=paced_sleep,
-            monotonic=time.monotonic,
+            SessionWiring(
+                open_page=browser.open,
+                saver_factory=saver.factory,
+                sleep=paced_sleep,
+                monotonic=time.monotonic,
+            ),
         )
     )
     try:
@@ -517,7 +527,7 @@ def test_session_rejects_invalid_timing(field, value) -> None:
 
 
 async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path):
-    from fakeyou.observability.journal import Journal
+    from fakeyou.observability.journal import Journal, JournalFile
     from fakeyou.observability.report import read_journal
 
     clock = FakeClock()
@@ -531,14 +541,16 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     )
     saver = FakeSaverSession()
     path = tmp_path / "events.jsonl"
-    journal = Journal("journal-meeting", path=path, echo=False)
+    journal = Journal("journal-meeting", file=JournalFile(path), echo=False)
     await run_meeting_session(
         _config(),
-        open_page=browser.open,
-        saver_factory=saver.factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=saver.factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
     journal.close()
 
@@ -586,11 +598,13 @@ async def test_lobby_timeout_retries_twice_before_terminal(journal) -> None:
     config = _config(lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0)
     result = await run_meeting_session(
         config,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
 
     assert result.phase == "ended"
@@ -622,11 +636,13 @@ async def test_run_meeting_session_collects_participant_evidence(tmp_path) -> No
 
     result = await run_meeting_session(
         _config(participant_policy_enabled=True, participant_evidence_path=evidence),
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
 
     assert result.phase == "ended"
@@ -703,11 +719,13 @@ async def test_run_meeting_session_journals_why_the_join_failed() -> None:
     clock = FakeClock()
     await run_meeting_session(
         _config(),
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
     [finished] = journal.events("join_finished")
     assert finished["status"] == "failed"

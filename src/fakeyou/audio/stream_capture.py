@@ -2,29 +2,33 @@ import asyncio
 import base64
 import binascii
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files
 from typing import Any, Protocol, runtime_checkable
 
-from pipecat.frames.frames import InputAudioRawFrame, StartFrame, TranscriptionFrame
+from pipecat.frames.frames import InputAudioRawFrame, StartFrame
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.audio.audio import (
+    DEFAULT_STREAM_POLICY,
     MeetingAudioError,
     MeetingAudioSession,
-    OnVad,
+    StreamCallbacks,
+    StreamComponents,
+    StreamPolicy,
+    StreamSource,
     TurnAudioTap,
     open_stream_audio,
 )
 from fakeyou.audio.deaf import DeafVerdict
-from fakeyou.audio.playback import PlaybackEngine, PlaybackEvent
+from fakeyou.audio.playback import PlaybackEngine
 from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
-from fakeyou.config.settings import DEFAULTS, STTSettings, TTSSettings
-from fakeyou.observability.faults import FaultReporter, record_consumer_fault
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
+from fakeyou.observability.faults import record_consumer_fault
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 
@@ -36,6 +40,24 @@ CAPTURE_DRAIN_JS = (
 SESSION_SILENCE_SECONDS = 30.0
 EARLY_AUDIO_BYTES = 160000
 STREAM_FLEET_SLOTS = 4
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryTiming:
+    monotonic: Callable[[], float] = time.monotonic
+    silence_seconds: float = SESSION_SILENCE_SECONDS
+
+
+DEFAULT_REGISTRY_TIMING = RegistryTiming()
+
+
+@dataclass(frozen=True, slots=True)
+class DrainPolling:
+    poll_interval_seconds: float = 0.25
+    heartbeat_polls: int = 40
+
+
+DEFAULT_DRAIN_POLLING = DrainPolling()
 
 
 def load_capture_script() -> str:
@@ -102,16 +124,14 @@ def _drain_error(detail: str) -> MeetingAudioError:
     return MeetingAudioError(f"stream drain window is corrupt: {detail}")
 
 
-def _parse_entry(entry: Any) -> StreamChunk:
-    if not isinstance(entry, Mapping):
-        raise _drain_error("entry is not a mapping")
-    slot = entry.get("slot")
-    if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
-        raise _drain_error("slot is not a valid integer")
-    seq = entry.get("seq")
-    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
-        raise _drain_error("seq is not a valid integer")
-    raw_csrcs = entry.get("csrcs")
+def _parse_count(entry: Mapping[str, Any], key: str) -> int:
+    value = entry.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise _drain_error(f"{key} is not a valid integer")
+    return value
+
+
+def _parse_csrcs(raw_csrcs: Any) -> tuple[int, ...]:
     if not isinstance(raw_csrcs, (list, tuple)):
         raise _drain_error("csrcs is not a list")
     csrcs: list[int] = []
@@ -119,13 +139,17 @@ def _parse_entry(entry: Any) -> StreamChunk:
         if isinstance(csrc, bool) or not isinstance(csrc, int):
             raise _drain_error("csrc is not an integer")
         csrcs.append(csrc)
-    level = entry.get("level")
-    if isinstance(level, bool) or not isinstance(level, (int, float)):
-        raise _drain_error("level is not a number")
-    page_ms = entry.get("page_ms")
-    if isinstance(page_ms, bool) or not isinstance(page_ms, (int, float)):
-        raise _drain_error("page_ms is not a number")
-    pcm_b64 = entry.get("pcm_b64")
+    return tuple(csrcs)
+
+
+def _parse_number(entry: Mapping[str, Any], key: str) -> float:
+    value = entry.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _drain_error(f"{key} is not a number")
+    return float(value)
+
+
+def _parse_pcm(pcm_b64: Any) -> bytes:
     if not isinstance(pcm_b64, str):
         raise _drain_error("pcm_b64 is not a string")
     try:
@@ -134,13 +158,19 @@ def _parse_entry(entry: Any) -> StreamChunk:
         raise _drain_error("pcm_b64 is not base64") from error
     if len(pcm) % 2 != 0:
         raise _drain_error("pcm length is not int16 aligned")
+    return pcm
+
+
+def _parse_entry(entry: Any) -> StreamChunk:
+    if not isinstance(entry, Mapping):
+        raise _drain_error("entry is not a mapping")
     return StreamChunk(
-        slot=slot,
-        seq=seq,
-        csrcs=tuple(csrcs),
-        level=float(level),
-        page_ms=float(page_ms),
-        pcm=pcm,
+        slot=_parse_count(entry, "slot"),
+        seq=_parse_count(entry, "seq"),
+        csrcs=_parse_csrcs(entry.get("csrcs")),
+        level=_parse_number(entry, "level"),
+        page_ms=_parse_number(entry, "page_ms"),
+        pcm=_parse_pcm(entry.get("pcm_b64")),
     )
 
 
@@ -268,16 +298,15 @@ class StreamRegistry:
     def __init__(
         self,
         *,
-        monotonic: Callable[[], float] = time.monotonic,
+        timing: RegistryTiming = DEFAULT_REGISTRY_TIMING,
         input_factory: Callable[[], StreamAudioInput] | None = None,
-        silence_seconds: float = SESSION_SILENCE_SECONDS,
         binder: SlotBinder | None = None,
         journal: Journal | None = None,
         recorder: SlotAudioWriter | None = None,
     ) -> None:
-        self._monotonic = monotonic
+        self._monotonic = timing.monotonic
         self._input_factory = _default_input if input_factory is None else input_factory
-        self._silence_seconds = silence_seconds
+        self._silence_seconds = timing.silence_seconds
         self._binder = binder
         self._journal = journal
         self._recorder = recorder
@@ -378,16 +407,15 @@ class CaptureDrainLoop:
         page: Any,
         registry: StreamRegistry,
         *,
-        poll_interval_seconds: float = 0.25,
+        polling: DrainPolling = DEFAULT_DRAIN_POLLING,
         journal: Journal | None = None,
-        heartbeat_polls: int = 40,
         twin_name: str | None = None,
     ) -> None:
         self._page = page
         self._registry = registry
-        self._poll_interval = poll_interval_seconds
+        self._poll_interval = polling.poll_interval_seconds
         self._journal = journal
-        self._heartbeat_polls = heartbeat_polls
+        self._heartbeat_polls = polling.heartbeat_polls
         self._twin_name = twin_name
         self._polls = 0
         self._fails = 0
@@ -586,58 +614,59 @@ class StreamFleetSession:
         await asyncio.gather(*(session.stop() for session in self._sessions))
 
 
+@dataclass(frozen=True, slots=True)
+class FleetTopology:
+    binder: SlotBinder
+    slots: int = MEET_AUDIO_SLOTS
+    recorder: SlotAudioWriter | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SlotFactories:
+    stt: Callable[[int], FrameProcessor] | None = None
+    playback: Callable[[int], PlaybackEngine] | None = None
+    turn_tap: Callable[[int], TurnAudioTap] | None = None
+
+
+DEFAULT_SLOT_FACTORIES = SlotFactories()
+
+
 @asynccontextmanager
 async def open_stream_fleet(
     *,
-    slots: int = MEET_AUDIO_SLOTS,
-    binder: SlotBinder,
-    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
-    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: OnVad | None = None,
-    stt_factory: Callable[[int], FrameProcessor] | None = None,
-    playback_factory: Callable[[int], PlaybackEngine] | None = None,
-    turn_tap_factory: Callable[[int], TurnAudioTap] | None = None,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
-    recorder: SlotAudioWriter | None = None,
-    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
-    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-    stt_settings: STTSettings = DEFAULTS.stt,
-    stt_keywords: Sequence[str] | None = None,
-    tts_settings: TTSSettings = DEFAULTS.tts,
-    speech_language: str = DEFAULTS.speech.language,
-    on_playback_event: Callable[[PlaybackEvent], None] | None = None,
+    topology: FleetTopology,
+    callbacks: StreamCallbacks,
+    factories: SlotFactories = DEFAULT_SLOT_FACTORIES,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+    policy: StreamPolicy = DEFAULT_STREAM_POLICY,
 ) -> AsyncIterator[StreamFleetSession]:
-    if slots <= 0:
+    if topology.slots <= 0:
         raise ValueError("stream fleet needs at least one slot")
-    registry = StreamRegistry(binder=binder, journal=journal, recorder=recorder)
+    registry = StreamRegistry(
+        binder=topology.binder, journal=diagnostics.journal, recorder=topology.recorder
+    )
     async with AsyncExitStack() as stack:
         sessions: list[MeetingAudioSession] = []
-        for slot in range(slots):
+        for slot in range(topology.slots):
             streamer = StreamAudioInput(TransportParams(audio_in_enabled=True))
             registry.register(slot, streamer)
+            slot_callbacks = callbacks if slot == 0 else replace(callbacks, on_playback_event=None)
             sessions.append(
                 await stack.enter_async_context(
                     open_stream_audio(
-                        stream_id=f"slot-{slot}",
-                        input=streamer,
-                        on_transcript=on_transcript,
-                        on_interim=on_interim,
-                        on_vad=on_vad,
-                        turn_tap=turn_tap_factory(slot) if turn_tap_factory is not None else None,
-                        stt=stt_factory(slot) if stt_factory is not None else None,
-                        playback=playback_factory(slot) if playback_factory is not None else None,
-                        on_playback_event=on_playback_event if slot == 0 else None,
-                        faults=faults,
-                        journal=journal,
-                        deaf_window_seconds=deaf_window_seconds,
-                        deaf_grace_seconds=deaf_grace_seconds,
-                        alone_leave_seconds=alone_leave_seconds,
-                        stt_settings=stt_settings,
-                        stt_keywords=stt_keywords,
-                        tts_settings=tts_settings,
-                        speech_language=speech_language,
+                        source=StreamSource(f"slot-{slot}", streamer),
+                        callbacks=slot_callbacks,
+                        components=StreamComponents(
+                            stt=factories.stt(slot) if factories.stt is not None else None,
+                            playback=(
+                                factories.playback(slot) if factories.playback is not None else None
+                            ),
+                            turn_tap=(
+                                factories.turn_tap(slot) if factories.turn_tap is not None else None
+                            ),
+                        ),
+                        diagnostics=diagnostics,
+                        policy=policy,
                     )
                 )
             )

@@ -3,6 +3,7 @@ import html
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -107,17 +108,22 @@ def _require_native_response(
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT)
 
 
+@dataclass(frozen=True, slots=True)
+class DebriefModels:
+    primary: BaseChatModel
+    fallback: BaseChatModel | None = None
+
+
 async def _extract_chunk(
-    model: BaseChatModel,
+    models: DebriefModels,
     chunk: tuple[sources.SourceEntry, ...],
     brief: MeetingBrief | None,
-    fallback: BaseChatModel | None,
 ) -> schema.DebriefDraft:
     middleware: list[AgentMiddleware] = [_require_native_response]
-    if fallback is not None:
-        middleware.append(ModelFallbackMiddleware(fallback))
+    if models.fallback is not None:
+        middleware.append(ModelFallbackMiddleware(models.fallback))
     agent = create_agent(
-        model=model,
+        model=models.primary,
         tools=[],
         system_prompt=_EXTRACTION_RULES,
         middleware=middleware,
@@ -150,16 +156,15 @@ async def _extract_chunk(
 
 
 async def _wait_for_chunk(
-    model: BaseChatModel,
+    models: DebriefModels,
     chunk: tuple[sources.SourceEntry, ...],
     *,
     brief: MeetingBrief | None,
     stop: asyncio.Event,
-    fallback: BaseChatModel | None,
 ) -> schema.DebriefDraft:
     if stop.is_set():
         raise asyncio.CancelledError
-    extraction = asyncio.create_task(_extract_chunk(model, chunk, brief, fallback))
+    extraction = asyncio.create_task(_extract_chunk(models, chunk, brief))
     stopped = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait((extraction, stopped), return_when=asyncio.FIRST_COMPLETED)
@@ -174,12 +179,11 @@ async def _wait_for_chunk(
 
 
 async def generate_debrief(
-    model: BaseChatModel,
+    models: DebriefModels,
     snapshot: sources.RecordSnapshot,
     *,
     brief: MeetingBrief | None,
     stop: asyncio.Event,
-    fallback: BaseChatModel | None = None,
     journal: Journal | None = None,
 ) -> schema.DebriefDraft:
     if stop.is_set():
@@ -199,7 +203,7 @@ async def generate_debrief(
             else None
         )
         try:
-            draft = await _wait_for_chunk(model, chunk, brief=brief, stop=stop, fallback=fallback)
+            draft = await _wait_for_chunk(models, chunk, brief=brief, stop=stop)
             sources.validate_draft(draft, sources={entry.id: entry for entry in chunk}, brief=brief)
         except BaseException as error:
             if journal is not None and request_id is not None:
@@ -277,6 +281,29 @@ def _safe_text(value: str) -> str:
     )
 
 
+def _append_evidence(
+    lines: list[str],
+    source_index: dict[str, schema.EvidenceSource],
+    labels: Mapping[str, str],
+    speaker_names: Mapping[str, str] | None,
+    evidence: tuple[schema.EvidenceRef, ...],
+) -> None:
+    for reference in evidence:
+        entry = source_index.get(reference.entry_id)
+        if entry is None:
+            raise schema.DebriefValidationError(ErrorCode.DEBRIEF_REPORT_SOURCE_METADATA_ABSENT)
+        speaker = entry.participant_id
+        if speaker_names is not None and speaker in speaker_names:
+            speaker = speaker_names[speaker]
+        lines.append(
+            f"- {labels['evidence']}: {_safe_text(reference.entry_id)}; "
+            f"{labels['speaker']}: {_safe_text(speaker)}; "
+            f"{labels['source_kind']}: {entry.kind}; "
+            f"{labels['source_time']}: {_safe_text(entry.at.isoformat())}"
+        )
+        lines.append(f"  {labels['quote']}: {_safe_text(reference.quote)}")
+
+
 def render_debrief(
     report: schema.DebriefReport, *, speaker_names: Mapping[str, str] | None = None
 ) -> str:
@@ -303,22 +330,6 @@ def render_debrief(
     ]
     source_index = {entry.id: entry for entry in report.evidence_sources}
 
-    def append_evidence(evidence: tuple[schema.EvidenceRef, ...]) -> None:
-        for reference in evidence:
-            entry = source_index.get(reference.entry_id)
-            if entry is None:
-                raise schema.DebriefValidationError(ErrorCode.DEBRIEF_REPORT_SOURCE_METADATA_ABSENT)
-            speaker = entry.participant_id
-            if speaker_names is not None and speaker in speaker_names:
-                speaker = speaker_names[speaker]
-            lines.append(
-                f"- {labels['evidence']}: {_safe_text(reference.entry_id)}; "
-                f"{labels['speaker']}: {_safe_text(speaker)}; "
-                f"{labels['source_kind']}: {entry.kind}; "
-                f"{labels['source_time']}: {_safe_text(entry.at.isoformat())}"
-            )
-            lines.append(f"  {labels['quote']}: {_safe_text(reference.quote)}")
-
     if not report.items:
         lines.append(labels["empty_items"])
     for index, item in enumerate(report.items, start=1):
@@ -334,7 +345,7 @@ def render_debrief(
             lines.append(f"{labels['assignee_claim']}: {_safe_text(item.assignee_claim)}")
         if item.due_text is not None:
             lines.append(f"{labels['due_claim']}: {_safe_text(item.due_text)}")
-        append_evidence(item.evidence)
+        _append_evidence(lines, source_index, labels, speaker_names, item.evidence)
         lines.append("")
     lines.extend([f"## {labels['findings']}", ""])
     if not report.findings:
@@ -344,7 +355,7 @@ def render_debrief(
         lines.append("")
         if not finding.evidence:
             lines.append(labels["no_evidence"])
-        append_evidence(finding.evidence)
+        _append_evidence(lines, source_index, labels, speaker_names, finding.evidence)
         lines.append("")
     lines.extend([f"## {labels['limitations']}", ""])
     lines.extend(f"- {_safe_text(limitation)}" for limitation in report.source_limitations)

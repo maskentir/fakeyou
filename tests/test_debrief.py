@@ -141,7 +141,10 @@ async def test_native_tool_output_preserves_evidence_and_fills_missing_brief(
     draft = DebriefDraft(items=(item(),), findings=())
     model = model_for(draft)
     result = await module.generate_debrief(
-        model, RecordSnapshot("a" * 64, (source(),)), brief=brief, stop=asyncio.Event()
+        module.DebriefModels(model),
+        RecordSnapshot("a" * 64, (source(),)),
+        brief=brief,
+        stop=asyncio.Event(),
     )
     assert result.items == draft.items
     assert result.findings == (
@@ -153,7 +156,7 @@ async def test_native_tool_output_preserves_evidence_and_fills_missing_brief(
 
 async def test_no_brief_means_empty_findings() -> None:
     result = await module.generate_debrief(
-        model_for(DebriefDraft(items=(item(),), findings=())),
+        module.DebriefModels(model_for(DebriefDraft(items=(item(),), findings=()))),
         RecordSnapshot("a" * 64, (source(),)),
         brief=None,
         stop=asyncio.Event(),
@@ -182,7 +185,10 @@ async def test_invalid_native_schema_fails_without_repair(payload: dict[str, Any
     model = ToolCallingFakeModel(responses=[native_response(payload)])
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_SCHEMA_INVALID
     assert len(model.seen) == 2
@@ -192,7 +198,10 @@ async def test_raw_text_is_never_a_debrief() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content='{"items": [], "findings": []}')])
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) == 2
@@ -211,7 +220,10 @@ async def test_external_tool_call_is_not_executed() -> None:
     )
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) <= 2
@@ -224,7 +236,10 @@ async def test_each_chunk_is_validated_before_merge() -> None:
     )
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, entries), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, entries),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
     assert len(model.seen) == 2
@@ -240,7 +255,10 @@ async def test_a_later_chunk_failure_never_returns_partial_draft() -> None:
     )
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, entries), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, entries),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
     assert len(model.seen) == 4
@@ -252,7 +270,10 @@ async def test_preexisting_stop_does_not_call_any_model() -> None:
     stop.set()
     with pytest.raises(asyncio.CancelledError):
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=stop
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=stop,
         )
     assert model.seen == []
 
@@ -276,7 +297,10 @@ async def test_stop_cancels_pending_native_call_without_using_fallback(
     stop = asyncio.Event()
     task = asyncio.create_task(
         module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=stop, fallback=fallback
+            module.DebriefModels(model, fallback),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=stop,
         )
     )
     try:
@@ -636,7 +660,10 @@ async def test_multiple_native_outputs_fail_without_repair_or_text_parsing() -> 
     model = ToolCallingFakeModel(responses=[response])
     with pytest.raises(DebriefValidationError) as caught:
         await module.generate_debrief(
-            model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
+            module.DebriefModels(model),
+            RecordSnapshot("a" * 64, (source(),)),
+            brief=None,
+            stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_SCHEMA_INVALID
     assert len(model.seen) == 2
@@ -657,11 +684,10 @@ async def test_outer_cancellation_cancels_only_local_extraction_without_fallback
     fallback = model_for(DebriefDraft(items=(), findings=()))
     task = asyncio.create_task(
         module.generate_debrief(
-            WaitingModel(responses=[AIMessage(content="unused")]),
+            module.DebriefModels(WaitingModel(responses=[AIMessage(content="unused")]), fallback),
             RecordSnapshot("a" * 64, (source(),)),
             brief=None,
             stop=asyncio.Event(),
-            fallback=fallback,
         )
     )
     try:
@@ -723,7 +749,10 @@ def test_cached_report_scope_must_match_historical_brief(
 async def test_native_prompt_carries_semantic_extraction_obligations(obligation: str) -> None:
     model = model_for(DebriefDraft(items=(), findings=()))
     await module.generate_debrief(
-        model, RecordSnapshot("a" * 64, (source(),)), brief=None, stop=asyncio.Event()
+        module.DebriefModels(model),
+        RecordSnapshot("a" * 64, (source(),)),
+        brief=None,
+        stop=asyncio.Event(),
     )
     prompt = model.seen[0][0].content
     assert isinstance(prompt, str)
@@ -795,7 +824,7 @@ async def test_native_output_preserves_uncertain_authority_and_future_work_claim
     expected = DebriefItem.model_validate(fields | {"evidence": [ref(quote=entry_text)]})
     model = model_for(DebriefDraft(items=(expected,), findings=()))
     result = await module.generate_debrief(
-        model,
+        module.DebriefModels(model),
         RecordSnapshot("a" * 64, (source(text=entry_text),)),
         brief=None,
         stop=asyncio.Event(),
@@ -825,7 +854,10 @@ async def test_native_conflicting_claims_remain_separate_without_authentication(
     )
     model = model_for(DebriefDraft(items=expected, findings=()))
     result = await module.generate_debrief(
-        model, RecordSnapshot("a" * 64, (first, second)), brief=None, stop=asyncio.Event()
+        module.DebriefModels(model),
+        RecordSnapshot("a" * 64, (first, second)),
+        brief=None,
+        stop=asyncio.Event(),
     )
     assert result.items == expected
     assert len(model.seen) == 2
@@ -962,7 +994,7 @@ async def test_debrief_cites_frame(record_path: Path) -> None:
         }
     )
     merged = await module.generate_debrief(
-        model_for(DebriefDraft(items=(cited,), findings=())),
+        module.DebriefModels(model_for(DebriefDraft(items=(cited,), findings=()))),
         snapshot,
         brief=None,
         stop=asyncio.Event(),

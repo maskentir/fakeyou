@@ -15,6 +15,7 @@ from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.provider_faults import ProviderFault, trim_detail
 
 JOURNAL_BACKUP_COUNT = 2
+JOURNAL_MAX_BYTES = 1_048_576
 
 _SENSITIVE = {
     "authorization",
@@ -38,6 +39,12 @@ def journal_path(directory: Path, meeting_id: str) -> Path:
 def journal_files(directory: Path, meeting_id: str) -> tuple[Path, ...]:
     path = journal_path(directory, meeting_id)
     return (path, *(Path(f"{path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)))
+
+
+@dataclass(frozen=True, slots=True)
+class JournalFile:
+    path: str | Path
+    max_bytes: int = JOURNAL_MAX_BYTES
 
 
 @dataclass(slots=True)
@@ -73,16 +80,15 @@ class Journal:
         *,
         emit: Callable[[str], None] | None = None,
         now: Callable[[], datetime] | None = None,
-        path: str | Path | None = None,
+        file: JournalFile | None = None,
         echo: bool = True,
-        max_bytes: int = 1_048_576,
     ) -> None:
         self._meeting_id = meeting_id
         self._emit = emit
         self._echo = echo
         self._now = now or (lambda: datetime.now(UTC))
-        self._path = Path(path) if path is not None else None
-        self._max_bytes = max(0, max_bytes)
+        self._path = Path(file.path) if file is not None else None
+        self._max_bytes = max(0, file.max_bytes if file is not None else JOURNAL_MAX_BYTES)
         self._file_handler: RotatingFileHandler | None = None
         self._started: dict[str, JournalTiming] = {}
         self._logger = logging.Logger(f"fakeyou.observability.journal.{uuid.uuid4().hex}")

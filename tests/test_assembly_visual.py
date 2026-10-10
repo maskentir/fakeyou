@@ -10,6 +10,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import VISUAL_GUIDANCE
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
 from tests.fakes import ToolCallingFakeModel, make_graphiti
@@ -64,11 +65,13 @@ async def test_assembly_registers_describe_frame_when_visual_wired(
     async with assembly_module.open_conversation(
         wired,
         _config(profile),
-        profile=profile,
-        graphiti=make_graphiti(),
-        on_transition=lambda *args: None,
-        visual_store=store,
-        visual_captioner=captioner,
+        agent=AgentWiring(
+            profile=profile,
+            graphiti=make_graphiti(),
+            visual_store=store,
+            visual_captioner=captioner,
+        ),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
 
@@ -89,9 +92,8 @@ async def test_assembly_registers_describe_frame_without_profile(
     async with assembly_module.open_conversation(
         wired,
         _config(_profile(settings)),
-        on_transition=lambda *args: None,
-        visual_store=store,
-        visual_captioner=captioner,
+        agent=AgentWiring(visual_store=store, visual_captioner=captioner),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
 
@@ -115,11 +117,13 @@ async def test_assembly_omits_visual_tooling_when_flag_off(
     async with assembly_module.open_conversation(
         settings,
         _config(profile),
-        profile=profile,
-        graphiti=make_graphiti(),
-        on_transition=lambda *args: None,
-        visual_store=store,
-        visual_captioner=captioner,
+        agent=AgentWiring(
+            profile=profile,
+            graphiti=make_graphiti(),
+            visual_store=store,
+            visual_captioner=captioner,
+        ),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
 

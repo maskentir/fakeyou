@@ -26,9 +26,9 @@ from fakeyou.foundation.attribution_probe import (
     append_probe_batch,
     load_probe_script,
 )
-from fakeyou.meet.browser import open_direct_page
-from fakeyou.meet.meet import GuestJoinRequest, request_guest_join
-from fakeyou.orchestration.runtime import run_meeting_session
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
+from fakeyou.meet.meet import GuestJoinRequest, JoinPolling, request_guest_join
+from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests.fakes import (
     IN_CALL,
     LINK,
@@ -115,7 +115,7 @@ def test_probe_audio_clock_stamps_vad_edges(tmp_path: Path) -> None:
 
 @pytest.mark.browser
 async def test_probe_captures_peer_connections_and_samples_sources() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/call",
@@ -180,7 +180,7 @@ async def test_probe_captures_peer_connections_and_samples_sources() -> None:
 
 @pytest.mark.browser
 async def test_probe_reports_roster_with_structural_self() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/roster",
@@ -214,8 +214,7 @@ async def test_guest_join_installs_init_scripts_before_navigation() -> None:
     result = await request_guest_join(
         page,
         request,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
         init_scripts=("probe();",),
     )
     assert result.status == "admitted"
@@ -248,11 +247,13 @@ async def test_run_meeting_session_installs_probe_script_when_enabled(
     )
     result = await run_meeting_session(
         config,
-        stop=stop,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=FakeClock().sleep,
-        monotonic=FakeClock().monotonic,
+        SessionWiring(
+            stop=stop,
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=FakeClock().sleep,
+            monotonic=FakeClock().monotonic,
+        ),
     )
     assert result.phase == "ended"
     assert page.init_scripts == [load_probe_script()]
@@ -268,11 +269,13 @@ async def test_run_meeting_session_skips_probe_script_when_disabled() -> None:
     config = SessionConfig(owner_id="o", twin_id="t", meeting_id="m", link=LINK, twin_name="Twin")
     await run_meeting_session(
         config,
-        stop=stop,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=FakeClock().sleep,
-        monotonic=FakeClock().monotonic,
+        SessionWiring(
+            stop=stop,
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=FakeClock().sleep,
+            monotonic=FakeClock().monotonic,
+        ),
     )
     assert page.init_scripts == []
 
@@ -686,15 +689,16 @@ def test_merge_levels_drops_malformed_entries() -> None:
 
 
 def test_dominant_sources_ignore_quiet_bleed() -> None:
-    from fakeyou.audio.probe_replay import dominant_sources_in_window
+    from fakeyou.audio.probe_replay import MonoWindow, dominant_sources_in_window
 
     samples = [
         {"page_ms": 1000.0, "sources": [{"source": 3, "audioLevel": 0.34}]},
         {"page_ms": 1050.0, "sources": [{"source": 5, "audioLevel": 0.06}]},
     ]
     anchors = [(1000.0, 5000.0)]
-    assert dominant_sources_in_window(samples, anchors, 4900.0, 5200.0) == {3}
-    assert dominant_sources_in_window(samples, anchors, 4900.0, 5200.0, margin=0.1) == {
+    window = MonoWindow(4900.0, 5200.0)
+    assert dominant_sources_in_window(samples, anchors, window) == {3}
+    assert dominant_sources_in_window(samples, anchors, window, margin=0.1) == {
         3,
         5,
     }
@@ -727,7 +731,7 @@ def test_percentile_uses_nearest_rank() -> None:
 
 @pytest.mark.browser
 async def test_probe_reports_media_element_census() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/media",
@@ -763,7 +767,7 @@ async def test_probe_reports_media_element_census() -> None:
 
 @pytest.mark.browser
 async def test_probe_counts_entries_of_a_real_stats_report() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/stats",
@@ -861,7 +865,7 @@ async def wait_for_audio_topology(page: object, timeout_seconds: float = 15.0) -
 
 @pytest.mark.browser
 async def test_probe_taps_webaudio_source_energy() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/tone",
@@ -901,7 +905,7 @@ async def wait_for_loud_levels(page: object, timeout_seconds: float = 15.0) -> d
 
 @pytest.mark.browser
 async def test_probe_samplers_survive_hostile_dom() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.add_init_script(load_probe_script())
         await real_page.route(
             "https://probe.fakeyou.test/hostile",

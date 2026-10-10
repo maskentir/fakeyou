@@ -15,6 +15,8 @@ from fakeyou.visual.visual_observer import (
     VISUAL_MIN_CLIP_HEIGHT,
     VISUAL_MIN_CLIP_WIDTH,
     VISUAL_SCAN_JS,
+    CaptionSink,
+    PollSchedule,
     VisualObserver,
 )
 from fakeyou.visual.visual_store import VisualStore, dhash_image
@@ -111,8 +113,10 @@ async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
         page,
         store,
         journal=journal,
-        captioner=captioner,
-        on_caption=lambda frame, caption: received.append((frame.frame_id, caption.text)),
+        captions=CaptionSink(
+            captioner,
+            lambda frame, caption: received.append((frame.frame_id, caption.text)),
+        ),
     )
     assert await observer.poll() is None
     frame = await observer.poll()
@@ -133,7 +137,7 @@ async def test_caption_failure_is_journaled_and_counted(
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
     captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
-    observer = VisualObserver(page, store, journal=journal, captioner=captioner)
+    observer = VisualObserver(page, store, journal=journal, captions=CaptionSink(captioner))
 
     async def failing(_frame: object) -> object:
         raise RuntimeError("llm down")
@@ -163,7 +167,7 @@ async def test_caption_emit_failure_is_journaled_and_counted(tmp_path: Path) -> 
         raise RuntimeError("record gone")
 
     observer = VisualObserver(
-        page, store, journal=journal, captioner=captioner, on_caption=failing_emit
+        page, store, journal=journal, captions=CaptionSink(captioner, failing_emit)
     )
     assert await observer.poll() is None
     assert await observer.poll() is not None
@@ -189,8 +193,10 @@ async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
     observer = VisualObserver(
         page,
         store,
-        captioner=captioner,
-        on_caption=lambda frame, caption: received.append((frame.frame_id, caption.text)),
+        captions=CaptionSink(
+            captioner,
+            lambda frame, caption: received.append((frame.frame_id, caption.text)),
+        ),
     )
     assert await observer.poll() is None
     first = await observer.poll()
@@ -332,7 +338,7 @@ async def test_capture_never_blocks_reply(tmp_path: Path) -> None:
     page = BlockingShotPage(gate, PRESENT_SCAN)
     store = VisualStore(tmp_path)
     clock = [1000.0]
-    observer = VisualObserver(page, store, monotonic=lambda: clock[0], poll_interval_seconds=0.01)
+    observer = VisualObserver(page, store, schedule=PollSchedule(lambda: clock[0], 0.01))
     await observer.start()
     await asyncio.sleep(0.05)
 

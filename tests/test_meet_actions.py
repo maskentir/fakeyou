@@ -8,10 +8,13 @@ import pytest
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet_action_ledger import (
     ACTIONS_FILE_NAME,
     LedgerError,
+    MeetActionAddress,
+    MeetActionCall,
+    MeetActionEffects,
     MeetActionLedger,
     action_id_for,
     actions_path,
@@ -276,7 +279,7 @@ async def test_custom_signals_drive_selectors() -> None:
 
 @pytest.mark.browser
 async def test_hand_and_chat_actions_against_fixture_page() -> None:
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.route(
             FIXTURE_URL,
             lambda route: route.fulfill(body=FIXTURE_HTML, content_type="text/html"),
@@ -308,13 +311,9 @@ async def test_ledger_records_intent_before_first_click(tmp_path: Path) -> None:
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-1",
-        kind="send_chat",
-        act=act,
-        observe=observe,
-        tool_call_id="call-1",
-        params=SECRET_PHRASE,
-        chars=len(SECRET_PHRASE),
+        address=MeetActionAddress(meeting_id="meeting-ledger-1", tool_call_id="call-1"),
+        call=MeetActionCall(kind="send_chat", params=SECRET_PHRASE, chars=len(SECRET_PHRASE)),
+        effects=MeetActionEffects(act, observe),
         journal=journal,
     )
 
@@ -355,11 +354,9 @@ async def test_observe_before_act_skips_click_and_records_observed_before(
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-2",
-        kind="raise_hand",
-        act=act,
-        observe=observe,
-        tool_call_id="call-2",
+        address=MeetActionAddress(meeting_id="meeting-ledger-2", tool_call_id="call-2"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
 
     assert result.succeeded
@@ -391,11 +388,9 @@ async def test_only_retryable_faults_are_retried(tmp_path: Path) -> None:
 
     retried = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-3",
-        kind="raise_hand",
-        act=flaky,
-        observe=observe,
-        tool_call_id="call-retry",
+        address=MeetActionAddress(meeting_id="meeting-ledger-3", tool_call_id="call-retry"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(flaky, observe),
     )
 
     assert retried.succeeded
@@ -411,19 +406,15 @@ async def test_only_retryable_faults_are_retried(tmp_path: Path) -> None:
 
     failed = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-3",
-        kind="lower_hand",
-        act=doomed,
-        observe=refuse,
-        tool_call_id="call-doomed",
+        address=MeetActionAddress(meeting_id="meeting-ledger-3", tool_call_id="call-doomed"),
+        call=MeetActionCall(kind="lower_hand"),
+        effects=MeetActionEffects(doomed, refuse),
     )
     redelivered = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-3",
-        kind="lower_hand",
-        act=doomed,
-        observe=refuse,
-        tool_call_id="call-doomed",
+        address=MeetActionAddress(meeting_id="meeting-ledger-3", tool_call_id="call-doomed"),
+        call=MeetActionCall(kind="lower_hand"),
+        effects=MeetActionEffects(doomed, refuse),
     )
 
     assert failed.failed
@@ -437,21 +428,15 @@ async def test_only_retryable_faults_are_retried(tmp_path: Path) -> None:
 
     rejected = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-3",
-        kind="send_chat",
-        act=never,
-        observe=refuse,
-        tool_call_id="call-denied",
-        authorized=False,
+        address=MeetActionAddress(meeting_id="meeting-ledger-3", tool_call_id="call-denied"),
+        call=MeetActionCall(kind="send_chat", authorized=False),
+        effects=MeetActionEffects(never, refuse),
     )
     rejected_again = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-3",
-        kind="send_chat",
-        act=never,
-        observe=refuse,
-        tool_call_id="call-denied",
-        authorized=False,
+        address=MeetActionAddress(meeting_id="meeting-ledger-3", tool_call_id="call-denied"),
+        call=MeetActionCall(kind="send_chat", authorized=False),
+        effects=MeetActionEffects(never, refuse),
     )
 
     assert rejected.refused
@@ -525,11 +510,9 @@ async def test_meet_action_writes_hold_single_writer_ledger_lock(tmp_path: Path)
     with ledger_lock(record), pytest.raises(RecordLockError, match="locked"):
         await execute_meet_action(
             record,
-            meeting_id="meeting-ledger-5",
-            kind="raise_hand",
-            act=act,
-            observe=observe,
-            tool_call_id="call-contended",
+            address=MeetActionAddress(meeting_id="meeting-ledger-5", tool_call_id="call-contended"),
+            call=MeetActionCall(kind="raise_hand"),
+            effects=MeetActionEffects(act, observe),
         )
     with ledger_lock(record), pytest.raises(RecordLockError, match="locked"):
         with ledger_lock(record):
@@ -552,11 +535,9 @@ async def test_double_delivery_actuates_exactly_once(tmp_path: Path) -> None:
 
     first = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-6",
-        kind="raise_hand",
-        act=act,
-        observe=observe,
-        tool_call_id="call-double",
+        address=MeetActionAddress(meeting_id="meeting-ledger-6", tool_call_id="call-double"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     assert first.succeeded
     assert not first.duplicate
@@ -564,11 +545,9 @@ async def test_double_delivery_actuates_exactly_once(tmp_path: Path) -> None:
 
     retry = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-6",
-        kind="raise_hand",
-        act=act,
-        observe=observe,
-        tool_call_id="call-double",
+        address=MeetActionAddress(meeting_id="meeting-ledger-6", tool_call_id="call-double"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     assert retry.succeeded
     assert retry.duplicate
@@ -576,11 +555,9 @@ async def test_double_delivery_actuates_exactly_once(tmp_path: Path) -> None:
 
     restart = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-6",
-        kind="raise_hand",
-        act=act,
-        observe=observe,
-        tool_call_id="call-double",
+        address=MeetActionAddress(meeting_id="meeting-ledger-6", tool_call_id="call-double"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     assert restart.succeeded
     assert restart.duplicate
@@ -614,11 +591,9 @@ async def test_execute_succeeds_while_meeting_lock_is_held(tmp_path: Path) -> No
     with record_lock(record, purpose="meeting"):
         result = await execute_meet_action(
             record,
-            meeting_id="meeting-ledger-8",
-            kind="raise_hand",
-            act=act,
-            observe=observe,
-            tool_call_id="call-held",
+            address=MeetActionAddress(meeting_id="meeting-ledger-8", tool_call_id="call-held"),
+            call=MeetActionCall(kind="raise_hand"),
+            effects=MeetActionEffects(act, observe),
         )
 
     assert result.succeeded
@@ -685,11 +660,9 @@ async def test_execute_rejects_corrupt_sidecar_without_acting(tmp_path: Path) ->
     with pytest.raises(LedgerError):
         await execute_meet_action(
             record,
-            meeting_id="meeting-ledger-13",
-            kind="raise_hand",
-            act=act,
-            observe=observe,
-            tool_call_id="call-corrupt",
+            address=MeetActionAddress(meeting_id="meeting-ledger-13", tool_call_id="call-corrupt"),
+            call=MeetActionCall(kind="raise_hand"),
+            effects=MeetActionEffects(act, observe),
         )
 
 
@@ -707,11 +680,9 @@ async def test_three_retryable_faults_fail_with_attempts_three(tmp_path: Path) -
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-14",
-        kind="raise_hand",
-        act=always_flaky,
-        observe=observe,
-        tool_call_id="call-exhausted",
+        address=MeetActionAddress(meeting_id="meeting-ledger-14", tool_call_id="call-exhausted"),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(always_flaky, observe),
     )
 
     assert result.failed
@@ -738,11 +709,9 @@ async def test_generic_exception_fails_without_retry(tmp_path: Path) -> None:
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-15",
-        kind="send_chat",
-        act=boom,
-        observe=observe,
-        tool_call_id="call-boom",
+        address=MeetActionAddress(meeting_id="meeting-ledger-15", tool_call_id="call-boom"),
+        call=MeetActionCall(kind="send_chat"),
+        effects=MeetActionEffects(boom, observe),
     )
 
     assert result.failed
@@ -764,11 +733,9 @@ async def test_act_failure_result_is_terminal_without_retry(tmp_path: Path) -> N
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-16",
-        kind="send_chat",
-        act=flop,
-        observe=observe,
-        tool_call_id="call-flop",
+        address=MeetActionAddress(meeting_id="meeting-ledger-16", tool_call_id="call-flop"),
+        call=MeetActionCall(kind="send_chat"),
+        effects=MeetActionEffects(flop, observe),
     )
 
     assert result.failed
@@ -776,11 +743,9 @@ async def test_act_failure_result_is_terminal_without_retry(tmp_path: Path) -> N
     assert len(calls) == 1
     retry = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-16",
-        kind="send_chat",
-        act=flop,
-        observe=observe,
-        tool_call_id="call-flop",
+        address=MeetActionAddress(meeting_id="meeting-ledger-16", tool_call_id="call-flop"),
+        call=MeetActionCall(kind="send_chat"),
+        effects=MeetActionEffects(flop, observe),
     )
     assert retry.failed
     assert retry.duplicate
@@ -798,19 +763,34 @@ async def test_explicit_seq_advances_auto_counter(tmp_path: Path) -> None:
         raise AssertionError("already effective so act must not run")
 
     first = await execute_meet_action(
-        record, meeting_id=meeting_id, kind="raise_hand", act=act, observe=observe, seq=0
+        record,
+        address=MeetActionAddress(meeting_id=meeting_id, seq=0),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     second = await execute_meet_action(
-        record, meeting_id=meeting_id, kind="send_chat", act=act, observe=observe
+        record,
+        address=MeetActionAddress(meeting_id=meeting_id),
+        call=MeetActionCall(kind="send_chat"),
+        effects=MeetActionEffects(act, observe),
     )
     third = await execute_meet_action(
-        record, meeting_id=meeting_id, kind="lower_hand", act=act, observe=observe
+        record,
+        address=MeetActionAddress(meeting_id=meeting_id),
+        call=MeetActionCall(kind="lower_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     fourth = await execute_meet_action(
-        record, meeting_id=meeting_id, kind="raise_hand", act=act, observe=observe, seq=9
+        record,
+        address=MeetActionAddress(meeting_id=meeting_id, seq=9),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
     fifth = await execute_meet_action(
-        record, meeting_id=meeting_id, kind="raise_hand", act=act, observe=observe
+        record,
+        address=MeetActionAddress(meeting_id=meeting_id),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act, observe),
     )
 
     assert first.action_id == action_id_for(meeting_id, 0)
@@ -871,11 +851,11 @@ async def test_retry_observation_preserves_first_observed_before(tmp_path: Path)
 
     result = await execute_meet_action(
         record,
-        meeting_id="meeting-ledger-19",
-        kind="raise_hand",
-        act=flaky,
-        observe=observe,
-        tool_call_id="call-retry-observe",
+        address=MeetActionAddress(
+            meeting_id="meeting-ledger-19", tool_call_id="call-retry-observe"
+        ),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(flaky, observe),
     )
 
     assert result.succeeded
@@ -1290,7 +1270,7 @@ async def test_double_delivery_retry_then_restart_actuates_exactly_once(
 async def test_meet_actions_live_fixture_through_dispatcher(tmp_path: Path) -> None:
     journal = RecordingJournal("meeting-e2e-live")
     dispatcher, record = _task5_dispatcher(tmp_path, "meeting-e2e-live", journal=journal)
-    async with open_direct_page(headless=True) as real_page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as real_page:
         await real_page.route(
             FIXTURE_URL,
             lambda route: route.fulfill(body=FIXTURE_HTML, content_type="text/html"),

@@ -5,13 +5,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 
 from fakeyou.audio.voice_activity import voice_speaker_name
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import DEFAULTS
+from fakeyou.config.settings import DEFAULTS, IngestionSettings
 from fakeyou.diarization.correction_labels import (
     correction_labels_valid,
     correction_speaker_name,
@@ -25,9 +26,10 @@ from fakeyou.foundation.speakers import (
     VOICE_SPEAKER_SUFFIX,
 )
 from fakeyou.memory.memory import meeting_episodes, meeting_saga
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault, classify_exception
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     read_status,
@@ -235,128 +237,218 @@ def meeting_windows(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingScope:
+    group_id: str
+    meeting_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class IngestScope:
+    group_id: str
+    meeting_id: str
+    twin_name: str
+    vocabulary: Sequence[str] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class IngestControl:
+    ingestion: IngestionSettings = field(default_factory=lambda: DEFAULTS.memory.ingestion)
+    stop: asyncio.Event | None = None
+
+
+DEFAULT_INGEST_CONTROL = IngestControl()
+
+
+async def _resumed_visuals(
+    memory: Graphiti, scope: IngestScope, visuals: list[list[VisualEntry]]
+) -> set[int]:
+    done: set[int] = set()
+    if not visuals:
+        return done
+    for episode in await _saga_episodes(
+        memory, group_id=scope.group_id, meeting_id=scope.meeting_id
+    ):
+        index = _visual_index(episode.name, scope.meeting_id)
+        if index is not None:
+            done.add(index)
+    return done
+
+
+@dataclass(frozen=True, slots=True)
+class _EpisodeSpec:
+    name: str
+    body: str
+    description: str
+    reference_time: datetime
+    window: int
+    utterances: int
+    finished: str
+    failed: str
+
+
+class _MeetingIngestor:
+    def __init__(
+        self,
+        memory: Graphiti,
+        scope: IngestScope,
+        control: IngestControl,
+        diagnostics: Diagnostics,
+        instructions: str,
+    ) -> None:
+        self._memory = memory
+        self._scope = scope
+        self._control = control
+        self._diagnostics = diagnostics
+        self._instructions = instructions
+
+    def stopped(self) -> bool:
+        stop = self._control.stop
+        return stop is not None and stop.is_set()
+
+    async def _add_episode(
+        self, spec: _EpisodeSpec, previous_uuid: str | None
+    ) -> tuple[str, int] | None:
+        try:
+            timer_journal = self._diagnostics.journal or Journal("", echo=False)
+            with timer_journal.timed(
+                finished=spec.finished,
+                failed=spec.failed,
+                source="memory_ingest",
+                window=spec.window,
+                utterances=spec.utterances,
+                facts=0,
+            ) as timing:
+                async with asyncio.timeout(self._control.ingestion.episode_timeout_seconds):
+                    result = await self._memory.add_episode(
+                        name=spec.name,
+                        episode_body=spec.body,
+                        source_description=spec.description,
+                        reference_time=spec.reference_time,
+                        source=EpisodeType.message,
+                        group_id=self._scope.group_id,
+                        saga=meeting_saga(self._scope.meeting_id),
+                        saga_previous_episode_uuid=previous_uuid,
+                        custom_extraction_instructions=self._instructions,
+                    )
+                timing.fields.update(facts=len(result.edges))
+        except Exception as error:
+            if self._diagnostics.faults is not None:
+                self._diagnostics.faults.record(classify_exception("memory_ingest", error))
+            return None
+        return result.episode.uuid, len(result.edges)
+
+    async def add_window(
+        self, index: int, window: list[Utterance], previous_uuid: str | None
+    ) -> tuple[str, int] | None:
+        return await self._add_episode(
+            _EpisodeSpec(
+                episode_name(self._scope.meeting_id, index),
+                "\n".join(f"{u.speaker}: {u.text}" for u in window),
+                f"Google Meet {self._scope.meeting_id} transcript",
+                window[0].source_at,
+                index,
+                len(window),
+                "memory_episode_ingested",
+                "memory_episode_failed",
+            ),
+            previous_uuid,
+        )
+
+    async def add_visual(
+        self, index: int, entry: VisualEntry, previous_uuid: str | None
+    ) -> tuple[str, int] | None:
+        return await self._add_episode(
+            _EpisodeSpec(
+                visual_episode_name(self._scope.meeting_id, index),
+                f"Shared screen {entry.frame_ref}: {entry.caption}",
+                f"Google Meet {self._scope.meeting_id} visual",
+                entry.captured_at,
+                index,
+                1,
+                "memory_visual_ingested",
+                "memory_visual_failed",
+            ),
+            previous_uuid,
+        )
+
+    async def drive_windows(
+        self, windows: list[list[Utterance]], resumed_from: int, previous_uuid: str | None
+    ) -> tuple[bool, str | None, dict[int, str], int, int]:
+        ingested = facts = 0
+        uuids: dict[int, str] = {}
+        for index in range(resumed_from, len(windows)):
+            if self.stopped():
+                return False, previous_uuid, uuids, ingested, facts
+            added = await self.add_window(index, windows[index], previous_uuid)
+            if added is None:
+                return False, previous_uuid, uuids, ingested, facts
+            previous_uuid, count = added
+            uuids[index] = previous_uuid
+            ingested += 1
+            facts += count
+        return True, previous_uuid, uuids, ingested, facts
+
+    async def drive_visuals(
+        self, visuals: list[list[VisualEntry]], visual_done: set[int], previous_uuid: str | None
+    ) -> tuple[bool, str | None, dict[int, str], int, int]:
+        ingested = facts = 0
+        uuids: dict[int, str] = {}
+        for index, frame in enumerate(visuals):
+            if index in visual_done:
+                continue
+            if self.stopped():
+                return False, previous_uuid, uuids, ingested, facts
+            entry = frame[0]
+            if not entry.caption.strip() or not entry.frame_ref.strip():
+                continue
+            added = await self.add_visual(index, entry, previous_uuid)
+            if added is None:
+                return False, previous_uuid, uuids, ingested, facts
+            previous_uuid, count = added
+            uuids[index] = previous_uuid
+            ingested += 1
+            facts += count
+        return True, previous_uuid, uuids, ingested, facts
+
+
 async def ingest_meeting(
     memory: Graphiti,
     entries: Sequence[RecordEntry],
-    *,
-    group_id: str,
-    meeting_id: str,
-    twin_name: str,
-    vocabulary: Sequence[str] = (),
-    journal: Journal | None = None,
-    faults: FaultReporter | None = None,
-    stop: asyncio.Event | None = None,
-    episode_timeout_seconds: float = DEFAULTS.memory.ingestion.episode_timeout_seconds,
-    window_utterances: int = DEFAULTS.memory.ingestion.window_utterances,
-    window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
+    scope: IngestScope,
+    control: IngestControl = DEFAULT_INGEST_CONTROL,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
 ) -> IngestResult:
     windows = meeting_windows(
-        entries, window_utterances=window_utterances, window_seconds=window_seconds
+        entries,
+        window_utterances=control.ingestion.window_utterances,
+        window_seconds=control.ingestion.window_seconds,
     )
     resumed_from, previous_uuid = await _resume_point(
-        memory, group_id=group_id, meeting_id=meeting_id
+        memory, group_id=scope.group_id, meeting_id=scope.meeting_id
     )
     instructions = extraction_instructions(
-        twin_name,
-        vocabulary,
+        scope.twin_name,
+        scope.vocabulary,
         voice_labels=any(
             isinstance(entry, TranscriptEntry) and voice_speaker_name(entry.participant_id)
             for entry in entries
         ),
     )
-    ingested = facts = 0
-    completed = True
-    uuids: dict[int, str] = {}
+    ingestor = _MeetingIngestor(memory, scope, control, diagnostics, instructions)
     visuals = visual_windows(entries)
-    visual_done: set[int] = set()
-    if visuals:
-        for episode in await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id):
-            visual_index = _visual_index(episode.name, meeting_id)
-            if visual_index is not None:
-                visual_done.add(visual_index)
-    for index in range(resumed_from, len(windows)):
-        if stop is not None and stop.is_set():
-            completed = False
-            break
-        window = windows[index]
-        try:
-            timer_journal = journal or Journal("", echo=False)
-            with timer_journal.timed(
-                finished="memory_episode_ingested",
-                failed="memory_episode_failed",
-                source="memory_ingest",
-                window=index,
-                utterances=len(window),
-                facts=0,
-            ) as timing:
-                async with asyncio.timeout(episode_timeout_seconds):
-                    result = await memory.add_episode(
-                        name=episode_name(meeting_id, index),
-                        episode_body="\n".join(f"{u.speaker}: {u.text}" for u in window),
-                        source_description=f"Google Meet {meeting_id} transcript",
-                        reference_time=window[0].source_at,
-                        source=EpisodeType.message,
-                        group_id=group_id,
-                        saga=meeting_saga(meeting_id),
-                        saga_previous_episode_uuid=previous_uuid,
-                        custom_extraction_instructions=instructions,
-                    )
-                timing.fields.update(facts=len(result.edges))
-        except Exception as error:
-            if faults is not None:
-                faults.record(classify_exception("memory_ingest", error))
-            completed = False
-            break
-        previous_uuid = result.episode.uuid
-        uuids[index] = result.episode.uuid
-        ingested += 1
-        facts += len(result.edges)
-    visual_uuids: dict[int, str] = {}
-    visual_ingested = 0
-    for index, frame in enumerate(visuals):
-        if index in visual_done:
-            continue
-        if stop is not None and stop.is_set():
-            completed = False
-            break
-        entry = frame[0]
-        if not entry.caption.strip() or not entry.frame_ref.strip():
-            continue
-        try:
-            timer_journal = journal or Journal("", echo=False)
-            with timer_journal.timed(
-                finished="memory_visual_ingested",
-                failed="memory_visual_failed",
-                source="memory_ingest",
-                window=index,
-                utterances=1,
-                facts=0,
-            ) as timing:
-                async with asyncio.timeout(episode_timeout_seconds):
-                    result = await memory.add_episode(
-                        name=visual_episode_name(meeting_id, index),
-                        episode_body=f"Shared screen {entry.frame_ref}: {entry.caption}",
-                        source_description=f"Google Meet {meeting_id} visual",
-                        reference_time=entry.captured_at,
-                        source=EpisodeType.message,
-                        group_id=group_id,
-                        saga=meeting_saga(meeting_id),
-                        saga_previous_episode_uuid=previous_uuid,
-                        custom_extraction_instructions=instructions,
-                    )
-                timing.fields.update(facts=len(result.edges))
-        except Exception as error:
-            if faults is not None:
-                faults.record(classify_exception("memory_ingest", error))
-            completed = False
-            break
-        previous_uuid = result.episode.uuid
-        visual_uuids[index] = result.episode.uuid
-        visual_ingested += 1
-        facts += len(result.edges)
+    visual_done = await _resumed_visuals(memory, scope, visuals)
+    completed, previous_uuid, uuids, ingested, facts = await ingestor.drive_windows(
+        windows, resumed_from, previous_uuid
+    )
+    visual_completed, _, visual_uuids, visual_ingested, visual_facts = await ingestor.drive_visuals(
+        visuals, visual_done, previous_uuid
+    )
     ingested += visual_ingested
-    if journal is not None:
-        journal.record(
+    facts += visual_facts
+    completed = completed and visual_completed
+    if diagnostics.journal is not None:
+        diagnostics.journal.record(
             "memory_ingest_finished",
             source="memory_ingest",
             windows=len(windows),
@@ -387,27 +479,18 @@ async def _invalidate_original_edges(
     return invalidated
 
 
-async def ingest_corrections(
-    memory: Graphiti,
-    record_path: Path,
-    *,
-    group_id: str,
-    meeting_id: str,
-    journal: Journal | None = None,
-    faults: FaultReporter | None = None,
-    window_utterances: int = DEFAULTS.memory.ingestion.window_utterances,
-    window_seconds: float = DEFAULTS.memory.ingestion.window_seconds,
-    episode_timeout_seconds: float = DEFAULTS.memory.ingestion.episode_timeout_seconds,
-) -> CorrectionResult:
+def _correction_payload(record_path: Path) -> tuple[dict[str, Any], str] | None:
     sidecar = record_path.parent / JSON_FILE_NAME
     if not sidecar.exists():
-        return CorrectionResult(changed_windows=0, episodes=(), completed=True)
-    live = load_meeting_record(record_path)
-    corrected = load_corrected_record(record_path)
+        return None
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
     corrected_at = payload.get("corrected_at")
     if not isinstance(corrected_at, str) or not corrected_at:
         raise DiarizeError(ErrorCode.DIARIZE_SIDECAR_INVALID)
+    return payload, corrected_at
+
+
+def _read_correction_labels(record_path: Path, payload: dict[str, Any]) -> dict[str, str]:
     stored = read_correction_labels(record_path)
     labeled = correction_labels_valid(record_path)
     labels: dict[str, str] = {}
@@ -422,39 +505,22 @@ async def ingest_corrections(
                 labels[uuid] = correction_speaker_name(turn["speaker"], stored.get(uuid))
             else:
                 labels[uuid] = turn["speaker"]
-    live_windows = _entries_to_windows(
-        live, None, window_utterances=window_utterances, window_seconds=window_seconds
-    )
-    fixed_windows = _entries_to_windows(
-        corrected, labels, window_utterances=window_utterances, window_seconds=window_seconds
-    )
-    changed = [
-        index
-        for index, (before, after) in enumerate(zip(live_windows, fixed_windows, strict=True))
-        if [utterance.speaker for utterance in before] != [utterance.speaker for utterance in after]
-    ]
-    status_file = status_path(record_path)
-    existing = read_status(status_file)
-    if existing is not None and existing.corrected_at == corrected_at:
-        if journal is not None:
-            journal.record(
-                "memory_correction_finished",
-                source="memory_ingest",
-                changed=len(changed),
-                ingested=0,
-                completed=True,
-            )
-        return CorrectionResult(changed_windows=len(changed), episodes=(), completed=True)
-    now = datetime.now(UTC)
-    base = existing
-    if base is None:
-        base = IngestionStatus(meeting_id=meeting_id, group_id=group_id, status="not_requested")
+    return labels
+
+
+async def _correction_window_map(
+    memory: Graphiti,
+    scope: MeetingScope,
+    existing: IngestionStatus | None,
+    changed: list[int],
+    corrected_at: str,
+) -> dict[int, str]:
     window_map: dict[int, str] = {}
     if existing is not None and existing.correction_run == corrected_at:
         window_map = dict(existing.correction_windows)
     if changed and (existing is None or existing.correction_run in (None, corrected_at)):
         adopted = await _orphaned_corrections(
-            memory, group_id=group_id, meeting_id=meeting_id, changed=changed
+            memory, group_id=scope.group_id, meeting_id=scope.meeting_id, changed=changed
         )
         prior: set[str] = set()
         if existing is not None:
@@ -465,18 +531,95 @@ async def ingest_corrections(
                 if adopted_uuid not in prior:
                     window_map.setdefault(adopted_index, adopted_uuid)
                     break
-    last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
-    previous_uuid = last[-1].uuid if last else None
-    originals = existing.episode_uuids if existing is not None else {}
-    episodes: list[str] = []
-    completed = True
-    for index in changed:
-        if index in window_map:
-            continue
-        window = fixed_windows[index]
+    return window_map
+
+
+@dataclass(slots=True)
+class _CorrectionDrive:
+    changed: list[int]
+    fixed_windows: list[list[Utterance]]
+    originals: dict[int, str]
+    previous_uuid: str | None
+    base: IngestionStatus
+    window_map: dict[int, str]
+    corrected_at: str
+    now: datetime
+    episodes: list[str] = field(default_factory=list)
+    completed: bool = True
+
+
+def _finalize_corrections(
+    drive: _CorrectionDrive, status_file: Path, faults: FaultReporter | None
+) -> None:
+    try:
+        drive.base = drive.base.model_copy(
+            update={
+                "corrected_at": drive.corrected_at,
+                "correction_episodes": list(
+                    dict.fromkeys([*drive.base.correction_episodes, *drive.window_map.values()])
+                ),
+                "updated_at": drive.now,
+            }
+        )
+        write_status(status_file, drive.base)
+    except OSError as error:
+        if faults is not None:
+            faults.record(classify_exception("memory_ingest", error))
+        drive.completed = False
+
+
+class _CorrectionIngestor:
+    def __init__(
+        self,
+        memory: Graphiti,
+        scope: MeetingScope,
+        control: IngestControl,
+        diagnostics: Diagnostics,
+        record_path: Path,
+    ) -> None:
+        self._memory = memory
+        self._scope = scope
+        self._control = control
+        self._diagnostics = diagnostics
+        self._record_path = record_path
+
+    async def _invalidate_window(self, index: int, original: str | None, now: datetime) -> int:
+        if original is None:
+            if self._diagnostics.faults is not None:
+                self._diagnostics.faults.record(
+                    classify_exception(
+                        "memory_ingest",
+                        ValueError(f"missing episode uuid for corrected window {index}"),
+                    )
+                )
+            return 0
+        return await _invalidate_original_edges(
+            self._memory, group_id=self._scope.group_id, episode_uuid=original, at=now
+        )
+
+    def _orphan_fault(
+        self, fault: ProviderFault, index: int, written_uuid: str | None
+    ) -> ProviderFault:
+        if written_uuid is None:
+            return fault
+        detail = (
+            f"correction window {index} orphaned episode {written_uuid}; retry recovers the window"
+        )
+        if fault.detail is not None:
+            detail = f"{detail} ({fault.detail})"
+        return ProviderFault(
+            fault.source,
+            fault.kind,
+            evidence=FaultEvidence(fault.status, detail),
+            retryable=fault.retryable,
+            operation=fault.operation,
+        )
+
+    async def add_one(self, drive: _CorrectionDrive, index: int) -> str | None:
+        window = drive.fixed_windows[index]
         written_uuid: str | None = None
         try:
-            timer_journal = journal or Journal("", echo=False)
+            timer_journal = self._diagnostics.journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished="memory_correction_ingested",
                 failed="memory_correction_failed",
@@ -485,90 +628,125 @@ async def ingest_corrections(
                 utterances=len(window),
                 facts=0,
             ) as timing:
-                async with asyncio.timeout(episode_timeout_seconds):
-                    result = await memory.add_episode(
-                        name=correction_episode_name(meeting_id, index),
+                async with asyncio.timeout(self._control.ingestion.episode_timeout_seconds):
+                    result = await self._memory.add_episode(
+                        name=correction_episode_name(self._scope.meeting_id, index),
                         episode_body="\n".join(f"{u.speaker}: {u.text}" for u in window),
-                        source_description=f"Google Meet {meeting_id} transcript (corrected)",
-                        reference_time=now,
+                        source_description=(
+                            f"Google Meet {self._scope.meeting_id} transcript (corrected)"
+                        ),
+                        reference_time=drive.now,
                         source=EpisodeType.message,
-                        group_id=group_id,
-                        saga=meeting_saga(meeting_id),
-                        saga_previous_episode_uuid=previous_uuid,
+                        group_id=self._scope.group_id,
+                        saga=meeting_saga(self._scope.meeting_id),
+                        saga_previous_episode_uuid=drive.previous_uuid,
                     )
                 written_uuid = result.episode.uuid
-                original = originals.get(index)
-                if original is None:
-                    if faults is not None:
-                        faults.record(
-                            classify_exception(
-                                "memory_ingest",
-                                ValueError(f"missing episode uuid for corrected window {index}"),
-                            )
-                        )
-                    invalidated = 0
-                else:
-                    invalidated = await _invalidate_original_edges(
-                        memory, group_id=group_id, episode_uuid=original, at=now
-                    )
+                invalidated = await self._invalidate_window(
+                    index, drive.originals.get(index), drive.now
+                )
                 timing.fields.update(facts=len(result.edges), invalidated=invalidated)
-                window_map[index] = result.episode.uuid
-                base = base.model_copy(
+                drive.window_map[index] = result.episode.uuid
+                drive.base = drive.base.model_copy(
                     update={
-                        "correction_windows": dict(window_map),
-                        "correction_run": corrected_at,
-                        "updated_at": now,
+                        "correction_windows": dict(drive.window_map),
+                        "correction_run": drive.corrected_at,
+                        "updated_at": drive.now,
                     }
                 )
-                write_status(status_file, base)
+                write_status(status_path(self._record_path), drive.base)
         except Exception as error:
-            if faults is not None:
+            if self._diagnostics.faults is not None:
                 fault = classify_exception("memory_ingest", error)
-                if written_uuid is not None:
-                    detail = (
-                        f"correction window {index} orphaned episode {written_uuid}; "
-                        "retry recovers the window"
-                    )
-                    if fault.detail is not None:
-                        detail = f"{detail} ({fault.detail})"
-                    fault = ProviderFault(
-                        fault.source,
-                        fault.kind,
-                        status=fault.status,
-                        detail=detail,
-                        retryable=fault.retryable,
-                        operation=fault.operation,
-                    )
-                faults.record(fault)
-            completed = False
-            break
-        previous_uuid = result.episode.uuid
-        episodes.append(result.episode.uuid)
-    if completed:
-        try:
-            base = base.model_copy(
-                update={
-                    "corrected_at": corrected_at,
-                    "correction_episodes": list(
-                        dict.fromkeys([*base.correction_episodes, *window_map.values()])
-                    ),
-                    "updated_at": now,
-                }
+                self._diagnostics.faults.record(self._orphan_fault(fault, index, written_uuid))
+            return None
+        return result.episode.uuid
+
+    async def drive(self, drive_state: _CorrectionDrive) -> None:
+        for index in drive_state.changed:
+            if index in drive_state.window_map:
+                continue
+            written = await self.add_one(drive_state, index)
+            if written is None:
+                drive_state.completed = False
+                return
+            drive_state.previous_uuid = written
+            drive_state.episodes.append(written)
+
+
+async def ingest_corrections(
+    memory: Graphiti,
+    record_path: Path,
+    scope: MeetingScope,
+    control: IngestControl = DEFAULT_INGEST_CONTROL,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+) -> CorrectionResult:
+    loaded = _correction_payload(record_path)
+    if loaded is None:
+        return CorrectionResult(changed_windows=0, episodes=(), completed=True)
+    payload, corrected_at = loaded
+    live = load_meeting_record(record_path)
+    corrected = load_corrected_record(record_path)
+    labels = _read_correction_labels(record_path, payload)
+    live_windows = _entries_to_windows(
+        live,
+        None,
+        window_utterances=control.ingestion.window_utterances,
+        window_seconds=control.ingestion.window_seconds,
+    )
+    fixed_windows = _entries_to_windows(
+        corrected,
+        labels,
+        window_utterances=control.ingestion.window_utterances,
+        window_seconds=control.ingestion.window_seconds,
+    )
+    changed = [
+        index
+        for index, (before, after) in enumerate(zip(live_windows, fixed_windows, strict=True))
+        if [utterance.speaker for utterance in before] != [utterance.speaker for utterance in after]
+    ]
+    status_file = status_path(record_path)
+    existing = read_status(status_file)
+    if existing is not None and existing.corrected_at == corrected_at:
+        if diagnostics.journal is not None:
+            diagnostics.journal.record(
+                "memory_correction_finished",
+                source="memory_ingest",
+                changed=len(changed),
+                ingested=0,
+                completed=True,
             )
-            write_status(status_file, base)
-        except OSError as error:
-            if faults is not None:
-                faults.record(classify_exception("memory_ingest", error))
-            completed = False
-    if journal is not None:
-        journal.record(
+        return CorrectionResult(changed_windows=len(changed), episodes=(), completed=True)
+    now = datetime.now(UTC)
+    base = (
+        existing
+        if existing is not None
+        else IngestionStatus(
+            meeting_id=scope.meeting_id, group_id=scope.group_id, status="not_requested"
+        )
+    )
+    window_map = await _correction_window_map(memory, scope, existing, changed, corrected_at)
+    last = await meeting_episodes(
+        memory, group_id=scope.group_id, meeting_id=scope.meeting_id, last_n=1
+    )
+    previous_uuid = last[-1].uuid if last else None
+    originals = existing.episode_uuids if existing is not None else {}
+    drive = _CorrectionDrive(
+        changed, fixed_windows, originals, previous_uuid, base, window_map, corrected_at, now
+    )
+    ingestor = _CorrectionIngestor(memory, scope, control, diagnostics, record_path)
+    await ingestor.drive(drive)
+    if drive.completed:
+        _finalize_corrections(drive, status_file, diagnostics.faults)
+    if diagnostics.journal is not None:
+        diagnostics.journal.record(
             "memory_correction_finished",
             source="memory_ingest",
             changed=len(changed),
-            ingested=len(episodes),
-            completed=completed,
+            ingested=len(drive.episodes),
+            completed=drive.completed,
         )
-    return CorrectionResult(len(changed), tuple(episodes), completed)
+    return CorrectionResult(len(changed), tuple(drive.episodes), drive.completed)
 
 
 def _correction_index(name: str, meeting_id: str) -> int | None:

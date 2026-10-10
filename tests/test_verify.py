@@ -7,13 +7,20 @@ from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.identity.verify import (
     CalibrationArtifact,
+    VerificationInputs,
     VerifiedDecision,
     claim_of,
     decide_verified,
     load_calibration_artifact,
 )
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
-from fakeyou.identity.voiceprint_match import VoiceprintMatcher, VoiceScores, apply_voice_scores
+from fakeyou.identity.voiceprint_match import (
+    VoiceprintMatcher,
+    VoiceScoreAttribution,
+    VoiceScores,
+    apply_voice_scores,
+)
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from tests.fakes import InMemoryVoiceprints, RecordingJournal
 
@@ -93,14 +100,11 @@ def _decide(
     return decide_verified(
         row.uuid,
         scores,
-        claim,
-        ARTIFACT,
-        registry=registry,
-        slot=row.slot,
-        overlap=overlap,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT, claim=claim, overlap=overlap, slot=row.slot, embedder=_embedder()
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
 
@@ -168,13 +172,9 @@ def test_missing_artifact_returns_null() -> None:
     decision = decide_verified(
         row.uuid,
         VoiceScores("alice", 0.9, 0.1, "verified", owner_name="alice", consent_ts=CONSENT),
-        "alice",
-        None,
-        registry=registry,
-        slot=row.slot,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(artifact=None, claim="alice", slot=row.slot, embedder=_embedder()),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
     assert decision is None
@@ -312,14 +312,11 @@ def test_reset_clears_verified_binding_for_fail_closed_session() -> None:
     rebound = decide_verified(
         row.uuid,
         VoiceScores("bob", 0.9, 0.1, "verified", owner_name="bob", consent_ts=CONSENT),
-        "bob",
-        ARTIFACT,
-        registry=registry,
-        slot=0,
-        overlap=False,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT, claim="bob", overlap=False, slot=0, embedder=_embedder()
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
     assert rebound is not None
@@ -437,13 +434,14 @@ def test_decide_refuses_artifact_embedder_model_mismatch() -> None:
     decision = decide_verified(
         row.uuid,
         _passing_scores(),
-        claim_of(row),
-        _stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
-        registry=registry,
-        slot=row.slot,
-        embedder=_embedder(f"model-b.onnx:{DIGEST_B}"),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=_stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
+            claim=claim_of(row),
+            slot=row.slot,
+            embedder=_embedder(f"model-b.onnx:{DIGEST_B}"),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
     assert decision is None
     assert journal.events("name_verified") == []
@@ -459,13 +457,14 @@ def test_decide_accepts_matching_digest_with_different_model_name() -> None:
     decision = decide_verified(
         row.uuid,
         _passing_scores(),
-        claim_of(row),
-        _stamped_artifact(f"container.onnx:{DIGEST_A}"),
-        registry=registry,
-        slot=row.slot,
-        embedder=_embedder(f"host-other.onnx:{DIGEST_A}"),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=_stamped_artifact(f"container.onnx:{DIGEST_A}"),
+            claim=claim_of(row),
+            slot=row.slot,
+            embedder=_embedder(f"host-other.onnx:{DIGEST_A}"),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
     assert decision is not None
 
@@ -479,13 +478,14 @@ def test_decide_refuses_stamped_artifact_with_unparsable_embedder_id() -> None:
     decision = decide_verified(
         row.uuid,
         _passing_scores(),
-        claim_of(row),
-        _stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
-        registry=registry,
-        slot=row.slot,
-        embedder=_embedder("embed-test-v1"),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=_stamped_artifact(f"model-a.onnx:{DIGEST_A}"),
+            claim=claim_of(row),
+            slot=row.slot,
+            embedder=_embedder("embed-test-v1"),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
     assert decision is None
     assert journal.events("name_verified") == []
@@ -541,16 +541,15 @@ def test_apply_voice_scores_forwards_to_verified_path() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         VoiceScores("alice", 0.9, 0.1, "verified", owner_name="alice", consent_ts=CONSENT),
-        device="dev-a",
-        owners={},
-        journal=journal,
-        faults=faults,
-        artifact=ARTIFACT,
-        claim="alice",
-        slot=row.slot,
-        embedder=_embedder(),
+        attribution=VoiceScoreAttribution(row.uuid, "dev-a", {}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
+        verification=VerificationInputs(
+            artifact=ARTIFACT,
+            claim="alice",
+            slot=row.slot,
+            embedder=_embedder(),
+        ),
     )
 
     assert outcome == "verified"
@@ -582,14 +581,15 @@ def test_claim_matching_owner_name_verifies_with_distinct_person_id() -> None:
     decision = decide_verified(
         row.uuid,
         scores,
-        claim_of(row),
-        ARTIFACT,
-        registry=registry,
-        slot=row.slot,
-        overlap=False,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT,
+            claim=claim_of(row),
+            overlap=False,
+            slot=row.slot,
+            embedder=_embedder(),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
     assert decision is not None
@@ -624,14 +624,15 @@ def test_claim_matching_person_id_but_not_owner_returns_null_with_misbind() -> N
     decision = decide_verified(
         row.uuid,
         scores,
-        claim_of(row),
-        ARTIFACT,
-        registry=registry,
-        slot=row.slot,
-        overlap=False,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT,
+            claim=claim_of(row),
+            overlap=False,
+            slot=row.slot,
+            embedder=_embedder(),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
     assert decision is None
@@ -658,14 +659,15 @@ def test_missing_owner_name_returns_null_without_fault() -> None:
         decide_verified(
             row.uuid,
             scores,
-            claim_of(row),
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=_embedder(),
-            journal=journal,
-            faults=faults,
+            VerificationInputs(
+                artifact=ARTIFACT,
+                claim=claim_of(row),
+                overlap=False,
+                slot=row.slot,
+                embedder=_embedder(),
+            ),
+            registry,
+            Diagnostics(faults=faults, journal=journal),
         )
         is None
     )
@@ -673,14 +675,15 @@ def test_missing_owner_name_returns_null_without_fault() -> None:
         decide_verified(
             row.uuid,
             _owner_scores(None, CONSENT),
-            claim_of(row),
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=_embedder(),
-            journal=journal,
-            faults=faults,
+            VerificationInputs(
+                artifact=ARTIFACT,
+                claim=claim_of(row),
+                overlap=False,
+                slot=row.slot,
+                embedder=_embedder(),
+            ),
+            registry,
+            Diagnostics(faults=faults, journal=journal),
         )
         is None
     )
@@ -699,14 +702,15 @@ def test_missing_consent_returns_null_without_fault() -> None:
         decide_verified(
             row.uuid,
             _owner_scores("Maya", None),
-            claim_of(row),
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=_embedder(),
-            journal=journal,
-            faults=faults,
+            VerificationInputs(
+                artifact=ARTIFACT,
+                claim=claim_of(row),
+                overlap=False,
+                slot=row.slot,
+                embedder=_embedder(),
+            ),
+            registry,
+            Diagnostics(faults=faults, journal=journal),
         )
         is None
     )
@@ -726,28 +730,26 @@ def test_journal_model_version_comes_from_embedder_model_id_and_stays_stable() -
     first = decide_verified(
         row.uuid,
         scores,
-        "Maya",
-        ARTIFACT,
-        registry=registry,
-        slot=row.slot,
-        overlap=False,
-        embedder=_embedder(),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT, claim="Maya", overlap=False, slot=row.slot, embedder=_embedder()
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
     assert first is not None
     registry.reset()
     second = decide_verified(
         row.uuid,
         scores,
-        "Maya",
-        ARTIFACT,
-        registry=registry,
-        slot=row.slot,
-        overlap=False,
-        embedder=_embedder("eres2net:deadbeef"),
-        journal=journal,
-        faults=faults,
+        VerificationInputs(
+            artifact=ARTIFACT,
+            claim="Maya",
+            overlap=False,
+            slot=row.slot,
+            embedder=_embedder("eres2net:deadbeef"),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
     )
 
     assert second is not None
@@ -767,14 +769,15 @@ def test_embedder_without_model_id_returns_null() -> None:
         decide_verified(
             row.uuid,
             scores,
-            "Maya",
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=_embedder(None),
-            journal=journal,
-            faults=faults,
+            VerificationInputs(
+                artifact=ARTIFACT,
+                claim="Maya",
+                overlap=False,
+                slot=row.slot,
+                embedder=_embedder(None),
+            ),
+            registry,
+            Diagnostics(faults=faults, journal=journal),
         )
         is None
     )
@@ -782,14 +785,11 @@ def test_embedder_without_model_id_returns_null() -> None:
         decide_verified(
             row.uuid,
             scores,
-            "Maya",
-            ARTIFACT,
-            registry=registry,
-            slot=row.slot,
-            overlap=False,
-            embedder=None,
-            journal=journal,
-            faults=faults,
+            VerificationInputs(
+                artifact=ARTIFACT, claim="Maya", overlap=False, slot=row.slot, embedder=None
+            ),
+            registry,
+            Diagnostics(faults=faults, journal=journal),
         )
         is None
     )
@@ -806,15 +806,14 @@ def test_apply_voice_scores_without_embedder_skips_verified_path() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         _owner_scores("Maya", CONSENT),
-        device="dev-a",
-        owners={},
-        journal=journal,
-        faults=faults,
-        artifact=ARTIFACT,
-        claim="Maya",
-        slot=row.slot,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-a", {}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
+        verification=VerificationInputs(
+            artifact=ARTIFACT,
+            claim="Maya",
+            slot=row.slot,
+        ),
     )
 
     assert outcome == "verified"

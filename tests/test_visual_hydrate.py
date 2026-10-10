@@ -30,6 +30,7 @@ from fakeyou.memory.visual_hydrate import (
     create_visual_resolver,
     visual_clarification,
 )
+from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests.fakes import ToolCallingFakeModel, make_graphiti
@@ -577,18 +578,23 @@ async def test_assembly_registers_hydrate_after_prefetch(
     async with assembly_module.open_conversation(
         wired,
         config,
-        profile=profile,
-        graphiti=make_graphiti(),
-        on_transition=lambda *args: None,
-        visual_store=store,
-        visual_captioner=captioner,
+        agent=AgentWiring(
+            profile=profile,
+            graphiti=make_graphiti(),
+            visual_store=store,
+            visual_captioner=captioner,
+        ),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
     names = created["middleware"]
     assert "VisualHydrateMiddleware" in names
     assert names.index("VisualHydrateMiddleware") > names.index("_MemoryPrefetchMiddleware")
     async with assembly_module.open_conversation(
-        wired, config, profile=profile, graphiti=make_graphiti(), on_transition=lambda *args: None
+        wired,
+        config,
+        agent=AgentWiring(profile=profile, graphiti=make_graphiti()),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
     assert "VisualHydrateMiddleware" not in created["middleware"]

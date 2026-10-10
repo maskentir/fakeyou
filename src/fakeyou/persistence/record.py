@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -48,6 +49,16 @@ class ToolResultEntry(_Entry):
 class ResumeEntry(_Entry):
     kind: Literal["resume"] = "resume"
     attempt: int
+
+
+@dataclass(frozen=True, slots=True)
+class VisualDraft:
+    visual_id: str
+    caption: str
+    sha256: str
+    captured_at: datetime
+    frame_ref: str
+    captured_page_ms: float = 0.0
 
 
 class VisualEntry(_Entry):
@@ -144,33 +155,24 @@ class MeetingRecord:
     def add_resume(self, *, attempt: int) -> None:
         self._append(ResumeEntry(at=self._now(), attempt=attempt))
 
-    def add_visual(
-        self,
-        *,
-        visual_id: str,
-        caption: str,
-        sha256: str,
-        captured_at: datetime,
-        frame_ref: str,
-        captured_page_ms: float = 0.0,
-    ) -> None:
+    def add_visual(self, draft: VisualDraft) -> None:
         if (
-            not visual_id.strip()
-            or not caption.strip()
-            or not frame_ref.strip()
-            or visual_id in self._seen_visual
+            not draft.visual_id.strip()
+            or not draft.caption.strip()
+            or not draft.frame_ref.strip()
+            or draft.visual_id in self._seen_visual
         ):
             return
-        self._seen_visual.add(visual_id)
+        self._seen_visual.add(draft.visual_id)
         self._append(
             VisualEntry(
                 at=self._now(),
-                visual_id=visual_id,
-                captured_at=captured_at,
-                sha256=sha256,
-                caption=caption,
-                frame_ref=frame_ref,
-                captured_page_ms=captured_page_ms,
+                visual_id=draft.visual_id,
+                captured_at=draft.captured_at,
+                sha256=draft.sha256,
+                caption=draft.caption,
+                frame_ref=draft.frame_ref,
+                captured_page_ms=draft.captured_page_ms,
             )
         )
 

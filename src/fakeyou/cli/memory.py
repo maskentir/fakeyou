@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
 from graphiti_core import Graphiti
@@ -13,10 +13,11 @@ from pydantic import TypeAdapter
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli._operator import load_operator_persona
+from fakeyou.cli._operator import OperatorIdentity, load_operator_persona
 from fakeyou.cli.diarize import diarize_run
 from fakeyou.cli.output import emit_error, emit_json, emit_progress, emit_text
 from fakeyou.config.settings import (
+    IngestionSettings,
     Settings,
 )
 from fakeyou.conversation.conversation import (
@@ -25,7 +26,12 @@ from fakeyou.conversation.conversation import (
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url
 from fakeyou.foundation.invariants import SessionId
-from fakeyou.memory.ingestion import IngestResult, ingest_meeting
+from fakeyou.memory.ingestion import (
+    IngestControl,
+    IngestResult,
+    IngestScope,
+    ingest_meeting,
+)
 from fakeyou.memory.memory import (
     ensure_indexes,
     forget_episode,
@@ -33,10 +39,11 @@ from fakeyou.memory.memory import (
     open_graphiti_memory,
     reembed_group,
 )
-from fakeyou.memory.owner_notes import OwnerNoteResult, remember_owner_note
+from fakeyou.memory.owner_notes import NoteIdentity, OwnerNoteResult, remember_owner_note
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
-from fakeyou.observability.journal import Journal, journal_files, journal_path
+from fakeyou.observability.journal import Journal, JournalFile, journal_files, journal_path
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.lifecycle import meeting_thread_id
@@ -53,6 +60,12 @@ from fakeyou.persistence.ingestion_status import (
 from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 
 
+@dataclass(frozen=True, slots=True)
+class CorrectionTarget:
+    episode_uuid: str
+    note_id: UUID | None = None
+
+
 async def initialize_memory(settings: Settings) -> None:
     async with open_graphiti_memory(memory_config(settings)) as memory:
         await ensure_indexes(memory)
@@ -61,9 +74,9 @@ async def initialize_memory(settings: Settings) -> None:
 
 @asynccontextmanager
 async def open_operator_memory(
-    persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
+    identity: OperatorIdentity, settings: Settings
 ) -> AsyncIterator[tuple[PersonaProfile, Graphiti]]:
-    profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+    profile = await load_operator_persona(identity, settings)
     async with open_persona_memory(settings) as memory:
         yield profile, memory
 
@@ -92,9 +105,7 @@ def _print_note_result(result: OwnerNoteResult) -> None:
 async def add_owner_note(
     text: str,
     *,
-    persona_path: Path,
-    owner_id: str | None,
-    twin_id: str | None,
+    identity: OperatorIdentity,
     settings: Settings,
     source_at: datetime | None = None,
     note_id: UUID | None = None,
@@ -102,7 +113,7 @@ async def add_owner_note(
     if not text.strip():
         raise FakeYouError(ErrorCode.MEMORY_NOTE_TEXT_BLANK)
     _require_usable_source(source_at)
-    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+    async with open_operator_memory(identity, settings) as (
         profile,
         memory,
     ):
@@ -114,7 +125,7 @@ async def add_owner_note(
             group_id=profile.memory_group,
             text=text,
             source_at=source_at,
-            note_id=operation,
+            identity=NoteIdentity(operation),
         )
     _print_note_result(result)
 
@@ -122,66 +133,70 @@ async def add_owner_note(
 async def correct_owner_note(
     text: str,
     *,
-    episode_uuid: str,
+    target: CorrectionTarget,
     source_at: datetime,
-    note_id: UUID | None,
-    persona_path: Path,
-    owner_id: str | None,
-    twin_id: str | None,
+    identity: OperatorIdentity,
     settings: Settings,
 ) -> None:
     if not text.strip():
         raise FakeYouError(ErrorCode.MEMORY_NOTE_TEXT_BLANK)
     try:
-        target = UUID(episode_uuid)
+        supersedes = UUID(target.episode_uuid)
     except ValueError:
         raise FakeYouError(ErrorCode.MEMORY_EPISODE_NOT_UUID) from None
     _require_usable_source(source_at)
-    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+    async with open_operator_memory(identity, settings) as (
         profile,
         memory,
     ):
-        operation = note_id if note_id is not None else uuid4()
-        if note_id is None:
+        operation = target.note_id if target.note_id is not None else uuid4()
+        if target.note_id is None:
             emit_progress(f"fakeyou: note-id {operation}")
         result = await remember_owner_note(
             memory,
             group_id=profile.memory_group,
             text=text,
             source_at=source_at,
-            note_id=operation,
-            supersedes=target,
+            identity=NoteIdentity(operation, supersedes),
         )
     _print_note_result(result)
 
 
+@dataclass(frozen=True, slots=True)
+class IngestJob:
+    record_path: Path
+    profile: PersonaProfile
+    meeting_id: str
+    twin_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class IngestRun:
+    ingestion: IngestionSettings
+    stop: asyncio.Event | None = None
+
+
 async def ingest_until_stopped(
     memory: Graphiti,
-    record_path: Path,
+    job: IngestJob,
     *,
-    profile: PersonaProfile,
-    meeting_id: str,
-    twin_name: str,
+    run: IngestRun,
     journal: Journal,
     faults: FaultReporter,
-    settings: Settings,
-    stop: asyncio.Event | None = None,
 ) -> IngestResult:
-    resolved = stop if stop is not None else asyncio.Event()
+    resolved = run.stop if run.stop is not None else asyncio.Event()
     with stop_signal_handlers(resolved):
         return await ingest_meeting(
             memory,
-            load_meeting_record(record_path),
-            group_id=profile.memory_group,
-            meeting_id=meeting_id,
-            twin_name=twin_name,
-            vocabulary=profile.vocabulary,
-            journal=journal,
-            faults=faults,
-            stop=resolved,
-            window_utterances=settings.memory.ingestion.window_utterances,
-            window_seconds=settings.memory.ingestion.window_seconds,
-            episode_timeout_seconds=settings.memory.ingestion.episode_timeout_seconds,
+            load_meeting_record(job.record_path),
+            IngestScope(
+                job.profile.memory_group,
+                job.meeting_id,
+                job.twin_name,
+                job.profile.vocabulary,
+            ),
+            IngestControl(run.ingestion, resolved),
+            Diagnostics(faults=faults, journal=journal),
         )
 
 
@@ -262,12 +277,68 @@ def _diarization_prereqs_met(settings: Settings, record_path: Path) -> bool:
     return any(audio_dir.glob("slot-*.wav"))
 
 
+def _terminal_outcome(
+    state: IngestionState,
+    reason: str,
+    fallback_sha256: str | None,
+    existing: IngestionStatus | None = None,
+) -> IngestOutcome:
+    return IngestOutcome(
+        state=state,
+        windows=existing.windows if existing is not None else 0,
+        resumed_from=existing.resumed_from if existing is not None else 0,
+        ingested=existing.ingested if existing is not None else 0,
+        facts=0,
+        completed=False,
+        record_sha256=existing.record_sha256 if existing is not None else fallback_sha256,
+        reason=reason,
+    )
+
+
+def _fail_ingest(
+    status_file: Path,
+    outcome: IngestOutcome,
+    meeting_id: str,
+    group_id: str,
+    faults: FaultReporter,
+) -> NoReturn:
+    _finish_ingest(
+        status_file,
+        outcome,
+        meeting_id=meeting_id,
+        group_id=group_id,
+        faults=faults,
+    )
+    raise SystemExit(ExitCode.FAILURE) from None
+
+
+def _maybe_diarize(
+    meeting_id: str,
+    settings: Settings,
+    record_path: Path,
+    *,
+    no_correct: bool,
+    faults: FaultReporter,
+) -> None:
+    if not no_correct and _diarization_prereqs_met(settings, record_path):
+        try:
+            diarize_run(meeting_id, settings=settings)
+        except FakeYouError as error:
+            faults.record(classify_exception("stt", error))
+
+
+def _ingest_state(result: IngestResult, stop: asyncio.Event) -> tuple[IngestionState, str | None]:
+    if result.completed:
+        return "completed", None
+    if stop.is_set():
+        return "interrupted", "stop_requested"
+    return "failed", "episode_failed"
+
+
 async def ingest_recorded_meeting(
     *,
     meeting_id: str,
-    persona_path: Path,
-    owner_id: str | None,
-    twin_id: str | None,
+    identity: OperatorIdentity,
     twin_name: str | None,
     settings: Settings,
     no_correct: bool = False,
@@ -276,17 +347,15 @@ async def ingest_recorded_meeting(
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not record_path.exists():
         raise FakeYouError(ErrorCode.MEMORY_RECORD_MISSING, meeting_id=meeting_id, path=record_path)
-    journal = Journal(meeting_id, path=journal_path(settings.paths.journal_dir, meeting_id))
+    journal = Journal(
+        meeting_id, file=JournalFile(journal_path(settings.paths.journal_dir, meeting_id))
+    )
     faults = FaultReporter(journal=journal)
     try:
-        if not no_correct and _diarization_prereqs_met(settings, record_path):
-            try:
-                diarize_run(meeting_id, settings=settings)
-            except FakeYouError as error:
-                faults.record(classify_exception("stt", error))
+        _maybe_diarize(meeting_id, settings, record_path, no_correct=no_correct, faults=faults)
         with record_lock(record_path, purpose="ingestion"):
             status_file = status_path(record_path)
-            profile = await load_operator_persona(persona_path, owner_id, twin_id, settings)
+            profile = await load_operator_persona(identity, settings)
             existing = read_status(status_file)
             if existing is not None and existing.group_id != profile.memory_group:
                 raise FakeYouError(ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH)
@@ -295,127 +364,71 @@ async def ingest_recorded_meeting(
                 load_meeting_record(record_path)
             except (OSError, ValueError) as error:
                 faults.record(classify_exception("memory_ingest", error))
-                _finish_ingest(
+                _fail_ingest(
                     status_file,
-                    IngestOutcome(
-                        state="failed",
-                        windows=existing.windows if existing is not None else 0,
-                        resumed_from=existing.resumed_from if existing is not None else 0,
-                        ingested=existing.ingested if existing is not None else 0,
-                        facts=0,
-                        completed=False,
-                        record_sha256=existing.record_sha256 if existing is not None else None,
-                        reason="record_unreadable",
-                    ),
-                    meeting_id=meeting_id,
-                    group_id=profile.memory_group,
-                    faults=faults,
+                    _terminal_outcome("failed", "record_unreadable", None, existing),
+                    meeting_id,
+                    profile.memory_group,
+                    faults,
                 )
-                raise SystemExit(ExitCode.FAILURE) from None
             if (
                 existing is not None
                 and existing.record_sha256 is not None
                 and existing.record_sha256 != current_hash
             ):
-                _finish_ingest(
+                _fail_ingest(
                     status_file,
-                    IngestOutcome(
-                        state="failed",
-                        windows=existing.windows,
-                        resumed_from=existing.resumed_from,
-                        ingested=existing.ingested,
-                        facts=0,
-                        completed=False,
-                        record_sha256=existing.record_sha256,
-                        reason="record_changed",
-                    ),
-                    meeting_id=meeting_id,
-                    group_id=profile.memory_group,
-                    faults=faults,
+                    _terminal_outcome("failed", "record_changed", existing.record_sha256, existing),
+                    meeting_id,
+                    profile.memory_group,
+                    faults,
                 )
-                raise SystemExit(ExitCode.FAILURE) from None
             stop = asyncio.Event()
             try:
                 async with open_persona_memory(settings) as memory:
                     try:
                         result = await ingest_until_stopped(
                             memory,
-                            record_path,
-                            profile=profile,
-                            meeting_id=meeting_id,
-                            twin_name=twin_name or profile.display_name,
+                            IngestJob(
+                                record_path,
+                                profile,
+                                meeting_id,
+                                twin_name or profile.display_name,
+                            ),
+                            run=IngestRun(settings.memory.ingestion, stop),
                             journal=journal,
                             faults=faults,
-                            settings=settings,
-                            stop=stop,
                         )
                     except ValueError as error:
                         faults.record(classify_exception("memory_ingest", error))
                         if isinstance(error, FakeYouError):
                             emit_error(error)
-                        _finish_ingest(
+                        _fail_ingest(
                             status_file,
-                            IngestOutcome(
-                                state="failed",
-                                windows=0,
-                                resumed_from=0,
-                                ingested=0,
-                                facts=0,
-                                completed=False,
-                                record_sha256=current_hash,
-                                reason="episode_name_invalid",
-                            ),
-                            meeting_id=meeting_id,
-                            group_id=profile.memory_group,
-                            faults=faults,
+                            _terminal_outcome("failed", "episode_name_invalid", current_hash),
+                            meeting_id,
+                            profile.memory_group,
+                            faults,
                         )
-                        raise SystemExit(ExitCode.FAILURE) from None
             except ProviderFault as error:
                 faults.record(error)
-                _finish_ingest(
+                _fail_ingest(
                     status_file,
-                    IngestOutcome(
-                        state="failed",
-                        windows=0,
-                        resumed_from=0,
-                        ingested=0,
-                        facts=0,
-                        completed=False,
-                        record_sha256=current_hash,
-                        reason=f"provider_{error.kind}",
-                    ),
-                    meeting_id=meeting_id,
-                    group_id=profile.memory_group,
-                    faults=faults,
+                    _terminal_outcome("failed", f"provider_{error.kind}", current_hash),
+                    meeting_id,
+                    profile.memory_group,
+                    faults,
                 )
-                raise SystemExit(ExitCode.FAILURE) from None
             except asyncio.CancelledError:
                 _finish_ingest(
                     status_file,
-                    IngestOutcome(
-                        state="interrupted",
-                        windows=0,
-                        resumed_from=0,
-                        ingested=0,
-                        facts=0,
-                        completed=False,
-                        record_sha256=current_hash,
-                        reason="stop_requested",
-                    ),
+                    _terminal_outcome("interrupted", "stop_requested", current_hash),
                     meeting_id=meeting_id,
                     group_id=profile.memory_group,
                     faults=faults,
                 )
                 raise
-            if result.completed:
-                state: IngestionState = "completed"
-                reason: str | None = None
-            elif stop.is_set():
-                state = "interrupted"
-                reason = "stop_requested"
-            else:
-                state = "failed"
-                reason = "episode_failed"
+            state, reason = _ingest_state(result, stop)
             if not _finish_ingest(
                 status_file,
                 IngestOutcome(
@@ -440,14 +453,12 @@ async def ingest_recorded_meeting(
 
 async def _forget_meeting_memory(
     *,
-    persona_path: Path,
-    owner_id: str | None,
-    twin_id: str | None,
+    identity: OperatorIdentity,
     meeting_id: str,
     settings: Settings,
     keep_record: bool,
 ) -> None:
-    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+    async with open_operator_memory(identity, settings) as (
         profile,
         memory,
     ):
@@ -460,9 +471,7 @@ async def _forget_meeting_memory(
 
 async def forget_memory(
     *,
-    persona_path: Path,
-    owner_id: str | None,
-    twin_id: str | None,
+    identity: OperatorIdentity,
     meeting_id: str | None,
     episode_uuid: str | None,
     settings: Settings,
@@ -478,9 +487,7 @@ async def forget_memory(
             meeting_record_path(settings.paths.record_dir, meeting_id), purpose="forget"
         ):
             await _forget_meeting_memory(
-                persona_path=persona_path,
-                owner_id=owner_id,
-                twin_id=twin_id,
+                identity=identity,
                 meeting_id=meeting_id,
                 settings=settings,
                 keep_record=keep_record,
@@ -488,7 +495,7 @@ async def forget_memory(
         return
     if episode_uuid is None:
         raise FakeYouError(ErrorCode.MEMORY_FORGET_TARGET_REQUIRED)
-    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+    async with open_operator_memory(identity, settings) as (
         profile,
         memory,
     ):
@@ -498,10 +505,8 @@ async def forget_memory(
     emit_json(summary)
 
 
-async def reembed_memory(
-    *, persona_path: Path, owner_id: str | None, twin_id: str | None, settings: Settings
-) -> None:
-    async with open_operator_memory(persona_path, owner_id, twin_id, settings) as (
+async def reembed_memory(*, identity: OperatorIdentity, settings: Settings) -> None:
+    async with open_operator_memory(identity, settings) as (
         profile,
         memory,
     ):

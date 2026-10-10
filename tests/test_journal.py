@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime
 
-from fakeyou.observability.journal import Journal
+from fakeyou.observability.journal import Journal, JournalFile
 
 
 def test_record_carries_meeting_id_timestamp_and_fields() -> None:
@@ -48,7 +48,7 @@ def test_record_never_raises_on_bad_fields() -> None:
 
 
 def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
-    journal = Journal("meeting-1", path=tmp_path / "events.jsonl", echo=False)
+    journal = Journal("meeting-1", file=JournalFile(tmp_path / "events.jsonl"), echo=False)
 
     journal.request_started("req-1", source="tts", operation="synthesize", at=1.0)
     journal.request_finished("req-1", duration_ms=12.5, status=200)
@@ -61,7 +61,7 @@ def test_request_lifecycle_has_correlation_and_elapsed(tmp_path) -> None:
 
 def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
     path = tmp_path / "events.jsonl"
-    journal = Journal("meeting-1", path=path, max_bytes=180, echo=False)
+    journal = Journal("meeting-1", file=JournalFile(path, max_bytes=180), echo=False)
 
     journal.record(
         "request_failed",
@@ -80,7 +80,7 @@ def test_journal_is_bounded_and_drops_sensitive_fields(tmp_path) -> None:
 
 def test_journal_should_omit_text_content_from_every_nested_event(tmp_path):
     path = tmp_path / "events.jsonl"
-    journal = Journal("meeting-1", path=path, echo=False)
+    journal = Journal("meeting-1", file=JournalFile(path), echo=False)
     for name in (
         "transcript_finalized",
         "playback_started",

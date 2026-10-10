@@ -5,6 +5,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -193,33 +194,41 @@ HARDENING_SCRIPT = """(() => {
 })();"""
 
 
+@dataclass(frozen=True, slots=True)
+class BrowserLaunch:
+    headless: bool = False
+    license_key: str | None = None
+    fingerprint_seed: int | None = None
+    profile_dir: str | Path | None = None
+    warmup: bool = False
+
+
+DEFAULT_BROWSER_LAUNCH = BrowserLaunch()
+
+
 @asynccontextmanager
 async def _prepared_browser_context(
     *,
-    headless: bool,
-    license_key: str | None,
-    fingerprint_seed: int | None,
-    profile_dir: str | Path | None,
-    warmup: bool,
+    launch_profile: BrowserLaunch,
     humanize: bool,
     environment: Mapping[str, str] | None = None,
 ) -> AsyncIterator[tuple[BrowserContext, str]]:
     with ExitStack() as stack:
-        if profile_dir is None:
+        if launch_profile.profile_dir is None:
             profile = stack.enter_context(TemporaryDirectory(prefix="fakeyou-browser-"))
         else:
-            profile = str(profile_dir)
+            profile = str(launch_profile.profile_dir)
         fresh_profile = profile_is_fresh(profile)
         await asyncio.to_thread(patch_preferences_for_3p_cookies, profile)
         launch_args = list(BROWSER_LAUNCH_ARGS)
-        if fingerprint_seed is not None:
-            launch_args.append(f"--fingerprint={fingerprint_seed}")
+        if launch_profile.fingerprint_seed is not None:
+            launch_args.append(f"--fingerprint={launch_profile.fingerprint_seed}")
         apply_browser_audio_policy()
         launch = asyncio.create_task(
             launch_persistent_context_async(
                 profile,
-                headless=headless,
-                license_key=license_key or None,
+                headless=launch_profile.headless,
+                license_key=launch_profile.license_key or None,
                 locale="en-US",
                 args=launch_args,
                 humanize=humanize,
@@ -237,7 +246,7 @@ async def _prepared_browser_context(
             raise
         try:
             await context.add_init_script(HARDENING_SCRIPT)
-            if warmup and fresh_profile:
+            if launch_profile.warmup and fresh_profile:
                 await warmup_profile(context)
             yield context, profile
         finally:
@@ -247,19 +256,11 @@ async def _prepared_browser_context(
 @asynccontextmanager
 async def open_direct_page(
     *,
-    headless: bool = False,
-    license_key: str | None = None,
-    fingerprint_seed: int | None = None,
-    profile_dir: str | Path | None = None,
-    warmup: bool = False,
+    launch: BrowserLaunch = DEFAULT_BROWSER_LAUNCH,
     environment: Mapping[str, str] | None = None,
 ) -> AsyncIterator[Page]:
     async with _prepared_browser_context(
-        headless=headless,
-        license_key=license_key,
-        fingerprint_seed=fingerprint_seed,
-        profile_dir=profile_dir,
-        warmup=warmup,
+        launch_profile=launch,
         humanize=True,
         environment=environment,
     ) as (context, _profile):
@@ -303,11 +304,7 @@ async def _read_devtools_endpoint(
 @asynccontextmanager
 async def open_browser_tools(
     *,
-    headless: bool = False,
-    license_key: str | None = None,
-    fingerprint_seed: int | None = None,
-    profile_dir: str | Path | None = None,
-    warmup: bool = False,
+    launch: BrowserLaunch = DEFAULT_BROWSER_LAUNCH,
     mcp_script: Path = Path("node_modules/@playwright/mcp/cli.js"),
 ) -> AsyncIterator[list[BaseTool]]:
     if not await asyncio.to_thread(mcp_script.is_file):
@@ -317,11 +314,7 @@ async def open_browser_tools(
     output_path = await asyncio.to_thread(Path(".runtime/browser").resolve)
 
     async with _prepared_browser_context(
-        headless=headless,
-        license_key=license_key,
-        fingerprint_seed=fingerprint_seed,
-        profile_dir=profile_dir,
-        warmup=warmup,
+        launch_profile=launch,
         humanize=False,
     ) as (_context, profile):
         port, endpoint = await _read_devtools_endpoint(profile)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import Fault
 
 if TYPE_CHECKING:
@@ -14,7 +15,6 @@ if TYPE_CHECKING:
     from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
     from fakeyou.identity.voiceprint_match import VoiceScores
     from fakeyou.observability.faults import FaultReporter
-    from fakeyou.observability.journal import Journal
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,22 +114,25 @@ def claim_of(row: SpeakerRow) -> str | None:
     return row.display_claim
 
 
-def decide_verified(
-    uuid: str,
-    scores: VoiceScores,
-    claim: str | None,
-    artifact: CalibrationArtifact | None,
-    *,
-    registry: SpeakerRegistry | None = None,
-    slot: int | None = None,
-    overlap: bool | None = None,
-    embedder: SpeakerEmbedder | None = None,
-    journal: Journal | None = None,
-    faults: FaultReporter | None = None,
-) -> VerifiedDecision | None:
-    if artifact is None or registry is None or journal is None:
-        return None
-    if embedder is None or slot is None:
+@dataclass(frozen=True, slots=True)
+class VerificationInputs:
+    artifact: CalibrationArtifact | None = None
+    claim: str | None = None
+    overlap: bool | None = None
+    slot: int | None = None
+    embedder: SpeakerEmbedder | None = None
+
+
+DEFAULT_VERIFICATION_INPUTS = VerificationInputs()
+
+
+def _model_context(
+    uuid: str, verification: VerificationInputs, diagnostics: Diagnostics
+) -> tuple[CalibrationArtifact, str, int] | None:
+    artifact = verification.artifact
+    embedder = verification.embedder
+    slot = verification.slot
+    if artifact is None or embedder is None or slot is None:
         return None
     model_id = embedder.model_id
     if not model_id:
@@ -138,8 +141,8 @@ def decide_verified(
         want = model_digest(artifact.model_version)
         got = model_digest(model_id)
         if want is None or got is None or want != got:
-            if faults is not None:
-                faults.record(
+            if diagnostics.faults is not None:
+                diagnostics.faults.record(
                     Fault(
                         source="audio",
                         kind="voiceprint_model_mismatch",
@@ -151,11 +154,20 @@ def decide_verified(
                     )
                 )
             return None
+    return artifact, model_id, slot
+
+
+def _is_overlapped(registry: SpeakerRegistry, slot: int, *, overlap: bool | None) -> bool:
+    if overlap is not None:
+        return overlap
+    return len(registry.stream_csrcs(slot)) > 1
+
+
+def _scored_candidate(
+    scores: VoiceScores, artifact: CalibrationArtifact
+) -> tuple[float, float, float, float, str] | None:
     person = scores.person_id
     if person is None or scores.outcome == "negative":
-        return None
-    overlapped = overlap if overlap is not None else len(registry.stream_csrcs(slot)) > 1
-    if overlapped:
         return None
     cohort = artifact.snorm_cohort
     if not cohort:
@@ -170,6 +182,12 @@ def decide_verified(
     margin = scores.s1 - scores.s2
     if margin < artifact.margin_floor:
         return None
+    return mean, std, llr, margin, person
+
+
+def _claim_owner(
+    scores: VoiceScores, claim: str | None, uuid: str, faults: FaultReporter | None
+) -> str | None:
     owner = scores.owner_name
     consent = scores.consent_ts
     if not owner or not consent:
@@ -186,7 +204,17 @@ def decide_verified(
                 )
             )
         return None
-    bound = registry.note_verified(uuid, person, claim)
+    return owner
+
+
+def _bind_person(
+    registry: SpeakerRegistry,
+    uuid: str,
+    person: str,
+    owner: str,
+    faults: FaultReporter | None,
+) -> str:
+    bound = registry.note_verified(uuid, person, owner)
     if bound == "conflict":
         if faults is not None:
             faults.record(
@@ -196,10 +224,36 @@ def decide_verified(
                     detail=f"voice {person} conflicts with verified binding for speaker {uuid}",
                 )
             )
+    return bound
+
+
+def decide_verified(
+    uuid: str,
+    scores: VoiceScores,
+    verification: VerificationInputs,
+    registry: SpeakerRegistry | None = None,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+) -> VerifiedDecision | None:
+    journal = diagnostics.journal
+    if registry is None or journal is None:
         return None
-    if bound == "unknown":
+    model = _model_context(uuid, verification, diagnostics)
+    if model is None:
         return None
-    decision = VerifiedDecision(uuid=uuid, person_id=person, name=claim, llr=llr, margin=margin)
+    artifact, model_id, slot = model
+    if _is_overlapped(registry, slot, overlap=verification.overlap):
+        return None
+    candidate = _scored_candidate(scores, artifact)
+    if candidate is None:
+        return None
+    mean, std, llr, margin, person = candidate
+    owner = _claim_owner(scores, verification.claim, uuid, diagnostics.faults)
+    if owner is None:
+        return None
+    bound = _bind_person(registry, uuid, person, owner, diagnostics.faults)
+    if bound in ("unknown", "conflict"):
+        return None
+    decision = VerifiedDecision(uuid=uuid, person_id=person, name=owner, llr=llr, margin=margin)
     if bound == "repeat":
         return decision
     journal.record(
@@ -210,7 +264,7 @@ def decide_verified(
         score_raw=round(scores.s1, 4),
         snorm_mean=round(mean, 4),
         snorm_std=round(std, 4),
-        snorm_n=len(cohort),
+        snorm_n=len(artifact.snorm_cohort),
         platt_version=artifact.platt_version,
         theta_llr=artifact.theta_llr,
         report_id=artifact.report_id,

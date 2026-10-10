@@ -21,6 +21,9 @@ from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.voiceprint import (
     PROVISIONAL_SNR_FLOOR_DB,
     VOICEPRINT_MIN_RMS,
+    EnrollSubject,
+    LivenessGate,
+    VoiceprintDeps,
     _digit_words,
     _digits_only,
     voiceprint_challenge,
@@ -105,13 +108,10 @@ def test_enroll_three_valid_clips_stores_record_and_journals(
     embedder = ScriptedEmbedder([(1.0, 0.0)])
 
     voiceprint_enroll(
-        "alice",
+        EnrollSubject("alice", False),
         [str(path) for path in clips],
-        negative=False,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=embedder,
+        deps=VoiceprintDeps(store, journal, embedder),
     )
 
     [utterances] = embedder.calls
@@ -139,13 +139,10 @@ def test_enroll_with_negative_flag_marks_record(settings: Settings, tmp_path: Pa
     embedder = ScriptedEmbedder([(0.0, 1.0)])
 
     voiceprint_enroll(
-        "twin-voice",
+        EnrollSubject("twin-voice", True),
         [str(path) for path in clips],
-        negative=True,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=embedder,
+        deps=VoiceprintDeps(store, journal, embedder),
     )
 
     assert saved(store, "twin-voice").is_negative is True
@@ -163,13 +160,10 @@ def test_enroll_with_two_clips_exits_2_without_side_effects(
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=embedder,
+            deps=VoiceprintDeps(store, journal, embedder),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_ENROLL_TOO_FEW_CLIPS
@@ -193,13 +187,10 @@ def test_enroll_with_silent_clip_exits_2(settings: Settings, tmp_path: Path) -> 
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=embedder,
+            deps=VoiceprintDeps(store, journal, embedder),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_SILENT
@@ -222,13 +213,10 @@ def test_enroll_with_short_clip_exits_2(settings: Settings, tmp_path: Path) -> N
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=embedder,
+            deps=VoiceprintDeps(store, journal, embedder),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT
@@ -253,13 +241,10 @@ def test_enroll_with_8khz_clip_exits_2_mentioning_format(
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=embedder,
+            deps=VoiceprintDeps(store, journal, embedder),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
@@ -283,13 +268,12 @@ def test_enroll_with_non_wav_clip_exits_2_mentioning_format(
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=InMemoryVoiceprints(),
-            journal=RecordingJournal(),
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(
+                InMemoryVoiceprints(), RecordingJournal(), ScriptedEmbedder([(1.0, 0.0)])
+            ),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
@@ -313,13 +297,12 @@ def test_enroll_with_truncated_clip_exits_2_mentioning_format(
 
     with pytest.raises(FakeYouError) as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=InMemoryVoiceprints(),
-            journal=RecordingJournal(),
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(
+                InMemoryVoiceprints(), RecordingJournal(), ScriptedEmbedder([(1.0, 0.0)])
+            ),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED
@@ -342,9 +325,7 @@ def test_verify_high_score_journals_verified_and_touches_print(
         "alice",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -364,9 +345,7 @@ def test_verify_low_score_journals_unknown(settings: Settings, tmp_path: Path) -
         "alice",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(0.0, 1.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(0.0, 1.0)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -385,9 +364,7 @@ def test_verify_close_runners_up_journals_conflict(settings: Settings, tmp_path:
         "alice",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -408,9 +385,7 @@ def test_verify_negative_winner_journals_unknown_without_fault(
         "alice",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(0.95, 0.3122)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(0.95, 0.3122)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -430,9 +405,7 @@ def test_verify_named_negative_print_journals_unknown(settings: Settings, tmp_pa
         "twin-voice",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(0.9, 0.4359)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(0.9, 0.4359)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -450,9 +423,7 @@ def test_verify_missing_name_journals_unknown(settings: Settings, tmp_path: Path
         "ghost",
         str(clip),
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
     )
 
     [row] = journal.events("voiceprint_decided")
@@ -560,13 +531,10 @@ def test_enroll_with_missing_clip_raises_without_journal(
 
     with pytest.raises(FakeYouError, match="cannot be read") as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             [str(path) for path in clips],
-            negative=False,
             settings=settings,
-            store=InMemoryVoiceprints(),
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(InMemoryVoiceprints(), journal, ScriptedEmbedder([(1.0, 0.0)])),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_CLIP_UNREADABLE
@@ -635,6 +603,51 @@ def test_voiceprint_commands_dispatch_without_leaking_parser_state(
     assert "command" not in call
 
 
+def test_voiceprint_enroll_dispatch_bundles_subject_and_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_enroll(*args: Any, **kwargs: Any) -> None:
+        calls.append({"args": args, **kwargs})
+
+    import sys
+
+    monkeypatch.setattr(cli_main, "voiceprint_enroll", fake_enroll)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "fakeyou",
+            "voiceprint",
+            "enroll",
+            "--name",
+            "alice",
+            "--clip",
+            "a.wav",
+            "--negative",
+            "--challenge-id",
+            "cid-1",
+            "--challenge",
+            "12345678",
+            "--transcript",
+            "12345678",
+            "--owner-name",
+            "Maya",
+            "--spontaneous-clip",
+            "s.wav",
+        ],
+    )
+    cli_main.main()
+
+    [call] = calls
+    assert call["subject"] == EnrollSubject("alice", True)
+    assert call["gate"] == LivenessGate("cid-1", "12345678", "12345678", "Maya", ("s.wav",))
+    assert call["clip"] == ["a.wav"]
+    for key in ("name", "negative", "challenge_id", "challenge", "transcript", "owner_name"):
+        assert key not in call
+
+
 CHALLENGE_ID = "11111111-2222-3333-4444-555555555555"
 CHALLENGE_DIGITS = "12345678"
 
@@ -670,27 +683,18 @@ def gated_enroll(
     spontaneous: list[str],
     *,
     settings: Settings,
-    store: InMemoryVoiceprints,
-    journal: RecordingJournal,
-    embedder: ScriptedEmbedder,
+    deps: VoiceprintDeps,
     challenge: str = CHALLENGE_DIGITS,
     transcript: str = CHALLENGE_DIGITS,
     owner_name: str = "Maya",
     challenge_id: str = CHALLENGE_ID,
 ) -> None:
     voiceprint_enroll(
-        name,
+        EnrollSubject(name, False),
         clips,
-        negative=False,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=embedder,
-        challenge_id=challenge_id,
-        challenge=challenge,
-        transcript=transcript,
-        owner_name=owner_name,
-        spontaneous_clip=spontaneous,
+        deps=deps,
+        gate=LivenessGate(challenge_id, challenge, transcript, owner_name, tuple(spontaneous)),
     )
 
 
@@ -727,9 +731,7 @@ def test_enroll_matching_challenge_enrolls_with_owner_and_accept_journal(
         clips,
         spontaneous,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=embedder,
+        deps=VoiceprintDeps(store, journal, embedder),
     )
 
     record = saved(store, "alice")
@@ -768,9 +770,7 @@ def test_enroll_transcript_two_edits_away_rejects_without_store(
             clips,
             spontaneous,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=embedder,
+            deps=VoiceprintDeps(store, journal, embedder),
             transcript="12345699",
         )
 
@@ -803,9 +803,7 @@ def test_enroll_short_total_duration_rejects(
             clips,
             spontaneous,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
         )
 
     assert caught.value.code == 2
@@ -833,9 +831,7 @@ def test_enroll_low_snr_rejects(
             clips,
             spontaneous,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
         )
 
     assert caught.value.code == 2
@@ -860,9 +856,7 @@ def test_enroll_without_spontaneous_rejects(
             clips,
             [],
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
         )
 
     assert caught.value.code == 2
@@ -887,9 +881,7 @@ def test_enroll_single_edit_accepts(
         clips,
         spontaneous,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
         transcript="12345679",
     )
 
@@ -912,9 +904,7 @@ def test_enroll_empty_normalized_challenge_rejects_without_store(
             clips,
             spontaneous,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
+            deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
             challenge="no digits here",
             transcript="nothing spoken",
         )
@@ -937,14 +927,11 @@ def test_enroll_partial_liveness_args_raises_without_journal(
 
     with pytest.raises(FakeYouError, match="gated enrollment needs") as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             clips,
-            negative=False,
             settings=settings,
-            store=InMemoryVoiceprints(),
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
-            challenge_id=CHALLENGE_ID,
+            deps=VoiceprintDeps(InMemoryVoiceprints(), journal, ScriptedEmbedder([(1.0, 0.0)])),
+            gate=LivenessGate(challenge_id=CHALLENGE_ID),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_ENROLLMENT_GATE_INCOMPLETE
@@ -960,14 +947,11 @@ def test_enroll_owner_name_without_challenge_flags_raises(
 
     with pytest.raises(FakeYouError, match="gated enrollment needs") as caught:
         voiceprint_enroll(
-            "alice",
+            EnrollSubject("alice", False),
             clips,
-            negative=False,
             settings=settings,
-            store=store,
-            journal=journal,
-            embedder=ScriptedEmbedder([(1.0, 0.0)]),
-            owner_name="Maya",
+            deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
+            gate=LivenessGate(owner_name="Maya"),
         )
 
     assert caught.value.code is ErrorCode.VOICEPRINT_ENROLLMENT_GATE_INCOMPLETE
@@ -980,13 +964,10 @@ def test_enroll_legacy_stores_empty_owner_name(settings: Settings, tmp_path: Pat
     store = InMemoryVoiceprints()
 
     voiceprint_enroll(
-        "alice",
+        EnrollSubject("alice", False),
         clips,
-        negative=False,
         settings=settings,
-        store=store,
-        journal=RecordingJournal(),
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, RecordingJournal(), ScriptedEmbedder([(1.0, 0.0)])),
     )
 
     assert saved(store, "alice").owner_name == ""
@@ -1129,9 +1110,7 @@ def test_enroll_worded_transcript_accepts(
         clips,
         spontaneous,
         settings=settings,
-        store=store,
-        journal=journal,
-        embedder=ScriptedEmbedder([(1.0, 0.0)]),
+        deps=VoiceprintDeps(store, journal, ScriptedEmbedder([(1.0, 0.0)])),
         transcript=spoken_phrase(CHALLENGE_DIGITS),
     )
 
@@ -1156,6 +1135,8 @@ def test_enroll_empty_clip_rejected_even_with_zero_minimum(
     clips = [write_tone_clip(tmp_path / f"clip-{index}.wav", seconds=0.0) for index in range(3)]
 
     with pytest.raises(FakeYouError) as error:
-        voiceprint_enroll("alice", [str(path) for path in clips], negative=False, settings=settings)
+        voiceprint_enroll(
+            EnrollSubject("alice", False), [str(path) for path in clips], settings=settings
+        )
 
     assert error.value.code is ErrorCode.VOICEPRINT_CLIP_TOO_SHORT

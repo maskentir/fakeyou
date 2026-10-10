@@ -3,18 +3,23 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from graphiti_core.nodes import EpisodeType
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import IngestionSettings
 from fakeyou.diarization.correction_labels import LABELS_FILE_NAME, write_correction_labels
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.foundation.speakers import TWIN_SPEAKER, UNIDENTIFIED_PARTICIPANT
 from fakeyou.memory.ingestion import (
     CorrectionResult,
+    IngestControl,
+    IngestScope,
+    MeetingScope,
     correction_episode_name,
     episode_name,
     extraction_instructions,
@@ -23,6 +28,7 @@ from fakeyou.memory.ingestion import (
     meeting_windows,
 )
 from fakeyou.memory.memory import meeting_saga
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.ingestion_status import (
@@ -62,18 +68,29 @@ def twin(seconds: float, text: str) -> TwinSpeechEntry:
     return TwinSpeechEntry(at=START + timedelta(seconds=seconds), text=text)
 
 
-async def run(memory: MagicMock, entries: list, **overrides):
+async def run(memory: MagicMock, entries: list, **overrides: Any) -> tuple[Any, list[Any]]:
     lines: list[str] = []
-    values = {
-        "group_id": "twin_group",
-        "meeting_id": "meeting-1",
-        "twin_name": "Rani Twin",
-        "vocabulary": ("Orchid", "Budi"),
-        "journal": Journal("meeting-1", emit=lines.append),
+    journal = overrides.pop("journal", Journal("meeting-1", emit=lines.append))
+    faults = overrides.pop("faults", FaultReporter(journal=journal))
+    scope = IngestScope(
+        overrides.pop("group_id", "twin_group"),
+        overrides.pop("meeting_id", "meeting-1"),
+        overrides.pop("twin_name", "Rani Twin"),
+        overrides.pop("vocabulary", ("Orchid", "Budi")),
+    )
+    ingestion_updates = {
+        key: overrides.pop(key)
+        for key in ("window_utterances", "window_seconds", "episode_timeout_seconds")
+        if key in overrides
     }
-    values["faults"] = FaultReporter(journal=values["journal"])
-    values.update(overrides)
-    result = await ingest_meeting(memory, entries, **values)
+    control = IngestControl(
+        IngestionSettings().model_copy(update=ingestion_updates),
+        overrides.pop("stop", None),
+    )
+    assert not overrides, overrides
+    result = await ingest_meeting(
+        memory, entries, scope, control, Diagnostics(faults=faults, journal=journal)
+    )
     return result, [json.loads(line) for line in lines]
 
 
@@ -341,18 +358,18 @@ async def test_ingest_after_correction_skips_corrected_episodes_when_resuming(
     await ingest_meeting(
         memory,
         entries,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        twin_name="Rani Twin",
+        IngestScope(group_id="twin_group", meeting_id="meeting-1", twin_name="Rani Twin"),
     )
-    await ingest_corrections(memory, record_path, group_id="twin_group", meeting_id="meeting-1")
+    await ingest_corrections(
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
+    )
 
     result = await ingest_meeting(
         memory,
         entries,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        twin_name="Rani Twin",
+        IngestScope(group_id="twin_group", meeting_id="meeting-1", twin_name="Rani Twin"),
     )
 
     assert (result.resumed_from, result.ingested, result.completed) == (3, 0, True)
@@ -478,9 +495,7 @@ async def test_ingest_corrections_reingests_only_changed_windows(tmp_path: Path)
     await ingest_meeting(
         memory,
         load_meeting_record(record_path),
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        twin_name="Rani Twin",
+        IngestScope(group_id="twin_group", meeting_id="meeting-1", twin_name="Rani Twin"),
     )
 
     before = datetime.now(UTC)
@@ -488,9 +503,8 @@ async def test_ingest_corrections_reingests_only_changed_windows(tmp_path: Path)
     result = await ingest_corrections(
         memory,
         record_path,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        journal=Journal("meeting-1", emit=lines.append),
+        MeetingScope("twin_group", "meeting-1"),
+        diagnostics=Diagnostics(journal=Journal("meeting-1", emit=lines.append)),
     )
     after = datetime.now(UTC)
 
@@ -549,7 +563,9 @@ async def test_ingest_corrections_keeps_window_map_and_logs_corrections(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
@@ -569,11 +585,15 @@ async def test_ingest_corrections_second_run_ingests_zero_episodes(tmp_path: Pat
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     added = len(memory.added)
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert first.episodes == ("uuid-meeting-1:w00001:corrected",)
@@ -590,7 +610,11 @@ async def test_ingest_corrections_rejects_stale_sidecar(tmp_path: Path) -> None:
         handle.write(said(200, "Late arrival.").model_dump_json() + "\n")
 
     with pytest.raises(DiarizeError) as error:
-        await ingest_corrections(memory, record_path, group_id="twin_group", meeting_id="meeting-1")
+        await ingest_corrections(
+            memory,
+            record_path,
+            MeetingScope("twin_group", "meeting-1"),
+        )
 
     assert error.value.code is ErrorCode.DIARIZE_STALE
     assert memory.added == []
@@ -604,7 +628,9 @@ async def test_ingest_corrections_without_sidecar_ingests_nothing(tmp_path: Path
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result == CorrectionResult(changed_windows=0, episodes=(), completed=True)
@@ -659,9 +685,8 @@ async def test_ingest_corrections_invalidates_original_edges_of_changed_windows(
     result = await ingest_corrections(
         memory,
         record_path,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        journal=Journal("meeting-1", emit=lines.append),
+        MeetingScope("twin_group", "meeting-1"),
+        diagnostics=Diagnostics(journal=Journal("meeting-1", emit=lines.append)),
     )
     after = datetime.now(UTC)
 
@@ -691,7 +716,10 @@ async def test_ingest_corrections_without_window_map_skips_invalidation(
     faults = FaultReporter(journal=journal)
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1", faults=faults
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
+        diagnostics=Diagnostics(faults=faults),
     )
 
     assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
@@ -725,10 +753,8 @@ async def test_ingest_corrections_aborts_when_invalidation_fails(tmp_path: Path)
     result = await ingest_corrections(
         memory,
         record_path,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        journal=journal,
-        faults=faults,
+        MeetingScope("twin_group", "meeting-1"),
+        diagnostics=Diagnostics(faults=faults, journal=journal),
     )
 
     assert result.completed is False
@@ -765,10 +791,8 @@ async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid
     result = await ingest_corrections(
         memory,
         record_path,
-        group_id="twin_group",
-        meeting_id="meeting-1",
-        journal=journal,
-        faults=faults,
+        MeetingScope("twin_group", "meeting-1"),
+        diagnostics=Diagnostics(faults=faults, journal=journal),
     )
 
     assert result.completed is False
@@ -844,11 +868,15 @@ async def test_ingest_corrections_retry_after_midrun_failure_writes_no_duplicate
     memory.errors[1] = RuntimeError("boom")
 
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     assert first.completed is False
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert second.changed_windows == 3
@@ -871,7 +899,9 @@ async def test_ingest_corrections_partial_map_survives_failure_and_retry_skips_i
     memory.errors[1] = RuntimeError("boom")
 
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert first.completed is False
@@ -881,7 +911,9 @@ async def test_ingest_corrections_partial_map_survives_failure_and_retry_skips_i
     assert status.correction_windows == {0: "uuid-meeting-1:w00000:corrected"}
     added_before_retry = len(memory.added)
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert second.completed is True
@@ -898,7 +930,9 @@ async def test_ingest_corrections_new_run_resets_window_map(tmp_path: Path) -> N
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert first.completed is True
@@ -914,7 +948,9 @@ async def test_ingest_corrections_new_run_resets_window_map(tmp_path: Path) -> N
         clock=lambda: rotated,
     )
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert second.completed is True
@@ -943,7 +979,9 @@ async def test_ingest_corrections_status_write_failure_reports_incomplete(
     monkeypatch.setattr("fakeyou.memory.ingestion.write_status", failing_write)
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result.completed is False
@@ -961,7 +999,9 @@ async def test_ingest_corrections_rotation_retry_recovers_same_run_orphan(
     correction_status(record_path)
     memory = make_graphiti(episode_prefix="episode-", edges=[])
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     assert first.completed is True
     rotated = CORRECTED_AT + timedelta(hours=1)
@@ -987,11 +1027,15 @@ async def test_ingest_corrections_rotation_retry_recovers_same_run_orphan(
 
     monkeypatch.setattr("fakeyou.memory.ingestion.write_status", flaky_write)
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     assert second.completed is False
     third = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert third.completed is True
@@ -1007,7 +1051,9 @@ async def test_ingest_corrections_rotation_reingests_overlapping_windows_with_ne
     memory = make_graphiti(episode_prefix="episode-", edges=[])
     memory.errors[1] = RuntimeError("boom")
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     assert first.completed is False
     rotated = CORRECTED_AT + timedelta(hours=1)
@@ -1022,7 +1068,9 @@ async def test_ingest_corrections_rotation_reingests_overlapping_windows_with_ne
         clock=lambda: rotated,
     )
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert second.completed is True
@@ -1047,11 +1095,15 @@ async def test_ingest_corrections_completion_unions_prior_attempt_episodes(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
     memory.errors[2] = RuntimeError("boom")
     first = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
     assert first.completed is False
     second = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert second.completed is True
@@ -1171,7 +1223,9 @@ async def test_ingest_corrections_renders_labels_in_the_corrected_episode_body(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result.changed_windows == 1
@@ -1189,7 +1243,9 @@ async def test_ingest_corrections_without_labels_keeps_raw_speaker_bytes(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result.changed_windows == 1
@@ -1208,7 +1264,9 @@ async def test_ingest_corrections_treats_invalid_labels_as_absent(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
 
     result = await ingest_corrections(
-        memory, record_path, group_id="twin_group", meeting_id="meeting-1"
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
     )
 
     assert result.changed_windows == 1

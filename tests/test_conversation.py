@@ -15,6 +15,9 @@ from fakeyou.conversation.conversation import (
     BARE_ACK_VOCABULARY,
     ConversationLoop,
     LangGraphResponder,
+    LoopGeneration,
+    LoopInteraction,
+    LoopTiming,
     StreamingLangGraphResponder,
     _is_bare_ack,
     _request_messages,
@@ -22,9 +25,14 @@ from fakeyou.conversation.conversation import (
     conversation_thread_id,
 )
 from fakeyou.conversation.session import ConversationError
-from fakeyou.foundation.transcript import TranscriptEvent, transcript_event
+from fakeyou.foundation.transcript import (
+    CaptureContext,
+    TranscriptEvent,
+    transcript_event,
+)
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.memory.memory import create_recall_error_middleware
+from fakeyou.observability.diagnostics import Diagnostics
 from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, ToolCallingFakeModel, recall_call
 
 
@@ -42,7 +50,7 @@ def event(id, text="hello", finalized=True, participant_id="unknown", speaker_ev
 
 async def test_new_final_cancels_waiting_model_and_answers_newest_once(journal):
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
@@ -105,7 +113,9 @@ async def test_close_cancels_model_and_prevents_later_speech():
 
 
 async def test_model_timeout_is_observable_without_exposing_provider_error():
-    loop = ConversationLoop(FakeResponder(asyncio.Event()), response_timeout_seconds=0.02)
+    loop = ConversationLoop(
+        FakeResponder(asyncio.Event()), timing=LoopTiming(response_timeout_seconds=0.02)
+    )
     loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
     with pytest.raises(ConversationError, match="conversation failed"):
@@ -145,7 +155,7 @@ async def test_observer_failure_preserves_model_and_speech():
         raise RuntimeError("private-provider-data")
 
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, on_transition=broken)
+    loop = ConversationLoop(responder, interaction=LoopInteraction(on_transition=broken))
     loop.bind(audio)
     await loop.handle_transcript(event("one"))
     await loop.wait_idle()
@@ -160,20 +170,20 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant():
     next_utterance = TranscriptionFrame("hello", "", "2026-09-28T00:00:01Z", finalized=True)
     assert first.id != replay.id
     assert (
-        transcript_event(first, "unknown", None, "").id
-        == transcript_event(replay, "p1", "e1", "").id
+        transcript_event(first, "unknown", None, CaptureContext("")).id
+        == transcript_event(replay, "p1", "e1", CaptureContext("")).id
     )
     assert (
-        transcript_event(first, "unknown", None, "").id
-        != transcript_event(first, "unknown", None, "s0").id
+        transcript_event(first, "unknown", None, CaptureContext("")).id
+        != transcript_event(first, "unknown", None, CaptureContext("s0")).id
     )
     assert (
-        transcript_event(first, "unknown", None, "").id
-        != transcript_event(next_utterance, "unknown", None, "").id
+        transcript_event(first, "unknown", None, CaptureContext("")).id
+        != transcript_event(next_utterance, "unknown", None, CaptureContext("")).id
     )
-    assert transcript_event(first, "unknown", None, "").participant_id == "unknown"
-    assert transcript_event(first, "p1", "e1", "s0").speaker_evidence_id == "e1"
-    assert transcript_event(first, "p1", "e1", "s0").stream_id == "s0"
+    assert transcript_event(first, "unknown", None, CaptureContext("")).participant_id == "unknown"
+    assert transcript_event(first, "p1", "e1", CaptureContext("s0")).speaker_evidence_id == "e1"
+    assert transcript_event(first, "p1", "e1", CaptureContext("s0")).stream_id == "s0"
 
 
 def test_conversation_threads_include_all_session_identities():
@@ -247,7 +257,11 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks():
 
 async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = ConversationLoop(responder, wake_phrases=["hey fakeyou"], clock=clock)
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(wake_phrases=["hey fakeyou"]),
+        timing=LoopTiming(clock=clock),
+    )
     loop.bind(audio)
     await loop.handle_transcript(event("one", "our project status"))
     await loop.wait_idle()
@@ -260,7 +274,9 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them():
 async def test_wake_phrase_activates_window_case_insensitively():
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
-        responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
+        responder,
+        interaction=LoopInteraction(wake_phrases=["hey fakeyou"]),
+        timing=LoopTiming(activation_seconds=30, clock=clock),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("one", "HEY Fakeyou, any update?"))
@@ -282,7 +298,9 @@ async def test_wake_phrase_activates_window_case_insensitively():
 async def test_wake_phrase_inside_window_extends_activation():
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
-        responder, wake_phrases=["hey fakeyou"], activation_seconds=30, clock=clock
+        responder,
+        interaction=LoopInteraction(wake_phrases=["hey fakeyou"]),
+        timing=LoopTiming(activation_seconds=30, clock=clock),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("one", "hey fakeyou hello"))
@@ -299,14 +317,14 @@ async def test_wake_phrase_inside_window_extends_activation():
 
 def test_activation_window_rejects_nonpositive_values():
     with pytest.raises(ValueError, match="activation window"):
-        ConversationLoop(FakeResponder(), activation_seconds=0)
+        ConversationLoop(FakeResponder(), timing=LoopTiming(activation_seconds=0))
     with pytest.raises(ValueError, match="activation window"):
-        ConversationLoop(FakeResponder(), activation_seconds=float("inf"))
+        ConversationLoop(FakeResponder(), timing=LoopTiming(activation_seconds=float("inf")))
 
 
 async def test_barge_in_stops_playback_only_while_speaking():
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, barge_in=True)
+    loop = ConversationLoop(responder, interaction=LoopInteraction(barge_in=True))
     loop.bind(audio)
     await loop.handle_transcript(event("one", "hello"))
     await loop.wait_idle()
@@ -375,7 +393,7 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
         async def respond(self, events, on_tool_start):
             return "ok"
 
-    loop = ConversationLoop(JournaledResponder(), journal=journal)
+    loop = ConversationLoop(JournaledResponder(), diagnostics=Diagnostics(journal=journal))
 
     loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
@@ -486,7 +504,11 @@ async def test_interim_speech_interrupts_playback_after_enough_words(
     lines = journal.lines
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
+    loop = ConversationLoop(
+        FakeResponder(),
+        interaction=LoopInteraction(barge_in=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
 
     await loop.handle_interim("okay")
@@ -507,7 +529,7 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback():
     await quiet.handle_interim("please stop for now")
 
     idle_audio = FakeReplyAudio()
-    idle = ConversationLoop(FakeResponder(), barge_in=True)
+    idle = ConversationLoop(FakeResponder(), interaction=LoopInteraction(barge_in=True))
     idle.bind(idle_audio)
     await idle.handle_interim("please stop for now")
 
@@ -519,7 +541,11 @@ async def test_interim_barge_in_respects_wake_phrases():
     clock = FakeClock()
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(FakeResponder(), barge_in=True, wake_phrases=["rani twin"], clock=clock)
+    loop = ConversationLoop(
+        FakeResponder(),
+        interaction=LoopInteraction(wake_phrases=["rani twin"], barge_in=True),
+        timing=LoopTiming(clock=clock),
+    )
     loop.bind(audio)
 
     await loop.handle_interim("someone else is talking now")
@@ -541,7 +567,11 @@ async def test_final_barge_in_is_journaled_with_its_trigger(
     lines = journal.lines
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
+    loop = ConversationLoop(
+        FakeResponder(),
+        interaction=LoopInteraction(barge_in=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
 
     await loop.handle_transcript(event("t1", "enough"))
@@ -558,7 +588,11 @@ async def test_one_interruption_is_journaled_and_stopped_once(
     lines = journal.lines
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(FakeResponder(), barge_in=True, journal=journal)
+    loop = ConversationLoop(
+        FakeResponder(),
+        interaction=LoopInteraction(barge_in=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
 
     await loop.handle_interim("wait a second")
@@ -571,7 +605,7 @@ async def test_one_interruption_is_journaled_and_stopped_once(
 async def test_interim_barge_in_rearms_for_the_next_reply():
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = ConversationLoop(FakeResponder(), barge_in=True)
+    loop = ConversationLoop(FakeResponder(), interaction=LoopInteraction(barge_in=True))
     loop.bind(audio)
 
     await loop.handle_interim("wait a second")
@@ -764,8 +798,36 @@ class ScriptedAgent:
 
 def streamed_loop(agent, audio, journal, language="id", **kwargs):
     responder = StreamingLangGraphResponder(agent, "thread", journal=journal, language=language)
+    interaction_keys = (
+        "on_transition",
+        "wake_phrases",
+        "barge_in",
+        "barge_in_min_words",
+        "participant_policy_enabled",
+    )
+    timing_keys = ("response_timeout_seconds", "activation_seconds", "clock")
+    generation_keys = (
+        "max_spoken_sentences",
+        "sentence_streaming",
+        "pre_generate_enabled",
+        "pregen_fuzzy_restart_enabled",
+    )
+    interaction = LoopInteraction(
+        **{key: kwargs.pop(key) for key in interaction_keys if key in kwargs}
+    )
+    timing = LoopTiming(**{key: kwargs.pop(key) for key in timing_keys if key in kwargs})
+    generation = LoopGeneration(
+        language=language,
+        sentence_streaming=True,
+        **{key: kwargs.pop(key) for key in generation_keys if key in kwargs},
+    )
+    assert not kwargs, kwargs
     loop = ConversationLoop(
-        responder, sentence_streaming=True, language=language, journal=journal, **kwargs
+        responder,
+        interaction=interaction,
+        timing=timing,
+        generation=generation,
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     return loop
@@ -836,7 +898,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(journal):
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
     responder = StreamingLangGraphResponder(agent, "thread", journal=journal)
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "hello"))
     await loop.wait_idle()
@@ -850,7 +912,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(journal):
 
 async def test_flag_on_with_plain_responder_keeps_old_behavior():
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, sentence_streaming=True)
+    loop = ConversationLoop(responder, generation=LoopGeneration(sentence_streaming=True))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "hello"))
     await loop.wait_idle()
@@ -1210,7 +1272,7 @@ def test_sentence_streaming_default_follows_settings_flag():
     from fakeyou.config.settings import DEFAULTS
 
     assert DEFAULTS.conversation.sentence_streaming is False
-    params = inspect.signature(ConversationLoop).parameters
+    params = inspect.signature(LoopGeneration).parameters
     assert params["sentence_streaming"].default == DEFAULTS.conversation.sentence_streaming
 
 
@@ -1247,7 +1309,11 @@ class GatedAudio(FakeReplyAudio):
 
 async def test_interim_cancels_pre_pcm_child_without_answering(journal):
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
-    loop = ConversationLoop(responder, barge_in=True, journal=journal)
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(barge_in=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
@@ -1270,7 +1336,11 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal):
 
 async def test_duplicate_final_and_interim_do_not_reschedule(journal):
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
-    loop = ConversationLoop(responder, barge_in=True, journal=journal)
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(barge_in=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
@@ -1295,7 +1365,7 @@ async def test_duplicate_final_and_interim_do_not_reschedule(journal):
 
 async def test_close_cancels_active_turn_and_never_reschedules(journal):
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
@@ -1322,7 +1392,7 @@ async def test_close_cancels_active_turn_and_never_reschedules(journal):
 async def test_new_final_during_tts_drops_stale_audio(journal):
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(audio.entered.wait(), 2)
@@ -1341,7 +1411,7 @@ async def test_new_final_during_tts_drops_stale_audio(journal):
 async def test_close_during_tts_speak_drops_audio_and_stays_closed(journal):
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(audio.entered.wait(), 2)
@@ -1357,7 +1427,7 @@ async def test_close_during_tts_speak_drops_audio_and_stays_closed(journal):
 
 async def test_cancelled_request_ids_do_not_attach_to_next_transcript(journal):
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
@@ -1413,7 +1483,7 @@ async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(journ
     )
     responder = LangGraphResponder(agent, "checkpoint-cancel-thread", journal=journal)
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first question"))
     assert await asyncio.wait_for(hanging_begun.wait(), 2)
@@ -1473,7 +1543,7 @@ async def test_cancelled_model_request_does_not_use_fallback(journal):
     )
     responder = LangGraphResponder(agent, "fallback-cancel-thread", journal=journal)
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "first"))
     assert await asyncio.wait_for(entered.wait(), 2)
@@ -1519,7 +1589,8 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
     )
     agent = create_meeting_agent(model, checkpointer=InMemorySaver())
     loop = ConversationLoop(
-        LangGraphResponder(agent, "loopback-thread", journal=journal), journal=journal
+        LangGraphResponder(agent, "loopback-thread", journal=journal),
+        diagnostics=Diagnostics(journal=journal),
     )
     audio = FakeReplyAudio()
     loop.bind(audio)
@@ -1544,15 +1615,20 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(journal):
 def test_policy_requires_configured_aliases():
     responder = FakeResponder()
     with pytest.raises(ValueError, match="twin aliases"):
-        ConversationLoop(responder, participant_policy_enabled=True)
+        ConversationLoop(responder, interaction=LoopInteraction(participant_policy_enabled=True))
     with pytest.raises(ValueError, match="twin aliases"):
-        ConversationLoop(responder, wake_phrases=["  "], participant_policy_enabled=True)
+        ConversationLoop(
+            responder,
+            interaction=LoopInteraction(wake_phrases=["  "], participant_policy_enabled=True),
+        )
 
 
 async def test_policy_silent_makes_zero_responder_calls(journal):
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, wake_phrases=["Rani Twin"], participant_policy_enabled=True
+        responder,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "Budi, when is the demo?"))
@@ -1572,10 +1648,10 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal):
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        wake_phrases=["Rani Twin"],
-        participant_policy_enabled=True,
-        barge_in=True,
+        interaction=LoopInteraction(
+            wake_phrases=["Rani Twin"], barge_in=True, participant_policy_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("t0", "Rani Twin, when is the demo?"))
@@ -1592,7 +1668,9 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal):
 async def test_policy_answers_vocative_and_ignores_quote_mention(journal):
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, wake_phrases=["Rani Twin"], participant_policy_enabled=True
+        responder,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "Rani Twin, when is the demo?"))
@@ -1613,10 +1691,9 @@ async def test_policy_unknown_followup_does_not_inherit_activation(journal):
     clock = FakeClock()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        wake_phrases=["Rani Twin"],
-        participant_policy_enabled=True,
-        clock=clock.monotonic,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        timing=LoopTiming(clock=clock.monotonic),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(
@@ -1642,10 +1719,9 @@ async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(journ
     clock = FakeClock()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        wake_phrases=["Rani Twin"],
-        participant_policy_enabled=True,
-        clock=clock.monotonic,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        timing=LoopTiming(clock=clock.monotonic),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "Rani Twin, when is the demo?"))
@@ -1664,10 +1740,9 @@ async def test_policy_other_known_speaker_followup_stays_silent(journal):
     clock = FakeClock()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        wake_phrases=["Rani Twin"],
-        participant_policy_enabled=True,
-        clock=clock.monotonic,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        timing=LoopTiming(clock=clock.monotonic),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(
@@ -1700,10 +1775,9 @@ async def test_policy_same_speaker_followup_replies(journal):
     clock = FakeClock()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        wake_phrases=["Rani Twin"],
-        participant_policy_enabled=True,
-        clock=clock.monotonic,
+        interaction=LoopInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
+        timing=LoopTiming(clock=clock.monotonic),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_transcript(
@@ -1790,7 +1864,7 @@ async def test_isolated_bare_ack_still_gets_a_reply(text: str) -> None:
 
 async def test_bare_ack_run_suppresses_after_first(journal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     first, second, third = ACK_CASES["run"]
     await loop.handle_transcript(event("t1", first))
@@ -1806,7 +1880,7 @@ async def test_bare_ack_run_suppresses_after_first(journal) -> None:
 
 
 async def test_ack_suppression_journals_a_silent_decision(journal) -> None:
-    loop = ConversationLoop(FakeResponder(), journal=journal)
+    loop = ConversationLoop(FakeResponder(), diagnostics=Diagnostics(journal=journal))
     loop.bind(FakeReplyAudio())
     first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
     await loop.handle_transcript(event("t1", first))
@@ -1825,7 +1899,7 @@ async def test_ack_suppression_journals_a_silent_decision(journal) -> None:
 @pytest.mark.parametrize("text", ACK_CASES["replies"])
 async def test_substantive_text_replies_inside_ack_runs(journal, text: str) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     first = ACK_CASES["run"][0]
     await loop.handle_transcript(event("t1", first))
@@ -1840,7 +1914,7 @@ async def test_substantive_text_replies_inside_ack_runs(journal, text: str) -> N
 
 async def test_substantive_text_breaks_the_ack_run(journal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     first, second, fourth = ACK_CASES["run"]
     third = ACK_CASES["run_breaker"]
@@ -1865,7 +1939,7 @@ async def test_substantive_text_breaks_the_ack_run(journal) -> None:
 
 async def test_vocative_text_replies_inside_ack_runs(journal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal)
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     first = ACK_CASES["run"][0]
     addressed = ACK_CASES["vocative"]
@@ -1882,7 +1956,10 @@ async def test_vocative_text_replies_inside_ack_runs(journal) -> None:
 async def test_addressed_text_replies_inside_wake_window_ack_runs(journal) -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
     loop = ConversationLoop(
-        responder, wake_phrases=["rani twin"], activation_seconds=30, clock=clock, journal=journal
+        responder,
+        interaction=LoopInteraction(wake_phrases=["rani twin"]),
+        timing=LoopTiming(activation_seconds=30, clock=clock),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
@@ -1911,8 +1988,7 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
         TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
         "a",
         None,
-        "s0",
-        capture_ms=55.5,
+        CaptureContext("s0", capture_ms=55.5),
     )
     assert event.capture_ms == 55.5
     assert (
@@ -1920,7 +1996,7 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
             TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
             "a",
             None,
-            "s0",
+            CaptureContext("s0"),
         ).capture_ms
         == 0.0
     )
@@ -1957,7 +2033,9 @@ async def test_pregeneration_adopts_exact_match_without_second_call(journal) -> 
     responder = _StreamingResponder(["Yes I can.", "Let me check."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
@@ -1976,7 +2054,9 @@ async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(journal) 
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
@@ -1992,7 +2072,11 @@ async def test_pregeneration_discards_on_mismatch_and_uses_normal_path(journal) 
 async def test_pregeneration_stays_off_by_default(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal, sentence_streaming=True)
+    loop = ConversationLoop(
+        responder,
+        generation=LoopGeneration(sentence_streaming=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
     await loop.handle_interim("can you help me today?")
@@ -2008,7 +2092,9 @@ async def test_note_vad_fires_pregen_and_adopts_exact_final(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
@@ -2031,7 +2117,9 @@ async def test_note_vad_stays_silent_on_speech_start(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
@@ -2046,7 +2134,9 @@ async def test_note_vad_stays_silent_without_interim(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.note_vad(active=False)
@@ -2060,7 +2150,9 @@ async def test_note_vad_fires_on_short_interim(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("see you")
@@ -2075,7 +2167,9 @@ async def test_note_vad_stays_silent_on_empty_interim(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("  ")
@@ -2089,7 +2183,11 @@ async def test_note_vad_stays_silent_on_empty_interim(journal) -> None:
 async def test_note_vad_stays_silent_when_disabled(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, journal=journal, sentence_streaming=True)
+    loop = ConversationLoop(
+        responder,
+        generation=LoopGeneration(sentence_streaming=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
     await loop.note_vad(active=False)
@@ -2104,7 +2202,9 @@ async def test_note_vad_stays_silent_when_busy(journal) -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today")
@@ -2119,7 +2219,9 @@ async def test_post_stop_interim_starts_pregen_with_single_word(journal) -> None
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.note_vad(active=False)
@@ -2136,7 +2238,9 @@ async def test_post_stop_interim_restarts_pregen_on_changed_words(journal) -> No
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2155,7 +2259,9 @@ async def test_post_stop_interim_keeps_pregen_on_identical_words(journal) -> Non
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2174,7 +2280,9 @@ async def test_mid_speech_interim_starts_no_post_stop_pregen(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.note_vad(active=True)
@@ -2189,7 +2297,9 @@ async def test_vad_start_clears_post_stop_pregen_flag(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.note_vad(active=True)
@@ -2206,7 +2316,9 @@ async def test_final_clears_post_stop_pregen_flag(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.note_vad(active=False)
@@ -2227,7 +2339,9 @@ async def test_pregen_superseded_journal_carries_word_diff(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2251,7 +2365,9 @@ async def test_pregen_mismatched_journal_carries_word_diff(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
@@ -2275,7 +2391,9 @@ async def test_pregen_adopted_journal_carries_exact_diff(journal) -> None:
     responder = _StreamingResponder(["Yes I can.", "Let me check."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
@@ -2302,7 +2420,9 @@ async def test_pregen_error_discard_journal_carries_no_diff(journal) -> None:
     responder = _FailingStreamResponder()
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me today?")
@@ -2324,7 +2444,9 @@ async def test_pregen_journal_diff_values_are_metadata_only(journal) -> None:
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2370,10 +2492,10 @@ async def test_pregen_fuzzy_restart_suppresses_suffix_extension(journal) -> None
     audio = FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        sentence_streaming=True,
-        pre_generate_enabled=True,
-        pregen_fuzzy_restart_enabled=True,
+        generation=LoopGeneration(
+            sentence_streaming=True, pre_generate_enabled=True, pregen_fuzzy_restart_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2410,10 +2532,10 @@ async def test_pregen_fuzzy_restart_restarts_on_single_substitution(journal) -> 
     audio = FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        sentence_streaming=True,
-        pre_generate_enabled=True,
-        pregen_fuzzy_restart_enabled=True,
+        generation=LoopGeneration(
+            sentence_streaming=True, pre_generate_enabled=True, pregen_fuzzy_restart_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2437,10 +2559,10 @@ async def test_pregen_fuzzy_restart_restarts_on_small_non_suffix_drift(journal) 
     audio = FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        sentence_streaming=True,
-        pre_generate_enabled=True,
-        pregen_fuzzy_restart_enabled=True,
+        generation=LoopGeneration(
+            sentence_streaming=True, pre_generate_enabled=True, pregen_fuzzy_restart_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("see you")
@@ -2460,10 +2582,10 @@ async def test_pregen_fuzzy_restart_suppresses_small_drift_on_long_utterance(jou
     audio = FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        sentence_streaming=True,
-        pre_generate_enabled=True,
-        pregen_fuzzy_restart_enabled=True,
+        generation=LoopGeneration(
+            sentence_streaming=True, pre_generate_enabled=True, pregen_fuzzy_restart_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("please can you help me today")
@@ -2493,7 +2615,9 @@ async def test_pregen_restart_without_fuzzy_flag_restarts_on_suffix_extension(jo
     responder = _StreamingResponder(["Yes I can."])
     audio = FakeReplyAudio()
     loop = ConversationLoop(
-        responder, journal=journal, sentence_streaming=True, pre_generate_enabled=True
+        responder,
+        generation=LoopGeneration(sentence_streaming=True, pre_generate_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2513,10 +2637,10 @@ async def test_pregen_fuzzy_restart_suppressed_pregen_rejects_inexact_final(jour
     audio = FakeReplyAudio()
     loop = ConversationLoop(
         responder,
-        journal=journal,
-        sentence_streaming=True,
-        pre_generate_enabled=True,
-        pregen_fuzzy_restart_enabled=True,
+        generation=LoopGeneration(
+            sentence_streaming=True, pre_generate_enabled=True, pregen_fuzzy_restart_enabled=True
+        ),
+        diagnostics=Diagnostics(journal=journal),
     )
     loop.bind(audio)
     await loop.handle_interim("can you help me")
@@ -2547,7 +2671,7 @@ def test_pregen_fuzzy_restart_default_follows_settings_flag():
     from fakeyou.config.settings import DEFAULTS
 
     assert DEFAULTS.conversation.pregen_fuzzy_restart_enabled is False
-    params = inspect.signature(ConversationLoop).parameters
+    params = inspect.signature(LoopGeneration).parameters
     assert (
         params["pregen_fuzzy_restart_enabled"].default
         == DEFAULTS.conversation.pregen_fuzzy_restart_enabled

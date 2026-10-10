@@ -9,6 +9,8 @@ import pytest
 from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.audio.stream_capture import (
+    DrainPolling,
+    RegistryTiming,
     StreamAudioInput,
     StreamChunk,
     StreamRegistry,
@@ -16,6 +18,7 @@ from fakeyou.audio.stream_capture import (
     parse_roster_names,
 )
 from fakeyou.audio.voice_activity import SlotBinder
+from fakeyou.cli.join import TranscriptSinks
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import open_direct_page
 from fakeyou.observability.journal import Journal
@@ -179,7 +182,10 @@ def _recording_registry(
         return created
 
     registry = StreamRegistry(
-        monotonic=monotonic, input_factory=_factory, binder=binder, journal=journal
+        timing=RegistryTiming(monotonic),
+        input_factory=_factory,
+        binder=binder,
+        journal=journal,
     )
     return registry, made
 
@@ -464,7 +470,12 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from pipecat.transports.base_transport import TransportParams
 
-    from fakeyou.audio.audio import open_stream_audio
+    from fakeyou.audio.audio import (
+        StreamCallbacks,
+        StreamComponents,
+        StreamSource,
+        open_stream_audio,
+    )
     from fakeyou.audio.stream_capture import StreamAudioInput
 
     class _EchoSTT(FrameProcessor):
@@ -517,18 +528,14 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
     right_input = StreamAudioInput(TransportParams(audio_in_enabled=True))
     async with (
         open_stream_audio(
-            stream_id="slot-0",
-            input=left_input,
-            on_transcript=on_left,
-            stt=_EchoSTT("left speech"),
-            playback=_Playback(),
+            source=StreamSource("slot-0", left_input),
+            callbacks=StreamCallbacks(on_left),
+            components=StreamComponents(stt=_EchoSTT("left speech"), playback=_Playback()),
         ),
         open_stream_audio(
-            stream_id="slot-1",
-            input=right_input,
-            on_transcript=on_right,
-            stt=_EchoSTT("right speech"),
-            playback=_Playback(),
+            source=StreamSource("slot-1", right_input),
+            callbacks=StreamCallbacks(on_right),
+            components=StreamComponents(stt=_EchoSTT("right speech"), playback=_Playback()),
         ),
     ):
         await left_input.feed(b"\x01\x02" * 160)
@@ -839,18 +846,26 @@ def _frame(text: str, timestamp: str):
 
 
 def test_merge_orders_two_streams_chronologically() -> None:
-    from fakeyou.foundation.transcript import merge_transcripts, transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, merge_transcripts, transcript_event
 
-    first = transcript_event(_frame("hello", "2026-10-06T01:00:02+00:00"), "a", None, "s1")
-    second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
+    first = transcript_event(
+        _frame("hello", "2026-10-06T01:00:02+00:00"), "a", None, CaptureContext("s1")
+    )
+    second = transcript_event(
+        _frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, CaptureContext("s0")
+    )
     assert [event.text for event in merge_transcripts([first, second])] == ["hi", "hello"]
 
 
 def test_merge_keeps_stream_tags_stable_on_id() -> None:
-    from fakeyou.foundation.transcript import merge_transcripts, transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, merge_transcripts, transcript_event
 
-    first = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s1")
-    second = transcript_event(_frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
+    first = transcript_event(
+        _frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, CaptureContext("s1")
+    )
+    second = transcript_event(
+        _frame("hi", "2026-10-06T01:00:01+00:00"), "b", None, CaptureContext("s0")
+    )
     merged = merge_transcripts([second, first])
     assert [event.id for event in merged] == sorted([first.id, second.id])
     assert {event.stream_id for event in merged} == {"s0", "s1"}
@@ -881,20 +896,28 @@ def test_flag_off_keeps_mixed_path() -> None:
 
 
 def test_stream_ids_change_transcript_identity() -> None:
-    from fakeyou.foundation.transcript import transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, transcript_event
 
-    left = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s0")
-    replay = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "b", None, "s0")
-    other = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, "s1")
+    left = transcript_event(
+        _frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, CaptureContext("s0")
+    )
+    replay = transcript_event(
+        _frame("hello", "2026-10-06T01:00:01+00:00"), "b", None, CaptureContext("s0")
+    )
+    other = transcript_event(
+        _frame("hello", "2026-10-06T01:00:01+00:00"), "a", None, CaptureContext("s1")
+    )
     assert left.id == replay.id
     assert left.id != other.id
 
 
 def test_request_messages_carry_stream_id() -> None:
     from fakeyou.conversation.conversation import _request_messages
-    from fakeyou.foundation.transcript import transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, transcript_event
 
-    event = transcript_event(_frame("hello", "2026-10-06T01:00:01+00:00"), "a", "e1", "slot-2")
+    event = transcript_event(
+        _frame("hello", "2026-10-06T01:00:01+00:00"), "a", "e1", CaptureContext("slot-2")
+    )
     (message,) = _request_messages([event])
     assert message.additional_kwargs["meeting_event"]["stream_id"] == "slot-2"
 
@@ -902,7 +925,7 @@ def test_request_messages_carry_stream_id() -> None:
 def test_record_stores_stream_id(tmp_path: Path) -> None:
     from pipecat.frames.frames import TranscriptionFrame
 
-    from fakeyou.foundation.transcript import transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, transcript_event
     from fakeyou.persistence.record import (
         MeetingRecord,
         TranscriptEntry,
@@ -913,7 +936,7 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path)
     frame = TranscriptionFrame("hello", "", "2026-10-06T01:00:01+00:00", finalized=True)
-    record.add_transcript(transcript_event(frame, "a", "e1", "slot-1"))
+    record.add_transcript(transcript_event(frame, "a", "e1", CaptureContext("slot-1")))
     record.close()
     [entry] = load_meeting_record(path)
     assert isinstance(entry, TranscriptEntry)
@@ -940,7 +963,12 @@ async def test_stream_input_buffers_audio_before_start() -> None:
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from pipecat.transports.base_transport import TransportParams
 
-    from fakeyou.audio.audio import open_stream_audio
+    from fakeyou.audio.audio import (
+        StreamCallbacks,
+        StreamComponents,
+        StreamSource,
+        open_stream_audio,
+    )
     from fakeyou.audio.stream_capture import StreamAudioInput
 
     class _EchoSTT(FrameProcessor):
@@ -980,11 +1008,9 @@ async def test_stream_input_buffers_audio_before_start() -> None:
     streamer = StreamAudioInput(TransportParams(audio_in_enabled=True))
     await streamer.feed(b"\x05\x06" * 160)
     async with open_stream_audio(
-        stream_id="slot-9",
-        input=streamer,
-        on_transcript=on_transcript,
-        stt=_EchoSTT("early speech"),
-        playback=_Playback(),
+        source=StreamSource("slot-9", streamer),
+        callbacks=StreamCallbacks(on_transcript),
+        components=StreamComponents(stt=_EchoSTT("early speech"), playback=_Playback()),
     ):
         await asyncio.wait_for(ready.wait(), timeout=5)
     assert seen == [("slot-9", "early speech")]
@@ -1092,7 +1118,9 @@ async def test_capture_drain_loop_emits_level_heartbeat() -> None:
     journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload, payload, payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
-    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=3)
+    loop = CaptureDrainLoop(
+        page, registry, journal=journal, polling=DrainPolling(heartbeat_polls=3)
+    )
     assert await loop.poll() is True
     assert await loop.poll() is True
     assert lines == []
@@ -1156,11 +1184,9 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         record = MeetingRecord(path, now=lambda: now)
         conversation = _Conversation()
         callback = build_transcript_callback(
-            journal=journal,
-            record=record,
-            conversation=conversation,
-            voice_activity=None,
+            sinks=TranscriptSinks(journal, record, conversation),
             binder=SlotBinder(),
+            voice_activity=None,
             per_stream_enabled=per_stream,
         )
         for index, frame in enumerate(turns):
@@ -1261,11 +1287,9 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=_Conversation(),
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, _Conversation()),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     for frame in frames:
@@ -1284,7 +1308,13 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
     from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    from fakeyou.audio.stream_capture import StreamChunk, open_stream_fleet
+    from fakeyou.audio.audio import StreamCallbacks
+    from fakeyou.audio.stream_capture import (
+        FleetTopology,
+        SlotFactories,
+        StreamChunk,
+        open_stream_fleet,
+    )
     from fakeyou.audio.voice_activity import SlotBinder
 
     class _EchoSTT(FrameProcessor):
@@ -1323,11 +1353,12 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
             received.set()
 
     async with open_stream_fleet(
-        slots=2,
-        binder=SlotBinder(),
-        on_transcript=on_transcript,
-        stt_factory=lambda slot: _EchoSTT(f"speech-{slot}"),
-        playback_factory=lambda slot: _Playback(),
+        topology=FleetTopology(SlotBinder(), 2),
+        callbacks=StreamCallbacks(on_transcript),
+        factories=SlotFactories(
+            stt=lambda slot: _EchoSTT(f"speech-{slot}"),
+            playback=lambda slot: _Playback(),
+        ),
     ) as fleet:
         assert set(fleet.capture_registry.sessions) == {0, 1}
         assert fleet.capture_registry.sessions[0].pinned is True
@@ -1349,7 +1380,14 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
     from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-    from fakeyou.audio.stream_capture import STREAM_FLEET_SLOTS, StreamChunk, open_stream_fleet
+    from fakeyou.audio.audio import StreamCallbacks
+    from fakeyou.audio.stream_capture import (
+        STREAM_FLEET_SLOTS,
+        FleetTopology,
+        SlotFactories,
+        StreamChunk,
+        open_stream_fleet,
+    )
     from fakeyou.audio.voice_activity import SlotBinder
 
     class _EchoSTT(FrameProcessor):
@@ -1389,11 +1427,12 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
             received.set()
 
     async with open_stream_fleet(
-        slots=STREAM_FLEET_SLOTS,
-        binder=SlotBinder(),
-        on_transcript=on_transcript,
-        stt_factory=lambda slot: _EchoSTT(f"speech-{slot}"),
-        playback_factory=lambda slot: _Playback(),
+        topology=FleetTopology(SlotBinder(), STREAM_FLEET_SLOTS),
+        callbacks=StreamCallbacks(on_transcript),
+        factories=SlotFactories(
+            stt=lambda slot: _EchoSTT(f"speech-{slot}"),
+            playback=lambda slot: _Playback(),
+        ),
     ) as fleet:
         assert set(fleet.capture_registry.sessions) == {0, 1, 2, 3}
         for slot in range(4):
@@ -1557,11 +1596,9 @@ async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path:
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=SlotBinder(),
+        voice_activity=None,
         per_stream_enabled=True,
     )
     frame = TranscriptionFrame(
@@ -1599,11 +1636,9 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
     binder.update_roster(["host"])
     binder.observe_stream(0, [111])
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     frame = TranscriptionFrame(
@@ -1651,7 +1686,9 @@ async def test_capture_drain_loop_emits_roster_diagnostics() -> None:
     journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
-    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
+    loop = CaptureDrainLoop(
+        page, registry, journal=journal, polling=DrainPolling(heartbeat_polls=1), twin_name="Twin"
+    )
     assert await loop.poll() is True
     assert len(lines) == 1
     event = json.loads(lines[0])
@@ -1699,7 +1736,9 @@ async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -
     journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[steady, broken])
     registry, _ = _recording_registry(FakeClock().monotonic)
-    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
+    loop = CaptureDrainLoop(
+        page, registry, journal=journal, polling=DrainPolling(heartbeat_polls=1)
+    )
     assert await loop.poll() is True
     assert await loop.poll() is True
     assert len(lines) == 2
@@ -1955,7 +1994,9 @@ async def test_capture_drain_loop_reports_collision_roster_diagnostics() -> None
     journal = Journal("meeting-9", emit=lines.append, echo=False)
     page = meet_page([], evaluates=[payload])
     registry, _ = _recording_registry(FakeClock().monotonic)
-    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1, twin_name="Twin")
+    loop = CaptureDrainLoop(
+        page, registry, journal=journal, polling=DrainPolling(heartbeat_polls=1), twin_name="Twin"
+    )
     assert await loop.poll() is True
     assert len(lines) == 1
     event = json.loads(lines[0])
@@ -1987,11 +2028,9 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
     binder.update_roster(["host", "guest"])
     binder.observe_stream(0, [111])
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     first = TranscriptionFrame(
@@ -2035,11 +2074,9 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     later = TranscriptionFrame(
@@ -2085,11 +2122,9 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     for stamp, slot, text in [
@@ -2290,7 +2325,9 @@ async def test_drain_loop_journals_slot_rescue_once() -> None:
     journal = Journal("meeting-9", emit=lines.append, echo=False)
     registry, _ = _recording_registry(FakeClock().monotonic)
     page = meet_page([], evaluates=[payload(1), payload(1), payload(2)])
-    loop = CaptureDrainLoop(page, registry, journal=journal, heartbeat_polls=1)
+    loop = CaptureDrainLoop(
+        page, registry, journal=journal, polling=DrainPolling(heartbeat_polls=1)
+    )
     assert await loop.poll() is True
     assert await loop.poll() is True
     assert await loop.poll() is True

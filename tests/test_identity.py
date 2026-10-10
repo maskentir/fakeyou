@@ -11,6 +11,7 @@ DISPLAY_CLAIM_RENDER_READERS = frozenset(
         "debrief/debrief.py",
         "debrief/debrief_sources.py",
         "cli/debrief.py",
+        "foundation/transcript.py",
     }
 )
 DISPLAY_CLAIM_TASK_READERS = frozenset({"identity/verify.py"})

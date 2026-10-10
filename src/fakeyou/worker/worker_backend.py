@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 
 from fakeyou.catalog.commands import Command
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.meeting_request import validate_meeting_request
+from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
 from fakeyou.debrief.debrief import debrief_report_status
 from fakeyou.foundation.invariants import SessionId
 from fakeyou.observability.journal import journal_path
@@ -95,18 +95,20 @@ class WorkerStartRequest:
     def __post_init__(self) -> None:
         checked_meeting_id(self.meeting_id)
         validate_meeting_request(
-            link=self.link,
-            lobby_timeout=self.lobby_timeout,
-            duration=self.duration,
-            initial_speech=self.initial_speech,
-            audio=self.audio,
-            conversation=self.conversation,
-            memory=self.memory,
-            persona_path=self.persona_path,
-            brief_path=self.brief_path,
-            meeting_id=self.meeting_id,
-            wake_phrase=self.wake_phrase,
-            barge_in=self.barge_in,
+            MeetingRequest(
+                link=self.link,
+                lobby_timeout=self.lobby_timeout,
+                duration=self.duration,
+                initial_speech=self.initial_speech,
+                audio=self.audio,
+                conversation=self.conversation,
+                memory=self.memory,
+                persona_path=self.persona_path,
+                brief_path=self.brief_path,
+                meeting_id=self.meeting_id,
+                wake_phrase=self.wake_phrase,
+                barge_in=self.barge_in,
+            )
         )
 
 
@@ -192,6 +194,14 @@ def summarize_session(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 "at": row.get("at"),
             }
     return {"phase": phase, "terminal_reason": terminal_reason, "last_fault": last_fault}
+
+
+def _valued_flag(flag: str, value: str | float | None) -> list[str]:
+    return [] if value is None else [flag, str(value)]
+
+
+def _bool_flag(flag: str, *, enabled: bool | None) -> list[str]:
+    return [flag] if enabled else []
 
 
 class DockerWorkerBackend:
@@ -537,42 +547,36 @@ class DockerWorkerBackend:
                 return parts[0], parts[1], parts[2]
         return None
 
+    def _path_flag(
+        self, flag: str, path: Path | str | None, *, must_exist: bool = True
+    ) -> list[str]:
+        if path is None:
+            return []
+        resolved = path if isinstance(path, Path) else Path(path)
+        return [flag, self._container_path(resolved, must_exist=must_exist)]
+
     def _join_args(self, request: WorkerStartRequest) -> list[str]:
-        args = ["join", request.link, "--meeting-id", request.meeting_id]
-        if request.twin_name is not None:
-            args += ["--twin-name", request.twin_name]
-        if request.owner_id is not None:
-            args += ["--owner-id", request.owner_id]
-        if request.twin_id is not None:
-            args += ["--twin-id", request.twin_id]
-        if request.lobby_timeout is not None:
-            args += ["--lobby-timeout", str(request.lobby_timeout)]
-        if request.duration is not None:
-            args += ["--duration", str(request.duration)]
-        if request.profile_dir is not None:
-            args += [
-                "--profile-dir",
-                self._container_path(Path(request.profile_dir), must_exist=False),
-            ]
-        if request.headless:
-            args += ["--headless"]
-        if request.audio:
-            args += ["--audio"]
-        if request.initial_speech is not None:
-            args += ["--speak", request.initial_speech]
-        if request.conversation:
-            args += ["--converse"]
-        if request.persona_path is not None:
-            args += ["--persona", self._container_path(request.persona_path)]
-        if request.brief_path is not None:
-            args += ["--brief", self._container_path(request.brief_path)]
-        if request.memory:
-            args += ["--memory"]
-        if request.wake_phrase is not None:
-            args += ["--wake-phrase", request.wake_phrase]
-        if request.barge_in:
-            args += ["--barge-in"]
-        return args
+        return [
+            "join",
+            request.link,
+            "--meeting-id",
+            request.meeting_id,
+            *_valued_flag("--twin-name", request.twin_name),
+            *_valued_flag("--owner-id", request.owner_id),
+            *_valued_flag("--twin-id", request.twin_id),
+            *_valued_flag("--lobby-timeout", request.lobby_timeout),
+            *_valued_flag("--duration", request.duration),
+            *self._path_flag("--profile-dir", request.profile_dir, must_exist=False),
+            *_bool_flag("--headless", enabled=request.headless),
+            *_bool_flag("--audio", enabled=request.audio),
+            *_valued_flag("--speak", request.initial_speech),
+            *_bool_flag("--converse", enabled=request.conversation),
+            *self._path_flag("--persona", request.persona_path),
+            *self._path_flag("--brief", request.brief_path),
+            *_bool_flag("--memory", enabled=request.memory),
+            *_valued_flag("--wake-phrase", request.wake_phrase),
+            *_bool_flag("--barge-in", enabled=request.barge_in),
+        ]
 
     def _container_path(self, path: Path, *, must_exist: bool = True) -> str:
         resolved = (self._project_dir / path).resolve()

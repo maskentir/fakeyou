@@ -1,5 +1,6 @@
 import asyncio
 import re
+from dataclasses import dataclass
 from typing import get_args
 
 import httpx2
@@ -38,22 +39,32 @@ def trim_detail(detail: str | None) -> str | None:
     return safe[:MAX_DETAIL_CHARS] or None
 
 
+@dataclass(frozen=True, slots=True)
+class FaultEvidence:
+    status: int | None = None
+    detail: str | None = None
+
+
 class ProviderFault(Exception):
     def __init__(
         self,
         source: Subsystem,
         kind: ProviderFaultKind,
         *,
-        status: int | None = None,
-        detail: str | None = None,
+        evidence: FaultEvidence | None = None,
         retryable: bool = False,
         operation: str | None = None,
     ) -> None:
         self.source: Subsystem = source
         self.operation = operation
         self.kind = kind if kind in _FAULT_KINDS else "unknown"
-        self.status = status if isinstance(status, int) and not isinstance(status, bool) else None
-        self.detail = trim_detail(detail)
+        seen = FaultEvidence() if evidence is None else evidence
+        self.status = (
+            seen.status
+            if isinstance(seen.status, int) and not isinstance(seen.status, bool)
+            else None
+        )
+        self.detail = trim_detail(seen.detail)
         self.retryable = bool(retryable)
         message = f"{self.source} {self.kind}"
         if self.operation:
@@ -66,17 +77,18 @@ class ProviderFault(Exception):
 
 
 def classify_http(source: Subsystem, status: int, detail: str | None = None) -> ProviderFault:
+    evidence = FaultEvidence(status, detail)
     if status == 402:
-        return ProviderFault(source, "payment_required", status=status, detail=detail)
+        return ProviderFault(source, "payment_required", evidence=evidence)
     if status in (401, 403):
-        return ProviderFault(source, "unauthorized", status=status, detail=detail)
+        return ProviderFault(source, "unauthorized", evidence=evidence)
     if status == 429:
-        return ProviderFault(source, "rate_limited", status=status, detail=detail, retryable=True)
+        return ProviderFault(source, "rate_limited", evidence=evidence, retryable=True)
     if 500 <= status <= 599:
-        return ProviderFault(source, "unavailable", status=status, detail=detail, retryable=True)
+        return ProviderFault(source, "unavailable", evidence=evidence, retryable=True)
     if 400 <= status <= 499:
-        return ProviderFault(source, "bad_request", status=status, detail=detail)
-    return ProviderFault(source, "unknown", status=status, detail=detail)
+        return ProviderFault(source, "bad_request", evidence=evidence)
+    return ProviderFault(source, "unknown", evidence=evidence)
 
 
 _MINIMAX_STATUS_KINDS: dict[int, tuple[ProviderFaultKind, bool]] = {
@@ -95,7 +107,7 @@ def classify_minimax_status(
     source: Subsystem, code: int, detail: str | None = None
 ) -> ProviderFault:
     kind, retryable = _MINIMAX_STATUS_KINDS.get(code, ("unknown", False))
-    return ProviderFault(source, kind, status=code, detail=detail, retryable=retryable)
+    return ProviderFault(source, kind, evidence=FaultEvidence(code, detail), retryable=retryable)
 
 
 def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
@@ -112,8 +124,10 @@ def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
     return ProviderFault(
         source,
         kind,
-        status=status if isinstance(status, int) else None,
-        detail=detail if isinstance(detail, str) else None,
+        evidence=FaultEvidence(
+            status=status if isinstance(status, int) else None,
+            detail=detail if isinstance(detail, str) else None,
+        ),
         retryable=retryable,
     )
 
@@ -135,7 +149,7 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
     if categorized is not None:
         return categorized
     if isinstance(error, FakeYouError):
-        return ProviderFault(source, "unknown", detail=str(error))
+        return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=str(error)))
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):
@@ -144,4 +158,4 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
         return classify_http(source, error.response.status_code)
     if isinstance(error, (APIConnectionError, httpx2.ConnectError, httpx2.NetworkError)):
         return ProviderFault(source, "unavailable", retryable=True)
-    return ProviderFault(source, "unknown", detail=type(error).__name__)
+    return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=type(error).__name__))

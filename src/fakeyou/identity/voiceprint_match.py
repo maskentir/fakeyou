@@ -8,15 +8,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 from fakeyou.db.voiceprint_store import VoiceprintRepository
-from fakeyou.identity.verify import decide_verified
+from fakeyou.identity.verify import DEFAULT_VERIFICATION_INPUTS, VerificationInputs, decide_verified
 from fakeyou.identity.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder, cosine
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import Fault
 
 if TYPE_CHECKING:
     from fakeyou.identity.identity import SpeakerRegistry
-    from fakeyou.identity.verify import CalibrationArtifact
-    from fakeyou.observability.faults import FaultReporter
-    from fakeyou.observability.journal import Journal
 
 MatchOutcome = Literal["verified", "unknown", "conflict", "negative"]
 DecidedOutcome = Literal["verified", "unknown", "conflict", "mismatched_owner"]
@@ -100,70 +98,59 @@ def score_turn_audio(
     return matcher.match(embedder.embed([utterance]))
 
 
+@dataclass(frozen=True, slots=True)
+class VoiceScoreAttribution:
+    speaker_uuid: str
+    device: str | None
+    owners: Mapping[str, str]
+
+
 def apply_voice_scores(
     registry: SpeakerRegistry,
-    speaker_uuid: str,
     scores: VoiceScores,
     *,
-    device: str | None,
-    owners: Mapping[str, str],
-    journal: Journal | None = None,
-    faults: FaultReporter | None = None,
-    artifact: CalibrationArtifact | None = None,
-    claim: str | None = None,
-    overlap: bool | None = None,
-    slot: int | None = None,
-    embedder: SpeakerEmbedder | None = None,
+    attribution: VoiceScoreAttribution,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+    verification: VerificationInputs = DEFAULT_VERIFICATION_INPUTS,
 ) -> DecidedOutcome:
-    registry.note_voice_scores(speaker_uuid, scores)
+    registry.note_voice_scores(attribution.speaker_uuid, scores)
     person = scores.person_id
     owner: str | None = None
-    if scores.outcome == "verified" and person is not None and device is not None:
-        owner = owners.get(device)
+    if scores.outcome == "verified" and person is not None and attribution.device is not None:
+        owner = attribution.owners.get(attribution.device)
     if owner is not None and person is not None and owner != person:
-        if faults is not None:
-            faults.record(
+        if diagnostics.faults is not None:
+            diagnostics.faults.record(
                 Fault(
                     source="audio",
                     kind="voiceprint_misbind",
                     detail=f"voice verified as {person} on device owned by {owner}",
                 )
             )
-        if journal is not None:
-            journal.record(
+        if diagnostics.journal is not None:
+            diagnostics.journal.record(
                 "voiceprint_decided",
                 source="audio",
                 person_id=person,
                 outcome="mismatched_owner",
                 score=round(scores.s1, 4),
                 margin=round(scores.s1 - scores.s2, 4),
-                speaker_uuid=speaker_uuid,
-                device=device,
+                speaker_uuid=attribution.speaker_uuid,
+                device=attribution.device,
                 owner=owner,
             )
         return "mismatched_owner"
     outcome: DecidedOutcome = "unknown" if scores.outcome == "negative" else scores.outcome
-    if journal is not None:
-        journal.record(
+    if diagnostics.journal is not None:
+        diagnostics.journal.record(
             "voiceprint_decided",
             source="audio",
             person_id=person,
             outcome=outcome,
             score=round(scores.s1, 4),
             margin=round(scores.s1 - scores.s2, 4),
-            speaker_uuid=speaker_uuid,
+            speaker_uuid=attribution.speaker_uuid,
         )
-    if artifact is not None and embedder is not None:
-        decide_verified(
-            speaker_uuid,
-            scores,
-            claim,
-            artifact,
-            registry=registry,
-            slot=slot,
-            overlap=overlap,
-            embedder=embedder,
-            journal=journal,
-            faults=faults,
-        )
+    if verification.artifact is not None and verification.embedder is not None:
+        decide_verified(attribution.speaker_uuid, scores, verification, registry, diagnostics)
     return outcome

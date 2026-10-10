@@ -9,6 +9,7 @@ import fakeyou.meet.browser as browser_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.meet.browser import (
     BROWSER_LAUNCH_ARGS,
+    BrowserLaunch,
     apply_browser_audio_policy,
     open_browser_tools,
     open_direct_page,
@@ -152,11 +153,7 @@ async def test_prepared_context_closes_browser_when_init_script_fails(
 
     with pytest.raises(RuntimeError, match="init script"):
         async with browser_module._prepared_browser_context(
-            headless=True,
-            license_key=None,
-            fingerprint_seed=None,
-            profile_dir=tmp_path,
-            warmup=False,
+            launch_profile=BrowserLaunch(True, None, None, tmp_path, False),
             humanize=True,
         ):
             pytest.fail("setup should fail before yielding")
@@ -176,11 +173,7 @@ async def test_prepared_context_closes_browser_when_setup_is_cancelled(
 
     with pytest.raises(asyncio.CancelledError):
         async with browser_module._prepared_browser_context(
-            headless=True,
-            license_key=None,
-            fingerprint_seed=None,
-            profile_dir=tmp_path,
-            warmup=False,
+            launch_profile=BrowserLaunch(True, None, None, tmp_path, False),
             humanize=True,
         ):
             pytest.fail("setup should be cancelled before yielding")
@@ -200,11 +193,7 @@ async def test_prepared_context_closes_browser_when_warmup_new_page_fails(
 
     with pytest.raises(RuntimeError, match="new page"):
         async with browser_module._prepared_browser_context(
-            headless=True,
-            license_key=None,
-            fingerprint_seed=None,
-            profile_dir=tmp_path,
-            warmup=True,
+            launch_profile=BrowserLaunch(True, None, None, tmp_path, True),
             humanize=True,
         ):
             pytest.fail("setup should fail before yielding")
@@ -232,11 +221,7 @@ async def test_prepared_context_captures_freshness_before_launch(
     monkeypatch.setattr(browser_module, "warmup_profile", warmup)
 
     async with browser_module._prepared_browser_context(
-        headless=True,
-        license_key=None,
-        fingerprint_seed=None,
-        profile_dir=tmp_path,
-        warmup=True,
+        launch_profile=BrowserLaunch(True, None, None, tmp_path, True),
         humanize=True,
     ):
         pass
@@ -260,11 +245,7 @@ async def test_prepared_context_preserves_profile_locks(
     monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
 
     async with browser_module._prepared_browser_context(
-        headless=True,
-        license_key=None,
-        fingerprint_seed=None,
-        profile_dir=tmp_path,
-        warmup=False,
+        launch_profile=BrowserLaunch(True, None, None, tmp_path, False),
         humanize=True,
     ):
         pass
@@ -292,11 +273,7 @@ async def test_prepared_context_finishes_launch_before_cancellation_cleanup(
 
     async def consume_context() -> None:
         async with browser_module._prepared_browser_context(
-            headless=True,
-            license_key=None,
-            fingerprint_seed=None,
-            profile_dir=tmp_path,
-            warmup=False,
+            launch_profile=BrowserLaunch(True, None, None, tmp_path, False),
             humanize=True,
         ):
             await asyncio.Event().wait()
@@ -448,7 +425,7 @@ async def test_browser_tools_keep_persistent_profile(tmp_path: Path) -> None:
 
 @pytest.mark.browser
 async def test_open_direct_page_drives_humanized_page() -> None:
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.goto("about:blank")
         assert await page.evaluate("(() => 1 + 1)()") == 2
 

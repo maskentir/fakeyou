@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, ValidationErr
 import fakeyou.cli.debrief as cli_debrief
 from evals.runtime_evidence import CANDIDATE_FILES, capture_candidate, finish_candidate
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.config.settings import OpenAIReply, PathSettings, Settings
 from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefReport
 from fakeyou.debrief.debrief_sources import (
@@ -836,9 +837,11 @@ async def replay_debriefs(
                 try:
                     await cli_debrief.debrief_meeting(
                         meeting_id=meeting_id,
-                        persona_path=persona_path,
-                        owner_id=fixture["persona"]["owner_id"],
-                        twin_id=fixture["persona"]["twin_id"],
+                        identity=OperatorIdentity(
+                            persona_path,
+                            fixture["persona"]["owner_id"],
+                            fixture["persona"]["twin_id"],
+                        ),
                         force=False,
                         settings=scoped,
                     )
@@ -1022,9 +1025,9 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
     ):
         await cli_debrief.debrief_meeting(
             meeting_id=meeting_id,
-            persona_path=persona,
-            owner_id=fixture["persona"]["owner_id"],
-            twin_id=fixture["persona"]["twin_id"],
+            identity=OperatorIdentity(
+                persona, fixture["persona"]["owner_id"], fixture["persona"]["twin_id"]
+            ),
             force=False,
             settings=scoped,
         )

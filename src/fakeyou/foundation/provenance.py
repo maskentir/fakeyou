@@ -38,13 +38,17 @@ class SourceEvidence:
             raise ValueError("time_granularity must be document, episode_window, or frame")
         if not self.speaker_identity.strip():
             raise ValueError("speaker_identity must not be blank")
-        if kind_value == "meeting_visual":
-            if self.frame_ref is None or not self.frame_ref.strip():
-                raise ValueError("meeting_visual needs frame_ref")
-            if granularity_value != "frame":
-                raise ValueError("meeting_visual needs frame granularity")
-        elif self.frame_ref is not None:
-            raise ValueError("frame_ref needs meeting_visual kind")
+        _check_visual_kind(kind_value, granularity_value, self.frame_ref)
+
+
+def _check_visual_kind(kind_value: str, granularity_value: str, frame_ref: str | None) -> None:
+    if kind_value == "meeting_visual":
+        if frame_ref is None or not frame_ref.strip():
+            raise ValueError("meeting_visual needs frame_ref")
+        if granularity_value != "frame":
+            raise ValueError("meeting_visual needs frame granularity")
+    elif frame_ref is not None:
+        raise ValueError("frame_ref needs meeting_visual kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,14 +80,10 @@ def _rendered_source_compact(source: SourceEvidence) -> dict[str, str | bool]:
     return rendered
 
 
-def render_evidence(
-    facts: list[FactEvidence],
-    *,
-    result_limit: int,
-    excluded: dict[str, int],
-    compact: bool = False,
-    search_rank: dict[str, int] | None = None,
-) -> str:
+_OrderedEntry = tuple[int, float, str, str, tuple[str, ...], tuple[SourceEvidence, ...]]
+
+
+def _validate_render_inputs(result_limit: int, excluded: dict[str, int]) -> None:
     if result_limit < 1:
         raise ValueError("result_limit must be at least 1")
     allowed = ("pending", "superseded", "missing_source")
@@ -93,6 +93,9 @@ def render_evidence(
     for value in excluded.values():
         if value < 0:
             raise ValueError("excluded counts must be zero or more")
+
+
+def _dedupe_sources(facts: list[FactEvidence]) -> dict[str, SourceEvidence]:
     seen: dict[str, SourceEvidence] = {}
     for fact in facts:
         for source in fact.sources:
@@ -100,6 +103,12 @@ def render_evidence(
             if prior is not None and prior != source:
                 raise ValueError(f"conflicting metadata for episode {source.episode_id}")
             seen[source.episode_id] = source
+    return seen
+
+
+def _merge_facts(
+    facts: list[FactEvidence],
+) -> tuple[dict[str, set[str]], dict[str, dict[str, SourceEvidence]]]:
     merged_ids: dict[str, set[str]] = {}
     merged_sources: dict[str, dict[str, SourceEvidence]] = {}
     for fact in facts:
@@ -109,7 +118,13 @@ def render_evidence(
         source_map = merged_sources.setdefault(key, {})
         for source in fact.sources:
             source_map[source.episode_id] = source
-    ordered: list[tuple[int, float, str, str, tuple[str, ...], tuple[SourceEvidence, ...]]] = []
+    return merged_ids, merged_sources
+
+
+def _rank_facts(
+    merged_ids: dict[str, set[str]], merged_sources: dict[str, dict[str, SourceEvidence]]
+) -> list[_OrderedEntry]:
+    ordered: list[_OrderedEntry] = []
     for key, ids in merged_ids.items():
         ranked = tuple(
             sorted(
@@ -130,53 +145,73 @@ def render_evidence(
             owner_rank = 1
             time_rank = float("inf")
         ordered.append((owner_rank, time_rank, fact_ids[0], key, fact_ids, ranked))
+    return ordered
+
+
+def _trim_ordered(
+    ordered: list[_OrderedEntry], result_limit: int, search_rank: dict[str, int] | None
+) -> list[_OrderedEntry]:
     if search_rank is None:
         ordered.sort(key=lambda entry: (entry[0], entry[1], entry[2], entry[3]))
-        trimmed = ordered[:result_limit]
-    else:
-        ordered.sort(
-            key=lambda entry: (
-                search_rank.get(entry[3], len(search_rank)),
-                entry[0],
-                entry[1],
-                entry[2],
-                entry[3],
-            )
+        return ordered[:result_limit]
+    ordered.sort(
+        key=lambda entry: (
+            search_rank.get(entry[3], len(search_rank)),
+            entry[0],
+            entry[1],
+            entry[2],
+            entry[3],
         )
-        trimmed = ordered[:result_limit]
-        if trimmed and not any(entry[0] == 0 for entry in trimmed):
-            pinned = next((entry for entry in ordered if entry[0] == 0), None)
-            if pinned is not None:
-                trimmed = [*trimmed[:-1], pinned]
-    rendered_facts: list[dict[str, object]] = []
-    for entry in trimmed:
-        text = entry[3]
-        fact_ids = entry[4]
-        ranked = entry[5]
-        rendered_sources: list[dict[str, str | bool]] = []
-        for source in ranked:
-            if compact:
-                rendered_sources.append(_rendered_source_compact(source))
-                continue
-            rendered_source: dict[str, str | bool] = {
-                "episode_id": source.episode_id,
-                "kind": source.kind,
-                "label": source.label,
-                "source_at": source.source_at.astimezone(UTC).isoformat(),
-                "recorded_at": source.recorded_at.astimezone(UTC).isoformat(),
-                "time_granularity": source.time_granularity,
-                "speaker_verified": source.speaker_verified,
-                "speaker_identity": source.speaker_identity,
-            }
-            if source.frame_ref is not None:
-                rendered_source["frame_ref"] = source.frame_ref
-            rendered_sources.append(rendered_source)
+    )
+    trimmed = ordered[:result_limit]
+    if trimmed and not any(entry[0] == 0 for entry in trimmed):
+        pinned = next((entry for entry in ordered if entry[0] == 0), None)
+        if pinned is not None:
+            trimmed = [*trimmed[:-1], pinned]
+    return trimmed
+
+
+def _render_fact_entry(entry: _OrderedEntry, *, compact: bool) -> dict[str, object]:
+    text = entry[3]
+    fact_ids = entry[4]
+    ranked = entry[5]
+    rendered_sources: list[dict[str, str | bool]] = []
+    for source in ranked:
         if compact:
-            rendered_facts.append({"text": text, "sources": rendered_sources})
-        else:
-            rendered_facts.append(
-                {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
-            )
+            rendered_sources.append(_rendered_source_compact(source))
+            continue
+        rendered_source: dict[str, str | bool] = {
+            "episode_id": source.episode_id,
+            "kind": source.kind,
+            "label": source.label,
+            "source_at": source.source_at.astimezone(UTC).isoformat(),
+            "recorded_at": source.recorded_at.astimezone(UTC).isoformat(),
+            "time_granularity": source.time_granularity,
+            "speaker_verified": source.speaker_verified,
+            "speaker_identity": source.speaker_identity,
+        }
+        if source.frame_ref is not None:
+            rendered_source["frame_ref"] = source.frame_ref
+        rendered_sources.append(rendered_source)
+    if compact:
+        return {"text": text, "sources": rendered_sources}
+    return {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
+
+
+def render_evidence(
+    facts: list[FactEvidence],
+    *,
+    result_limit: int,
+    excluded: dict[str, int],
+    compact: bool = False,
+    search_rank: dict[str, int] | None = None,
+) -> str:
+    _validate_render_inputs(result_limit, excluded)
+    seen = _dedupe_sources(facts)
+    merged_ids, merged_sources = _merge_facts(facts)
+    ordered = _rank_facts(merged_ids, merged_sources)
+    trimmed = _trim_ordered(ordered, result_limit, search_rank)
+    rendered_facts = [_render_fact_entry(entry, compact=compact) for entry in trimmed]
     schema = (
         EVIDENCE_SCHEMA_V2
         if any(source.kind == "meeting_visual" for source in seen.values())

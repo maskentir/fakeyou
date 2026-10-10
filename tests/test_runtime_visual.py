@@ -8,7 +8,7 @@ from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.lifecycle import MeetingLifecycle
-from fakeyou.orchestration.runtime import _MeetingWorker, run_meeting_session
+from fakeyou.orchestration.runtime import SessionWiring, _MeetingWorker, run_meeting_session
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
 from tests.fakes import (
@@ -54,13 +54,15 @@ async def test_run_meeting_session_starts_visual_observer_when_flag_on(
 
     result = await run_meeting_session(
         _config(visual_enabled=True),
-        stop=stop,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
-        visual_store=VisualStore(tmp_path / "visual"),
+        SessionWiring(
+            stop=stop,
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+            visual_store=VisualStore(tmp_path / "visual"),
+        ),
     )
 
     assert result.phase == "ended"
@@ -81,13 +83,15 @@ async def test_run_meeting_session_skips_visual_observer_when_flag_off(
 
     result = await run_meeting_session(
         _config(),
-        stop=stop,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
-        visual_store=VisualStore(tmp_path / "visual"),
+        SessionWiring(
+            stop=stop,
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+            visual_store=VisualStore(tmp_path / "visual"),
+        ),
     )
 
     assert result.phase == "ended"

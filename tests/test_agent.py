@@ -9,7 +9,7 @@ from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, create_meet
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.memory.persona import PersonaProfile
-from fakeyou.orchestration.assembly import open_conversation
+from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior, open_conversation
 from tests.fakes import ToolCallingFakeModel
 
 
@@ -109,7 +109,10 @@ async def test_production_agent_short_circuits_greeting_without_model(
         }
     )
     async with open_conversation(
-        settings, config, profile=profile, on_transition=lambda *args: None
+        settings,
+        config,
+        agent=AgentWiring(profile=profile),
+        behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         [agent] = built
         result = await agent.ainvoke(

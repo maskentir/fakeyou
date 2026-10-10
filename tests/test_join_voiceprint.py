@@ -14,7 +14,7 @@ from pipecat.processors.frame_processor import FrameDirection
 
 import fakeyou.cli.join as join_module
 from fakeyou.audio.voice_activity import SlotBinder, VoiceAttribution
-from fakeyou.cli.join import build_transcript_callback
+from fakeyou.cli.join import LiveScoring, TranscriptSinks, build_transcript_callback
 from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.identity.identity import SpeakerRegistry
@@ -77,15 +77,11 @@ async def test_final_scores_turn_and_notes_honest_margin(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
         per_stream_enabled=True,
-        voiceprint=live,
-        registry=registry,
-        faults=None,
     )
     frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
     frame.transport_source = "slot-0"
@@ -112,15 +108,11 @@ async def test_short_clip_skips_scoring_without_decision(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
         per_stream_enabled=True,
-        voiceprint=live,
-        registry=registry,
-        faults=None,
     )
     frame = TranscriptionFrame("Hi.", "", "2026-10-06T01:00:03+00:00", finalized=True)
     frame.transport_source = "slot-0"
@@ -144,15 +136,11 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
         per_stream_enabled=True,
-        voiceprint=live,
-        registry=registry,
-        faults=None,
     )
     await prime_turn_tap(live, "slot-0", b"\x0a" * 3200)
     stale = TranscriptionFrame("Stale.", "", "2026-10-06T01:00:03+00:00", finalized=True)
@@ -193,15 +181,11 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=cast(Any, voice_activity),
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=SlotBinder(registry=registry),
+        voice_activity=cast(Any, voice_activity),
+        scoring=LiveScoring(live, registry),
         per_stream_enabled=False,
-        voiceprint=live,
-        registry=registry,
-        faults=None,
     )
     await prime_turn_tap(live, "", b"\x0a" * 3200)
     await callback(TranscriptionFrame("Stale.", "", "2026-10-06T01:00:03+00:00", finalized=True))
@@ -225,11 +209,9 @@ async def test_disabled_voiceprint_never_scores(settings: Settings, tmp_path: Pa
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None),
         binder=binder,
+        voice_activity=None,
         per_stream_enabled=True,
     )
     frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
@@ -273,15 +255,11 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     record_path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
         per_stream_enabled=True,
-        voiceprint=live,
-        registry=registry,
-        faults=None,
     )
     frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
     frame.transport_source = "slot-0"
@@ -327,15 +305,11 @@ async def test_legacy_transcript_carries_display_claim(tmp_path: Path) -> None:
     record_path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=None,
-        voice_activity=cast(Any, voice_activity),
+        sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
+        voice_activity=cast(Any, voice_activity),
+        scoring=LiveScoring(None, registry),
         per_stream_enabled=False,
-        voiceprint=None,
-        registry=registry,
-        faults=None,
     )
     frame = TranscriptionFrame("Hi.", "", "2026-10-06T01:00:03+00:00", finalized=True)
 

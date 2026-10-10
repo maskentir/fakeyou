@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
@@ -126,6 +127,24 @@ def _matching_uuid(turns: list[dict[str, object]], point: float, tolerance_ms: i
     return best
 
 
+def _shift_turns(turns: list[Any], offset: float) -> list[dict[str, object]]:
+    shifted: list[dict[str, object]] = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
+        start = turn.get("start_ms")
+        end = turn.get("end_ms")
+        if (
+            isinstance(start, bool)
+            or not isinstance(start, (int, float))
+            or isinstance(end, bool)
+            or not isinstance(end, (int, float))
+        ):
+            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
+        shifted.append({**turn, "start_ms": float(start) + offset, "end_ms": float(end) + offset})
+    return shifted
+
+
 def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> list[RecordEntry]:
     entries = load_meeting_record(record_path)
     sidecar = record_path.parent / JSON_FILE_NAME
@@ -144,20 +163,7 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
     if not isinstance(turns, list):
         raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
     offset = _session_start_page_ms(record_path)
-    shifted: list[dict[str, object]] = []
-    for turn in turns:
-        if not isinstance(turn, dict):
-            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
-        start = turn.get("start_ms")
-        end = turn.get("end_ms")
-        if (
-            isinstance(start, bool)
-            or not isinstance(start, (int, float))
-            or isinstance(end, bool)
-            or not isinstance(end, (int, float))
-        ):
-            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
-        shifted.append({**turn, "start_ms": float(start) + offset, "end_ms": float(end) + offset})
+    shifted = _shift_turns(turns, offset)
     corrected: list[RecordEntry] = []
     for entry in entries:
         if not isinstance(entry, TranscriptEntry):

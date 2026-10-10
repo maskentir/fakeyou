@@ -2,6 +2,8 @@ import json
 import math
 import statistics
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -101,407 +103,556 @@ def summarize(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
-def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    turns: dict[str, dict[str, Any]] = {}
+@dataclass(slots=True)
+class _ReportState:
+    turns: dict[str, dict[str, Any]] = field(default_factory=dict)
     speech_stopped_at: datetime | None = None
     speech_started_at: datetime | None = None
     speak_started_at: datetime | None = None
-    interruption_seconds: list[float] = []
-    barge_in_triggers = Counter[str]()
+    interruption_seconds: list[float] = field(default_factory=list)
+    barge_in_triggers: Counter[str] = field(default_factory=Counter)
     active: dict[str, Any] | None = None
     replying: dict[str, Any] | None = None
-    synthesis_turns: dict[str, str | None] = {}
-    pending: dict[str, Any] = {}
-    excluded = Counter[str]()
-    replies = Counter[str]()
-    tools: dict[str, Counter[str]] = {}
-    meet_actions: dict[str, dict[str, Any]] = {}
-    episodes: list[dict[str, Any]] = []
-    faults = Counter[tuple[str, str]]()
+    synthesis_turns: dict[str, str | None] = field(default_factory=dict)
+    pending: dict[str, Any] = field(default_factory=dict)
+    excluded: Counter[str] = field(default_factory=Counter)
+    replies: Counter[str] = field(default_factory=Counter)
+    tools: dict[str, Counter[str]] = field(default_factory=dict)
+    meet_actions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    episodes: list[dict[str, Any]] = field(default_factory=list)
+    faults: Counter[tuple[str, str]] = field(default_factory=Counter)
     result: dict[str, Any] | None = None
-    milestones: dict[str, dict[str, Any]] = {}
-    cancel_requested = 0
-    cancel_completed = 0
-    ingest_runs: list[tuple[bool | None, bool]] = []
-    ingest_fault_pending = False
-    utterances = 0
-    attributed = 0
-    unknown_reasons = Counter[str]()
-    policy_actions = Counter[str]()
-    policy_reasons = Counter[str]()
-    observer_methods = Counter[str]()
-    order_inversions = 0
-    drain_gaps = 0
-    tap_slot_rescues = 0
-    tap_slot_drops = 0
-    turn_interims: list[float] = []
-    turn_delays: list[float] = []
-    capture_engines = Counter[str]()
-    starts = 0
-    outcomes = Counter[str]()
-    reasons = Counter[str]()
-    diff_classes = Counter[str]()
-    norm_dist_buckets = Counter[str]()
-    overlaps: list[float] = []
-    visual_frames = 0
-    visual_captioned = 0
-    visual_cost_usd = 0.0
-    visual_capture_ms: list[float] = []
-    for row in rows:
-        event = row.get("event")
-        try:
-            at = datetime.fromisoformat(row["at"]) if "at" in row else None
-        except (TypeError, ValueError):
-            at = None
-        if event in STARTUP_MILESTONES and row.get("source") == "runtime":
-            milestones.setdefault(str(event), {**row, "at": at})
-        if event == "speech_stopped":
-            speech_stopped_at = at
-        elif event == "speech_started":
-            speech_started_at = at
-        elif event == "barge_in_detected":
-            barge_in_triggers[str(row.get("trigger"))] += 1
-        elif event == "transcript_finalized":
-            utterances += 1
-            speaker_id = row.get("participant_id")
-            speaker_reason = row.get("speaker_reason")
-            if isinstance(speaker_id, str) and speaker_id != "unknown":
-                attributed += 1
-            elif isinstance(speaker_reason, str):
-                unknown_reasons[speaker_reason] += 1
-            elif row.get("speaker_evidence_id") is None:
-                unknown_reasons["no_evidence"] += 1
-            else:
-                unknown_reasons["evidence_unmatched"] += 1
-            transcript_id = str(row.get("transcript_id"))
-            turns[transcript_id] = {
-                "transcript_id": transcript_id,
-                "speech_stopped_at": speech_stopped_at,
-                "final_at": at,
-                "tools": [],
-                "outcome": "pending",
-                "llm_count": 0,
-                "llm_ms": 0.0,
-                "recall_count": 0,
-                "recall_ms": 0.0,
-                "incomplete": 0,
-                "sentence_count": 0,
-                "streamed": False,
-            }
-            speech_stopped_at = None
-        elif event == "agent_started":
-            active = _turn_for(turns, row)
-            if active is not None:
-                active["agent_at"] = at
-        elif event == "request_started":
-            if row.get("source") == "llm" or _is_prefetch(row):
-                request_id = row.get("request_id")
-                if isinstance(request_id, str):
-                    pending[request_id] = row.get("transcript_id")
-        elif event in ("request_finished", "request_failed"):
-            if row.get("source") == "llm":
-                request_id = row.get("request_id")
-                if isinstance(request_id, str):
-                    pending.pop(request_id, None)
-                turn = _transcript_turn(turns, row, excluded)
-                if turn is not None:
-                    turn["llm_count"] += 1
-                    _add_duration(turn, "llm_ms", row.get("duration_ms"), excluded)
-            elif _is_prefetch(row):
-                request_id = row.get("request_id")
-                if isinstance(request_id, str):
-                    pending.pop(request_id, None)
-                turn = _transcript_turn(turns, row, excluded)
-                if turn is not None:
-                    turn["recall_count"] += 1
-                    _add_duration(turn, "recall_ms", row.get("duration_ms"), excluded)
-        elif event == "tool_started":
-            request_id = row.get("request_id")
-            if isinstance(request_id, str):
-                pending[request_id] = row.get("transcript_id")
-        elif event in ("tool_finished", "tool_failed"):
-            name = str(row.get("tool"))
-            outcome = "finished" if event == "tool_finished" else "failed"
-            tools.setdefault(name, Counter())[outcome] += 1
-            request_id = row.get("request_id")
-            if isinstance(request_id, str):
-                pending.pop(request_id, None)
-            tool_transcript = row.get("transcript_id")
-            if isinstance(tool_transcript, str):
-                turn = turns.get(tool_transcript)
-                if turn is None:
-                    excluded["unknown_transcript"] += 1
-                else:
-                    turn["tools"].append(name)
-                    if name == "recall_meeting_context":
-                        turn["recall_count"] += 1
-                        _add_duration(turn, "recall_ms", row.get("duration_ms"), excluded)
-            else:
-                excluded["missing_transcript"] += 1
-                if active is not None:
-                    active["tools"].append(name)
-        elif event in _MEET_ACTION_EVENTS:
-            _record_meet_action(meet_actions, row, excluded)
-        elif event == "agent_finished":
-            replying = _turn_for(turns, row)
-            if replying is not None:
-                replying["reply_at"] = at
-                replying["outcome"] = "silent"
-        elif event in ("agent_cancelled", "agent_failed"):
-            if event == "agent_cancelled":
-                cancel_completed += 1
-            turn = _turn_for(turns, row)
-            if turn is not None:
-                turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
-        elif event == "agent_cancel_requested":
-            cancel_requested += 1
-        elif event == "answer_text_emitted":
-            turn = _transcript_turn(turns, row, excluded)
-            if turn is not None:
-                turn["streamed"] = True
-                if at is not None and turn.get("first_text_at") is None:
-                    turn["first_text_at"] = at
-        elif event == "answer_sentence_emitted":
-            turn = _transcript_turn(turns, row, excluded)
-            if turn is not None:
-                turn["streamed"] = True
-                if at is not None and turn.get("first_sentence_at") is None:
-                    turn["first_sentence_at"] = at
-                turn["sentence_count"] += 1
-        elif event == "playback_started":
-            speak_started_at = at
-            if replying is not None:
-                replying.setdefault("speak_at", at)
-        elif event == "synthesis_started":
-            request_id = row.get("request_id")
-            if isinstance(request_id, str):
-                linked = row.get("transcript_id")
-                if isinstance(linked, str) and linked in turns:
-                    if synthesis_turns.get(request_id, linked) != linked:
-                        synthesis_turns[request_id] = None
-                    else:
-                        synthesis_turns[request_id] = linked
-                else:
-                    if isinstance(linked, str):
-                        excluded["unknown_transcript"] += 1
-                    if request_id in synthesis_turns:
-                        synthesis_turns[request_id] = None
-                    else:
-                        synthesis_turns[request_id] = (
-                            replying["transcript_id"] if replying is not None else None
-                        )
-        elif event == "synthesis_pcm_emitted":
-            turn = _synthesis_turn(turns, synthesis_turns, row, excluded)
-            if turn is not None and at is not None:
-                turn.setdefault("first_pcm_at", at)
-        elif event == "synthesis_finished":
-            if not isinstance(row.get("request_id"), str):
-                if replying is not None and "speak_at" in replying:
-                    pcm_at = _first_pcm_at(row, at, excluded)
-                    if pcm_at is not None:
-                        replying.setdefault("first_pcm_at", pcm_at)
-            else:
-                turn = _synthesis_turn(turns, synthesis_turns, row, excluded)
-                if turn is not None:
-                    pcm_at = _first_pcm_at(row, at, excluded)
-                    if pcm_at is not None:
-                        turn.setdefault("first_pcm_at", pcm_at)
-        elif event == "playback_finished":
-            replies["spoken"] += 1
-            replies["trailing_questions"] += row.get("ends_with_question") is True
-            if replying is not None:
-                replying["outcome"] = "spoken"
-            replying = None
-        elif event == "playback_dropped":
-            replies["interrupted"] += 1
-            if (
-                row.get("detail") == "interrupted"
-                and at is not None
-                and speech_started_at is not None
-                and speak_started_at is not None
-                and speech_started_at >= speak_started_at
-            ):
-                interruption_seconds.append((at - speech_started_at).total_seconds())
-            if replying is not None:
-                replying["outcome"] = "interrupted"
-            replying = None
-        elif event in ("memory_episode_ingested", "memory_episode_failed"):
-            episodes.append(row)
-        elif event == "memory_ingest_finished":
-            raw_completed = row.get("completed")
-            ingest_runs.append(
-                (
-                    bool(raw_completed) if isinstance(raw_completed, bool) else None,
-                    ingest_fault_pending,
-                )
+    milestones: dict[str, dict[str, Any]] = field(default_factory=dict)
+    cancel_requested: int = 0
+    cancel_completed: int = 0
+    ingest_runs: list[tuple[bool | None, bool]] = field(default_factory=list)
+    ingest_fault_pending: bool = False
+    utterances: int = 0
+    attributed: int = 0
+    unknown_reasons: Counter[str] = field(default_factory=Counter)
+    policy_actions: Counter[str] = field(default_factory=Counter)
+    policy_reasons: Counter[str] = field(default_factory=Counter)
+    observer_methods: Counter[str] = field(default_factory=Counter)
+    order_inversions: int = 0
+    drain_gaps: int = 0
+    tap_slot_rescues: int = 0
+    tap_slot_drops: int = 0
+    turn_interims: list[float] = field(default_factory=list)
+    turn_delays: list[float] = field(default_factory=list)
+    capture_engines: Counter[str] = field(default_factory=Counter)
+    starts: int = 0
+    outcomes: Counter[str] = field(default_factory=Counter)
+    reasons: Counter[str] = field(default_factory=Counter)
+    diff_classes: Counter[str] = field(default_factory=Counter)
+    norm_dist_buckets: Counter[str] = field(default_factory=Counter)
+    overlaps: list[float] = field(default_factory=list)
+    visual_frames: int = 0
+    visual_captioned: int = 0
+    visual_cost_usd: float = 0.0
+    visual_capture_ms: list[float] = field(default_factory=list)
+
+
+def _parse_row_at(row: dict[str, Any]) -> datetime | None:
+    if "at" not in row:
+        return None
+    try:
+        return datetime.fromisoformat(row["at"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_speech_event(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "speech_stopped":
+        state.speech_stopped_at = at
+    elif event == "speech_started":
+        state.speech_started_at = at
+    else:
+        state.barge_in_triggers[str(row.get("trigger"))] += 1
+
+
+def _apply_transcript_finalized(
+    state: _ReportState, row: dict[str, Any], at: datetime | None
+) -> None:
+    state.utterances += 1
+    speaker_id = row.get("participant_id")
+    speaker_reason = row.get("speaker_reason")
+    if isinstance(speaker_id, str) and speaker_id != "unknown":
+        state.attributed += 1
+    elif isinstance(speaker_reason, str):
+        state.unknown_reasons[speaker_reason] += 1
+    elif row.get("speaker_evidence_id") is None:
+        state.unknown_reasons["no_evidence"] += 1
+    else:
+        state.unknown_reasons["evidence_unmatched"] += 1
+    transcript_id = str(row.get("transcript_id"))
+    state.turns[transcript_id] = {
+        "transcript_id": transcript_id,
+        "speech_stopped_at": state.speech_stopped_at,
+        "final_at": at,
+        "tools": [],
+        "outcome": "pending",
+        "llm_count": 0,
+        "llm_ms": 0.0,
+        "recall_count": 0,
+        "recall_ms": 0.0,
+        "incomplete": 0,
+        "sentence_count": 0,
+        "streamed": False,
+    }
+    state.speech_stopped_at = None
+
+
+def _apply_agent_event(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "agent_started":
+        state.active = _turn_for(state.turns, row)
+        if state.active is not None:
+            state.active["agent_at"] = at
+    elif event == "agent_finished":
+        state.replying = _turn_for(state.turns, row)
+        if state.replying is not None:
+            state.replying["reply_at"] = at
+            state.replying["outcome"] = "silent"
+    elif event == "agent_cancel_requested":
+        state.cancel_requested += 1
+    else:
+        if event == "agent_cancelled":
+            state.cancel_completed += 1
+        turn = _turn_for(state.turns, row)
+        if turn is not None:
+            turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
+
+
+def _apply_request_started(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    if row.get("source") == "llm" or _is_prefetch(row):
+        request_id = row.get("request_id")
+        if isinstance(request_id, str):
+            state.pending[request_id] = row.get("transcript_id")
+
+
+def _apply_request_done(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    if row.get("source") == "llm":
+        request_id = row.get("request_id")
+        if isinstance(request_id, str):
+            state.pending.pop(request_id, None)
+        turn = _transcript_turn(state.turns, row, state.excluded)
+        if turn is not None:
+            turn["llm_count"] += 1
+            _add_duration(turn, "llm_ms", row.get("duration_ms"), state.excluded)
+    elif _is_prefetch(row):
+        request_id = row.get("request_id")
+        if isinstance(request_id, str):
+            state.pending.pop(request_id, None)
+        turn = _transcript_turn(state.turns, row, state.excluded)
+        if turn is not None:
+            turn["recall_count"] += 1
+            _add_duration(turn, "recall_ms", row.get("duration_ms"), state.excluded)
+
+
+def _apply_tool_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    if row.get("event") == "tool_started":
+        request_id = row.get("request_id")
+        if isinstance(request_id, str):
+            state.pending[request_id] = row.get("transcript_id")
+        return
+    name = str(row.get("tool"))
+    outcome = "finished" if row.get("event") == "tool_finished" else "failed"
+    state.tools.setdefault(name, Counter())[outcome] += 1
+    request_id = row.get("request_id")
+    if isinstance(request_id, str):
+        state.pending.pop(request_id, None)
+    tool_transcript = row.get("transcript_id")
+    if isinstance(tool_transcript, str):
+        turn = state.turns.get(tool_transcript)
+        if turn is None:
+            state.excluded["unknown_transcript"] += 1
+        else:
+            turn["tools"].append(name)
+            if name == "recall_meeting_context":
+                turn["recall_count"] += 1
+                _add_duration(turn, "recall_ms", row.get("duration_ms"), state.excluded)
+    else:
+        state.excluded["missing_transcript"] += 1
+        if state.active is not None:
+            state.active["tools"].append(name)
+
+
+def _apply_answer_emitted(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    turn = _transcript_turn(state.turns, row, state.excluded)
+    if turn is None:
+        return
+    turn["streamed"] = True
+    if row.get("event") == "answer_sentence_emitted":
+        if at is not None and turn.get("first_sentence_at") is None:
+            turn["first_sentence_at"] = at
+        turn["sentence_count"] += 1
+    elif at is not None and turn.get("first_text_at") is None:
+        turn["first_text_at"] = at
+
+
+def _playback_drop_delay(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    if (
+        row.get("detail") == "interrupted"
+        and at is not None
+        and state.speech_started_at is not None
+        and state.speak_started_at is not None
+        and state.speech_started_at >= state.speak_started_at
+    ):
+        state.interruption_seconds.append((at - state.speech_started_at).total_seconds())
+
+
+def _apply_playback_event(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "playback_started":
+        state.speak_started_at = at
+        if state.replying is not None:
+            state.replying.setdefault("speak_at", at)
+    elif event == "playback_finished":
+        state.replies["spoken"] += 1
+        state.replies["trailing_questions"] += row.get("ends_with_question") is True
+        if state.replying is not None:
+            state.replying["outcome"] = "spoken"
+        state.replying = None
+    else:
+        state.replies["interrupted"] += 1
+        _playback_drop_delay(state, row, at)
+        if state.replying is not None:
+            state.replying["outcome"] = "interrupted"
+        state.replying = None
+
+
+def _link_synthesis_turn(state: _ReportState, row: dict[str, Any]) -> None:
+    request_id = row.get("request_id")
+    if not isinstance(request_id, str):
+        return
+    linked = row.get("transcript_id")
+    if isinstance(linked, str) and linked in state.turns:
+        if state.synthesis_turns.get(request_id, linked) != linked:
+            state.synthesis_turns[request_id] = None
+        else:
+            state.synthesis_turns[request_id] = linked
+    else:
+        if isinstance(linked, str):
+            state.excluded["unknown_transcript"] += 1
+        if request_id in state.synthesis_turns:
+            state.synthesis_turns[request_id] = None
+        else:
+            state.synthesis_turns[request_id] = (
+                state.replying["transcript_id"] if state.replying is not None else None
             )
-            ingest_fault_pending = False
-        elif event == "fault_recorded":
-            faults[(str(row.get("source")), str(row.get("kind")))] += 1
-            if row.get("source") == "memory_ingest":
-                ingest_fault_pending = True
-        elif event == "session_finished":
-            result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
-        elif event == "policy_decided":
-            policy_actions[str(row.get("action"))] += 1
-            policy_reasons[str(row.get("reason"))] += 1
-        elif event == "participant_observer_started":
-            observer_methods[str(row.get("method"))] += 1
-        elif event == "order_inversion_detected":
-            order_inversions += 1
-        elif event == "drain_gap_detected":
-            drain_gaps += 1
-        elif event == "tap_slot_rescued":
-            tap_slot_rescues += 1
-        elif event == "tap_slot_dropped":
-            tap_slot_drops += 1
-        elif event == "stt_turn_recorded":
-            interims = row.get("interims")
-            if isinstance(interims, bool) or not isinstance(interims, (int, float)):
-                continue
-            turn_interims.append(float(interims))
-            delay = row.get("first_interim_to_final_ms")
-            if isinstance(delay, bool) or not isinstance(delay, (int, float)):
-                continue
-            turn_delays.append(float(delay))
-        elif event == "capture_polled":
-            slots = row.get("slots")
-            if not isinstance(slots, dict):
-                continue
-            for slot in slots.values():
-                engine = slot.get("engine") if isinstance(slot, dict) else None
-                if isinstance(engine, str) and engine:
-                    capture_engines[engine] += 1
-        elif event == "visual_captured":
-            visual_frames += 1
-            duration = row.get("duration_ms")
-            if (
-                isinstance(duration, (int, float))
-                and not isinstance(duration, bool)
-                and math.isfinite(duration)
-                and duration >= 0
-            ):
-                visual_capture_ms.append(float(duration))
-        elif event == "visual_captioned":
-            visual_captioned += 1
-            cost = row.get("cost_usd")
-            if (
-                isinstance(cost, (int, float))
-                and not isinstance(cost, bool)
-                and math.isfinite(cost)
-                and cost >= 0
-            ):
-                visual_cost_usd += float(cost)
-        elif event == "pregeneration_started":
-            starts += 1
-        elif event == "pregeneration_finished":
-            outcome = str(row.get("outcome"))
-            outcomes[outcome] += 1
-            if outcome == "discarded":
-                reasons[str(row.get("reason"))] += 1
-            if "diff_class" in row:
-                diff_classes[str(row.get("diff_class"))] += 1
-            if "norm_dist_bucket" in row:
-                norm_dist_buckets[str(row.get("norm_dist_bucket"))] += 1
-            if outcome == "adopted":
-                duration = row.get("duration_ms")
-                if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-                    overlaps.append(float(duration) / 1000)
-    for transcript_id in pending.values():
-        if isinstance(transcript_id, str) and transcript_id in turns:
-            turns[transcript_id]["incomplete"] += 1
+
+
+def _apply_synthesis_done(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    if not isinstance(row.get("request_id"), str):
+        if state.replying is not None and "speak_at" in state.replying:
+            pcm_at = _first_pcm_at(row, at, state.excluded)
+            if pcm_at is not None:
+                state.replying.setdefault("first_pcm_at", pcm_at)
+    else:
+        turn = _synthesis_turn(state.turns, state.synthesis_turns, row, state.excluded)
+        if turn is not None:
+            pcm_at = _first_pcm_at(row, at, state.excluded)
+            if pcm_at is not None:
+                turn.setdefault("first_pcm_at", pcm_at)
+
+
+def _apply_synthesis_event(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "synthesis_started":
+        _link_synthesis_turn(state, row)
+    elif event == "synthesis_pcm_emitted":
+        turn = _synthesis_turn(state.turns, state.synthesis_turns, row, state.excluded)
+        if turn is not None and at is not None:
+            turn.setdefault("first_pcm_at", at)
+    else:
+        _apply_synthesis_done(state, row, at)
+
+
+def _apply_memory_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    event = row.get("event")
+    if event in ("memory_episode_ingested", "memory_episode_failed"):
+        state.episodes.append(row)
+    elif event == "memory_ingest_finished":
+        raw_completed = row.get("completed")
+        state.ingest_runs.append(
+            (
+                bool(raw_completed) if isinstance(raw_completed, bool) else None,
+                state.ingest_fault_pending,
+            )
+        )
+        state.ingest_fault_pending = False
+    else:
+        state.faults[(str(row.get("source")), str(row.get("kind")))] += 1
+        if row.get("source") == "memory_ingest":
+            state.ingest_fault_pending = True
+
+
+def _apply_counter_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "order_inversion_detected":
+        state.order_inversions += 1
+    elif event == "drain_gap_detected":
+        state.drain_gaps += 1
+    elif event == "tap_slot_rescued":
+        state.tap_slot_rescues += 1
+    elif event == "tap_slot_dropped":
+        state.tap_slot_drops += 1
+    else:
+        state.starts += 1
+
+
+def _apply_session_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    event = row.get("event")
+    if event == "session_finished":
+        state.result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
+    elif event == "policy_decided":
+        state.policy_actions[str(row.get("action"))] += 1
+        state.policy_reasons[str(row.get("reason"))] += 1
+    else:
+        state.observer_methods[str(row.get("method"))] += 1
+
+
+def _apply_stt_turn(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    interims = row.get("interims")
+    if isinstance(interims, bool) or not isinstance(interims, (int, float)):
+        return
+    state.turn_interims.append(float(interims))
+    delay = row.get("first_interim_to_final_ms")
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)):
+        return
+    state.turn_delays.append(float(delay))
+
+
+def _apply_capture_polled(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    slots = row.get("slots")
+    if not isinstance(slots, dict):
+        return
+    for slot in slots.values():
+        engine = slot.get("engine") if isinstance(slot, dict) else None
+        if isinstance(engine, str) and engine:
+            state.capture_engines[engine] += 1
+
+
+def _apply_visual_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    if row.get("event") == "visual_captured":
+        state.visual_frames += 1
+        duration = row.get("duration_ms")
+        if (
+            isinstance(duration, (int, float))
+            and not isinstance(duration, bool)
+            and math.isfinite(duration)
+            and duration >= 0
+        ):
+            state.visual_capture_ms.append(float(duration))
+    else:
+        state.visual_captioned += 1
+        cost = row.get("cost_usd")
+        if (
+            isinstance(cost, (int, float))
+            and not isinstance(cost, bool)
+            and math.isfinite(cost)
+            and cost >= 0
+        ):
+            state.visual_cost_usd += float(cost)
+
+
+def _apply_pregeneration_finished(
+    state: _ReportState, row: dict[str, Any], _at: datetime | None
+) -> None:
+    outcome = str(row.get("outcome"))
+    state.outcomes[outcome] += 1
+    if outcome == "discarded":
+        state.reasons[str(row.get("reason"))] += 1
+    if "diff_class" in row:
+        state.diff_classes[str(row.get("diff_class"))] += 1
+    if "norm_dist_bucket" in row:
+        state.norm_dist_buckets[str(row.get("norm_dist_bucket"))] += 1
+    if outcome == "adopted":
+        duration = row.get("duration_ms")
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+            state.overlaps.append(float(duration) / 1000)
+
+
+def _apply_meet_action(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    _record_meet_action(state.meet_actions, row, state.excluded)
+
+
+_RowHandler = Callable[[_ReportState, dict[str, Any], datetime | None], None]
+
+_ROW_HANDLERS: dict[str, _RowHandler] = {
+    "speech_stopped": _apply_speech_event,
+    "speech_started": _apply_speech_event,
+    "barge_in_detected": _apply_speech_event,
+    "transcript_finalized": _apply_transcript_finalized,
+    "agent_started": _apply_agent_event,
+    "agent_finished": _apply_agent_event,
+    "agent_cancelled": _apply_agent_event,
+    "agent_failed": _apply_agent_event,
+    "agent_cancel_requested": _apply_agent_event,
+    "request_started": _apply_request_started,
+    "request_finished": _apply_request_done,
+    "request_failed": _apply_request_done,
+    "tool_started": _apply_tool_event,
+    "tool_finished": _apply_tool_event,
+    "tool_failed": _apply_tool_event,
+    "answer_text_emitted": _apply_answer_emitted,
+    "answer_sentence_emitted": _apply_answer_emitted,
+    "playback_started": _apply_playback_event,
+    "playback_finished": _apply_playback_event,
+    "playback_dropped": _apply_playback_event,
+    "synthesis_started": _apply_synthesis_event,
+    "synthesis_pcm_emitted": _apply_synthesis_event,
+    "synthesis_finished": _apply_synthesis_event,
+    "memory_episode_ingested": _apply_memory_event,
+    "memory_episode_failed": _apply_memory_event,
+    "memory_ingest_finished": _apply_memory_event,
+    "fault_recorded": _apply_memory_event,
+    "session_finished": _apply_session_event,
+    "policy_decided": _apply_session_event,
+    "participant_observer_started": _apply_session_event,
+    "order_inversion_detected": _apply_counter_event,
+    "drain_gap_detected": _apply_counter_event,
+    "tap_slot_rescued": _apply_counter_event,
+    "tap_slot_dropped": _apply_counter_event,
+    "stt_turn_recorded": _apply_stt_turn,
+    "capture_polled": _apply_capture_polled,
+    "visual_captured": _apply_visual_event,
+    "visual_captioned": _apply_visual_event,
+    "pregeneration_started": _apply_counter_event,
+    "pregeneration_finished": _apply_pregeneration_finished,
+}
+for _meet_event in _MEET_ACTION_EVENTS:
+    _ROW_HANDLERS[_meet_event] = _apply_meet_action
+
+
+def _close_pending(state: _ReportState) -> None:
+    for transcript_id in state.pending.values():
+        if isinstance(transcript_id, str) and transcript_id in state.turns:
+            state.turns[transcript_id]["incomplete"] += 1
         elif isinstance(transcript_id, str):
-            excluded["unknown_transcript"] += 1
+            state.excluded["unknown_transcript"] += 1
         else:
-            excluded["missing_transcript"] += 1
-    turn_reports = [_turn_report(turn, excluded) for turn in turns.values()]
+            state.excluded["missing_transcript"] += 1
+
+
+def _session_outcome(result: dict[str, Any] | None) -> str:
     if result is None or result.get("exit_code") is None:
-        session_outcome = "unknown"
-    elif result.get("exit_code") == 0:
-        session_outcome = "completed"
-    else:
-        session_outcome = "failed"
+        return "unknown"
+    if result.get("exit_code") == 0:
+        return "completed"
+    return "failed"
+
+
+def _ingestion_outcome(ingest_runs: list[tuple[bool | None, bool]]) -> str:
     if not ingest_runs:
-        ingestion_outcome = "unknown"
-    else:
-        run_completed, run_faulted = ingest_runs[-1]
-        if run_completed is None:
-            ingestion_outcome = "unknown"
-        elif run_completed:
-            ingestion_outcome = "completed"
-        elif run_faulted:
-            ingestion_outcome = "failed"
-        else:
-            ingestion_outcome = "interrupted"
+        return "unknown"
+    run_completed, run_faulted = ingest_runs[-1]
+    if run_completed is None:
+        return "unknown"
+    if run_completed:
+        return "completed"
+    if run_faulted:
+        return "failed"
+    return "interrupted"
+
+
+def _ingestion_section(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "startup": _startup_report(milestones),
-        "session_outcome": session_outcome,
-        "ingestion_outcome": ingestion_outcome,
-        "cancellation": {"requested": cancel_requested, "completed": cancel_completed},
+        "episodes": len(episodes),
+        "facts": sum(int(episode.get("facts") or 0) for episode in episodes),
+        "empty": sum(
+            episode["event"] == "memory_episode_ingested" and not episode.get("facts")
+            for episode in episodes
+        ),
+        "failed": sum(episode["event"] == "memory_episode_failed" for episode in episodes),
+        "duration_seconds": summarize(
+            [float(episode.get("duration_ms") or 0) / 1000 for episode in episodes]
+        ),
+    }
+
+
+def _assemble_report(state: _ReportState, turn_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "startup": _startup_report(state.milestones),
+        "session_outcome": _session_outcome(state.result),
+        "ingestion_outcome": _ingestion_outcome(state.ingest_runs),
+        "cancellation": {
+            "requested": state.cancel_requested,
+            "completed": state.cancel_completed,
+        },
         "participation": {
-            "utterances_recorded": utterances,
-            "attributed_utterances": attributed,
-            "attribution_coverage": round(attributed / utterances, 3) if utterances else None,
-            "unknown_reasons": dict(unknown_reasons),
+            "utterances_recorded": state.utterances,
+            "attributed_utterances": state.attributed,
+            "attribution_coverage": round(state.attributed / state.utterances, 3)
+            if state.utterances
+            else None,
+            "unknown_reasons": dict(state.unknown_reasons),
             "answers": sum(1 for turn in turn_reports if turn["llm_count"] > 0),
-            "policy": dict(policy_actions),
-            "policy_reasons": dict(policy_reasons),
-            "observer_methods": dict(observer_methods),
+            "policy": dict(state.policy_actions),
+            "policy_reasons": dict(state.policy_reasons),
+            "observer_methods": dict(state.observer_methods),
         },
         "turns": turn_reports,
         "latency": {
             stage: summarize([turn[stage] for turn in turn_reports if turn[stage] is not None])
             for stage in LATENCY_STAGES
         },
-        "evidence": {"excluded": dict(excluded)},
-        "replies": {key: replies[key] for key in ("spoken", "interrupted", "trailing_questions")},
-        "tools": {name: dict(counts) for name, counts in tools.items()},
-        "meet_actions": _meet_actions_report(meet_actions),
+        "evidence": {"excluded": dict(state.excluded)},
+        "replies": {
+            key: state.replies[key] for key in ("spoken", "interrupted", "trailing_questions")
+        },
+        "tools": {name: dict(counts) for name, counts in state.tools.items()},
+        "meet_actions": _meet_actions_report(state.meet_actions),
         "interruptions": {
-            "triggers": dict(barge_in_triggers),
-            "speech_to_stop_seconds": summarize(interruption_seconds),
+            "triggers": dict(state.barge_in_triggers),
+            "speech_to_stop_seconds": summarize(state.interruption_seconds),
         },
         "stt_quality": {
-            "order_inversions": order_inversions,
-            "drain_gaps": drain_gaps,
-            "tap_slot_rescues": tap_slot_rescues,
-            "tap_slot_drops": tap_slot_drops,
-            "turn_interims": summarize(turn_interims),
-            "first_interim_to_final_ms": summarize(turn_delays),
-            "capture_engines": dict(capture_engines),
+            "order_inversions": state.order_inversions,
+            "drain_gaps": state.drain_gaps,
+            "tap_slot_rescues": state.tap_slot_rescues,
+            "tap_slot_drops": state.tap_slot_drops,
+            "turn_interims": summarize(state.turn_interims),
+            "first_interim_to_final_ms": summarize(state.turn_delays),
+            "capture_engines": dict(state.capture_engines),
         },
-        "ingestion": {
-            "episodes": len(episodes),
-            "facts": sum(int(episode.get("facts") or 0) for episode in episodes),
-            "empty": sum(
-                episode["event"] == "memory_episode_ingested" and not episode.get("facts")
-                for episode in episodes
-            ),
-            "failed": sum(episode["event"] == "memory_episode_failed" for episode in episodes),
-            "duration_seconds": summarize(
-                [float(episode.get("duration_ms") or 0) / 1000 for episode in episodes]
-            ),
-        },
+        "ingestion": _ingestion_section(state.episodes),
         "faults": [
             {"source": source, "kind": kind, "count": count}
-            for (source, kind), count in faults.items()
+            for (source, kind), count in state.faults.items()
         ],
         "pregeneration": {
-            "starts": starts,
-            "outcomes": dict(outcomes),
-            "reasons": dict(reasons),
-            "diff_classes": dict(diff_classes),
-            "norm_dist_buckets": dict(norm_dist_buckets),
-            "adopted_overlap_seconds": summarize(overlaps),
+            "starts": state.starts,
+            "outcomes": dict(state.outcomes),
+            "reasons": dict(state.reasons),
+            "diff_classes": dict(state.diff_classes),
+            "norm_dist_buckets": dict(state.norm_dist_buckets),
+            "adopted_overlap_seconds": summarize(state.overlaps),
         },
         "visual": {
-            "frames": visual_frames,
-            "captioned": visual_captioned,
-            "cost_usd": round(visual_cost_usd, 6),
-            "p95_ms": summarize(visual_capture_ms)["p95"],
+            "frames": state.visual_frames,
+            "captioned": state.visual_captioned,
+            "cost_usd": round(state.visual_cost_usd, 6),
+            "p95_ms": summarize(state.visual_capture_ms)["p95"],
         },
-        "result": result,
+        "result": state.result,
     }
+
+
+def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    state = _ReportState()
+    for row in rows:
+        event = row.get("event")
+        at = _parse_row_at(row)
+        if event in STARTUP_MILESTONES and row.get("source") == "runtime":
+            state.milestones.setdefault(str(event), {**row, "at": at})
+        handler = _ROW_HANDLERS.get(event) if event is not None else None
+        if handler is not None:
+            handler(state, row, at)
+    _close_pending(state)
+    turn_reports = [_turn_report(turn, state.excluded) for turn in state.turns.values()]
+    return _assemble_report(state, turn_reports)
 
 
 def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -548,13 +699,13 @@ def _transcript_turn(
     return turn
 
 
-def _record_meet_action(
+def _meet_entry(
     meet: dict[str, dict[str, Any]], row: dict[str, Any], excluded: Counter[str]
-) -> None:
+) -> dict[str, Any] | None:
     action_id = row.get("action_id")
     if not isinstance(action_id, str) or not action_id:
         excluded["missing_action_id"] += 1
-        return
+        return None
     entry = meet.get(action_id)
     if entry is None:
         entry = {
@@ -569,23 +720,22 @@ def _record_meet_action(
         meet[action_id] = entry
     if entry["outcome"] is not None:
         excluded["duplicate"] += 1
-        return
-    action = row.get("action")
-    if entry["action"] is None and isinstance(action, str) and action:
-        entry["action"] = action
+        return None
+    return entry
+
+
+def _merge_meet_attempts(entry: dict[str, Any], row: dict[str, Any]) -> None:
     for key in ("attempt", "attempts"):
         value = row.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
         if math.isfinite(value) and value >= 1 and value > entry["attempts"]:
             entry["attempts"] = int(value)
-    event = row.get("event")
-    if event == "meet_action_observed":
-        entry["observed"] = True
-        return
-    outcome = _MEET_ACTION_TERMINAL.get(event) if isinstance(event, str) else None
-    if outcome is None:
-        return
+
+
+def _finish_meet_entry(
+    entry: dict[str, Any], outcome: str, row: dict[str, Any], excluded: Counter[str]
+) -> None:
     entry["outcome"] = outcome
     reason = row.get("reason")
     entry["reason"] = reason if isinstance(reason, str) else None
@@ -600,6 +750,26 @@ def _record_meet_action(
             entry["duration_ms"] = duration
     if outcome == "finished" and row.get("observed") and not entry["observed"]:
         excluded["unobserved_finish"] += 1
+
+
+def _record_meet_action(
+    meet: dict[str, dict[str, Any]], row: dict[str, Any], excluded: Counter[str]
+) -> None:
+    entry = _meet_entry(meet, row, excluded)
+    if entry is None:
+        return
+    action = row.get("action")
+    if entry["action"] is None and isinstance(action, str) and action:
+        entry["action"] = action
+    _merge_meet_attempts(entry, row)
+    event = row.get("event")
+    if event == "meet_action_observed":
+        entry["observed"] = True
+        return
+    outcome = _MEET_ACTION_TERMINAL.get(event) if isinstance(event, str) else None
+    if outcome is None:
+        return
+    _finish_meet_entry(entry, outcome, row, excluded)
 
 
 def _meet_actions_report(meet: dict[str, dict[str, Any]]) -> dict[str, Any]:

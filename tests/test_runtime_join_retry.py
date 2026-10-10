@@ -2,7 +2,12 @@ import pytest
 
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import JoinResult
-from fakeyou.orchestration.runtime import run_join_with_retry, run_meeting_session
+from fakeyou.orchestration.runtime import (
+    JoinRetryPolicy,
+    SessionWiring,
+    run_join_with_retry,
+    run_meeting_session,
+)
 from tests.fakes import (
     ENDED,
     IN_CALL,
@@ -30,13 +35,10 @@ def _scripted(statuses):
 async def _retry(attempt, journal, clock, should_stop, rng, max_attempts=3, base=2.0, cap=30.0):
     return await run_join_with_retry(
         attempt,
-        max_attempts=max_attempts,
-        base_seconds=base,
-        cap_seconds=cap,
+        policy=JoinRetryPolicy(max_attempts, base, cap, rng),
         sleep=clock.sleep,
         record=journal.record,
         should_stop=should_stop,
-        rng=rng,
     )
 
 
@@ -115,13 +117,10 @@ async def test_join_retry_stop_during_backoff_aborts() -> None:
 
     result, attempts = await run_join_with_retry(
         attempt,
-        max_attempts=3,
-        base_seconds=2.0,
-        cap_seconds=30.0,
+        policy=JoinRetryPolicy(3, 2.0, 30.0, lambda low, high: 1.0),
         sleep=sleep_and_stop,
         record=journal.record,
         should_stop=lambda: stopped,
-        rng=lambda low, high: 1.0,
     )
 
     assert result.status == "aborted"
@@ -161,9 +160,7 @@ async def test_join_retry_default_jitter_stays_within_bound() -> None:
 
     result, attempts = await run_join_with_retry(
         attempt,
-        max_attempts=2,
-        base_seconds=2.0,
-        cap_seconds=30.0,
+        policy=JoinRetryPolicy(2, 2.0, 30.0),
         sleep=clock.sleep,
         record=journal.record,
         should_stop=lambda: False,
@@ -193,11 +190,13 @@ async def test_worker_join_retries_timeout_then_admits() -> None:
 
     result = await run_meeting_session(
         config,
-        open_page=browser.open,
-        saver_factory=FakeSaverSession().factory,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        journal=journal,
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
     )
 
     assert result.terminal_reason == "ended_by_host"

@@ -14,7 +14,7 @@ from fakeyou.conversation.agent import (
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, require_url
 from fakeyou.foundation.invariants import IDENTIFIER_PATTERN
-from fakeyou.meet.browser import open_browser_tools
+from fakeyou.meet.browser import BrowserLaunch, open_browser_tools
 from fakeyou.memory.memory import (
     create_memory_tools,
     open_graphiti_memory,
@@ -47,10 +47,12 @@ async def chat(
             tools.extend(
                 await resources.enter_async_context(
                     open_browser_tools(
-                        headless=settings.browser.headless,
-                        license_key=settings.browser.license_key.get_secret_value()
-                        if settings.browser.license_key
-                        else None,
+                        launch=BrowserLaunch(
+                            headless=settings.browser.headless,
+                            license_key=settings.browser.license_key.get_secret_value()
+                            if settings.browser.license_key
+                            else None,
+                        )
                     )
                 )
             )

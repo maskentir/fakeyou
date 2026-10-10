@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from fakeyou.config.settings import DEFAULTS
@@ -139,6 +140,32 @@ def _safe_endpoint(endpoint: str) -> str:
         return trim_detail(endpoint) or "<invalid endpoint>"
 
 
+def _collect_results(
+    endpoints: tuple[str, ...], outcomes: list[Any], budget_seconds: float
+) -> list[ProbeResult]:
+    results: list[ProbeResult] = []
+    for endpoint, outcome in zip(endpoints, outcomes, strict=True):
+        if isinstance(outcome, ProbeResult):
+            results.append(outcome)
+        elif isinstance(outcome, asyncio.CancelledError):
+            results.append(
+                ProbeResult(
+                    host=endpoint,
+                    ok=False,
+                    latency_ms=budget_seconds * 1000,
+                    detail="budget exceeded",
+                )
+            )
+        elif isinstance(outcome, BaseException):
+            detail = _trim(f"{type(outcome).__name__}: {outcome}")
+            results.append(ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail=detail))
+        else:
+            results.append(
+                ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail="invalid probe result")
+            )
+    return results
+
+
 async def run_preflight(
     hosts: tuple[str, ...] | list[str],
     *,
@@ -176,24 +203,4 @@ async def run_preflight(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    results: list[ProbeResult] = []
-    for endpoint, outcome in zip(endpoints, outcomes, strict=True):
-        if isinstance(outcome, ProbeResult):
-            results.append(outcome)
-        elif isinstance(outcome, asyncio.CancelledError):
-            results.append(
-                ProbeResult(
-                    host=endpoint,
-                    ok=False,
-                    latency_ms=budget_seconds * 1000,
-                    detail="budget exceeded",
-                )
-            )
-        elif isinstance(outcome, BaseException):
-            detail = _trim(f"{type(outcome).__name__}: {outcome}")
-            results.append(ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail=detail))
-        else:
-            results.append(
-                ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail="invalid probe result")
-            )
-    return results
+    return _collect_results(endpoints, list(outcomes), budget_seconds)

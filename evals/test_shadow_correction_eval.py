@@ -20,7 +20,7 @@ from evals.test_memory_correction_eval import (
 )
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.memory.ingestion import ingest_corrections, ingest_meeting
+from fakeyou.memory.ingestion import MeetingScope, ingest_corrections, ingest_meeting
 from fakeyou.memory.memory import (
     create_memory_tools,
     ensure_indexes,
@@ -179,7 +179,7 @@ async def run_shadow_dual(
     )
     prod_before = await answer_queries(memory, queries, group_id=prod_group)
     corrected = await ingest_corrections(
-        memory, record_shadow, group_id=shadow_group, meeting_id=meeting_id
+        memory, record_shadow, MeetingScope(shadow_group, meeting_id)
     )
     shadow_answers = await answer_queries(memory, queries, group_id=shadow_group)
     prod_after = await answer_queries(memory, queries, group_id=prod_group)
@@ -247,7 +247,7 @@ async def test_shadow_dual_run_offline(tmp_path: Path, monkeypatch: pytest.Monke
     record_path = write_fixture_record(tmp_path, fixture)
     ingest_store = make_graphiti()
     corrected = await ingest_corrections(
-        ingest_store, record_path, group_id=shadow_group, meeting_id=meeting_id
+        ingest_store, record_path, MeetingScope(shadow_group, meeting_id)
     )
 
     assert corrected.completed is True

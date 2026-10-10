@@ -20,15 +20,16 @@ from fakeyou.config.settings import CompatibleReply, MemorySettings, Settings, r
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory import owner_notes
-from fakeyou.memory.ingestion import ingest_meeting
+from fakeyou.memory.ingestion import IngestScope, ingest_meeting
 from fakeyou.memory.memory import (
     create_graphiti_memory,
     create_memory_tools,
     forget_episode,
     forget_meeting,
 )
-from fakeyou.memory.owner_notes import read_note_states, remember_owner_note
+from fakeyou.memory.owner_notes import NoteIdentity, read_note_states, remember_owner_note
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import (
@@ -314,9 +315,20 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                 "journal": Journal(meeting_id, emit=lines.append),
             }
             options["faults"] = FaultReporter(journal=options["journal"])
-            first = await ingest_meeting(memory, load_meeting_record(record_path), **options)
+            scope = IngestScope(
+                options["group_id"],
+                options["meeting_id"],
+                options["twin_name"],
+                options["vocabulary"],
+            )
+            diagnostics = Diagnostics(options["faults"], options["journal"])
+            first = await ingest_meeting(
+                memory, load_meeting_record(record_path), scope, diagnostics=diagnostics
+            )
             ingested = True
-            again = await ingest_meeting(memory, load_meeting_record(record_path), **options)
+            again = await ingest_meeting(
+                memory, load_meeting_record(record_path), scope, diagnostics=diagnostics
+            )
             await memory.close()
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -436,7 +448,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
                 group_id=group_id,
                 text=f"Rani announced the Orchid{run} customer demo moves to Thursday morning.",
                 source_at=target_at,
-                note_id=target_id,
+                identity=NoteIdentity(target_id),
             )
             assert target.facts
             fix = await owner_notes.remember_owner_note(
@@ -444,8 +456,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
                 group_id=group_id,
                 text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
                 source_at=fix_at,
-                note_id=fix_id,
-                supersedes=target_id,
+                identity=NoteIdentity(fix_id, target_id),
             )
             assert fix.supersedes == str(target_id)
             again = await owner_notes.remember_owner_note(
@@ -453,8 +464,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
                 group_id=group_id,
                 text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
                 source_at=fix_at,
-                note_id=fix_id,
-                supersedes=target_id,
+                identity=NoteIdentity(fix_id, target_id),
             )
             assert again == fix
             episode = await EpisodicNode.get_by_uuid(memory.driver, str(fix_id))
@@ -471,8 +481,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
                 group_id=group_id,
                 text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
                 source_at=fix_at,
-                note_id=fix_id,
-                supersedes=target_id,
+                identity=NoteIdentity(fix_id, target_id),
             )
             assert reopened == fix
     except Exception as error:
@@ -519,7 +528,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                 memory,
                 group_id=comparison_id,
                 text="Rani announced the comparison team serves jasmine tea on Friday morning.",
-                note_id=comparison_note_id,
+                identity=NoteIdentity(comparison_note_id),
             )
             assert comparison_note.facts
             comparison_snapshot = await _group_node_count(memory, comparison_id)
@@ -528,7 +537,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                 group_id=group_id,
                 text=f"Rani announced that the {project} customer demo moves to Friday morning.",
                 source_at=old_source,
-                note_id=note_id,
+                identity=NoteIdentity(note_id),
             )
             assert first.source_at == old_source
             assert first.recorded_at >= old_source
@@ -555,12 +564,13 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                 ingested = await ingest_meeting(
                     memory,
                     load_meeting_record(record_path),
-                    group_id=group_id,
-                    meeting_id=meeting_id,
-                    twin_name="Trust Twin",
-                    vocabulary=(project,),
-                    journal=journal,
-                    faults=FaultReporter(journal=journal),
+                    IngestScope(
+                        group_id=group_id,
+                        meeting_id=meeting_id,
+                        twin_name="Trust Twin",
+                        vocabulary=(project,),
+                    ),
+                    diagnostics=Diagnostics(faults=FaultReporter(journal=journal), journal=journal),
                 )
             finally:
                 journal.close()
@@ -576,8 +586,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                 group_id=group_id,
                 text=f"Rani announced that the {project} customer demo moves to Monday morning.",
                 source_at=new_source,
-                note_id=correction_id,
-                supersedes=note_id,
+                identity=NoteIdentity(correction_id, note_id),
             )
             assert corrected.supersedes == str(note_id)
             assert corrected.source_at == new_source
@@ -599,8 +608,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path) -> No
                 memory,
                 group_id=group_id,
                 text=f"Rani announced that the {project} customer demo moves to Monday morning.",
-                note_id=correction_id,
-                supersedes=note_id,
+                identity=NoteIdentity(correction_id, note_id),
             )
             assert retried == corrected
             controls = await memory.driver.execute_query(

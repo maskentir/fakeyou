@@ -9,7 +9,7 @@ import struct
 import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -632,8 +632,12 @@ class SessionRun(dict[str, Any]):
             "detail": "ok",
         }
 
-    async def __call__(self, config: Any, **kwargs: Any) -> Any:
+    async def __call__(self, config: Any, wiring: Any = None, **kwargs: Any) -> Any:
         self["config"] = config
+        if is_dataclass(wiring):
+            unpacked = {field.name: getattr(wiring, field.name) for field in fields(wiring)}
+            unpacked.update(kwargs)
+            kwargs = unpacked
         self["kwargs"] = kwargs
         self.update(kwargs)
         if self.effect is not None:

@@ -8,9 +8,15 @@ import pytest
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.worker import worker_start, worker_status, worker_stop
 from fakeyou.config.settings import Settings
-from fakeyou.worker.worker_backend import WorkerStarted, WorkerState, WorkerStopped
+from fakeyou.worker.worker_backend import (
+    WorkerStarted,
+    WorkerStartRequest,
+    WorkerState,
+    WorkerStopped,
+)
 
 LINK = "https://meet.google.com/abc-defg-hij"
 
@@ -59,28 +65,38 @@ class FakeBackend:
         return WorkerIngest(meeting_id=meeting_id, status="completed")
 
 
-def start_arguments(**overrides: Any) -> dict[str, Any]:
+def start_request(**overrides: Any) -> WorkerStartRequest:
     values: dict[str, Any] = {
         "link": LINK,
         "twin_name": None,
-        "owner_id": None,
-        "twin_id": "twin-1",
         "meeting_id": "meeting-9",
         "lobby_timeout": None,
         "duration": None,
         "profile_dir": None,
         "headless": None,
-        "audio_enabled": True,
+        "audio": True,
         "initial_speech": None,
-        "conversation_enabled": True,
-        "persona_path": None,
+        "conversation": True,
         "brief_path": None,
         "memory": False,
         "wake_phrase": None,
         "barge_in": False,
     }
     values.update(overrides)
-    return values
+    identity = values.pop(
+        "identity",
+        OperatorIdentity(
+            values.pop("persona_path", None),
+            values.pop("owner_id", None),
+            values.pop("twin_id", "twin-1"),
+        ),
+    )
+    return WorkerStartRequest(
+        owner_id=identity.owner_id,
+        twin_id=identity.twin_id,
+        persona_path=identity.persona_path,
+        **values,
+    )
 
 
 def test_worker_start_maps_arguments_and_prints_ids(
@@ -88,7 +104,7 @@ def test_worker_start_maps_arguments_and_prints_ids(
 ) -> None:
     backend = FakeBackend()
 
-    worker_start(**start_arguments(), settings=settings, backend=backend)
+    worker_start(start_request(), settings=settings, backend=backend)
 
     [call] = backend.calls
     assert call[0] == "start"
@@ -107,7 +123,7 @@ def test_worker_start_requires_the_postgres_database_url(
     monkeypatch.delenv("FAKEYOU_COMPOSE_WORKER_DATABASE_URL", raising=False)
 
     with pytest.raises(FakeYouError, match="FAKEYOU_COMPOSE_WORKER_DATABASE_URL") as caught:
-        worker_start(**start_arguments(), settings=settings)
+        worker_start(start_request(), settings=settings)
 
     assert caught.value.code is ErrorCode.CONFIG_WORKER_DATABASE_URL_MISSING
 
@@ -150,7 +166,7 @@ def test_worker_commands_never_print_secrets(
     settings.database.url = SecretStr("postgresql://fakeyou:s3cret@localhost/fakeyou")
     backend = FakeBackend()
 
-    worker_start(**start_arguments(), settings=settings, backend=backend)
+    worker_start(start_request(), settings=settings, backend=backend)
     worker_status(meeting_id="meeting-9", settings=settings, backend=backend)
     worker_stop(meeting_id="meeting-9", timeout=30.0, settings=settings, backend=backend)
 
@@ -178,11 +194,13 @@ def test_worker_subcommands_dispatch_without_leaking_parser_state(
     cli_main.main()
 
     [call] = calls
-    assert call["link"] == LINK
-    assert call["meeting_id"] == "meeting-9"
-    assert call["audio_enabled"] is True
+    assert call["request"].link == LINK
+    assert call["request"].meeting_id == "meeting-9"
+    assert call["request"].audio is True
     assert "worker_command" not in call
     assert "command" not in call
+    assert "link" not in call
+    assert "identity" not in call
 
 
 def test_worker_status_accepts_an_optional_meeting_id() -> None:
@@ -202,9 +220,7 @@ def test_worker_ingest_prints_the_job_status(
 
     worker_ingest(
         meeting_id="meeting-9",
-        persona_path=Path("persona.json"),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(Path("persona.json"), None, None),
         settings=settings,
         backend=backend,
     )
@@ -242,9 +258,7 @@ def test_worker_ingest_exits_nonzero_unless_completed(
     with pytest.raises(SystemExit) as caught:
         worker_ingest(
             meeting_id="meeting-9",
-            persona_path=Path("persona.json"),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(Path("persona.json"), None, None),
             settings=settings,
             backend=backend,
         )

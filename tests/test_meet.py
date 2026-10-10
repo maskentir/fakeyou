@@ -2,6 +2,7 @@ import pytest
 
 from fakeyou.meet.meet import (
     GuestJoinRequest,
+    JoinPolling,
     click_when_ready,
     disable_meeting_camera,
     enable_meeting_microphone,
@@ -47,7 +48,9 @@ async def test_request_guest_join_admits_happy_path() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -61,7 +64,9 @@ async def test_request_guest_join_accepts_join_now_button() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -73,7 +78,9 @@ async def test_request_guest_join_reports_denial() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "denied"
@@ -86,7 +93,9 @@ async def test_request_guest_join_reports_platform_block() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "blocked"
@@ -100,8 +109,7 @@ async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -
     result = await request_guest_join(
         page,
         _request(captcha_grace_seconds=4.0, poll_interval_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "blocked"
@@ -114,7 +122,9 @@ async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -127,8 +137,7 @@ async def test_request_guest_join_times_out_in_lobby() -> None:
     result = await request_guest_join(
         page,
         _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "timeout"
@@ -143,8 +152,7 @@ async def test_request_guest_join_timeout_names_waiting_room() -> None:
     result = await request_guest_join(
         page,
         _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "timeout"
@@ -156,7 +164,9 @@ async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -170,7 +180,9 @@ async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "denied"
@@ -181,7 +193,7 @@ async def test_request_guest_join_aborts_when_stop_requested() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic, abort=lambda: True
+        page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic, lambda: True)
     )
 
     assert result.status == "aborted"
@@ -192,7 +204,9 @@ async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -204,7 +218,9 @@ async def test_request_guest_join_fails_when_page_is_not_on_meeting_host() -> No
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -216,7 +232,9 @@ async def test_request_guest_join_fails_without_name_field() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -228,7 +246,9 @@ async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -242,8 +262,7 @@ async def test_request_guest_join_fails_without_join_button() -> None:
     result = await request_guest_join(
         page,
         _request(button_timeout_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -255,7 +274,9 @@ async def test_request_guest_join_waits_for_join_button_to_enable() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -268,7 +289,9 @@ async def test_request_guest_join_dismisses_media_dialog_first() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -280,7 +303,9 @@ async def test_request_guest_join_fails_when_typing_returns_error() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -292,7 +317,9 @@ async def test_request_guest_join_fails_when_click_returns_error() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -304,7 +331,9 @@ async def test_request_guest_join_retries_transient_name_click() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -317,7 +346,9 @@ async def test_request_guest_join_gives_up_name_click_after_retries() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "failed"
@@ -329,7 +360,9 @@ async def test_request_guest_join_retries_transient_join_click() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -345,7 +378,9 @@ async def test_request_guest_join_retries_transient_dialog_click() -> None:
     clock = FakeClock()
 
     result = await request_guest_join(
-        page, _request(), sleep=clock.sleep, monotonic=clock.monotonic
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -448,7 +483,11 @@ async def test_leave_meeting_clicks_and_verifies() -> None:
     page = meet_page([IN_CALL, ENDED])
     clock = FakeClock()
 
-    result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
+    result = await leave_meeting(
+        page,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
 
     assert result.status == "left"
     assert page.clicked == [LEAVE_SELECTOR]
@@ -458,7 +497,11 @@ async def test_leave_meeting_when_already_out_is_left() -> None:
     page = meet_page([ENDED], counts={LEAVE_SELECTOR: [0]})
     clock = FakeClock()
 
-    result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
+    result = await leave_meeting(
+        page,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
 
     assert result.status == "left"
     assert page.clicked == []
@@ -479,7 +522,11 @@ async def test_leave_meeting_fails_without_leave_button_on_unknown_page() -> Non
     page = meet_page(["blank page without markers"], counts={LEAVE_SELECTOR: [0]})
     clock = FakeClock()
 
-    result = await leave_meeting(page, sleep=clock.sleep, monotonic=clock.monotonic)
+    result = await leave_meeting(
+        page,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
 
     assert result.status == "failed"
     assert "leave button not found" in result.detail
@@ -549,8 +596,7 @@ async def test_request_guest_join_admits_on_deadline_recheck() -> None:
     result = await request_guest_join(
         page,
         _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "admitted"
@@ -567,8 +613,7 @@ async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> No
     result = await request_guest_join(
         page,
         _request(lobby_timeout_seconds=5.0, poll_interval_seconds=2.0),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
+        polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
     assert result.status == "timeout"

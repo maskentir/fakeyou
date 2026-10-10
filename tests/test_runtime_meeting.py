@@ -7,7 +7,7 @@ from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.meet.browser import open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
 from fakeyou.orchestration.lifecycle import create_lifecycle_graph
-from fakeyou.orchestration.runtime import run_meeting_session
+from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests.fakes import DATABASE_URL
 
 MEETING_PAGE = """<!doctype html><html><body>
@@ -49,7 +49,7 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
         monitor_interval_seconds=0.1,
     )
 
-    result = await run_meeting_session(config, open_page=open_fixture)
+    result = await run_meeting_session(config, SessionWiring(open_page=open_fixture))
 
     assert result.phase == "ended"
     assert result.terminal_reason == "duration_limit_reached"

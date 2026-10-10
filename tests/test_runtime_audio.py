@@ -68,7 +68,8 @@ async def test_audio_is_ready_before_join_and_stops_before_leave(open_audio, ses
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, initial_speech="Hello", **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, initial_speech="Hello", **session.kwargs),
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -94,7 +95,7 @@ async def test_denied_guest_stops_the_audio_opened_for_the_lobby(open_audio, ses
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
     assert result.terminal_reason == "denied_by_host"
     assert session.events == ["audio_started", "denied", "audio_stopped", "browser_closed"]
@@ -111,7 +112,7 @@ async def test_owner_stop_during_audio_startup_never_joins(session):
             session.events.append("audio_start_cancelled")
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
     assert result.terminal_reason == "stopped_by_owner"
     assert session.events == ["audio_start_cancelled", "browser_closed"]
@@ -142,7 +143,7 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
     if failure_at == "microphone":
         monkeypatch.setattr(runtime, "enable_meeting_microphone", microphone)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
     if failure_at == "startup":
         assert result.terminal_reason == "infra_failure"
@@ -166,7 +167,8 @@ async def test_camera_failure_is_recorded_without_failing_session(
     reporter = FaultReporter(journal=journal)
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, faults=reporter, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, faults=reporter, **session.kwargs),
     )
     assert result.terminal_reason != "audio_failure"
     assert "leave" in session.events
@@ -210,10 +212,12 @@ async def test_session_duration_counts_from_admission(session, monkeypatch):
     )
     result = await runtime.run_meeting_session(
         config,
-        open_audio=open_audio,
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        **session.kwargs,
+        runtime.SessionWiring(
+            open_audio=open_audio,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            **session.kwargs,
+        ),
     )
     assert result.terminal_reason == "duration_limit_reached"
     assert clock.sleeps[:2] == [50.0, 30.0]
@@ -225,7 +229,8 @@ async def test_conversation_binds_after_audio_and_closes_before_leave(open_audio
 
     conversation = FakeConversation(session.events)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, conversation=conversation, **session.kwargs),
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -248,7 +253,8 @@ async def test_conversation_failure_keeps_listening_until_owner_stop(open_audio,
 
     conversation = FakeConversation(session.events, fail=True)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, conversation=conversation, **session.kwargs),
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -282,10 +288,12 @@ async def test_owner_stop_interrupts_blocked_initial_speech(open_audio, session)
     result = await asyncio.wait_for(
         runtime.run_meeting_session(
             session.config,
-            open_audio=open_audio,
-            initial_speech="Hello",
-            conversation=conversation,
-            **session.kwargs,
+            runtime.SessionWiring(
+                open_audio=open_audio,
+                initial_speech="Hello",
+                conversation=conversation,
+                **session.kwargs,
+            ),
         ),
         timeout=1,
     )
@@ -320,7 +328,10 @@ async def test_capture_drain_starts_before_initial_speech(open_audio, session):
     config = replace(session.config, per_stream_enabled=True)
 
     result = await runtime.run_meeting_session(
-        config, open_audio=open_audio, initial_speech="Hello", journal=journal, **session.kwargs
+        config,
+        runtime.SessionWiring(
+            open_audio=open_audio, initial_speech="Hello", journal=journal, **session.kwargs
+        ),
     )
     journal.close()
 
@@ -333,7 +344,8 @@ async def test_capture_drain_starts_before_initial_speech(open_audio, session):
 async def test_conversation_requires_audio(session):
     with pytest.raises(ValueError, match="conversation requires meeting audio"):
         await runtime.run_meeting_session(
-            session.config, conversation=FakeConversation(session.events), **session.kwargs
+            session.config,
+            runtime.SessionWiring(conversation=FakeConversation(session.events), **session.kwargs),
         )
 
 
@@ -345,7 +357,8 @@ async def test_conversation_never_binds_and_closes_after_denial(open_audio, sess
 
     conversation = FakeConversation(session.events)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, conversation=conversation, **session.kwargs),
     )
 
     assert result.terminal_reason == "denied_by_host"
@@ -366,11 +379,13 @@ async def test_conversation_closes_if_checkpoint_setup_fails(session):
     with pytest.raises(RuntimeError, match="checkpoint unavailable"):
         await runtime.run_meeting_session(
             session.config,
-            open_audio=open_audio,
-            conversation=conversation,
-            saver_factory=broken_saver,
-            open_page=session.kwargs["open_page"],
-            stop=session.stop,
+            runtime.SessionWiring(
+                open_audio=open_audio,
+                conversation=conversation,
+                saver_factory=broken_saver,
+                open_page=session.kwargs["open_page"],
+                stop=session.stop,
+            ),
         )
 
     assert session.events == ["conversation_closed"]
@@ -386,7 +401,8 @@ async def test_conversation_closes_before_audio_on_unexpected_monitor_error(
 
     conversation = FakeConversation(session.events)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, conversation=conversation, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, conversation=conversation, **session.kwargs),
     )
 
     assert result.terminal_reason == "browser_failure"
@@ -395,11 +411,15 @@ async def test_conversation_closes_before_audio_on_unexpected_monitor_error(
 
 def _faulty_reporter():
     from fakeyou.observability.faults import FaultReporter
-    from fakeyou.observability.provider_faults import ProviderFault
+    from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
 
     reporter = FaultReporter(journal=Journal("meeting"))
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
     return reporter
 
 
@@ -434,7 +454,8 @@ async def test_finish_merges_fault_suffix_on_audio_failure(open_audio, session):
     open_audio = partial(open_audio, CaptureStoppedAudio(session.events))
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, faults=reporter, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, faults=reporter, **session.kwargs),
     )
 
     assert result.terminal_reason == "audio_failure"
@@ -447,7 +468,8 @@ async def test_finish_merges_fault_suffix_on_leave_path(open_audio, session):
     reporter = _faulty_reporter()
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, faults=reporter, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, faults=reporter, **session.kwargs),
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -459,9 +481,11 @@ async def test_empty_faults_leave_detail_byte_identical(journal, open_audio, ses
 
     result = await runtime.run_meeting_session(
         session.config,
-        open_audio=open_audio,
-        faults=FaultReporter(journal=journal),
-        **session.kwargs,
+        runtime.SessionWiring(
+            open_audio=open_audio,
+            faults=FaultReporter(journal=journal),
+            **session.kwargs,
+        ),
     )
 
     assert result.detail == "left"
@@ -482,9 +506,11 @@ async def test_broken_reporter_never_changes_exit_path(journal, open_audio, sess
 
     result = await runtime.run_meeting_session(
         session.config,
-        open_audio=open_audio,
-        faults=_BrokenReporter(journal=journal),
-        **session.kwargs,
+        runtime.SessionWiring(
+            open_audio=open_audio,
+            faults=_BrokenReporter(journal=journal),
+            **session.kwargs,
+        ),
     )
 
     assert result.terminal_reason == "audio_failure"
@@ -516,7 +542,7 @@ async def test_preflight_all_fail_refuses_before_browser(session):
     kwargs = dict(session.kwargs)
     kwargs["open_page"] = counting_page
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, preflight=all_fail, **kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, preflight=all_fail, **kwargs)
     )
 
     assert result.terminal_reason == "infra_failure"
@@ -534,7 +560,8 @@ async def test_preflight_partial_failure_refuses_to_join(open_audio, session):
         ]
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, preflight=mixed, **session.kwargs
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, preflight=mixed, **session.kwargs),
     )
 
     assert result.terminal_reason == "infra_failure"
@@ -557,7 +584,9 @@ async def test_stop_during_preflight_returns_owner_stop(session):
 
     kwargs = dict(session.kwargs)
     kwargs["open_page"] = counting_page
-    result = await runtime.run_meeting_session(session.config, preflight=hanging, **kwargs)
+    result = await runtime.run_meeting_session(
+        session.config, runtime.SessionWiring(preflight=hanging, **kwargs)
+    )
 
     assert result.terminal_reason == "stopped_by_owner"
     assert opened == []
@@ -583,7 +612,7 @@ async def test_deaf_grace_expiry_terminates_with_repair_first(session, monkeypat
             await audio.stop()
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
 
     assert result.terminal_reason == "audio_failure"
@@ -614,7 +643,7 @@ async def test_deaf_repair_then_hearing_avoids_terminal(session, monkeypatch):
             await audio.stop()
 
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -637,7 +666,7 @@ async def test_audio_failure_remains_primary_when_leave_also_fails(
 
     monkeypatch.setattr(runtime, "leave_meeting", broken_leave)
     result = await runtime.run_meeting_session(
-        session.config, open_audio=open_audio, **session.kwargs
+        session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
     assert result.terminal_reason == "audio_failure"
     assert result.detail == "capture stopped"
@@ -659,10 +688,12 @@ async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_ad
     conversation = FakeConversation(session.events)
     await runtime.run_meeting_session(
         session.config,
-        open_audio=open_audio,
-        conversation=conversation,
-        journal=journal,
-        **session.kwargs,
+        runtime.SessionWiring(
+            open_audio=open_audio,
+            conversation=conversation,
+            journal=journal,
+            **session.kwargs,
+        ),
     )
 
     milestones = [

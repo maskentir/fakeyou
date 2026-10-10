@@ -4,6 +4,7 @@ import io
 import math
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -144,6 +145,24 @@ def _encode_thumb(image: Image.Image) -> bytes:
     return _encode_jpeg(thumb)
 
 
+@dataclass(frozen=True, slots=True)
+class PollSchedule:
+    monotonic: Callable[[], float] = time.monotonic
+    interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS
+
+
+DEFAULT_POLL_SCHEDULE = PollSchedule()
+
+
+@dataclass(frozen=True, slots=True)
+class CaptionSink:
+    captioner: VisualCaptioner | None = None
+    on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
+
+
+DEFAULT_CAPTION_SINK = CaptionSink()
+
+
 class VisualObserver:
     def __init__(
         self,
@@ -151,18 +170,16 @@ class VisualObserver:
         store: VisualStore,
         *,
         journal: Journal | None = None,
-        monotonic: Callable[[], float] = time.monotonic,
-        poll_interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS,
-        captioner: VisualCaptioner | None = None,
-        on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None,
+        schedule: PollSchedule = DEFAULT_POLL_SCHEDULE,
+        captions: CaptionSink = DEFAULT_CAPTION_SINK,
     ) -> None:
         self._page = page
         self._store = store
         self._journal = journal
-        self._monotonic = monotonic
-        self._poll_interval = poll_interval_seconds
-        self._captioner = captioner
-        self._on_caption = on_caption
+        self._monotonic = schedule.monotonic
+        self._poll_interval = schedule.interval_seconds
+        self._captioner = captions.captioner
+        self._on_caption = captions.on_caption
         self._hits = 0
         self._presenting = False
         self._task: asyncio.Task[None] | None = None

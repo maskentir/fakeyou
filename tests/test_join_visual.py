@@ -7,7 +7,7 @@ from typing import Any
 from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.voice_activity import SlotBinder
-from fakeyou.cli.join import build_transcript_callback, record_visual_caption
+from fakeyou.cli.join import TranscriptSinks, build_transcript_callback, record_visual_caption
 from fakeyou.persistence.record import (
     MeetingRecord,
     VisualEntry,
@@ -64,13 +64,10 @@ async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=conversation,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, conversation, visual_store=store),
         binder=SlotBinder(),
+        voice_activity=None,
         per_stream_enabled=True,
-        visual_store=store,
     )
     frame = TranscriptionFrame(
         "What date is shown?", "", "2026-10-09T03:10:05+00:00", finalized=True
@@ -91,13 +88,10 @@ async def test_transcript_callback_falls_back_to_wall_clock(tmp_path: Path) -> N
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=conversation,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, conversation, visual_store=store),
         binder=SlotBinder(),
+        voice_activity=None,
         per_stream_enabled=False,
-        visual_store=store,
     )
     frame = TranscriptionFrame(
         "What is on screen?", "", "2026-10-09T03:10:11+00:00", finalized=True
@@ -117,11 +111,9 @@ async def test_transcript_callback_skips_visual_without_store(tmp_path: Path) ->
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-visual"))
     conversation = _Conversation()
     callback = build_transcript_callback(
-        journal=journal,
-        record=record,
-        conversation=conversation,
-        voice_activity=None,
+        sinks=TranscriptSinks(journal, record, conversation),
         binder=SlotBinder(),
+        voice_activity=None,
         per_stream_enabled=True,
     )
     frame = TranscriptionFrame(

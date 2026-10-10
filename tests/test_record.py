@@ -208,32 +208,26 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
 
 
 def test_record_accepts_visual_entry(tmp_path: Path) -> None:
-    from fakeyou.persistence.record import VisualEntry
+    from fakeyou.persistence.record import VisualDraft, VisualEntry
+
+    def draft(visual_id: str, caption: str, digest: str, page_ms: float = 0.0) -> VisualDraft:
+        return VisualDraft(
+            visual_id=visual_id,
+            caption=caption,
+            sha256=digest * 32,
+            captured_at=NOW,
+            frame_ref=f"frame:{digest * 4}@{NOW.isoformat()}",
+            captured_page_ms=page_ms,
+        )
 
     record = open_record(tmp_path)
     record.add_visual(
-        visual_id="frame-7",
-        caption="Quarterly revenue grew twelve percent.",
-        sha256="ab" * 32,
-        captured_at=NOW,
-        captured_page_ms=1727690400000.0,
-        frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
+        draft("frame-7", "Quarterly revenue grew twelve percent.", "ab", 1727690400000.0)
     )
     record.add_visual(
-        visual_id="frame-7",
-        caption="Quarterly revenue grew twelve percent.",
-        sha256="ab" * 32,
-        captured_at=NOW,
-        captured_page_ms=1727690400000.0,
-        frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
+        draft("frame-7", "Quarterly revenue grew twelve percent.", "ab", 1727690400000.0)
     )
-    record.add_visual(
-        visual_id="frame-8",
-        caption="   ",
-        sha256="cd" * 32,
-        captured_at=NOW,
-        frame_ref=f"frame:{'cd' * 4}@{NOW.isoformat()}",
-    )
+    record.add_visual(draft("frame-8", "   ", "cd"))
     record.close()
 
     entries = load_meeting_record(meeting_record_path(tmp_path, "meeting-1"))

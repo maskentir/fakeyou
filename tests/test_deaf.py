@@ -6,6 +6,7 @@ import pytest
 from fakeyou.audio.deaf import (
     CaptureActivity,
     DeafMonitor,
+    DeafTiming,
     audio_duration_ms,
     evaluate_deafness,
     rms_level,
@@ -112,7 +113,9 @@ def test_capture_failure_grace_resets_after_recovery(activity):
 def test_fault_reports_repeat_only_every_sixty_seconds(journal, activity):
     capture, _ = activity
     reporter = FaultReporter(journal=journal)
-    monitor = DeafMonitor(activity=capture, faults=reporter, deaf_grace_seconds=600)
+    monitor = DeafMonitor(
+        activity=capture, faults=reporter, timing=DeafTiming(deaf_grace_seconds=600)
+    )
     assert monitor.note_tick(1000, "no_transcripts") == "repair"
     assert monitor.note_tick(1059, "no_transcripts") is None
     assert monitor.note_tick(1060, "no_transcripts") == "restate"
@@ -202,7 +205,9 @@ def test_capture_silent_records_once_restates_and_never_terminals(journal, activ
 def test_missing_capture_heartbeat_is_reported_as_fault(journal, activity):
     capture, clock = activity
     reporter = FaultReporter(journal=journal)
-    monitor = DeafMonitor(activity=capture, faults=reporter, deaf_grace_seconds=120)
+    monitor = DeafMonitor(
+        activity=capture, faults=reporter, timing=DeafTiming(deaf_grace_seconds=120)
+    )
     capture.observe_presence(2)
     clock[0] += 31
     assert monitor.verdict(clock[0]) == "no_audio_frames"

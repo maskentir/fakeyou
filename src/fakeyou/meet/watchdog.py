@@ -115,9 +115,7 @@ class UIWatchdog:
                     5.0,
                 )
 
-    async def _check(self) -> WatchdogCheck:
-        events: list[WatchdogEvent] = []
-        now = self._monotonic()
+    def _sweep_expired(self, now: float, events: list[WatchdogEvent]) -> None:
         for fingerprint, deadline in self._manual.items():
             if now >= deadline and fingerprint not in self._expired:
                 self._expired.add(fingerprint)
@@ -126,6 +124,69 @@ class UIWatchdog:
                         "manual_action_expired", fingerprint, "Manual action deadline expired"
                     )
                 )
+
+    def _sweep_cleared(self, visible: set[str], events: list[WatchdogEvent]) -> None:
+        for fingerprint in self._manual.keys() - visible:
+            del self._manual[fingerprint]
+            self._expired.discard(fingerprint)
+            events.append(
+                WatchdogEvent(
+                    "manual_action_cleared", fingerprint, "The blocking dialog is no longer visible"
+                )
+            )
+
+    def _resolve_action(self, modal: _Modal) -> tuple[str | None, bool]:
+        folded = modal.text.casefold()
+        action = next((label for text, label in _HARMLESS_NOTICES if text == folded), None)
+        if action is not None:
+            return action, True
+        action = next(
+            (label for text, label in _DISMISSABLE_ERRORS if text == folded),
+            None,
+        )
+        return action, False
+
+    async def _try_dismiss(
+        self, modal: _Modal, action: str, *, strict: bool, events: list[WatchdogEvent]
+    ) -> bool:
+        try:
+            target = self._page.locator(_DIALOG_SELECTOR).nth(modal.index)
+            current = await target.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
+            single_button = await target.get_by_role("button").count() == 1 if strict else True
+            if (
+                isinstance(current, str)
+                and " ".join(current.split()) == modal.text
+                and single_button
+            ):
+                await self._page.locator(_dialog_button_xpath(modal.index, action)).first.click(
+                    timeout=2000
+                )
+                return True
+            return False
+        except Exception as error:
+            events.append(WatchdogEvent("watchdog_failed", modal.fingerprint, type(error).__name__))
+            return False
+
+    async def _handle_modal(self, modal: _Modal, now: float, events: list[WatchdogEvent]) -> None:
+        if modal.fingerprint in self._handled or self._stable[modal.fingerprint] < 2:
+            return
+        action, strict = self._resolve_action(modal)
+        dismissed = False
+        if action is not None:
+            dismissed = await self._try_dismiss(modal, action, strict=strict, events=events)
+        self._handled.add(modal.fingerprint)
+        if dismissed:
+            events.append(WatchdogEvent("modal_dismissed", modal.fingerprint, modal.text))
+        else:
+            self._manual[modal.fingerprint] = now + self._ttl
+            events.append(
+                WatchdogEvent("manual_action_required", modal.fingerprint, modal.text, self._ttl)
+            )
+
+    async def _check(self) -> WatchdogCheck:
+        events: list[WatchdogEvent] = []
+        now = self._monotonic()
+        self._sweep_expired(now, events)
         try:
             observation = await self._observe(self._page, self._signals)
         except Exception as error:
@@ -152,60 +213,10 @@ class UIWatchdog:
         self._stable = {
             fingerprint: self._stable.get(fingerprint, 0) + 1 for fingerprint in visible
         }
-        for fingerprint in self._manual.keys() - visible:
-            del self._manual[fingerprint]
-            self._expired.discard(fingerprint)
-            events.append(
-                WatchdogEvent(
-                    "manual_action_cleared", fingerprint, "The blocking dialog is no longer visible"
-                )
-            )
+        self._sweep_cleared(visible, events)
         self._handled.intersection_update(visible)
         for modal in modals:
-            if modal.fingerprint in self._handled or self._stable[modal.fingerprint] < 2:
-                continue
-            dismissed = False
-            action = next(
-                (label for text, label in _HARMLESS_NOTICES if text == modal.text.casefold()), None
-            )
-            strict_buttons = action is not None
-            if action is None:
-                action = next(
-                    (label for text, label in _DISMISSABLE_ERRORS if text == modal.text.casefold()),
-                    None,
-                )
-            if action is not None:
-                try:
-                    target = self._page.locator(_DIALOG_SELECTOR).nth(modal.index)
-                    current = await target.evaluate(
-                        "el => el.innerText.slice(0, 4000)", timeout=2000
-                    )
-                    single_button = (
-                        await target.get_by_role("button").count() == 1 if strict_buttons else True
-                    )
-                    if (
-                        isinstance(current, str)
-                        and " ".join(current.split()) == modal.text
-                        and single_button
-                    ):
-                        await self._page.locator(
-                            _dialog_button_xpath(modal.index, action)
-                        ).first.click(timeout=2000)
-                        dismissed = True
-                except Exception as error:
-                    events.append(
-                        WatchdogEvent("watchdog_failed", modal.fingerprint, type(error).__name__)
-                    )
-            self._handled.add(modal.fingerprint)
-            if dismissed:
-                events.append(WatchdogEvent("modal_dismissed", modal.fingerprint, modal.text))
-            else:
-                self._manual[modal.fingerprint] = now + self._ttl
-                events.append(
-                    WatchdogEvent(
-                        "manual_action_required", modal.fingerprint, modal.text, self._ttl
-                    )
-                )
+            await self._handle_modal(modal, now, events)
         self._quiet_checks = 0 if modals else self._quiet_checks + 1
         delay = 20.0 if self._quiet_checks >= 3 else 5.0
         count = await read_participant_count(self._page) if observation.state == "in_call" else None

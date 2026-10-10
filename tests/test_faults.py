@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
-from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.observability.journal import Journal, JournalFile
+from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
 from fakeyou.observability.report import build_session_report, read_journal
 
 
@@ -21,7 +21,9 @@ def test_storm_collapses_to_one_kind_with_first_detail() -> None:
 
     for index in range(18):
         reporter.record(
-            ProviderFault("stt", "unavailable", status=503, detail=f"flap {index}", retryable=True)
+            ProviderFault(
+                "stt", "unavailable", evidence=FaultEvidence(503, f"flap {index}"), retryable=True
+            )
         )
 
     assert reporter.total() == 18
@@ -45,10 +47,18 @@ def test_storm_collapses_to_one_kind_with_first_detail() -> None:
 
 def test_tie_counts_sort_by_kind_ascending() -> None:
     reporter = _reporter()
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("tts", "unknown", detail="odd", retryable=False))
-    reporter.record(ProviderFault("tts", "unknown", detail="odd", retryable=False))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="odd"), retryable=False)
+    )
+    reporter.record(
+        ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="odd"), retryable=False)
+    )
 
     report = reporter.report()
 
@@ -59,9 +69,13 @@ def test_tie_counts_sort_by_kind_ascending() -> None:
 
 def test_counts_sort_before_kind() -> None:
     reporter = _reporter()
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
     for _ in range(3):
-        reporter.record(ProviderFault("tts", "unknown", detail="odd", retryable=False))
+        reporter.record(
+            ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="odd"), retryable=False)
+        )
 
     report = reporter.report()
 
@@ -98,9 +112,15 @@ def test_first_of_kind_logs_once_with_meeting_id() -> None:
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
     reporter = FaultReporter(journal=Journal("meeting-7", now=lambda: frozen, emit=lines.append))
 
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("stt", "timeout", detail="slow again", retryable=True))
-    reporter.record(ProviderFault("tts", "unknown", detail="odd", retryable=False))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow again"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="odd"), retryable=False)
+    )
 
     assert len(lines) == 2
     first = json.loads(lines[0])
@@ -116,7 +136,13 @@ def test_health_fault_is_recorded_with_its_operation() -> None:
 
     reporter.record(Fault(source="stt", kind="no_transcripts", detail="silent provider"))
     reporter.record(
-        ProviderFault("browser", "timeout", operation="camera", detail="slow", retryable=True)
+        ProviderFault(
+            "browser",
+            "timeout",
+            operation="camera",
+            evidence=FaultEvidence(detail="slow"),
+            retryable=True,
+        )
     )
 
     assert reporter.total() == 2
@@ -130,7 +156,9 @@ def test_health_fault_is_recorded_with_its_operation() -> None:
 
 def test_report_shape_matches_session_result_contract() -> None:
     reporter = _reporter()
-    reporter.record(ProviderFault("agent", "bad_request", status=400, detail="no", retryable=False))
+    reporter.record(
+        ProviderFault("agent", "bad_request", evidence=FaultEvidence(400, "no"), retryable=False)
+    )
 
     report = reporter.report()
 
@@ -148,8 +176,8 @@ def test_report_shape_matches_session_result_contract() -> None:
 
 def test_same_kind_from_different_sources_is_grouped_separately() -> None:
     reporter = _reporter()
-    reporter.record(ProviderFault("stt", "unavailable", status=503, detail="stt"))
-    reporter.record(ProviderFault("tts", "unavailable", status=503, detail="tts"))
+    reporter.record(ProviderFault("stt", "unavailable", evidence=FaultEvidence(503, "stt")))
+    reporter.record(ProviderFault("tts", "unavailable", evidence=FaultEvidence(503, "tts")))
 
     assert reporter.total() == 2
     assert len(reporter.summaries()) == 2
@@ -161,8 +189,12 @@ def test_fault_count_survives_logging_failure() -> None:
         raise OSError("logging unavailable")
 
     reporter = _reporter(log=broken)
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("stt", "timeout", detail="still slow", retryable=True))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="still slow"), retryable=True)
+    )
 
     assert reporter.total() == 2
     assert reporter.report()["faults"]["total"] == 2
@@ -171,11 +203,15 @@ def test_fault_count_survives_logging_failure() -> None:
 def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = Journal("meeting-7", path=path, echo=False, now=lambda: frozen)
+    journal = Journal("meeting-7", file=JournalFile(path), echo=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
 
-    reporter.record(ProviderFault("stt", "timeout", detail="slow", retryable=True))
-    reporter.record(ProviderFault("stt", "timeout", detail="again", retryable=True))
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="slow"), retryable=True)
+    )
+    reporter.record(
+        ProviderFault("stt", "timeout", evidence=FaultEvidence(detail="again"), retryable=True)
+    )
     journal.close()
 
     rows = read_journal(path)
@@ -192,7 +228,7 @@ def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clo
 def test_consumer_fault_should_share_journal_file_identity_and_clock(tmp_path):
     path = tmp_path / "journal.jsonl"
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
-    journal = Journal("meeting-7", path=path, echo=False, now=lambda: frozen)
+    journal = Journal("meeting-7", file=JournalFile(path), echo=False, now=lambda: frozen)
     reporter = FaultReporter(journal=journal)
     record_consumer_fault(
         reporter, None, source="stt", detail="transcript_consumer", error=ValueError("private")

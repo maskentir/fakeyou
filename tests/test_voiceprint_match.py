@@ -11,11 +11,13 @@ from fakeyou.identity.voiceprint_match import (
     CLIP_GRID_MS,
     CLIP_PAD_MS,
     VoiceprintMatcher,
+    VoiceScoreAttribution,
     VoiceScores,
     apply_voice_scores,
     cut_turn_clip,
     score_turn_audio,
 )
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from tests.fakes import CONSENT_AT, FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
 
@@ -108,7 +110,10 @@ def test_apply_verified_notes_scores_and_journals_verified() -> None:
     scores = VoiceScores("alice", 0.9, 0.1, "verified")
 
     outcome = apply_voice_scores(
-        registry, row.uuid, scores, device="dev-q", owners={}, journal=journal, faults=faults
+        registry,
+        scores,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-q", {}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
     )
 
     assert outcome == "verified"
@@ -135,12 +140,9 @@ def test_apply_matching_owner_verifies_without_fault() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         VoiceScores("alice", 0.9, 0.1, "verified"),
-        device="dev-q",
-        owners={"dev-q": "alice"},
-        journal=journal,
-        faults=faults,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-q", {"dev-q": "alice"}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
     )
 
     assert outcome == "verified"
@@ -161,12 +163,9 @@ def test_apply_verified_on_foreign_device_faults_and_keeps_binding() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         VoiceScores("alice", 0.9, 0.1, "verified"),
-        device="dev-q",
-        owners={"dev-q": "bob"},
-        journal=journal,
-        faults=faults,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-q", {"dev-q": "bob"}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
     )
 
     assert outcome == "mismatched_owner"
@@ -194,12 +193,9 @@ def test_apply_negative_consumes_as_unknown_without_fault() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         VoiceScores("alice", 0.2, 0.1, "negative"),
-        device="dev-q",
-        owners={},
-        journal=journal,
-        faults=faults,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-q", {}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
     )
 
     assert outcome == "unknown"
@@ -219,12 +215,9 @@ def test_apply_conflict_journals_conflict_without_fault() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        row.uuid,
         VoiceScores("alice", 0.9, 0.85, "conflict"),
-        device="dev-q",
-        owners={"dev-q": "bob"},
-        journal=journal,
-        faults=faults,
+        attribution=VoiceScoreAttribution(row.uuid, "dev-q", {"dev-q": "bob"}),
+        diagnostics=Diagnostics(journal=journal, faults=faults),
     )
 
     assert outcome == "conflict"
@@ -241,11 +234,9 @@ def test_apply_unknown_speaker_uuid_notes_nothing_but_journals() -> None:
 
     outcome = apply_voice_scores(
         registry,
-        "0" * 32,
         VoiceScores("alice", 0.9, 0.1, "verified"),
-        device=None,
-        owners={},
-        journal=journal,
+        attribution=VoiceScoreAttribution("0" * 32, None, {}),
+        diagnostics=Diagnostics(journal=journal),
     )
 
     assert outcome == "verified"

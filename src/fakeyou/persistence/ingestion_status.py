@@ -100,6 +100,17 @@ def write_atomically(path: Path, data: bytes) -> None:
         raise
 
 
+def _parse_heartbeat(raw_heartbeat: Any) -> datetime | None:
+    if raw_heartbeat is None:
+        return None
+    if not isinstance(raw_heartbeat, str):
+        raise ValueError("heartbeat must be an iso string")
+    heartbeat = datetime.fromisoformat(raw_heartbeat)
+    if heartbeat.tzinfo is None or heartbeat.utcoffset() is None:
+        raise ValueError("heartbeat must carry timezone")
+    return heartbeat
+
+
 def _lock_owner(path: Path) -> dict[str, Any] | None:
     try:
         raw = path.read_bytes()
@@ -123,17 +134,10 @@ def _lock_owner(path: Path) -> dict[str, Any] | None:
     host = data.get("host")
     if host is not None and (not isinstance(host, str) or not host):
         return None
-    heartbeat: datetime | None = None
-    raw_heartbeat = data.get("heartbeat")
-    if raw_heartbeat is not None:
-        if not isinstance(raw_heartbeat, str):
-            return None
-        try:
-            heartbeat = datetime.fromisoformat(raw_heartbeat)
-        except ValueError:
-            return None
-        if heartbeat.tzinfo is None or heartbeat.utcoffset() is None:
-            return None
+    try:
+        heartbeat = _parse_heartbeat(data.get("heartbeat"))
+    except ValueError:
+        return None
     return {"host": host, "pid": pid, "purpose": purpose, "token": token, "heartbeat": heartbeat}
 
 

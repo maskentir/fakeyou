@@ -1,7 +1,6 @@
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from functools import partial
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -18,6 +17,7 @@ from sqlalchemy.engine import make_url
 
 import fakeyou.cli.join as cli_join
 import fakeyou.db.checkpoint as checkpoint_module
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.config.settings import (
     BrowserSettings,
     DatabaseSettings,
@@ -179,17 +179,44 @@ def journal() -> Iterator[RecordingJournal]:
 
 @pytest.fixture
 def join(settings: Settings) -> Callable[..., Any]:
-    return partial(
-        cli_join.join_meeting,
-        twin_name=None,
-        owner_id=None,
-        twin_id=None,
-        meeting_id="meeting-1",
-        lobby_timeout=None,
-        duration=None,
-        profile_dir=None,
-        settings=settings,
-    )
+    async def go(link: str, *args: Any, **kwargs: Any) -> Any:
+        options: dict[str, Any] = {
+            "twin_name": None,
+            "meeting_id": "meeting-1",
+            "lobby_timeout": None,
+            "duration": None,
+            "profile_dir": None,
+            "settings": settings,
+        }
+        options.update(kwargs)
+        if "identity" not in options:
+            options["identity"] = OperatorIdentity(
+                options.pop("persona_path", None),
+                options.pop("owner_id", None),
+                options.pop("twin_id", None),
+            )
+        request_settings = options.pop("settings")
+        bundled = cli_join.JoinOptions(
+            identity=options.pop("identity"),
+            twin_name=options.pop("twin_name"),
+            meeting_id=options.pop("meeting_id"),
+            lobby_timeout=options.pop("lobby_timeout"),
+            duration=options.pop("duration"),
+            profile_dir=options.pop("profile_dir"),
+            audio_enabled=options.pop("audio_enabled", False),
+            initial_speech=options.pop("initial_speech", None),
+            headless=options.pop("headless", None),
+            memory=options.pop("memory", False),
+            conversation_enabled=options.pop("conversation_enabled", False),
+            wake_phrase=options.pop("wake_phrase", None),
+            barge_in=options.pop("barge_in", False),
+            brief_path=options.pop("brief_path", None),
+            resume=options.pop("resume", False),
+        )
+        assert not options, f"unknown join kwargs: {sorted(options)}"
+        return await cli_join.join_meeting(link, *args, options=bundled, settings=request_settings)
+
+    return go
 
 
 @pytest.fixture

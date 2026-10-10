@@ -11,13 +11,14 @@ from pydantic import SecretStr
 import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.main import build_parser
 from fakeyou.cli.memory import IngestOutcome, _finish_ingest, ingest_recorded_meeting
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.ingestion import EpisodeNameError, ingest_corrections
+from fakeyou.memory.ingestion import EpisodeNameError, MeetingScope, ingest_corrections
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
@@ -177,9 +178,7 @@ async def test_ingest_auto_runs_diarization_before_live_ingest(
     monkeypatch.setattr(cli_memory, "ingest_until_stopped", guarded)
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=_write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -206,9 +205,7 @@ async def test_ingest_no_correct_skips_diarization_entirely(
     _fake_memory(monkeypatch, graphiti)
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=_write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         no_correct=True,
         settings=settings,
@@ -248,9 +245,7 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
     _fake_memory(monkeypatch, graphiti)
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=_write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -281,17 +276,13 @@ async def test_ingest_rerun_writes_zero_new_correction_episodes(
     persona_path = _write_persona(tmp_path)
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=persona_path,
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
     )
     group_id = PersonaProfile.model_validate(PERSONA_DATA).memory_group
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
-    first = await ingest_corrections(
-        graphiti, record_path, group_id=group_id, meeting_id="meeting-9"
-    )
+    first = await ingest_corrections(graphiti, record_path, MeetingScope(group_id, "meeting-9"))
 
     assert first.completed is True
     assert len(first.episodes) == 1
@@ -301,16 +292,12 @@ async def test_ingest_rerun_writes_zero_new_correction_episodes(
     assert corrected == ["meeting-9:w00000:corrected"]
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=persona_path,
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         no_correct=True,
         settings=settings,
     )
-    second = await ingest_corrections(
-        graphiti, record_path, group_id=group_id, meeting_id="meeting-9"
-    )
+    second = await ingest_corrections(graphiti, record_path, MeetingScope(group_id, "meeting-9"))
 
     assert second.completed is True
     assert second.episodes == ()
@@ -335,9 +322,7 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     persona_path = _write_persona(tmp_path)
     await ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=persona_path,
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
     )
@@ -346,9 +331,7 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     _fake_memory(monkeypatch, second_memory)
     await ingest_recorded_meeting(
         meeting_id="meeting-10",
-        persona_path=persona_path,
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
     )
@@ -414,9 +397,7 @@ async def test_ingest_episode_name_error_keeps_hint_on_stderr(
     with pytest.raises(SystemExit) as exit:
         await ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=_write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(_write_persona(tmp_path), None, None),
             twin_name=None,
             no_correct=True,
             settings=settings,

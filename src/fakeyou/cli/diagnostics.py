@@ -9,7 +9,7 @@ from fakeyou.config.settings import (
 )
 from fakeyou.debrief.debrief import debrief_report_status
 from fakeyou.foundation.invariants import SessionId
-from fakeyou.meet.browser import open_browser_tools
+from fakeyou.meet.browser import BrowserLaunch, open_browser_tools
 from fakeyou.observability.journal import journal_path
 from fakeyou.observability.report import build_session_report, read_journal
 from fakeyou.persistence.record import meeting_record_path
@@ -21,10 +21,12 @@ def check_setup(settings: Settings) -> None:
 
 async def show_browser_tools(settings: Settings) -> None:
     async with open_browser_tools(
-        headless=settings.browser.headless,
-        license_key=settings.browser.license_key.get_secret_value()
-        if settings.browser.license_key
-        else None,
+        launch=BrowserLaunch(
+            headless=settings.browser.headless,
+            license_key=settings.browser.license_key.get_secret_value()
+            if settings.browser.license_key
+            else None,
+        )
     ) as tools:
         emit_text("\n".join(tool.name for tool in tools))
 

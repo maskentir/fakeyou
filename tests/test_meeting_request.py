@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.meeting_request import validate_meeting_request
+from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
 
 LINK = "https://meet.google.com/abc-defg-hij"
 PERSONA = Path("persona.json")
@@ -31,14 +31,16 @@ def request(**overrides: Any) -> dict[str, Any]:
 
 def test_a_request_that_honours_every_rule_raises_nothing() -> None:
     validate_meeting_request(
-        **request(
-            lobby_timeout=60.0,
-            duration=3600.0,
-            initial_speech="Hello.",
-            memory=True,
-            brief_path=BRIEF,
-            wake_phrase="hey fakeyou",
-            barge_in=True,
+        MeetingRequest(
+            **request(
+                lobby_timeout=60.0,
+                duration=3600.0,
+                initial_speech="Hello.",
+                memory=True,
+                brief_path=BRIEF,
+                wake_phrase="hey fakeyou",
+                barge_in=True,
+            )
         )
     )
 
@@ -146,5 +148,5 @@ def test_a_request_that_honours_every_rule_raises_nothing() -> None:
 )
 def test_each_rule_raises_its_catalog_code(overrides: dict[str, Any], code: ErrorCode) -> None:
     with pytest.raises(FakeYouError) as caught:
-        validate_meeting_request(**request(**overrides))
+        validate_meeting_request(MeetingRequest(**request(**overrides)))
     assert caught.value.code is code

@@ -12,6 +12,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -36,19 +37,27 @@ from pipecat.transports.base_input import BaseInputTransport
 from pipecat.workers.runner import WorkerRunner
 
 from fakeyou.audio.deaf import (
+    DEFAULT_DEAF_TIMING,
     CaptureActivity,
     DeafMonitor,
+    DeafTiming,
     DeafVerdict,
     audio_duration_ms,
     rms_level,
 )
 from fakeyou.audio.playback import (
+    PlaybackBackend,
     PlaybackEngine,
     PlaybackEvent,
     create_pactl_muter,
     create_paplay_stream_runner,
 )
-from fakeyou.audio.voice import SPEECH_LANGUAGES, create_muse_stt, create_speech_synthesizer
+from fakeyou.audio.voice import (
+    SPEECH_LANGUAGES,
+    MuseSTTOptions,
+    create_muse_stt,
+    create_speech_synthesizer,
+)
 from fakeyou.audio.voice_activity import VoiceActivityTracker
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
@@ -61,9 +70,14 @@ from fakeyou.foundation.invariants import (
     PLAYBACK_SAMPLE_RATE,
 )
 from fakeyou.identity.voiceprint_match import CLIP_GRID_MS, CLIP_PAD_MS, cut_turn_clip
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
 from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import category_fault, classify_exception
+from fakeyou.observability.provider_faults import (
+    ProviderFault,
+    category_fault,
+    classify_exception,
+)
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_CONTINUITY_BUFFER_SECONDS = 30
@@ -498,56 +512,117 @@ def _native_transport() -> Any:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class StreamCallbacks:
+    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]]
+    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None
+    on_vad: OnVad | None = None
+    on_playback_event: Callable[[PlaybackEvent], None] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechPipelineSettings:
+    stt_settings: STTSettings = field(default_factory=lambda: DEFAULTS.stt)
+    stt_keywords: Sequence[str] | None = None
+    tts_settings: TTSSettings = field(default_factory=lambda: DEFAULTS.tts)
+    speech_language: str = DEFAULTS.speech.language
+    vad_settings: VADSettings = field(default_factory=lambda: DEFAULTS.vad)
+
+
+@dataclass(frozen=True, slots=True)
+class StreamPolicy:
+    timing: DeafTiming = DeafTiming()
+    speech: SpeechPipelineSettings = SpeechPipelineSettings()
+
+
+DEFAULT_STREAM_POLICY = StreamPolicy()
+
+
+@dataclass(frozen=True, slots=True)
+class StreamSource:
+    stream_id: str
+    input: BaseInputTransport
+
+
+@dataclass(frozen=True, slots=True)
+class StreamComponents:
+    stt: FrameProcessor | None = None
+    playback: PlaybackEngine | None = None
+    turn_tap: TurnAudioTap | None = None
+    activity: CaptureActivity | None = None
+    probe: AttributionProbe | None = None
+    voice_activity: VoiceActivityTracker | None = None
+
+
+DEFAULT_STREAM_COMPONENTS = StreamComponents()
+
+
+@dataclass(frozen=True, slots=True)
+class SessionPipeline:
+    worker: PipelineWorker
+    runner: WorkerRunner
+    runner_task: asyncio.Task[None]
+    engine: PlaybackEngine
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCapture:
+    stt: object = None
+    activity: CaptureActivity | None = None
+
+
+DEFAULT_SESSION_CAPTURE = SessionCapture()
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRuntime:
+    now: Callable[[], float] = time.monotonic
+    stream_id: str | None = None
+    stt_idle_reconnect_seconds: float = 0.0
+
+
+DEFAULT_SESSION_RUNTIME = SessionRuntime()
+
+
 class MeetingAudioSession:
     def __init__(
         self,
-        worker: PipelineWorker,
-        runner: WorkerRunner,
-        runner_task: asyncio.Task[None],
-        engine: PlaybackEngine,
+        pipeline: SessionPipeline,
         *,
-        stt: object = None,
-        activity: CaptureActivity | None = None,
-        faults: FaultReporter | None = None,
-        journal: Journal | None = None,
-        deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
-        deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-        alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-        now: Callable[[], float] = time.monotonic,
-        stream_id: str | None = None,
-        stt_idle_reconnect_seconds: float = 0.0,
+        capture: SessionCapture = DEFAULT_SESSION_CAPTURE,
+        diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+        timing: DeafTiming = DEFAULT_DEAF_TIMING,
+        runtime: SessionRuntime = DEFAULT_SESSION_RUNTIME,
     ) -> None:
-        self.activity = activity or CaptureActivity(now=now)
-        self._now = now
-        self._stream_id = stream_id
-        self._stt_idle_reconnect_seconds = stt_idle_reconnect_seconds
-        self._stt = stt
-        self._faults = faults
-        self._journal = journal
+        self.activity = capture.activity or CaptureActivity(now=runtime.now)
+        self._now = runtime.now
+        self._stream_id = runtime.stream_id
+        self._stt_idle_reconnect_seconds = runtime.stt_idle_reconnect_seconds
+        self._stt = capture.stt
+        self._faults = diagnostics.faults
+        self._journal = diagnostics.journal
         self._monitor = DeafMonitor(
             activity=self.activity,
-            faults=faults,
-            deaf_window_seconds=deaf_window_seconds,
-            deaf_grace_seconds=deaf_grace_seconds,
-            alone_leave_seconds=alone_leave_seconds,
-            journal=journal,
+            faults=diagnostics.faults,
+            timing=timing,
+            journal=diagnostics.journal,
         )
         self._reconnect_state = "idle"
         self._reconnect_since: float | None = None
         self._reconnect_attempts = 0
         self._last_reconnect_at: float | None = None
         self._maintenance_lock = asyncio.Lock()
-        if isinstance(stt, ManagedMuseSTT):
-            stt.reconnect_requested = self.request_stt_reconnect
-        self.worker = worker
-        self._engine = engine
-        self._runner = runner
-        self._runner_task = runner_task
+        if isinstance(capture.stt, ManagedMuseSTT):
+            capture.stt.reconnect_requested = self.request_stt_reconnect
+        self.worker = pipeline.worker
+        self._engine = pipeline.engine
+        self._runner = pipeline.runner
+        self._runner_task = pipeline.runner_task
         self._failed = asyncio.Event()
         self._failure: MeetingAudioError | None = None
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
-        runner_task.add_done_callback(self._runner_finished)
+        pipeline.runner_task.add_done_callback(self._runner_finished)
 
     def fail(self, message: str, *, cause: BaseException | None = None) -> None:
         if self._failure is None:
@@ -629,6 +704,87 @@ class MeetingAudioSession:
             or stamp - quiet_since < 3
         )
 
+    def _apply_monitor_action(self, verdict: DeafVerdict, action: str | None) -> None:
+        if action == "terminal":
+            self.fail(f"persistent {verdict}")
+            self.raise_if_failed()
+        if action == "repair":
+            self.request_stt_reconnect(verdict)
+
+    def _maybe_proactive_reconnect(self, stamp: float, *, is_busy: bool) -> None:
+        if (
+            self._reconnect_state == "idle"
+            and self._stt_idle_reconnect_seconds > 0
+            and not stt_socket_dead(self._stt)
+            and self._quiet_for_reconnect(stamp, is_busy=is_busy)
+        ):
+            idle_of = getattr(self._stt, "idle_seconds", None)
+            idle = idle_of(stamp) if callable(idle_of) else None
+            if idle is not None and idle >= self._stt_idle_reconnect_seconds:
+                self.request_stt_reconnect("proactive_idle")
+
+    def _reconnect_ready(self, stamp: float, *, is_busy: bool) -> bool:
+        if self._reconnect_state != "queued":
+            return False
+        if self._reconnect_since is not None and stamp - self._reconnect_since >= 120:
+            self._reconnect_state = "exhausted"
+            self.fail("STT reconnect deadline exceeded")
+            self.raise_if_failed()
+        if self._stopping:
+            return False
+        if not stt_socket_dead(self._stt):
+            if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
+                return False
+        if self._last_reconnect_at is not None and stamp - self._last_reconnect_at < 5:
+            return False
+        return True
+
+    def _note_reconnect_failure(self, error: Exception) -> None:
+        fault = classify_exception("stt", error)
+        if self._faults is not None:
+            self._faults.record(fault)
+        if self._journal is not None:
+            self._journal.record(
+                "stt_reconnect_failed",
+                source="stt",
+                kind=fault.kind,
+                attempts=self._reconnect_attempts,
+                **self._reconnect_tags(),
+            )
+        self._reconnect_state = "queued" if self._reconnect_attempts < 3 else "exhausted"
+        if self._reconnect_state == "exhausted":
+            self.fail("STT reconnect attempts exhausted", cause=error)
+            self.raise_if_failed()
+
+    def _note_reconnect_success(self) -> None:
+        self._reconnect_state = "idle"
+        if self._journal is not None:
+            self._journal.record(
+                "stt_reconnect_finished",
+                source="stt",
+                attempts=self._reconnect_attempts,
+                **self._reconnect_tags(),
+            )
+
+    async def _drive_reconnect(
+        self, stamp: float, verdict: DeafVerdict, *, is_busy: bool
+    ) -> DeafVerdict:
+        if not self._reconnect_ready(stamp, is_busy=is_busy):
+            return verdict
+        self._reconnect_state = "running"
+        self._last_reconnect_at = stamp
+        self._reconnect_attempts += 1
+        try:
+            await run_stt_reconnect(self._stt)
+        except asyncio.CancelledError:
+            self._reconnect_state = "queued"
+            raise
+        except Exception as error:
+            self._note_reconnect_failure(error)
+        else:
+            self._note_reconnect_success()
+        return verdict
+
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
     ) -> DeafVerdict:
@@ -637,69 +793,9 @@ class MeetingAudioSession:
             stamp = self._now()
             self.activity.observe_presence(remote_participants)
             verdict = self._monitor.verdict(stamp)
-            action = self._monitor.note_tick(stamp, verdict)
-            if action == "terminal":
-                self.fail(f"persistent {verdict}")
-                self.raise_if_failed()
-            if action == "repair":
-                self.request_stt_reconnect(verdict)
-            if (
-                self._reconnect_state == "idle"
-                and self._stt_idle_reconnect_seconds > 0
-                and not stt_socket_dead(self._stt)
-                and self._quiet_for_reconnect(stamp, is_busy=is_busy)
-            ):
-                idle_of = getattr(self._stt, "idle_seconds", None)
-                idle = idle_of(stamp) if callable(idle_of) else None
-                if idle is not None and idle >= self._stt_idle_reconnect_seconds:
-                    self.request_stt_reconnect("proactive_idle")
-            if self._reconnect_state != "queued":
-                return verdict
-            if self._reconnect_since is not None and stamp - self._reconnect_since >= 120:
-                self._reconnect_state = "exhausted"
-                self.fail("STT reconnect deadline exceeded")
-                self.raise_if_failed()
-            if self._stopping:
-                return verdict
-            if not stt_socket_dead(self._stt):
-                if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
-                    return verdict
-            if self._last_reconnect_at is not None and stamp - self._last_reconnect_at < 5:
-                return verdict
-            self._reconnect_state = "running"
-            self._last_reconnect_at = stamp
-            self._reconnect_attempts += 1
-            try:
-                await run_stt_reconnect(self._stt)
-            except asyncio.CancelledError:
-                self._reconnect_state = "queued"
-                raise
-            except Exception as error:
-                fault = classify_exception("stt", error)
-                if self._faults is not None:
-                    self._faults.record(fault)
-                if self._journal is not None:
-                    self._journal.record(
-                        "stt_reconnect_failed",
-                        source="stt",
-                        kind=fault.kind,
-                        attempts=self._reconnect_attempts,
-                        **self._reconnect_tags(),
-                    )
-                self._reconnect_state = "queued" if self._reconnect_attempts < 3 else "exhausted"
-                if self._reconnect_state == "exhausted":
-                    self.fail("STT reconnect attempts exhausted", cause=error)
-                    self.raise_if_failed()
-            else:
-                self._reconnect_state = "idle"
-                if self._journal is not None:
-                    self._journal.record(
-                        "stt_reconnect_finished",
-                        source="stt",
-                        attempts=self._reconnect_attempts,
-                        **self._reconnect_tags(),
-                    )
-            return verdict
+            self._apply_monitor_action(verdict, self._monitor.note_tick(stamp, verdict))
+            self._maybe_proactive_reconnect(stamp, is_busy=is_busy)
+            return await self._drive_reconnect(stamp, verdict, is_busy=is_busy)
 
     @property
     def is_speaking(self) -> bool:
@@ -788,85 +884,240 @@ def create_playback_engine(
             language=speech_language,
             journal=journal,
         ),
-        stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
-        set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
+        PlaybackBackend(
+            set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
+            stream_audio=create_paplay_stream_runner(
+                sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE
+            ),
+        ),
         on_event=on_event,
-        faults=faults,
-        journal=journal,
+        diagnostics=Diagnostics(faults=faults, journal=journal),
     )
+
+
+@dataclass(slots=True)
+class _SessionSlot:
+    session: MeetingAudioSession | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PipelineSpec:
+    input: FrameProcessor
+    stt: FrameProcessor
+    transcript: Callable[[TranscriptionFrame], Awaitable[None]]
+    interim: Callable[[TranscriptionFrame], Awaitable[None]] | None
+    extra: tuple[FrameProcessor, ...] = ()
+
+
+def _resolve_engine(
+    playback: PlaybackEngine | None,
+    speech: SpeechPipelineSettings,
+    callbacks: StreamCallbacks,
+    diagnostics: Diagnostics,
+) -> PlaybackEngine:
+    if playback is not None:
+        return playback
+    return create_playback_engine(
+        tts_settings=speech.tts_settings,
+        speech_language=speech.speech_language,
+        on_event=callbacks.on_playback_event,
+        faults=diagnostics.faults,
+        journal=diagnostics.journal,
+    )
+
+
+def _resolve_stt(stt: FrameProcessor | None, speech: SpeechPipelineSettings) -> FrameProcessor:
+    if stt is not None:
+        return stt
+    return create_muse_stt(
+        api_key=require_secret(speech.stt_settings.api_key, ConfigKey.STT_API_KEY),
+        options=MuseSTTOptions(
+            model=speech.stt_settings.model,
+            mode=speech.stt_settings.mode,
+            language=SPEECH_LANGUAGES[speech.speech_language][0],
+            keywords=speech.stt_keywords,
+        ),
+        sample_rate=CAPTURE_SAMPLE_RATE,
+        url=speech.stt_settings.url,
+        service_class=ManagedMuseSTT,
+    )
+
+
+def _resolve_transport(transport: Any | None) -> Any:
+    return transport if transport is not None else _native_transport()
+
+
+def _terminate_if_native(*, native: bool, transport: Any | None) -> None:
+    if native and transport is not None:
+        _terminate_native_audio(transport)
+
+
+def _tagged_optional(
+    stream_id: str,
+    callback: Callable[[TranscriptionFrame], Awaitable[None]] | None,
+    input: BaseInputTransport,
+) -> Callable[[TranscriptionFrame], Awaitable[None]] | None:
+    if callback is None:
+        return None
+    return _tagged(stream_id, callback, clock=lambda: getattr(input, "last_capture", None))
+
+
+def _build_worker(
+    spec: _PipelineSpec,
+    components: StreamComponents,
+    callbacks: StreamCallbacks,
+    diagnostics: Diagnostics,
+    speech: SpeechPipelineSettings,
+) -> tuple[PipelineWorker, CaptureActivity]:
+    activity = components.activity or CaptureActivity()
+    worker = PipelineWorker(
+        Pipeline(
+            [
+                spec.input,
+                VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, speech.vad_settings)),
+                *([components.turn_tap] if components.turn_tap is not None else []),
+                _CaptureObserver(
+                    activity,
+                    diagnostics.journal,
+                    components.probe,
+                    components.voice_activity,
+                    on_vad=callbacks.on_vad,
+                ),
+                *spec.extra,
+                spec.stt,
+                _TranscriptObserver(
+                    spec.transcript,
+                    activity,
+                    diagnostics.faults,
+                    spec.interim,
+                    journal=diagnostics.journal,
+                ),
+            ]
+        ),
+        params=PipelineParams(audio_in_sample_rate=CAPTURE_SAMPLE_RATE),
+        idle_timeout_secs=None,
+    )
+    return worker, activity
+
+
+async def _record_pipeline_error(
+    slot: _SessionSlot, faults: FaultReporter | None, frame: ErrorFrame
+) -> ProviderFault | None:
+    detail = category_fault("stt", frame) or classify_exception(
+        "stt", frame.exception or RuntimeError("provider failure")
+    )
+    if faults is not None:
+        faults.record(detail)
+    session = slot.session
+    if frame.category is not None and not frame.category.is_permanent:
+        if session is not None and detail.retryable:
+            session.request_stt_reconnect("provider_fault")
+        return None
+    if session is not None:
+        session.fail("meeting audio provider failed", cause=detail)
+        return None
+    return detail
+
+
+def _fail_early(session: MeetingAudioSession, early_failures: list[BaseException]) -> None:
+    for cause in early_failures:
+        session.fail("meeting audio provider failed", cause=cause)
+
+
+async def _await_session_start(
+    session: MeetingAudioSession,
+    runner_task: asyncio.Task[None],
+    started: asyncio.Event,
+) -> None:
+    async with asyncio.timeout(25):
+        started_task = asyncio.create_task(started.wait())
+        failed_task = asyncio.create_task(session.wait_failed())
+        try:
+            done, _ = await asyncio.wait(
+                {started_task, failed_task, runner_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            session.raise_if_failed()
+            if runner_task in done and not started.is_set():
+                raise MeetingAudioError("meeting audio startup failed")
+        finally:
+            for task in (started_task, failed_task):
+                task.cancel()
+            await asyncio.gather(started_task, failed_task, return_exceptions=True)
+
+
+async def _cleanup_audio_session(
+    session: MeetingAudioSession | None,
+    engine: PlaybackEngine,
+    diagnostics: Diagnostics,
+    teardown: Callable[[], None] | None = None,
+) -> None:
+    original_error = sys.exc_info()[1]
+    cleanup_errors: list[Exception] = []
+    if session is not None:
+        try:
+            await session.stop()
+        except Exception as error:
+            cleanup_errors.append(error)
+    try:
+        await _bounded_call(engine.close(), STOP_DEADLINE_SECONDS)
+    except Exception as error:
+        cleanup_errors.append(error)
+    finally:
+        if teardown is not None:
+            teardown()
+    for cleanup_error in cleanup_errors:
+        record_consumer_fault(
+            diagnostics.faults,
+            diagnostics.journal,
+            source="audio",
+            detail="audio_cleanup",
+            error=cleanup_error,
+        )
+    if cleanup_errors and original_error is None:
+        raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]
+
+
+async def _confirm_stt_ready(
+    stt: FrameProcessor,
+    speech: SpeechPipelineSettings,
+    diagnostics: Diagnostics,
+    stream_id: str,
+) -> None:
+    if not await stt_ready(stt, timeout_seconds=speech.stt_settings.ready_timeout_seconds):
+        if diagnostics.journal is not None:
+            diagnostics.journal.record("stt_session_failed", source="stt", stream_id=stream_id)
+        raise MeetingAudioError("STT session did not become ready")
+    if diagnostics.journal is not None:
+        diagnostics.journal.record("stt_session_started", source="stt", stream_id=stream_id)
 
 
 @asynccontextmanager
 async def open_meeting_audio(
     *,
-    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
     transport: Any | None = None,
-    stt: FrameProcessor | None = None,
-    playback: PlaybackEngine | None = None,
-    on_playback_event: Callable[[PlaybackEvent], None] | None = None,
-    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: OnVad | None = None,
-    activity: CaptureActivity | None = None,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
-    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
-    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-    stt_settings: STTSettings = DEFAULTS.stt,
-    stt_keywords: Sequence[str] | None = None,
-    tts_settings: TTSSettings = DEFAULTS.tts,
-    speech_language: str = DEFAULTS.speech.language,
-    vad_settings: VADSettings = DEFAULTS.vad,
-    probe: AttributionProbe | None = None,
-    voice_activity: VoiceActivityTracker | None = None,
-    turn_tap: TurnAudioTap | None = None,
+    callbacks: StreamCallbacks,
+    components: StreamComponents = DEFAULT_STREAM_COMPONENTS,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+    policy: StreamPolicy = DEFAULT_STREAM_POLICY,
 ) -> AsyncIterator[MeetingAudioSession]:
-    activity = activity or CaptureActivity()
+    speech = policy.speech
     native_transport = transport is None
+    engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
+    slot = _SessionSlot()
     session: MeetingAudioSession | None = None
-    engine = (
-        playback
-        if playback is not None
-        else create_playback_engine(
-            tts_settings=tts_settings,
-            speech_language=speech_language,
-            on_event=on_playback_event,
-            faults=faults,
-            journal=journal,
-        )
-    )
     try:
         try:
-            stt = (
-                stt
-                if stt is not None
-                else create_muse_stt(
-                    api_key=require_secret(stt_settings.api_key, ConfigKey.STT_API_KEY),
-                    sample_rate=CAPTURE_SAMPLE_RATE,
-                    model=stt_settings.model,
-                    url=stt_settings.url,
-                    mode=stt_settings.mode,
-                    language=SPEECH_LANGUAGES[speech_language][0],
-                    keywords=stt_keywords,
-                    service_class=ManagedMuseSTT,
-                )
-            )
-            transport = transport if transport is not None else _native_transport()
-            worker = PipelineWorker(
-                Pipeline(
-                    [
-                        transport.input(),
-                        VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
-                        *([turn_tap] if turn_tap is not None else []),
-                        _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
-                        stt,
-                        _TranscriptObserver(
-                            on_transcript, activity, faults, on_interim, journal=journal
-                        ),
-                    ]
+            stt = _resolve_stt(components.stt, speech)
+            transport = _resolve_transport(transport)
+            worker, activity = _build_worker(
+                _PipelineSpec(
+                    transport.input(), stt, callbacks.on_transcript, callbacks.on_interim
                 ),
-                params=PipelineParams(audio_in_sample_rate=CAPTURE_SAMPLE_RATE),
-                idle_timeout_secs=None,
+                components,
+                callbacks,
+                diagnostics,
+                speech,
             )
             started = asyncio.Event()
             runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
@@ -877,18 +1128,8 @@ async def open_meeting_audio(
                 started.set()
 
             async def on_pipeline_error(_: PipelineWorker, frame: ErrorFrame) -> None:
-                detail = category_fault("stt", frame) or classify_exception(
-                    "stt", frame.exception or RuntimeError("provider failure")
-                )
-                if faults is not None:
-                    faults.record(detail)
-                if frame.category is not None and not frame.category.is_permanent:
-                    if session is not None and detail.retryable:
-                        session.request_stt_reconnect("provider_fault")
-                    return
-                if session is not None:
-                    session.fail("meeting audio provider failed", cause=detail)
-                else:
+                detail = await _record_pipeline_error(slot, diagnostics.faults, frame)
+                if detail is not None:
                     early_failures.append(detail)
 
             worker.event_handler("on_pipeline_started")(on_pipeline_started)
@@ -897,66 +1138,30 @@ async def open_meeting_audio(
                 await runner.add_workers(worker)
             runner_task = asyncio.create_task(runner.run())
             session = MeetingAudioSession(
-                worker,
-                runner,
-                runner_task,
-                engine,
-                stt=stt,
-                activity=activity,
-                faults=faults,
-                journal=journal,
-                deaf_window_seconds=deaf_window_seconds,
-                deaf_grace_seconds=deaf_grace_seconds,
-                alone_leave_seconds=alone_leave_seconds,
+                SessionPipeline(worker, runner, runner_task, engine),
+                capture=SessionCapture(stt, activity),
+                diagnostics=diagnostics,
+                timing=policy.timing,
             )
-            for cause in early_failures:
-                session.fail("meeting audio provider failed", cause=cause)
+            slot.session = session
+            _fail_early(session, early_failures)
         except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
             raise MeetingAudioError("meeting audio initialization failed") from error
-
         try:
-            async with asyncio.timeout(25):
-                started_task = asyncio.create_task(started.wait())
-                failed_task = asyncio.create_task(session.wait_failed())
-                try:
-                    done, _ = await asyncio.wait(
-                        {started_task, failed_task, runner_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    session.raise_if_failed()
-                    if runner_task in done and not started.is_set():
-                        raise MeetingAudioError("meeting audio startup failed")
-                finally:
-                    for task in (started_task, failed_task):
-                        task.cancel()
-                    await asyncio.gather(started_task, failed_task, return_exceptions=True)
+            await _await_session_start(session, runner_task, started)
         except TimeoutError:
             raise MeetingAudioError("meeting audio startup timed out") from None
         session.raise_if_failed()
         yield session
     finally:
-        original_error = sys.exc_info()[1]
-        cleanup_errors: list[Exception] = []
-        if session is not None:
-            try:
-                await session.stop()
-            except Exception as error:
-                cleanup_errors.append(error)
-        try:
-            await _bounded_call(engine.close(), STOP_DEADLINE_SECONDS)
-        except Exception as error:
-            cleanup_errors.append(error)
-        finally:
-            if native_transport and transport is not None:
-                _terminate_native_audio(transport)
-        for cleanup_error in cleanup_errors:
-            record_consumer_fault(
-                faults, journal, source="audio", detail="audio_cleanup", error=cleanup_error
-            )
-        if cleanup_errors and original_error is None:
-            raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]
+        await _cleanup_audio_session(
+            session,
+            engine,
+            diagnostics,
+            teardown=lambda: _terminate_if_native(native=native_transport, transport=transport),
+        )
 
 
 def _tagged(
@@ -979,87 +1184,42 @@ def _tagged(
 @asynccontextmanager
 async def open_stream_audio(
     *,
-    stream_id: str,
-    input: BaseInputTransport,
-    on_transcript: Callable[[TranscriptionFrame], Awaitable[None]],
-    stt: FrameProcessor | None = None,
-    playback: PlaybackEngine | None = None,
-    on_playback_event: Callable[[PlaybackEvent], None] | None = None,
-    on_interim: Callable[[TranscriptionFrame], Awaitable[None]] | None = None,
-    on_vad: OnVad | None = None,
-    activity: CaptureActivity | None = None,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
-    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
-    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-    stt_settings: STTSettings = DEFAULTS.stt,
-    stt_keywords: Sequence[str] | None = None,
-    tts_settings: TTSSettings = DEFAULTS.tts,
-    speech_language: str = DEFAULTS.speech.language,
-    vad_settings: VADSettings = DEFAULTS.vad,
-    probe: AttributionProbe | None = None,
-    voice_activity: VoiceActivityTracker | None = None,
-    turn_tap: TurnAudioTap | None = None,
+    source: StreamSource,
+    callbacks: StreamCallbacks,
+    components: StreamComponents = DEFAULT_STREAM_COMPONENTS,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+    policy: StreamPolicy = DEFAULT_STREAM_POLICY,
 ) -> AsyncIterator[MeetingAudioSession]:
-    activity = activity or CaptureActivity()
-    tagged_interim = (
-        _tagged(stream_id, on_interim, clock=lambda: getattr(input, "last_capture", None))
-        if on_interim is not None
-        else None
-    )
+    speech = policy.speech
+    stream_id = source.stream_id
+    input = source.input
+    tagged_interim = _tagged_optional(stream_id, callbacks.on_interim, input)
+    engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
+    slot = _SessionSlot()
     session: MeetingAudioSession | None = None
-    engine = (
-        playback
-        if playback is not None
-        else create_playback_engine(
-            tts_settings=tts_settings,
-            speech_language=speech_language,
-            on_event=on_playback_event,
-            faults=faults,
-            journal=journal,
-        )
-    )
     try:
         try:
-            stt = (
-                stt
-                if stt is not None
-                else create_muse_stt(
-                    api_key=require_secret(stt_settings.api_key, ConfigKey.STT_API_KEY),
-                    sample_rate=CAPTURE_SAMPLE_RATE,
-                    model=stt_settings.model,
-                    url=stt_settings.url,
-                    mode=stt_settings.mode,
-                    language=SPEECH_LANGUAGES[speech_language][0],
-                    keywords=stt_keywords,
-                    service_class=ManagedMuseSTT,
-                )
-            )
-            worker = PipelineWorker(
-                Pipeline(
-                    [
-                        input,
-                        VADProcessor(vad_analyzer=vad_analyzer(CAPTURE_SAMPLE_RATE, vad_settings)),
-                        *([turn_tap] if turn_tap is not None else []),
-                        _CaptureObserver(activity, journal, probe, voice_activity, on_vad=on_vad),
-                        PreRollBuffer(CAPTURE_SAMPLE_RATE, preroll_ms=stt_settings.preroll_ms),
-                        stt,
-                        _TranscriptObserver(
-                            _tagged(
-                                stream_id,
-                                on_transcript,
-                                clock=lambda: getattr(input, "last_capture", None),
-                            ),
-                            activity,
-                            faults,
-                            tagged_interim,
-                            journal=journal,
+            stt = _resolve_stt(components.stt, speech)
+            worker, activity = _build_worker(
+                _PipelineSpec(
+                    input,
+                    stt,
+                    _tagged(
+                        stream_id,
+                        callbacks.on_transcript,
+                        clock=lambda: getattr(input, "last_capture", None),
+                    ),
+                    tagged_interim,
+                    extra=(
+                        PreRollBuffer(
+                            CAPTURE_SAMPLE_RATE, preroll_ms=speech.stt_settings.preroll_ms
                         ),
-                    ]
+                    ),
                 ),
-                params=PipelineParams(audio_in_sample_rate=CAPTURE_SAMPLE_RATE),
-                idle_timeout_secs=None,
+                components,
+                callbacks,
+                diagnostics,
+                speech,
             )
             started = asyncio.Event()
             runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
@@ -1070,18 +1230,8 @@ async def open_stream_audio(
                 started.set()
 
             async def on_pipeline_error(_: PipelineWorker, frame: ErrorFrame) -> None:
-                detail = category_fault("stt", frame) or classify_exception(
-                    "stt", frame.exception or RuntimeError("provider failure")
-                )
-                if faults is not None:
-                    faults.record(detail)
-                if frame.category is not None and not frame.category.is_permanent:
-                    if session is not None and detail.retryable:
-                        session.request_stt_reconnect("provider_fault")
-                    return
-                if session is not None:
-                    session.fail("meeting audio provider failed", cause=detail)
-                else:
+                detail = await _record_pipeline_error(slot, diagnostics.faults, frame)
+                if detail is not None:
                     early_failures.append(detail)
 
             worker.event_handler("on_pipeline_started")(on_pipeline_started)
@@ -1090,68 +1240,27 @@ async def open_stream_audio(
                 await runner.add_workers(worker)
             runner_task = asyncio.create_task(runner.run())
             session = MeetingAudioSession(
-                worker,
-                runner,
-                runner_task,
-                engine,
-                stt=stt,
-                activity=activity,
-                faults=faults,
-                journal=journal,
-                deaf_window_seconds=deaf_window_seconds,
-                deaf_grace_seconds=deaf_grace_seconds,
-                alone_leave_seconds=alone_leave_seconds,
-                stream_id=stream_id,
-                stt_idle_reconnect_seconds=stt_settings.idle_reconnect_seconds,
+                SessionPipeline(worker, runner, runner_task, engine),
+                capture=SessionCapture(stt, activity),
+                diagnostics=diagnostics,
+                timing=policy.timing,
+                runtime=SessionRuntime(
+                    stream_id=stream_id,
+                    stt_idle_reconnect_seconds=speech.stt_settings.idle_reconnect_seconds,
+                ),
             )
-            for cause in early_failures:
-                session.fail("meeting audio provider failed", cause=cause)
+            slot.session = session
+            _fail_early(session, early_failures)
         except (asyncio.CancelledError, FakeYouError):
             raise
         except Exception as error:
             raise MeetingAudioError("meeting audio initialization failed") from error
-
         try:
-            async with asyncio.timeout(25):
-                started_task = asyncio.create_task(started.wait())
-                failed_task = asyncio.create_task(session.wait_failed())
-                try:
-                    done, _ = await asyncio.wait(
-                        {started_task, failed_task, runner_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    session.raise_if_failed()
-                    if runner_task in done and not started.is_set():
-                        raise MeetingAudioError("meeting audio startup failed")
-                finally:
-                    for task in (started_task, failed_task):
-                        task.cancel()
-                    await asyncio.gather(started_task, failed_task, return_exceptions=True)
+            await _await_session_start(session, runner_task, started)
         except TimeoutError:
             raise MeetingAudioError("meeting audio startup timed out") from None
         session.raise_if_failed()
-        if not await stt_ready(stt, timeout_seconds=stt_settings.ready_timeout_seconds):
-            if journal is not None:
-                journal.record("stt_session_failed", source="stt", stream_id=stream_id)
-            raise MeetingAudioError("STT session did not become ready")
-        if journal is not None:
-            journal.record("stt_session_started", source="stt", stream_id=stream_id)
+        await _confirm_stt_ready(stt, speech, diagnostics, stream_id)
         yield session
     finally:
-        original_error = sys.exc_info()[1]
-        cleanup_errors: list[Exception] = []
-        if session is not None:
-            try:
-                await session.stop()
-            except Exception as error:
-                cleanup_errors.append(error)
-        try:
-            await _bounded_call(engine.close(), STOP_DEADLINE_SECONDS)
-        except Exception as error:
-            cleanup_errors.append(error)
-        for cleanup_error in cleanup_errors:
-            record_consumer_fault(
-                faults, journal, source="audio", detail="audio_cleanup", error=cleanup_error
-            )
-        if cleanup_errors and original_error is None:
-            raise MeetingAudioError("meeting audio cleanup failed") from cleanup_errors[0]
+        await _cleanup_audio_session(session, engine, diagnostics)

@@ -11,13 +11,14 @@ import fakeyou.cli.debrief as cli_debrief
 import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.main import build_parser
 from fakeyou.config.settings import GoogleReply
 from fakeyou.debrief.debrief_schema import DebriefDraft
 from fakeyou.diarization.diarize_client import DiarizedTurn
 from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.memory.persona import PersonaProfile, persona_digest
-from fakeyou.observability.journal import Journal, journal_path
+from fakeyou.observability.journal import Journal, JournalFile, journal_path
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.persistence.brief import (
     MeetingBrief,
@@ -53,7 +54,9 @@ async def test_debrief_cancellation_exits_nonzero_without_traceback(monkeypatch,
 @pytest.mark.parametrize("outcome", ["available", "stale", "missing", "invalid"])
 def test_session_report_has_independent_debrief_status(settings, monkeypatch, capsys, outcome):
     journal = Journal(
-        "debrief-test", path=journal_path(settings.paths.journal_dir, "debrief-test"), echo=False
+        "debrief-test",
+        file=JournalFile(journal_path(settings.paths.journal_dir, "debrief-test")),
+        echo=False,
     )
     journal.record(
         "session_finished", source="cli", terminal_reason="stopped_by_owner", exit_code=0
@@ -100,9 +103,7 @@ def debrief_run(settings, tmp_path):
         partial(
             cli_debrief.debrief_meeting,
             meeting_id="debrief-test",
-            persona_path=persona_path,
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(persona_path, None, None),
             force=False,
             settings=settings,
         ),
@@ -441,9 +442,7 @@ async def test_debrief_renders_display_claim_as_unverified_speaker_label(
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
     await cli_debrief.debrief_meeting(
         meeting_id="debrief-claim",
-        persona_path=persona_path,
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(persona_path, None, None),
         force=False,
         settings=settings,
     )

@@ -14,6 +14,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.memory.owner_notes import (
     OWNER_NOTE_SOURCE,
     NoteConflictError,
+    NoteIdentity,
     OwnerNoteResult,
     ensure_note_indexes,
     forget_owner_note,
@@ -504,7 +505,7 @@ async def test_remember_new_note_keeps_source_time(note_store: NoteStore) -> Non
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert isinstance(result, OwnerNoteResult)
@@ -577,7 +578,7 @@ async def test_naive_source_time_is_rejected(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=datetime(2026, 9, 30, 6, 40),
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_TIME_NOT_AWARE
@@ -594,7 +595,7 @@ async def test_future_source_time_is_rejected(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=future,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_SOURCE_AT_FUTURE
@@ -613,7 +614,7 @@ async def test_note_id_taken_by_existing_episode_is_rejected(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_ID_IN_USE
@@ -629,7 +630,7 @@ async def test_retry_published_note_does_not_extract_twice(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     calls = note_store.extraction_calls
 
@@ -638,7 +639,7 @@ async def test_retry_published_note_does_not_extract_twice(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert again == first
@@ -657,10 +658,12 @@ async def test_retry_without_source_time_uses_stored_time(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
-    again = await remember_owner_note(note_store.memory, group_id=GROUP, text=BODY, note_id=NOTE_A)
+    again = await remember_owner_note(
+        note_store.memory, group_id=GROUP, text=BODY, identity=NoteIdentity(NOTE_A)
+    )
 
     assert again == first
     assert again.source_at == SOURCE_AT
@@ -676,7 +679,7 @@ async def test_retry_with_equivalent_timezone_offset_matches(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     shifted = SOURCE_AT.astimezone(timezone(timedelta(hours=7)))
     assert shifted == SOURCE_AT
@@ -687,7 +690,7 @@ async def test_retry_with_equivalent_timezone_offset_matches(
         group_id=GROUP,
         text=BODY,
         source_at=shifted,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert again == first
@@ -702,7 +705,7 @@ async def test_same_id_with_different_text_is_rejected(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     with pytest.raises(NoteConflictError, match="different payload") as caught:
@@ -711,7 +714,7 @@ async def test_same_id_with_different_text_is_rejected(
             group_id=GROUP,
             text="Orchid demo moves to Monday.",
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
@@ -726,7 +729,7 @@ async def test_same_id_with_different_source_time_is_rejected(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     with pytest.raises(NoteConflictError, match="different payload") as caught:
@@ -735,7 +738,7 @@ async def test_same_id_with_different_source_time_is_rejected(
             group_id=GROUP,
             text=BODY,
             source_at=OLDER_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
@@ -750,15 +753,14 @@ async def test_same_id_with_different_target_is_rejected(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     await remember_owner_note(
         note_store.memory,
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     with pytest.raises(NoteConflictError, match="different payload") as caught:
@@ -767,7 +769,7 @@ async def test_same_id_with_different_target_is_rejected(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
+            identity=NoteIdentity(NOTE_B),
         )
 
     assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
@@ -782,7 +784,7 @@ async def test_correction_publishes_and_supersedes_target(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     result = await remember_owner_note(
@@ -790,8 +792,7 @@ async def test_correction_publishes_and_supersedes_target(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     assert result.episode_uuid == str(NOTE_B)
@@ -824,8 +825,7 @@ async def test_correction_of_legacy_note_creates_superseded_record(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     assert result.supersedes == str(NOTE_A)
@@ -849,8 +849,7 @@ async def test_correction_rejects_unknown_target(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=uuid4(),
+            identity=NoteIdentity(NOTE_B, uuid4()),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN
@@ -866,7 +865,7 @@ async def test_correction_target_in_other_group_is_hidden(
         group_id=OTHER_GROUP,
         text=BODY,
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     with pytest.raises(FakeYouError, match="unknown correction target") as caught:
@@ -875,8 +874,7 @@ async def test_correction_target_in_other_group_is_hidden(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN
@@ -900,8 +898,7 @@ async def test_correction_rejects_transcript_target(note_store: NoteStore) -> No
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_NOT_OWNER_NOTE
@@ -915,15 +912,14 @@ async def test_correction_rejects_replaced_target(note_store: NoteStore) -> None
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     await remember_owner_note(
         note_store.memory,
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     with pytest.raises(NoteConflictError, match="no longer active") as caught:
@@ -932,8 +928,7 @@ async def test_correction_rejects_replaced_target(note_store: NoteStore) -> None
             group_id=GROUP,
             text="Orchid demo moves to Monday.",
             source_at=datetime(2026, 10, 1, 6, 40, tzinfo=UTC),
-            note_id=NOTE_C,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_C, NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE
@@ -949,7 +944,7 @@ async def test_correction_rejects_pending_target(note_store: NoteStore) -> None:
             group_id=GROUP,
             text="Orchid demo moves to Thursday.",
             source_at=OLDER_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     with pytest.raises(NoteConflictError, match="no longer active") as caught:
@@ -958,8 +953,7 @@ async def test_correction_rejects_pending_target(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE
@@ -978,7 +972,7 @@ async def test_correction_requires_newer_source_time(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     with pytest.raises(FakeYouError, match="newer than its target") as caught:
@@ -987,8 +981,7 @@ async def test_correction_requires_newer_source_time(
             group_id=GROUP,
             text=BODY,
             source_at=source_at,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_CORRECTION_NOT_NEWER
@@ -1005,7 +998,7 @@ async def test_empty_extraction_never_publishes(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_NO_USABLE_FACTS
@@ -1018,7 +1011,7 @@ async def test_empty_extraction_never_publishes(note_store: NoteStore) -> None:
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert result.facts == (BODY,)
@@ -1038,7 +1031,7 @@ async def test_extraction_without_usable_evidence_never_publishes(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert caught.value.code is ErrorCode.NOTE_NO_USABLE_FACTS
@@ -1055,7 +1048,7 @@ async def test_fault_after_prepare_resumes(note_store: NoteStore) -> None:
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert note_store.episodes == {}
@@ -1067,7 +1060,7 @@ async def test_fault_after_prepare_resumes(note_store: NoteStore) -> None:
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert result.facts == (BODY,)
@@ -1087,7 +1080,7 @@ async def test_fault_after_episode_saved_resumes_with_single_extraction(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert len(note_store.episodes) == 1
@@ -1098,7 +1091,7 @@ async def test_fault_after_episode_saved_resumes_with_single_extraction(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert result.facts == (BODY,)
@@ -1117,7 +1110,7 @@ async def test_fault_after_extraction_resumes_without_reextracting(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     assert note_store.extraction_calls == 1
@@ -1129,7 +1122,7 @@ async def test_fault_after_extraction_resumes_without_reextracting(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert result.facts == (BODY,)
@@ -1145,7 +1138,7 @@ async def test_fault_before_commit_rolls_back_and_resumes(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     note_store.fail_next.add("late_publish")
 
@@ -1155,8 +1148,7 @@ async def test_fault_before_commit_rolls_back_and_resumes(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     states = await read_note_states(
@@ -1172,8 +1164,7 @@ async def test_fault_before_commit_rolls_back_and_resumes(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     assert result.supersedes == str(NOTE_A)
@@ -1198,7 +1189,7 @@ async def test_fault_after_commit_returns_active_on_retry(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_A,
+            identity=NoteIdentity(NOTE_A),
         )
 
     states = await read_note_states(note_store.memory, group_id=GROUP, episode_uuids=[str(NOTE_A)])
@@ -1209,14 +1200,14 @@ async def test_fault_after_commit_returns_active_on_retry(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     again = await remember_owner_note(
         note_store.memory,
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert again == result
@@ -1235,7 +1226,7 @@ async def test_concurrent_corrections_keep_single_winner(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     bodies = {str(NOTE_B): BODY, str(NOTE_C): "Orchid demo moves to Monday."}
 
@@ -1245,8 +1236,7 @@ async def test_concurrent_corrections_keep_single_winner(
             group_id=GROUP,
             text=bodies[str(note_id)],
             source_at=SOURCE_AT,
-            note_id=note_id,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(note_id, NOTE_A),
         )
 
     first, second = await asyncio.gather(correct(NOTE_B), correct(NOTE_C), return_exceptions=True)
@@ -1271,8 +1261,7 @@ async def test_concurrent_corrections_keep_single_winner(
         group_id=GROUP,
         text=bodies[winner.episode_uuid],
         source_at=SOURCE_AT,
-        note_id=UUID(winner.episode_uuid),
-        supersedes=NOTE_A,
+        identity=NoteIdentity(UUID(winner.episode_uuid), NOTE_A),
     )
 
     assert repeat == winner
@@ -1284,15 +1273,14 @@ async def test_forget_blocks_correction_chain(note_store: NoteStore) -> None:
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     await remember_owner_note(
         note_store.memory,
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
-        supersedes=NOTE_A,
+        identity=NoteIdentity(NOTE_B, NOTE_A),
     )
 
     with pytest.raises(FakeYouError, match="correction chain") as caught:
@@ -1315,7 +1303,7 @@ async def test_forget_blocks_target_with_pending_correction(
         group_id=GROUP,
         text="Orchid demo moves to Thursday.",
         source_at=OLDER_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     note_store.fail_next.add("publish")
     with pytest.raises(RuntimeError, match="injected publish failure"):
@@ -1324,8 +1312,7 @@ async def test_forget_blocks_target_with_pending_correction(
             group_id=GROUP,
             text=BODY,
             source_at=SOURCE_AT,
-            note_id=NOTE_B,
-            supersedes=NOTE_A,
+            identity=NoteIdentity(NOTE_B, NOTE_A),
         )
 
     with pytest.raises(FakeYouError, match="pending correction") as caught:
@@ -1348,14 +1335,14 @@ async def test_forget_removes_standalone_note_with_control(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     await remember_owner_note(
         note_store.memory,
         group_id=OTHER_GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_B,
+        identity=NoteIdentity(NOTE_B),
     )
 
     await forget_owner_note(note_store.memory, group_id=GROUP, episode_uuid=str(NOTE_A))
@@ -1373,7 +1360,7 @@ async def test_forget_rejects_foreign_group(note_store: NoteStore) -> None:
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     with pytest.raises(FakeYouError, match="not in this persona") as caught:
@@ -1390,7 +1377,7 @@ async def test_control_record_survives_episode_resave(note_store: NoteStore) -> 
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     await note_store.episodes[result.episode_uuid].save(note_store.driver)
@@ -1410,7 +1397,7 @@ async def test_states_hide_other_groups_and_unknown_ids(
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert (
@@ -1440,7 +1427,7 @@ async def test_retry_reads_neo4j_native_datetimes(note_store: NoteStore) -> None
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
     control = note_store.controls[str(NOTE_A)]
     control["source_at"] = Neo4jDateTime.from_native(first.source_at)
@@ -1451,7 +1438,7 @@ async def test_retry_reads_neo4j_native_datetimes(note_store: NoteStore) -> None
         group_id=GROUP,
         text=BODY,
         source_at=SOURCE_AT,
-        note_id=NOTE_A,
+        identity=NoteIdentity(NOTE_A),
     )
 
     assert again == first

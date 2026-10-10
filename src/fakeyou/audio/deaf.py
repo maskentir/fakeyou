@@ -176,24 +176,32 @@ def evaluate_deafness(
     return "silent"
 
 
+@dataclass(frozen=True, slots=True)
+class DeafTiming:
+    deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds
+    deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds
+    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds
+    restate_interval_seconds: float = 60.0
+
+
+DEFAULT_DEAF_TIMING = DeafTiming()
+
+
 class DeafMonitor:
     def __init__(
         self,
         *,
         activity: CaptureActivity,
         faults: FaultReporter | None = None,
-        deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
-        deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-        alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
-        restate_interval_seconds: float = 60.0,
+        timing: DeafTiming = DEFAULT_DEAF_TIMING,
         journal: Journal | None = None,
     ) -> None:
         self._activity = activity
         self._faults = faults
-        self.alone_leave_seconds = alone_leave_seconds
-        self.deaf_window_seconds = deaf_window_seconds
-        self.deaf_grace_seconds = deaf_grace_seconds
-        self.restate_interval_seconds = restate_interval_seconds
+        self.alone_leave_seconds = timing.alone_leave_seconds
+        self.deaf_window_seconds = timing.deaf_window_seconds
+        self.deaf_grace_seconds = timing.deaf_grace_seconds
+        self.restate_interval_seconds = timing.restate_interval_seconds
         self._journal = journal
         self._first_fault_at: float | None = None
         self._last_report_at: float | None = None

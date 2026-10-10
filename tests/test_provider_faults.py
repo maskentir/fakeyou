@@ -8,6 +8,7 @@ from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.observability.provider_faults import (
     ERROR_CATEGORY_KINDS,
+    FaultEvidence,
     ProviderFault,
     classify_exception,
     classify_http,
@@ -156,20 +157,22 @@ def test_cancelled_error_is_never_classified() -> None:
 
 
 def test_provider_fault_passes_through_unchanged() -> None:
-    original = ProviderFault("stt", "unavailable", detail="down", retryable=True)
+    original = ProviderFault(
+        "stt", "unavailable", evidence=FaultEvidence(detail="down"), retryable=True
+    )
 
     assert classify_exception("stt", original) is original
 
 
 def test_provider_fault_renders_source_and_kind() -> None:
-    fault = ProviderFault("agent", "timeout", status=None, detail="slow", retryable=True)
+    fault = ProviderFault("agent", "timeout", evidence=FaultEvidence(None, "slow"), retryable=True)
 
     assert str(fault).startswith("agent timeout")
     assert isinstance(fault, Exception)
 
 
 def test_provider_fault_truncates_long_detail() -> None:
-    fault = ProviderFault("tts", "unknown", detail="y" * 900)
+    fault = ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="y" * 900))
 
     assert fault.detail is not None
     assert len(fault.detail) <= 300

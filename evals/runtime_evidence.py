@@ -301,12 +301,12 @@ async def native_responder(
         async with assembly.open_conversation(
             settings,
             config,
-            graphiti=memory,
-            profile=profile,
-            brief=brief,
-            on_transition=lambda *_: None,
-            wake_phrases=(profile.display_name,),
-            on_tool_result=record_tool_results(counter.tool_results),
+            agent=assembly.AgentWiring(profile=profile, brief=brief, graphiti=memory),
+            behavior=assembly.LoopBehavior(
+                on_transition=lambda *_: None,
+                wake_phrases=(profile.display_name,),
+                on_tool_result=record_tool_results(counter.tool_results),
+            ),
         ) as conversation:
             responder = conversation._responder
             if not isinstance(responder, LangGraphResponder):

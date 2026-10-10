@@ -4,6 +4,7 @@ import signal
 import sys
 import threading
 from contextlib import asynccontextmanager, nullcontext
+from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,8 @@ import fakeyou.orchestration.providers as providers
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
+from fakeyou.cli._operator import OperatorIdentity
+from fakeyou.cli.memory import CorrectionTarget
 from fakeyou.config.settings import (
     DEFAULTS,
     CompatibleReply,
@@ -52,9 +55,10 @@ from fakeyou.foundation.invariants import (
 )
 from fakeyou.meet.browser import profile_lock
 from fakeyou.memory import owner_notes
-from fakeyou.memory.owner_notes import NoteConflictError, OwnerNoteResult
+from fakeyou.memory.owner_notes import NoteConflictError, NoteIdentity, OwnerNoteResult
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
 from fakeyou.observability.journal import journal_path
+from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
 from fakeyou.persistence.brief import (
     MAX_BRIEF_BYTES,
     MeetingBrief,
@@ -388,7 +392,7 @@ async def test_join_without_audio_still_wires_faults_and_journal(
     assert captured["config"].database_url == DATABASE_URL
     assert isinstance(captured["faults"], FaultReporter)
     assert isinstance(captured["journal"], Journal)
-    assert "preflight_hosts" not in captured
+    assert captured["preflight_hosts"] is None
     assert (tmp_path / "journals" / "meeting-1.jsonl").is_file()
 
 
@@ -508,7 +512,7 @@ async def test_join_headless_override(session_run, join, settings) -> None:
         (
             ["memory-reembed", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
             "reembed_memory",
-            {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
+            {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
         ),
         (
             ["memory-forget", "--meeting", "m1", "--persona", "p.json", "--keep-record"],
@@ -563,7 +567,7 @@ def test_join_owner_id_flag(monkeypatch) -> None:
         ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", "--owner-id", "owner-9"],
     )
     cli_main.main()
-    assert captured["owner_id"] == "owner-9"
+    assert captured["options"].identity.owner_id == "owner-9"
 
 
 @pytest.mark.parametrize(
@@ -595,7 +599,7 @@ def test_join_headless_flag(monkeypatch, argv, expected) -> None:
         sys, "argv", ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", *argv]
     )
     cli_main.main()
-    assert captured["headless"] is expected
+    assert captured["options"].headless is expected
 
 
 def test_compose_pulse_defaults_match_audio_constants() -> None:
@@ -734,7 +738,7 @@ async def test_join_audio_transcript_reaches_conversation(
             user_id="",
             timestamp="2026-09-28T00:00:00+00:00",
         )
-        await kwargs["open_audio"].keywords["on_transcript"](frame)
+        await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -849,7 +853,7 @@ async def test_join_wake_phrase_gates_agent_replies(
                 user_id="",
                 timestamp="2026-09-28T00:00:00+00:00",
             )
-            await kwargs["open_audio"].keywords["on_transcript"](frame)
+            await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -898,7 +902,7 @@ async def test_join_barge_in_stops_speaking_session(
             user_id="",
             timestamp="2026-09-28T00:00:00+00:00",
         )
-        await kwargs["open_audio"].keywords["on_transcript"](frame)
+        await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -926,7 +930,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     capsys: pytest.CaptureFixture,
 ) -> None:
     async def run(config, **kwargs):
-        handler = kwargs["open_audio"].keywords["on_playback_event"]
+        handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         handler(PlaybackEvent("playback_started", "hello", ""))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
         handler(PlaybackEvent("playback_finished", "hello?  ", ""))
@@ -968,7 +972,7 @@ async def test_join_audio_wires_journal_and_preflight_hosts(
         tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
     )
 
-    journal = captured["open_audio"].keywords["journal"]
+    journal = captured["open_audio"].keywords["diagnostics"].journal
     assert journal._meeting_id == "meeting-9"
     assert captured["preflight_hosts"] == BASE_HOSTS
     assert captured["preflight_budget_seconds"] == 5.0
@@ -989,7 +993,7 @@ async def test_join_without_audio_skips_preflight(
         "https://meet.google.com/abc-defg-hij",
     )
 
-    assert "preflight_hosts" not in captured
+    assert captured["preflight_hosts"] is None
 
 
 PERSONA_DATA = {
@@ -1178,13 +1182,17 @@ async def _join_persona_conversation(
     audio = audio if audio is not None else FakeReplyAudio()
     outcome: dict = {}
 
-    async def run(config, **kwargs):
+    async def run(config, wiring=None, **kwargs):
+        if wiring is not None:
+            merged = {field.name: getattr(wiring, field.name) for field in fields(wiring)}
+            merged.update(kwargs)
+            kwargs = merged
         if on_start is not None:
             on_start()
         loop = kwargs["conversation"]
         outcome["config"] = config
         outcome["conversation"] = loop
-        audio.on_playback_event = kwargs["open_audio"].keywords["on_playback_event"]
+        audio.on_playback_event = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         loop.bind(audio)
         for index, text in enumerate(transcripts):
             frame = SimpleNamespace(
@@ -1194,7 +1202,7 @@ async def _join_persona_conversation(
                 user_id="",
                 timestamp=f"2026-09-30T00:00:0{index}+00:00",
             )
-            await kwargs["open_audio"].keywords["on_transcript"](frame)
+            await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         if settle is None:
             await loop.wait_idle()
         else:
@@ -1577,9 +1585,9 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
     )
     cli_main.main()
 
-    assert captured["persona_path"] == Path("p.json")
-    assert captured["memory"] is True
-    assert captured["brief_path"] is None
+    assert captured["options"].identity.persona_path == Path("p.json")
+    assert captured["options"].memory is True
+    assert captured["options"].brief_path is None
 
 
 def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1608,8 +1616,8 @@ def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     cli_main.main()
 
-    assert captured["brief_path"] == Path("b.json")
-    assert captured["meeting_id"] == "meeting-9"
+    assert captured["options"].brief_path == Path("b.json")
+    assert captured["options"].meeting_id == "meeting-9"
 
 
 async def test_join_defers_ingest_then_memory_ingest_writes_episode(
@@ -1646,9 +1654,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     fake_persona_memory(monkeypatch, graphiti)
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path, ingest_transcripts=True),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path, ingest_transcripts=True), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -1696,9 +1702,9 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     fake_persona_memory(monkeypatch, graphiti)
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path, ingest_transcripts=True, allowed_tools=[]),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(
+            write_persona(tmp_path, ingest_transcripts=True, allowed_tools=[]), None, None
+        ),
         twin_name=None,
         settings=settings,
     )
@@ -2491,10 +2497,8 @@ async def test_open_conversation_rejects_a_brief_without_a_persona(
         async with assembly.open_conversation(
             settings,
             config,
-            profile=None,
-            graphiti=None,
-            brief=meeting_brief(),
-            on_transition=lambda *_args: None,
+            agent=AgentWiring(profile=None, brief=meeting_brief(), graphiti=None),
+            behavior=LoopBehavior(on_transition=lambda *_args: None),
         ):
             pytest.fail("conversation must not open")
     assert caught.value.code is ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE
@@ -2515,10 +2519,12 @@ async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
         async with assembly.open_conversation(
             settings,
             config,
-            profile=PersonaProfile.model_validate(PERSONA_DATA),
-            graphiti=make_graphiti(),
-            brief=meeting_brief(),
-            on_transition=lambda *_args: None,
+            agent=AgentWiring(
+                profile=PersonaProfile.model_validate(PERSONA_DATA),
+                brief=meeting_brief(),
+                graphiti=make_graphiti(),
+            ),
+            behavior=LoopBehavior(on_transition=lambda *_args: None),
         ):
             pytest.fail("conversation must not open")
     assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
@@ -2563,9 +2569,7 @@ async def test_memory_add_stores_owner_note_in_persona_group(
 
     await cli_memory.add_owner_note(
         "The Orchid demo moves to Friday.",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
         source_at=source_at,
         note_id=note_id,
@@ -2578,7 +2582,7 @@ async def test_memory_add_stores_owner_note_in_persona_group(
             "group_id": profile.memory_group,
             "text": "The Orchid demo moves to Friday.",
             "source_at": source_at,
-            "note_id": note_id,
+            "identity": NoteIdentity(note_id),
         }
     ]
     assert opened == ["open", "close"]
@@ -2603,7 +2607,7 @@ async def test_memory_add_generates_and_reports_note_id_before_extraction(
     async def remember(memory, **kwargs):
         seen.append(kwargs)
         return OwnerNoteResult(
-            episode_uuid=str(kwargs["note_id"]),
+            episode_uuid=str(kwargs["identity"].note_id),
             facts=("A note.",),
             source_at=datetime(2026, 9, 30, 6, 40, tzinfo=UTC),
             recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
@@ -2614,15 +2618,13 @@ async def test_memory_add_generates_and_reports_note_id_before_extraction(
 
     await cli_memory.add_owner_note(
         "A note.",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
     )
 
     [call] = seen
-    assert UUID(str(call["note_id"])) == call["note_id"]
-    assert f"note-id {call['note_id']}" in capsys.readouterr().err
+    assert UUID(str(call["identity"].note_id)) == call["identity"].note_id
+    assert f"note-id {call['identity'].note_id}" in capsys.readouterr().err
 
 
 async def test_memory_add_rejects_future_source_before_opening_memory(
@@ -2633,9 +2635,7 @@ async def test_memory_add_rejects_future_source_before_opening_memory(
     with pytest.raises(FakeYouError, match="future") as caught:
         await cli_memory.add_owner_note(
             "A note.",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             settings=settings,
             source_at=datetime(2999, 1, 1, tzinfo=UTC),
         )
@@ -2656,9 +2656,7 @@ async def test_memory_add_propagates_a_note_conflict(
     with pytest.raises(FakeYouError, match="already in use") as caught:
         await cli_memory.add_owner_note(
             "A note.",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             settings=settings,
         )
     assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
@@ -2689,12 +2687,9 @@ async def test_memory_correct_supersedes_target_note(
 
     await cli_memory.correct_owner_note(
         "The Orchid demo moves to Friday.",
-        episode_uuid=str(target),
+        target=CorrectionTarget(str(target), note_id),
         source_at=source_at,
-        note_id=note_id,
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
     )
 
@@ -2705,8 +2700,7 @@ async def test_memory_correct_supersedes_target_note(
             "group_id": profile.memory_group,
             "text": "The Orchid demo moves to Friday.",
             "source_at": source_at,
-            "note_id": note_id,
-            "supersedes": target,
+            "identity": NoteIdentity(note_id, target),
         }
     ]
     assert opened == ["open", "close"]
@@ -2732,7 +2726,7 @@ async def test_memory_correct_generates_note_id_when_missing(
     async def remember(memory, **kwargs):
         seen.append(kwargs)
         return OwnerNoteResult(
-            episode_uuid=str(kwargs["note_id"]),
+            episode_uuid=str(kwargs["identity"].note_id),
             facts=("Fixed.",),
             source_at=source_at,
             recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
@@ -2743,18 +2737,15 @@ async def test_memory_correct_generates_note_id_when_missing(
 
     await cli_memory.correct_owner_note(
         "Fixed.",
-        episode_uuid=str(target),
+        target=CorrectionTarget(str(target), None),
         source_at=source_at,
-        note_id=None,
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
     )
 
     [call] = seen
-    assert call["supersedes"] == target
-    assert f"note-id {call['note_id']}" in capsys.readouterr().err
+    assert call["identity"].supersedes == target
+    assert f"note-id {call['identity'].note_id}" in capsys.readouterr().err
 
 
 _CORRECT_TARGET = "a1b2c3d4-0000-4000-8000-000000000001"
@@ -2797,12 +2788,9 @@ async def test_memory_correct_validates_before_opening_memory(
     with pytest.raises(FakeYouError, match=match) as caught:
         await cli_memory.correct_owner_note(
             text,
-            episode_uuid=episode_uuid,
+            target=CorrectionTarget(episode_uuid, None),
             source_at=source_at,
-            note_id=None,
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             settings=settings,
         )
     assert caught.value.code is code
@@ -2817,12 +2805,9 @@ async def test_memory_correct_rejects_a_foreign_identity_before_opening_memory(
     with pytest.raises(FakeYouError, match="owner_id and twin_id"):
         await cli_memory.correct_owner_note(
             "Fixed.",
-            episode_uuid=_CORRECT_TARGET,
+            target=CorrectionTarget(_CORRECT_TARGET, None),
             source_at=_CORRECT_SOURCE,
-            note_id=None,
-            persona_path=write_persona(tmp_path),
-            owner_id="other-owner",
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), "other-owner", None),
             settings=settings,
         )
     assert opened == []
@@ -2836,9 +2821,7 @@ async def test_memory_add_validates_before_opening_memory(
     with pytest.raises(FakeYouError, match="blank") as caught:
         await cli_memory.add_owner_note(
             "  ",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             settings=settings,
         )
     assert caught.value.code is ErrorCode.MEMORY_NOTE_TEXT_BLANK
@@ -2853,9 +2836,7 @@ async def test_memory_add_rejects_a_foreign_identity_before_opening_memory(
     with pytest.raises(FakeYouError, match="owner_id and twin_id"):
         await cli_memory.add_owner_note(
             "A note.",
-            persona_path=write_persona(tmp_path),
-            owner_id="other-owner",
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), "other-owner", None),
             settings=settings,
         )
     assert opened == []
@@ -2875,9 +2856,7 @@ async def test_memory_forget_meeting_uses_persona_group(
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
 
     await cli_memory.forget_memory(
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         meeting_id="meeting-9",
         episode_uuid=None,
         settings=settings,
@@ -2923,9 +2902,7 @@ async def _forget_meeting_with_local_files(
 
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
     await cli_memory.forget_memory(
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         meeting_id="meeting-9",
         episode_uuid=None,
         settings=settings,
@@ -3010,9 +2987,7 @@ async def test_memory_forget_episode_uses_persona_group(
     monkeypatch.setattr(cli_memory, "forget_episode", forget)
 
     await cli_memory.forget_memory(
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         meeting_id=None,
         episode_uuid="episode-7",
         settings=settings,
@@ -3037,9 +3012,7 @@ async def test_memory_forget_validates_before_opening_memory(
 
     with pytest.raises(FakeYouError, match="exactly one") as caught:
         await cli_memory.forget_memory(
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             meeting_id=meeting_id,
             episode_uuid=episode_uuid,
             settings=settings,
@@ -3055,9 +3028,7 @@ async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memor
 
     with pytest.raises(ValueError, match="String should match pattern"):
         await cli_memory.forget_memory(
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             meeting_id="bad meeting",
             episode_uuid=None,
             settings=settings,
@@ -3071,12 +3042,16 @@ async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memor
         (
             ["memory-add", "A note.", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
             "add_owner_note",
-            {"persona_path": Path("p.json"), "owner_id": "o", "twin_id": "t"},
+            {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
         ),
         (
             ["memory-forget", "--meeting", "m1", "--persona", "p.json"],
             "forget_memory",
-            {"persona_path": Path("p.json"), "meeting_id": "m1", "episode_uuid": None},
+            {
+                "identity": OperatorIdentity(Path("p.json"), None, None),
+                "meeting_id": "m1",
+                "episode_uuid": None,
+            },
         ),
     ],
 )
@@ -3170,10 +3145,12 @@ def test_memory_correct_parses_target_source_and_note_id(
     cli_main.main()
 
     assert captured["text"] == "Fixed note."
-    assert captured["episode_uuid"] == "a1b2c3d4-0000-4000-8000-000000000001"
+    assert captured["target"] == CorrectionTarget(
+        "a1b2c3d4-0000-4000-8000-000000000001",
+        UUID("a1b2c3d4-0000-4000-8000-000000000002"),
+    )
     assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    assert captured["note_id"] == UUID("a1b2c3d4-0000-4000-8000-000000000002")
-    assert captured["persona_path"] == Path("p.json")
+    assert captured["identity"].persona_path == Path("p.json")
 
 
 @pytest.mark.parametrize(
@@ -3521,9 +3498,7 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
 
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path, vocabulary=["Orchid"]),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path, vocabulary=["Orchid"]), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -3558,9 +3533,7 @@ async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
     with pytest.raises(SystemExit) as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
             settings=settings,
         )
@@ -3575,9 +3548,7 @@ async def test_memory_ingest_command_requires_a_record(
     with pytest.raises(FakeYouError, match="no meeting record") as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
             settings=settings,
         )
@@ -3588,9 +3559,7 @@ async def test_memory_ingest_command_requires_a_record(
 async def test_memory_forget_keep_record_requires_a_meeting(settings, tmp_path: Path) -> None:
     with pytest.raises(FakeYouError, match="--keep-record") as caught:
         await cli_memory.forget_memory(
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             meeting_id=None,
             episode_uuid="episode-7",
             settings=settings,
@@ -3615,7 +3584,7 @@ async def test_join_passes_persona_vocabulary_as_speech_keywords(
 
     from fakeyou.memory.persona import number_keywords
 
-    assert captured["open_audio"].keywords["stt_keywords"] == (
+    assert captured["open_audio"].keywords["policy"].speech.stt_keywords == (
         "Rani Twin",
         "Orchid",
         "Budi",
@@ -3630,7 +3599,7 @@ async def test_join_without_persona_has_no_speech_keywords(
         tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
     )
 
-    assert captured["open_audio"].keywords["stt_keywords"] is None
+    assert captured["open_audio"].keywords["policy"].speech.stt_keywords is None
 
 
 def with_muse_fallback(settings: Settings) -> Settings:
@@ -3674,7 +3643,11 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     settings = with_muse_fallback(settings)
     config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
 
-    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
         pass
 
     greeting_type = type(create_greeting_middleware("id"))
@@ -3707,16 +3680,24 @@ async def test_open_conversation_wires_sentence_streaming_flag(
     monkeypatch.setattr(assembly, "ConversationLoop", fake_loop)
     config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
 
-    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
         pass
     assert type(seen["responder"]) is LangGraphResponder
-    assert seen["kwargs"]["sentence_streaming"] is False
+    assert seen["kwargs"]["generation"].sentence_streaming is False
 
     settings.conversation.sentence_streaming = True
-    async with assembly.open_conversation(settings, config, on_transition=lambda *args: None):
+    async with assembly.open_conversation(
+        settings,
+        config,
+        behavior=LoopBehavior(on_transition=lambda *args: None),
+    ):
         pass
     assert isinstance(seen["responder"], StreamingLangGraphResponder)
-    assert seen["kwargs"]["sentence_streaming"] is True
+    assert seen["kwargs"]["generation"].sentence_streaming is True
 
 
 def test_preflight_probes_the_fallback_endpoint(settings):
@@ -3760,7 +3741,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
                 stop_playback=stop_playback,
             )
         )
-        interim = kwargs["open_audio"].keywords["on_interim"]
+        interim = kwargs["open_audio"].keywords["callbacks"].on_interim
         await interim(SimpleNamespace(text="wait"))
         await interim(SimpleNamespace(text="wait a moment"))
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
@@ -4059,9 +4040,7 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
 
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -4086,9 +4065,7 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
     fake_persona_memory(monkeypatch, graphiti)
     arguments = {
         "meeting_id": "meeting-9",
-        "persona_path": write_persona(tmp_path),
-        "owner_id": None,
-        "twin_id": None,
+        "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
         "settings": settings,
     }
@@ -4134,9 +4111,7 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
     fake_persona_memory(monkeypatch, graphiti)
     arguments = {
         "meeting_id": "meeting-9",
-        "persona_path": write_persona(tmp_path),
-        "owner_id": None,
-        "twin_id": None,
+        "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
         "settings": settings,
     }
@@ -4158,9 +4133,7 @@ async def test_memory_ingest_persists_window_episode_uuids(
 
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -4185,9 +4158,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
     fake_persona_memory(monkeypatch, graphiti)
     arguments = {
         "meeting_id": "meeting-9",
-        "persona_path": write_persona(tmp_path),
-        "owner_id": None,
-        "twin_id": None,
+        "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
         "settings": settings,
     }
@@ -4235,9 +4206,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
         with pytest.raises(FakeYouError, match="locked") as caught:
             await cli_memory.ingest_recorded_meeting(
                 meeting_id="meeting-9",
-                persona_path=write_persona(tmp_path),
-                owner_id=None,
-                twin_id=None,
+                identity=OperatorIdentity(write_persona(tmp_path), None, None),
                 twin_name=None,
                 settings=settings,
             )
@@ -4258,9 +4227,7 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
     fake_persona_memory(monkeypatch, graphiti)
     arguments = {
         "meeting_id": "meeting-9",
-        "persona_path": write_persona(tmp_path),
-        "owner_id": None,
-        "twin_id": None,
+        "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
         "settings": settings,
     }
@@ -4322,9 +4289,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
     with pytest.raises(FakeYouError, match="group") as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
             settings=settings,
         )
@@ -4349,9 +4314,7 @@ async def test_memory_ingest_corrupt_status_starts_fresh(
 
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -4375,9 +4338,7 @@ async def test_memory_ingest_partial_record_is_not_completed(
     with pytest.raises(SystemExit) as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
             settings=settings,
         )
@@ -4399,9 +4360,7 @@ async def test_memory_ingest_empty_record_reports_zero_windows(
 
     await cli_memory.ingest_recorded_meeting(
         meeting_id="meeting-9",
-        persona_path=write_persona(tmp_path),
-        owner_id=None,
-        twin_id=None,
+        identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
     )
@@ -4424,7 +4383,10 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     real_ingest = cli_memory.ingest_until_stopped
 
     async def stop_first(*args, **kwargs):
-        kwargs["stop"].set()
+        run = kwargs["run"]
+        stop = run.stop if run.stop is not None else asyncio.Event()
+        stop.set()
+        kwargs["run"] = cli_memory.IngestRun(run.ingestion, stop)
         return await real_ingest(*args, **kwargs)
 
     monkeypatch.setattr(cli_memory, "ingest_until_stopped", stop_first)
@@ -4432,9 +4394,7 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     with pytest.raises(SystemExit) as caught:
         await cli_memory.ingest_recorded_meeting(
             meeting_id="meeting-9",
-            persona_path=write_persona(tmp_path),
-            owner_id=None,
-            twin_id=None,
+            identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
             settings=settings,
         )
@@ -4459,14 +4419,10 @@ async def test_ingest_until_stopped_uses_the_caller_stop_event(
 
     stopped = await cli_memory.ingest_until_stopped(
         make_graphiti(),
-        record_path,
-        profile=profile,
-        meeting_id="meeting-9",
-        twin_name="Rani Twin",
+        cli_memory.IngestJob(record_path, profile, "meeting-9", "Rani Twin"),
+        run=cli_memory.IngestRun(settings.memory.ingestion, asyncio.Event()),
         journal=journal,
         faults=faults,
-        settings=settings,
-        stop=asyncio.Event(),
     )
     assert (stopped.ingested, stopped.completed) == (1, True)
 
@@ -4474,14 +4430,10 @@ async def test_ingest_until_stopped_uses_the_caller_stop_event(
     halted.set()
     early = await cli_memory.ingest_until_stopped(
         make_graphiti(),
-        record_path,
-        profile=profile,
-        meeting_id="meeting-9",
-        twin_name="Rani Twin",
+        cli_memory.IngestJob(record_path, profile, "meeting-9", "Rani Twin"),
+        run=cli_memory.IngestRun(settings.memory.ingestion, halted),
         journal=journal,
         faults=faults,
-        settings=settings,
-        stop=halted,
     )
     assert (early.ingested, early.completed) == (0, False)
     assert signal.getsignal(signal.SIGINT) == before
@@ -4510,9 +4462,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     with record_lock(record_path, purpose=lock_purpose):
         with pytest.raises(FakeYouError, match="locked") as caught:
             await cli_memory.forget_memory(
-                persona_path=write_persona(tmp_path),
-                owner_id=None,
-                twin_id=None,
+                identity=OperatorIdentity(write_persona(tmp_path), None, None),
                 meeting_id="meeting-9",
                 episode_uuid=None,
                 settings=settings,

@@ -71,6 +71,7 @@ from fakeyou.memory.owner_notes import (
     forget_owner_note,
     read_note_states,
 )
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
@@ -293,23 +294,63 @@ def _fact_lines(fact: str) -> list[str]:
     return [fact, f"{speaker} stated this during the meeting."]
 
 
+async def _store_facts(
+    memory: Graphiti, group_id: str, facts: list[tuple[str, str]], reference_time: datetime
+) -> None:
+    body = "\n".join(line for fact, _ in facts for line in _fact_lines(fact))
+    await memory.add_episode(
+        name=f"meeting-{reference_time.isoformat()}",
+        episode_body=body,
+        source=EpisodeType.text,
+        source_description=facts[-1][1],
+        reference_time=reference_time,
+        group_id=group_id,
+    )
+
+
+class _FactBuffer:
+    def __init__(self) -> None:
+        self._pending: list[tuple[str, str]] = []
+
+    async def _flush(self, memory: Graphiti, group_id: str, reference_time: datetime) -> None:
+        if self._pending:
+            await _store_facts(memory, group_id, list(self._pending), reference_time)
+            self._pending.clear()
+
+    async def remember(
+        self,
+        memory: Graphiti,
+        group_id: str,
+        fact: str,
+        source_description: str,
+        flush: bool,
+    ) -> str:
+        reference_time = datetime.now(UTC)
+        text = " ".join(fact.split())
+        if flush:
+            if text:
+                self._pending.append((text, source_description))
+            await self._flush(memory, group_id, reference_time)
+            return "Remembered meeting fact."
+        if not text:
+            return "Buffered meeting fact."
+        if len(text) >= _BUFFERED_FACT_CHARS:
+            await self._flush(memory, group_id, reference_time)
+            await _store_facts(memory, group_id, [(text, source_description)], reference_time)
+            return "Remembered meeting fact."
+        self._pending.append((text, source_description))
+        if len(self._pending) >= _BUFFERED_FACT_COUNT:
+            await self._flush(memory, group_id, reference_time)
+            return "Remembered meeting fact."
+        return "Buffered meeting fact."
+
+
 def create_memory_tools(
     memory: Graphiti, *, group_id: str, recall: RecallSettings = DEFAULTS.memory.recall
 ) -> list[BaseTool]:
     if not re.fullmatch(IDENTIFIER_PATTERN, group_id):
         raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
-    pending: list[tuple[str, str]] = []
-
-    async def store_facts(facts: list[tuple[str, str]], reference_time: datetime) -> None:
-        body = "\n".join(line for fact, _ in facts for line in _fact_lines(fact))
-        await memory.add_episode(
-            name=f"meeting-{reference_time.isoformat()}",
-            episode_body=body,
-            source=EpisodeType.text,
-            source_description=facts[-1][1],
-            reference_time=reference_time,
-            group_id=group_id,
-        )
+    buffer = _FactBuffer()
 
     @tool(
         description=(
@@ -321,29 +362,7 @@ def create_memory_tools(
     async def remember_meeting_fact(
         fact: str, source_description: str = "meeting transcript", flush: bool = False
     ) -> str:
-        reference_time = datetime.now(UTC)
-        text = " ".join(fact.split())
-        if flush:
-            if text:
-                pending.append((text, source_description))
-            if pending:
-                await store_facts(list(pending), reference_time)
-                pending.clear()
-            return "Remembered meeting fact."
-        if not text:
-            return "Buffered meeting fact."
-        if len(text) >= _BUFFERED_FACT_CHARS:
-            if pending:
-                await store_facts(list(pending), reference_time)
-                pending.clear()
-            await store_facts([(text, source_description)], reference_time)
-            return "Remembered meeting fact."
-        pending.append((text, source_description))
-        if len(pending) >= _BUFFERED_FACT_COUNT:
-            await store_facts(list(pending), reference_time)
-            pending.clear()
-            return "Remembered meeting fact."
-        return "Buffered meeting fact."
+        return await buffer.remember(memory, group_id, fact, source_description, flush)
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
@@ -365,18 +384,23 @@ class MeetActionDispatcher(Protocol):
     def request(self, kind: MeetActionKind, *, action_id: str, text: str = "") -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class MeetActionRequest:
+    kind: MeetActionKind
+    action_id: str
+    text: str = ""
+
+
 def _request_meet_action(
     dispatcher: MeetActionDispatcher,
     refuse: Callable[..., str],
     journal: Journal | None,
     tool_name: str,
-    kind: MeetActionKind,
-    action_id: str,
-    text: str,
+    request: MeetActionRequest,
 ) -> str:
     if not dispatcher.enabled or dispatcher.closed:
         return refuse(tool_name, journal=journal)
-    dispatcher.request(kind, action_id=action_id, text=text)
+    dispatcher.request(request.kind, action_id=request.action_id, text=request.text)
     return MEET_ACTION_QUEUED
 
 
@@ -389,19 +413,31 @@ def create_meet_action_tools(
     @tool(description="Raise your hand in the meeting to show you want to speak.")
     async def meet_raise_hand(tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         return _request_meet_action(
-            dispatcher, refuse, journal, "meet_raise_hand", "raise_hand", tool_call_id, ""
+            dispatcher,
+            refuse,
+            journal,
+            "meet_raise_hand",
+            MeetActionRequest("raise_hand", tool_call_id),
         )
 
     @tool(description="Lower your hand in the meeting.")
     async def meet_lower_hand(tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         return _request_meet_action(
-            dispatcher, refuse, journal, "meet_lower_hand", "lower_hand", tool_call_id, ""
+            dispatcher,
+            refuse,
+            journal,
+            "meet_lower_hand",
+            MeetActionRequest("lower_hand", tool_call_id),
         )
 
     @tool(description="Send a short chat message to everyone in the meeting.")
     async def meet_send_chat(message: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         return _request_meet_action(
-            dispatcher, refuse, journal, "meet_send_chat", "send_chat", tool_call_id, message
+            dispatcher,
+            refuse,
+            journal,
+            "meet_send_chat",
+            MeetActionRequest("send_chat", tool_call_id, message),
         )
 
     return [meet_raise_hand, meet_lower_hand, meet_send_chat]
@@ -512,15 +548,14 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         *,
         group_id: str,
         recall: RecallSettings,
-        faults: FaultReporter | None,
-        journal: Journal | None,
+        diag: Diagnostics = DEFAULT_DIAGNOSTICS,
         visual_caption: VisualCaptionResolver | None = None,
     ) -> None:
         self._memory = memory
         self._group_id = group_id
         self._recall = recall
-        self._faults = faults
-        self._journal = journal or Journal("", echo=False)
+        self._faults = diag.faults
+        self._journal = diag.journal or Journal("", echo=False)
         self._visual_caption = visual_caption
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
         self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
@@ -676,16 +711,14 @@ def create_memory_prefetch_middleware(
     *,
     group_id: str,
     recall: RecallSettings = DEFAULTS.memory.recall,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
+    diag: Diagnostics = DEFAULT_DIAGNOSTICS,
     visual_caption: VisualCaptionResolver | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
         memory,
         group_id=group_id,
         recall=recall,
-        faults=faults,
-        journal=journal,
+        diag=diag,
         visual_caption=visual_caption,
     )
 

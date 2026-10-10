@@ -21,7 +21,7 @@ from pipecat.services.meta.stt import MetaSTTService
 from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
-from fakeyou.audio.voice import SPEECH_LANGUAGES, create_muse_stt
+from fakeyou.audio.voice import SPEECH_LANGUAGES, MuseSTTOptions, create_muse_stt
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
 from tests.fakes import FakeSTT
@@ -218,9 +218,11 @@ async def test_muse_endpointing_transcribes_realtime_wav() -> None:
 
     stt = create_muse_stt(
         api_key=api_key,
-        language=SPEECH_LANGUAGES[settings.speech.language][0],
-        mode="ENDPOINTING",
-        model=settings.stt.model,
+        options=MuseSTTOptions(
+            language=SPEECH_LANGUAGES[settings.speech.language][0],
+            mode="ENDPOINTING",
+            model=settings.stt.model,
+        ),
         url=settings.stt.url,
         sample_rate=sample_rate,
     )

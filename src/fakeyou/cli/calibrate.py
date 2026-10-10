@@ -12,7 +12,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
 from fakeyou.config.settings import Settings
-from fakeyou.identity.verify import load_calibration_artifact, model_digest
+from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact, model_digest
 
 LLR_BIN_WIDTH = 0.5
 MARGIN_BIN_WIDTH = 0.05
@@ -254,6 +254,19 @@ def _report_id(trials: list[Trial]) -> str:
     return f"cal-{digest}"
 
 
+def _lock_margin_floor(targets: list[Trial], nontargets: list[Trial]) -> float:
+    target_margins = [trial.s1 - trial.s2 for trial in targets]
+    nontarget_margins = [trial.s1 - trial.s2 for trial in nontargets]
+    worst_nontarget = max(nontarget_margins)
+    best_target = min(target_margins)
+    if worst_nontarget >= best_target:
+        raise FakeYouError(ErrorCode.CALIBRATE_MARGINS_NO_VALLEY)
+    floor = (worst_nontarget + best_target) / 2.0
+    if not _valley_holds(target_margins + nontarget_margins, floor, MARGIN_BIN_WIDTH):
+        raise FakeYouError(ErrorCode.CALIBRATE_MARGIN_FLOOR_OUTSIDE_VALLEY)
+    return floor
+
+
 def calibrate_lock(
     dev_journals: list[str],
     out: str,
@@ -283,16 +296,7 @@ def calibrate_lock(
         raise FakeYouError(ErrorCode.CALIBRATE_NO_OPERATING_POINT)
     if not _valley_holds(llrs, theta, LLR_BIN_WIDTH):
         raise FakeYouError(ErrorCode.CALIBRATE_THETA_OUTSIDE_VALLEY)
-    target_margins = [trial.s1 - trial.s2 for trial in targets]
-    nontarget_margins = [trial.s1 - trial.s2 for trial in nontargets]
-    worst_nontarget = max(nontarget_margins)
-    best_target = min(target_margins)
-    if worst_nontarget >= best_target:
-        raise FakeYouError(ErrorCode.CALIBRATE_MARGINS_NO_VALLEY)
-    floor = (worst_nontarget + best_target) / 2.0
-    margins = target_margins + nontarget_margins
-    if not _valley_holds(margins, floor, MARGIN_BIN_WIDTH):
-        raise FakeYouError(ErrorCode.CALIBRATE_MARGIN_FLOOR_OUTSIDE_VALLEY)
+    floor = _lock_margin_floor(targets, nontargets)
     report = _report_id(trials)
     payload = {
         "theta_llr": theta,
@@ -346,6 +350,16 @@ def _ship_gate(
     )
 
 
+def _check_eval_model(loaded: CalibrationArtifact, model_version: str | None) -> None:
+    if model_version is None:
+        return
+    if loaded.model_version is None:
+        _fail_eval({"pass": False, "error": "model_unknown"}, ExitCode.INPUT_REJECTED)
+    claimed = model_digest(model_version)
+    if claimed is None or claimed != model_digest(loaded.model_version):
+        _fail_eval({"pass": False, "error": "model_mismatch"}, ExitCode.INPUT_REJECTED)
+
+
 def calibrate_eval(
     eval_journals: list[str],
     artifact: str,
@@ -356,12 +370,7 @@ def calibrate_eval(
     loaded = load_calibration_artifact(artifact)
     if loaded is None:
         _fail_eval({"pass": False, "error": "invalid_artifact"}, ExitCode.EVAL_GATE_FAILED)
-    if model_version is not None:
-        if loaded.model_version is None:
-            _fail_eval({"pass": False, "error": "model_unknown"}, ExitCode.INPUT_REJECTED)
-        claimed = model_digest(model_version)
-        if claimed is None or claimed != model_digest(loaded.model_version):
-            _fail_eval({"pass": False, "error": "model_mismatch"}, ExitCode.INPUT_REJECTED)
+    _check_eval_model(loaded, model_version)
     trials = _load_trials(eval_journals)
     dev = _dev_speakers(artifact)
     if dev is None:

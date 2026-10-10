@@ -15,6 +15,7 @@ from playwright.async_api import Page
 
 from fakeyou.audio.audio import open_meeting_audio
 from fakeyou.audio.playback import (
+    PlaybackBackend,
     PlaybackEngine,
     create_pactl_muter,
     create_paplay_stream_runner,
@@ -57,15 +58,16 @@ class _ToneSynth:
 def _container_playback() -> PlaybackEngine:
     return PlaybackEngine(
         _ToneSynth(),
-        stream_audio=create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
-        set_muted=create_pactl_muter(sink=AGENT_SINK_NAME),
+        PlaybackBackend(
+            create_pactl_muter(sink=AGENT_SINK_NAME),
+            create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
+        ),
     )
 
 
 @asynccontextmanager
 async def _audio_page() -> AsyncIterator[Page]:
     async with open_direct_page(
-        headless=False,
         environment={"PULSE_SOURCE": AGENT_MIC_SOURCE_NAME, "PULSE_SINK": MEETING_SINK_NAME},
     ) as page:
         await page.route(

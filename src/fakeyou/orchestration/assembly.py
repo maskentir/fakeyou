@@ -32,6 +32,9 @@ from fakeyou.conversation.conversation import (
     ConversationPhase,
     ConversationResponder,
     LangGraphResponder,
+    LoopGeneration,
+    LoopInteraction,
+    LoopTiming,
     StreamingLangGraphResponder,
     ToolResultCallback,
     conversation_thread_id,
@@ -61,7 +64,7 @@ from fakeyou.memory.persona import (
     refuse_meet_tool,
 )
 from fakeyou.memory.visual_hydrate import create_visual_hydrate_middleware, create_visual_resolver
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import (
     create_chat_model,
@@ -181,141 +184,219 @@ def stop_signal_handlers(stop: asyncio.Event) -> Iterator[None]:
         yield
 
 
+@dataclass(frozen=True, slots=True)
+class AgentWiring:
+    profile: PersonaProfile | None = None
+    brief: MeetingBrief | None = None
+    graphiti: Graphiti | None = None
+    visual_store: VisualStore | None = None
+    visual_captioner: VisualCaptioner | None = None
+
+
+DEFAULT_AGENT_WIRING = AgentWiring()
+
+
+@dataclass(frozen=True, slots=True)
+class LoopBehavior:
+    on_transition: Callable[[ConversationPhase, ConversationPhase, str], None]
+    wake_phrases: Sequence[str] = ()
+    barge_in: bool = False
+    on_tool_result: ToolResultCallback | None = None
+    meet_dispatcher: MeetActionDispatcher | None = None
+
+
+def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
+    return (
+        settings.visual.enabled
+        and agent.visual_store is not None
+        and agent.visual_captioner is not None
+    )
+
+
+class _ConversationBuilder:
+    def __init__(
+        self,
+        settings: Settings,
+        agent: AgentWiring,
+        behavior: LoopBehavior,
+        diagnostics: Diagnostics,
+    ) -> None:
+        self._settings = settings
+        self._agent = agent
+        self._behavior = behavior
+        self._diagnostics = diagnostics
+        self._tools: list[BaseTool] = []
+        self._middleware: list[AgentMiddleware[Any, Any, Any]] = []
+        self._persona = ""
+        self._tool_names: frozenset[PersonaTool] = frozenset()
+
+    def build_persona(self) -> None:
+        profile = self._agent.profile
+        if profile is None:
+            if self._agent.brief is not None:
+                raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE)
+            self._persona = default_persona(self._settings)
+        else:
+            self._tool_names = meeting_tool_names(
+                profile, self._agent.brief, memory_requested=self._agent.graphiti is not None
+            )
+            self._persona = build_system_prompt(
+                profile.model_copy(update={"allowed_tools": self._tool_names}),
+                brief=self._agent.brief,
+                recall_strategy=self._settings.memory.recall.strategy,
+            )
+        if _visual_wired(self._settings, self._agent):
+            self._persona = f"{self._persona}\n\n{VISUAL_GUIDANCE}"
+
+    def add_greeting(self) -> None:
+        profile = self._agent.profile
+        language = profile.language if profile is not None else self._settings.speech.language
+        self._middleware.append(create_greeting_middleware(language))
+        fallback = create_fallback_chat_model(self._settings)
+        if fallback is not None:
+            self._middleware.append(ModelFallbackMiddleware(fallback))
+
+    def wired_visual(self) -> VisualCaptionResolver | None:
+        if not _visual_wired(self._settings, self._agent):
+            return None
+        store = self._agent.visual_store
+        captioner = self._agent.visual_captioner
+        assert store is not None and captioner is not None
+        return create_visual_resolver(store, captioner)
+
+    def add_memory(self, visual: VisualCaptionResolver | None) -> None:
+        profile = self._agent.profile
+        graphiti = self._agent.graphiti
+        if graphiti is None or profile is None or not self._tool_names:
+            return
+        bound, prefetch = memory_wiring(self._tool_names, self._settings.memory.recall.strategy)
+        if prefetch:
+            self._middleware.append(
+                create_memory_prefetch_middleware(
+                    graphiti,
+                    group_id=profile.memory_group,
+                    recall=self._settings.memory.recall,
+                    diag=self._diagnostics,
+                    visual_caption=visual,
+                )
+            )
+        if bound:
+            self._tools.extend(
+                tool
+                for tool in create_memory_tools(
+                    graphiti, group_id=profile.memory_group, recall=self._settings.memory.recall
+                )
+                if tool.name in bound
+            )
+            self._middleware.append(create_recall_error_middleware(self._diagnostics.faults))
+
+    def add_visual(self) -> None:
+        if not _visual_wired(self._settings, self._agent):
+            return
+        store = self._agent.visual_store
+        captioner = self._agent.visual_captioner
+        assert store is not None and captioner is not None
+        self._middleware.append(
+            create_visual_hydrate_middleware(
+                store,
+                captioner,
+                max_images=self._settings.visual.max_images,
+                journal=self._diagnostics.journal,
+            )
+        )
+        self._tools.extend(create_visual_tools(store, captioner))
+
+    def add_meet_tools(self) -> None:
+        if self._agent.profile is None or self._behavior.meet_dispatcher is None:
+            return
+        meet = self._tool_names - {"recall_meeting_context"}
+        if meet:
+            self._tools.extend(
+                tool
+                for tool in create_meet_action_tools(
+                    self._behavior.meet_dispatcher,
+                    refuse=refuse_meet_tool,
+                    journal=self._diagnostics.journal,
+                )
+                if tool.name in meet
+            )
+
+    def build_agent(self, model: Any, checkpointer: Any) -> Any:
+        return create_meeting_agent(
+            model,
+            tools=self._tools,
+            checkpointer=checkpointer,
+            persona=self._persona,
+            middleware=self._middleware,
+        )
+
+    def build_responder(self, agent: Any, thread_id: str) -> ConversationResponder:
+        if self._settings.conversation.sentence_streaming:
+            return StreamingLangGraphResponder(
+                agent,
+                thread_id,
+                journal=self._diagnostics.journal,
+                on_tool_result=self._behavior.on_tool_result,
+                language=self._settings.speech.language,
+                max_sentences=self._settings.conversation.max_spoken_sentences,
+            )
+        return LangGraphResponder(
+            agent,
+            thread_id,
+            journal=self._diagnostics.journal,
+            on_tool_result=self._behavior.on_tool_result,
+        )
+
+    def build_loop(self, responder: ConversationResponder) -> ConversationLoop:
+        conversation_settings = self._settings.conversation
+        return ConversationLoop(
+            responder,
+            interaction=LoopInteraction(
+                on_transition=self._behavior.on_transition,
+                wake_phrases=self._behavior.wake_phrases,
+                barge_in=self._behavior.barge_in,
+                barge_in_min_words=conversation_settings.barge_in_min_words,
+                participant_policy_enabled=conversation_settings.participant_policy_enabled,
+            ),
+            timing=LoopTiming(
+                response_timeout_seconds=conversation_settings.response_timeout_seconds,
+                activation_seconds=conversation_settings.activation_seconds,
+            ),
+            generation=LoopGeneration(
+                max_spoken_sentences=conversation_settings.max_spoken_sentences,
+                language=self._settings.speech.language,
+                sentence_streaming=conversation_settings.sentence_streaming,
+                pre_generate_enabled=conversation_settings.pre_generate_enabled,
+                pregen_fuzzy_restart_enabled=conversation_settings.pregen_fuzzy_restart_enabled,
+            ),
+            diagnostics=Diagnostics(
+                faults=self._diagnostics.faults, journal=self._diagnostics.journal
+            ),
+        )
+
+
 @asynccontextmanager
 async def open_conversation(
     settings: Settings,
     config: SessionConfig,
     *,
-    graphiti: Graphiti | None = None,
-    profile: PersonaProfile | None = None,
-    on_transition: Callable[[ConversationPhase, ConversationPhase, str], None],
-    wake_phrases: Sequence[str] = (),
-    barge_in: bool = False,
-    faults: FaultReporter | None = None,
-    journal: Journal | None = None,
-    on_tool_result: ToolResultCallback | None = None,
-    brief: MeetingBrief | None = None,
-    meet_dispatcher: MeetActionDispatcher | None = None,
-    visual_store: VisualStore | None = None,
-    visual_captioner: VisualCaptioner | None = None,
+    agent: AgentWiring = DEFAULT_AGENT_WIRING,
+    behavior: LoopBehavior,
+    diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
 ) -> AsyncIterator[ConversationLoop]:
-    tool_names: frozenset[PersonaTool] = frozenset()
-    visual_wired = (
-        settings.visual.enabled and visual_store is not None and visual_captioner is not None
-    )
-    if profile is None:
-        if brief is not None:
-            raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE)
-        persona = default_persona(settings)
-    else:
-        tool_names = meeting_tool_names(profile, brief, memory_requested=graphiti is not None)
-        persona = build_system_prompt(
-            profile.model_copy(update={"allowed_tools": tool_names}),
-            brief=brief,
-            recall_strategy=settings.memory.recall.strategy,
-        )
-    if visual_wired:
-        persona = f"{persona}\n\n{VISUAL_GUIDANCE}"
+    builder = _ConversationBuilder(settings, agent, behavior, diagnostics)
+    builder.build_persona()
     model = create_chat_model(settings)
     async with AsyncExitStack() as resources:
         checkpointer = await resources.enter_async_context(
             open_checkpointer(require_url(configured_url(settings)))
         )
-        tools: list[BaseTool] = []
-        middleware: list[AgentMiddleware[Any, Any, Any]] = []
-        greeting_language = profile.language if profile is not None else settings.speech.language
-        middleware.append(create_greeting_middleware(greeting_language))
-        fallback = create_fallback_chat_model(settings)
-        if fallback is not None:
-            middleware.append(ModelFallbackMiddleware(fallback))
-        visual: VisualCaptionResolver | None = None
-        if visual_wired:
-            assert visual_store is not None and visual_captioner is not None
-            visual = create_visual_resolver(visual_store, visual_captioner)
-        if graphiti is not None and profile is not None and tool_names:
-            bound, prefetch = memory_wiring(tool_names, settings.memory.recall.strategy)
-            if prefetch:
-                middleware.append(
-                    create_memory_prefetch_middleware(
-                        graphiti,
-                        group_id=profile.memory_group,
-                        recall=settings.memory.recall,
-                        faults=faults,
-                        journal=journal,
-                        visual_caption=visual,
-                    )
-                )
-            if bound:
-                tools.extend(
-                    tool
-                    for tool in create_memory_tools(
-                        graphiti, group_id=profile.memory_group, recall=settings.memory.recall
-                    )
-                    if tool.name in bound
-                )
-                middleware.append(create_recall_error_middleware(faults))
-        if visual_wired:
-            assert visual_store is not None and visual_captioner is not None
-            middleware.append(
-                create_visual_hydrate_middleware(
-                    visual_store,
-                    visual_captioner,
-                    max_images=settings.visual.max_images,
-                    journal=journal,
-                )
-            )
-            tools.extend(create_visual_tools(visual_store, visual_captioner))
-        if profile is not None and meet_dispatcher is not None:
-            meet = tool_names - {"recall_meeting_context"}
-            if meet:
-                tools.extend(
-                    tool
-                    for tool in create_meet_action_tools(
-                        meet_dispatcher, refuse=refuse_meet_tool, journal=journal
-                    )
-                    if tool.name in meet
-                )
-        agent = create_meeting_agent(
-            model,
-            tools=tools,
-            checkpointer=checkpointer,
-            persona=persona,
-            middleware=middleware,
-        )
+        builder.add_greeting()
+        builder.add_memory(builder.wired_visual())
+        builder.add_visual()
+        builder.add_meet_tools()
         thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
-        responder: ConversationResponder
-        if settings.conversation.sentence_streaming:
-            responder = StreamingLangGraphResponder(
-                agent,
-                thread_id,
-                journal=journal,
-                on_tool_result=on_tool_result,
-                language=settings.speech.language,
-                max_sentences=settings.conversation.max_spoken_sentences,
-            )
-        else:
-            responder = LangGraphResponder(
-                agent,
-                thread_id,
-                journal=journal,
-                on_tool_result=on_tool_result,
-            )
-        conversation = ConversationLoop(
-            responder,
-            on_transition=on_transition,
-            wake_phrases=wake_phrases,
-            barge_in=barge_in,
-            response_timeout_seconds=settings.conversation.response_timeout_seconds,
-            activation_seconds=settings.conversation.activation_seconds,
-            barge_in_min_words=settings.conversation.barge_in_min_words,
-            max_spoken_sentences=settings.conversation.max_spoken_sentences,
-            language=settings.speech.language,
-            sentence_streaming=settings.conversation.sentence_streaming,
-            faults=faults,
-            journal=journal,
-            participant_policy_enabled=settings.conversation.participant_policy_enabled,
-            pre_generate_enabled=settings.conversation.pre_generate_enabled,
-            pregen_fuzzy_restart_enabled=settings.conversation.pregen_fuzzy_restart_enabled,
-        )
+        responder = builder.build_responder(builder.build_agent(model, checkpointer), thread_id)
+        conversation = builder.build_loop(responder)
         resources.push_async_callback(conversation.close)
         yield conversation

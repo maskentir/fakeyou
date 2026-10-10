@@ -25,6 +25,7 @@ from fakeyou.memory.memory import (
     create_memory_tools,
 )
 from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, memory_wiring
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import MeetingBrief
 from tests.fakes import ToolCallingFakeModel, make_graphiti
@@ -87,7 +88,7 @@ def prefetch_agent(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, recall=settings, faults=faults
+                memory, group_id=GROUP, recall=settings, diag=Diagnostics(faults=faults)
             )
         ],
     )
@@ -496,7 +497,10 @@ async def opened_agent(
         twin_name="Demo Twin",
     )
     async with assembly.open_conversation(
-        settings, config, profile=profile, on_transition=lambda *args: None, **options
+        settings,
+        config,
+        agent=assembly.AgentWiring(profile=profile, **options),
+        behavior=assembly.LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
     return created
@@ -562,7 +566,11 @@ async def test_prefetch_journal_rows_carry_transcript_and_outcome(
         model,
         checkpointer=InMemorySaver(),
         persona="PERSONA",
-        middleware=[create_memory_prefetch_middleware(memory, group_id=GROUP, journal=journal)],
+        middleware=[
+            create_memory_prefetch_middleware(
+                memory, group_id=GROUP, diag=Diagnostics(journal=journal)
+            )
+        ],
     )
 
     await turn(agent, participant("Who leads QA?", "t1"))
@@ -587,7 +595,7 @@ async def test_cancelled_prefetch_closes_its_journal_request_without_a_fault(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, journal=journal, faults=faults
+                memory, group_id=GROUP, diag=Diagnostics(faults=faults, journal=journal)
             )
         ],
     )
