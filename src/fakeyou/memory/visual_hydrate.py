@@ -56,21 +56,17 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         *,
         max_images: int = VISUAL_HYDRATE_MAX_IMAGES,
         journal: Journal | None = None,
-        enabled: bool = True,
     ) -> None:
         self._store = store
         self._captioner = captioner
         self._max_images = max_images
         self._journal = journal
-        self._enabled = enabled
 
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
-        if not self._enabled:
-            return await handler(request)
         _, speech = current_speech(request.messages)
         frames = self._resolve(visual_refs_of(speech[-1])) if speech else []
         if not frames:
@@ -80,8 +76,6 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         return self._strip_response(await handler(request.override(messages=messages)))
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        if not self._enabled:
-            return None
         messages = state.get("messages", [])
         tagged = [
             message
@@ -96,8 +90,6 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         return {"messages": trimmed}
 
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        if not self._enabled:
-            return None
         messages = state.get("messages", [])
         if not messages:
             return None
@@ -188,19 +180,12 @@ def create_visual_hydrate_middleware(
     *,
     max_images: int = VISUAL_HYDRATE_MAX_IMAGES,
     journal: Journal | None = None,
-    enabled: bool = True,
 ) -> AgentMiddleware[Any, Any, Any]:
-    return VisualHydrateMiddleware(
-        store, captioner, max_images=max_images, journal=journal, enabled=enabled
-    )
+    return VisualHydrateMiddleware(store, captioner, max_images=max_images, journal=journal)
 
 
-def create_visual_resolver(
-    store: VisualStore, captioner: VisualCaptioner, *, enabled: bool = True
-) -> VisualCaptionResolver:
+def create_visual_resolver(store: VisualStore, captioner: VisualCaptioner) -> VisualCaptionResolver:
     async def resolve(ref: str) -> str | None:
-        if not enabled:
-            return None
         frame = next((item for item in store.frames if item.frame_id == ref), None)
         if frame is None:
             return None

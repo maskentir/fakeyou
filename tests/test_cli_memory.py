@@ -12,7 +12,7 @@ import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.main import build_parser
-from fakeyou.cli.memory import _finish_ingest, ingest_recorded_meeting
+from fakeyou.cli.memory import IngestOutcome, _finish_ingest, ingest_recorded_meeting
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
@@ -131,18 +131,20 @@ def test_finish_ingest_preserves_correction_progress(tmp_path: Path) -> None:
 
     ok = _finish_ingest(
         status_file,
+        IngestOutcome(
+            state="completed",
+            windows=3,
+            resumed_from=0,
+            ingested=3,
+            facts=1,
+            completed=True,
+            record_sha256="abc",
+            reason=None,
+            episode_uuids={1: "uuid-b"},
+        ),
         meeting_id="meeting-1",
         group_id="twin_group",
-        state="completed",
-        windows=3,
-        resumed_from=0,
-        ingested=3,
-        facts=1,
-        completed=True,
-        record_sha256="abc",
-        reason=None,
         faults=faults,
-        episode_uuids={1: "uuid-b"},
     )
 
     assert ok is True

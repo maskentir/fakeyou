@@ -85,8 +85,6 @@ class VisualCaptioner:
         return self._spent_usd
 
     def cached_caption(self, frame: VisualFrame) -> VisualCaption | None:
-        if not self._settings.enabled:
-            return None
         cached = self._cache.get(frame.sha256)
         if cached is None:
             return None
@@ -97,8 +95,6 @@ class VisualCaptioner:
         return caption
 
     async def caption_frame(self, frame: VisualFrame) -> VisualCaption | None:
-        if not self._settings.enabled:
-            return None
         hit = self.cached_caption(frame)
         if hit is not None:
             return hit

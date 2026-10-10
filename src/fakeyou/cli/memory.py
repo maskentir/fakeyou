@@ -2,7 +2,7 @@ import asyncio
 import shutil
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -185,40 +185,45 @@ async def ingest_until_stopped(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class IngestOutcome:
+    state: IngestionState
+    windows: int
+    resumed_from: int
+    ingested: int
+    facts: int
+    completed: bool
+    record_sha256: str | None
+    reason: str | None
+    episode_uuids: Mapping[int, str] | None = None
+
+
 def _finish_ingest(
     status_file: Path,
+    outcome: IngestOutcome,
     *,
     meeting_id: str,
     group_id: str,
-    state: IngestionState,
-    windows: int,
-    resumed_from: int,
-    ingested: int,
-    facts: int,
-    completed: bool,
-    record_sha256: str | None,
-    reason: str | None,
     faults: FaultReporter,
-    episode_uuids: Mapping[int, str] | None = None,
 ) -> bool:
     stored = True
     previous = read_status(status_file)
     merged = dict(previous.episode_uuids) if previous is not None else {}
-    if episode_uuids:
-        merged.update(episode_uuids)
+    if outcome.episode_uuids:
+        merged.update(outcome.episode_uuids)
     try:
         write_status(
             status_file,
             IngestionStatus(
                 meeting_id=meeting_id,
                 group_id=group_id,
-                status=state,
-                windows=windows,
-                resumed_from=resumed_from,
-                ingested=ingested,
-                record_sha256=record_sha256,
+                status=outcome.state,
+                windows=outcome.windows,
+                resumed_from=outcome.resumed_from,
+                ingested=outcome.ingested,
+                record_sha256=outcome.record_sha256,
                 updated_at=datetime.now(UTC),
-                reason=reason,
+                reason=outcome.reason,
                 episode_uuids=merged,
                 corrected_at=previous.corrected_at if previous is not None else None,
                 correction_episodes=list(previous.correction_episodes)
@@ -236,15 +241,15 @@ def _finish_ingest(
     emit_json(
         {
             "meeting_id": meeting_id,
-            "windows": windows,
-            "resumed_from": resumed_from,
-            "ingested": ingested,
-            "facts": facts,
-            "completed": completed,
-            "status": state,
+            "windows": outcome.windows,
+            "resumed_from": outcome.resumed_from,
+            "ingested": outcome.ingested,
+            "facts": outcome.facts,
+            "completed": outcome.completed,
+            "status": outcome.state,
         }
     )
-    return completed and stored
+    return outcome.completed and stored
 
 
 def _diarization_prereqs_met(settings: Settings, record_path: Path) -> bool:
@@ -292,16 +297,18 @@ async def ingest_recorded_meeting(
                 faults.record(classify_exception("memory_ingest", error))
                 _finish_ingest(
                     status_file,
+                    IngestOutcome(
+                        state="failed",
+                        windows=existing.windows if existing is not None else 0,
+                        resumed_from=existing.resumed_from if existing is not None else 0,
+                        ingested=existing.ingested if existing is not None else 0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=existing.record_sha256 if existing is not None else None,
+                        reason="record_unreadable",
+                    ),
                     meeting_id=meeting_id,
                     group_id=profile.memory_group,
-                    state="failed",
-                    windows=existing.windows if existing is not None else 0,
-                    resumed_from=existing.resumed_from if existing is not None else 0,
-                    ingested=existing.ingested if existing is not None else 0,
-                    facts=0,
-                    completed=False,
-                    record_sha256=existing.record_sha256 if existing is not None else None,
-                    reason="record_unreadable",
                     faults=faults,
                 )
                 raise SystemExit(ExitCode.FAILURE) from None
@@ -312,16 +319,18 @@ async def ingest_recorded_meeting(
             ):
                 _finish_ingest(
                     status_file,
+                    IngestOutcome(
+                        state="failed",
+                        windows=existing.windows,
+                        resumed_from=existing.resumed_from,
+                        ingested=existing.ingested,
+                        facts=0,
+                        completed=False,
+                        record_sha256=existing.record_sha256,
+                        reason="record_changed",
+                    ),
                     meeting_id=meeting_id,
                     group_id=profile.memory_group,
-                    state="failed",
-                    windows=existing.windows,
-                    resumed_from=existing.resumed_from,
-                    ingested=existing.ingested,
-                    facts=0,
-                    completed=False,
-                    record_sha256=existing.record_sha256,
-                    reason="record_changed",
                     faults=faults,
                 )
                 raise SystemExit(ExitCode.FAILURE) from None
@@ -346,16 +355,18 @@ async def ingest_recorded_meeting(
                             emit_error(error)
                         _finish_ingest(
                             status_file,
+                            IngestOutcome(
+                                state="failed",
+                                windows=0,
+                                resumed_from=0,
+                                ingested=0,
+                                facts=0,
+                                completed=False,
+                                record_sha256=current_hash,
+                                reason="episode_name_invalid",
+                            ),
                             meeting_id=meeting_id,
                             group_id=profile.memory_group,
-                            state="failed",
-                            windows=0,
-                            resumed_from=0,
-                            ingested=0,
-                            facts=0,
-                            completed=False,
-                            record_sha256=current_hash,
-                            reason="episode_name_invalid",
                             faults=faults,
                         )
                         raise SystemExit(ExitCode.FAILURE) from None
@@ -363,32 +374,36 @@ async def ingest_recorded_meeting(
                 faults.record(error)
                 _finish_ingest(
                     status_file,
+                    IngestOutcome(
+                        state="failed",
+                        windows=0,
+                        resumed_from=0,
+                        ingested=0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=current_hash,
+                        reason=f"provider_{error.kind}",
+                    ),
                     meeting_id=meeting_id,
                     group_id=profile.memory_group,
-                    state="failed",
-                    windows=0,
-                    resumed_from=0,
-                    ingested=0,
-                    facts=0,
-                    completed=False,
-                    record_sha256=current_hash,
-                    reason=f"provider_{error.kind}",
                     faults=faults,
                 )
                 raise SystemExit(ExitCode.FAILURE) from None
             except asyncio.CancelledError:
                 _finish_ingest(
                     status_file,
+                    IngestOutcome(
+                        state="interrupted",
+                        windows=0,
+                        resumed_from=0,
+                        ingested=0,
+                        facts=0,
+                        completed=False,
+                        record_sha256=current_hash,
+                        reason="stop_requested",
+                    ),
                     meeting_id=meeting_id,
                     group_id=profile.memory_group,
-                    state="interrupted",
-                    windows=0,
-                    resumed_from=0,
-                    ingested=0,
-                    facts=0,
-                    completed=False,
-                    record_sha256=current_hash,
-                    reason="stop_requested",
                     faults=faults,
                 )
                 raise
@@ -403,18 +418,20 @@ async def ingest_recorded_meeting(
                 reason = "episode_failed"
             if not _finish_ingest(
                 status_file,
+                IngestOutcome(
+                    state=state,
+                    windows=result.windows,
+                    resumed_from=result.resumed_from,
+                    ingested=result.ingested,
+                    facts=result.facts,
+                    completed=result.completed,
+                    record_sha256=current_hash,
+                    reason=reason,
+                    episode_uuids=result.episode_uuids,
+                ),
                 meeting_id=meeting_id,
                 group_id=profile.memory_group,
-                state=state,
-                windows=result.windows,
-                resumed_from=result.resumed_from,
-                ingested=result.ingested,
-                facts=result.facts,
-                completed=result.completed,
-                record_sha256=current_hash,
-                reason=reason,
                 faults=faults,
-                episode_uuids=result.episode_uuids,
             ):
                 raise SystemExit(ExitCode.FAILURE) from None
     finally:

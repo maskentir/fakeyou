@@ -153,7 +153,6 @@ class VisualObserver:
         journal: Journal | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         poll_interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS,
-        enabled: bool = True,
         captioner: VisualCaptioner | None = None,
         on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None,
     ) -> None:
@@ -162,7 +161,6 @@ class VisualObserver:
         self._journal = journal
         self._monotonic = monotonic
         self._poll_interval = poll_interval_seconds
-        self._enabled = enabled
         self._captioner = captioner
         self._on_caption = on_caption
         self._hits = 0
@@ -206,8 +204,6 @@ class VisualObserver:
             await asyncio.gather(*pending, return_exceptions=True)
 
     async def poll(self) -> VisualFrame | None:
-        if not self._enabled:
-            return None
         try:
             scan = await self._page.evaluate(VISUAL_SCAN_JS)
         except asyncio.CancelledError:

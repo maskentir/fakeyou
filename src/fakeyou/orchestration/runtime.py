@@ -626,7 +626,6 @@ class _MeetingWorker:
             self.visual_store,
             journal=self.journal,
             monotonic=self.monotonic,
-            enabled=self.config.visual_enabled,
             captioner=self.visual_captioner,
             on_caption=self.visual_on_caption,
         )
