@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -821,7 +822,7 @@ async def test_probe_reads_identity_and_level_from_encoded_audio_frames() -> Non
             await page.goto("about:blank")
             await page.evaluate(LOOPBACK_ENCODED_RECEIVER)
             deadline = asyncio.get_running_loop().time() + 15.0
-            windows: list[dict] = []
+            windows: list[dict[str, Any]] = []
             while len(windows) < 5 and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.3)
                 drained = await page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
@@ -889,7 +890,7 @@ async def test_probe_taps_webaudio_source_energy() -> None:
         assert len(drained["audio_topology"]["sources"]) >= 1
 
 
-async def wait_for_loud_levels(page: object, timeout_seconds: float = 15.0) -> dict:
+async def wait_for_loud_levels(page: object, timeout_seconds: float = 15.0) -> dict[str, Any]:
     from playwright.async_api import Page
 
     assert isinstance(page, Page)
@@ -897,7 +898,7 @@ async def wait_for_loud_levels(page: object, timeout_seconds: float = 15.0) -> d
     while True:
         drained = await page.evaluate("() => window.__fakeyouAttributionProbe.drain()")
         if any(entry["audioLevel"] > 0.1 for entry in drained["levels"]):
-            return drained
+            return cast(dict[str, Any], drained)
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("probe never recorded loud levels")
         await asyncio.sleep(0.2)
