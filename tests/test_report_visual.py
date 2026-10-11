@@ -1,3 +1,5 @@
+from typing import Any
+
 from fakeyou.observability.report import (
     VISUAL_BUDGET_MAX,
     VISUAL_BUDGET_P95,
@@ -7,7 +9,7 @@ from fakeyou.observability.report import (
 from tests._report_support import row
 
 
-def visual_captured(offset: float, visual_id: str, duration_ms: float) -> dict:
+def visual_captured(offset: float, visual_id: str, duration_ms: float) -> dict[str, Any]:
     return row(
         offset,
         "visual_captured",
@@ -19,7 +21,9 @@ def visual_captured(offset: float, visual_id: str, duration_ms: float) -> dict:
     )
 
 
-def visual_captioned(offset: float, visual_id: str, cost_usd: float, duration_ms: float) -> dict:
+def visual_captioned(
+    offset: float, visual_id: str, cost_usd: float, duration_ms: float
+) -> dict[str, Any]:
     return row(
         offset,
         "visual_captioned",
@@ -53,7 +57,7 @@ def test_report_counts_visuals() -> None:
 
 
 def test_gate_constants_consumed() -> None:
-    rows: list = []
+    rows: list[dict[str, Any]] = []
     for index in range(20):
         rows.append(visual_captured(index * 10, f"frame-{index}", 2000))
     for index in range(19):
