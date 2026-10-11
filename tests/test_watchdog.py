@@ -5,7 +5,7 @@ import pytest
 from playwright.async_api import Page
 
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
-from fakeyou.meet.meet import CallObservation
+from fakeyou.meet.meet import CallObservation, CallState
 from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
 
 
@@ -22,7 +22,9 @@ def observe() -> AsyncMock:
     return AsyncMock(return_value=CallObservation("in_call", "call controls are visible"))
 
 
-def show_dialog(page, text, *, visible=True, button_count=1):
+def show_dialog(
+    page: MagicMock, text: str, *, visible: bool = True, button_count: int = 1
+) -> MagicMock:
     dialog = MagicMock()
     dialog.is_visible = AsyncMock(return_value=visible)
     dialog.evaluate = AsyncMock(return_value=text)
@@ -197,7 +199,7 @@ async def test_should_ignore_hidden_dialogs(page: MagicMock, observe: AsyncMock)
 
 @pytest.mark.parametrize("state", ["in_call", "removed", "ended"])
 async def test_should_preserve_call_observation_when_modal_scan_fails(
-    page: MagicMock, observe: AsyncMock, state: str
+    page: MagicMock, observe: AsyncMock, state: CallState
 ) -> None:
     observe.return_value = CallObservation(state, "definitive observation")
     page.locator.side_effect = RuntimeError("https://secret.example/token")
