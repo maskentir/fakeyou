@@ -309,7 +309,7 @@ def test_eval_low_precision_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtur
 
 
 def test_ship_gate_thresholds() -> None:
-    good = {
+    good: dict[str, Any] = {
         "verified": 190,
         "wilson_lower": 0.9802,
         "overlap_rate": 1.0,
@@ -343,7 +343,7 @@ def test_ship_gate_thresholds() -> None:
     ],
 )
 def test_calibrate_commands_dispatch_journals_and_outputs(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict[str, Any]
 ) -> None:
     calls: list[dict[str, Any]] = []
 
