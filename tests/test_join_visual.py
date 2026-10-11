@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.cli.join import TranscriptSinks, build_transcript_callback, record_visual_caption
+
+if TYPE_CHECKING:
+    from fakeyou.conversation.conversation import ConversationLoop
 from fakeyou.persistence.record import (
     MeetingRecord,
     VisualEntry,
@@ -63,8 +66,11 @@ async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-visual"))
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
+    sinks = TranscriptSinks(
+        journal, record, cast("ConversationLoop", conversation), visual_store=store
+    )
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, conversation, visual_store=store),
+        sinks=sinks,
         binder=SlotBinder(),
         voice_activity=None,
         per_stream_enabled=True,
@@ -73,7 +79,8 @@ async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
         "What date is shown?", "", "2026-10-09T03:10:05+00:00", finalized=True
     )
     frame.transport_source = "slot-0"
-    frame.capture_ms = 100000.0
+    frame_any = cast(Any, frame)
+    frame_any.capture_ms = 100000.0
 
     await callback(frame)
 
@@ -87,8 +94,11 @@ async def test_transcript_callback_falls_back_to_wall_clock(tmp_path: Path) -> N
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-visual"))
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
+    sinks = TranscriptSinks(
+        journal, record, cast("ConversationLoop", conversation), visual_store=store
+    )
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, conversation, visual_store=store),
+        sinks=sinks,
         binder=SlotBinder(),
         voice_activity=None,
         per_stream_enabled=False,
@@ -111,7 +121,7 @@ async def test_transcript_callback_skips_visual_without_store(tmp_path: Path) ->
     record = MeetingRecord(meeting_record_path(tmp_path, "meeting-visual"))
     conversation = _Conversation()
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, conversation),
+        sinks=TranscriptSinks(journal, record, cast("ConversationLoop", conversation)),
         binder=SlotBinder(),
         voice_activity=None,
         per_stream_enabled=True,
@@ -120,7 +130,8 @@ async def test_transcript_callback_skips_visual_without_store(tmp_path: Path) ->
         "What date is shown?", "", "2026-10-09T03:10:05+00:00", finalized=True
     )
     frame.transport_source = "slot-0"
-    frame.capture_ms = 100000.0
+    frame_any = cast(Any, frame)
+    frame_any.capture_ms = 100000.0
 
     await callback(frame)
 
