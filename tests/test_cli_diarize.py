@@ -289,8 +289,9 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
     sizes: list[int] = []
 
     def opener(request: urllib.request.Request) -> _FakeResponse:
-        assert request.data is not None
-        sizes.append(len(request.data))
+        data = request.data
+        assert isinstance(data, (bytes, bytearray))
+        sizes.append(len(data))
         return _FakeResponse(_turns_payload([]))
 
     assert diarize_run("m1", settings=settings, opener=opener) == 0
