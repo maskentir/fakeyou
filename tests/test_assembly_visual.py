@@ -28,7 +28,7 @@ def _profile(settings: Settings) -> PersonaProfile:
         twin_id=settings.identity.twin_id,
         display_name="Visual Twin",
         role="Project coordinator",
-        allowed_tools=["recall_meeting_context"],
+        allowed_tools=frozenset({"recall_meeting_context"}),
     )
 
 
