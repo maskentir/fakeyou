@@ -3,6 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -139,7 +140,7 @@ def _transcript_line(index: int, capture_ms: float) -> str:
 
 
 def _record_session(
-    tmp_path: Path, captures: list[float], *, anchors: list[dict[str, object]]
+    tmp_path: Path, captures: list[float], *, anchors: list[dict[str, Any]]
 ) -> tuple[Path, Path]:
     meeting_dir = tmp_path / "meetings" / "m1"
     meeting_dir.mkdir(parents=True)
@@ -163,8 +164,9 @@ def test_load_corrected_record_attaches_exact_uuids_with_anchor_offset(tmp_path:
     write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
 
     entries = load_corrected_record(record_path)
+    transcripts = cast(list[TranscriptEntry], entries)
 
-    assert [entry.corrected_speaker_uuid for entry in entries] == [
+    assert [entry.corrected_speaker_uuid for entry in transcripts] == [
         _expected_uuid("A", 0),
         _expected_uuid("B", 3600),
     ]
@@ -216,8 +218,9 @@ def test_load_corrected_record_leaves_far_entries_unattached(tmp_path: Path) -> 
     )
 
     entries = load_corrected_record(record_path)
+    transcripts = cast(list[TranscriptEntry], entries)
 
-    assert [entry.corrected_speaker_uuid for entry in entries] == [
+    assert [entry.corrected_speaker_uuid for entry in transcripts] == [
         _expected_uuid("A", 0),
         _expected_uuid("A", 0),
         None,
