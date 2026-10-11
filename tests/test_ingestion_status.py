@@ -6,6 +6,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -67,8 +68,8 @@ def test_correction_log_roundtrips_without_touching_window_map(tmp_path: Path) -
 NOW = datetime(2026, 10, 3, 8, 0, tzinfo=UTC)
 
 
-def pending_status(**overrides) -> IngestionStatus:
-    values: dict = {
+def pending_status(**overrides: Any) -> IngestionStatus:
+    values: dict[str, Any] = {
         "meeting_id": "meeting-9",
         "group_id": "twin_group",
         "status": "pending",
@@ -126,7 +127,7 @@ def test_atomic_status_failure_keeps_previous_file(
     path = tmp_path / "ingestion.json"
     path.write_text("previous", encoding="utf-8")
 
-    def reject_replace(source, target):
+    def reject_replace(source: Any, target: Any) -> None:
         raise OSError("replace failed")
 
     monkeypatch.setattr("os.replace", reject_replace)
@@ -142,7 +143,7 @@ def test_status_fsync_failure_keeps_previous_file(
     path = tmp_path / "ingestion.json"
     path.write_text("previous", encoding="utf-8")
 
-    def reject_fsync(fd):
+    def reject_fsync(fd: int) -> None:
         raise OSError("fsync failed")
 
     monkeypatch.setattr("os.fsync", reject_fsync)
@@ -445,11 +446,11 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
     ).write_atomically
     calls: list[str] = []
 
-    def fail_once(path, data):
+    def fail_once(path: Path, data: bytes) -> None:
         calls.append("write")
         if len(calls) == 1:
             raise OSError("transient write error")
-        return real_write(path, data)
+        real_write(path, data)
 
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
         first = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
