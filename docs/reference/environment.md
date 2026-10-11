@@ -1,6 +1,6 @@
 # Variabel environment
 
-Halaman ini dihasilkan dari `Settings` dan `COMPOSE_ONLY_KEYS` oleh `fakeyou.catalog.env_catalog`. Jangan mengedit halaman ini secara manual. Regenerasi dengan `uv run python -m fakeyou.catalog.env_catalog > docs/reference/environment.md`. `tests/test_env_catalog.py` gagal jika halaman ini berbeda dari hasil generator.
+Halaman ini dihasilkan dari `Settings` dan `COMPOSE_ONLY_KEYS` oleh `fakeyou.config.env_catalog`. Jangan mengedit halaman ini secara manual. Regenerasi dengan `uv run python -m fakeyou.config.env_catalog > docs/reference/environment.md`. `tests/test_env_catalog.py` gagal jika halaman ini berbeda dari hasil generator.
 
 ## Aturan
 

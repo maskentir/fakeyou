@@ -5,7 +5,6 @@ from types import UnionType
 from typing import Any, Union, get_args, get_origin
 
 from pydantic import BaseModel, SecretStr
-from pydantic_core import PydanticUndefined
 
 from fakeyou.catalog.config import COMPOSE_ONLY_KEYS, ENV_PREFIX, NESTED_DELIMITER
 from fakeyou.config.settings import Settings
@@ -69,10 +68,12 @@ def _format_type(annotation: Any) -> str:
 def _format_default(field: Any) -> str:
     if field.is_required():
         return "wajib"
+    if field.default_factory is not None:
+        return "-"
     default = field.default
     if isinstance(default, SecretStr):
         return "`**********`" if default.get_secret_value() else "-"
-    if default is None or default is PydanticUndefined:
+    if default is None:
         return "-"
     if isinstance(default, bool):
         return str(default).lower()

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fakeyou.catalog.env_catalog import render_env_catalog
+from fakeyou.config.env_catalog import render_env_catalog
 
 PAGE = Path(__file__).resolve().parent.parent / "docs" / "reference" / "environment.md"
 
