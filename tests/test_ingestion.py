@@ -3,11 +3,11 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import MagicMock
 
 import pytest
-from graphiti_core.nodes import EpisodeType
+from graphiti_core.nodes import EpisodeType, SagaNode
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import IngestionSettings
@@ -38,9 +38,11 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.record import (
+    RecordEntry,
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
+    VisualEntry,
     load_meeting_record,
 )
 from tests.fakes import make_graphiti
@@ -68,7 +70,7 @@ def twin(seconds: float, text: str) -> TwinSpeechEntry:
     return TwinSpeechEntry(at=START + timedelta(seconds=seconds), text=text)
 
 
-async def run(memory: MagicMock, entries: list, **overrides: Any) -> tuple[Any, list[Any]]:
+async def run(memory: MagicMock, entries: list[Any], **overrides: Any) -> tuple[Any, list[Any]]:
     lines: list[str] = []
     journal = overrides.pop("journal", Journal("meeting-1", emit=lines.append))
     faults = overrides.pop("faults", FaultReporter(journal=journal))
@@ -95,7 +97,7 @@ async def run(memory: MagicMock, entries: list, **overrides: Any) -> tuple[Any, 
 
 
 def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
-    entries = [
+    entries: list[RecordEntry] = [
         twin(0, "How about moving the demo to Thursday?"),
         said(2, "Okay,\n agreed."),
         ToolResultEntry(at=START, tool="recall_meeting_context", output="x", duration_ms=1),
@@ -743,7 +745,7 @@ async def test_ingest_corrections_aborts_when_invalidation_fails(tmp_path: Path)
         },
     )
 
-    async def failing(*args, **kwargs):
+    async def failing(*args: Any, **kwargs: Any) -> NoReturn:
         raise RuntimeError("neo4j is down")
 
     memory.driver.execute_query.side_effect = failing
@@ -763,8 +765,9 @@ async def test_ingest_corrections_aborts_when_invalidation_fails(tmp_path: Path)
     assert faults.total() == 1
     rows = [json.loads(line) for line in lines]
     assert "memory_correction_failed" in [row["event"] for row in rows]
-    assert read_status(status_path(record_path)) is not None
-    assert read_status(status_path(record_path)).corrected_at is None
+    status = read_status(status_path(record_path))
+    assert status is not None
+    assert status.corrected_at is None
 
 
 async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid(
@@ -782,7 +785,7 @@ async def test_ingest_corrections_invalidation_failure_fault_carries_orphan_uuid
         },
     )
 
-    async def failing(*args, **kwargs):
+    async def failing(*args: Any, **kwargs: Any) -> NoReturn:
         raise RuntimeError("neo4j is down")
 
     memory.driver.execute_query.side_effect = failing
@@ -1280,9 +1283,7 @@ async def test_ingest_corrections_treats_invalid_labels_as_absent(
     assert "unverified" not in memory.added[-1]["episode_body"]
 
 
-def visual_entry(visual_id: str, caption: str, captured: datetime, ref: str):
-    from fakeyou.persistence.record import VisualEntry
-
+def visual_entry(visual_id: str, caption: str, captured: datetime, ref: str) -> VisualEntry:
     return VisualEntry(
         at=START,
         visual_id=visual_id,
@@ -1320,7 +1321,6 @@ async def test_ingest_visual_window() -> None:
 
 
 async def test_forget_meeting_cleans_visuals(monkeypatch: pytest.MonkeyPatch) -> None:
-    import fakeyou.memory.memory as memory_module
     from fakeyou.memory.ingestion import visual_episode_name
     from fakeyou.memory.memory import forget_meeting
 
@@ -1345,13 +1345,13 @@ async def test_forget_meeting_cleans_visuals(monkeypatch: pytest.MonkeyPatch) ->
         def __init__(self, name: str) -> None:
             self.name = name
 
-        async def delete(self, driver) -> None:
+        async def delete(self, driver: Any) -> None:
             deleted.append(self.name)
 
-    async def get_by_group_ids(driver, group_ids):
+    async def get_by_group_ids(driver: Any, group_ids: list[str]) -> list[_Saga]:
         return [_Saga(saga)]
 
-    monkeypatch.setattr(memory_module.SagaNode, "get_by_group_ids", get_by_group_ids)
+    monkeypatch.setattr(SagaNode, "get_by_group_ids", get_by_group_ids)
 
     removed = await forget_meeting(second, group_id="twin_group", meeting_id="meeting-1")
 
