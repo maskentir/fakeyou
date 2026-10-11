@@ -44,7 +44,7 @@ def pack_embedding(embedding: tuple[float, ...]) -> bytes:
     return struct.pack("<" + "f" * len(embedding), *embedding)
 
 
-def unpack_embedding(blob: bytes, dim: int) -> tuple[float, ...]:
+def unpack_embedding(blob: bytes | memoryview, dim: int) -> tuple[float, ...]:
     return struct.unpack("<" + "f" * dim, bytes(blob))
 
 
