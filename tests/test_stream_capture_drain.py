@@ -10,7 +10,7 @@ from fakeyou.audio.stream_capture import (
     load_capture_script,
 )
 from fakeyou.audio.voice_activity import SlotBinder
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from tests._capture_support import _recording_registry
 from tests.fakes import FakeClock, meet_page
 
@@ -149,7 +149,7 @@ def test_load_capture_script_exposes_capture_api() -> None:
 @pytest.mark.browser
 async def test_stream_capture_separates_two_tones() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -166,7 +166,7 @@ async def test_stream_capture_separates_two_tones() -> None:
 @pytest.mark.browser
 async def test_stream_capture_muting_one_tone_keeps_other_stream() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -189,7 +189,7 @@ async def test_stream_capture_muting_one_tone_keeps_other_stream() -> None:
 @pytest.mark.browser
 async def test_stream_capture_drain_emits_monotonic_seq_per_slot() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -409,7 +409,7 @@ async def test_stream_capture_failing_decoder_still_drains_live_mstp() -> None:
 
 
 async def test_stream_input_tags_transcripts_with_stream_id() -> None:
-    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     from fakeyou.audio.audio import (
@@ -424,7 +424,7 @@ async def test_stream_input_tags_transcripts_with_stream_id() -> None:
             super().__init__()
             self._text = text
 
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
+        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
             await super().process_frame(frame, direction)
             if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
                 await self.push_frame(
@@ -731,7 +731,7 @@ async def test_start_capture_drain_respects_enabled_flag() -> None:
 
 
 async def test_stream_input_buffers_audio_before_start() -> None:
-    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     from fakeyou.audio.audio import (
@@ -746,7 +746,7 @@ async def test_stream_input_buffers_audio_before_start() -> None:
             super().__init__()
             self._text = text
 
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
+        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
             await super().process_frame(frame, direction)
             if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
                 await self.push_frame(
