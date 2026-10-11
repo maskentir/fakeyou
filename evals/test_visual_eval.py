@@ -2,9 +2,9 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from PIL import Image
 
 import fakeyou.debrief.debrief as debrief_module
@@ -39,7 +39,7 @@ MS_PER_SECOND = 1000.0
 
 
 def load_visual_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    fixture = json.loads(path.read_text(encoding="utf-8"))
+    fixture: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if fixture["schema_version"] != SCHEMA:
         raise ValueError("visual fixture schema mismatch")
     ids = [scenario["id"] for scenario in fixture["scenarios"]]
@@ -51,14 +51,14 @@ def load_visual_fixture(path: Path = FIXTURE) -> dict[str, Any]:
 def scenario_by_id(fixture: dict[str, Any], wanted: str) -> dict[str, Any]:
     for scenario in fixture["scenarios"]:
         if scenario["id"] == wanted:
-            return scenario
+            return cast(dict[str, Any], scenario)
     raise ValueError(f"unknown visual scenario {wanted}")
 
 
 def frame_by_id(fixture: dict[str, Any], wanted: str) -> dict[str, Any]:
     for row in fixture["frames"]:
         if row["frame_id"] == wanted:
-            return row
+            return cast(dict[str, Any], row)
     raise ValueError(f"unknown visual frame {wanted}")
 
 
@@ -118,7 +118,7 @@ def store_for(
 def captioner_for(
     captions: list[str], settings: VisualSettings, journal: RecordingJournal
 ) -> VisualCaptioner:
-    responses = [
+    responses: list[BaseMessage] = [
         AIMessage(
             content=text,
             usage_metadata={"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
@@ -316,6 +316,10 @@ async def test_budget_caps_hold_on_replay(tmp_path: Path) -> None:
     assert len(captioned) == len(scenario["replay_frames"])
     assert len(captioned) <= settings.max_calls
     assert captioner.spent_usd <= settings.budget_usd
-    assert stats["p95"] / MS_PER_SECOND <= VISUAL_BUDGET_P95
-    assert stats["max"] / MS_PER_SECOND <= VISUAL_BUDGET_MAX
+    p95 = stats["p95"]
+    max_ms = stats["max"]
+    assert p95 is not None
+    assert max_ms is not None
+    assert p95 / MS_PER_SECOND <= VISUAL_BUDGET_P95
+    assert max_ms / MS_PER_SECOND <= VISUAL_BUDGET_MAX
     assert resolved / len(results) >= VISUAL_STABILITY_MIN
