@@ -1,8 +1,9 @@
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
+from playwright.async_api import Page
 
 from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.session import SessionConfig
@@ -110,7 +111,7 @@ async def test_worker_wires_captioner_and_callback_into_observer(tmp_path: Path)
     worker = _MeetingWorker(
         _config(visual_enabled=True),
         lifecycle,
-        page,
+        cast(Page, page),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
         clock.sleep,
