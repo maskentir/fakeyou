@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.runnables.config import var_child_runnable_config
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, ValidationError
@@ -43,7 +43,7 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.record import meeting_record_path
-from tests.fakes import ToolCallingFakeModel
+from tests.fakes import ToolCallingFakeModel, env_file_opt
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "evals" / "fixtures" / "debrief-scenarios.json"
@@ -79,14 +79,16 @@ EXPECTED_CATEGORIES = {
 
 def record_bytes(case: dict[str, Any]) -> bytes:
     if "raw_record" in case:
-        return case["raw_record"].encode("utf-8")
+        raw = case["raw_record"]
+        assert isinstance(raw, str)
+        return raw.encode("utf-8")
     return "".join(
         json.dumps(entry, separators=(",", ":")) + "\n" for entry in case["entries"]
     ).encode("utf-8")
 
 
 def load_debrief_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    fixture = json.loads(path.read_text(encoding="utf-8"))
+    fixture: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     cases = fixture["cases"]
     if len(cases) != 8 or {case["id"] for case in cases} != {f"d{i:02}" for i in range(1, 9)}:
         raise ValueError("debrief fixtures require eight unique cases")
@@ -132,8 +134,8 @@ def capture_debrief_candidate(*, root: Path = ROOT) -> dict[str, Any]:
     )
 
 
-def contract_results(fixture: dict) -> list[dict]:
-    results = []
+def contract_results(fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
     for case in fixture["cases"]:
         raw = record_bytes(case)
         report = None
@@ -218,8 +220,10 @@ def contract_results(fixture: dict) -> list[dict]:
     return results
 
 
-def contract_reviews(fixture: dict, results: list[dict]) -> list[dict]:
-    reviews = []
+def contract_reviews(
+    fixture: dict[str, Any], results: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    reviews: list[dict[str, Any]] = []
     for case, result in zip(fixture["cases"], results, strict=True):
         report = json.loads(result["report_json"]) if result["report_json"] else None
         reviews.append(
@@ -269,13 +273,13 @@ def contract_reviews(fixture: dict, results: list[dict]) -> list[dict]:
     return reviews
 
 
-def test_candidate_hashes_include_b_runtime_and_fixture():
+def test_candidate_hashes_include_b_runtime_and_fixture() -> None:
     candidate = capture_debrief_candidate()
     assert "src/fakeyou/debrief/debrief.py" in candidate.get("start_files", {})
     assert "evals/fixtures/debrief-scenarios.json" in candidate.get("start_files", {})
 
 
-def test_fixture_has_eight_exact_categories_and_no_completed_truncated_twin():
+def test_fixture_has_eight_exact_categories_and_no_completed_truncated_twin() -> None:
     fixture = load_debrief_fixture()
     assert len(fixture["cases"]) == 8
     assert {case["category"] for case in fixture["cases"]} == {
@@ -292,16 +296,16 @@ def test_fixture_has_eight_exact_categories_and_no_completed_truncated_twin():
     assert not any(entry["kind"] == "twin_speech" for entry in truncated["entries"])
 
 
-def test_ground_truth_review_is_required_even_for_valid_json():
+def test_ground_truth_review_is_required_even_for_valid_json() -> None:
     assert not debrief_gate([], [], load_debrief_fixture())
 
 
-def test_candidate_is_bound_to_actual_source_bytes():
+def test_candidate_is_bound_to_actual_source_bytes() -> None:
     candidate = capture_debrief_candidate()
     assert len(candidate.get("start_sha256", "")) == 64
 
 
-def test_reviewed_reports_pass_only_after_each_item_and_criterion_is_checked():
+def test_reviewed_reports_pass_only_after_each_item_and_criterion_is_checked() -> None:
     fixture = load_debrief_fixture()
     results = contract_results(fixture)
     reviews = contract_reviews(fixture, results)
@@ -321,7 +325,7 @@ def test_reviewed_reports_pass_only_after_each_item_and_criterion_is_checked():
         "wrong_metadata",
     ],
 )
-def test_review_gate_rejects_invalid_semantic_or_source_evidence(mutation):
+def test_review_gate_rejects_invalid_semantic_or_source_evidence(mutation: str) -> None:
     fixture = load_debrief_fixture()
     results = contract_results(fixture)
     reviews = contract_reviews(fixture, results)
@@ -409,7 +413,7 @@ def _source_index(case: dict[str, Any]) -> dict[str, Any]:
     from fakeyou.debrief.debrief_sources import SourceEntry
     from fakeyou.persistence.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
 
-    adapter = TypeAdapter(RecordEntry)
+    adapter: TypeAdapter[RecordEntry] = TypeAdapter(RecordEntry)
     sources = {}
     for number, line in enumerate(record_bytes(case).splitlines(), 1):
         if not line.strip():
@@ -475,7 +479,12 @@ def _report_for_review(
     draft = DebriefDraft(items=report.items, findings=report.findings)
     brief = _case_brief(fixture, case, report.meeting_id)
     validate_draft(draft, sources=sources, brief=brief)
-    cited = {ref.entry_id for item in (*report.items, *report.findings) for ref in item.evidence}
+    cited = {
+        ref.entry_id
+        for collection in (report.items, report.findings)
+        for item in collection
+        for ref in item.evidence
+    }
     evidence_ids = [source.id for source in report.evidence_sources]
     if len(evidence_ids) != len(set(evidence_ids)) or set(evidence_ids) != cited:
         raise ValueError("report evidence index mismatch")
@@ -621,8 +630,8 @@ def debrief_gate(
 
 
 async def test_offline_native_cli_runner_saves_immutable_reports_and_pending_review(
-    offline_settings, tmp_path
-):
+    offline_settings: Settings, tmp_path: Path
+) -> None:
     directory = tmp_path / "raw"
     outcome = await replay_debriefs(
         offline_settings, directory, model_factory=contract_debrief_model
@@ -644,7 +653,7 @@ async def test_offline_native_cli_runner_saves_immutable_reports_and_pending_rev
 def contract_debrief_model(case: dict[str, Any]) -> BaseChatModel:
     sources = _source_index(case)
     chunks = chunk_sources(tuple(sources.values()))
-    replies = []
+    replies: list[BaseMessage] = []
     for number, chunk in enumerate(chunks):
         ids = {entry.id for entry in chunk}
         items = [
@@ -681,7 +690,7 @@ def contract_debrief_model(case: dict[str, Any]) -> BaseChatModel:
 @pytest.fixture
 def offline_settings(tmp_path: Path) -> Settings:
     return Settings(
-        _env_file=None,
+        **env_file_opt(None),
         reply=OpenAIReply(model="offline-contract"),
         paths=PathSettings(record_dir=tmp_path / "meetings", journal_dir=tmp_path / "journals"),
     )
@@ -719,7 +728,7 @@ class DebriefCallCounter(AsyncCallbackHandler):
         call.update(latency_ms=(time.monotonic() - started) * 1000, error=type(error).__name__)
 
 
-async def test_native_callback_preserves_structured_tool_arguments():
+async def test_native_callback_preserves_structured_tool_arguments() -> None:
     counter = DebriefCallCounter()
     await counter.on_chat_model_start({}, [[AIMessage(content="Synthetic source")]], run_id="r1")
     message = AIMessage(
@@ -804,7 +813,7 @@ async def replay_debriefs(
     candidate = capture_debrief_candidate()
     _write_json_fresh(directory / "fixture.json", fixture)
     _write_json_fresh(directory / "candidate-start.json", candidate)
-    results = []
+    results: list[dict[str, Any]] = []
     for case in fixture["cases"]:
         for run in range(runs):
             scoped, persona_path, record, meeting_id = _stage_case(
@@ -990,8 +999,8 @@ INVALID_SOURCE_CODES = {
     ["missing", "corrupt", "oversized_entry", "too_many_chunks", "lock", "corrupt_context"],
 )
 async def test_cli_invalid_sources_fail_before_provider_construction(
-    offline_settings, tmp_path, invalid
-):
+    offline_settings: Settings, tmp_path: Path, invalid: str
+) -> None:
     fixture = load_debrief_fixture()
     case = fixture["cases"][0]
     directory = tmp_path / invalid
@@ -1052,7 +1061,7 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
         "empty_rationale",
     ],
 )
-def test_gate_rejects_review_and_coverage_contract_failures(mutation):
+def test_gate_rejects_review_and_coverage_contract_failures(mutation: str) -> None:
     fixture = load_debrief_fixture()
     results = contract_results(fixture)
     reviews = contract_reviews(fixture, results)
@@ -1097,7 +1106,7 @@ def _replace_report_for_contract(
     reviews[index]["report_sha256"] = digest
 
 
-def test_required_item_coverage_uses_ground_truth_denominator():
+def test_required_item_coverage_uses_ground_truth_denominator() -> None:
     fixture = load_debrief_fixture()
     results = contract_results(fixture)
     reviews = contract_reviews(fixture, results)
@@ -1107,7 +1116,9 @@ def test_required_item_coverage_uses_ground_truth_denominator():
     assert not debrief_gate(reviews, results, fixture)
 
 
-async def test_saved_raw_evidence_tampering_fails_independent_review(offline_settings, tmp_path):
+async def test_saved_raw_evidence_tampering_fails_independent_review(
+    offline_settings: Settings, tmp_path: Path
+) -> None:
     directory = tmp_path / "raw-review"
     outcome = await replay_debriefs(
         offline_settings, directory, model_factory=contract_debrief_model
@@ -1125,7 +1136,9 @@ async def test_saved_raw_evidence_tampering_fails_independent_review(offline_set
     assert rejected["raw_artifacts_intact"] is False
 
 
-async def test_manifest_result_override_cannot_replace_hashed_outputs(offline_settings, tmp_path):
+async def test_manifest_result_override_cannot_replace_hashed_outputs(
+    offline_settings: Settings, tmp_path: Path
+) -> None:
     directory = tmp_path / "raw-manifest-review"
     outcome = await replay_debriefs(
         offline_settings, directory, model_factory=contract_debrief_model
@@ -1177,7 +1190,7 @@ def _fixture_context_text(
     return context.model_dump_json(indent=2) + "\n"
 
 
-def test_offline_contract_reviews_cannot_approve_live_artifacts():
+def test_offline_contract_reviews_cannot_approve_live_artifacts() -> None:
     fixture = load_debrief_fixture()
     results = contract_results(fixture)
     reviews = contract_reviews(fixture, results)
