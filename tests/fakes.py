@@ -36,6 +36,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
+from playwright.async_api import Page
 
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.conversation.conversation import ConversationResponder
@@ -140,7 +141,7 @@ class FakeLocator:
             raise RuntimeError(f"click failed: {self.selector}")
 
 
-class FakePage:
+class FakePage(Page):
     def __init__(
         self,
         contents: Sequence[str | Exception] = (),
@@ -173,10 +174,15 @@ class FakePage:
         self.typed: list[str] = []
         self.waited: list[str] = []
         self.evaluate_calls: list[str] = []
-        self.keyboard = FakeKeyboard(self)
+        self._keyboard: Any = FakeKeyboard(self)
 
-    async def add_init_script(self, script: str) -> None:
-        self.init_scripts.append(script)
+    @property
+    def keyboard(self) -> Any:
+        return self._keyboard
+
+    async def add_init_script(self, script: str | None = None, **kwargs: Any) -> Any:
+        if script is not None:
+            self.init_scripts.append(script)
 
     async def goto(self, url: str, **kwargs: Any) -> None:
         self.visited.append(url)
@@ -196,7 +202,7 @@ class FakePage:
             raise result
         return result
 
-    async def evaluate(self, expression: str) -> Any:
+    async def evaluate(self, expression: str, arg: Any = None) -> Any:
         self.evaluate_calls.append(expression)
         if not self._evaluates:
             raise AssertionError("page evaluate called more times than scripted")
@@ -205,10 +211,10 @@ class FakePage:
             raise result
         return result
 
-    def locator(self, selector: str) -> FakeLocator:
+    def locator(self, selector: str, **kwargs: Any) -> Any:
         return FakeLocator(self, selector)
 
-    def get_by_placeholder(self, text: str) -> FakeLocator:
+    def get_by_placeholder(self, text: str | re.Pattern[str], **kwargs: Any) -> Any:
         return FakeLocator(self, f"placeholder:{text}")
 
 

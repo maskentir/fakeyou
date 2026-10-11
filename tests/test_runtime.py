@@ -1,15 +1,18 @@
 import asyncio
 import json
 import time
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.conversation.session import SessionConfig
+from fakeyou.conversation.session import SessionConfig, SessionResult
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.meet.participant_observer import OBSERVE_JS
 from fakeyou.observability.journal import Journal
@@ -33,6 +36,7 @@ from tests.fakes import (
     REMOVED,
     FakeAudio,
     FakeClock,
+    FakePage,
     FakePageSession,
     FakeSaverSession,
     RecordingJournal,
@@ -49,16 +53,22 @@ class _BlockingTerminalSaver(InMemorySaver):
         self.terminal_cancelled = asyncio.Event()
         self._blocked = False
 
-    def factory(self):
+    def factory(self) -> AbstractAsyncContextManager["_BlockingTerminalSaver"]:
         saver = self
 
         @asynccontextmanager
-        async def _session():
+        async def _session() -> AsyncIterator[_BlockingTerminalSaver]:
             yield saver
 
         return _session()
 
-    async def aput(self, config, checkpoint, metadata, new_versions):
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         values = checkpoint.get("channel_values", {})
         if (
             not self._blocked
@@ -78,8 +88,8 @@ class _BlockingTerminalSaver(InMemorySaver):
         return result
 
 
-def _config(**overrides):
-    values = {
+def _config(**overrides: Any) -> SessionConfig:
+    values: dict[str, Any] = {
         "owner_id": "owner-1",
         "twin_id": "twin-1",
         "meeting_id": "meeting-1",
@@ -90,7 +100,13 @@ def _config(**overrides):
     return SessionConfig(**values)
 
 
-async def _run(config, browser, saver, clock, stop=None):
+async def _run(
+    config: SessionConfig,
+    browser: FakePageSession,
+    saver: FakeSaverSession,
+    clock: FakeClock,
+    stop: asyncio.Event | None = None,
+) -> SessionResult:
     return await run_meeting_session(
         config,
         SessionWiring(
@@ -150,7 +166,7 @@ async def test_run_meeting_session_logs_slow_monitor_poll(
 ) -> None:
     clock = FakeClock()
 
-    def advance_on_monitor_poll(reads):
+    def advance_on_monitor_poll(reads: int) -> None:
         if reads == 2:
             clock.now += 2.5
 
@@ -237,7 +253,7 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
     journal = Journal("meeting-1", emit=events.append, echo=False)
     clock = FakeClock()
 
-    def failing_open(*args: object, **kwargs: object) -> object:
+    def failing_open(*args: object, **kwargs: object) -> NoReturn:
         raise RuntimeError("boom secret-token")
 
     result = await run_meeting_session(
@@ -265,7 +281,7 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
 async def test_run_meeting_session_reraises_catalog_errors_unmangled() -> None:
     clock = FakeClock()
 
-    def failing_open(*args: object, **kwargs: object) -> object:
+    def failing_open(*args: object, **kwargs: object) -> NoReturn:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
 
     with pytest.raises(FakeYouError) as error:
@@ -329,7 +345,7 @@ async def test_browser_startup_failure_is_persisted_as_terminal() -> None:
     saver = FakeSaverSession()
 
     @asynccontextmanager
-    async def fail_open(**kwargs):
+    async def fail_open(**kwargs: Any) -> AsyncIterator[Any]:
         raise RuntimeError("browser launch failed")
         yield
 
@@ -352,7 +368,7 @@ async def test_stop_arriving_with_browser_startup_does_not_request_join() -> Non
     saver = FakeSaverSession()
 
     @asynccontextmanager
-    async def open_then_stop(**kwargs):
+    async def open_then_stop(**kwargs: Any) -> AsyncIterator[FakePage]:
         async with browser.open(**kwargs) as opened:
             stop.set()
             yield opened
@@ -394,20 +410,22 @@ async def test_session_rejects_checkpoint_owned_by_another_owner() -> None:
     assert other.opened == 0
 
 
-async def test_stop_cancels_pending_navigation_and_closes_browser() -> None:
+async def test_stop_cancels_pending_navigation_and_closes_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stop = asyncio.Event()
     navigation_started = asyncio.Event()
     navigation_cancelled = asyncio.Event()
     page = meet_page()
 
-    async def slow_navigation(*args, **kwargs):
+    async def slow_navigation(*args: Any, **kwargs: Any) -> None:
         navigation_started.set()
         try:
             await asyncio.Event().wait()
         finally:
             navigation_cancelled.set()
 
-    page.goto = slow_navigation
+    monkeypatch.setattr(page, "goto", slow_navigation)
     browser = FakePageSession(page)
     async with asyncio.TaskGroup() as tasks:
         running = tasks.create_task(_run(_config(), browser, FakeSaverSession(), FakeClock(), stop))
@@ -470,20 +488,23 @@ async def test_repeated_cancellation_preserves_terminal_checkpoint() -> None:
     assert browser.closed == 1
 
 
-async def test_cancellation_during_leave_preserves_cancellation_and_terminal_checkpoint() -> None:
+async def test_cancellation_during_leave_preserves_cancellation_and_terminal_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     stop = asyncio.Event()
     leaving = asyncio.Event()
     page = meet_page()
     saver = FakeSaverSession()
 
-    async def content():
+    async def content() -> str:
         if not stop.is_set():
             stop.set()
             return IN_CALL
         leaving.set()
         await asyncio.Event().wait()
+        raise AssertionError("terminal wait returned without cancellation")
 
-    page.content = content
+    monkeypatch.setattr(page, "content", content)
     browser = FakePageSession(page)
     running = asyncio.create_task(_run(_config(), browser, saver, FakeClock(), stop))
     try:
@@ -539,7 +560,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
 
     clock = FakeClock()
 
-    def advance_on_monitor_poll(reads):
+    def advance_on_monitor_poll(reads: int) -> None:
         if reads == 2:
             clock.now += 2.5
 
@@ -628,7 +649,7 @@ async def test_lobby_timeout_retries_twice_before_terminal(journal: RecordingJou
     assert finished[0]["attempts"] == 3
 
 
-def _mining_payload():
+def _mining_payload() -> dict[str, Any]:
     return {
         "tiles": [{"key": "a", "label": "Budi", "self": False, "speaking": True}],
         "people": [],
