@@ -22,7 +22,7 @@ services:
     environment:
       FAKEYOU_DATABASE__URL: ${FAKEYOU_COMPOSE_WORKER_DATABASE_URL:-}
       FAKEYOU_BROWSER__HEADLESS: "false"
-      # PULSE defaults follow src/fakeyou/audio.py as source of truth; override via env.
+      # PULSE defaults follow src/fakeyou/foundation/invariants.py as source of truth; override via env.
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
       PULSE_SINK: ${PULSE_SINK:-agent_output}
       FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}
