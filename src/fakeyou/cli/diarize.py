@@ -84,7 +84,7 @@ def diarize_run(
     *,
     settings: Settings,
     opener: Callable[[urllib.request.Request], Any] | None = None,
-) -> int:
+) -> ExitCode:
     secret = settings.stt.api_key
     api_key = secret.get_secret_value() if secret is not None else ""
     if not api_key.strip():
@@ -96,7 +96,7 @@ def diarize_run(
             _run_locked(record_path, audio_dir, api_key, opener)
     except (OSError, ValueError, wave.Error) as error:
         raise FakeYouError(ErrorCode.DIARIZE_INPUT_UNREADABLE, reason=str(error)) from error
-    return 0
+    return ExitCode.SUCCESS
 
 
 def _sidecar_turn_count(record_path: Path) -> int:
@@ -108,7 +108,7 @@ def _sidecar_turn_count(record_path: Path) -> int:
     return len(turns) if isinstance(turns, list) else 0
 
 
-def diarize_show(meeting_id: str, *, settings: Settings) -> int:
+def diarize_show(meeting_id: str, *, settings: Settings) -> ExitCode:
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     if not (record_path.parent / JSON_FILE_NAME).exists():
         raise FakeYouError(ErrorCode.DIARIZE_CORRECTION_MISSING, meeting_id=meeting_id)
@@ -131,4 +131,4 @@ def diarize_show(meeting_id: str, *, settings: Settings) -> int:
     emit_text(f"turns: {_sidecar_turn_count(record_path)}")
     emit_text(f"covered: {covered}/{len(transcripts)} transcript entries")
     emit_text("status: ok")
-    return 0
+    return ExitCode.SUCCESS

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -194,13 +194,3 @@ class ParticipantObserver:
         self._samples = [sample for sample in self._samples if sample.at_ms >= cutoff]
         if self._on_poll is not None:
             self._on_poll(raw, at_ms)
-
-
-def describe_poll(raw: Mapping[str, Any]) -> dict[str, Any]:
-    tiles = raw.get("tiles")
-    names: Sequence[str] = []
-    if isinstance(tiles, list):
-        names = [
-            str(tile.get("key", "")) for tile in tiles if isinstance(tile, dict) and tile.get("key")
-        ]
-    return {"method": QUERY_METHOD_MINING, "keys": list(names)}

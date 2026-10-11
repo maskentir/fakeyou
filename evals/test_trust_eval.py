@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import json
 import os
-import subprocess
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -46,36 +45,6 @@ USEFULNESS_THRESHOLD = 0.9
 MIN_USEFUL_PAIRS = 79
 JUDGE_MODEL = "gpt-4.1-mini"
 EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
-
-
-def trust_source_commit() -> str:
-    try:
-        proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd=ROOT,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
-
-
-def trust_dirty_flag() -> bool:
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            cwd=ROOT,
-        )
-        return bool(proc.stdout.strip())
-    except Exception:
-        return True
 
 
 def judge_available() -> bool:

@@ -95,3 +95,11 @@ def test_env_example_documents_every_setting() -> None:
     documented = set(re.findall(r"^#?\s*(FAKEYOU_[A-Z0-9_]+)=", example, re.MULTILINE))
 
     assert _setting_env_keys(Settings) - documented == set()
+
+
+def test_compose_only_keys_cover_every_compose_variable() -> None:
+    compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"FAKEYOU_COMPOSE_[A-Z0-9_]+", compose))
+    cataloged = {key.value for key in COMPOSE_ONLY_KEYS}
+
+    assert referenced - cataloged == set()

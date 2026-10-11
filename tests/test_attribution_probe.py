@@ -836,20 +836,6 @@ async def test_probe_reads_identity_and_level_from_encoded_audio_frames() -> Non
             await browser.close()
 
 
-async def wait_for_census(page: object, timeout_seconds: float = 15.0) -> None:
-    from playwright.async_api import Page
-
-    assert isinstance(page, Page)
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while True:
-        pending = await page.evaluate("() => window.__fakeyouAttributionProbe.pending()")
-        if pending["census"]:
-            return
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError(f"probe never recorded census: {pending!r}")
-        await asyncio.sleep(0.1)
-
-
 async def wait_for_audio_topology(page: object, timeout_seconds: float = 15.0) -> None:
     from playwright.async_api import Page
 
