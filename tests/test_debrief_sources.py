@@ -3,7 +3,7 @@ import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -107,10 +107,11 @@ def test_record_hash_matches_original_bytes_and_preserves_unknown_metadata(tmp_p
         ),
     )
     assert path.read_bytes() == raw
+    snapshot_any = cast(Any, snapshot)
     with pytest.raises(FrozenInstanceError):
-        snapshot.record_sha256 = "b" * 64
+        snapshot_any.record_sha256 = "b" * 64
     with pytest.raises(FrozenInstanceError):
-        snapshot.sources[0].participant_id = "guessed-owner"
+        snapshot_any.sources[0].participant_id = "guessed-owner"
 
 
 def test_record_snapshot_reads_once_even_if_file_changes(
