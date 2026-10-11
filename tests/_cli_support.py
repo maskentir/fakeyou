@@ -204,10 +204,10 @@ async def _join_persona_conversation(
     model: FakeMessagesListChatModel,
     graphiti: MagicMock | None = None,
     transcripts: tuple[str, ...] = ("When does Orchid launch?",),
-    settle: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    settle: Callable[[], Coroutine[Any, Any, Any]] | None = None,
     persona_overrides: dict[str, Any] | None = None,
     audio: FakeReplyAudio | None = None,
-    on_start: Callable[[], None] | None = None,
+    on_start: Callable[[], Any] | None = None,
     native_checkpointer: bool = False,
     **overrides: Any,
 ) -> tuple[dict[str, Any], FakeReplyAudio, dict[str, Any]]:

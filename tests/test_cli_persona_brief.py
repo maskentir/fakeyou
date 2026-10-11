@@ -1,16 +1,19 @@
 import asyncio
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn, cast
 
 import pytest
+from graphiti_core.nodes import EpisodicNode
 from langchain.agents.middleware import ToolErrorMiddleware
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.outputs import ChatResult
 from pydantic import SecretStr
 
 import fakeyou.cli.join as cli_join
@@ -88,7 +91,7 @@ def meeting_files(settings: Settings) -> dict[str, bytes]:
     }
 
 
-def journal_rows(settings: Settings, meeting_id: str = "meeting-9") -> list[dict]:
+def journal_rows(settings: Settings, meeting_id: str = "meeting-9") -> list[dict[str, Any]]:
     path = journal_path(settings.paths.journal_dir, meeting_id)
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -133,7 +136,7 @@ async def test_join_rejects_invalid_persona_before_resources(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict,
+    overrides: dict[str, Any],
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -158,7 +161,7 @@ async def test_join_reports_a_foreign_persona_identity_with_its_code(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict,
+    overrides: dict[str, Any],
 ) -> None:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
@@ -281,11 +284,11 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         created_at=datetime(2026, 9, 30, 9, tzinfo=UTC),
     )
 
-    async def get_by_uuids(driver, uuids):
+    async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
         assert driver is graphiti.driver
         return [episode for uuid in uuids if uuid == "meet-1"]
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
 
     created, audio, outcome = await _join_persona_conversation(
         tmp_path,
@@ -319,6 +322,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     assert profile.memory_group != settings.memory.store.group
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     [content] = [m.content for m in tool_results]
+    assert isinstance(content, str)
     payload = json.loads(content)
     assert payload["schema"] == "memory_evidence/v1"
     assert [item["text"] for item in payload["facts"]] == [fact]
@@ -402,9 +406,9 @@ async def test_join_persona_reply_keeps_two_sentence_cap(
 
 
 def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_join(link, **kwargs):
+    async def fake_join(link: str, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "join_meeting", fake_join)
@@ -423,9 +427,9 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_join(link, **kwargs):
+    async def fake_join(link: str, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "join_meeting", fake_join)
@@ -526,7 +530,7 @@ async def test_join_brief_requires_converse_persona_and_explicit_meeting_id(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict,
+    overrides: dict[str, Any],
     match: str,
     code: ErrorCode,
 ) -> None:
@@ -610,7 +614,7 @@ async def test_join_rejects_an_unusable_brief_before_resources(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    content: dict | str | None,
+    content: dict[str, Any] | str | None,
     match: str,
     code: ErrorCode,
 ) -> None:
@@ -651,7 +655,13 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
     observed: list[bool] = []
 
     class SnapshotObservingModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             observed.append(context_file.exists())
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
@@ -937,7 +947,7 @@ async def test_join_brief_refuses_an_unreachable_checkpoint_before_resources(
     join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
-    async def unreachable(url):
+    async def unreachable(url: Any) -> AsyncIterator[Any]:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
         yield
 
@@ -970,7 +980,7 @@ async def test_join_brief_snapshot_write_failure_starts_nothing(
 
     prepare_brief_join(settings, monkeypatch)
 
-    def reject_replace(source, target):
+    def reject_replace(source: Any, target: Any) -> NoReturn:
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(os, "replace", reject_replace)
@@ -1104,7 +1114,13 @@ async def test_join_brief_stop_before_pcm_cancels_the_model_turn(
     started = asyncio.Event()
 
     class HangingModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             started.set()
             await asyncio.Event().wait()
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
@@ -1137,9 +1153,13 @@ async def test_join_brief_stop_during_playback_records_no_twin_speech(
             super().__init__()
             self.entered = asyncio.Event()
 
-        async def speak(self, text, *, sentence_index=None, transcript_id=None):
+        async def speak(
+            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        ) -> None:
             self.speaking = True
-            self.on_playback_event(PlaybackEvent("playback_started", text))
+            event_callback = self.on_playback_event
+            assert event_callback is not None
+            event_callback(PlaybackEvent("playback_started", text))
             self.entered.set()
             await asyncio.Event().wait()
 
@@ -1179,7 +1199,7 @@ async def test_open_conversation_rejects_a_brief_without_a_persona(
     with pytest.raises(FakeYouError) as caught:
         async with assembly.open_conversation(
             settings,
-            config,
+            cast(Any, config),
             agent=AgentWiring(profile=None, brief=meeting_brief(), graphiti=None),
             behavior=LoopBehavior(on_transition=lambda *_args: None),
         ):
@@ -1201,7 +1221,7 @@ async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
     with pytest.raises(FakeYouError, match="brief_only") as caught:
         async with assembly.open_conversation(
             settings,
-            config,
+            cast(Any, config),
             agent=AgentWiring(
                 profile=PersonaProfile.model_validate(PERSONA_DATA),
                 brief=meeting_brief(),
