@@ -19,6 +19,7 @@ from fakeyou.audio.voice_activity import (
     MEET_AUDIO_SLOTS,
     VOICE_ACTIVITY_DRAIN_JS,
     SlotBinder,
+    Tenure,
     VoiceActivityLoop,
     VoiceActivityTracker,
     load_voice_activity_script,
@@ -48,7 +49,7 @@ CSRC_FIXTURE = Path(__file__).parent / "fixtures" / "voice-labels-csrc-live-3.js
 
 def batch(
     page_ms: float,
-    levels: list[list[float]],
+    levels: list[list[Any]],
     participants: list[dict[str, str]] | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
@@ -1126,7 +1127,10 @@ def test_binder_adapter_exposes_registry_uuid() -> None:
     registry.update_roster(["dev-a"])
     binder = SlotBinder(registry=registry)
     outcome = binder.resolve(0)
-    assert outcome.uuid == registry.resolve(0).uuid
+    assert isinstance(outcome, Tenure)
+    direct = registry.resolve(0)
+    assert not isinstance(direct, str)
+    assert outcome.uuid == direct.uuid
     assert outcome.uuid
 
 
@@ -1135,7 +1139,11 @@ def test_binder_adapter_keeps_default_registry_private() -> None:
     second = SlotBinder()
     first.update_roster(["dev-a"])
     second.update_roster(["dev-a"])
-    assert first.resolve(0).uuid == second.resolve(0).uuid
+    first_row = first.resolve(0)
+    second_row = second.resolve(0)
+    assert isinstance(first_row, Tenure)
+    assert isinstance(second_row, Tenure)
+    assert first_row.uuid == second_row.uuid
     assert first.drain_binder_events() != []
 
 
@@ -1149,6 +1157,8 @@ def test_tracker_and_binder_share_registry_rows() -> None:
     binder.observe_stream(0, [11])
     row = binder.resolve(0)
     same = tracker._registry.resolve_csrcs(frozenset([11]))
+    assert isinstance(row, Tenure)
+    assert same is not None
     assert same.uuid == row.uuid
 
 
