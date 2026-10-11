@@ -3,6 +3,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -114,7 +115,7 @@ def _with_enter(page: FakePage) -> list[str]:
     return pressed
 
 
-def _tool_call(name: str, call_id: str, args: dict | None = None) -> dict:
+def _tool_call(name: str, call_id: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"args": args or {}, "name": name, "type": "tool_call", "id": call_id}
 
 
@@ -183,11 +184,12 @@ async def test_hand_click_retries_three_times_with_fresh_locator() -> None:
     locate_calls: list[str] = []
     real_locator = page.locator
 
-    def counting(selector: str):
+    def counting(selector: str) -> Any:
         locate_calls.append(selector)
         return real_locator(selector)
 
-    page.locator = counting
+    page_any = cast(Any, page)
+    page_any.locator = counting
 
     result = await raise_hand(page, sleep=clock.sleep, monotonic=clock.monotonic)
 
