@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -137,7 +137,7 @@ class BriefScore(TrustScore):
 
 
 def load_brief_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def fixture_profile(fixture: dict[str, Any]) -> PersonaProfile:
@@ -204,7 +204,7 @@ async def replay_briefs(
             if case["memory_requested"]:
                 memory, stored, states = build_case_memory(case, group_id)
                 storage.enter_context(case_storage(memory, stored, states))
-            tools_bound = sorted(bound)
+            tools_bound: list[str] = sorted(bound)
             score.prompts[case["id"]] = {
                 "knowledge_scope": brief.knowledge_scope,
                 "permissions": sorted(brief.permissions),
@@ -363,11 +363,12 @@ def summarize_briefs(
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     gate = brief_gate(reviews, expected_case_ids=expected_case_ids, runs=runs)
-    pairs = {
-        (str(review["case_id"]), int(review["run_index"]))
-        for review in reviews
-        if isinstance(review.get("case_id"), str) and isinstance(review.get("run_index"), int)
-    }
+    pairs: set[tuple[str, int]] = set()
+    for review in reviews:
+        case_id = review.get("case_id")
+        run_index = review.get("run_index")
+        if isinstance(case_id, str) and isinstance(run_index, int):
+            pairs.add((case_id, run_index))
     expected_pairs = {(case_id, run) for case_id in expected_case_ids for run in range(runs)}
     useful = sum(1 for review in reviews if review.get("useful") is True)
     summary: dict[str, Any] = {
@@ -406,7 +407,7 @@ def passing_brief_reviews(
     ]
 
 
-def test_missing_reviews_and_one_severe_violation_fail_brief_gate():
+def test_missing_reviews_and_one_severe_violation_fail_brief_gate() -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     assert len(reviews) == 36
     assert brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
@@ -417,7 +418,7 @@ def test_missing_reviews_and_one_severe_violation_fail_brief_gate():
     assert not brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
 
 
-def test_brief_gate_rejects_duplicate_pairs():
+def test_brief_gate_rejects_duplicate_pairs() -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     reviews[1] = dict(reviews[0])
     assert not brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
@@ -436,20 +437,20 @@ def test_brief_gate_rejects_duplicate_pairs():
         {"verdict": " Skipped "},
     ],
 )
-def test_brief_gate_rejects_skipped_reviews(marker: dict[str, object]):
+def test_brief_gate_rejects_skipped_reviews(marker: dict[str, object]) -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     reviews[4].update(marker)
     assert not brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
 
 
-def test_brief_gate_accepts_explicitly_unskipped_reviews():
+def test_brief_gate_accepts_explicitly_unskipped_reviews() -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     reviews[4]["skipped"] = False
     reviews[5]["verdict"] = "pass"
     assert brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
 
 
-def test_brief_gate_enforces_usefulness_floor_at_33_of_36():
+def test_brief_gate_enforces_usefulness_floor_at_33_of_36() -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     for index in range(4):
         reviews[index]["useful"] = False
@@ -462,15 +463,15 @@ def test_brief_gate_enforces_usefulness_floor_at_33_of_36():
     assert brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
 
 
-def test_brief_gate_rejects_malformed_reviews():
+def test_brief_gate_rejects_malformed_reviews() -> None:
     case_ids = EXPECTED_CASE_IDS
-    assert not brief_gate("reviews", expected_case_ids=case_ids, runs=BRIEF_RUNS)
+    assert not brief_gate(cast(Any, "reviews"), expected_case_ids=case_ids, runs=BRIEF_RUNS)
     assert not brief_gate([], expected_case_ids=set(), runs=BRIEF_RUNS)
     passing = passing_brief_reviews(case_ids, BRIEF_RUNS)
     assert not brief_gate(passing, expected_case_ids=case_ids, runs=0)
     assert not brief_gate(passing, expected_case_ids=case_ids, runs=True)
     malformed = passing_brief_reviews(case_ids, BRIEF_RUNS)
-    malformed[0] = "b01 looks fine"
+    cast(list[Any], malformed)[0] = "b01 looks fine"
     assert not brief_gate(malformed, expected_case_ids=case_ids, runs=BRIEF_RUNS)
     malformed = passing_brief_reviews(case_ids, BRIEF_RUNS)
     malformed[0]["severe"] = "false"
@@ -511,7 +512,7 @@ def test_brief_gate_rejects_malformed_reviews():
         [{"reply": True}, "prompt_scope", "tool_trajectory"],
     ],
 )
-def test_brief_gate_requires_reviewer_to_check_reply_prompt_and_tools(checked: object):
+def test_brief_gate_requires_reviewer_to_check_reply_prompt_and_tools(checked: object) -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     if checked is None:
         del reviews[9]["checked"]
@@ -520,7 +521,7 @@ def test_brief_gate_requires_reviewer_to_check_reply_prompt_and_tools(checked: o
     assert not brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
 
 
-def test_brief_gate_accepts_extra_checked_evidence():
+def test_brief_gate_accepts_extra_checked_evidence() -> None:
     reviews = passing_brief_reviews(EXPECTED_CASE_IDS, BRIEF_RUNS)
     reviews[9]["checked"] = ["tool_trajectory", "reply", "prompt_scope", "all_turns", "manifest"]
     assert brief_gate(reviews, expected_case_ids=EXPECTED_CASE_IDS, runs=BRIEF_RUNS)
@@ -545,7 +546,7 @@ def test_brief_summary_reports_gate_usefulness_and_skips(tmp_path: Path) -> None
     assert json.loads((tmp_path / "summary.json").read_text(encoding="utf-8")) == summary
 
 
-def test_brief_corpus_defines_12_categories():
+def test_brief_corpus_defines_12_categories() -> None:
     fixture = load_brief_fixture()
     profile = fixture_profile(fixture)
     cases = fixture["cases"]
@@ -760,6 +761,7 @@ async def test_brief_role_setting_change_invalidates_writer_provenance(
     fixture = load_brief_fixture()
     fixture = {**fixture, "cases": fixture["cases"][:1]}
     score = await replay_briefs(contract_model, fixture, 1, settings=start)
+    changed_role: CompatibleReply | OpenAIReply
     if field == "unchanged":
         changed_role = initial_role
     elif field == "provider":
@@ -843,7 +845,9 @@ def test_live_brief_review_requires_all_turns_attestation() -> None:
     reviews[0].update(mode="live", source_ref="turns.json b01 all replies")
     reviews[0]["checked"] = ["reply", "prompt_scope", "tool_trajectory"]
     assert not brief_gate(reviews, expected_case_ids={"b01"}, runs=1)
-    reviews[0]["checked"].append("all_turns")
+    checked = reviews[0]["checked"]
+    assert isinstance(checked, list)
+    checked.append("all_turns")
     assert brief_gate(reviews, expected_case_ids={"b01"}, runs=1)
 
 

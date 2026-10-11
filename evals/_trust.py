@@ -4,16 +4,17 @@ import hashlib
 import json
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
+from graphiti_core.nodes import EpisodicNode
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 import fakeyou.memory.memory as memory_module
 from evals._shared import token_present
@@ -49,7 +50,9 @@ AID_CHECKS = (
 )
 
 
-def trust_gate(reviews: list[dict[str, object]], *, expected_case_ids: set[str], runs: int) -> bool:
+def trust_gate(
+    reviews: list[dict[str, object]], *, expected_case_ids: set[str] | frozenset[str], runs: int
+) -> bool:
     if not isinstance(reviews, list):
         return False
     if not isinstance(runs, int) or isinstance(runs, bool) or runs < 1:
@@ -149,7 +152,7 @@ class TrustScore:
 
 
 def load_trust_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def build_case_memory(
@@ -186,7 +189,7 @@ def build_case_memory(
 
 
 @contextlib.contextmanager
-def case_storage(memory: Any, stored: dict[str, Any], states: dict[str, str]):
+def case_storage(memory: Any, stored: dict[str, Any], states: dict[str, str]) -> Iterator[None]:
     async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
         assert driver is memory.driver
         return [stored[uuid] for uuid in uuids if uuid in stored]
@@ -197,7 +200,7 @@ def case_storage(memory: Any, stored: dict[str, Any], states: dict[str, str]):
         assert group_id
         return {uuid: states[uuid] for uuid in episode_uuids if uuid in states}
 
-    with patch.object(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids):
+    with patch.object(EpisodicNode, "get_by_uuids", get_by_uuids):
         with patch.object(memory_module, "read_note_states", scripted_states):
             yield
 
@@ -215,7 +218,7 @@ def score_aids(case: dict[str, Any], reply: str, recalled: bool) -> dict[str, bo
 
 
 def contract_model(case: dict[str, Any], *, recall_tool: bool = True) -> ToolCallingFakeModel:
-    responses: list[AIMessage] = []
+    responses: list[BaseMessage] = []
     for turn in case["turns"]:
         if recall_tool and case.get("needs_recall", False):
             responses.append(recall_call({"query": str(turn["say"])}))
