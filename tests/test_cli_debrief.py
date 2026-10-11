@@ -4,7 +4,7 @@ from collections.abc import Coroutine
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -41,7 +41,7 @@ from tests.fakes import ToolCallingFakeModel
 async def test_debrief_cancellation_exits_nonzero_without_traceback(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    async def cancel(**kwargs):
+    async def cancel(**kwargs: Any) -> NoReturn:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(
@@ -122,7 +122,7 @@ def debrief_run(
     )
 
 
-def debrief_model():
+def debrief_model() -> ToolCallingFakeModel:
     return ToolCallingFakeModel(
         responses=[
             AIMessage(
@@ -262,7 +262,7 @@ async def test_force_failure_preserves_existing_canonical_report(
     await run()
     previous = (path.parent / "debrief.json").read_bytes()
 
-    async def fail(*args, **kwargs):
+    async def fail(*args: Any, **kwargs: Any) -> NoReturn:
         raise ValueError("provider failed")
 
     monkeypatch.setattr(cli_debrief, "generate_debrief", fail)
@@ -282,10 +282,10 @@ async def test_attempt_write_failure_preserves_cancellation(
     run, path, profile = debrief_run
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
 
-    async def cancel(*args, **kwargs):
+    async def cancel(*args: Any, **kwargs: Any) -> NoReturn:
         raise asyncio.CancelledError
 
-    def fail_write(*args, **kwargs):
+    def fail_write(*args: Any, **kwargs: Any) -> NoReturn:
         raise OSError("disk write failed")
 
     monkeypatch.setattr(cli_debrief, "generate_debrief", cancel)
@@ -303,7 +303,7 @@ async def test_provider_faults_keep_their_identity_through_debrief(
 ) -> None:
     run, path, profile = debrief_run
 
-    def unavailable(settings):
+    def unavailable(settings: Any) -> NoReturn:
         raise ProviderFault("llm", "unavailable")
 
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", unavailable)
@@ -348,7 +348,7 @@ async def test_debrief_total_deadline_ignores_the_conversation_budget(
     settings.debrief = GoogleReply(timeout_seconds=5.0, max_retries=0)
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
 
-    async def quick(*args, **kwargs):
+    async def quick(*args: Any, **kwargs: Any) -> DebriefDraft:
         await asyncio.sleep(0.05)
         return DebriefDraft(items=(), findings=())
 
@@ -370,7 +370,7 @@ async def test_debrief_enforces_total_response_deadline(
     cancelled = asyncio.Event()
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
 
-    async def slow(*args, **kwargs):
+    async def slow(*args: Any, **kwargs: Any) -> None:
         try:
             await asyncio.Event().wait()
         finally:
@@ -393,7 +393,7 @@ async def test_model_cannot_publish_after_record_changes(
     run, path, profile = debrief_run
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
 
-    async def mutate(*args, **kwargs):
+    async def mutate(*args: Any, **kwargs: Any) -> DebriefDraft:
         path.write_text(path.read_text() + "\n")
         return DebriefDraft(items=(), findings=())
 
@@ -437,7 +437,7 @@ async def test_debrief_cancellation_keeps_previous_result_and_lock(
     monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda settings: debrief_model())
     started = asyncio.Event()
 
-    async def wait(*args, **kwargs):
+    async def wait(*args: Any, **kwargs: Any) -> None:
         started.set()
         await asyncio.Event().wait()
 
