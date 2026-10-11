@@ -1,7 +1,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -211,7 +211,7 @@ def test_worker_subcommands_dispatch_without_leaking_parser_state(
     ],
 )
 def test_worker_status_and_stop_dispatch_meeting_id(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict[str, Any]
 ) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -271,7 +271,8 @@ def test_worker_ingest_exits_nonzero_unless_completed(
     def interrupted(meeting_id: str, **kwargs: Any) -> WorkerIngest:
         return WorkerIngest(meeting_id=meeting_id, status="interrupted")
 
-    backend.ingest = interrupted
+    backend_any = cast(Any, backend)
+    backend_any.ingest = interrupted
 
     with pytest.raises(SystemExit) as caught:
         worker_ingest(
