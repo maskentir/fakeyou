@@ -6,7 +6,7 @@ import subprocess
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -162,11 +162,12 @@ def summarize_trust(
     gate = trust_gate(reviews, expected_case_ids=expected_case_ids, runs=runs)
     severe = sum(1 for review in reviews if review.get("severe") is True)
     useful = sum(1 for review in reviews if review.get("useful") is True)
-    pairs = {
-        (str(review["case_id"]), int(review["run_index"]))
-        for review in reviews
-        if isinstance(review.get("case_id"), str) and isinstance(review.get("run_index"), int)
-    }
+    pairs: set[tuple[str, int]] = set()
+    for review in reviews:
+        case_id = review.get("case_id")
+        run_index = review.get("run_index")
+        if isinstance(case_id, str) and isinstance(run_index, int):
+            pairs.add((case_id, run_index))
     expected_pairs = {(case_id, run) for case_id in expected_case_ids for run in range(runs)}
     summary: dict[str, Any] = {
         "reviews_seen": len(reviews),
@@ -191,7 +192,7 @@ def summarize_trust(
     return summary
 
 
-def test_missing_reviews_and_one_severe_violation_fail_gate():
+def test_missing_reviews_and_one_severe_violation_fail_gate() -> None:
     case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = [
         {
@@ -210,9 +211,9 @@ def test_missing_reviews_and_one_severe_violation_fail_gate():
     assert not trust_gate(reviews, expected_case_ids=case_ids, runs=3)
 
 
-def test_trust_gate_rejects_malformed_reviews():
+def test_trust_gate_rejects_malformed_reviews() -> None:
     case_ids = {f"c{i:02d}" for i in range(1, 26)}
-    assert not trust_gate("reviews", expected_case_ids=case_ids, runs=3)
+    assert not trust_gate(cast(Any, "reviews"), expected_case_ids=case_ids, runs=3)
     assert not trust_gate([], expected_case_ids=set(), runs=3)
     assert not trust_gate(passing_trust_reviews(case_ids, 3), expected_case_ids=case_ids, runs=0)
     assert not trust_gate(passing_trust_reviews(case_ids, 3), expected_case_ids=case_ids, runs=True)
@@ -244,7 +245,7 @@ def test_trust_gate_rejects_malformed_reviews():
     assert trust_gate(malformed, expected_case_ids=case_ids, runs=3)
 
 
-def test_trust_gate_enforces_usefulness_floor():
+def test_trust_gate_enforces_usefulness_floor() -> None:
     case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     for index in range(8):
@@ -267,7 +268,7 @@ def test_trust_gate_enforces_usefulness_floor():
         "Answer presents unavailable status as known fact.",
     ],
 )
-def test_severe_violation_fails_gate(reason: str):
+def test_severe_violation_fails_gate(reason: str) -> None:
     case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     reviews[5]["severe"] = True
@@ -275,13 +276,13 @@ def test_severe_violation_fails_gate(reason: str):
     assert not trust_gate(reviews, expected_case_ids=case_ids, runs=3)
 
 
-def test_missing_single_review_fails_gate():
+def test_missing_single_review_fails_gate() -> None:
     case_ids = {f"c{i:02d}" for i in range(1, 26)}
     reviews = passing_trust_reviews(case_ids, 3)
     assert not trust_gate(reviews[1:], expected_case_ids=case_ids, runs=3)
 
 
-def test_trust_corpus_defines_29_rated_cases():
+def test_trust_corpus_defines_29_rated_cases() -> None:
     fixture = load_trust_fixture()
     cases = fixture["cases"]
     assert [case["id"] for case in cases] == [f"c{i:02d}" for i in range(1, 30)]
@@ -480,6 +481,7 @@ async def test_trust_role_setting_change_invalidates_writer_provenance(
     fixture = load_trust_fixture()
     fixture = {**fixture, "cases": fixture["cases"][:1]}
     score = await replay_trust(contract_model, fixture, 1, settings=start)
+    changed_role: CompatibleReply | OpenAIReply
     if field == "unchanged":
         changed_role = initial_role
     elif field == "provider":
