@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,7 +13,7 @@ from fakeyou.audio.stream_capture import (
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.cli.join import TranscriptSinks
 from fakeyou.identity.identity import SpeakerRegistry
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.observability.journal import Journal
 from tests._capture_support import _recording_registry
 from tests.fakes import FakeClock, meet_page
@@ -313,7 +314,7 @@ async def test_capture_drain_loop_roster_diagnostics_fall_back_without_tiles() -
 @pytest.mark.browser
 async def test_stream_capture_drain_reports_roster_tile_count() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate(
@@ -348,7 +349,7 @@ def test_parse_roster_keeps_all_entries_when_twin_name_collides() -> None:
     )
 
 
-def _collision_payload(names: list[str]) -> dict[str, object]:
+def _collision_payload(names: list[str]) -> dict[str, Any]:
     return {
         "streams": [
             {
@@ -611,7 +612,7 @@ async def test_tagged_callback_stamps_capture_clock() -> None:
 
     from fakeyou.audio.audio import _tagged
 
-    seen: list[TranscriptionFrame] = []
+    seen: list[Any] = []
 
     async def record(frame: TranscriptionFrame) -> None:
         seen.append(frame)
@@ -631,7 +632,8 @@ def test_attribute_stream_frame_returns_capture_ms() -> None:
 
     stamped = TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
     stamped.transport_source = "slot-2"
-    stamped.capture_ms = 55.5
+    stamped_any: Any = stamped
+    stamped_any.capture_ms = 55.5
     assert attribute_stream_frame(stamped, SlotBinder(capacity=4))[4] == 55.5
     plain = TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00")
     plain.transport_source = "slot-2"
@@ -641,7 +643,7 @@ def test_attribute_stream_frame_returns_capture_ms() -> None:
 @pytest.mark.browser
 async def test_stream_capture_supervisor_rescues_stalled_slot() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -664,7 +666,7 @@ async def test_stream_capture_supervisor_rescues_stalled_slot() -> None:
 @pytest.mark.browser
 async def test_stream_capture_supervisor_releases_ended_track() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -689,7 +691,7 @@ async def test_stream_capture_supervisor_releases_ended_track() -> None:
 @pytest.mark.browser
 async def test_stream_capture_supervisor_releases_stale_ended_track_without_rescue() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -715,7 +717,7 @@ async def test_stream_capture_supervisor_releases_stale_ended_track_without_resc
 @pytest.mark.browser
 async def test_stream_capture_supervisor_releases_futile_slot() -> None:
     script = load_capture_script()
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.add_init_script(script)
         await page.goto("about:blank")
         await page.evaluate("() => window.__fakeyouStreamCapture.attachTestTones()")
@@ -763,7 +765,7 @@ def test_parse_health_skips_malformed_entries() -> None:
 async def test_drain_loop_journals_slot_rescue_once() -> None:
     from fakeyou.audio.stream_capture import CaptureDrainLoop
 
-    def payload(rescued: int) -> dict:
+    def payload(rescued: int) -> dict[str, Any]:
         return {
             "streams": [],
             "roster": [],
@@ -815,7 +817,7 @@ async def test_drain_loop_journals_released_slots_as_dropped() -> None:
 async def test_drain_loop_ignores_malformed_released() -> None:
     from fakeyou.audio.stream_capture import CaptureDrainLoop
 
-    def payload(released: object) -> dict:
+    def payload(released: object) -> dict[str, Any]:
         return {"streams": [], "roster": [], "dropped": 0, "released": released}
 
     cases = [
