@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Any
 
 from fakeyou.observability.report import (
     build_session_report,
@@ -6,7 +7,7 @@ from fakeyou.observability.report import (
 from tests._report_support import START, answered_turn, row
 
 
-def streamed_turn(offset: float, transcript_id: str) -> list:
+def streamed_turn(offset: float, transcript_id: str) -> list[dict[str, Any]]:
     request_id = f"{transcript_id}:1"
     return [
         row(offset, "speech_stopped", source="audio"),
