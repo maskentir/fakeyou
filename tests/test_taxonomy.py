@@ -31,8 +31,10 @@ def _journal_calls() -> list[tuple[str, int, str, ast.Call]]:
                     calls.append((path.name, node.lineno, first.value, node))
             if node.func.attr == "timed":
                 for keyword in node.keywords:
-                    if keyword.arg in {"started", "finished", "failed"} and isinstance(
-                        keyword.value, ast.Constant
+                    if (
+                        keyword.arg in {"started", "finished", "failed"}
+                        and isinstance(keyword.value, ast.Constant)
+                        and isinstance(keyword.value.value, str)
                     ):
                         calls.append((path.name, node.lineno, keyword.value.value, node))
     return calls
