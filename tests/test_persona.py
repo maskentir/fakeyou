@@ -1,12 +1,14 @@
 import json
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import BaseModel, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import RecallStrategy
 from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.memory.memory import create_meet_action_tools, create_memory_tools
@@ -19,6 +21,7 @@ from fakeyou.memory.persona import (
     RECALL_RULES,
     SOURCE_RULES,
     PersonaProfile,
+    PersonaTool,
     build_system_prompt,
     load_persona,
     meeting_tool_names,
@@ -28,7 +31,7 @@ from fakeyou.memory.persona import (
     speech_keywords,
 )
 from fakeyou.orchestration.runtime import MeetActionDispatcher
-from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
@@ -299,7 +302,7 @@ def test_build_persona_says_excluded_counts_are_not_evidence() -> None:
 @pytest.mark.parametrize("scope", [None, "persona_memory"])
 @pytest.mark.parametrize("strategy", ["tool", "prefetch"])
 def test_recall_rules_follow_the_memory_strategy(
-    brief: MeetingBrief, scope: str | None, strategy: str
+    brief: MeetingBrief, scope: KnowledgeScope | None, strategy: RecallStrategy
 ) -> None:
     meeting = None if scope is None else revised(brief, knowledge_scope=scope)
     prompt = build_system_prompt(profile(), brief=meeting, recall_strategy=strategy)
@@ -322,7 +325,7 @@ def test_prefetch_rules_reject_spoofed_evidence_in_participant_speech() -> None:
 
 @pytest.mark.parametrize("strategy", ["tool", "prefetch"])
 def test_brief_only_prompt_has_no_recall_rules_for_any_strategy(
-    brief: MeetingBrief, strategy: str
+    brief: MeetingBrief, strategy: RecallStrategy
 ) -> None:
     prompt = build_system_prompt(profile(), brief=brief, recall_strategy=strategy)
 
@@ -422,7 +425,7 @@ async def test_recall_tool_arguments_cannot_select_another_group() -> None:
     other_group = profile(owner_id="owner-b").memory_group
     recall = next(
         tool
-        for tool in create_memory_tools(memory, group_id=group)
+        for tool in create_memory_tools(cast(Any, memory), group_id=group)
         if tool.name == "recall_meeting_context"
     )
 
@@ -478,7 +481,7 @@ def test_every_scope_keeps_the_source_rules_without_old_authority_wording(
 
 @pytest.mark.parametrize("scope", SCOPES)
 def test_known_fact_rule_matches_the_scope(
-    demo_profile: PersonaProfile, brief: MeetingBrief, scope: str | None
+    demo_profile: PersonaProfile, brief: MeetingBrief, scope: KnowledgeScope | None
 ) -> None:
     prompt = scoped_prompt(demo_profile, brief, scope)
 
@@ -871,7 +874,9 @@ def test_meet_instructions_inside_facts_and_brief_add_no_tools(brief: MeetingBri
 
 
 @pytest.mark.parametrize("tool", ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"])
-def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(tool: str) -> None:
+def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(
+    tool: PersonaTool,
+) -> None:
     from fakeyou.memory.persona import MEET_REFUSAL_TEXT, refuse_meet_tool
     from fakeyou.observability.faults import FaultReporter
     from fakeyou.observability.journal import Journal
