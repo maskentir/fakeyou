@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from evals._shared import token_present
 from fakeyou.config.settings import DEFAULTS
@@ -15,7 +15,7 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "memory-correction-v1.j
 
 
 def load_correction_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def query_matches(answer: str, present: list[str], absent: list[str]) -> bool:

@@ -17,7 +17,7 @@ from evals._correction import (
 from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.memory.ingestion import MeetingScope, ingest_corrections, ingest_meeting
+from fakeyou.memory.ingestion import IngestScope, MeetingScope, ingest_corrections, ingest_meeting
 from fakeyou.memory.memory import (
     RECALL_EMPTY_RESULT,
     ensure_indexes,
@@ -122,9 +122,11 @@ async def run_memory_correction(
     ingested = await ingest_meeting(
         memory,
         load_meeting_record(record_path),
-        group_id=group_id,
-        meeting_id=meeting_id,
-        twin_name=str(fixture["twin_name"]),
+        IngestScope(
+            group_id=group_id,
+            meeting_id=meeting_id,
+            twin_name=str(fixture["twin_name"]),
+        ),
     )
     write_status(
         status_path(record_path),

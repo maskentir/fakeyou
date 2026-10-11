@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from graphiti_core.nodes import EpisodicNode
 
 import fakeyou.memory.memory as memory_module
 from evals._correction import (
@@ -20,7 +21,7 @@ from evals._correction import (
 from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.memory.ingestion import MeetingScope, ingest_corrections, ingest_meeting
+from fakeyou.memory.ingestion import IngestScope, MeetingScope, ingest_corrections, ingest_meeting
 from fakeyou.memory.memory import (
     create_memory_tools,
     ensure_indexes,
@@ -126,7 +127,7 @@ def diff_report_json(report: dict[str, Any]) -> str:
 
 def shadow_wins(report: dict[str, Any]) -> bool:
     aggregate = report["aggregate"]
-    return aggregate["superseded_shadow"] == 0 and aggregate["superseded_prod"] >= 1
+    return bool(aggregate["superseded_shadow"] == 0 and aggregate["superseded_prod"] >= 1)
 
 
 async def run_shadow_dual(
@@ -144,9 +145,7 @@ async def run_shadow_dual(
     prod_ingested = await ingest_meeting(
         memory,
         load_meeting_record(record_prod),
-        group_id=prod_group,
-        meeting_id=meeting_id,
-        twin_name=twin_name,
+        IngestScope(group_id=prod_group, meeting_id=meeting_id, twin_name=twin_name),
     )
     write_status(
         status_path(record_prod),
@@ -162,9 +161,7 @@ async def run_shadow_dual(
     shadow_ingested = await ingest_meeting(
         memory,
         load_meeting_record(record_shadow),
-        group_id=shadow_group,
-        meeting_id=meeting_id,
-        twin_name=twin_name,
+        IngestScope(group_id=shadow_group, meeting_id=meeting_id, twin_name=twin_name),
     )
     write_status(
         status_path(record_shadow),
@@ -308,7 +305,7 @@ async def test_shadow_dual_run_offline(tmp_path: Path, monkeypatch: pytest.Monke
     ) -> dict[str, str]:
         return dict.fromkeys(episode_uuids, "active")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", active_states)
     prod_before = await answer_queries(prod_store, queries, group_id=prod_group)
     shadow_answers = await answer_queries(shadow_store, queries, group_id=shadow_group)
