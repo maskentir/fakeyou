@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, cast
 
 import pytest
 
@@ -11,7 +12,7 @@ from tests.fakes import FakeClock, meet_page
 
 
 async def test_stream_fleet_tags_transcripts_per_slot() -> None:
-    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     from fakeyou.audio.audio import StreamCallbacks
@@ -26,7 +27,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
             super().__init__()
             self._text = text
 
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
+        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
             await super().process_frame(frame, direction)
             if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
                 await self.push_frame(
@@ -81,7 +82,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
 
 
 async def test_stream_fleet_covers_fourth_slot() -> None:
-    from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
+    from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     from fakeyou.audio.audio import StreamCallbacks
@@ -97,7 +98,7 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
             super().__init__()
             self._text = text
 
-        async def process_frame(self, frame, direction: FrameDirection) -> None:
+        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
             await super().process_frame(frame, direction)
             if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
                 await self.push_frame(
@@ -204,9 +205,9 @@ async def test_fleet_alone_requires_every_slot_alone() -> None:
         async def maintenance_tick(self, **extra: object) -> str:
             return self._verdict
 
-    mixed = StreamFleetSession([_Slot("alone"), _Slot("hearing")], StreamRegistry())
+    mixed = StreamFleetSession(cast(Any, [_Slot("alone"), _Slot("hearing")]), StreamRegistry())
     assert await mixed.maintenance_tick(is_busy=False) == "hearing"
-    unanimous = StreamFleetSession([_Slot("alone"), _Slot("alone")], StreamRegistry())
+    unanimous = StreamFleetSession(cast(Any, [_Slot("alone"), _Slot("alone")]), StreamRegistry())
     assert await unanimous.maintenance_tick(is_busy=False) == "alone"
 
 
@@ -223,7 +224,7 @@ async def test_fleet_speak_raises_when_every_slot_dead() -> None:
         async def speak(self, text: str, **extra: object) -> None:
             self.spoken.append(text)
 
-    fleet = StreamFleetSession([_DeadSlot(), _DeadSlot()], StreamRegistry())
+    fleet = StreamFleetSession(cast(Any, [_DeadSlot(), _DeadSlot()]), StreamRegistry())
     with pytest.raises(MeetingAudioError):
         await fleet.speak("hello")
     assert _DeadSlot.spoken == []

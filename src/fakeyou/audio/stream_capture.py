@@ -25,7 +25,7 @@ from fakeyou.audio.audio import (
     open_stream_audio,
 )
 from fakeyou.audio.deaf import DeafVerdict
-from fakeyou.audio.playback import PlaybackEngine
+from fakeyou.audio.playback import PlaybackPort
 from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import record_consumer_fault
@@ -624,7 +624,7 @@ class FleetTopology:
 @dataclass(frozen=True, slots=True)
 class SlotFactories:
     stt: Callable[[int], FrameProcessor] | None = None
-    playback: Callable[[int], PlaybackEngine] | None = None
+    playback: Callable[[int], PlaybackPort] | None = None
     turn_tap: Callable[[int], TurnAudioTap] | None = None
 
 
