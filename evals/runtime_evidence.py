@@ -297,6 +297,7 @@ async def native_responder(
         patch.object(assembly, "create_chat_model", return_value=model),
         patch.object(assembly, "create_fallback_chat_model", return_value=fallback),
         patch.object(assembly, "open_checkpointer", checkpointer),
+        patch.object(assembly, "require_url", lambda url: url or "eval-in-memory"),
     ):
         async with assembly.open_conversation(
             settings,
