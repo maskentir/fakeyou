@@ -1,6 +1,7 @@
 from typing import Any
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -187,7 +188,7 @@ def test_lifecycle_rejects_unknown_attribution() -> None:
 
 @pytest.mark.asyncio
 async def test_lifecycle_state_survives_postgres_reopen(migrated_database_url: str) -> None:
-    config = {"configurable": {"thread_id": "durable-lifecycle"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "durable-lifecycle"}}
     async with open_checkpointer(migrated_database_url) as saver:
         first = create_lifecycle_graph(checkpointer=saver)
         await first.ainvoke(
@@ -251,7 +252,8 @@ async def test_lifecycle_resume_restarts_a_crashed_thread_in_place() -> None:
     )
 
     await resumed.send("join_requested", "owner_action", "retry")
-    assert resumed.state["phase"] == "lobby"
+    phase: str = resumed.state["phase"]
+    assert phase == "lobby"
 
 
 async def test_lifecycle_resume_still_rejects_an_identity_mismatch() -> None:
