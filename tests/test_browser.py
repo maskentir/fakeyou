@@ -3,7 +3,7 @@ import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -57,7 +57,7 @@ def _set_worker_pulse_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_browser_audio_policy_unmutes_worker(
-    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list[str]
 ) -> None:
     _set_worker_pulse_env(monkeypatch)
 
@@ -66,7 +66,7 @@ def test_browser_audio_policy_unmutes_worker(
 
 
 def test_browser_audio_policy_is_idempotent(
-    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list[str]
 ) -> None:
     _set_worker_pulse_env(monkeypatch)
 
@@ -76,7 +76,7 @@ def test_browser_audio_policy_is_idempotent(
 
 
 def test_browser_audio_policy_skips_without_worker_env(
-    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list[str]
 ) -> None:
     monkeypatch.delenv("PULSE_SOURCE", raising=False)
     monkeypatch.delenv("PULSE_SINK", raising=False)
@@ -86,7 +86,7 @@ def test_browser_audio_policy_skips_without_worker_env(
 
 
 def test_browser_audio_policy_skips_on_partial_worker_env(
-    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list
+    monkeypatch: pytest.MonkeyPatch, cloak_ignore_args: list[str]
 ) -> None:
     monkeypatch.setenv("PULSE_SOURCE", "meeting_audio.monitor")
     monkeypatch.setenv("PULSE_SINK", "something_else")
@@ -148,7 +148,7 @@ async def test_prepared_context_closes_browser_when_init_script_fails(
 ) -> None:
     context = FakeBrowserContext(fail_on_init=True)
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         return context
 
     monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
@@ -168,7 +168,7 @@ async def test_prepared_context_closes_browser_when_setup_is_cancelled(
 ) -> None:
     context = FakeBrowserContext(cancel_on_init=True)
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         return context
 
     monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
@@ -188,7 +188,7 @@ async def test_prepared_context_closes_browser_when_warmup_new_page_fails(
 ) -> None:
     context = FakeBrowserContext(fail_on_new_page=True)
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         return context
 
     monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
@@ -209,13 +209,13 @@ async def test_prepared_context_captures_freshness_before_launch(
     context = FakeBrowserContext()
     warmed = []
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         cookies = tmp_path / "Default" / "Cookies"
         cookies.parent.mkdir(parents=True, exist_ok=True)
         cookies.write_text("created by launch")
         return context
 
-    async def warmup(*args, **kwargs):
+    async def warmup(*args: Any, **kwargs: Any) -> int:
         warmed.append(True)
         return 1
 
@@ -241,7 +241,7 @@ async def test_prepared_context_preserves_profile_locks(
     for path in lock_paths:
         path.write_text("owned by another browser")
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         return context
 
     monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
@@ -264,7 +264,7 @@ async def test_prepared_context_finishes_launch_before_cancellation_cleanup(
     release_launch = asyncio.Event()
     launch_cancelled = asyncio.Event()
 
-    async def launch(*args, **kwargs):
+    async def launch(*args: Any, **kwargs: Any) -> FakeBrowserContext:
         launch_started.set()
         try:
             await release_launch.wait()
@@ -303,7 +303,7 @@ async def test_warmup_profile_visits_urls_and_closes_page() -> None:
     page = FakeWarmupPage()
     context = FakeWarmupContext(page)
 
-    warmed = await warmup_profile(context, ("https://a.example", "https://b.example"))
+    warmed = await warmup_profile(cast(Any, context), ("https://a.example", "https://b.example"))
 
     assert warmed == 2
     assert page.visited == ["https://a.example", "https://b.example"]
@@ -314,7 +314,7 @@ async def test_warmup_profile_continues_past_failures() -> None:
     page = FakeWarmupPage(fail_on=("https://a.example",))
     context = FakeWarmupContext(page)
 
-    warmed = await warmup_profile(context, ("https://a.example", "https://b.example"))
+    warmed = await warmup_profile(cast(Any, context), ("https://a.example", "https://b.example"))
 
     assert warmed == 1
     assert page.visited == ["https://a.example", "https://b.example"]
@@ -374,7 +374,7 @@ async def test_devtools_endpoint_times_out_without_file(tmp_path: Path) -> None:
 
 @pytest.mark.browser
 async def test_browser_tools_read_and_operate_a_real_page() -> None:
-    async with open_browser_tools(headless=True) as tools:
+    async with open_browser_tools(launch=BrowserLaunch(headless=True)) as tools:
         indexed = {tool.name: tool for tool in tools}
         assert {"browser_navigate", "browser_snapshot", "browser_take_screenshot"} <= indexed.keys()
         result = await indexed["browser_navigate"].ainvoke({"url": "about:blank"})
@@ -398,7 +398,7 @@ async def test_browser_tools_read_and_operate_a_real_page() -> None:
 
 @pytest.mark.browser
 async def test_browser_hardening_patches_automation_tells() -> None:
-    async with open_browser_tools(headless=True) as tools:
+    async with open_browser_tools(launch=BrowserLaunch(headless=True)) as tools:
         indexed = {tool.name: tool for tool in tools}
         await indexed["browser_navigate"].ainvoke({"url": "about:blank"})
         result = await indexed["browser_evaluate"].ainvoke(
@@ -418,7 +418,7 @@ async def test_browser_hardening_patches_automation_tells() -> None:
 async def test_browser_tools_keep_persistent_profile(tmp_path: Path) -> None:
     profile = tmp_path / "twin-profile"
 
-    async with open_browser_tools(headless=True, profile_dir=profile):
+    async with open_browser_tools(launch=BrowserLaunch(headless=True, profile_dir=profile)):
         pass
 
     assert profile.is_dir()
