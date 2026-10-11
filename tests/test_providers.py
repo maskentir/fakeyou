@@ -4,6 +4,7 @@ import socket
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from langchain_core.tools import tool
 from pydantic import SecretStr
 
 from fakeyou.audio.voice import create_speech_synthesizer
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import CompatibleReply, MemorySettings, Settings, require_secret
 from fakeyou.conversation.agent import create_meeting_agent
@@ -46,11 +48,15 @@ LIVE_INGESTION_MEETING = (
 )
 
 
-def _secret_or_skip(settings_value, name: str) -> str:
+def _secret_or_skip(settings_value: SecretStr | None, name: ConfigKey) -> str:
     try:
         return require_secret(settings_value, name)
     except FakeYouError as error:
         pytest.skip(str(error))
+
+
+async def _close_memory(memory: Any) -> None:
+    await _close_memory(memory)
 
 
 def _fail_provider(error: Exception, provider: str) -> None:
@@ -104,7 +110,7 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
 async def test_configured_tts_streams_pcm_audio() -> None:
     settings = Settings()
     try:
-        require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
+        require_secret(settings.tts.api_key, ConfigKey.TTS_API_KEY)
     except FakeYouError as error:
         pytest.skip(str(error))
     synthesizer = create_speech_synthesizer(
@@ -162,7 +168,7 @@ async def test_graphiti_fact_survives_client_reopen() -> None:
                 group_id=group_id,
             )
             episode_uuid = result.episode.uuid
-            await memory.close()
+            await _close_memory(memory)
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             matches = await memory.search(f"{marker} jasmine tea", group_ids=[group_id])
@@ -178,7 +184,7 @@ async def test_graphiti_fact_survives_client_reopen() -> None:
                     async with asyncio.timeout(30):
                         await memory.remove_episode(episode_uuid)
             finally:
-                await memory.close()
+                await _close_memory(memory)
 
 
 @pytest.mark.live
@@ -217,7 +223,7 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
                 )
                 episode_uuids.append(result.episode.uuid)
                 extracted[employer] = [edge.fact for edge in result.edges]
-            await memory.close()
+            await _close_memory(memory)
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             for employer, profile in profiles.items():
@@ -237,7 +243,7 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
                     for profile in profiles.values():
                         leftovers.append(await _group_node_count(memory, profile.memory_group))
             finally:
-                await memory.close()
+                await _close_memory(memory)
 
     assert all(extracted.values()), f"Graphiti extraction produced no fact edge: {extracted}"
     first, second = employers
@@ -248,20 +254,22 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
     assert leftovers == [0, 0]
 
 
-async def _group_node_count(memory, group_id: str) -> int:
+async def _group_node_count(memory: Any, group_id: str) -> int:
     result = await memory.driver.execute_query(
         "MATCH (n {group_id: $group_id}) RETURN count(n) AS count", group_id=group_id
     )
-    return result.records[0]["count"]
+    count: int = result.records[0]["count"]
+    return count
 
 
-async def _recall(memory, group_id: str, query: str) -> str:
+async def _recall(memory: Any, group_id: str, query: str) -> str:
     tools = create_memory_tools(memory, group_id=group_id)
     recall = next(tool for tool in tools if tool.name == "recall_meeting_context")
-    return await recall.ainvoke({"query": query})
+    text: str = await recall.ainvoke({"query": query})
+    return text
 
 
-def _episode_sources(payload: dict, episode_id: str) -> list[dict]:
+def _episode_sources(payload: dict[str, Any], episode_id: str) -> list[dict[str, Any]]:
     return [
         source
         for fact in payload["facts"]
@@ -309,7 +317,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
         async with asyncio.timeout(420):
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             await memory.build_indices_and_constraints()
-            options = {
+            options: dict[str, Any] = {
                 "group_id": profile.memory_group,
                 "meeting_id": meeting_id,
                 "twin_name": profile.display_name,
@@ -331,7 +339,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
             again = await ingest_meeting(
                 memory, load_meeting_record(record_path), scope, diagnostics=diagnostics
             )
-            await memory.close()
+            await _close_memory(memory)
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             recalled = await _recall(memory, profile.memory_group, f"{project} customer demo day")
@@ -360,7 +368,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                         memory, group_id=profile.memory_group, meeting_id=meeting_id
                     )
             finally:
-                await memory.close()
+                await _close_memory(memory)
 
     episodes = [json.loads(line) for line in lines if '"memory_episode_' in line]
     summary = [(row["utterances"], row["facts"], round(row["duration_ms"])) for row in episodes]
@@ -379,7 +387,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
 @pytest.mark.live
 async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down() -> None:
     settings = Settings()
-    fallback_key = _secret_or_skip(settings.reply.api_key, "FAKEYOU_REPLY__API_KEY")
+    fallback_key = _secret_or_skip(settings.reply.api_key, ConfigKey.REPLY_API_KEY)
     broken = settings.model_copy(
         update={
             "reply": CompatibleReply(
@@ -398,10 +406,12 @@ async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down()
     def read_agenda_marker() -> str:
         return "agenda-marker-904"
 
+    fallback_model = create_fallback_chat_model(broken)
+    assert fallback_model is not None
     agent = create_meeting_agent(
         create_chat_model(broken),
         tools=[read_agenda_marker],
-        middleware=[ModelFallbackMiddleware(create_fallback_chat_model(broken))],
+        middleware=[ModelFallbackMiddleware(fallback_model)],
     )
     started = time.monotonic()
     try:
@@ -471,7 +481,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
             assert again == fix
             episode = await EpisodicNode.get_by_uuid(memory.driver, str(fix_id))
             await episode.save(memory.driver)
-            await memory.close()
+            await _close_memory(memory)
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             states = await owner_notes.read_note_states(
@@ -502,7 +512,7 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
                         group_id=group_id,
                     )
             finally:
-                await memory.close()
+                await _close_memory(memory)
 
 
 @pytest.mark.live
@@ -593,7 +603,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path)
             assert corrected.supersedes == str(note_id)
             assert corrected.source_at == new_source
             assert corrected.episode_uuid == str(correction_id)
-            await memory.close()
+            await _close_memory(memory)
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             states = await read_note_states(
@@ -647,4 +657,4 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path)
                             group_id=target,
                         )
             finally:
-                await memory.close()
+                await _close_memory(memory)
