@@ -39,7 +39,13 @@ from fakeyou.memory.memory import (
     open_graphiti_memory,
     reembed_group,
 )
-from fakeyou.memory.owner_notes import NoteIdentity, OwnerNoteResult, remember_owner_note
+from fakeyou.memory.owner_notes import (
+    NoteIdentity,
+    OwnerNoteResult,
+)
+from fakeyou.memory.owner_notes import (
+    remember_owner_note as remember_owner_note,
+)
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter

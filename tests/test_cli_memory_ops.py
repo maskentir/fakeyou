@@ -2,7 +2,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any, NoReturn
 from uuid import UUID
 
 import pytest
@@ -30,6 +30,7 @@ from fakeyou.persistence.brief import (
     read_meeting_context,
     write_meeting_context,
 )
+from fakeyou.persistence.ingestion_status import LockPurpose, record_lock
 from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import (
     PERSONA_DATA,
@@ -86,12 +87,12 @@ async def test_memory_add_stores_owner_note_in_persona_group(
 ) -> None:
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
     source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
     note_id = UUID("b322d326-37b5-482a-904c-ef982f4dc510")
 
-    async def remember(memory, **kwargs):
+    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
         calls.append({"memory": memory, **kwargs})
         return OwnerNoteResult(
             episode_uuid=str(note_id),
@@ -142,9 +143,9 @@ async def test_memory_add_generates_and_reports_note_id_before_extraction(
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
-    seen: list[dict] = []
+    seen: list[dict[str, Any]] = []
 
-    async def remember(memory, **kwargs):
+    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
         seen.append(kwargs)
         return OwnerNoteResult(
             episode_uuid=str(kwargs["identity"].note_id),
@@ -188,7 +189,7 @@ async def test_memory_add_propagates_a_note_conflict(
 ) -> None:
     fake_persona_memory(monkeypatch, make_graphiti())
 
-    async def conflicting(_memory, **_kwargs):
+    async def conflicting(_memory: Any, **_kwargs: Any) -> NoReturn:
         raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
 
     monkeypatch.setattr(cli_memory, "remember_owner_note", conflicting)
@@ -210,13 +211,13 @@ async def test_memory_correct_supersedes_target_note(
 ) -> None:
     graphiti = make_graphiti()
     opened = fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
     target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
     note_id = UUID("a1b2c3d4-0000-4000-8000-000000000002")
     source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
 
-    async def remember(memory, **kwargs):
+    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
         calls.append({"memory": memory, **kwargs})
         return OwnerNoteResult(
             episode_uuid=str(note_id),
@@ -265,11 +266,11 @@ async def test_memory_correct_generates_note_id_when_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     fake_persona_memory(monkeypatch, make_graphiti())
-    seen: list[dict] = []
+    seen: list[dict[str, Any]] = []
     target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
     source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
 
-    async def remember(memory, **kwargs):
+    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
         seen.append(kwargs)
         return OwnerNoteResult(
             episode_uuid=str(kwargs["identity"].note_id),
@@ -397,9 +398,9 @@ async def test_memory_forget_meeting_uses_persona_group(
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
-    async def forget(memory, **kwargs):
+    async def forget(memory: Any, **kwargs: Any) -> int:
         calls.append({"memory": memory, **kwargs})
         return 3
 
@@ -425,8 +426,8 @@ async def test_memory_forget_meeting_uses_persona_group(
 
 
 async def _forget_meeting_with_local_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, settings, keep_record: bool
-) -> tuple[SimpleNamespace, str]:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, settings: Settings, keep_record: bool
+) -> tuple[Settings, str]:
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
@@ -447,7 +448,7 @@ async def _forget_meeting_with_local_files(
             await lifecycle.initialize()
     fake_persona_memory(monkeypatch, make_graphiti())
 
-    async def forget(memory, **kwargs):
+    async def forget(memory: Any, **kwargs: Any) -> int:
         return 2
 
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
@@ -530,9 +531,9 @@ async def test_memory_forget_episode_uses_persona_group(
 ) -> None:
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
-    async def forget(memory, **kwargs):
+    async def forget(memory: Any, **kwargs: Any) -> None:
         calls.append(kwargs)
 
     monkeypatch.setattr(cli_memory, "forget_episode", forget)
@@ -607,11 +608,11 @@ async def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memor
     ],
 )
 def test_memory_operator_commands_parse_arguments(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict[str, Any]
 ) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_command(*args, **kwargs):
+    async def fake_command(*args: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, target, fake_command)
@@ -626,9 +627,9 @@ def test_memory_operator_commands_parse_arguments(
 def test_memory_add_parses_optional_source_and_note_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_command(*args, **kwargs):
+    async def fake_command(*args: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
@@ -658,9 +659,9 @@ def test_memory_add_parses_optional_source_and_note_id(
 def test_memory_add_defaults_source_and_note_id_to_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_command(*args, **kwargs):
+    async def fake_command(*args: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
@@ -676,9 +677,9 @@ def test_memory_add_defaults_source_and_note_id_to_none(
 def test_memory_correct_parses_target_source_and_note_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_command(*args, **kwargs):
+    async def fake_command(*args: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "correct_owner_note", fake_command)
@@ -767,6 +768,8 @@ def test_memory_config_routes_embeddings_and_extraction_separately(settings: Set
     settings.memory.llm.api_key = SecretStr("meta-key")
 
     config = providers.memory_config(settings)
+    assert config.embedder.api_key is not None
+    assert config.llm.api_key is not None
 
     assert (
         config.embedder.resolved_base_url,
@@ -819,10 +822,8 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     keep_record: bool,
-    lock_purpose: str,
+    lock_purpose: LockPurpose,
 ) -> None:
-    from fakeyou.persistence.ingestion_status import record_lock
-
     record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
     record_path.parent.mkdir(parents=True)
     record_path.write_text("{}\n", encoding="utf-8")
@@ -830,7 +831,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     write_meeting_context(context_path(record_path), context)
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
-    async def forget(memory, **kwargs):
+    async def forget(memory: Any, **kwargs: Any) -> NoReturn:
         pytest.fail("provider must stay closed while the record is locked")
 
     monkeypatch.setattr(cli_memory, "forget_meeting", forget)
