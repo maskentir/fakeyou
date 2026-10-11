@@ -7,6 +7,7 @@ import pytest
 from openai import AsyncOpenAI
 from pipecat.services.meta.stt import MetaSTTService
 from pipecat.transcriptions.language import Language
+from pydantic import SecretStr
 
 from fakeyou.audio.voice import (
     SPEECH_LANGUAGES,
@@ -523,8 +524,8 @@ async def test_minimax_first_pcm_is_reported_once(journal: RecordingJournal) -> 
 
 
 def test_create_speech_synthesizer_picks_provider_defaults() -> None:
-    minimax = create_speech_synthesizer(MiniMaxTTS(api_key="k"))
-    openai = create_speech_synthesizer(OpenAITTS(api_key="k", voice="nova"))
+    minimax = create_speech_synthesizer(MiniMaxTTS(api_key=SecretStr("k")))
+    openai = create_speech_synthesizer(OpenAITTS(api_key=SecretStr("k"), voice="nova"))
 
     assert isinstance(minimax, MiniMaxSpeechSynthesizer)
     assert (minimax._model, minimax._voice) == (MiniMaxTTS().model, MiniMaxTTS().voice)

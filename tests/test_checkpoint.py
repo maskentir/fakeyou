@@ -13,6 +13,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.diagnostics import check_setup
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import open_checkpointer
+from tests.fakes import env_file_opt
 
 LANGGRAPH_TABLES = {"checkpoint_blobs", "checkpoint_migrations", "checkpoint_writes", "checkpoints"}
 
@@ -110,7 +111,7 @@ def test_check_masks_the_database_url(
 def test_database_url_loads_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKEYOU_DATABASE__URL", "postgresql://fakeyou:x@localhost/fakeyou")
 
-    url = Settings(_env_file=None).database.url
+    url = Settings(**env_file_opt(None)).database.url
 
     assert url is not None
     assert url.get_secret_value() == "postgresql://fakeyou:x@localhost/fakeyou"

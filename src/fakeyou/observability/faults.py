@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+from typing import Any
 
 from fakeyou.foundation.taxonomy import FaultKind, Subsystem
 from fakeyou.observability.journal import Journal
@@ -82,7 +83,7 @@ class FaultReporter:
         )
         return tuple(rows)
 
-    def report(self) -> dict[str, object] | None:
+    def report(self) -> dict[str, Any] | None:
         try:
             entries = self.summaries()
             if not entries:

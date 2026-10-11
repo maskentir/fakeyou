@@ -1,13 +1,17 @@
 import asyncio
 import struct
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
-from pipecat.frames.frames import EndFrame, InputAudioRawFrame, TranscriptionFrame
+from pipecat.frames.frames import EndFrame, Frame, InputAudioRawFrame, TranscriptionFrame
 from pipecat.pipeline.worker import PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.errors import ErrorCategory
+from pipecat.workers.base_worker import BaseWorker
 from pipecat.workers.runner import WorkerRunner
+from pydantic import SecretStr
 
 import fakeyou.audio.audio as audio
 from fakeyou.audio.audio import (
@@ -26,11 +30,29 @@ from fakeyou.audio.audio import (
     open_meeting_audio,
 )
 from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.playback import PlaybackEngine, PlaybackPort
+from fakeyou.audio.voice import OpenAISpeechSynthesizer
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import MiniMaxTTS, OpenAITTS, STTSettings
+from fakeyou.foundation.attribution_probe import AttributionProbe
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal, JournalFile
 from tests.fakes import FakeReconnectableSTT, FakeSTT, RecordingJournal
+
+
+def _pipeline(engine: PlaybackPort, runner_task: asyncio.Task[None]) -> SessionPipeline:
+    worker = cast(PipelineWorker, object())
+    runner = cast(WorkerRunner, object())
+    return SessionPipeline(worker, runner, runner_task, engine)
+
+
+async def _wait_gate(gate: asyncio.Event) -> None:
+    await gate.wait()
+
+
+class _FailingProbe(AttributionProbe):
+    def observe_vad(self, *, active: bool) -> None:
+        raise RuntimeError("probe gone")
 
 
 class _Transport:
@@ -73,7 +95,7 @@ class _Playback:
 
 
 class _Input(FrameProcessor):
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         await self.push_frame(frame, direction)
 
@@ -93,8 +115,8 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
         components=StreamComponents(stt=FakeSTT(), playback=engine),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -124,8 +146,8 @@ async def test_session_threads_sentence_index_to_playback_engine() -> None:
         components=StreamComponents(stt=FakeSTT(), playback=engine),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -155,8 +177,8 @@ async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -178,8 +200,8 @@ async def test_unexpected_worker_exit_is_reported() -> None:
         components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -207,8 +229,8 @@ async def test_callback_failure_degrades_without_killing_session(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -240,8 +262,8 @@ async def test_startup_provider_error_fails_before_timeout() -> None:
                 ),
                 policy=StreamPolicy(
                     speech=SpeechPipelineSettings(
-                        stt_settings=STTSettings(api_key="muse-secret"),
-                        tts_settings=OpenAITTS(api_key="openai-secret"),
+                        stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                        tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
                     )
                 ),
             ):
@@ -278,8 +300,8 @@ async def test_native_transport_is_terminated_when_construction_fails(
             components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
             policy=StreamPolicy(
                 speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key="muse-secret"),
-                    tts_settings=OpenAITTS(api_key="openai-secret"),
+                    stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
                 )
             ),
         ):
@@ -306,8 +328,8 @@ async def test_native_transport_without_backend_still_reports_root_error(
             components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
             policy=StreamPolicy(
                 speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key="muse-secret"),
-                    tts_settings=OpenAITTS(api_key="openai-secret"),
+                    stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
                 )
             ),
         ):
@@ -321,10 +343,10 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch: pytest.Monk
     cancelled = False
 
     class _Runner:
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             pass
 
-        async def add_workers(self, worker) -> None:
+        async def add_workers(self, worker: BaseWorker) -> None:
             pass
 
         async def run(self) -> None:
@@ -347,8 +369,8 @@ async def test_cancellation_during_startup_stops_runner(monkeypatch: pytest.Monk
         components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     )
@@ -364,14 +386,16 @@ async def test_error_handler_registered_before_add_workers(monkeypatch: pytest.M
     order: list[str] = []
     original_add_handler = PipelineWorker.add_event_handler
 
-    def recording_add_handler(self, event_name: str, handler) -> None:
+    def recording_add_handler(
+        self: PipelineWorker, event_name: str, handler: Callable[..., Any]
+    ) -> None:
         order.append(event_name)
         original_add_handler(self, event_name, handler)
 
     monkeypatch.setattr(PipelineWorker, "add_event_handler", recording_add_handler)
     original_add_workers = WorkerRunner.add_workers
 
-    async def recording_add_workers(self, *workers) -> None:
+    async def recording_add_workers(self: WorkerRunner, *workers: BaseWorker) -> None:
         order.append("add_workers")
         await original_add_workers(self, *workers)
 
@@ -386,8 +410,8 @@ async def test_error_handler_registered_before_add_workers(monkeypatch: pytest.M
         components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ):
@@ -412,8 +436,8 @@ async def test_pipeline_error_chains_frame_detail() -> None:
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -430,7 +454,7 @@ async def test_runner_failure_chains_original_exception() -> None:
         raise ValueError("root-boom")
 
     task = asyncio.create_task(boom())
-    session = MeetingAudioSession(SessionPipeline(object(), object(), task, _Playback()))
+    session = MeetingAudioSession(_pipeline(_Playback(), task))
     with pytest.raises(MeetingAudioError) as caught:
         await asyncio.wait_for(session.wait_failed(), timeout=2)
     assert isinstance(caught.value.__cause__, ValueError)
@@ -463,8 +487,8 @@ async def test_terminate_failure_does_not_mask_initialization_error(
             components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
             policy=StreamPolicy(
                 speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key="muse-secret"),
-                    tts_settings=OpenAITTS(api_key="openai-secret"),
+                    stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
                 )
             ),
         ):
@@ -486,8 +510,8 @@ async def test_nonpermanent_stt_error_keeps_session_alive() -> None:
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -513,8 +537,8 @@ async def test_permanent_stt_error_fails_session() -> None:
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -535,8 +559,8 @@ async def test_injected_playback_engine_is_closed_on_shutdown() -> None:
         components=StreamComponents(stt=FakeSTT(), playback=engine),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ):
@@ -554,12 +578,14 @@ async def test_default_playback_engine_closes_speech_client() -> None:
         components=StreamComponents(stt=FakeSTT()),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
-        owned = session._engine._synthesizer._client
+        engine = cast(PlaybackEngine, session._engine)
+        synth = cast(OpenAISpeechSynthesizer, engine.synthesizer)
+        owned = synth.client
         assert not owned.is_closed()
     assert owned.is_closed()
 
@@ -586,8 +612,8 @@ async def test_terminate_failure_does_not_fail_clean_shutdown(
         components=StreamComponents(stt=FakeSTT(), playback=_Playback()),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ):
@@ -617,8 +643,8 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -651,8 +677,8 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
         ),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -686,8 +712,8 @@ async def test_permanent_error_records_before_kill_with_typed_cause(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -722,8 +748,8 @@ async def test_nonpermanent_error_records_without_killing(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -761,8 +787,8 @@ async def test_uncategorized_error_falls_back_to_exception_classification(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -792,8 +818,8 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -823,8 +849,8 @@ async def test_supported_stt_reconnect_queues_request(
         diagnostics=Diagnostics(faults=reporter),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -845,10 +871,10 @@ async def test_stt_reconnect_lifecycle_is_journaled(
     activity.mark_ready()
 
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),
@@ -877,21 +903,21 @@ async def test_stt_reconnect_lifecycle_is_journaled(
 def test_default_playback_engine_streams_tts_to_paplay() -> None:
     import inspect
 
-    engine = create_playback_engine(tts_settings=OpenAITTS(api_key="k"))
+    engine = create_playback_engine(tts_settings=OpenAITTS(api_key=SecretStr("k")))
 
     assert engine._stream_audio is not None
-    assert inspect.isasyncgen(engine._synthesizer.stream("hello"))
+    assert inspect.isasyncgen(engine.synthesizer.stream("hello"))
 
 
 def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
     from fakeyou.audio.voice import MiniMaxSpeechSynthesizer
 
     engine = create_playback_engine(
-        tts_settings=MiniMaxTTS(api_key="k", voice="Indonesian_CaringMan")
+        tts_settings=MiniMaxTTS(api_key=SecretStr("k"), voice="Indonesian_CaringMan")
     )
 
-    assert isinstance(engine._synthesizer, MiniMaxSpeechSynthesizer)
-    assert engine._synthesizer._voice == "Indonesian_CaringMan"
+    assert isinstance(engine.synthesizer, MiniMaxSpeechSynthesizer)
+    assert engine.synthesizer._voice == "Indonesian_CaringMan"
 
 
 async def test_default_playback_engine_wires_faults_and_journal() -> None:
@@ -901,17 +927,18 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
     reporter = FaultReporter(journal=Journal("meeting-1"))
     journal = Journal("meeting-1", emit=lambda _: None, echo=False)
     engine = create_playback_engine(
-        tts_settings=OpenAITTS(api_key="k"), faults=reporter, journal=journal
+        tts_settings=OpenAITTS(api_key=SecretStr("k")), faults=reporter, journal=journal
     )
     try:
-        assert engine._faults is reporter
-        assert engine._journal is journal
-        assert engine._synthesizer._journal is journal
+        assert engine.faults is reporter
+        assert engine.journal is journal
+        synth = cast(OpenAISpeechSynthesizer, engine.synthesizer)
+        assert synth.journal is journal
     finally:
         await engine.close()
 
 
-async def test_capture_observer_meters_frame_energy() -> None:
+async def test_capture_observer_meters_frame_energy(monkeypatch: pytest.MonkeyPatch) -> None:
     import math
     import struct
 
@@ -919,10 +946,10 @@ async def test_capture_observer_meters_frame_energy() -> None:
     activity.mark_ready()
     observer = _CaptureObserver(activity)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     tone = struct.pack("<320h", *[int(16384 * math.sin(i / 10)) for i in range(320)])
     await observer.process_frame(
         InputAudioRawFrame(audio=tone, sample_rate=16000, num_channels=1),
@@ -940,17 +967,17 @@ async def test_capture_observer_meters_frame_energy() -> None:
 
 
 async def test_capture_observer_journals_speech_boundaries(
-    journal: RecordingJournal,
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     observer = _CaptureObserver(CaptureActivity(), journal=journal)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
@@ -963,7 +990,7 @@ async def test_capture_observer_journals_speech_boundaries(
     assert all(row["at"] for row in rows)
 
 
-async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
+async def test_capture_observer_reports_vad_only_to_on_vad(monkeypatch: pytest.MonkeyPatch) -> None:
     from pipecat.frames.frames import (
         UserSpeakingFrame,
         VADUserStartedSpeakingFrame,
@@ -977,10 +1004,10 @@ async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
 
     observer = _CaptureObserver(CaptureActivity(), on_vad=on_vad)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
@@ -989,20 +1016,22 @@ async def test_capture_observer_reports_vad_only_to_on_vad() -> None:
     assert seen == [True, False]
 
 
-async def test_capture_observer_contains_on_vad_failure(journal: RecordingJournal) -> None:
+async def test_capture_observer_contains_on_vad_failure(
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from pipecat.frames.frames import VADUserStoppedSpeakingFrame
 
     async def on_vad(*, active: bool) -> None:
         raise RuntimeError("vad consumer down")
 
-    pushed: list = []
+    pushed: list[Frame] = []
     observer = _CaptureObserver(CaptureActivity(), on_vad=on_vad, journal=journal)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         pushed.append(frame)
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
     assert len(pushed) == 1
@@ -1010,22 +1039,17 @@ async def test_capture_observer_contains_on_vad_failure(journal: RecordingJourna
 
 
 async def test_capture_observer_journals_first_probe_vad_failure_only(
-    journal: RecordingJournal,
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from types import SimpleNamespace
-
     from pipecat.frames.frames import VADUserStartedSpeakingFrame
 
-    def failing_observe(*, active: bool) -> None:
-        raise RuntimeError("probe gone")
-
-    probe = SimpleNamespace(observe_vad=failing_observe)
+    probe = _FailingProbe(tmp_path / "probe.jsonl")
     observer = _CaptureObserver(CaptureActivity(), journal=journal, probe=probe)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
@@ -1039,9 +1063,9 @@ async def test_admission_restarts_the_capture_grace_clock_unless_audio_failed() 
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task = asyncio.create_task(_wait_gate(gate))
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(activity=activity),
         runtime=SessionRuntime(now=lambda: clock[0]),
     )
@@ -1077,8 +1101,8 @@ async def test_callback_fault_should_use_audio_journal_without_reporter(tmp_path
         diagnostics=Diagnostics(journal=journal),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -1110,8 +1134,8 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         components=StreamComponents(stt=FakeSTT(), playback=engine),
         policy=StreamPolicy(
             speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key="muse-secret"),
-                tts_settings=OpenAITTS(api_key="openai-secret"),
+                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
             )
         ),
     ) as session:
@@ -1122,7 +1146,9 @@ async def test_session_threads_transcript_id_to_playback_engine() -> None:
         await session.stop()
 
 
-async def test_transcript_observer_journals_turn_stats(journal: RecordingJournal) -> None:
+async def test_transcript_observer_journals_turn_stats(
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
     from pipecat.processors.frame_processor import FrameDirection
 
@@ -1130,15 +1156,15 @@ async def test_transcript_observer_journals_turn_stats(journal: RecordingJournal
 
     seen = []
 
-    async def callback(frame):
+    async def callback(frame: TranscriptionFrame) -> None:
         seen.append(frame)
 
     observer = _TranscriptObserver(callback, CaptureActivity(), None, journal=journal)
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    observer.push_frame = sink
+    monkeypatch.setattr(observer, "push_frame", sink)
     await observer.process_frame(
         InterimTranscriptionFrame(text="Hel", user_id="", timestamp="2026-10-06T01:00:01+00:00"),
         FrameDirection.DOWNSTREAM,
@@ -1188,17 +1214,19 @@ def test_vad_analyzer_maps_settings_to_params() -> None:
     assert custom._params.min_volume == 0.3
 
 
-async def test_turn_tap_collects_audio_between_speech_boundaries() -> None:
+async def test_turn_tap_collects_audio_between_speech_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     tap = TurnAudioTap()
-    pushed: list = []
+    pushed: list[Frame] = []
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         pushed.append(frame)
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(
         InputAudioRawFrame(audio=b"\x01" * 320, sample_rate=16000, num_channels=1),
         FrameDirection.DOWNSTREAM,
@@ -1225,29 +1253,29 @@ async def test_turn_tap_collects_audio_between_speech_boundaries() -> None:
     ]
 
 
-async def test_turn_tap_stop_without_start_leaves_no_clip() -> None:
+async def test_turn_tap_stop_without_start_leaves_no_clip(monkeypatch: pytest.MonkeyPatch) -> None:
     from pipecat.frames.frames import VADUserStoppedSpeakingFrame
 
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
     assert tap.take_clip() == b""
 
 
-async def test_turn_tap_restarts_on_repeated_start() -> None:
+async def test_turn_tap_restarts_on_repeated_start(monkeypatch: pytest.MonkeyPatch) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await tap.process_frame(
         InputAudioRawFrame(audio=b"\x04" * 320, sample_rate=16000, num_channels=1),
@@ -1263,15 +1291,17 @@ async def test_turn_tap_restarts_on_repeated_start() -> None:
     assert tap.take_clip() == b"\x04" * 320 + b"\x05" * 320
 
 
-async def test_turn_tap_accumulates_segments_across_vad_cycles() -> None:
+async def test_turn_tap_accumulates_segments_across_vad_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await tap.process_frame(
         InputAudioRawFrame(audio=b"\x0a" * 320, sample_rate=16000, num_channels=1),
@@ -1288,7 +1318,7 @@ async def test_turn_tap_accumulates_segments_across_vad_cycles() -> None:
     assert tap.take_clip() == b"\x0a" * 320 + b"\x0b" * 160
 
 
-async def test_turn_tap_trims_accumulation_to_recent_tail() -> None:
+async def test_turn_tap_trims_accumulation_to_recent_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     from fakeyou.audio.audio import TURN_TAP_MAX_SECONDS
@@ -1298,10 +1328,10 @@ async def test_turn_tap_trims_accumulation_to_recent_tail() -> None:
     second = b"\x0d" * 3200
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await tap.process_frame(
         InputAudioRawFrame(audio=first, sample_rate=16000, num_channels=1),
@@ -1318,15 +1348,15 @@ async def test_turn_tap_trims_accumulation_to_recent_tail() -> None:
     assert tap.take_clip() == (first + second)[-limit:]
 
 
-async def test_turn_tap_accumulated_take_clears() -> None:
+async def test_turn_tap_accumulated_take_clears(monkeypatch: pytest.MonkeyPatch) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     await tap.process_frame(
         InputAudioRawFrame(audio=b"\x0e" * 320, sample_rate=16000, num_channels=1),
@@ -1368,15 +1398,17 @@ async def _drive_tap(tap: TurnAudioTap, total: int, start_at: int, stop_at: int)
         await tap.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
 
-async def test_turn_tap_clips_within_one_grid_cell_are_byte_identical() -> None:
+async def test_turn_tap_clips_within_one_grid_cell_are_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first = TurnAudioTap()
     second = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    first.push_frame = sink
-    second.push_frame = sink
+    monkeypatch.setattr(first, "push_frame", sink)
+    monkeypatch.setattr(second, "push_frame", sink)
     await _drive_tap(first, 300, 105, 231)
     await _drive_tap(second, 300, 109, 235)
 
@@ -1387,13 +1419,15 @@ async def test_turn_tap_clips_within_one_grid_cell_are_byte_identical() -> None:
     assert first_clip == b"".join(_tap_stream_frame(index) for index in range(80, 260))
 
 
-async def test_turn_tap_includes_preroll_before_speech_start() -> None:
+async def test_turn_tap_includes_preroll_before_speech_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await _drive_tap(tap, 100, 50, 100)
 
     clip = tap.take_clip()
@@ -1402,13 +1436,15 @@ async def test_turn_tap_includes_preroll_before_speech_start() -> None:
     assert clip[:6400] == b"".join(_tap_stream_frame(index) for index in range(30, 50))
 
 
-async def test_turn_tap_includes_trailing_after_speech_stop() -> None:
+async def test_turn_tap_includes_trailing_after_speech_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tap = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    tap.push_frame = sink
+    monkeypatch.setattr(tap, "push_frame", sink)
     await _drive_tap(tap, 110, 10, 60)
 
     clip = tap.take_clip()
@@ -1419,17 +1455,19 @@ async def test_turn_tap_includes_trailing_after_speech_stop() -> None:
     )
 
 
-async def test_turn_tap_keep_open_second_take_is_byte_identical() -> None:
+async def test_turn_tap_keep_open_second_take_is_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 
     first = TurnAudioTap()
     second = TurnAudioTap()
 
-    async def sink(frame, direction):
+    async def sink(frame: Frame, direction: FrameDirection) -> None:
         return None
 
-    first.push_frame = sink
-    second.push_frame = sink
+    monkeypatch.setattr(first, "push_frame", sink)
+    monkeypatch.setattr(second, "push_frame", sink)
     first_bounds = (20, 40, 105, 231)
     second_bounds = (20, 40, 109, 235)
     total = 300
@@ -1484,7 +1522,7 @@ async def test_missing_muse_key_is_reported_as_configuration_not_audio_failure()
             policy=StreamPolicy(
                 speech=SpeechPipelineSettings(
                     stt_settings=STTSettings(api_key=None),
-                    tts_settings=OpenAITTS(api_key="openai-secret"),
+                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
                 )
             ),
         ):

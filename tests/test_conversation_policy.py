@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import SecretStr
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
@@ -268,7 +269,7 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
     port = sockets[0].getsockname()[1]
     model = ChatOpenAI(
         model="loopback-dummy",
-        api_key="test-key",
+        api_key=SecretStr("test-key"),
         base_url=f"http://127.0.0.1:{port}/v1",
         request_timeout=30,
         max_retries=0,

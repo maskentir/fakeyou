@@ -9,7 +9,15 @@ from pydantic import SecretStr
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import DEFAULTS, IdentitySettings, Settings, require_secret
+from fakeyou.config.settings import (
+    DEFAULTS,
+    IdentitySettings,
+    MeetingSettings,
+    MemorySettings,
+    Settings,
+    require_secret,
+)
+from tests.fakes import env_file_opt
 
 
 @pytest.fixture(autouse=True)
@@ -63,14 +71,19 @@ def test_secret_keys_read_explicit_role_environment(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("FAKEYOU_REPLY__API_KEY", "reply-secret")
     monkeypatch.setenv("FAKEYOU_STT__API_KEY", "stt-secret")
     settings = Settings()
+    assert settings.reply.api_key is not None
     assert settings.reply.api_key.get_secret_value() == "reply-secret"
+    assert settings.stt.api_key is not None
     assert settings.stt.api_key.get_secret_value() == "stt-secret"
     assert settings.tts.api_key is None
 
 
 def test_env_example_values_match_settings_defaults() -> None:
     example = Path(__file__).resolve().parent.parent / ".env.example"
-    assert Settings(_env_file=example).model_dump() == Settings(_env_file=None).model_dump()
+    assert (
+        Settings(**env_file_opt(example)).model_dump()
+        == Settings(**env_file_opt(None)).model_dump()
+    )
 
 
 def test_conversation_sentence_streaming_defaults_off() -> None:
@@ -140,15 +153,15 @@ def test_cli_entry_exports_the_embedding_dimension_before_graphiti_loads(
 
 
 def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values() -> None:
-    assert Settings(_env_file=None).memory.recall.strategy == "prefetch"
+    assert Settings(**env_file_opt(None)).memory.recall.strategy == "prefetch"
     with pytest.raises(ValueError, match="Input should be 'tool' or 'prefetch'"):
-        Settings(_env_file=None, memory={"recall": {"strategy": "hybrid"}})
+        MemorySettings.model_validate({"recall": {"strategy": "hybrid"}})
 
 
 def test_vad_defaults_mirror_pipecat() -> None:
     from pipecat.audio.vad.vad_analyzer import VADParams
 
-    vad = Settings(_env_file=None).vad
+    vad = Settings(**env_file_opt(None)).vad
     expected = VADParams()
     assert vad.confidence == expected.confidence
     assert vad.start_secs == expected.start_secs
@@ -159,7 +172,7 @@ def test_vad_defaults_mirror_pipecat() -> None:
 def test_vad_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKEYOU_VAD__START_SECS", "0.5")
     monkeypatch.setenv("FAKEYOU_VAD__MIN_VOLUME", "0.4")
-    vad = Settings(_env_file=None).vad
+    vad = Settings(**env_file_opt(None)).vad
     assert vad.start_secs == 0.5
     assert vad.min_volume == 0.4
     assert vad.confidence == 0.7
@@ -167,14 +180,14 @@ def test_vad_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_join_retry_settings_default_and_read_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    defaults = Settings(_env_file=None).meeting
+    defaults = Settings(**env_file_opt(None)).meeting
     assert defaults.join_max_attempts == 3
     assert defaults.join_retry_base_seconds == 2.0
     assert defaults.join_retry_cap_seconds == 30.0
     monkeypatch.setenv("FAKEYOU_MEETING__JOIN_MAX_ATTEMPTS", "5")
     monkeypatch.setenv("FAKEYOU_MEETING__JOIN_RETRY_BASE_SECONDS", "1.5")
     monkeypatch.setenv("FAKEYOU_MEETING__JOIN_RETRY_CAP_SECONDS", "10.0")
-    retry = Settings(_env_file=None).meeting
+    retry = Settings(**env_file_opt(None)).meeting
     assert retry.join_max_attempts == 5
     assert retry.join_retry_base_seconds == 1.5
     assert retry.join_retry_cap_seconds == 10.0
@@ -182,7 +195,7 @@ def test_join_retry_settings_default_and_read_environment(monkeypatch: pytest.Mo
 
 def test_join_max_attempts_rejects_zero() -> None:
     with pytest.raises(ValueError, match="Input should be greater than or equal to 1"):
-        Settings(_env_file=None, meeting={"join_max_attempts": 0})
+        MeetingSettings.model_validate({"join_max_attempts": 0})
 
 
 def test_voiceprint_defaults_follow_identity_settings() -> None:
@@ -215,4 +228,4 @@ def test_env_example_is_valid_when_its_optional_blocks_are_enabled(
     env_file.write_text("\n".join(enabled) + "\n", encoding="utf-8")
     monkeypatch.setenv("FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS", "300")
 
-    Settings(_env_file=env_file)
+    Settings(**env_file_opt(env_file))

@@ -323,6 +323,10 @@ def _query_tokens(text: str) -> set[str]:
     return {token for token in _QUERY_TOKEN.findall(text.lower()) if len(token) >= 3}
 
 
+def env_file_opt(path: Path | str | None) -> dict[str, Any]:
+    return {"_env_file": path}
+
+
 def make_graphiti(
     *,
     facts: Sequence[str] = (),

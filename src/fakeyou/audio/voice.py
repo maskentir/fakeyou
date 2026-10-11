@@ -128,6 +128,14 @@ class OpenAISpeechSynthesizer:
             await self._client.close()
             self._owns_client = False
 
+    @property
+    def client(self) -> AsyncOpenAI:
+        return self._client
+
+    @property
+    def journal(self) -> Journal | None:
+        return self._journal
+
     def _arguments(self, text: str) -> SpeechCreateParams:
         arguments: SpeechCreateParams = {
             "model": self._model,
@@ -191,6 +199,14 @@ class MiniMaxSpeechSynthesizer:
         if self._owns_client:
             await self._client.aclose()
             self._owns_client = False
+
+    @property
+    def client(self) -> httpx2.AsyncClient:
+        return self._client
+
+    @property
+    def journal(self) -> Journal | None:
+        return self._journal
 
     def _payload(self, text: str) -> dict[str, Any]:
         return {

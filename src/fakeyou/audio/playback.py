@@ -8,6 +8,8 @@ from typing import Any, Literal, NoReturn, Protocol
 from fakeyou.foundation.invariants import PCM_CHANNELS, PCM_FORMAT
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 
 PlaybackEventKind = Literal[
@@ -172,6 +174,23 @@ class PlaybackBackend:
     stream_audio: PlayStream
 
 
+class PlaybackPort(Protocol):
+    @property
+    def is_speaking(self) -> bool: ...
+
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
 class PlaybackEngine:
     def __init__(
         self,
@@ -207,6 +226,18 @@ class PlaybackEngine:
     @property
     def is_speaking(self) -> bool:
         return self._speaking
+
+    @property
+    def synthesizer(self) -> SpeechSynthesizer:
+        return self._synthesizer
+
+    @property
+    def faults(self) -> FaultReporter | None:
+        return self._faults
+
+    @property
+    def journal(self) -> Journal | None:
+        return self._journal
 
     def _stream_extra(
         self, sentence_index: int | None, transcript_id: str | None

@@ -49,6 +49,7 @@ from fakeyou.audio.playback import (
     PlaybackBackend,
     PlaybackEngine,
     PlaybackEvent,
+    PlaybackPort,
     create_pactl_muter,
     create_paplay_stream_runner,
 )
@@ -547,7 +548,7 @@ class StreamSource:
 @dataclass(frozen=True, slots=True)
 class StreamComponents:
     stt: FrameProcessor | None = None
-    playback: PlaybackEngine | None = None
+    playback: PlaybackPort | None = None
     turn_tap: TurnAudioTap | None = None
     activity: CaptureActivity | None = None
     probe: AttributionProbe | None = None
@@ -562,7 +563,7 @@ class SessionPipeline:
     worker: PipelineWorker
     runner: WorkerRunner
     runner_task: asyncio.Task[None]
-    engine: PlaybackEngine
+    engine: PlaybackPort
 
 
 @dataclass(frozen=True, slots=True)
@@ -910,11 +911,11 @@ class _PipelineSpec:
 
 
 def _resolve_engine(
-    playback: PlaybackEngine | None,
+    playback: PlaybackPort | None,
     speech: SpeechPipelineSettings,
     callbacks: StreamCallbacks,
     diagnostics: Diagnostics,
-) -> PlaybackEngine:
+) -> PlaybackPort:
     if playback is not None:
         return playback
     return create_playback_engine(
@@ -1048,7 +1049,7 @@ async def _await_session_start(
 
 async def _cleanup_audio_session(
     session: MeetingAudioSession | None,
-    engine: PlaybackEngine,
+    engine: PlaybackPort,
     diagnostics: Diagnostics,
     teardown: Callable[[], None] | None = None,
 ) -> None:

@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from PIL import Image
+from pydantic import SecretStr
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
@@ -167,7 +168,7 @@ def test_visual_role_routes_through_init_chat_model(monkeypatch: pytest.MonkeyPa
         return sentinel
 
     monkeypatch.setattr(providers, "init_chat_model", fake_init)
-    settings = Settings(visual=VisualSettings(api_key="test-visual-key"))
+    settings = Settings(visual=VisualSettings(api_key=SecretStr("test-visual-key")))
     assert settings.visual.provider == "google"
     assert create_visual_chat_model(settings) is sentinel
     assert len(calls) == 1
@@ -189,8 +190,10 @@ def test_visual_role_ignores_reply_provider(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(providers, "init_chat_model", fake_init)
     settings = Settings(
-        reply=GoogleReply(api_key="reply-key"),
-        visual=VisualSettings(provider="openai", model="gpt-4.1-mini", api_key="visual-key"),
+        reply=GoogleReply(api_key=SecretStr("reply-key")),
+        visual=VisualSettings(
+            provider="openai", model="gpt-4.1-mini", api_key=SecretStr("visual-key")
+        ),
     )
     assert create_visual_chat_model(settings) is sentinel
     assert len(calls) == 1
@@ -210,12 +213,12 @@ def test_visual_compatible_routes_to_visual_base_url(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(providers, "init_chat_model", fake_init)
     settings = Settings(
-        reply=OpenAIReply(api_key="reply-key"),
+        reply=OpenAIReply(api_key=SecretStr("reply-key")),
         visual=VisualSettings(
             provider="openai_compatible",
             model="qwen-3-vl",
             base_url="https://visual.example/v1",
-            api_key="visual-key",
+            api_key=SecretStr("visual-key"),
         ),
     )
     assert create_visual_chat_model(settings) is sentinel
@@ -228,9 +231,9 @@ def test_visual_compatible_routes_to_visual_base_url(monkeypatch: pytest.MonkeyP
 
 def test_visual_compatible_without_base_url_fails_fast() -> None:
     settings = Settings(
-        reply=OpenAIReply(api_key="reply-key"),
+        reply=OpenAIReply(api_key=SecretStr("reply-key")),
         visual=VisualSettings(
-            provider="openai_compatible", model="qwen-3-vl", api_key="visual-key"
+            provider="openai_compatible", model="qwen-3-vl", api_key=SecretStr("visual-key")
         ),
     )
     with pytest.raises(FakeYouError, match="FAKEYOU_VISUAL__BASE_URL") as caught:
@@ -239,7 +242,9 @@ def test_visual_compatible_without_base_url_fails_fast() -> None:
 
 
 def test_visual_role_never_borrows_the_reply_key() -> None:
-    settings = Settings(reply=OpenAIReply(api_key="reply-key"), visual=VisualSettings(enabled=True))
+    settings = Settings(
+        reply=OpenAIReply(api_key=SecretStr("reply-key")), visual=VisualSettings(enabled=True)
+    )
     with pytest.raises(FakeYouError, match="FAKEYOU_VISUAL__API_KEY") as caught:
         create_visual_chat_model(settings)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING

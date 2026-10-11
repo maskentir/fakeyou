@@ -32,7 +32,7 @@ from fakeyou.foundation.invariants import (
 )
 from fakeyou.orchestration.assembly import LoopBehavior
 from tests._cli_support import BASE_HOSTS, _join_with_audio, with_muse_fallback
-from tests.fakes import SessionRun
+from tests.fakes import SessionRun, env_file_opt
 
 
 def test_main_exits_2_on_input_error(
@@ -267,7 +267,7 @@ def test_settings_read_extra_body_as_json(
     monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
     monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
     monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
-    assert Settings(_env_file=None).reply.extra_body == {"reasoning_split": True}
+    assert Settings(**env_file_opt(None)).reply.extra_body == {"reasoning_split": True}
 
 
 def test_chat_model_uses_its_own_key_and_explicit_provider(
