@@ -3,15 +3,16 @@ import json
 import statistics
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.tools import tool
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.catalog.errors import FakeYouError
@@ -70,7 +71,7 @@ class ReplayScore:
         }
 
 
-def recall_tool(facts: list[str]):
+def recall_tool(facts: list[str]) -> BaseTool:
     @tool(description="Search long-term meeting memory for relevant context.")
     def recall_meeting_context(query: str) -> str:
         return "\n".join(facts) if facts else RECALL_EMPTY_RESULT
@@ -109,7 +110,9 @@ def score_turn(
     return outcome
 
 
-async def replay(model_factory, fixture: dict[str, Any], runs: int) -> ReplayScore:
+async def replay(
+    model_factory: Callable[[], Any], fixture: dict[str, Any], runs: int
+) -> ReplayScore:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
     score = ReplayScore()
     for run in range(runs):
@@ -133,8 +136,12 @@ async def replay(model_factory, fixture: dict[str, Any], runs: int) -> ReplaySco
                     speaker_evidence_id=None,
                 )
                 started = time.monotonic()
+
+                def _note_tool_start(calls: list[None] = calls) -> None:
+                    calls.append(None)
+
                 try:
-                    reply = await responder.respond([event], lambda calls=calls: calls.append(None))
+                    reply = await responder.respond([event], _note_tool_start)
                 except Exception:
                     reply = ""
                 latency = time.monotonic() - started
@@ -155,7 +162,7 @@ async def replay(model_factory, fixture: dict[str, Any], runs: int) -> ReplaySco
 
 
 def load_fixture() -> dict[str, Any]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(FIXTURE.read_text(encoding="utf-8")))
 
 
 def _sanitize_url(value: str) -> str:
@@ -319,7 +326,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
             }
         ],
     }
-    replies = [
+    replies: list[BaseMessage] = [
         AIMessage(content="The beta launch is on 14 October 2026."),
         AIMessage(content="Five million?"),
     ]
