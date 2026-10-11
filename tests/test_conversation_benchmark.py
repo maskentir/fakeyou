@@ -55,7 +55,9 @@ def test_replay_artifacts_mask_role_credentials(tmp_path: Path, settings: Settin
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["source_commit"] == "test-commit"
     assert summary["reply"]["api_key"] == "**********"
-    assert settings.reply.api_key.get_secret_value() not in (tmp_path / "summary.json").read_text()
+    api_key = settings.reply.api_key
+    assert api_key is not None
+    assert api_key.get_secret_value() not in (tmp_path / "summary.json").read_text()
     assert (tmp_path / "turns.json").exists()
 
 
