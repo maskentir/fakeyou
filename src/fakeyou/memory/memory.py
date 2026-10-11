@@ -67,9 +67,13 @@ from fakeyou.foundation.transcript import visual_refs_of
 from fakeyou.meet.meet_action_ledger import MeetActionKind
 from fakeyou.memory.owner_notes import (
     OWNER_NOTE_SOURCE,
-    ensure_note_indexes,
-    forget_owner_note,
     read_note_states,
+)
+from fakeyou.memory.owner_notes import (
+    ensure_note_indexes as ensure_note_indexes,
+)
+from fakeyou.memory.owner_notes import (
+    forget_owner_note as forget_owner_note,
 )
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import FaultReporter

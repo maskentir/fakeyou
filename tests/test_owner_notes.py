@@ -1,10 +1,11 @@
 import asyncio
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from graphiti_core import Graphiti
 from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.nodes import EpisodeType
 from neo4j.exceptions import ConstraintError
@@ -380,10 +381,13 @@ class NoteStore:
         self.queries: list[tuple[str, dict[str, Any]]] = []
         self.indexes = 0
         self.driver = FakeDriver(self)
-        self.memory = SimpleNamespace(
-            driver=self.driver,
-            add_episode=self.add_episode,
-            remove_episode=self.remove_episode,
+        self.memory = cast(
+            Graphiti,
+            SimpleNamespace(
+                driver=self.driver,
+                add_episode=self.add_episode,
+                remove_episode=self.remove_episode,
+            ),
         )
 
     def lock_for(self, uuid: str) -> Any:

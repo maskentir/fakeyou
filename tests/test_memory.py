@@ -1,20 +1,30 @@
 import asyncio
 import json
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from graphiti_core import Graphiti
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from graphiti_core.edges import EntityEdge
+from graphiti_core.embedder.client import EMBEDDING_DIM
+from graphiti_core.embedder.openai import OpenAIEmbedder
+from graphiti_core.errors import GroupsEdgesNotFoundError
+from graphiti_core.nodes import EntityNode, EpisodicNode, SagaNode
 from graphiti_core.search.search_filters import ComparisonOperator
 from neo4j.exceptions import ServiceUnavailable
+from openai import AsyncOpenAI
 
 import fakeyou.memory.memory as memory_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS, MemorySettings, RecallSettings
 from fakeyou.memory import owner_notes
 from fakeyou.memory.memory import (
+    AnthropicReranker,
+    GraphitiAnthropicSDK,
     create_memory_tools,
     create_recall_error_middleware,
     ensure_indexes,
@@ -96,6 +106,7 @@ def _config() -> MemorySettings:
 def test_graphiti_memory_uses_explicit_models() -> None:
     memory = memory_module.create_graphiti_memory(_config())
 
+    assert isinstance(memory.embedder, OpenAIEmbedder)
     assert memory.llm_client.config.model == "memory-model"
     assert memory.llm_client.config.small_model == "memory-small"
     assert memory.embedder.config.embedding_model == "memory-embedding"
@@ -117,6 +128,10 @@ def test_graphiti_memory_embeds_through_a_separate_endpoint() -> None:
         )
     )
 
+    from graphiti_core.llm_client.openai_client import OpenAIClient
+
+    assert isinstance(memory.embedder, OpenAIEmbedder)
+    assert isinstance(memory.llm_client, OpenAIClient)
     assert str(memory.embedder.client.base_url) == "http://embeddings:11434/v1/"
     assert memory.embedder.client.api_key == "local"
     assert memory.embedder.config.embedding_dim == 768
@@ -141,6 +156,7 @@ def test_graphiti_memory_extracts_through_an_openai_compatible_endpoint() -> Non
     )
 
     assert isinstance(memory.llm_client, OpenAIGenericClient)
+    assert isinstance(memory.embedder, OpenAIEmbedder)
     assert memory.llm_client.structured_output_mode == "json_schema"
     assert str(memory.llm_client.client.base_url) == "https://api.meta.ai/v1/"
     assert memory.llm_client.client.api_key == "meta-key"
@@ -157,7 +173,7 @@ async def test_open_graphiti_memory_is_lightweight(
         MemorySettings.model_validate(
             {
                 **_config().model_dump(),
-                "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+                "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
             }
         )
     ) as opened:
@@ -203,7 +219,7 @@ def _recall(monkeypatch: pytest.MonkeyPatch, memory: Any, episodes: dict[str, An
         assert group_id == "team_alpha"
         return dict.fromkeys(episode_uuids, "active")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", active_states)
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
     return recall
@@ -467,7 +483,7 @@ async def test_recall_excludes_pending_superseded_foreign_and_missing_sources(
         assert group_id == "team_alpha"
         return {uuid: states[uuid] for uuid in episode_uuids}
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", scripted_states)
     memory = make_graphiti(
         facts=[
@@ -527,7 +543,7 @@ async def test_recall_returns_empty_when_no_evidence_survives(
     ) -> dict[str, str]:
         return dict.fromkeys(episode_uuids, "pending")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", pending_states)
     memory = make_graphiti(
         facts=["Waiting note fact.", "Missing episode fact."],
@@ -541,6 +557,8 @@ async def test_recall_returns_empty_when_no_evidence_survives(
 async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
 ) -> None:
+    from langchain.agents.middleware import ToolCallRequest
+
     from fakeyou.observability.faults import FaultReporter
 
     moment = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
@@ -554,7 +572,7 @@ async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     async def broken_states(_memory: Any, **kwargs: Any) -> dict[str, str]:
         raise RuntimeError("status store offline")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", broken_states)
     memory = make_graphiti(facts=["Live note fact."], episodes={"Live note fact.": ["note-a"]})
     _remember, recall = create_memory_tools(memory, group_id="team_alpha")
@@ -566,7 +584,10 @@ async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     assert (
         middleware.on_error(
             RuntimeError("status store offline"),
-            SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"}),
+            cast(
+                ToolCallRequest,
+                SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"}),
+            ),
         )
         == memory_module.RECALL_UNAVAILABLE_RESULT
     )
@@ -593,7 +614,7 @@ async def test_recall_batches_episode_and_status_lookups(
         state_calls.append(list(episode_uuids))
         return dict.fromkeys(episode_uuids, "active")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", active_states)
     memory = make_graphiti(
         facts=["Alpha fact.", "Beta fact."],
@@ -616,25 +637,30 @@ async def test_verify_memory_connection_fails_fast_without_transaction_retry() -
     try:
         async with asyncio.timeout(5):
             with pytest.raises(ServiceUnavailable):
-                await verify_memory_connection(SimpleNamespace(driver=driver))
+                await verify_memory_connection(cast(Graphiti, SimpleNamespace(driver=driver)))
     finally:
         await driver.close()
 
 
 async def test_verify_memory_connection_requires_neo4j_driver() -> None:
     with pytest.raises(TypeError, match="Neo4j"):
-        await verify_memory_connection(SimpleNamespace(driver=object()))
+        await verify_memory_connection(cast(Graphiti, SimpleNamespace(driver=object())))
 
 
 def test_recall_error_middleware_returns_unknown_and_records_fault(
     journal: RecordingJournal,
 ) -> None:
+    from langchain.agents.middleware import ToolCallRequest
+
     from fakeyou.observability.faults import FaultReporter
 
     lines = journal.lines
     faults = FaultReporter(journal=journal)
     middleware = create_recall_error_middleware(faults)
-    request = SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"})
+    request = cast(
+        ToolCallRequest,
+        SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"}),
+    )
 
     assert middleware.on_error is not None
     content = middleware.on_error(RuntimeError("secret detail"), request)
@@ -654,12 +680,12 @@ async def test_forget_meeting_removes_every_saga_episode_and_the_saga(
     deleted: list[str] = []
     saga_groups: list[list[str]] = []
 
-    async def get_by_group_ids(driver, group_ids):
+    async def get_by_group_ids(driver: Any, group_ids: list[str]) -> list[Any]:
         saga_groups.append(group_ids)
         return [FakeSaga(saga, deleted), FakeSaga("meeting:other", deleted)]
 
     monkeypatch.setattr(memory_module, "FORGET_BATCH_SIZE", 2)
-    monkeypatch.setattr(memory_module.SagaNode, "get_by_group_ids", get_by_group_ids)
+    monkeypatch.setattr(SagaNode, "get_by_group_ids", get_by_group_ids)
 
     removed = await forget_meeting(memory, group_id="team_alpha", meeting_id="meeting-1")
 
@@ -693,12 +719,12 @@ async def test_forget_episode_only_removes_episodes_in_the_persona_group(
 ) -> None:
     memory = make_graphiti(saga_episodes={})
 
-    async def get_by_uuid(driver, uuid):
+    async def get_by_uuid(driver: Any, uuid: str) -> SimpleNamespace:
         return SimpleNamespace(
             uuid=uuid, group_id=group_id, source_description="Google Meet m1 transcript"
         )
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuid", get_by_uuid)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuid", get_by_uuid)
 
     if allowed:
         await forget_episode(memory, group_id="team_alpha", episode_uuid="e1")
@@ -714,9 +740,9 @@ async def test_forget_episode_routes_owner_notes_through_chain_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     memory = make_graphiti(saga_episodes={})
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
-    async def get_by_uuid(driver, uuid):
+    async def get_by_uuid(driver: Any, uuid: str) -> SimpleNamespace:
         label = owner_notes.OWNER_NOTE_SOURCE if uuid == "note-1" else "Google Meet m1 transcript"
         return SimpleNamespace(uuid=uuid, group_id="team_alpha", source_description=label)
 
@@ -724,7 +750,7 @@ async def test_forget_episode_routes_owner_notes_through_chain_rules(
         calls.append(kwargs)
 
     assert memory_module.forget_owner_note is owner_notes.forget_owner_note
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuid", get_by_uuid)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuid", get_by_uuid)
     monkeypatch.setattr(memory_module, "forget_owner_note", guarded_forget)
 
     await forget_episode(memory, group_id="team_alpha", episode_uuid="note-1")
@@ -779,15 +805,22 @@ async def test_reembed_group_pages_through_entities_and_facts(
     saved: list[tuple[str, list[float]]] = []
 
     class Item(SimpleNamespace):
-        async def save(self, driver):
+        async def save(self, driver: Any) -> None:
             saved.append((self.uuid, getattr(self, "name_embedding", None) or self.fact_embedding))
 
     nodes = [Item(uuid=f"n{i}", name=f"entity {i}", name_embedding=None) for i in (3, 2, 1)]
     edges = [Item(uuid=f"e{i}", fact=f"fact {i}", fact_embedding=None) for i in (2, 1)]
     pages: list[tuple[str, str | None]] = []
 
-    def pager(kind, items, empty_error=None):
-        async def get_by_group_ids(driver, group_ids, limit=None, uuid_cursor=None):
+    def pager(
+        kind: str, items: list[Any], empty_error: Callable[..., BaseException] | None = None
+    ) -> Callable[..., Any]:
+        async def get_by_group_ids(
+            driver: Any,
+            group_ids: list[str],
+            limit: int | None = None,
+            uuid_cursor: str | None = None,
+        ) -> list[Any]:
             pages.append((kind, uuid_cursor))
             assert group_ids == ["twin_group"]
             remaining = [item for item in items if uuid_cursor is None or item.uuid < uuid_cursor]
@@ -798,18 +831,18 @@ async def test_reembed_group_pages_through_entities_and_facts(
         return get_by_group_ids
 
     monkeypatch.setattr(memory_module, "REEMBED_BATCH_SIZE", 2)
-    monkeypatch.setattr(memory_module.EntityNode, "get_by_group_ids", pager("node", nodes))
+    monkeypatch.setattr(EntityNode, "get_by_group_ids", pager("node", nodes))
     monkeypatch.setattr(
-        memory_module.EntityEdge,
+        EntityEdge,
         "get_by_group_ids",
-        pager("edge", edges, memory_module.GroupsEdgesNotFoundError),
+        pager("edge", edges, GroupsEdgesNotFoundError),
     )
 
     class Embedder:
-        async def create_batch(self, texts):
+        async def create_batch(self, texts: list[str]) -> list[list[float]]:
             return [[float(len(text)), 1.0] for text in texts]
 
-    memory = SimpleNamespace(driver="driver", embedder=Embedder())
+    memory = cast(Graphiti, SimpleNamespace(driver="driver", embedder=Embedder()))
 
     result = await memory_module.reembed_group(memory, group_id="twin_group")
 
@@ -839,7 +872,7 @@ async def test_memory_context_closes_owned_transports(
         {
             **_config().model_dump(),
             "llm": {**_config().llm.model_dump(), "client": provider},
-            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
         }
     )
     from anthropic import AsyncAnthropic
@@ -850,7 +883,7 @@ async def test_memory_context_closes_owned_transports(
     for sdk in (AsyncOpenAI, AsyncAnthropic):
         original = sdk.close
 
-        async def close(client, original=original):
+        async def close(client: Any, original: Callable[..., Any] = original) -> Any:
             closed.append(client)
             await original(client)
 
@@ -858,10 +891,24 @@ async def test_memory_context_closes_owned_transports(
     error: RuntimeError | None = None
     try:
         async with open_graphiti_memory(config) as memory:
+            from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+            from graphiti_core.llm_client.anthropic_client import AnthropicClient
+            from graphiti_core.llm_client.openai_client import OpenAIClient
+            from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+
+            if provider == "anthropic":
+                assert isinstance(memory.llm_client, AnthropicClient)
+            elif provider == "openai":
+                assert isinstance(memory.llm_client, OpenAIClient)
+            else:
+                assert isinstance(memory.llm_client, OpenAIGenericClient)
+            assert isinstance(memory.embedder, OpenAIEmbedder)
             clients = [memory.llm_client.client, memory.embedder.client]
             if provider != "anthropic":
+                assert isinstance(memory.cross_encoder, OpenAIRerankerClient)
                 clients.append(memory.cross_encoder.client)
             else:
+                assert isinstance(memory.cross_encoder, AnthropicReranker)
                 assert memory.cross_encoder.client is memory.llm_client
             if fail_body:
                 raise RuntimeError("setup failed")
@@ -892,31 +939,29 @@ async def test_memory_context_closes_owned_transports(
 async def test_memory_context_closes_transports_on_partial_construction(
     component: str, provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from openai import AsyncOpenAI
+    clients: list[Any] = []
+    original_anthropic = GraphitiAnthropicSDK
 
-    clients = []
-    original_anthropic = memory_module.GraphitiAnthropicSDK
-
-    def anthropic(*args, **kwargs):
+    def anthropic(*args: Any, **kwargs: Any) -> Any:
         client = original_anthropic(*args, **kwargs)
         clients.append(client)
         return client
 
-    def openai(*args, **kwargs):
+    def openai(*args: Any, **kwargs: Any) -> Any:
         client = AsyncOpenAI(*args, **kwargs)
         clients.append(client)
         return client
 
-    def fail(*args, **kwargs):
+    def fail(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("construction failed")
 
     monkeypatch.setattr(memory_module, "GraphitiAnthropicSDK", anthropic)
     monkeypatch.setattr(memory_module, "AsyncOpenAI", openai, raising=False)
-    drivers = []
+    drivers: list[Any] = []
     if component == "Graphiti":
-        original_driver = memory_module.Neo4jDriver
+        original_driver = Neo4jDriver
 
-        def driver(*args, **kwargs):
+        def driver(*args: Any, **kwargs: Any) -> Any:
             created = original_driver(*args, **kwargs)
             drivers.append(created)
             return created
@@ -927,7 +972,7 @@ async def test_memory_context_closes_transports_on_partial_construction(
         {
             **_config().model_dump(),
             "llm": {**_config().llm.model_dump(), "client": provider},
-            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
         }
     )
     try:
@@ -953,7 +998,7 @@ async def test_memory_context_waits_for_construction_cleanup_when_cancelled(
     constructed = []
     original = memory_module.create_graphiti_memory
 
-    def construct(config, **kwargs):
+    def construct(config: MemorySettings, **kwargs: Any) -> Graphiti:
         memory = original(config, **kwargs)
         constructed.append(memory)
         loop.call_soon_threadsafe(started.set)
@@ -964,11 +1009,11 @@ async def test_memory_context_waits_for_construction_cleanup_when_cancelled(
     config = MemorySettings.model_validate(
         {
             **_config().model_dump(),
-            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
         }
     )
 
-    async def open_memory():
+    async def open_memory() -> None:
         async with open_graphiti_memory(config):
             pytest.fail("cancelled construction must not yield")
 
@@ -981,15 +1026,29 @@ async def test_memory_context_waits_for_construction_cleanup_when_cancelled(
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await opening
+        from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+        from graphiti_core.llm_client.openai_client import OpenAIClient
+
         memory = constructed[0]
+        assert isinstance(memory.driver, Neo4jDriver)
+        assert isinstance(memory.llm_client, OpenAIClient)
+        assert isinstance(memory.embedder, OpenAIEmbedder)
+        assert isinstance(memory.cross_encoder, OpenAIRerankerClient)
         assert memory.driver.client._closed
         assert memory.llm_client.client.is_closed()
         assert memory.embedder.client.is_closed()
         assert memory.cross_encoder.client.is_closed()
     finally:
+        from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+        from graphiti_core.llm_client.openai_client import OpenAIClient
+
         release.set()
         for memory in constructed:
-            await memory.close()
+            closer: Callable[[], Coroutine[Any, Any, None]] = memory.close
+            await closer()
+            assert isinstance(memory.llm_client, OpenAIClient)
+            assert isinstance(memory.embedder, OpenAIEmbedder)
+            assert isinstance(memory.cross_encoder, OpenAIRerankerClient)
             await memory.llm_client.client.close()
             await memory.embedder.client.close()
             await memory.cross_encoder.client.close()
@@ -1005,18 +1064,18 @@ async def test_memory_context_finishes_late_construction_after_repeated_cancella
     release = threading.Event()
     finished = threading.Event()
     loop = asyncio.get_running_loop()
-    constructed = []
-    clients = []
+    constructed: list[Graphiti] = []
+    clients: list[Any] = []
     original_factory = memory_module.create_graphiti_memory
-    original_embedder = memory_module.OpenAIEmbedder
-    original_sdk = memory_module.AsyncOpenAI
+    original_embedder = OpenAIEmbedder
+    original_sdk = AsyncOpenAI
 
-    def sdk(*args, **kwargs):
+    def sdk(*args: Any, **kwargs: Any) -> Any:
         client = original_sdk(*args, **kwargs)
         clients.append(client)
         return client
 
-    def embedder(*args, **kwargs):
+    def embedder(*args: Any, **kwargs: Any) -> Any:
         loop.call_soon_threadsafe(started.set)
         if not release.wait(2):
             raise RuntimeError("construction gate timed out")
@@ -1024,7 +1083,7 @@ async def test_memory_context_finishes_late_construction_after_repeated_cancella
             raise RuntimeError("late construction failed")
         return original_embedder(*args, **kwargs)
 
-    def construct(config, **kwargs):
+    def construct(config: MemorySettings, **kwargs: Any) -> Graphiti:
         try:
             memory = original_factory(config, **kwargs)
             constructed.append(memory)
@@ -1038,11 +1097,11 @@ async def test_memory_context_finishes_late_construction_after_repeated_cancella
     config = MemorySettings.model_validate(
         {
             **_config().model_dump(),
-            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
         }
     )
 
-    async def open_memory():
+    async def open_memory() -> None:
         async with open_graphiti_memory(config):
             pytest.fail("cancelled construction must not yield")
 
@@ -1059,13 +1118,15 @@ async def test_memory_context_finishes_late_construction_after_repeated_cancella
         assert all(client.is_closed() for client in clients)
         if not fail_construction:
             assert len(clients) == 3
+            assert isinstance(constructed[0].driver, Neo4jDriver)
             assert constructed[0].driver.client._closed
     finally:
         release.set()
         await asyncio.to_thread(finished.wait, 2)
         await asyncio.gather(opening, return_exceptions=True)
         for memory in constructed:
-            await memory.close()
+            closer: Callable[[], Coroutine[Any, Any, None]] = memory.close
+            await closer()
         for client in clients:
             await client.close()
 
@@ -1080,7 +1141,7 @@ async def test_memory_context_finishes_disposal_after_repeated_cancellation(
     clients = []
     original_close = AsyncOpenAI.close
 
-    async def close(client):
+    async def close(client: Any) -> None:
         if not started.is_set():
             started.set()
             await release.wait()
@@ -1090,12 +1151,18 @@ async def test_memory_context_finishes_disposal_after_repeated_cancellation(
     config = MemorySettings.model_validate(
         {
             **_config().model_dump(),
-            "embedder": {**_config().embedder.model_dump(), "dim": memory_module.EMBEDDING_DIM},
+            "embedder": {**_config().embedder.model_dump(), "dim": EMBEDDING_DIM},
         }
     )
 
-    async def open_memory():
+    async def open_memory() -> None:
+        from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
+        from graphiti_core.llm_client.openai_client import OpenAIClient
+
         async with open_graphiti_memory(config) as memory:
+            assert isinstance(memory.llm_client, OpenAIClient)
+            assert isinstance(memory.embedder, OpenAIEmbedder)
+            assert isinstance(memory.cross_encoder, OpenAIRerankerClient)
             clients.extend(
                 [memory.llm_client.client, memory.embedder.client, memory.cross_encoder.client]
             )
@@ -1135,7 +1202,7 @@ def _owner_rumor_memory(
     ) -> dict[str, str]:
         return {uuid: owner_state for uuid in episode_uuids}
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", scripted_states)
     return make_graphiti(
         facts=[
