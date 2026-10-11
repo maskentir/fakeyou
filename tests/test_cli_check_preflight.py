@@ -3,7 +3,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn, cast
 
 import pytest
 from pydantic import SecretStr
@@ -73,12 +73,12 @@ def test_main_exits_2_on_input_error(
 def test_main_dispatches_parsed_options_to_the_command_handler(
     monkeypatch: pytest.MonkeyPatch, argv: list[str], handler: str, expected: dict[str, Any]
 ) -> None:
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
-    def record(**kwargs):
+    def record(**kwargs: Any) -> None:
         calls.append(kwargs)
 
-    async def record_async(**kwargs):
+    async def record_async(**kwargs: Any) -> None:
         calls.append(kwargs)
 
     sync_handlers = {"show_session_report"}
@@ -165,8 +165,10 @@ async def test_join_without_audio_skips_preflight(
     assert captured["preflight_hosts"] is None
 
 
-def record_chat_model_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
-    calls: list[tuple] = []
+def record_chat_model_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[tuple[Any, ...], dict[str, Any]]]:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *args, **kwargs: calls.append((args, kwargs))
     )
@@ -178,7 +180,7 @@ def test_main_reports_unavailable_memory_with_infra_exit_code(
 ) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
-    async def unavailable(*_args, **_kwargs):
+    async def unavailable(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise ProviderFault("memory", "unavailable")
 
     monkeypatch.setattr(cli_main, "add_owner_note", unavailable)
@@ -267,7 +269,9 @@ def test_settings_read_extra_body_as_json(
     monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
     monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
     monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
-    assert Settings(**env_file_opt(None)).reply.extra_body == {"reasoning_split": True}
+    reply = Settings(**env_file_opt(None)).reply
+    assert isinstance(reply, CompatibleReply)
+    assert reply.extra_body == {"reasoning_split": True}
 
 
 def test_chat_model_uses_its_own_key_and_explicit_provider(
@@ -360,9 +364,9 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 ) -> None:
     from langchain.agents.middleware import ModelFallbackMiddleware
 
-    created: dict = {}
+    created: dict[str, Any] = {}
 
-    def fake_agent(model, **kwargs):
+    def fake_agent(model: Any, **kwargs: Any) -> SimpleNamespace:
         created.update(kwargs)
         return SimpleNamespace(name="agent")
 
@@ -373,7 +377,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 
     async with assembly.open_conversation(
         settings,
-        config,
+        cast(Any, config),
         behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
@@ -390,13 +394,13 @@ async def test_open_conversation_wires_sentence_streaming_flag(
 ) -> None:
     from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
 
-    seen: dict = {}
+    seen: dict[str, Any] = {}
 
     class StubLoop:
         async def close(self) -> None:
             pass
 
-    def fake_loop(responder, **kwargs):
+    def fake_loop(responder: Any, **kwargs: Any) -> StubLoop:
         seen["responder"] = responder
         seen["kwargs"] = kwargs
         return StubLoop()
@@ -410,7 +414,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
 
     async with assembly.open_conversation(
         settings,
-        config,
+        cast(Any, config),
         behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
@@ -420,7 +424,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
     settings.conversation.sentence_streaming = True
     async with assembly.open_conversation(
         settings,
-        config,
+        cast(Any, config),
         behavior=LoopBehavior(on_transition=lambda *args: None),
     ):
         pass
@@ -430,6 +434,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
 
 def test_preflight_probes_the_fallback_endpoint(settings: Settings) -> None:
     settings = with_muse_fallback(settings)
+    assert settings.reply_fallback is not None
     settings.reply_fallback.base_url = "https://fallback.example.com:8443/v1"
     assert providers.preflight_hosts(settings) == (
         *BASE_HOSTS,
@@ -441,6 +446,7 @@ def test_check_reports_the_fallback_model(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings = with_muse_fallback(settings)
+    assert settings.reply_fallback is not None
     cli_diagnostics.check_setup(settings)
     assert json.loads(capsys.readouterr().out)[
         "reply_fallback"
@@ -457,7 +463,7 @@ def test_check_reports_no_fallback_by_default(
 def test_ctrl_c_is_reported_as_an_operation_interruption(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def interrupted(**_kwargs):
+    def interrupted(**_kwargs: Any) -> NoReturn:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli_main, "show_session_report", interrupted)
@@ -473,7 +479,7 @@ def test_ctrl_c_is_reported_as_an_operation_interruption(
 def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def interrupted_settings(*_args, **_kwargs):
+    def interrupted_settings(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli_main, "Settings", interrupted_settings)
