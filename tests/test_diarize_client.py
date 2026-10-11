@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+from email.message import Message
 from typing import Any
 
 import pytest
@@ -102,7 +103,7 @@ def test_transcribe_chunk_parses_turns_and_drops_transcript_text() -> None:
 
 def test_transcribe_chunk_http_error_becomes_diarize_error_without_key() -> None:
     def opener(request: urllib.request.Request) -> _FakeResponse:
-        raise urllib.error.HTTPError(request.full_url, 500, "server blew up", {}, None)
+        raise urllib.error.HTTPError(request.full_url, 500, "server blew up", Message(), None)
 
     with pytest.raises(DiarizeError) as group:
         transcribe_chunk(b"RIFF" + bytes(60), api_key="secret-key", opener=opener)
