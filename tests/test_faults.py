@@ -2,7 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
 from fakeyou.observability.journal import Journal, JournalFile
@@ -98,7 +98,7 @@ def test_record_never_raises_and_ignores_garbage() -> None:
     ]
 
     for item in garbage:
-        reporter.record(item)
+        reporter.record(cast(Any, item))
 
     assert reporter.total() == 0
     assert reporter.report() is None
@@ -199,7 +199,9 @@ def test_fault_count_survives_logging_failure() -> None:
     )
 
     assert reporter.total() == 2
-    assert reporter.report()["faults"]["total"] == 2
+    report = reporter.report()
+    assert report is not None
+    assert report["faults"]["total"] == 2
 
 
 def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clock(
