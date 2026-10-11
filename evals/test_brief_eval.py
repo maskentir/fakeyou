@@ -14,17 +14,8 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import SecretStr
 
-from evals.runtime_evidence import (
-    ModelCallCounter,
-    capture_candidate,
-    finish_candidate,
-    native_responder,
-    prepare_artifact_directory,
-    respond_with_deadline,
-    runtime_metadata,
-)
-from evals.test_replay_eval import _sanitized_role
-from evals.test_trust_eval import (
+from evals._shared import sanitized_role, token_present
+from evals._trust import (
     TrustScore,
     build_case_memory,
     case_storage,
@@ -33,9 +24,17 @@ from evals.test_trust_eval import (
     passing_trust_reviews,
     rated_pairs,
     strategy_settings,
-    token_present,
     trust_gate,
     write_trust_summary,
+)
+from evals.runtime_evidence import (
+    ModelCallCounter,
+    capture_candidate,
+    finish_candidate,
+    native_responder,
+    prepare_artifact_directory,
+    respond_with_deadline,
+    runtime_metadata,
 )
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import CompatibleReply, OpenAIReply, Settings
@@ -336,8 +335,8 @@ def write_brief_artifacts(
             "unrated turns; any severe earlier response makes the case/run severe. "
             "Aids are helpers, never the verdict.",
         },
-        "reply": _sanitized_role(reply_raw) if isinstance(reply_raw, dict) else {},
-        "reply_fallback": _sanitized_role(fallback_raw) if isinstance(fallback_raw, dict) else None,
+        "reply": sanitized_role(reply_raw) if isinstance(reply_raw, dict) else {},
+        "reply_fallback": sanitized_role(fallback_raw) if isinstance(fallback_raw, dict) else None,
         "response_timeout_seconds": dumped.get("conversation", {}).get("response_timeout_seconds"),
         "recall_timeout_seconds": settings.memory.recall.timeout_seconds,
         "latency": score.latency_summary(),
@@ -818,7 +817,7 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
 async def test_brief_response_deadline_cancels_native_responder() -> None:
     from langchain_core.messages import AIMessage
 
-    from evals.test_trust_eval import EvalDelayedModel
+    from evals._trust import EvalDelayedModel
 
     fixture = load_brief_fixture()
     settings = Settings()

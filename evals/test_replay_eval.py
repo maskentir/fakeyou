@@ -8,13 +8,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from evals._shared import sanitized_role
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
@@ -39,7 +39,6 @@ REQUIRED_CHECKS = (
     "must_not_mention",
     "within_two_sentences",
 )
-CREDENTIAL_MARKERS = ("key", "token", "secret", "password", "passwd", "auth", "credential")
 
 
 @dataclass
@@ -165,60 +164,6 @@ def load_fixture() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(FIXTURE.read_text(encoding="utf-8")))
 
 
-def _sanitize_url(value: str) -> str:
-    if "://" not in value:
-        return value
-    try:
-        parts = urlsplit(value)
-        if not parts.scheme or not parts.netloc:
-            return value
-        host = parts.hostname or ""
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        port = f":{parts.port}" if parts.port else ""
-        netloc = f"{host}{port}"
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-    except Exception:
-        return value
-
-
-def _is_credential_key(name: str) -> bool:
-    lowered = name.lower()
-    return any(marker in lowered for marker in CREDENTIAL_MARKERS)
-
-
-def _sanitize_extra_body(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned: dict[Any, Any] = {}
-        for key, item in value.items():
-            if isinstance(key, str) and _is_credential_key(key):
-                cleaned[key] = "**********"
-            else:
-                cleaned[key] = _sanitize_extra_body(item)
-        return cleaned
-    if isinstance(value, list):
-        return [_sanitize_extra_body(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_sanitize_extra_body(item) for item in value)
-    if isinstance(value, str) and "://" in value:
-        return _sanitize_url(value)
-    return value
-
-
-def _sanitized_role(role: dict[str, Any]) -> dict[str, Any]:
-    cleaned = dict(role)
-    base_url = cleaned.get("base_url")
-    if isinstance(base_url, str):
-        cleaned["base_url"] = _sanitize_url(base_url)
-    for key, item in list(cleaned.items()):
-        if key not in ("base_url", "extra_body") and isinstance(item, str) and "://" in item:
-            cleaned[key] = _sanitize_url(item)
-    extra = cleaned.get("extra_body")
-    if extra is not None:
-        cleaned["extra_body"] = _sanitize_extra_body(extra)
-    return cleaned
-
-
 def _source_commit() -> str:
     try:
         proc = subprocess.run(
@@ -248,9 +193,9 @@ def write_replay_artifacts(
     dumped = settings.model_dump(mode="json")
     reply_raw = dumped.get("reply", {})
     fallback_raw = dumped.get("reply_fallback")
-    reply_manifest = _sanitized_role(reply_raw) if isinstance(reply_raw, dict) else {}
+    reply_manifest = sanitized_role(reply_raw) if isinstance(reply_raw, dict) else {}
     if isinstance(fallback_raw, dict):
-        fallback_manifest: dict[str, Any] | None = _sanitized_role(fallback_raw)
+        fallback_manifest: dict[str, Any] | None = sanitized_role(fallback_raw)
     else:
         fallback_manifest = None
     language = dumped.get("speech", {}).get("language", "")

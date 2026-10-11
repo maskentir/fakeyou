@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
+from evals._trust import contract_model, replay_trust, strategy_settings
 from evals.runtime_evidence import finish_candidate
-from evals.test_trust_eval import contract_model, replay_trust, strategy_settings
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model

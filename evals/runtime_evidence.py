@@ -17,7 +17,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly
-from evals.test_replay_eval import _sanitized_role
+from evals._shared import sanitized_role
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import LangGraphResponder, ToolResultCallback
 from fakeyou.conversation.session import SessionConfig
@@ -150,8 +150,8 @@ def runtime_metadata(settings: Settings) -> dict[str, Any]:
         "proof_scope": "native non-streaming agent/responder; not full ConversationLoop/audio",
         "assembly": "fakeyou.orchestration.assembly.open_conversation",
         "boundaries": "supplied model/fallback, synthetic Graphiti, fresh InMemorySaver",
-        "reply": _sanitized_role(dumped["reply"]),
-        "reply_fallback": _sanitized_role(dumped["reply_fallback"])
+        "reply": sanitized_role(dumped["reply"]),
+        "reply_fallback": sanitized_role(dumped["reply_fallback"])
         if isinstance(dumped["reply_fallback"], dict)
         else None,
         "response_timeout_seconds": settings.conversation.response_timeout_seconds,

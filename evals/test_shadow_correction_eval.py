@@ -10,14 +10,14 @@ from typing import Any
 import pytest
 
 import fakeyou.memory.memory as memory_module
-from evals.test_memory_correction_eval import (
+from evals._correction import (
     answer_queries,
     load_correction_fixture,
     query_matches,
     superseded_serve_rate,
-    token_present,
     write_fixture_record,
 )
+from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.memory.ingestion import MeetingScope, ingest_corrections, ingest_meeting
