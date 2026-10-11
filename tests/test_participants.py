@@ -6,7 +6,7 @@ from fakeyou.foundation.participants import (
 )
 
 
-def roster(*parts):
+def roster(*parts: Participant) -> dict[str, Participant]:
     return {p.id: p for p in parts}
 
 
