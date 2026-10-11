@@ -1,6 +1,6 @@
 import json
-from collections.abc import Callable
-from typing import cast
+from collections.abc import AsyncGenerator, Callable
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -32,10 +32,12 @@ def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
     )
 
     assert isinstance(service, MetaSTTService)
-    assert service._settings.language == "Indonesian"
-    assert service._settings.mode == "ENDPOINTING"
-    assert service._settings.keywords == ["Jemboed"]
-    assert service._settings.emit_audio_progress is False
+    stt_settings = service._settings
+    assert stt_settings is not None
+    assert stt_settings.language == "Indonesian"
+    assert stt_settings.mode == "ENDPOINTING"
+    assert stt_settings.keywords == ["Jemboed"]
+    assert stt_settings.emit_audio_progress is False
 
 
 def test_create_muse_stt_rejects_unknown_mode_before_connecting() -> None:
@@ -57,7 +59,7 @@ async def test_tts_http_client_bounds_slow_streams() -> None:
 
 
 async def test_synthesizer_streams_a_pcm_request(openai_client: Callable[..., AsyncOpenAI]) -> None:
-    requests = []
+    requests: list[httpx2.Request] = []
     client = openai_client(requests=requests)
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
 
@@ -84,7 +86,7 @@ async def test_synthesizer_streams_a_pcm_request(openai_client: Callable[..., As
 async def test_synthesizer_rejects_blank_text_before_request(
     openai_client: Callable[..., AsyncOpenAI],
 ) -> None:
-    requests = []
+    requests: list[httpx2.Request] = []
     client = openai_client(requests=requests)
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key", client=client)
 
@@ -216,11 +218,13 @@ async def test_synthesizer_stream_failure_raises_typed_fault(
     assert failed["request_id"] == journal.events()[0]["request_id"]
 
 
-def _minimax_client(handler) -> httpx2.AsyncClient:
+def _minimax_client(
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> httpx2.AsyncClient:
     return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
 
 
-def _sse(*events: dict) -> bytes:
+def _sse(*events: dict[str, Any]) -> bytes:
     import json
 
     return b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
@@ -345,7 +349,7 @@ async def test_first_pcm_is_reported_before_synthesis_finishes(
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
-    stream = synthesizer.stream("Hello.")
+    stream: Any = synthesizer.stream("Hello.")
     try:
         assert await anext(stream) == b"\x00\x01"
         [first] = journal.events("synthesis_pcm_emitted")
@@ -410,7 +414,7 @@ async def test_empty_chunks_are_skipped_before_first_pcm(
 async def test_journaled_stream_skips_empty_chunks(journal: RecordingJournal) -> None:
     from fakeyou.audio.voice import _journaled_stream
 
-    async def open_stream(text):
+    async def open_stream(text: str) -> AsyncGenerator[bytes, None]:
         assert text == "Hello."
         yield b""
         yield b"\x00\x01"
@@ -487,7 +491,7 @@ async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
-    stream = synthesizer.stream("Hello.")
+    stream: Any = synthesizer.stream("Hello.")
     try:
         assert await anext(stream) == b"\x00\x01"
     finally:
@@ -608,7 +612,7 @@ async def test_synthesis_tags_transcript_id_on_all_events(
     synthesizer = OpenAISpeechSynthesizer(
         client=openai_client(chunks=[b"\x00\x01", b"\x02\x03"]), journal=journal
     )
-    stream = synthesizer.stream("Hello.", transcript_id="t9")
+    stream: Any = synthesizer.stream("Hello.", transcript_id="t9")
     try:
         assert await anext(stream) == b"\x00\x01"
         [started] = journal.events("synthesis_started")
