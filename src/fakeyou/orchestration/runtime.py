@@ -148,7 +148,7 @@ async def run_join_with_retry(
     *,
     policy: JoinRetryPolicy,
     sleep: Callable[[float], Awaitable[None]],
-    record: Callable[..., None],
+    record: Callable[..., Any],
     should_stop: Callable[[], bool],
 ) -> tuple[JoinResult, int]:
     attempts = 0

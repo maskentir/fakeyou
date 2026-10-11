@@ -1,7 +1,10 @@
+from collections.abc import Callable, Coroutine, Iterable
+from typing import Any
+
 import pytest
 
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.meet.meet import JoinResult
+from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.orchestration.runtime import (
     JoinRetryPolicy,
     SessionWiring,
@@ -21,18 +24,29 @@ from tests.fakes import (
 )
 
 
-def _scripted(statuses):
+def _scripted(
+    statuses: Iterable[JoinStatus],
+) -> tuple[Callable[[], Coroutine[Any, Any, JoinResult]], list[int]]:
     outcomes = [JoinResult(status=status, detail=f"{status} detail") for status in statuses]
-    calls = []
+    calls: list[int] = []
 
-    async def attempt():
+    async def attempt() -> JoinResult:
         calls.append(len(calls))
         return outcomes.pop(0)
 
     return attempt, calls
 
 
-async def _retry(attempt, journal, clock, should_stop, rng, max_attempts=3, base=2.0, cap=30.0):
+async def _retry(
+    attempt: Callable[[], Coroutine[Any, Any, JoinResult]],
+    journal: RecordingJournal,
+    clock: FakeClock,
+    should_stop: Callable[[], bool],
+    rng: Callable[[float, float], float],
+    max_attempts: int = 3,
+    base: float = 2.0,
+    cap: float = 30.0,
+) -> tuple[JoinResult, int]:
     return await run_join_with_retry(
         attempt,
         policy=JoinRetryPolicy(max_attempts, base, cap, rng),
@@ -62,7 +76,7 @@ async def test_join_retry_succeeds_after_transient_failures() -> None:
 
 
 @pytest.mark.parametrize("status", ["admitted", "denied", "blocked", "aborted"])
-async def test_join_retry_terminal_statuses_do_not_retry(status: str) -> None:
+async def test_join_retry_terminal_statuses_do_not_retry(status: JoinStatus) -> None:
     attempt, calls = _scripted([status])
     clock = FakeClock()
     journal = RecordingJournal()
