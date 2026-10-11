@@ -1,7 +1,9 @@
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.workers.runner import WorkerRunner
 from websockets.protocol import State
 
 import fakeyou.audio.audio as audio
@@ -17,6 +19,7 @@ from fakeyou.audio.audio import (
     stt_reconnect_supported,
 )
 from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.playback import PlaybackPort
 from fakeyou.audio.voice import create_muse_stt
 from fakeyou.observability.diagnostics import Diagnostics
 from tests.fakes import FakeReconnectableSTT, LegacyRawReconnectSTT, LegacySTT, RecordingJournal
@@ -35,6 +38,31 @@ class _Playback:
     @property
     def is_speaking(self) -> bool:
         return False
+
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+def _pipeline(engine: PlaybackPort, runner_task: asyncio.Task[None]) -> SessionPipeline:
+    worker = cast(PipelineWorker, object())
+    runner = cast(WorkerRunner, object())
+    return SessionPipeline(worker, runner, runner_task, engine)
+
+
+async def _wait_gate(gate: asyncio.Event) -> None:
+    await gate.wait()
 
 
 class _FailingReconnectSTT:
@@ -55,9 +83,9 @@ def _quiet_session(
     activity.mark_ready()
     stt.idle_seconds = lambda now: idle_seconds
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         runtime=SessionRuntime(
             now=lambda: clock[0], stt_idle_reconnect_seconds=stt_idle_reconnect_seconds
@@ -65,14 +93,16 @@ def _quiet_session(
     )
     clock[0] += 10.0
     activity.observe_audio()
-    session._test_gate = gate
-    session._test_runner = runner_task
+    session_any: Any = session
+    session_any._test_gate = gate
+    session_any._test_runner = runner_task
     return session
 
 
 async def _close_quiet_session(session: MeetingAudioSession) -> None:
-    session._test_gate.set()
-    await session._test_runner
+    session_any: Any = session
+    session_any._test_gate.set()
+    await session_any._test_runner
 
 
 def _speech_chunk(index: int, size: int = 320) -> bytes:
@@ -88,6 +118,7 @@ def test_pipecat_1_12_0_meta_stt_exposes_reconnect_coroutine() -> None:
 
 def test_managed_muse_stt_exposes_policy_controlled_reconnect() -> None:
     stt = create_muse_stt(api_key="test-meta-key", service_class=ManagedMuseSTT)
+    assert isinstance(stt, ManagedMuseSTT)
 
     assert asyncio.iscoroutinefunction(stt.reconnect_when_idle)
     assert stt_reconnect_supported(stt) is True
@@ -176,11 +207,11 @@ async def test_dead_socket_reconnect_bypasses_quiet_gate(journal: RecordingJourn
     activity.mark_ready()
     activity.observe_speech(active=True)
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),
@@ -202,11 +233,11 @@ async def test_healthy_socket_reconnect_keeps_quiet_gate(journal: RecordingJourn
     activity.mark_ready()
     activity.observe_speech(active=True)
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.OPEN)
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),
@@ -227,10 +258,10 @@ async def test_reconnect_journal_events_carry_stream_id(journal: RecordingJourna
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0], stream_id="slot-2"),
@@ -257,9 +288,9 @@ async def test_reconnect_failed_journal_event_carries_stream_id(journal: Recordi
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=_FailingReconnectSTT(), activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0], stream_id="slot-1"),
@@ -284,10 +315,10 @@ async def test_reconnect_journal_events_omit_missing_stream_id(journal: Recordin
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),
@@ -339,11 +370,11 @@ async def test_stale_queued_reconnect_deadline_fails_without_admit() -> None:
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         runtime=SessionRuntime(now=lambda: clock[0]),
     )
@@ -363,11 +394,11 @@ async def test_admit_resets_stale_queued_reconnect_epoch(journal: RecordingJourn
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     gate = asyncio.Event()
-    runner_task: asyncio.Task[None] = asyncio.create_task(gate.wait())
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
     stt = FakeReconnectableSTT()
     stt._websocket = _FakeSocket(State.CLOSED)
     session = MeetingAudioSession(
-        SessionPipeline(object(), object(), runner_task, _Playback()),
+        _pipeline(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),

@@ -659,6 +659,7 @@ class FakeReconnectableSTT(FakeSTT):
     def __init__(self) -> None:
         super().__init__(finalized=())
         self.calls = 0
+        self._websocket: Any = None
 
     async def reconnect_when_idle(self) -> None:
         self.calls += 1
