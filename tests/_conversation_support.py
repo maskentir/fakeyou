@@ -5,7 +5,13 @@ from fakeyou.foundation.transcript import (
 )
 
 
-def event(id, text="hello", finalized=True, participant_id="unknown", speaker_evidence_id=None):
+def event(
+    id: str,
+    text: str = "hello",
+    finalized: bool = True,
+    participant_id: str = "unknown",
+    speaker_evidence_id: str | None = None,
+) -> TranscriptEvent:
     return TranscriptEvent(
         id,
         datetime.now(UTC).isoformat(),

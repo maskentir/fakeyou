@@ -1,9 +1,20 @@
 import asyncio
 import json
 import uuid
+from collections.abc import Iterable
+from typing import Any, cast
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
+from langchain_core.outputs import ChatResult
+from langchain_core.runnables import Runnable
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
@@ -27,19 +38,26 @@ from tests.fakes import (
     recall_call,
 )
 
+_AgentT = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
+
 
 class ScriptedStream:
-    def __init__(self, owner, actions, callbacks):
+    def __init__(
+        self,
+        owner: "ScriptedAgent",
+        actions: Iterable[tuple[Any, ...]],
+        callbacks: Iterable[Any],
+    ) -> None:
         self._owner = owner
         self._actions = list(actions)
         self._callbacks = list(callbacks)
         self.delivered = 0
         self.aclosed = False
 
-    def __aiter__(self):
+    def __aiter__(self) -> "ScriptedStream":
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> tuple[AIMessageChunk, dict[str, str]]:
         while self._actions:
             action = self._actions.pop(0)
             if action[0] == "chunk":
@@ -67,23 +85,29 @@ class ScriptedStream:
             raise AssertionError(action[0])
         raise StopAsyncIteration
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         self.aclosed = True
         self._owner.closed += 1
 
 
 class ScriptedAgent:
-    def __init__(self, scripts, fallback_reply=""):
+    def __init__(
+        self,
+        scripts: dict[str, list[tuple[Any, ...]]] | list[tuple[Any, ...]],
+        fallback_reply: str = "",
+    ) -> None:
         self._scripts = scripts
         self.fallback_reply = fallback_reply
-        self.streams = []
-        self.configs = []
-        self.stream_modes = []
+        self.streams: list[ScriptedStream] = []
+        self.configs: list[dict[str, Any] | None] = []
+        self.stream_modes: list[Any] = []
         self.delivered = 0
         self.closed = 0
-        self.ainvoke_calls = []
+        self.ainvoke_calls: list[dict[str, Any]] = []
 
-    def astream(self, payload, config=None, **kwargs):
+    def astream(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> "ScriptedStream":
         key = payload["messages"][-1].id
         if isinstance(self._scripts, dict):
             actions = self._scripts.get(key, self._scripts.get("*", []))
@@ -95,12 +119,20 @@ class ScriptedAgent:
         self.streams.append(stream)
         return stream
 
-    async def ainvoke(self, payload, config=None, **kwargs):
+    async def ainvoke(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
         self.ainvoke_calls.append(payload)
         return {"messages": [AIMessage(content=self.fallback_reply)]}
 
 
-def streamed_loop(agent, audio, journal, language="id", **kwargs):
+def streamed_loop(
+    agent: Any,
+    audio: FakeReplyAudio,
+    journal: RecordingJournal,
+    language: str = "id",
+    **kwargs: Any,
+) -> ConversationLoop:
     responder = StreamingLangGraphResponder(agent, "thread", journal=journal, language=language)
     interaction_keys = (
         "on_transition",
@@ -205,7 +237,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(
 ) -> None:
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
-    responder = StreamingLangGraphResponder(agent, "thread", journal=journal)
+    responder = StreamingLangGraphResponder(cast(_AgentT, agent), "thread", journal=journal)
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "hello"))
@@ -307,7 +339,13 @@ async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> 
     from langchain.agents.middleware import ModelFallbackMiddleware
 
     class FailingChatModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             raise RuntimeError("primary down")
 
     agent = create_meeting_agent(
@@ -371,7 +409,7 @@ async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) 
 
 def test_streaming_responder_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
-        StreamingLangGraphResponder(ScriptedAgent([]), "thread", max_sentences=0)
+        StreamingLangGraphResponder(cast(_AgentT, ScriptedAgent([])), "thread", max_sentences=0)
 
 
 async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJournal) -> None:
