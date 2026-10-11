@@ -1,6 +1,9 @@
+from typing import Any
+
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly_module
@@ -46,7 +49,7 @@ def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
 async def test_agent_reopens_postgres_checkpoint_for_same_thread(
     migrated_database_url: str,
 ) -> None:
-    config = {"configurable": {"thread_id": "durable-thread"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "durable-thread"}}
     async with open_checkpointer(migrated_database_url) as saver:
         first_agent = create_meeting_agent(
             FakeMessagesListChatModel(responses=[AIMessage(content="remembered")]),
@@ -85,9 +88,9 @@ async def test_production_agent_short_circuits_greeting_without_model(
 ) -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="from model")])
     monkeypatch.setattr(providers_module, "init_chat_model", lambda *_args, **_kwargs: model)
-    built: list = []
+    built: list[Any] = []
 
-    def recording_agent(agent_model, **kwargs):
+    def recording_agent(agent_model: Any, **kwargs: Any) -> Any:
         agent = create_meeting_agent(agent_model, **kwargs)
         built.append(agent)
         return agent
