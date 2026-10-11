@@ -1,10 +1,13 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
+from playwright.async_api import Page
 
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.meet.browser import open_direct_page
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
 from fakeyou.orchestration.lifecycle import create_lifecycle_graph
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
@@ -24,10 +27,10 @@ document.querySelector('#join').onclick = () => {
 
 @pytest.mark.browser
 async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state() -> None:
-    pages = []
+    pages: list[Page] = []
 
     @asynccontextmanager
-    async def open_fixture(**kwargs):
+    async def open_fixture(**kwargs: Any) -> AsyncIterator[Page]:
         async with open_direct_page(**kwargs) as page:
             await page.route(
                 "https://meet.google.com/**",
@@ -69,7 +72,7 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
 
 @pytest.mark.browser
 async def test_microphone_enable_checks_result_and_does_not_toggle_twice() -> None:
-    async with open_direct_page(headless=True) as page:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
         await page.route(
             "https://meet.google.com/**",
             lambda route: route.fulfill(
