@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from fakeyou.diarization.diarize_correction import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import BriefItem, MeetingBrief, MeetingContext, brief_digest
+from fakeyou.persistence.ingestion_status import write_atomically
 from tests.fakes import ToolCallingFakeModel
 
 AT = datetime(2026, 10, 3, 12, tzinfo=UTC)
@@ -410,7 +412,7 @@ def test_publish_json_last_and_rebuild_markdown_from_canonical_report(
 ) -> None:
     report = report_for(record_path)
     written: list[str] = []
-    real_write = module.write_atomically
+    real_write = write_atomically
 
     def tracked(path: Path, data: bytes) -> None:
         written.append(path.name)
@@ -436,7 +438,7 @@ def test_atomic_publish_failure_preserves_previous_canonical_report(
     module.write_debrief(record_path, previous)
     canonical = record_path.parent / "debrief.json"
     before = canonical.read_bytes()
-    real_write = module.write_atomically
+    real_write = write_atomically
 
     def failing(path: Path, data: bytes) -> None:
         if path.name == failure_name:
@@ -531,7 +533,7 @@ def test_post_replace_write_failure_restores_previous_canonical_state(
     if previous_exists:
         module.write_debrief(record_path, previous)
     before = canonical.read_bytes() if previous_exists else None
-    real_write = module.write_atomically
+    real_write = write_atomically
 
     def failing_after_replace(path: Path, data: bytes) -> None:
         real_write(path, data)
@@ -551,8 +553,8 @@ def test_failed_rollback_preserves_old_backup_and_blocks_cache(
     module.write_debrief(record_path, previous)
     canonical = record_path.parent / "debrief.json"
     before = canonical.read_bytes()
-    real_write = module.write_atomically
-    real_replace = module.os.replace
+    real_write = write_atomically
+    real_replace = os.replace
 
     def failing_write(path: Path, data: bytes) -> None:
         real_write(path, data)
@@ -565,7 +567,7 @@ def test_failed_rollback_preserves_old_backup_and_blocks_cache(
         real_replace(source, target)
 
     monkeypatch.setattr(module, "write_atomically", failing_write)
-    monkeypatch.setattr(module.os, "replace", failing_restore)
+    monkeypatch.setattr(os, "replace", failing_restore)
     with pytest.raises(OSError, match="rollback failed"):
         module.write_debrief(record_path, report_for(record_path, model="failed-model"))
     backups = list(record_path.parent.glob("debrief.json.*.rollback"))
@@ -621,7 +623,7 @@ def test_publish_rejects_source_changed_after_markdown_write(
     module.write_debrief(record_path, previous)
     canonical = record_path.parent / "debrief.json"
     before = canonical.read_bytes()
-    real_write = module.write_atomically
+    real_write = write_atomically
 
     def mutate_source(path: Path, data: bytes) -> None:
         real_write(path, data)
