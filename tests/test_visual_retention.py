@@ -2,7 +2,6 @@ import asyncio
 import os
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -10,14 +9,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 import fakeyou.orchestration.assembly as assembly_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli.audio import PurgeReport, visual_purge_expired
+from fakeyou.cli.audio import visual_purge_expired
 from fakeyou.config.settings import Settings, VisualSettings
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.visual_retention import PurgeReport
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import _MeetingWorker
 from fakeyou.visual.visual_store import VisualStore
-from tests.fakes import FakeClock, RecordingJournal
+from tests.fakes import FakeClock, FakePage, RecordingJournal
 
 DAY = 86400.0
 
@@ -99,7 +99,7 @@ async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) 
             twin_name="Twin",
         ),
         lifecycle,
-        SimpleNamespace(),
+        FakePage(),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
         clock.sleep,
@@ -124,7 +124,7 @@ async def test_flag_on_starts_observer(tmp_path: Path) -> None:
             visual_enabled=True,
         ),
         lifecycle,
-        SimpleNamespace(),
+        FakePage(),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
         clock.sleep,
