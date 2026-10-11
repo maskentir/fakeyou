@@ -1,5 +1,6 @@
 from pipecat.frames.frames import (
     AudioRawFrame,
+    Frame,
     InputAudioRawFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -12,9 +13,9 @@ from fakeyou.audio.audio import PreRollBuffer
 class _Sink(FrameProcessor):
     def __init__(self) -> None:
         super().__init__(enable_direct_mode=True)
-        self.frames: list = []
+        self.frames: list[Frame] = []
 
-    async def process_frame(self, frame, direction) -> None:
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         self.frames.append(frame)
 
