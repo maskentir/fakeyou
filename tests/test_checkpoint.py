@@ -1,8 +1,10 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import psycopg
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from pydantic import SecretStr
@@ -27,7 +29,7 @@ async def test_open_checkpointer_uses_postgres_and_runs_setup(
     class FakePostgresSaver:
         @classmethod
         @asynccontextmanager
-        async def from_conn_string(cls, conn_string: str):
+        async def from_conn_string(cls, conn_string: str) -> AsyncIterator["FakePostgresSaver"]:
             calls["conn_string"] = conn_string
             saver = cls()
             calls["saver"] = saver
@@ -49,7 +51,9 @@ async def test_open_checkpointer_uses_postgres_and_runs_setup(
 async def test_setup_creates_the_langgraph_tables_and_keeps_a_thread(
     migrated_database_url: str, migrated_engine: Engine
 ) -> None:
-    config = {"configurable": {"thread_id": "checkpoint-roundtrip", "checkpoint_ns": ""}}
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "checkpoint-roundtrip", "checkpoint_ns": ""}
+    }
     checkpoint = empty_checkpoint()
 
     async with open_checkpointer(migrated_database_url) as saver:
@@ -83,7 +87,7 @@ async def test_open_checkpointer_maps_driver_errors_to_unreachable(
     class FailingSaver:
         @classmethod
         @asynccontextmanager
-        async def from_conn_string(cls, _conn_string: str):
+        async def from_conn_string(cls, _conn_string: str) -> AsyncIterator["FailingSaver"]:
             raise psycopg.ProgrammingError("boom")
             yield cls()
 
