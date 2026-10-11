@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Any
 
 from fakeyou.observability.report import (
     build_session_report,
@@ -11,7 +12,7 @@ from fakeyou.orchestration.runtime import (
 from tests._report_support import START, answered_turn, row
 
 
-def meet_requested(offset: float, action: str, action_id: str, **fields) -> dict:
+def meet_requested(offset: float, action: str, action_id: str, **fields: Any) -> dict[str, Any]:
     return row(
         offset,
         "meet_action_requested",
@@ -144,7 +145,7 @@ def test_meet_action_finish_without_proof_is_excluded_as_unobserved() -> None:
 
 
 def test_meet_action_rejections_are_terminal_without_retry() -> None:
-    rows: list = []
+    rows: list[dict[str, Any]] = []
     for index, reason in enumerate(["authority_denied", "not_admitted", "duplicate_suppressed"]):
         base = index * 10
         rows += [
@@ -310,7 +311,9 @@ def test_meet_actions_first_terminal_wins_and_missing_ids_excluded() -> None:
     assert report["evidence"]["excluded"] == {"duplicate": 1, "missing_action_id": 2}
 
 
-def finished_action(offset: float, action: str, action_id: str, duration_ms: float) -> list:
+def finished_action(
+    offset: float, action: str, action_id: str, duration_ms: float
+) -> list[dict[str, Any]]:
     return [
         meet_requested(offset, action, action_id),
         row(offset + 1, "meet_action_started", source="agent", action=action, action_id=action_id),
@@ -335,10 +338,11 @@ def finished_action(offset: float, action: str, action_id: str, duration_ms: flo
     ]
 
 
-def m4_stability(section: dict) -> float:
+def m4_stability(section: dict[str, Any]) -> float:
     finished = sum(outcomes.get("finished", 0) for outcomes in section["counts"].values())
     failed = sum(outcomes.get("failed", 0) for outcomes in section["counts"].values())
-    return finished / (finished + failed)
+    stability: float = finished / (finished + failed)
+    return stability
 
 
 def test_m4_gate_passes_for_compliant_session() -> None:
@@ -401,7 +405,7 @@ def test_m4_gate_rejects_finish_without_observed_proof() -> None:
 
 
 def test_m4_gate_rejects_low_stability() -> None:
-    rows: list = []
+    rows: list[dict[str, Any]] = []
     for index in range(9):
         rows += finished_action(index * 10, "raise_hand", f"ok-{index}", 1200)
     rows += [

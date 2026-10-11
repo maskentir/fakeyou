@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 START = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 
 
-def row(seconds: float, event: str, **fields) -> dict:
+def row(seconds: float, event: str, **fields: Any) -> dict[str, Any]:
     return {
         "event": event,
         "meeting_id": "m1",
@@ -20,7 +21,7 @@ def answered_turn(
     recall: bool = False,
     participant_id: str = "unknown",
     speaker_evidence_id: str | None = None,
-) -> list:
+) -> list[dict[str, Any]]:
     rows = [
         row(offset, "speech_stopped", source="audio"),
         row(
