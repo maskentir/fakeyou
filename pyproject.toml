@@ -120,6 +120,7 @@ markers = [
 [tool.deptry]
 extend_exclude = ["evals"]
 known_first_party = ["fakeyou"]
+package_module_name_map = {"sherpa-onnx-core" = ["sherpa_onnx"]}
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["langchain-anthropic", "langchain-google-genai", "langchain-openai"]
