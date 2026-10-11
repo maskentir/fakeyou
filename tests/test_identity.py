@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
-from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.identity import SpeakerRegistry, SpeakerRow
 from fakeyou.identity.voiceprint_match import VoiceScores
 
 DISPLAY_CLAIM_RENDER_READERS = frozenset(
@@ -51,6 +51,7 @@ def test_registry_mints_deterministic_uuid_rows() -> None:
     registry = _registry()
     registry.observe_stream(0, [11])
     row = registry.resolve(0)
+    assert isinstance(row, SpeakerRow)
     assert row.label == "A"
     assert row.uuid == uuid5(NAMESPACE_URL, "speaker:A").hex
     assert row.status == "provisional"
@@ -65,8 +66,10 @@ def test_registry_follows_csrc_across_slots() -> None:
     registry = _registry()
     registry.observe_stream(0, [11])
     first = registry.resolve(0)
+    assert isinstance(first, SpeakerRow)
     registry.observe_stream(1, [11])
     moved = registry.resolve(1)
+    assert isinstance(moved, SpeakerRow)
     assert moved.uuid == first.uuid
     assert moved.slot == 1
     assert moved.confidence == 0.7
@@ -82,6 +85,7 @@ def test_registry_binds_once_and_refuses_conflicts() -> None:
     registry.update_roster(["only"])
     registry.observe_stream(0, [11])
     row = registry.resolve(0)
+    assert isinstance(row, SpeakerRow)
     assert row.device == "only"
     assert row.status == "confirmed"
     assert row.confidence == 1.0
@@ -94,6 +98,8 @@ def test_registry_resolve_csrcs_conflicts_on_split_identity() -> None:
     registry = _registry()
     first = registry.resolve_csrcs(frozenset([11]))
     second = registry.resolve_csrcs(frozenset([22]))
+    assert first is not None
+    assert second is not None
     assert first.uuid != second.uuid
     assert registry.resolve_csrcs(frozenset([11, 22])) is None
     assert registry.resolve_csrcs(frozenset([11])) == first
