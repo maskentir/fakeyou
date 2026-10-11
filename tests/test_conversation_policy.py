@@ -251,7 +251,7 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
     disconnected = asyncio.Event()
     connections = 0
 
-    async def hold(reader, writer):
+    async def hold(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal connections
         connections += 1
         try:
@@ -265,13 +265,13 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
             writer.close()
 
     server = await asyncio.start_server(hold, "127.0.0.1", 0)
-    sockets = server.sockets or []
+    sockets = list(server.sockets or [])
     port = sockets[0].getsockname()[1]
     model = ChatOpenAI(
         model="loopback-dummy",
         api_key=SecretStr("test-key"),
         base_url=f"http://127.0.0.1:{port}/v1",
-        request_timeout=30,
+        timeout=30,
         max_retries=0,
     )
     agent = create_meeting_agent(model, checkpointer=InMemorySaver())

@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator, Callable, Sequence
+from typing import Any
 
 import pytest
 
@@ -22,16 +24,22 @@ class _StreamingResponder:
         self.calls: list[list[TranscriptEvent]] = []
         self.released = asyncio.Event()
 
-    def stream_sentences(self, events, on_tool_start, *, request_id: str):
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
         self.calls.append(list(events))
         return self._generate()
 
-    async def _generate(self):
+    async def _generate(self) -> AsyncIterator[str]:
         for sentence in self.sentences:
             yield sentence
 
 
-def journal_has(journal, name, **fields):
+def journal_has(journal: RecordingJournal, name: str, **fields: Any) -> bool:
     return any(
         all(row.get(key) == value for key, value in fields.items()) for row in journal.events(name)
     )
@@ -426,7 +434,13 @@ async def test_pregen_adopted_journal_carries_exact_diff(journal: RecordingJourn
 
 
 class _FailingStreamResponder:
-    def stream_sentences(self, events, on_tool_start, *, request_id: str):
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
         raise RuntimeError("stream failed")
 
 
@@ -493,11 +507,17 @@ class _GatedStreamingResponder:
         self.calls: list[list[TranscriptEvent]] = []
         self.release = asyncio.Event()
 
-    def stream_sentences(self, events, on_tool_start, *, request_id: str):
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
         self.calls.append(list(events))
         return self._generate()
 
-    async def _generate(self):
+    async def _generate(self) -> AsyncIterator[str]:
         await self.release.wait()
         yield "Yes I can."
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from importlib.resources import files
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -630,7 +630,7 @@ DEFAULT_LOOP_GENERATION = LoopGeneration()
 class ConversationLoop:
     def __init__(
         self,
-        responder: ConversationResponder,
+        responder: ConversationResponder | StreamingConversationResponder,
         *,
         interaction: LoopInteraction = DEFAULT_LOOP_INTERACTION,
         timing: LoopTiming = DEFAULT_LOOP_TIMING,
@@ -1287,7 +1287,7 @@ class ConversationLoop:
             return
         try:
             async with asyncio.timeout(self._response_timeout):
-                reply = await self._responder.respond(
+                reply = await cast(ConversationResponder, responder).respond(
                     events, partial(self._tool_started, generation, event_id)
                 )
         except Exception:

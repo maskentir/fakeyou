@@ -1,8 +1,14 @@
 from datetime import UTC, datetime
+from typing import Any
+
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import Runnable
 
 from fakeyou.foundation.transcript import (
     TranscriptEvent,
 )
+
+AgentT = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
 
 
 def event(

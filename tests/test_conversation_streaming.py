@@ -10,11 +10,9 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
-    HumanMessage,
     ToolMessage,
 )
 from langchain_core.outputs import ChatResult
-from langchain_core.runnables import Runnable
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
@@ -29,7 +27,7 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.session import ConversationError
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
-from tests._conversation_support import event
+from tests._conversation_support import AgentT, event
 from tests.fakes import (
     FakeReplyAudio,
     FakeResponder,
@@ -37,8 +35,6 @@ from tests.fakes import (
     ToolCallingFakeModel,
     recall_call,
 )
-
-_AgentT = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
 
 
 class ScriptedStream:
@@ -237,7 +233,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(
 ) -> None:
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
-    responder = StreamingLangGraphResponder(cast(_AgentT, agent), "thread", journal=journal)
+    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
     loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
     loop.bind(audio)
     await loop.handle_transcript(event("t1", "hello"))
@@ -409,7 +405,7 @@ async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) 
 
 def test_streaming_responder_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
-        StreamingLangGraphResponder(cast(_AgentT, ScriptedAgent([])), "thread", max_sentences=0)
+        StreamingLangGraphResponder(cast(AgentT, ScriptedAgent([])), "thread", max_sentences=0)
 
 
 async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJournal) -> None:

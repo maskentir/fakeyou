@@ -1,10 +1,14 @@
 import asyncio
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any, NoReturn, cast
 
 import pytest
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 from pipecat.frames.frames import TranscriptionFrame
 
@@ -20,10 +24,11 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.session import ConversationError
 from fakeyou.foundation.transcript import (
     CaptureContext,
+    TranscriptEvent,
     transcript_event,
 )
 from fakeyou.observability.diagnostics import Diagnostics
-from tests._conversation_support import event
+from tests._conversation_support import AgentT, event
 from tests.fakes import (
     FakeReplyAudio,
     FakeResponder,
@@ -138,7 +143,7 @@ async def test_loop_speaks_capped_reply_head() -> None:
 
 
 async def test_observer_failure_preserves_model_and_speech() -> None:
-    def broken(*args):
+    def broken(*args: Any) -> NoReturn:
         raise RuntimeError("private-provider-data")
 
     responder, audio = FakeResponder(), FakeReplyAudio()
@@ -215,10 +220,10 @@ async def test_adapter_never_speaks_user_or_tool_output(
     message: HumanMessage | ToolMessage,
 ) -> None:
     class Agent:
-        async def ainvoke(self, request, config):
+        async def ainvoke(self, request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
             return {"messages": [message]}
 
-    responder = LangGraphResponder(Agent(), "thread")
+    responder = LangGraphResponder(cast(AgentT, Agent()), "thread")
     assert await responder.respond([event("one")], lambda: None) == ""
 
 
@@ -226,10 +231,10 @@ async def test_agent_error_raises_typed_provider_fault() -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingAgent:
-        async def ainvoke(self, request, config):
+        async def ainvoke(self, request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
             raise RuntimeError("agent exploded")
 
-    responder = LangGraphResponder(FailingAgent(), "thread")
+    responder = LangGraphResponder(cast(AgentT, FailingAgent()), "thread")
     with pytest.raises(ProviderFault) as caught:
         await responder.respond([event("one")], lambda: None)
 
@@ -240,7 +245,9 @@ async def test_agent_error_raises_typed_provider_fault() -> None:
 
 async def test_responder_error_still_fails_loop() -> None:
     class Broken:
-        async def respond(self, events, on_tool_start):
+        async def respond(
+            self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+        ) -> str:
             raise RuntimeError("model exploded")
 
     loop = ConversationLoop(Broken())
@@ -263,15 +270,18 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
     class JournaledResponder:
         journal: object | None = None
 
-        async def respond(self, events, on_tool_start):
+        async def respond(
+            self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+        ) -> str:
             return "ok"
 
-    loop = ConversationLoop(JournaledResponder(), diagnostics=Diagnostics(journal=journal))
+    responder = JournaledResponder()
+    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
 
     loop.bind(FakeReplyAudio())
     await loop.handle_transcript(event("one"))
     await loop.wait_idle()
-    assert loop._responder.journal is None
+    assert responder.journal is None
     assert [json.loads(line)["event"] for line in lines] == ["agent_started", "agent_finished"]
     await loop.close()
 
@@ -378,7 +388,13 @@ async def test_failed_model_request_keeps_transcript_and_error_type(
     from fakeyou.observability.provider_faults import ProviderFault
 
     class FailingChatModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             raise RuntimeError("model exploded")
 
     agent = create_meeting_agent(
@@ -435,13 +451,15 @@ async def test_cancelled_tool_run_keeps_transcript_without_content(
 
 
 class GatedAudio(FakeReplyAudio):
-    def __init__(self, gate):
+    def __init__(self, gate: asyncio.Event) -> None:
         super().__init__()
         self.gate = gate
         self.entered = asyncio.Event()
         self.attempts = 0
 
-    async def speak(self, text, *, sentence_index=None, transcript_id=None):
+    async def speak(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ) -> None:
         self.attempts += 1
         self.entered.set()
         await self.gate.wait()
@@ -613,7 +631,7 @@ async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(
         await hanging_gate.wait()
         return "late result"
 
-    def named_call(name, call_id):
+    def named_call(name: str, call_id: str) -> AIMessage:
         calls = [{"name": name, "args": {"query": "demo"}, "id": call_id, "type": "tool_call"}]
         return AIMessage(content="", tool_calls=calls)
 
@@ -694,7 +712,7 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks() -> N
     observed = []
 
     class Agent:
-        async def ainvoke(self, request, config):
+        async def ainvoke(self, request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
             await config["callbacks"][0].on_tool_start({}, "", run_id=None)
             return {
                 "messages": [
@@ -707,7 +725,7 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks() -> N
                 ]
             }
 
-    responder = LangGraphResponder(Agent(), "thread")
+    responder = LangGraphResponder(cast(AgentT, Agent()), "thread")
     assert await responder.respond([event("one")], lambda: observed.append("tool")) == "spoken"
     assert observed == ["tool"]
 
@@ -725,7 +743,7 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
             "From Google Meet m1 transcript on 2026-09-23 03:10 UTC: Budi is the PIC"
         )
 
-    results: list[tuple] = []
+    results: list[tuple[str, str, float]] = []
     agent = create_meeting_agent(
         _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
     )
@@ -761,7 +779,13 @@ async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJ
     fallback_calls: list[int] = []
 
     class HangingModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             attempts.append(1)
             if len(attempts) == 1:
                 entered.set()
@@ -769,7 +793,13 @@ async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJ
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
     class CountingModel(ToolCallingFakeModel):
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
             fallback_calls.append(1)
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
