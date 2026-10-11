@@ -1,11 +1,11 @@
 import asyncio
 import json
 import signal
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -161,7 +161,7 @@ async def test_join_resume_refuses_an_unreachable_lifecycle_checkpoint(
     join: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @asynccontextmanager
-    async def unreachable(url):
+    async def unreachable(url: Any) -> AsyncIterator[Any]:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
         yield
 
@@ -181,7 +181,7 @@ async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
 
-    async def failing_add(**kwargs):
+    async def failing_add(**kwargs: Any) -> NoReturn:
         raise RuntimeError("graph down")
 
     graphiti.add_episode = failing_add
@@ -459,7 +459,7 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
     graphiti = make_graphiti(episode_prefix="uuid-")
     graphiti.errors[1] = RuntimeError("graph down")
     fake_persona_memory(monkeypatch, graphiti)
-    arguments = {
+    arguments: dict[str, Any] = {
         "meeting_id": "meeting-9",
         "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
@@ -506,7 +506,7 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
-    arguments = {
+    arguments: dict[str, Any] = {
         "meeting_id": "meeting-9",
         "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
@@ -553,7 +553,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
     graphiti = make_graphiti(episode_prefix="uuid-")
     graphiti.errors[1] = RuntimeError("graph down")
     fake_persona_memory(monkeypatch, graphiti)
-    arguments = {
+    arguments: dict[str, Any] = {
         "meeting_id": "meeting-9",
         "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
@@ -622,7 +622,7 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
     write_record(settings, "meeting-9")
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
-    arguments = {
+    arguments: dict[str, Any] = {
         "meeting_id": "meeting-9",
         "identity": OperatorIdentity(write_persona(tmp_path), None, None),
         "twin_name": None,
@@ -785,7 +785,7 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     fake_persona_memory(monkeypatch, graphiti)
     real_ingest = cli_memory.ingest_until_stopped
 
-    async def stop_first(*args, **kwargs):
+    async def stop_first(*args: Any, **kwargs: Any) -> Any:
         run = kwargs["run"]
         stop = run.stop if run.stop is not None else asyncio.Event()
         stop.set()

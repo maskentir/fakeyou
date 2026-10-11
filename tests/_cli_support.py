@@ -1,10 +1,12 @@
 import json
 import sys
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, NoReturn
 from unittest.mock import MagicMock
 
 import pytest
@@ -52,14 +54,20 @@ def _enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _join_with_audio(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, join, settings, session_run, **overrides
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    join: Callable[..., Coroutine[Any, Any, Any]],
+    settings: Settings,
+    session_run: Any,
+    **overrides: Any,
+) -> Any:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(value, url=None):
+    async def fake_saver(value: Any, url: Any = None) -> AsyncIterator[InMemorySaver]:
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
@@ -100,7 +108,7 @@ def write_persona(tmp_path: Path, **overrides: object) -> Path:
     return path
 
 
-def persona_join_arguments(tmp_path: Path, settings: Settings, **overrides) -> dict:
+def persona_join_arguments(tmp_path: Path, settings: Settings, **overrides: Any) -> dict[str, Any]:
     arguments = {
         "twin_name": None,
         "owner_id": None,
@@ -118,7 +126,7 @@ def persona_join_arguments(tmp_path: Path, settings: Settings, **overrides) -> d
 
 
 def forbid_resources(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail(*_args, **_kwargs):
+    def fail(*_args: Any, **_kwargs: Any) -> NoReturn:
         pytest.fail("resources must not open before persona validation")
 
     monkeypatch.setattr(providers, "init_chat_model", fail)
@@ -191,24 +199,24 @@ async def _join_persona_conversation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    join,
-    settings,
+    join: Callable[..., Coroutine[Any, Any, Any]],
+    settings: Settings,
     model: FakeMessagesListChatModel,
     graphiti: MagicMock | None = None,
     transcripts: tuple[str, ...] = ("When does Orchid launch?",),
-    settle=None,
-    persona_overrides: dict | None = None,
+    settle: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    persona_overrides: dict[str, Any] | None = None,
     audio: FakeReplyAudio | None = None,
-    on_start=None,
+    on_start: Callable[[], None] | None = None,
     native_checkpointer: bool = False,
-    **overrides,
-) -> tuple[dict, FakeReplyAudio, dict]:
+    **overrides: Any,
+) -> tuple[dict[str, Any], FakeReplyAudio, dict[str, Any]]:
     settings.stt.api_key = SecretStr("muse-key")
     _enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
     @asynccontextmanager
-    async def memory_saver(_value, url=None):
+    async def memory_saver(_value: Any, url: Any = None) -> AsyncIterator[InMemorySaver]:
         yield InMemorySaver()
 
     if not native_checkpointer:
@@ -223,17 +231,17 @@ async def _join_persona_conversation(
             "create_graphiti_memory",
             lambda _config, **_kwargs: pytest.fail("graphiti must stay closed without --memory"),
         )
-    created: dict = {}
+    created: dict[str, Any] = {}
 
-    def recording_agent(agent_model, **kwargs):
+    def recording_agent(agent_model: Any, **kwargs: Any) -> Any:
         created.update(kwargs)
         return create_meeting_agent(agent_model, **kwargs)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", recording_agent)
     audio = audio if audio is not None else FakeReplyAudio()
-    outcome: dict = {}
+    outcome: dict[str, Any] = {}
 
-    async def run(config, wiring=None, **kwargs):
+    async def run(config: Any, wiring: Any = None, **kwargs: Any) -> SessionResult:
         if wiring is not None:
             merged = {field.name: getattr(wiring, field.name) for field in fields(wiring)}
             merged.update(kwargs)
@@ -276,7 +284,7 @@ def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list
     opened: list[str] = []
 
     @asynccontextmanager
-    async def open_memory(_settings):
+    async def open_memory(_settings: Any) -> AsyncIterator[Any]:
         opened.append("open")
         yield memory
         opened.append("close")
@@ -323,12 +331,13 @@ def with_muse_fallback(settings: Settings) -> Settings:
     return settings
 
 
-def printed_join_summary(capsys) -> dict:
+def printed_join_summary(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
     out = capsys.readouterr().out
-    return json.loads(out[out.rindex('{\n  "meeting_id"') :])
+    summary: dict[str, Any] = json.loads(out[out.rindex('{\n  "meeting_id"') :])
+    return summary
 
 
-def write_ingest_windows(settings, meeting_id: str, count: int) -> None:
+def write_ingest_windows(settings: Settings, meeting_id: str, count: int) -> None:
     from datetime import timedelta
 
     from fakeyou.foundation.transcript import TranscriptEvent
