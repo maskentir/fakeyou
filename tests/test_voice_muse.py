@@ -6,11 +6,13 @@ import time
 import unicodedata
 import wave
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pipecat.frames.frames import (
     EndFrame,
     ErrorFrame,
+    Frame,
     InputAudioRawFrame,
     TranscriptionFrame,
 )
@@ -22,6 +24,7 @@ from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
 from fakeyou.audio.voice import SPEECH_LANGUAGES, MuseSTTOptions, create_muse_stt
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
 from tests.fakes import FakeSTT
@@ -32,7 +35,7 @@ class _Collector(FrameProcessor):
         super().__init__()
         self.final: asyncio.Queue[TranscriptionFrame] = asyncio.Queue()
 
-    async def process_frame(self, frame, direction: FrameDirection) -> None:
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame):
             await self.final.put(frame)
@@ -95,7 +98,9 @@ async def test_endpointing_harness_uses_configured_muse_model_url_and_language(
     monkeypatch.setenv("MUSE_TEST_AUDIO", "unused.wav")
     monkeypatch.setenv("MUSE_EXPECTED_TEXT", "Hello there")
 
-    async def run_pipeline(stt, pcm, sample_rate, expected, secret) -> None:
+    async def run_pipeline(
+        stt: FrameProcessor, pcm: bytes, sample_rate: int, expected: str, secret: str | None
+    ) -> None:
         observed.update(stt=stt, pcm=pcm, sample_rate=sample_rate, expected=expected, secret=secret)
 
     monkeypatch.setattr(sys.modules[__name__], "_run_pipeline", run_pipeline)
@@ -109,9 +114,11 @@ async def test_endpointing_harness_uses_configured_muse_model_url_and_language(
     assert observed["expected"] == "hello there"
     assert observed["secret"] == "test-key"
 
-    assert service._settings.model == "custom-muse-model"
-    assert service._settings.language == "English"
-    assert service._settings.mode == "ENDPOINTING"
+    stt_settings = service._settings
+    assert stt_settings is not None
+    assert stt_settings.model == "custom-muse-model"
+    assert stt_settings.language == "English"
+    assert stt_settings.mode == "ENDPOINTING"
     assert service._url == "wss://muse.example.test/asr"
 
 
@@ -131,13 +138,15 @@ async def _run_pipeline(
     started = asyncio.Event()
     errors: list[str] = []
 
-    @task.event_handler("on_pipeline_started")
-    async def on_pipeline_started(_, __) -> None:
+    async def on_pipeline_started(_: Any, __: Any) -> None:
         started.set()
 
-    @task.event_handler("on_pipeline_error")
-    async def on_pipeline_error(_, frame: ErrorFrame) -> None:
+    async def on_pipeline_error(_: Any, frame: ErrorFrame) -> None:
         errors.append(frame.error)
+
+    worker: Any = task
+    worker.event_handler("on_pipeline_started")(on_pipeline_started)
+    worker.event_handler("on_pipeline_error")(on_pipeline_error)
 
     runner = WorkerRunner(handle_sigint=False, handle_sigterm=False)
     await runner.add_workers(task)
@@ -208,7 +217,7 @@ async def test_muse_endpointing_transcribes_realtime_wav() -> None:
     if not audio_name or not expected:
         pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     try:
-        api_key = require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
+        api_key = require_secret(settings.stt.api_key, ConfigKey.STT_API_KEY)
     except FakeYouError as error:
         pytest.skip(str(error))
     sample_rate, pcm = _read_wav(Path(audio_name))
