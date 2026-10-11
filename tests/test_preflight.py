@@ -1,7 +1,9 @@
+import asyncio
 import json
 import ssl
 import time
 from pathlib import Path
+from typing import Any, NoReturn
 
 import pytest
 
@@ -18,9 +20,7 @@ def _trusting_client_context() -> ssl.SSLContext:
     return context
 
 
-async def _serve_tls_once() -> tuple:
-    import asyncio
-
+async def _serve_tls_once() -> asyncio.Server:
     server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_context.load_cert_chain(str(LOCAL_CERT), str(LOCAL_KEY))
     server = await asyncio.start_server(
@@ -67,7 +67,7 @@ async def test_probe_endpoint_rejects_a_host_without_a_scheme(
 ) -> None:
     import fakeyou.orchestration.preflight as preflight
 
-    async def unexpected_connection(*args):
+    async def unexpected_connection(*args: Any) -> NoReturn:
         pytest.fail("an endpoint without a scheme must not open a connection")
 
     monkeypatch.setattr(preflight, "_connect_and_close", unexpected_connection)
