@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -106,10 +107,11 @@ def test_timed_should_correlate_success_and_preserve_result_fields(
 ) -> None:
     import fakeyou.observability.journal as module
 
-    lines = []
+    lines: list[str] = []
     journal = Journal("timed", emit=lines.append)
     ticks = iter([1.0, 1.25])
-    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    module_any = cast(Any, module)
+    monkeypatch.setattr(module_any.time, "monotonic", lambda: next(ticks))
     with journal.timed(
         source="tts",
         started="synthesis_started",
@@ -130,7 +132,7 @@ def test_timed_should_record_failure_and_propagate_original_error() -> None:
 
     from fakeyou.observability.provider_faults import ProviderFault
 
-    lines = []
+    lines: list[str] = []
     journal = Journal("timed", emit=lines.append)
     error = ProviderFault("tts", "timeout")
     with (
