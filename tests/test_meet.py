@@ -1,5 +1,5 @@
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -40,8 +40,8 @@ from tests.fakes import (
 )
 
 
-def _request(**overrides):
-    values = {"link": LINK, "twin_name": "Twin"}
+def _request(**overrides: Any) -> GuestJoinRequest:
+    values: dict[str, Any] = {"link": LINK, "twin_name": "Twin"}
     values.update(overrides)
     return GuestJoinRequest(**values)
 
@@ -395,7 +395,7 @@ async def test_click_when_ready_resolves_locator_once_per_attempt() -> None:
     clock = FakeClock()
     calls = []
 
-    def locate():
+    def locate() -> Any:
         calls.append(1)
         return page.locator(ASK_SELECTOR)
 
@@ -410,7 +410,7 @@ async def test_click_when_ready_resolves_fresh_locator_each_attempt() -> None:
     clock = FakeClock()
     seen = []
 
-    def locate():
+    def locate() -> Any:
         locator = page.locator(ASK_SELECTOR)
         seen.append(locator)
         return locator
@@ -427,16 +427,16 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
 
     class _TimeoutLocator:
         @property
-        def first(self):
+        def first(self) -> "_TimeoutLocator":
             return self
 
-        async def wait_for(self, **kwargs):
+        async def wait_for(self, **kwargs: Any) -> None:
             calls["wait_for"] = kwargs
 
-        async def click(self, **kwargs):
+        async def click(self, **kwargs: Any) -> None:
             calls["click"] = kwargs
 
-    failure = await click_when_ready(_TimeoutLocator, "join button", FakeClock().sleep)
+    failure = await click_when_ready(cast(Any, _TimeoutLocator), "join button", FakeClock().sleep)
 
     assert failure is None
     assert calls["wait_for"] == {"state": "visible", "timeout": 2000}
@@ -446,16 +446,18 @@ async def test_click_when_ready_keeps_short_timeouts() -> None:
 async def test_click_when_ready_reports_error_type_name_only() -> None:
     class _FailingLocator:
         @property
-        def first(self):
+        def first(self) -> "_FailingLocator":
             return self
 
-        async def wait_for(self, **_kwargs):
+        async def wait_for(self, **_kwargs: Any) -> None:
             return None
 
-        async def click(self, **_kwargs):
+        async def click(self, **_kwargs: Any) -> None:
             raise RuntimeError("boom secret-token")
 
-    failure = await click_when_ready(_FailingLocator, "join button", FakeClock().sleep, 1)
+    failure = await click_when_ready(
+        cast(Any, _FailingLocator), "join button", FakeClock().sleep, 1
+    )
 
     assert failure == "clicking 'join button' failed after 1 attempts: RuntimeError"
     assert "secret-token" not in (failure or "")
@@ -568,7 +570,7 @@ async def test_media_toggle_preserves_state_and_reports_failure(
     device: str,
     scenario: str,
 ) -> None:
-    values = {}
+    values: dict[str, Any] = {}
     if scenario != "already_set":
         values["visible"] = {current: False}
     if scenario == "transient_click":
