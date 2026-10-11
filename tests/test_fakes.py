@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,8 +24,9 @@ def test_settings_fixture_cleans_environment_and_uses_the_real_schema(
     assert not any(
         name.lower().startswith(Settings.model_config["env_prefix"].lower()) for name in os.environ
     )
+    settings_any = cast(Any, settings)
     with pytest.raises(ValueError, match="no field"):
-        settings.chat_modle = "typo:model"
+        settings_any.chat_modle = "typo:model"
 
 
 @pytest.mark.parametrize(
