@@ -7,7 +7,7 @@ import random
 import sys
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -75,8 +75,9 @@ def test_load_embedder_exposes_stable_model_id(
     data = b"not a model"
     model.write_bytes(data)
     stub = types.ModuleType("sherpa_onnx")
-    stub.SpeakerEmbeddingExtractorConfig = StubExtractorConfig
-    stub.SpeakerEmbeddingExtractor = StubExtractor
+    stub_any = cast(Any, stub)
+    stub_any.SpeakerEmbeddingExtractorConfig = StubExtractorConfig
+    stub_any.SpeakerEmbeddingExtractor = StubExtractor
     monkeypatch.setitem(sys.modules, "sherpa_onnx", stub)
     digest = hashlib.sha256(data).hexdigest()
 
