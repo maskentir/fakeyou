@@ -2,11 +2,11 @@ import asyncio
 import json
 import signal
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -22,11 +22,20 @@ from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA
-from fakeyou.conversation.conversation import ConversationLoop, conversation_thread_id
+from fakeyou.conversation.conversation import (
+    ConversationLoop,
+    LangGraphResponder,
+    conversation_thread_id,
+)
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.meet.browser import profile_lock
-from fakeyou.persistence.record import load_meeting_record, meeting_record_path
+from fakeyou.persistence.record import (
+    TranscriptEntry,
+    TwinSpeechEntry,
+    load_meeting_record,
+    meeting_record_path,
+)
 from tests._cli_support import (
     MEET_LINK,
     _enable_audio_platform,
@@ -144,6 +153,7 @@ async def test_join_exit_code_matches_terminal_reason(
     with pytest.raises(SystemExit) if exit_code else nullcontext() as caught:
         await join("https://meet.google.com/abc-defg-hij")
     if exit_code:
+        assert caught is not None
         assert caught.value.code == exit_code
 
     captured = capsys.readouterr()
@@ -302,9 +312,9 @@ async def test_join_headless_override(
 
 
 def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_join(link, **kwargs):
+    async def fake_join(link: str, **kwargs: Any) -> None:
         captured["link"] = link
         captured.update(kwargs)
 
@@ -344,9 +354,9 @@ def test_cli_rejects_owner_alias(
 def test_join_headless_flag(
     monkeypatch: pytest.MonkeyPatch, argv: list[Any], expected: bool | None
 ) -> None:
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def fake_join(link, **kwargs):
+    async def fake_join(link: str, **kwargs: Any) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "join_meeting", fake_join)
@@ -367,9 +377,15 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    created: dict = {}
+    created: dict[str, Any] = {}
 
-    def fake_agent(model, *, tools=(), checkpointer=None, **kwargs):
+    def fake_agent(
+        model: Any,
+        *,
+        tools: tuple[Any, ...] = (),
+        checkpointer: Any = None,
+        **kwargs: Any,
+    ) -> SimpleNamespace:
         created["tools"] = list(tools)
         created["checkpointer"] = checkpointer
         created.update(kwargs)
@@ -394,7 +410,9 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id"))
     ]
-    assert loop._responder.journal is not None
+    responder = loop._responder
+    assert isinstance(responder, LangGraphResponder)
+    assert responder.journal is not None
 
 
 @pytest.mark.asyncio
@@ -404,19 +422,21 @@ async def test_join_audio_transcript_reaches_conversation(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    agent_calls: list = []
+    agent_calls: list[Any] = []
 
     class FakeAgent:
-        async def ainvoke(self, request, config=None):
+        async def ainvoke(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
             agent_calls.append(config)
             return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
     captured = {}
 
-    async def run(config, **kwargs):
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
         captured.update(kwargs)
         loop = kwargs["conversation"]
         loop.bind(SimpleNamespace(speak=lambda text: asyncio.sleep(0)))
@@ -458,7 +478,8 @@ async def test_join_audio_transcript_reaches_conversation(
     assert final["speaker_evidence_id"] is None
     assert final["at"]
     entries = load_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
-    assert [(entry.kind, entry.text) for entry in entries] == [("transcript", "Hello.")]
+    transcripts = cast(list[TranscriptEntry], entries)
+    assert [(entry.kind, entry.text) for entry in transcripts] == [("transcript", "Hello.")]
 
 
 async def test_audio_only_does_not_construct_responding_agent(
@@ -533,13 +554,15 @@ async def test_join_wake_phrase_gates_agent_replies(
     agent_calls = []
 
     class FakeAgent:
-        async def ainvoke(self, request, config=None):
+        async def ainvoke(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
-    async def run(config, **kwargs):
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
         loop = kwargs["conversation"]
         loop.bind(SimpleNamespace(speak=lambda text: asyncio.sleep(0)))
         for ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
@@ -579,15 +602,17 @@ async def test_join_barge_in_stops_speaking_session(
     stops = []
 
     class FakeAgent:
-        async def ainvoke(self, request, config=None):
+        async def ainvoke(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
             return {"messages": [AIMessage(content="Reply.")]}
 
-    async def stop_playback():
+    async def stop_playback() -> None:
         stops.append(True)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: FakeAgent())
 
-    async def run(config, **kwargs):
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
         loop = kwargs["conversation"]
         loop.bind(
             SimpleNamespace(
@@ -628,9 +653,9 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    async def run(config, **kwargs):
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
         handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         handler(PlaybackEvent("playback_started", "hello", ""))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
@@ -662,7 +687,8 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         if row.get("source") == "playback"
     )
     entries = load_meeting_record(meeting_record_path(tmp_path / "meetings", "meeting-9"))
-    assert [(entry.kind, entry.text) for entry in entries] == [("twin_speech", "hello?  ")]
+    speeches = cast(list[TwinSpeechEntry], entries)
+    assert [(entry.kind, entry.text) for entry in speeches] == [("twin_speech", "hello?  ")]
 
 
 @pytest.mark.parametrize(
@@ -678,7 +704,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    graphiti_options: dict,
+    graphiti_options: dict[str, Any],
     kind: str,
 ) -> None:
     graphiti = make_graphiti(**graphiti_options)
@@ -698,7 +724,7 @@ async def test_join_memory_startup_failure_exits_before_browser(
     )
 
     @asynccontextmanager
-    async def tracked_saver(_value, url=None):
+    async def tracked_saver(_value: Any, url: Any = None) -> AsyncIterator[InMemorySaver]:
         saver_events.append("open")
         try:
             yield InMemorySaver()
@@ -783,12 +809,12 @@ async def test_join_routes_interim_transcripts_to_barge_in(
 ) -> None:
     stops: list[bool] = []
 
-    async def stop_playback():
+    async def stop_playback() -> None:
         stops.append(True)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *args, **kwargs: object())
 
-    async def run(config, **kwargs):
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
         loop = kwargs["conversation"]
         loop.bind(
             SimpleNamespace(
