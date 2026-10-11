@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from fakeyou.observability.faults import Fault, FaultReporter, record_consumer_fault
 from fakeyou.observability.journal import Journal, JournalFile
@@ -9,8 +10,8 @@ from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
 from fakeyou.observability.report import build_session_report, read_journal
 
 
-def _reporter(**overrides):
-    values: dict = {"meeting_id": "meeting-1"}
+def _reporter(**overrides: Any) -> FaultReporter:
+    values: dict[str, Any] = {"meeting_id": "meeting-1"}
     values.update(overrides)
     return FaultReporter(
         journal=Journal(values["meeting_id"], now=values.get("now"), emit=values.get("log"))
