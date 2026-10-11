@@ -1,4 +1,5 @@
 import inspect
+from typing import Any
 
 import pytest
 from graphiti_core import Graphiti
@@ -9,9 +10,12 @@ from graphiti_core.nodes import EpisodicNode
 from graphiti_core.search.search_filters import ComparisonOperator, date_filter_query_constructor
 from langchain.agents.middleware import ToolErrorMiddleware
 from langchain.chat_models import init_chat_model
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from neo4j.exceptions import ConstraintError
 from neo4j.time import DateTime as Neo4jDateTime
-from pipecat.frames.frames import TranscriptionFrame
+from pipecat.frames.frames import Frame, TranscriptionFrame
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
 
 from fakeyou.config.settings import STTSettings
@@ -58,21 +62,23 @@ async def test_meta_stt_drops_diarization_speaker_labels() -> None:
     frames: list[TranscriptionFrame] = []
     stt = MetaSTTService(api_key="key", sample_rate=16000)
 
-    async def collect(frame, direction=None):
+    async def collect(frame: Frame, direction: FrameDirection | None = None) -> None:
         if isinstance(frame, TranscriptionFrame):
             frames.append(frame)
 
-    async def no_metrics(*_args, **_kwargs):
+    async def no_metrics(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    stt.push_frame = collect
-    stt.emit_stt_usage_metrics = no_metrics
-    stt._trace_transcription = no_metrics
+    stt_any: Any = stt
+    stt_any.push_frame = collect
+    stt_any.emit_stt_usage_metrics = no_metrics
+    stt_any._trace_transcription = no_metrics
     await stt._handle_message({"type": "speaker", "label": "A"})
     await stt._handle_message({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
 
     [frame] = frames
     assert frame.text == "Hello."
+    assert frame.result is not None
     assert "speaker" not in frame.result
     assert "label" not in frame.result
 
@@ -93,6 +99,7 @@ def test_init_chat_model_forwards_openai_compatible_provider_options() -> None:
         reasoning_effort="minimal",
     )
 
+    assert isinstance(model, ChatOpenAI)
     assert model.openai_api_base == "https://api.meta.ai/v1"
     assert model.reasoning_effort == "minimal"
 
@@ -105,6 +112,7 @@ def test_init_chat_model_forwards_google_reasoning_effort() -> None:
         reasoning_effort="low",
     )
 
+    assert isinstance(model, ChatGoogleGenerativeAI)
     assert model.reasoning_effort == "low"
 
 
@@ -116,6 +124,7 @@ def test_init_chat_model_sends_extra_body_fields_in_the_request() -> None:
         extra_body={"reasoning_split": True},
     )
 
+    assert isinstance(model, ChatOpenAI)
     payload = model._get_request_payload([("user", "hello")])
 
     assert payload["extra_body"] == {"reasoning_split": True}
