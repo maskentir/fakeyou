@@ -3,10 +3,12 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 from langgraph.checkpoint.memory import InMemorySaver
 from PIL import Image
 
@@ -120,11 +122,23 @@ class RecordingSaver(InMemorySaver):
         super().__init__()
         self.dumps: list[str] = []
 
-    def put(self, config, checkpoint, metadata, new_versions):
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         self.dumps.append(json.dumps(checkpoint, default=str))
         return super().put(config, checkpoint, metadata, new_versions)
 
-    async def aput(self, config, checkpoint, metadata, new_versions):
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
         self.dumps.append(json.dumps(checkpoint, default=str))
         return await super().aput(config, checkpoint, metadata, new_versions)
 
@@ -162,7 +176,7 @@ def stack(
     saver: Any = None,
     visual: Any = None,
 ) -> tuple[Any, ToolCallingFakeModel]:
-    model = ToolCallingFakeModel(responses=replies, seen=[])
+    model = ToolCallingFakeModel(responses=cast(list[Any], replies), seen=[])
     agent = create_meeting_agent(
         model,
         checkpointer=saver or InMemorySaver(),
@@ -488,7 +502,7 @@ async def test_trim_skips_network_on_cache_miss(tmp_path: Path) -> None:
                 participant("What shows costs?", "t2", (second.frame_id,)),
             ]
         },
-        None,
+        cast(Any, None),
     )
 
     assert update is not None
@@ -532,13 +546,15 @@ def test_after_model_drops_echoed_images(tmp_path: Path) -> None:
                 )
             ]
         },
-        None,
+        cast(Any, None),
     )
     assert update is not None
     [cleaned] = update["messages"]
     assert cleaned.id == "echo-1"
     assert cleaned.content == [{"type": "text", "text": "Revenue grew."}]
-    assert middleware.after_model({"messages": [AIMessage(content="Plain.")]}, None) is None
+    assert (
+        middleware.after_model({"messages": [AIMessage(content="Plain.")]}, cast(Any, None)) is None
+    )
 
 
 async def test_assembly_registers_hydrate_after_prefetch(
@@ -564,7 +580,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
         twin_id=settings.identity.twin_id,
         display_name="Visual Twin",
         role="Project coordinator",
-        allowed_tools=["recall_meeting_context"],
+        allowed_tools=cast(Any, ["recall_meeting_context"]),
     )
     config = SessionConfig(
         owner_id=profile.owner_id,
