@@ -570,7 +570,7 @@ def test_enroll_with_missing_clip_raises_without_journal(
     ],
 )
 def test_voiceprint_commands_dispatch_to_handlers(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], target: str, expected: dict[str, Any]
 ) -> None:
     calls: list[dict[str, Any]] = []
 
