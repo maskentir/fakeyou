@@ -11,15 +11,23 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from pipecat.frames.frames import TranscriptionFrame
 from playwright.async_api import Page
 
-from fakeyou.audio.audio import open_meeting_audio
+from fakeyou.audio.audio import (
+    SpeechPipelineSettings,
+    StreamCallbacks,
+    StreamComponents,
+    StreamPolicy,
+    open_meeting_audio,
+)
 from fakeyou.audio.playback import (
     PlaybackBackend,
     PlaybackEngine,
     create_pactl_muter,
     create_paplay_stream_runner,
 )
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
 from fakeyou.foundation.invariants import (
@@ -43,7 +51,9 @@ class _ToneSynth:
         )
         return struct.pack("<72000h", *samples)
 
-    async def stream(self, text: str) -> AsyncIterator[bytes]:
+    async def stream(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ) -> AsyncIterator[bytes]:
         if not text.strip():
             raise ValueError("cannot synthesize blank text")
         audio = self._audio()
@@ -139,15 +149,14 @@ def _normalise(text: str) -> str:
 async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser() -> None:
     stt = FakeSTT(finalized=(), signal=True)
 
-    async def on_transcript(_frame) -> None:
+    async def on_transcript(_frame: TranscriptionFrame) -> None:
         pass
 
     async with (
         _audio_page() as page,
         open_meeting_audio(
-            on_transcript=on_transcript,
-            stt=stt,
-            playback=_container_playback(),
+            callbacks=StreamCallbacks(on_transcript),
+            components=StreamComponents(stt=stt, playback=_container_playback()),
         ) as session,
     ):
         await page.evaluate("window.audioProbe.start()")
@@ -187,8 +196,8 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
         pytest.skip("set MUSE_TEST_AUDIO and MUSE_EXPECTED_TEXT")
     settings = Settings()
     try:
-        require_secret(settings.stt.api_key, "FAKEYOU_STT__API_KEY")
-        require_secret(settings.tts.api_key, "FAKEYOU_TTS__API_KEY")
+        require_secret(settings.stt.api_key, ConfigKey.STT_API_KEY)
+        require_secret(settings.tts.api_key, ConfigKey.TTS_API_KEY)
     except FakeYouError as error:
         pytest.skip(str(error))
     expected_text = _normalise(expected)
@@ -199,7 +208,7 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
     finals: list[str] = []
     received = asyncio.Event()
 
-    async def on_transcript(frame) -> None:
+    async def on_transcript(frame: TranscriptionFrame) -> None:
         finals.append(frame.text)
         if _normalise(" ".join(finals)) == expected_text:
             received.set()
@@ -207,10 +216,14 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
     async with (
         _audio_page() as page,
         open_meeting_audio(
-            stt_settings=settings.stt,
-            tts_settings=settings.tts,
-            speech_language=settings.speech.language,
-            on_transcript=on_transcript,
+            callbacks=StreamCallbacks(on_transcript),
+            policy=StreamPolicy(
+                speech=SpeechPipelineSettings(
+                    stt_settings=settings.stt,
+                    tts_settings=settings.tts,
+                    speech_language=settings.speech.language,
+                )
+            ),
         ) as session,
     ):
         await page.evaluate("dataUri => window.audioProbe.playWav(dataUri)", data_uri)
