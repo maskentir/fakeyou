@@ -715,7 +715,7 @@ def test_docker_failures_raise_worker_errors_not_tracebacks(tmp_path: Path) -> N
     ],
 )
 def test_start_requests_reject_invalid_join_combinations(
-    tmp_path: Path, overrides: dict, code: ErrorCode
+    tmp_path: Path, overrides: dict[str, Any], code: ErrorCode
 ) -> None:
     runner = FakeRunner()
     backend = DockerWorkerBackend(

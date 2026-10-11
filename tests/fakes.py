@@ -969,7 +969,7 @@ def write_journal(path: Path, rows: list[dict[str, Any]]) -> None:
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
 
-FINISHED_ROWS = [
+FINISHED_ROWS: list[dict[str, Any]] = [
     {
         "event": "join_requested",
         "meeting_id": "meeting-9",
