@@ -3,16 +3,17 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from graphiti_core.nodes import EpisodicNode
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
-from fakeyou.config.settings import RecallSettings
+from fakeyou.config.settings import RecallSettings, RecallStrategy
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.memory.memory import (
@@ -24,7 +25,7 @@ from fakeyou.memory.memory import (
     create_memory_prefetch_middleware,
     create_memory_tools,
 )
-from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, memory_wiring
+from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, PersonaTool, memory_wiring
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import MeetingBrief
@@ -55,10 +56,12 @@ def stored_memory(monkeypatch: pytest.MonkeyPatch, **options: Any) -> Any:
     async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
         return [episode for uuid in uuids if uuid == "e1"]
 
-    async def active_states(_memory: Any, *, group_id: str, episode_uuids: list[str]) -> dict:
+    async def active_states(
+        _memory: Any, *, group_id: str, episode_uuids: list[str]
+    ) -> dict[str, Any]:
         return dict.fromkeys(episode_uuids, "active")
 
-    monkeypatch.setattr(memory_module.EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", active_states)
     return make_graphiti(**options)
 
@@ -79,7 +82,7 @@ def prefetch_agent(
     faults: Faults | None = None,
     tools: bool = False,
 ) -> tuple[Any, ToolCallingFakeModel]:
-    model = ToolCallingFakeModel(responses=responses, seen=[])
+    model = ToolCallingFakeModel(responses=cast(list[Any], responses), seen=[])
     settings = recall or RecallSettings()
     agent = create_meeting_agent(
         model,
@@ -88,7 +91,7 @@ def prefetch_agent(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, recall=settings, diag=Diagnostics(faults=faults)
+                memory, group_id=GROUP, recall=settings, diag=Diagnostics(faults=cast(Any, faults))
             )
         ],
     )
@@ -96,9 +99,10 @@ def prefetch_agent(
 
 
 async def turn(agent: Any, message: HumanMessage) -> dict[str, Any]:
-    return await agent.ainvoke(
+    result: dict[str, Any] = await agent.ainvoke(
         {"messages": [message]}, config={"configurable": {"thread_id": "thread"}}
     )
+    return result
 
 
 def model_calls(model: ToolCallingFakeModel) -> list[list[Any]]:
@@ -458,7 +462,9 @@ async def test_fallback_retry_reuses_the_prefetched_evidence_of_the_turn(
     ],
 )
 def test_memory_wiring_binds_tools_and_prefetch_per_strategy(
-    names: frozenset[str], strategy: str, expected: tuple[frozenset[str], bool]
+    names: frozenset[PersonaTool],
+    strategy: RecallStrategy,
+    expected: tuple[frozenset[PersonaTool], bool],
 ) -> None:
     assert memory_wiring(names, strategy) == expected
 
@@ -487,7 +493,7 @@ async def opened_agent(
         twin_id=settings.identity.twin_id,
         display_name="Demo Twin",
         role="Project coordinator",
-        allowed_tools=["recall_meeting_context"],
+        allowed_tools=cast(Any, ["recall_meeting_context"]),
     )
     config = SessionConfig(
         owner_id=profile.owner_id,
@@ -516,7 +522,7 @@ async def opened_agent(
 async def test_open_conversation_wires_memory_by_recall_strategy(
     settings: Any,
     monkeypatch: pytest.MonkeyPatch,
-    strategy: str,
+    strategy: RecallStrategy,
     tools: list[str],
     prefetch: bool,
 ) -> None:
@@ -595,7 +601,7 @@ async def test_cancelled_prefetch_closes_its_journal_request_without_a_fault(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, diag=Diagnostics(faults=faults, journal=journal)
+                memory, group_id=GROUP, diag=Diagnostics(faults=cast(Any, faults), journal=journal)
             )
         ],
     )
