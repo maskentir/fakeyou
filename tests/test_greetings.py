@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -107,7 +108,7 @@ async def test_follow_up_reaches_model_with_greeting_context() -> None:
         middleware=[create_greeting_middleware("id")],
         checkpointer=InMemorySaver(),
     )
-    config = {"configurable": {"thread_id": "greeting-follow-up"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "greeting-follow-up"}}
     first = await agent.ainvoke(
         {"messages": [tagged_event(CASES["id_spot"], "greeting-2")]}, config=config
     )
@@ -132,7 +133,7 @@ async def test_old_greeting_in_history_does_not_retrigger() -> None:
         middleware=[create_greeting_middleware("id")],
         checkpointer=InMemorySaver(),
     )
-    config = {"configurable": {"thread_id": "greeting-no-retrigger"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "greeting-no-retrigger"}}
     await agent.ainvoke({"messages": [tagged_event(CASES["id_spot"], "greeting-3")]}, config=config)
     assert model.seen == []
     result = await agent.ainvoke(
