@@ -1,7 +1,9 @@
 import asyncio
 import os
 import stat
+from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,6 +13,9 @@ from fakeyou.audio.playback import (
     PlaybackError,
     PlaybackEvent,
     PlaybackTiming,
+    PlayStream,
+    SetMuted,
+    SpeechSynthesizer,
     create_pactl_muter,
     create_paplay_stream_runner,
 )
@@ -29,7 +34,7 @@ class _Synth:
 
     async def stream(
         self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
-    ):
+    ) -> AsyncIterator[bytes]:
         self.texts.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
@@ -50,7 +55,7 @@ class _Player:
         self.release = asyncio.Event()
         self.release.set()
 
-    async def __call__(self, chunks) -> None:
+    async def __call__(self, chunks: AsyncIterator[bytes]) -> None:
         data = b"".join([chunk async for chunk in chunks])
         self.played.append(data)
         self.started.set()
@@ -71,7 +76,9 @@ class _SlowSynth:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def stream(self, text: str):
+    async def stream(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ) -> AsyncIterator[bytes]:
         self.texts.append(text)
         self.started.set()
         try:
@@ -97,16 +104,16 @@ class _Muter:
 
 
 def _engine(
-    synth,
-    player,
-    muter,
-    events,
-    tail_seconds=0.5,
-    stream_audio=None,
-    journal=None,
-    faults=None,
-    cleanup_timeout_seconds=5.0,
-):
+    synth: SpeechSynthesizer,
+    player: PlayStream,
+    muter: SetMuted,
+    events: list[PlaybackEvent],
+    tail_seconds: float = 0.5,
+    stream_audio: PlayStream | None = None,
+    journal: RecordingJournal | None = None,
+    faults: Any = None,
+    cleanup_timeout_seconds: float = 5.0,
+) -> PlaybackEngine:
     return PlaybackEngine(
         synth,
         PlaybackBackend(muter, stream_audio if stream_audio is not None else player),
@@ -345,7 +352,7 @@ async def test_close_is_idempotent_and_blocks_late_speaks() -> None:
     assert synth.closed
 
 
-async def _collect(chunks):
+async def _collect(chunks: Iterable[bytes]) -> AsyncIterator[bytes]:
     for chunk in chunks:
         yield chunk
 
@@ -386,7 +393,7 @@ async def test_paplay_stream_runner_broken_pipe_is_fault(
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
-    async def flood():
+    async def flood() -> AsyncIterator[bytes]:
         for _ in range(300):
             yield b"\x00" * 4096
 
@@ -405,14 +412,14 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
     processes = []
     create_subprocess = asyncio.create_subprocess_exec
 
-    async def capture_process(*args, **kwargs):
+    async def capture_process(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
         proc = await create_subprocess(*args, **kwargs)
         processes.append(proc)
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process)
 
-    async def fail_while_cancelling():
+    async def fail_while_cancelling() -> AsyncIterator[bytes]:
         task = asyncio.current_task()
         assert task is not None
         task.cancel()
@@ -425,6 +432,7 @@ async def test_paplay_stream_runner_broken_pipe_during_cancel_is_cleanup(
                 fail_while_cancelling()
             )
         assert processes[0].returncode is not None
+        assert processes[0].stdin is not None
         assert processes[0].stdin.is_closing()
     finally:
         await processes[0].wait()
@@ -440,7 +448,7 @@ async def test_paplay_stream_runner_cleans_up_source_failure(
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_PAPLAY_PID", str(pid_file))
 
-    async def fail():
+    async def fail() -> AsyncIterator[bytes]:
         for _ in range(100):
             if pid_file.exists():
                 break
@@ -677,12 +685,14 @@ async def test_play_failure_records_and_worker_survives(
 
 
 class _StreamSynth:
-    def __init__(self, chunks=(b"\x00" * 100, b"\x01" * 100)) -> None:
+    def __init__(self, chunks: Iterable[bytes] = (b"\x00" * 100, b"\x01" * 100)) -> None:
         self.chunks = list(chunks)
         self.texts: list[str] = []
         self.closed = False
 
-    async def stream(self, text: str):
+    async def stream(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ) -> AsyncIterator[bytes]:
         self.texts.append(text)
         for chunk in self.chunks:
             yield chunk
@@ -696,7 +706,7 @@ class _StreamPlayer:
         self.error = error
         self.chunks: list[bytes] = []
 
-    async def __call__(self, chunks) -> None:
+    async def __call__(self, chunks: AsyncIterator[bytes]) -> None:
         async for chunk in chunks:
             self.chunks.append(chunk)
         if self.error is not None:
@@ -709,7 +719,9 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
             super().__init__()
             self.calls = 0
 
-        async def stream(self, text: str):
+        async def stream(
+            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        ) -> AsyncIterator[bytes]:
             self.calls += 1
             if self.calls == 1:
                 raise TimeoutError("stream stalled")
@@ -743,7 +755,9 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
             super().__init__()
             self.calls = 0
 
-        async def stream(self, text: str):
+        async def stream(
+            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        ) -> AsyncIterator[bytes]:
             self.calls += 1
             yield self.chunks[0]
             raise TimeoutError("stream stalled")
@@ -834,17 +848,19 @@ async def test_streaming_play_failure_reports_and_engine_recovers(
 async def test_engine_closes_retained_stream_after_first_chunk(outcome: str) -> None:
     finalized = asyncio.Event()
     started = asyncio.Event()
-    retained = []
+    retained: list[Any] = []
 
     class Synth(_Synth):
-        async def stream(self, text):
+        async def stream(
+            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        ) -> AsyncIterator[bytes]:
             try:
                 yield b"first"
                 yield b"second"
             finally:
                 finalized.set()
 
-    async def consume(chunks):
+    async def consume(chunks: AsyncIterator[bytes]) -> None:
         retained.append(chunks)
         assert await anext(chunks) == b"first"
         started.set()
@@ -875,20 +891,20 @@ async def test_engine_closes_dropped_pcm_iterators(drop: str) -> None:
     class Chunks:
         closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> "Chunks":
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> bytes:
             raise StopAsyncIteration
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
-    async def consume(chunks):
+    async def consume(chunks: AsyncIterator[bytes]) -> None:
         started.set()
         await release.wait()
 
-    async def mute(muted):
+    async def mute(muted: bool) -> None:
         if not muted and drop == "unmute_stop":
             await engine.stop()
 
@@ -920,10 +936,12 @@ async def test_engine_closes_dropped_pcm_iterators(drop: str) -> None:
 
 async def test_engine_limits_stream_finalizer_to_cleanup_budget() -> None:
     finalized = asyncio.Event()
-    retained = []
+    retained: list[Any] = []
 
     class Synth(_Synth):
-        async def stream(self, text):
+        async def stream(
+            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        ) -> AsyncIterator[bytes]:
             try:
                 yield b"first"
             finally:
@@ -932,7 +950,7 @@ async def test_engine_limits_stream_finalizer_to_cleanup_budget() -> None:
                 finally:
                     finalized.set()
 
-    async def consume(chunks):
+    async def consume(chunks: AsyncIterator[bytes]) -> None:
         retained.append(chunks)
         await anext(chunks)
         raise PlaybackError("pipe failed")
@@ -953,16 +971,16 @@ async def test_engine_closes_dequeued_iterator_when_unmute_is_cancelled() -> Non
     class Chunks:
         closed = False
 
-        def __aiter__(self):
+        def __aiter__(self) -> "Chunks":
             return self
 
-        async def __anext__(self):
+        async def __anext__(self) -> bytes:
             raise StopAsyncIteration
 
-        async def aclose(self):
+        async def aclose(self) -> None:
             self.closed = True
 
-    async def mute(muted):
+    async def mute(muted: bool) -> None:
         if not muted:
             entered.set()
             await asyncio.Event().wait()
