@@ -1,5 +1,6 @@
 import json
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -174,7 +175,7 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(url):
+    async def fake_saver(url: str) -> AsyncIterator[InMemorySaver]:
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
