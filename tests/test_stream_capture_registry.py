@@ -1,11 +1,15 @@
 import json
 from pathlib import Path
+from typing import Any, cast
+
+from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.stream_capture import (
     StreamChunk,
 )
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.cli.join import TranscriptSinks
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.journal import Journal
 from tests._capture_support import _recording_registry
 from tests.fakes import FakeClock, meet_page
@@ -69,9 +73,7 @@ async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     assert [(row["kind"], row["missed"]) for row in gaps] == [("gap", 1), ("resync", 0)]
 
 
-def _frame(text: str, timestamp: str):
-    from pipecat.frames.frames import TranscriptionFrame
-
+def _frame(text: str, timestamp: str) -> TranscriptionFrame:
     return TranscriptionFrame(text, user_id="", timestamp=timestamp)
 
 
@@ -272,19 +274,21 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 
     class _Conversation:
         def __init__(self) -> None:
-            self.events: list = []
+            self.events: list[TranscriptEvent] = []
 
-        async def handle_transcript(self, event) -> None:
+        async def handle_transcript(self, event: TranscriptEvent) -> None:
             self.events.append(event)
 
-    async def run(per_stream: bool, tag: str):
+    async def run(
+        per_stream: bool, tag: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[TranscriptEvent]]:
         lines: list[str] = []
         journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
         path = meeting_record_path(tmp_path, tag)
         record = MeetingRecord(path, now=lambda: now)
         conversation = _Conversation()
         callback = build_transcript_callback(
-            sinks=TranscriptSinks(journal, record, conversation),
+            sinks=TranscriptSinks(journal, record, cast(Any, conversation)),
             binder=SlotBinder(),
             voice_activity=None,
             per_stream_enabled=per_stream,
@@ -386,7 +390,7 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     path = meeting_record_path(tmp_path, "meeting-9")
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, _Conversation()),
+        sinks=TranscriptSinks(journal, record, cast(Any, _Conversation())),
         binder=binder,
         voice_activity=None,
         per_stream_enabled=True,
