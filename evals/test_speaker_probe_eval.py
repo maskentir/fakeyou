@@ -3,7 +3,7 @@ import os
 import statistics
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -20,7 +20,7 @@ EXPECTED_VARIANT_IDS = ("c04", "c26", "c27", "c28")
 
 
 def load_probe_fixture(path: Path = FIXTURE) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _words(text: str) -> list[str]:
@@ -139,7 +139,7 @@ def _write_probe_artifacts(
     denials = sum(1 for sample in samples if sample["denial"])
     low, high = denial_wilson(denials, len(samples))
     summary = {
-        "reasoning_effort": settings.reply.reasoning_effort,
+        "reasoning_effort": getattr(settings.reply, "reasoning_effort", None),
         "model": settings.reply.model,
         "variants": by_variant,
         "overall": {
@@ -178,7 +178,8 @@ async def test_live_speaker_probe_measures_denial_rate(tmp_path: Path) -> None:
     )
     summary = _write_probe_artifacts(target, score=score, settings=settings, fixture=fixture)
     print(f"\nlive speaker probe model: {settings.reply.model}")
-    print(f"reasoning: {settings.reply.reasoning_effort} overall: {summary['overall']}")
+    effort = getattr(settings.reply, "reasoning_effort", None)
+    print(f"reasoning: {effort} overall: {summary['overall']}")
     assert len(score.turns) == len(EXPECTED_VARIANT_IDS) * SPEAKER_RUNS
     assert sum(1 for turn in score.turns if turn.get("exception")) == 0
     if os.environ.get("SPEAKER_MEASURE_FIX", "") == "":

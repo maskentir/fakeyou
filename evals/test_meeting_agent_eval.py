@@ -1,5 +1,6 @@
-from deepeval import assert_test
+from deepeval.evaluate import assert_test
 from deepeval.metrics import ToolCorrectnessMetric
+from deepeval.metrics.base_metric import BaseMetric
 from deepeval.test_case import LLMTestCase, ToolCall, ToolCallParams
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -61,7 +62,7 @@ def test_meeting_agent_tool_trajectory_is_correct() -> None:
         ],
     )
 
-    metric = ToolCorrectnessMetric(
+    metric: BaseMetric = ToolCorrectnessMetric(
         threshold=1.0,
         strict_mode=True,
         model=OfflineJudge(),

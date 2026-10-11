@@ -4,12 +4,13 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from deepeval import assert_test
+from deepeval.evaluate import assert_test
 from deepeval.metrics import GEval, ToolCorrectnessMetric
+from deepeval.metrics.base_metric import BaseMetric
 from deepeval.models import OpenAIModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams, ToolCall, ToolCallParams
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.config.settings import Settings
@@ -32,7 +33,7 @@ RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
 JUDGE_MODEL = "gpt-4.1-mini"
 
 
-def profile_recall_tools(memory: MagicMock) -> list:
+def profile_recall_tools(memory: MagicMock) -> list[BaseTool]:
     return [
         candidate
         for candidate in create_memory_tools(memory, group_id=EXAMPLE_PROFILE.memory_group)
@@ -94,7 +95,7 @@ async def test_recall_trajectory_stays_in_profile_namespace() -> None:
             )
         ],
     )
-    metric = ToolCorrectnessMetric(
+    metric: BaseMetric = ToolCorrectnessMetric(
         threshold=1.0,
         strict_mode=True,
         model=OfflineJudge(),
@@ -170,7 +171,7 @@ def test_live_persona_quality(scenario: str) -> None:
     model = create_chat_model(settings)
     live = LIVE_SCENARIOS[scenario]
     question, criteria = live["question"], live["criteria"]
-    recalled_context = PERSONA_FIXTURE["contexts"][live["context"]]
+    recalled_context: str = PERSONA_FIXTURE["contexts"][live["context"]]
 
     @tool(description="Search long-term meeting memory for relevant context.")
     def recall_meeting_context(query: str) -> str:
@@ -191,7 +192,7 @@ def test_live_persona_quality(scenario: str) -> None:
     if scenario in RECALL_REQUIRED_SCENARIOS:
         assert recalled, "the model answered without calling recall_meeting_context"
 
-    metric = GEval(
+    metric: BaseMetric = GEval(
         name=scenario,
         criteria=criteria + " The reply is short, natural spoken Indonesian.",
         evaluation_params=[
