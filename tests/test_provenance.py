@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -385,9 +386,9 @@ def test_empty_episode_id_fails() -> None:
 def test_invalid_kind_and_granularity_fail() -> None:
     base = datetime(2026, 9, 30, 3, 10, tzinfo=UTC)
     with pytest.raises(ValueError, match="kind"):
-        SourceEvidence("e1", "bogus", "owner note", base, base, "document")
+        SourceEvidence("e1", cast(Any, "bogus"), "owner note", base, base, "document")
     with pytest.raises(ValueError, match="time_granularity"):
-        SourceEvidence("e1", "owner_note", "owner note", base, base, "bogus")
+        SourceEvidence("e1", "owner_note", "owner note", base, base, cast(Any, "bogus"))
 
 
 def test_whitespace_variants_merge() -> None:
