@@ -1,6 +1,8 @@
 import asyncio
 import json
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -12,12 +14,12 @@ from fakeyou.meet.participant_observer import (
 
 
 class FakePage:
-    def __init__(self, payloads):
+    def __init__(self, payloads: Iterable[dict[str, Any] | Exception]) -> None:
         self.payloads = list(payloads)
         self.calls = 0
         self.closed = False
 
-    async def evaluate(self, _script):
+    async def evaluate(self, _script: str) -> Any:
         self.calls += 1
         if not self.payloads:
             raise RuntimeError("page gone")
@@ -29,7 +31,7 @@ class FakePage:
         return payload
 
 
-def mining_result(*tiles, self_seen=False):
+def mining_result(*tiles: tuple[str, str, bool, bool], self_seen: bool = False) -> dict[str, Any]:
     return {
         "tiles": [
             {"key": key, "label": label, "self": self, "speaking": speaking}
@@ -41,7 +43,7 @@ def mining_result(*tiles, self_seen=False):
 
 
 def test_empty_roster_yields_no_samples() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage([mining_result()])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
         await observer.start()
@@ -55,7 +57,7 @@ def test_empty_roster_yields_no_samples() -> None:
 
 
 def test_roster_and_active_speaker_snapshot() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage(
             [
                 mining_result(
@@ -79,7 +81,7 @@ def test_roster_and_active_speaker_snapshot() -> None:
 
 
 def test_duplicate_names_keep_distinct_ids() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage([mining_result(("a", "Sam", False, False), ("b", "Sam", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
         await observer.start()
@@ -93,7 +95,7 @@ def test_duplicate_names_keep_distinct_ids() -> None:
 
 
 def test_participant_leave_keeps_history_but_drops_roster() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage(
             [
                 mining_result(("a", "Budi", False, True)),
@@ -113,7 +115,7 @@ def test_participant_leave_keeps_history_but_drops_roster() -> None:
 
 
 def test_poll_exception_does_not_stop_observer() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage(
             [
                 mining_result(("a", "Budi", False, True)),
@@ -140,7 +142,7 @@ def test_poll_exception_does_not_stop_observer() -> None:
 
 
 def test_close_is_idempotent_and_stops_polling() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
         await observer.start()
@@ -155,7 +157,7 @@ def test_close_is_idempotent_and_stops_polling() -> None:
 
 
 def test_epoch_reset_clears_timeline_and_roster() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
         await observer.start()
@@ -193,14 +195,15 @@ def test_evidence_appends_mining_record(tmp_path: Path) -> None:
 
 
 def test_snapshot_is_immutable() -> None:
-    async def run():
+    async def run() -> None:
         page = FakePage([mining_result(("a", "Budi", False, True))])
         observer = ParticipantObserver(page, epoch="e1", monotonic=lambda: 100.0)
         await observer.start()
         await asyncio.sleep(0.4)
         samples, roster = observer.snapshot()
+        mutable_roster = cast(dict[str, Any], roster)
         with pytest.raises(TypeError):
-            roster["x"] = roster["a"]
+            mutable_roster["x"] = roster["a"]
         assert isinstance(samples, tuple)
         await observer.close()
 
