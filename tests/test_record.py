@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -20,8 +21,8 @@ from tests.fakes import RecordingJournal
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 
 
-def transcript(index: int, text: str = "Hello.", **overrides) -> TranscriptEvent:
-    fields = {
+def transcript(index: int, text: str = "Hello.", **overrides: Any) -> TranscriptEvent:
+    fields: dict[str, Any] = {
         "id": f"event-{index}",
         "timestamp": f"2026-09-30T10:00:0{index}+00:00",
         "source": "meeting_audio",
@@ -34,7 +35,7 @@ def transcript(index: int, text: str = "Hello.", **overrides) -> TranscriptEvent
     return TranscriptEvent(**fields)
 
 
-def open_record(tmp_path: Path, **overrides) -> MeetingRecord:
+def open_record(tmp_path: Path, **overrides: Any) -> MeetingRecord:
     return MeetingRecord(meeting_record_path(tmp_path, "meeting-1"), now=lambda: NOW, **overrides)
 
 
@@ -205,7 +206,9 @@ def test_repaired_order_sorts_stamped_transcripts_in_place(tmp_path: Path) -> No
         "transcript",
     ]
     assert [entry.text for entry in repaired if entry.kind == "transcript"] == ["one", "two", "old"]
-    assert repaired[1].text == "ack"
+    second = repaired[1]
+    assert isinstance(second, TwinSpeechEntry)
+    assert second.text == "ack"
     raw = load_meeting_record(path, repair=False)
     assert [entry.text for entry in raw if entry.kind == "transcript"] == ["two", "one", "old"]
 
@@ -282,5 +285,6 @@ def test_repaired_order_is_stable_and_pure() -> None:
         capture_ms=10.0,
     )
     entries = [second, first]
-    assert [entry.id for entry in repaired_order(entries)] == ["a", "b"]
+    ordered = cast(list[TranscriptEntry], repaired_order(entries))
+    assert [entry.id for entry in ordered] == ["a", "b"]
     assert [entry.id for entry in entries] == ["b", "a"]
