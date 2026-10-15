@@ -449,7 +449,9 @@ class Configuration(Section):
     vad: VADSettings = Field(default_factory=VADSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
-    participation_decider: ParticipationDeciderSettings = Field(default_factory=ParticipationDeciderSettings)
+    participation_decider: ParticipationDeciderSettings = Field(
+        default_factory=ParticipationDeciderSettings
+    )
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)

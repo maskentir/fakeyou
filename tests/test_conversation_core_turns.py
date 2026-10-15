@@ -7,6 +7,7 @@ from fakeyou.conversation.conversation import (
     ConversationLoop,
     LoopInteraction,
     cap_spoken_reply,
+    pregen_cache_key,
     settle_turn,
 )
 from fakeyou.observability.diagnostics import Diagnostics
@@ -331,3 +332,15 @@ async def test_cancelled_request_ids_do_not_attach_to_next_transcript(
     assert "first" not in body
     assert "second" not in body
     await loop.close()
+
+
+def test_pregen_key_changes_when_turn_cue_changes():
+    key_a = pregen_cache_key(("t1", "t2"), "none", mine=False)
+    key_b = pregen_cache_key(("t1", "t2"), "explicit", mine=True)
+    assert key_a != key_b
+
+
+def test_stale_key_is_rejected():
+    assert pregen_cache_key(("old-id",), "explicit", mine=True) != pregen_cache_key(
+        ("new-id",), "explicit", mine=True
+    )

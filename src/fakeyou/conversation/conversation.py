@@ -19,6 +19,7 @@ from langchain_core.runnables import Runnable
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.endpointing import SemanticEndpoint
+from fakeyou.conversation.participation_decider import JevDecision
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.db.checkpoint import is_checkpoint_error
 from fakeyou.foundation.participation import (
@@ -39,6 +40,7 @@ from fakeyou.foundation.protocols import (
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.turn_tracker import empty_turn_state, note_event
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -690,6 +692,13 @@ async def settle_turn(turn: asyncio.Task[None]) -> bool:
     return True
 
 
+def pregen_cache_key(event_ids: tuple[str, ...], cue: str, *, mine: bool) -> tuple[str | bool, ...]:
+    return (*event_ids[-6:], cue, mine)
+
+
+JEV_TO_PARTICIPATION = {"speak": "reply", "silent": "silent", "clarify": "clarify"}
+
+
 def _pregen_failure_reason(task: asyncio.Task[None] | None) -> str | None:
     if task is None or not task.done():
         return None
@@ -779,6 +788,10 @@ class ConversationLoop:
         self._engaged_speaker: str | None = None
         self._engaged_voice: str | None = None
         self._awaiting_reply = False
+        self._turn = empty_turn_state()
+        self._jev_pregen: dict[tuple[str | bool, ...], JevDecision] = {}
+        self._jev_speak_threshold = 0.70
+        self._jev_clarify_threshold = 0.50
         self._previous_inbound_was_bare_ack = False
         self._activation_seconds = timing.activation_seconds
         self._barge_in_min_words = interaction.barge_in_min_words
@@ -882,6 +895,7 @@ class ConversationLoop:
             return
         self._seen.add(event.id)
         self._events.append(event)
+        self._turn = note_event(self._turn, event, self._addressing_names)
         self._endpoint.reset()
         self._vad_stopped = False
         self._last_interim_text = None
@@ -1040,13 +1054,24 @@ class ConversationLoop:
             bare_ack=is_bare_ack(event.text),
             interjection=is_interjection(event.text),
             awaiting_reply=self._awaiting_reply,
+            turn_cue=self._turn.cue,
+            turn_mine=self._turn.my_turn_likely,
         )
         decision = choose_participation(context)
+        if (
+            decision.action == "silent"
+            and decision.reason == "not_addressed"
+            and (self._turn.my_turn_likely or self._turn.cue != "none")
+        ):
+            return self._decide_jev(event)
         self._record(
             "policy_decided",
             transcript_id=event.id,
             action=decision.action,
             reason=decision.reason,
+            decision_source="rule",
+            confidence=1.0,
+            turn_cue=self._turn.cue,
         )
         if decision.action == "silent":
             return False
@@ -1055,6 +1080,68 @@ class ConversationLoop:
             self._engaged_voice = (
                 event.voice_clusters[0] if len(event.voice_clusters) == 1 else None
             )
+        if event.participant_id != "unknown":
+            self._engaged_speaker = event.participant_id
+        return True
+
+    def store_jev_pregen(self, decision: JevDecision) -> None:
+        if len(self._jev_pregen) > 16:
+            self._jev_pregen.clear()
+        key = pregen_cache_key(
+            tuple(item.id for item in self._events),
+            self._turn.cue,
+            mine=self._turn.my_turn_likely,
+        )
+        self._jev_pregen[key] = decision
+
+    def _decide_jev(self, event: TranscriptEvent) -> bool:
+        key = pregen_cache_key(
+            tuple(item.id for item in self._events),
+            self._turn.cue,
+            mine=self._turn.my_turn_likely,
+        )
+        cached = self._jev_pregen.get(key)
+        if cached is None:
+            self._record(
+                "policy_decided",
+                transcript_id=event.id,
+                action="silent",
+                reason="jev_stale_silent",
+                decision_source="jev",
+                confidence=0.0,
+                turn_cue=self._turn.cue,
+            )
+            return False
+        threshold = (
+            self._jev_speak_threshold if cached.action == "speak" else self._jev_clarify_threshold
+        )
+        reason = {"speak": "jev_speak", "silent": "jev_silent", "clarify": "jev_clarify"}[
+            cached.action
+        ]
+        if cached.action != "silent" and cached.confidence < threshold:
+            self._record(
+                "policy_decided",
+                transcript_id=event.id,
+                action="silent",
+                reason="jev_stale_silent",
+                decision_source="jev",
+                confidence=cached.confidence,
+                turn_cue=self._turn.cue,
+            )
+            return False
+        action = JEV_TO_PARTICIPATION[cached.action]
+        self._record(
+            "policy_decided",
+            transcript_id=event.id,
+            action=action,
+            reason=reason,
+            decision_source="jev",
+            confidence=cached.confidence,
+            turn_cue=self._turn.cue,
+        )
+        if action == "silent":
+            return False
+        self._active_until = self._clock() + self._activation_seconds
         if event.participant_id != "unknown":
             self._engaged_speaker = event.participant_id
         return True
