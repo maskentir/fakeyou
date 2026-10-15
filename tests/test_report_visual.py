@@ -1,11 +1,7 @@
 from typing import Any
 
-from fakeyou.observability.report import (
-    VISUAL_BUDGET_MAX,
-    VISUAL_BUDGET_P95,
-    VISUAL_STABILITY_MIN,
-    build_session_report,
-)
+from evals._budgets import VISUAL_BUDGET_MAX, VISUAL_BUDGET_P95, VISUAL_STABILITY_MIN
+from fakeyou.observability.report import build_session_report
 from tests._report_support import row
 
 

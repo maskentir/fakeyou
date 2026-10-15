@@ -1,70 +1,17 @@
-import shutil
-import time
 from pathlib import Path
 
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.cli.output import emit_json
 from fakeyou.config.settings import Settings
-from fakeyou.foundation.visual_retention import PurgeReport, purge_visual_files
-
-DAY_SECONDS = 86400
-
-
-def _directory_bytes(directory: Path) -> int:
-    return sum(item.stat().st_size for item in directory.rglob("*") if item.is_file())
-
-
-def _audio_mtime(audio_dir: Path) -> float:
-    sidecar = audio_dir / "slots.json"
-    if sidecar.is_file():
-        return sidecar.stat().st_mtime
-    return audio_dir.stat().st_mtime
+from fakeyou.foundation.visual_retention import PurgeReport
+from fakeyou.persistence.retention import purge_audio_expired, purge_visual_expired
 
 
 def audio_purge_expired(*, root: Path | None, days: int | None, settings: Settings) -> None:
-    resolved_days = settings.audio.retention_days if days is None else days
-    if resolved_days <= 0:
-        raise FakeYouError(ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE)
-    resolved_root = settings.paths.record_dir if root is None else root
-    if not resolved_root.is_dir():
-        raise FakeYouError(ErrorCode.AUDIO_ROOT_MISSING, path=resolved_root)
-    cutoff = time.time() - resolved_days * DAY_SECONDS
-    removed: list[str] = []
-    kept = 0
-    freed_bytes = 0
-    for meeting in sorted(resolved_root.iterdir()):
-        audio_dir = meeting / "audio"
-        if not audio_dir.is_dir():
-            continue
-        if _audio_mtime(audio_dir) < cutoff:
-            freed_bytes += _directory_bytes(audio_dir)
-            shutil.rmtree(audio_dir)
-            removed.append(meeting.name)
-        else:
-            kept += 1
-    emit_json({"removed": removed, "kept": kept, "freed_bytes": freed_bytes})
+    report = purge_audio_expired(root=root, days=days, settings=settings)
+    emit_json({"removed": report.removed, "kept": report.kept, "freed_bytes": report.freed_bytes})
 
 
 def visual_purge_expired(*, root: Path | None, days: int | None, settings: Settings) -> PurgeReport:
-    raw_days = settings.visual.retention_raw_days if days is None else days
-    if raw_days <= 0:
-        raise FakeYouError(ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE)
-    resolved_root = settings.paths.record_dir if root is None else root
-    if not resolved_root.is_dir():
-        raise FakeYouError(ErrorCode.VISUAL_ROOT_MISSING, path=resolved_root)
-    now = time.time()
-    raw_cutoff = now - raw_days * DAY_SECONDS
-    text_cutoff = now - settings.visual.retention_text_days * DAY_SECONDS
-    total = PurgeReport()
-    for meeting in sorted(resolved_root.iterdir()):
-        visual_dir = meeting / "visual"
-        if not visual_dir.is_dir():
-            continue
-        partial = purge_visual_files(
-            visual_dir, raw_cutoff=raw_cutoff, text_cutoff=text_cutoff, prefix=meeting.name
-        )
-        total.removed.extend(partial.removed)
-        total.kept += partial.kept
-        total.freed_bytes += partial.freed_bytes
-    emit_json({"removed": total.removed, "kept": total.kept, "freed_bytes": total.freed_bytes})
-    return total
+    report = purge_visual_expired(root=root, days=days, settings=settings)
+    emit_json({"removed": report.removed, "kept": report.kept, "freed_bytes": report.freed_bytes})
+    return report

@@ -5,13 +5,14 @@ from typing import Any
 import pytest
 from playwright.async_api import Page
 
+from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
 from fakeyou.orchestration.lifecycle import create_lifecycle_graph
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
-from tests.fakes import DATABASE_URL
+from tests._fakes_common import DATABASE_URL
 
 MEETING_PAGE = """<!doctype html><html><body>
 <input placeholder="Your name"><button id="join">Ask to join</button>
@@ -40,9 +41,9 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
             yield page
 
     config = SessionConfig(
-        owner_id="fixture-owner",
-        twin_id="fixture-twin",
-        meeting_id="fixture-meeting",
+        owner_id=SessionId("fixture-owner"),
+        twin_id=SessionId("fixture-twin"),
+        meeting_id=SessionId("fixture-meeting"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Fixture Twin",
         database_url=DATABASE_URL,

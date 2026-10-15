@@ -8,6 +8,7 @@ from fakeyou.catalog.exit_codes import ExitCode
 
 class ErrorCode(StrEnum):
     INPUT_INVALID = "input.invalid"
+    SESSION_ID_INVALID = "session.id_invalid"
     DATABASE_URL_MISSING = "database.url_missing"
     DATABASE_URL_SCHEME = "database.url_scheme"
     DATABASE_UNREACHABLE = "database.unreachable"
@@ -33,6 +34,10 @@ class ErrorCode(StrEnum):
     VOICEPRINT_MODEL_DIGEST_MISMATCH = "voiceprint.model_digest_mismatch"
     VOICEPRINT_EXTRA_MISSING = "voiceprint.extra_missing"
     CHAT_THREAD_INVALID = "chat.thread_invalid"
+    CHAT_FAILED = "chat.failed"
+    MEET_CHAT_TOO_LONG = "meet_chat.too_long"
+    MEET_CHAT_RATE_LIMITED = "meet_chat.rate_limited"
+    MEET_CHAT_EVIDENCE_REJECTED = "meet_chat.evidence_rejected"
     MEETING_LINK_INVALID = "meeting.link_invalid"
     MEETING_LOBBY_TIMEOUT_NOT_POSITIVE = "meeting.lobby_timeout_not_positive"
     MEETING_DURATION_NOT_POSITIVE = "meeting.duration_not_positive"
@@ -71,6 +76,8 @@ class ErrorCode(StrEnum):
     RECORD_LOCKED = "record.locked"
     RECORD_LOCK_CORRUPT = "record.lock_corrupt"
     LEASE_LOCKED = "lease.locked"
+    LEASE_LOST = "lease.lost"
+    INGESTION_STATUS_CORRUPT = "ingestion.status_corrupt"
     ACTION_LEDGER_LOCKED = "action_ledger.locked"
     MEMORY_PERSONA_UNREADABLE = "memory.persona_unreadable"
     MEMORY_SOURCE_AT_NAIVE = "memory.source_at_naive"
@@ -83,6 +90,7 @@ class ErrorCode(StrEnum):
     MEMORY_FORGET_TARGET_REQUIRED = "memory.forget_target_required"
     MEMORY_KEEP_RECORD_REQUIRES_MEETING = "memory.keep_record_requires_meeting"
     MEMORY_FORGET_INCOMPLETE = "memory.forget_incomplete"
+    MEMORY_FORGET_FILES_INCOMPLETE = "memory.forget_files_incomplete"
     NOTE_CORRECTION_TARGET_INACTIVE = "note.correction_target_inactive"
     NOTE_NOT_PENDING = "note.not_pending"
     NOTE_CORRECTION_CONCURRENT = "note.correction_concurrent"
@@ -115,8 +123,12 @@ class ErrorCode(StrEnum):
     CALIBRATE_ARTIFACT_NOT_WRITTEN = "calibrate.artifact_not_written"
     AUDIO_RETENTION_DAYS_NOT_POSITIVE = "audio.retention_days_not_positive"
     AUDIO_ROOT_MISSING = "audio.root_missing"
+    AUDIO_PURGE_FAILED = "audio.purge_failed"
+    VISUAL_RETENTION_DAYS_NOT_POSITIVE = "visual.retention_days_not_positive"
     VISUAL_ROOT_MISSING = "visual.root_missing"
+    VISUAL_PURGE_FAILED = "visual.purge_failed"
     DIAGNOSTICS_JOURNAL_MISSING = "diagnostics.journal_missing"
+    DIAGNOSTICS_REPORT_FAILED = "diagnostics.report_failed"
     DIARIZE_INPUT_UNREADABLE = "diarize.input_unreadable"
     DIARIZE_CORRECTION_MISSING = "diarize.correction_missing"
     DIARIZE_TRANSCRIPTION_FAILED = "diarize.transcription_failed"
@@ -125,7 +137,6 @@ class ErrorCode(StrEnum):
     DIARIZE_SCHEMA_UNSUPPORTED = "diarize.schema_unsupported"
     DIARIZE_TURNS_INVALID = "diarize.turns_invalid"
     DIARIZE_STALE = "diarize.stale"
-    WORKER_MEETING_ID_INVALID = "worker.meeting_id_invalid"
     WORKER_ALREADY_RUNNING = "worker.already_running"
     WORKER_STILL_RUNNING = "worker.still_running"
     WORKER_INGEST_ALREADY_RUNNING = "worker.ingest_already_running"
@@ -152,6 +163,8 @@ class ErrorCode(StrEnum):
     ACTION_LEDGER_INTENT_UNKNOWN = "action_ledger.intent_unknown"
     BROWSER_DEVTOOLS_UNAVAILABLE = "browser.devtools_unavailable"
     BROWSER_MCP_MISSING = "browser.mcp_missing"
+    BROWSER_NODE_MISSING = "browser.node_missing"
+    BROWSER_TOOLS_FAILED = "browser.tools_failed"
     DATABASE_SCHEMA_EMPTY = "database.schema_empty"
     DATABASE_SCHEMA_HEADS_INVALID = "database.schema_heads_invalid"
     MEETING_BRIEF_REQUIRES_PROFILE = "meeting.brief_requires_profile"
@@ -221,6 +234,11 @@ class ErrorSpec:
 
 CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.INPUT_INVALID: ErrorSpec("invalid input: {reason}", ExitCode.INPUT_REJECTED),
+    ErrorCode.SESSION_ID_INVALID: ErrorSpec(
+        "invalid {field}: {value!r}; use 1-128 letters, numbers, '_' or '-', "
+        "starting with a letter or number",
+        ExitCode.INPUT_REJECTED,
+    ),
     ErrorCode.DATABASE_URL_MISSING: ErrorSpec(
         f"Set {ConfigKey.DATABASE_URL} in .env before using this command.", ExitCode.INPUT_REJECTED
     ),
@@ -311,6 +329,16 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.CHAT_THREAD_INVALID: ErrorSpec(
         "--thread must be 1-128 characters using letters, numbers, '_' or '-'",
         ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.CHAT_FAILED: ErrorSpec("chat failed: {reason}"),
+    ErrorCode.MEET_CHAT_TOO_LONG: ErrorSpec(
+        "meet chat message must be {limit} characters or fewer", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.MEET_CHAT_RATE_LIMITED: ErrorSpec(
+        "meet chat allows {limit} messages per minute", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.MEET_CHAT_EVIDENCE_REJECTED: ErrorSpec(
+        "meet chat message must not contain memory evidence text", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEETING_LINK_INVALID: ErrorSpec(
         "link must be an https://meet.google.com/ meeting URL", ExitCode.INPUT_REJECTED
@@ -427,6 +455,12 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "meeting record lock is corrupt: {path}; inspect it first"
     ),
     ErrorCode.LEASE_LOCKED: ErrorSpec("lease is locked: {path}"),
+    ErrorCode.LEASE_LOST: ErrorSpec(
+        "lease on {path} was lost while held; the work it guarded may be incomplete"
+    ),
+    ErrorCode.INGESTION_STATUS_CORRUPT: ErrorSpec(
+        "ingestion status {path} is corrupt: {reason}; inspect it before retrying"
+    ),
     ErrorCode.ACTION_LEDGER_LOCKED: ErrorSpec("action ledger is locked: {path}"),
     ErrorCode.MEMORY_PERSONA_UNREADABLE: ErrorSpec(
         "--persona cannot be read: {reason}", ExitCode.INPUT_REJECTED
@@ -459,6 +493,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "--keep-record only applies to --meeting-id", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
+    ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE: ErrorSpec(
+        "meeting file {path} could not be removed during forget: {reason}"
+    ),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
     ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),
     ErrorCode.NOTE_CORRECTION_CONCURRENT: ErrorSpec(
@@ -539,12 +576,18 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.AUDIO_ROOT_MISSING: ErrorSpec(
         "audio root is missing: {path}", ExitCode.INPUT_REJECTED
     ),
+    ErrorCode.AUDIO_PURGE_FAILED: ErrorSpec("audio purge failed: {reason}"),
+    ErrorCode.VISUAL_RETENTION_DAYS_NOT_POSITIVE: ErrorSpec(
+        "--days must be positive", ExitCode.INPUT_REJECTED
+    ),
     ErrorCode.VISUAL_ROOT_MISSING: ErrorSpec(
         "visual root is missing: {path}", ExitCode.INPUT_REJECTED
     ),
+    ErrorCode.VISUAL_PURGE_FAILED: ErrorSpec("visual purge failed: {reason}"),
     ErrorCode.DIAGNOSTICS_JOURNAL_MISSING: ErrorSpec(
         "no journal for meeting {meeting_id} at {path}", ExitCode.INPUT_REJECTED
     ),
+    ErrorCode.DIAGNOSTICS_REPORT_FAILED: ErrorSpec("session report failed: {reason}"),
     ErrorCode.DIARIZE_INPUT_UNREADABLE: ErrorSpec(
         "diarization input cannot be read: {reason}", ExitCode.INPUT_REJECTED
     ),
@@ -561,9 +604,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.DIARIZE_STALE: ErrorSpec(
         "diarization sidecar is stale: record changed since correction",
         ExitCode.INPUT_REJECTED,
-    ),
-    ErrorCode.WORKER_MEETING_ID_INVALID: ErrorSpec(
-        "invalid meeting ID: {meeting_id!r}", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.WORKER_ALREADY_RUNNING: ErrorSpec(
         "worker for meeting {meeting_id} is already running"
@@ -623,6 +663,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.BROWSER_MCP_MISSING: ErrorSpec(
         "Playwright MCP is missing. Run " + Command.NPM_CI + " from the project directory."
     ),
+    ErrorCode.BROWSER_NODE_MISSING: ErrorSpec(
+        "node is not available: {reason}", ExitCode.INFRA_FAILURE
+    ),
+    ErrorCode.BROWSER_TOOLS_FAILED: ErrorSpec("browser tools failed: {reason}"),
     ErrorCode.DATABASE_SCHEMA_EMPTY: ErrorSpec(
         "database has no migrations applied, expected {expected}; run `" + Command.DB_UPGRADE + "`"
     ),

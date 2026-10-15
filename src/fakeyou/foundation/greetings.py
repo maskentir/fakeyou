@@ -1,13 +1,12 @@
 import json
-from importlib.resources import files
-from typing import Any
+from typing import Any, override
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
-_VOCABULARY: dict[str, Any] = json.loads(
-    (files("fakeyou") / "greetings_vocabulary.json").read_text(encoding="utf-8")
-)
+from fakeyou.foundation.resources import read_package_text
+
+_VOCABULARY: dict[str, Any] = json.loads(read_package_text("greetings_vocabulary.json"))
 _OUTPUTS: dict[str, str] = _VOCABULARY["outputs"]
 _GREETINGS: set[str] = set(_VOCABULARY["greetings"])
 _LEAD_INS: tuple[tuple[str, ...], ...] = tuple(
@@ -64,6 +63,7 @@ class _GreetingMiddleware(AgentMiddleware[Any, Any, Any]):
         self._language = language
 
     @hook_config(can_jump_to=["end"])
+    @override
     def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         trailing: list[HumanMessage] = []
         for message in reversed(state.get("messages", [])):

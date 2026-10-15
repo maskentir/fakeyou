@@ -1,20 +1,21 @@
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.diarization.correction_labels import CorrectionTurn
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.persistence.ingestion_status import write_atomically
+from fakeyou.foundation.numbers import real_number
+from fakeyou.persistence.audio_persist import read_slot_anchors
+from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.record import RecordEntry, TranscriptEntry, load_meeting_record
 
 SCHEMA = "diarization_correction/v1"
-RTTM_FILE_NAME = "diarization.rttm"
-JSON_FILE_NAME = "diarization.json"
 
 
 class StaleDiarizationError(DiarizeError):
@@ -22,11 +23,18 @@ class StaleDiarizationError(DiarizeError):
 
 
 def correction_digest(record_path: Path) -> str | None:
+    layout = MeetingDir.from_record_path(record_path)
     try:
-        raw = (record_path.parent / JSON_FILE_NAME).read_bytes()
+        sidecar = layout.diarization.read_bytes()
     except OSError:
         return None
-    return sha256(raw).hexdigest()
+    try:
+        labels = layout.correction_labels.read_bytes()
+    except FileNotFoundError:
+        labels = b""
+    except OSError:
+        return None
+    return sha256(sidecar + b"\0" + labels).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -72,8 +80,9 @@ def write_correction_bundle(
             for turn in turns
         ],
     }
-    rttm_path = record_path.parent / RTTM_FILE_NAME
-    json_path = record_path.parent / JSON_FILE_NAME
+    layout = MeetingDir.from_record_path(record_path)
+    rttm_path = layout.diarization_rttm
+    json_path = layout.diarization
     file_id = audio_dir.parent.name
     rttm = "".join(_rttm_line(file_id, turn) + "\n" for turn in turns)
     write_atomically(rttm_path, rttm.encode("utf-8"))
@@ -82,74 +91,66 @@ def write_correction_bundle(
 
 
 def _session_start_page_ms(record_path: Path) -> float:
-    slots_path = record_path.parent / "audio" / "slots.json"
+    audio_dir = MeetingDir.from_record_path(record_path).audio_dir
     try:
-        payload = json.loads(slots_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError):
-        return 0.0
-    anchors = payload.get("anchors") if isinstance(payload, dict) else None
-    if not isinstance(anchors, list):
-        return 0.0
+        anchors = read_slot_anchors(audio_dir)
+    except (TypeError, ValueError) as error:
+        raise DiarizeError(
+            ErrorCode.DIARIZE_INPUT_UNREADABLE, reason=type(error).__name__
+        ) from error
     starts = [
         anchor["page_ms"]
         for anchor in anchors
-        if isinstance(anchor, dict)
-        and isinstance(anchor.get("page_ms"), (int, float))
+        if isinstance(anchor.get("page_ms"), (int, float))
         and not isinstance(anchor.get("page_ms"), bool)
     ]
     return float(min(starts)) if starts else 0.0
 
 
-def _matching_uuid(turns: list[dict[str, object]], point: float, tolerance_ms: int) -> str | None:
+def _matching_uuid(turns: Sequence[CorrectionTurn], point: float, tolerance_ms: int) -> str | None:
     best: str | None = None
     best_distance: float | None = None
     for turn in turns:
-        start = turn["start_ms"]
-        end = turn["end_ms"]
-        corrected = turn["corrected_uuid"]
-        if (
-            not isinstance(start, (int, float))
-            or not isinstance(end, (int, float))
-            or not isinstance(corrected, str)
-        ):
-            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
-        low = float(start) - tolerance_ms
-        high = float(end) + tolerance_ms
+        low = turn.start_ms - tolerance_ms
+        high = turn.end_ms + tolerance_ms
         if not low <= point <= high:
             continue
-        if float(start) <= point <= float(end):
+        if turn.start_ms <= point <= turn.end_ms:
             distance = 0.0
         else:
-            distance = min(abs(point - float(start)), abs(point - float(end)))
+            distance = min(abs(point - turn.start_ms), abs(point - turn.end_ms))
         if best is None or best_distance is None or distance < best_distance:
-            best = corrected
+            best = turn.corrected_uuid
             best_distance = distance
     return best
 
 
-def _shift_turns(turns: list[Any], offset: float) -> list[dict[str, object]]:
-    shifted: list[dict[str, object]] = []
-    for turn in turns:
-        if not isinstance(turn, dict):
-            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
-        start = turn.get("start_ms")
-        end = turn.get("end_ms")
-        if (
-            isinstance(start, bool)
-            or not isinstance(start, (int, float))
-            or isinstance(end, bool)
-            or not isinstance(end, (int, float))
-        ):
-            raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
-        shifted.append({**turn, "start_ms": float(start) + offset, "end_ms": float(end) + offset})
-    return shifted
+def _parse_turn(turn: object, offset: float) -> CorrectionTurn:
+    if not isinstance(turn, dict):
+        raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
+    corrected = turn.get("corrected_uuid")
+    speaker = turn.get("speaker")
+    start = real_number(turn.get("start_ms"))
+    end = real_number(turn.get("end_ms"))
+    if (
+        not isinstance(corrected, str)
+        or not isinstance(speaker, str)
+        or start is None
+        or end is None
+    ):
+        raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
+    return CorrectionTurn(
+        corrected_uuid=corrected,
+        speaker=speaker,
+        start_ms=start + offset,
+        end_ms=end + offset,
+    )
 
 
-def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> list[RecordEntry]:
-    entries = load_meeting_record(record_path)
-    sidecar = record_path.parent / JSON_FILE_NAME
+def _sidecar_turns(record_path: Path) -> list[CorrectionTurn] | None:
+    sidecar = MeetingDir.from_record_path(record_path).diarization
     if not sidecar.exists():
-        return entries
+        return None
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except ValueError as error:
@@ -163,7 +164,18 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
     if not isinstance(turns, list):
         raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
     offset = _session_start_page_ms(record_path)
-    shifted = _shift_turns(turns, offset)
+    return [_parse_turn(turn, offset) for turn in turns]
+
+
+def load_correction_turns(record_path: Path) -> list[CorrectionTurn]:
+    return _sidecar_turns(record_path) or []
+
+
+def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> list[RecordEntry]:
+    entries = load_meeting_record(record_path)
+    turns = _sidecar_turns(record_path)
+    if turns is None:
+        return entries
     corrected: list[RecordEntry] = []
     for entry in entries:
         if not isinstance(entry, TranscriptEntry):
@@ -172,9 +184,7 @@ def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> lis
         corrected.append(
             entry.model_copy(
                 update={
-                    "corrected_speaker_uuid": _matching_uuid(
-                        shifted, entry.capture_ms, tolerance_ms
-                    )
+                    "corrected_speaker_uuid": _matching_uuid(turns, entry.capture_ms, tolerance_ms)
                 }
             )
         )

@@ -152,8 +152,10 @@ def _record_session(
     audio_dir = meeting_dir / "audio"
     audio_dir.mkdir(parents=True)
     (audio_dir / "slots.json").write_text(
-        json.dumps({"schema": "slot_audio/v1", "slots": {}, "anchors": anchors}),
-        encoding="utf-8",
+        json.dumps({"schema": "slot_audio/v2", "slots": {}}), encoding="utf-8"
+    )
+    (audio_dir / "anchors.jsonl").write_text(
+        "".join(json.dumps(anchor) + "\n" for anchor in anchors), encoding="utf-8"
     )
     return audio_dir, record_path
 
@@ -238,3 +240,33 @@ def test_old_record_lines_without_correction_field_still_load(tmp_path: Path) ->
     assert isinstance(entries[0], TranscriptEntry)
     assert entries[0].corrected_speaker_uuid is None
     assert load_corrected_record(record_path) == entries
+
+
+def test_load_corrected_record_rejects_corrupt_anchors(tmp_path: Path) -> None:
+    audio_dir, record_path = _record_session(
+        tmp_path, [6000.0, 10000.0], anchors=[{"slot": 0, "seq": 0, "page_ms": 5000.0}]
+    )
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    valid = json.dumps({"slot": 0, "seq": 1, "page_ms": 5020.0})
+    (audio_dir / "anchors.jsonl").write_text(f"{{corrupt\n{valid}\n", encoding="utf-8")
+
+    with pytest.raises(DiarizeError, match="cannot be read") as error:
+        load_corrected_record(record_path)
+
+    assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
+
+
+def test_load_corrected_record_without_anchors_applies_zero_offset(tmp_path: Path) -> None:
+    audio_dir, record_path = _record_session(
+        tmp_path, [1000.0, 4000.0], anchors=[{"slot": 0, "seq": 0, "page_ms": 5000.0}]
+    )
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    (audio_dir / "anchors.jsonl").unlink()
+
+    entries = load_corrected_record(record_path)
+    transcripts = cast(list[TranscriptEntry], entries)
+
+    assert [entry.corrected_speaker_uuid for entry in transcripts] == [
+        _expected_uuid("A", 0),
+        _expected_uuid("B", 3600),
+    ]

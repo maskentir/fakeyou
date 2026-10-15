@@ -1,8 +1,11 @@
+import asyncio
 from collections.abc import Callable, Coroutine
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 
+import fakeyou.meet.meet as meet_module
 from fakeyou.meet.meet import (
     GuestJoinRequest,
     JoinPolling,
@@ -14,7 +17,8 @@ from fakeyou.meet.meet import (
     request_guest_join,
     with_pinned_meet_locale,
 )
-from tests.fakes import (
+from tests._fakes_common import LINK, FakeClock
+from tests._meet_browser_fakes import (
     ASK_SELECTOR,
     CAM_OFF_SELECTOR,
     CAM_ON_SELECTOR,
@@ -26,7 +30,6 @@ from tests.fakes import (
     JOIN_NOW_SELECTOR,
     LEAVE_AND_WAITING,
     LEAVE_SELECTOR,
-    LINK,
     LIVE_CAPTCHA,
     LOBBY,
     MIC_OFF_SELECTOR,
@@ -35,7 +38,8 @@ from tests.fakes import (
     NO_CAPTCHA,
     REMOVED,
     WAITING,
-    FakeClock,
+    FakePage,
+    HangingPage,
     meet_page,
 )
 
@@ -60,6 +64,21 @@ async def test_request_guest_join_admits_happy_path() -> None:
     assert page.visited == [f"{LINK}?hl=en"]
     assert page.typed == ["Twin"]
     assert page.clicked == [NAME_SELECTOR, ASK_SELECTOR]
+
+
+async def test_request_guest_join_fails_when_navigation_lands_on_another_host() -> None:
+    page = meet_page([IN_CALL], final_url="https://accounts.google.com/ServiceLogin")
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "failed"
+    assert "accounts.google.com" in result.detail
+    assert page.typed == []
 
 
 async def test_request_guest_join_accepts_join_now_button() -> None:
@@ -120,6 +139,59 @@ async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -
     assert clock.sleeps == [2.0, 2.0]
 
 
+async def test_request_guest_join_bounds_a_hung_lobby_poll() -> None:
+    page = HangingPage(
+        hang_content=True,
+        counts={DIALOG_SELECTOR: [0], NAME_SELECTOR: [1], ASK_SELECTOR: [1]},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(poll_interval_seconds=0.01),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "failed"
+    assert "timed out" in result.detail
+    assert page.cancelled is True
+
+
+async def test_request_guest_join_bounds_the_host_probe_after_navigation_failure() -> None:
+    page = HangingPage(
+        hang_evaluate=True,
+        goto_failures=1,
+        counts={DIALOG_SELECTOR: [0], NAME_SELECTOR: [1], ASK_SELECTOR: [1]},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(poll_interval_seconds=0.01),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "failed"
+    assert page.cancelled is True
+
+
+async def test_request_guest_join_bounds_a_hung_join_attempt() -> None:
+    page = HangingPage(
+        [DENIED] * 50,
+        hang_content=False,
+        hang_evaluate=True,
+        counts={DIALOG_SELECTOR: [0], NAME_SELECTOR: [1], ASK_SELECTOR: [1]},
+    )
+
+    result = await request_guest_join(
+        page,
+        _request(lobby_timeout_seconds=0.05, poll_interval_seconds=0.01),
+    )
+
+    assert result.status == "blocked"
+    assert page.cancelled is True
+
+
 async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
     page = meet_page([DENIED, IN_CALL], evaluates=[LIVE_CAPTCHA])
     clock = FakeClock()
@@ -134,7 +206,7 @@ async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
 
 
 async def test_request_guest_join_times_out_in_lobby() -> None:
-    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY])
+    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, LOBBY])
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -149,7 +221,7 @@ async def test_request_guest_join_times_out_in_lobby() -> None:
 
 
 async def test_request_guest_join_timeout_names_waiting_room() -> None:
-    page = meet_page([WAITING, WAITING, WAITING, WAITING])
+    page = meet_page([WAITING, WAITING, WAITING, WAITING, WAITING])
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -163,7 +235,7 @@ async def test_request_guest_join_timeout_names_waiting_room() -> None:
 
 
 async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
-    page = meet_page([RuntimeError("lobby gone")])
+    page = meet_page([PlaywrightError("lobby gone")])
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -174,7 +246,7 @@ async def test_request_guest_join_fails_when_lobby_content_read_fails() -> None:
 
     assert result.status == "failed"
     assert "lobby page content" in result.detail
-    assert "(RuntimeError)" in result.detail
+    assert "(Error)" in result.detail
     assert "lobby gone" not in result.detail
 
 
@@ -453,13 +525,13 @@ async def test_click_when_ready_reports_error_type_name_only() -> None:
             return None
 
         async def click(self, **_kwargs: Any) -> None:
-            raise RuntimeError("boom secret-token")
+            raise PlaywrightError("boom secret-token")
 
     failure = await click_when_ready(
         cast(Any, _FailingLocator), "join button", FakeClock().sleep, 1
     )
 
-    assert failure == "clicking 'join button' failed after 1 attempts: RuntimeError"
+    assert failure == "clicking 'join button' failed after 1 attempts: Error"
     assert "secret-token" not in (failure or "")
 
 
@@ -578,7 +650,7 @@ async def test_media_toggle_preserves_state_and_reports_failure(
     elif scenario == "failed_click":
         values["click_failures"] = {opposite}
     elif scenario == "failed_state":
-        values["visible"] = {current: RuntimeError("state boom")}
+        values["visible"] = {current: PlaywrightError("state boom")}
     elif scenario == "failed_confirmation":
         values["wait_failures"] = {current}
     page = meet_page([], **values)
@@ -615,7 +687,7 @@ async def test_request_guest_join_admits_on_deadline_recheck() -> None:
 async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> None:
     reads: list[int] = []
     page = meet_page(
-        [LOBBY, LOBBY, LOBBY, LOBBY, RuntimeError("lobby gone")], on_content=reads.append
+        [LOBBY, LOBBY, LOBBY, LOBBY, PlaywrightError("lobby gone")], on_content=reads.append
     )
     clock = FakeClock()
 
@@ -627,3 +699,83 @@ async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> No
 
     assert result.status == "timeout"
     assert len(reads) == 5
+
+
+async def test_request_guest_join_propagates_unexpected_content_error() -> None:
+    page = meet_page([ValueError("bug")])
+    clock = FakeClock()
+
+    with pytest.raises(ValueError, match="bug"):
+        await request_guest_join(
+            page,
+            _request(),
+            polling=JoinPolling(clock.sleep, clock.monotonic),
+        )
+
+
+async def test_click_when_ready_propagates_unexpected_click_error() -> None:
+    class _BuggyLocator:
+        @property
+        def first(self) -> "_BuggyLocator":
+            return self
+
+        async def wait_for(self, **_kwargs: Any) -> None:
+            return None
+
+        async def click(self, **_kwargs: Any) -> None:
+            raise ValueError("bug")
+
+    with pytest.raises(ValueError, match="bug"):
+        await click_when_ready(cast(Any, _BuggyLocator), "join button", FakeClock().sleep, 1)
+
+
+async def test_request_guest_join_propagates_unexpected_navigation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = meet_page([IN_CALL])
+    clock = FakeClock()
+
+    async def boom(url: str, **_kwargs: Any) -> None:
+        del url
+        raise ValueError("bug")
+
+    monkeypatch.setattr(page, "goto", boom)
+    with pytest.raises(ValueError, match="bug"):
+        await request_guest_join(
+            page,
+            _request(),
+            polling=JoinPolling(clock.sleep, clock.monotonic),
+        )
+
+
+async def test_call_state_reads_are_bounded_and_report_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(meet_module, "CALL_STATE_TIMEOUT_SECONDS", 0.05)
+    page = HangingPage([], hang_content=True)
+
+    observation = await observe_call_state(page)
+
+    assert observation.state == "unknown"
+
+
+async def test_lobby_preparation_is_inside_the_join_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(meet_module, "PREPARE_TIMEOUT_SECONDS", 0.05)
+
+    class SlowNavigation(FakePage):
+        @override
+        async def goto(self, url: str, **kwargs: Any) -> None:
+            del kwargs
+            self.visited.append(url)
+            await asyncio.sleep(5.0)
+
+    page = SlowNavigation()
+
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic)
+    )
+
+    assert result.status == "failed"
+    assert "lobby preparation did not finish" in result.detail

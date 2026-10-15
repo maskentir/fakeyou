@@ -50,6 +50,12 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | --- | --- | --- | --- |
 | `input.invalid` | `INPUT_INVALID` | INPUT_REJECTED | `invalid input: {reason}` |
 
+### session
+
+| Kode | Anggota | Exit | Pesan |
+| --- | --- | --- | --- |
+| `session.id_invalid` | `SESSION_ID_INVALID` | INPUT_REJECTED | `invalid {field}: {value!r}; use 1-128 letters, numbers, '_' or '-', starting with a letter or number` |
+
 ### database
 
 | Kode | Anggota | Exit | Pesan |
@@ -96,6 +102,15 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
 | `chat.thread_invalid` | `CHAT_THREAD_INVALID` | INPUT_REJECTED | `--thread must be 1-128 characters using letters, numbers, '_' or '-'` |
+| `chat.failed` | `CHAT_FAILED` | FAILURE | `chat failed: {reason}` |
+
+### meet_chat
+
+| Kode | Anggota | Exit | Pesan |
+| --- | --- | --- | --- |
+| `meet_chat.too_long` | `MEET_CHAT_TOO_LONG` | INPUT_REJECTED | `meet chat message must be {limit} characters or fewer` |
+| `meet_chat.rate_limited` | `MEET_CHAT_RATE_LIMITED` | INPUT_REJECTED | `meet chat allows {limit} messages per minute` |
+| `meet_chat.evidence_rejected` | `MEET_CHAT_EVIDENCE_REJECTED` | INPUT_REJECTED | `meet chat message must not contain memory evidence text` |
 
 ### meeting
 
@@ -143,7 +158,9 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | --- | --- | --- | --- |
 | `browser.profile_in_use` | `BROWSER_PROFILE_IN_USE` | FAILURE | `browser profile is in use: {reason}` |
 | `browser.devtools_unavailable` | `BROWSER_DEVTOOLS_UNAVAILABLE` | FAILURE | `Chrome DevTools endpoint is unavailable: {reason}` |
-| `browser.mcp_missing` | `BROWSER_MCP_MISSING` | FAILURE | `Playwright MCP is missing. Run npm ci from the project directory.` |
+| `browser.mcp_missing` | `BROWSER_MCP_MISSING` | FAILURE | `Playwright MCP is missing. Run npm ci --ignore-scripts from the project directory.` |
+| `browser.node_missing` | `BROWSER_NODE_MISSING` | INFRA_FAILURE | `node is not available: {reason}` |
+| `browser.tools_failed` | `BROWSER_TOOLS_FAILED` | FAILURE | `browser tools failed: {reason}` |
 
 ### record
 
@@ -157,6 +174,14 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
 | `lease.locked` | `LEASE_LOCKED` | FAILURE | `lease is locked: {path}` |
+| `lease.lost` | `LEASE_LOST` | FAILURE | `lease on {path} was lost while held; the work it guarded may be incomplete` |
+
+### ingestion
+
+| Kode | Anggota | Exit | Pesan |
+| --- | --- | --- | --- |
+| `ingestion.status_corrupt` | `INGESTION_STATUS_CORRUPT` | FAILURE | `ingestion status {path} is corrupt: {reason}; inspect it before retrying` |
+| `ingestion.episode_name_invalid` | `INGESTION_EPISODE_NAME_INVALID` | FAILURE | `invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; run fakeyou memory-forget --meeting-id with --keep-record before ingesting again` |
 
 ### action_ledger
 
@@ -182,6 +207,7 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | `memory.forget_target_required` | `MEMORY_FORGET_TARGET_REQUIRED` | INPUT_REJECTED | `memory-forget requires exactly one of --meeting-id or --episode` |
 | `memory.keep_record_requires_meeting` | `MEMORY_KEEP_RECORD_REQUIRES_MEETING` | INPUT_REJECTED | `--keep-record only applies to --meeting-id` |
 | `memory.forget_incomplete` | `MEMORY_FORGET_INCOMPLETE` | FAILURE | `episode {uuid} survived removal during forget` |
+| `memory.forget_files_incomplete` | `MEMORY_FORGET_FILES_INCOMPLETE` | FAILURE | `meeting file {path} could not be removed during forget: {reason}` |
 | `memory.unavailable` | `MEMORY_UNAVAILABLE` | INFRA_FAILURE | `memory unavailable: {reason}` |
 
 ### note
@@ -289,12 +315,15 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | --- | --- | --- | --- |
 | `audio.retention_days_not_positive` | `AUDIO_RETENTION_DAYS_NOT_POSITIVE` | INPUT_REJECTED | `--days must be positive` |
 | `audio.root_missing` | `AUDIO_ROOT_MISSING` | INPUT_REJECTED | `audio root is missing: {path}` |
+| `audio.purge_failed` | `AUDIO_PURGE_FAILED` | FAILURE | `audio purge failed: {reason}` |
 
 ### visual
 
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
+| `visual.retention_days_not_positive` | `VISUAL_RETENTION_DAYS_NOT_POSITIVE` | INPUT_REJECTED | `--days must be positive` |
 | `visual.root_missing` | `VISUAL_ROOT_MISSING` | INPUT_REJECTED | `visual root is missing: {path}` |
+| `visual.purge_failed` | `VISUAL_PURGE_FAILED` | FAILURE | `visual purge failed: {reason}` |
 | `visual.provider_unsupported` | `VISUAL_PROVIDER_UNSUPPORTED` | INPUT_REJECTED | `unsupported visual provider: {provider}` |
 
 ### diagnostics
@@ -302,6 +331,7 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
 | `diagnostics.journal_missing` | `DIAGNOSTICS_JOURNAL_MISSING` | INPUT_REJECTED | `no journal for meeting {meeting_id} at {path}` |
+| `diagnostics.report_failed` | `DIAGNOSTICS_REPORT_FAILED` | FAILURE | `session report failed: {reason}` |
 
 ### diarize
 
@@ -324,7 +354,6 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
-| `worker.meeting_id_invalid` | `WORKER_MEETING_ID_INVALID` | INPUT_REJECTED | `invalid meeting ID: {meeting_id!r}` |
 | `worker.already_running` | `WORKER_ALREADY_RUNNING` | FAILURE | `worker for meeting {meeting_id} is already running` |
 | `worker.still_running` | `WORKER_STILL_RUNNING` | FAILURE | `worker for meeting {meeting_id} is still running` |
 | `worker.ingest_already_running` | `WORKER_INGEST_ALREADY_RUNNING` | FAILURE | `ingest job for meeting {meeting_id} is already running` |
@@ -355,12 +384,6 @@ Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.
 | Kode | Anggota | Exit | Pesan |
 | --- | --- | --- | --- |
 | `provider.unavailable` | `PROVIDER_UNAVAILABLE` | INFRA_FAILURE | `provider unavailable: {reason}` |
-
-### ingestion
-
-| Kode | Anggota | Exit | Pesan |
-| --- | --- | --- | --- |
-| `ingestion.episode_name_invalid` | `INGESTION_EPISODE_NAME_INVALID` | FAILURE | `invalid episode name for meeting {meeting_id}; expected {meeting_id}:w<index>; run fakeyou memory-forget --meeting-id with --keep-record before ingesting again` |
 
 ### persona
 

@@ -57,6 +57,7 @@ stop() {
   fi
 }
 trap stop TERM INT
+umask 077
 /entrypoint.sh "$@" &
 child=$!
 while :; do

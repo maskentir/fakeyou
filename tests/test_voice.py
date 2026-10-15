@@ -5,7 +5,7 @@ from typing import Any, cast
 import httpx2
 import pytest
 from openai import AsyncOpenAI
-from pipecat.services.meta.stt import MetaSTTService
+from pipecat.services.meta.stt import MetaSTTService, MetaSTTSettings
 from pipecat.transcriptions.language import Language
 from pydantic import SecretStr
 
@@ -22,7 +22,7 @@ from fakeyou.audio.voice import (
 )
 from fakeyou.config.settings import DEFAULTS, MiniMaxTTS, OpenAITTS, STTMode
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
-from tests.fakes import RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 
 
 def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
@@ -32,8 +32,8 @@ def test_create_muse_stt_builds_native_indonesian_endpointing_service() -> None:
     )
 
     assert isinstance(service, MetaSTTService)
-    stt_settings = service._settings
-    assert stt_settings is not None
+    stt_settings = service.settings
+    assert isinstance(stt_settings, MetaSTTSettings)
     assert stt_settings.language == "Indonesian"
     assert stt_settings.mode == "ENDPOINTING"
     assert stt_settings.keywords == ["Jemboed"]
@@ -49,7 +49,7 @@ def test_create_muse_stt_rejects_unknown_mode_before_connecting() -> None:
 
 async def test_tts_http_client_bounds_slow_streams() -> None:
     synthesizer = OpenAISpeechSynthesizer(api_key="test-key")
-    client = synthesizer._client
+    client = synthesizer.client
     try:
         assert client.timeout == httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
         assert client.timeout == TTS_HTTP_TIMEOUT
@@ -105,7 +105,7 @@ def test_synthesizer_rejects_unknown_voice_before_connecting() -> None:
 
 async def test_synthesizer_closes_owned_http_client() -> None:
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key")
-    owned = synthesizer._client
+    owned = synthesizer.client
 
     assert owned is not None
     assert not owned.is_closed()
@@ -116,7 +116,7 @@ async def test_synthesizer_closes_owned_http_client() -> None:
 
 def test_synthesizer_disables_sdk_retries() -> None:
     synthesizer = OpenAISpeechSynthesizer(api_key="test-openai-key")
-    assert synthesizer._client.max_retries == 0
+    assert synthesizer.client.max_retries == 0
 
 
 async def test_synthesizer_timeout_raises_typed_provider_fault(
@@ -260,7 +260,7 @@ async def test_minimax_synthesizer_streams_an_indonesian_pcm_request() -> None:
 async def test_minimax_stream_yields_chunks_and_skips_the_aggregated_final_event(
     journal: RecordingJournal,
 ) -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
             content=_sse(
@@ -300,7 +300,7 @@ async def test_minimax_error_status_raises_typed_provider_fault(
 ) -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200, content=_sse({"base_resp": {"status_code": status_code, "status_msg": "error"}})
         )
@@ -321,7 +321,7 @@ async def test_minimax_http_error_raises_typed_provider_fault() -> None:
     from fakeyou.observability.provider_faults import ProviderFault
 
     synthesizer = MiniMaxSpeechSynthesizer(
-        api_key="k", client=_minimax_client(lambda request: httpx2.Response(503))
+        api_key="k", client=_minimax_client(lambda _request: httpx2.Response(503))
     )
 
     with pytest.raises(ProviderFault) as caught:
@@ -332,13 +332,13 @@ async def test_minimax_http_error_raises_typed_provider_fault() -> None:
 
 async def test_minimax_synthesizer_closes_only_its_own_client() -> None:
     owned = MiniMaxSpeechSynthesizer(api_key="k")
-    shared = _minimax_client(lambda request: httpx2.Response(200))
+    shared = _minimax_client(lambda _request: httpx2.Response(200))
     borrowed = MiniMaxSpeechSynthesizer(api_key="k", client=shared)
 
     await owned.aclose()
     await borrowed.aclose()
 
-    assert owned._client.is_closed
+    assert owned.client.is_closed
     assert not shared.is_closed
     await shared.aclose()
 
@@ -412,7 +412,7 @@ async def test_empty_chunks_are_skipped_before_first_pcm(
 
 
 async def test_journaled_stream_skips_empty_chunks(journal: RecordingJournal) -> None:
-    from fakeyou.audio.voice import _journaled_stream
+    from fakeyou.audio.voice import journaled_stream
 
     async def open_stream(text: str) -> AsyncGenerator[bytes, None]:
         assert text == "Hello."
@@ -420,7 +420,7 @@ async def test_journaled_stream_skips_empty_chunks(journal: RecordingJournal) ->
         yield b"\x00\x01"
         yield b""
 
-    chunks = [chunk async for chunk in _journaled_stream(journal, "Hello.", open_stream)]
+    chunks = [chunk async for chunk in journaled_stream(journal, "Hello.", open_stream)]
 
     assert chunks == [b"\x00\x01"]
     [first] = journal.events("synthesis_pcm_emitted")
@@ -503,7 +503,7 @@ async def test_cancelled_stream_after_first_pcm_keeps_the_first_pcm_proof(
 
 
 async def test_minimax_first_pcm_is_reported_once(journal: RecordingJournal) -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
             content=_sse(
@@ -532,9 +532,9 @@ def test_create_speech_synthesizer_picks_provider_defaults() -> None:
     openai = create_speech_synthesizer(OpenAITTS(api_key=SecretStr("k"), voice="nova"))
 
     assert isinstance(minimax, MiniMaxSpeechSynthesizer)
-    assert (minimax._model, minimax._voice) == (MiniMaxTTS().model, MiniMaxTTS().voice)
+    assert (minimax.model, minimax.voice) == (MiniMaxTTS().model, MiniMaxTTS().voice)
     assert isinstance(openai, OpenAISpeechSynthesizer)
-    assert (openai._model, openai._voice) == (DEFAULTS.tts.model, "nova")
+    assert (openai.model, openai.voice) == (DEFAULTS.tts.model, "nova")
 
 
 async def test_synthesizer_tags_sentence_synthesis_with_its_index(
@@ -579,7 +579,7 @@ async def test_synthesizer_without_sentence_index_omits_the_tag(
 async def test_minimax_synthesizer_tags_sentence_synthesis_with_its_index(
     journal: RecordingJournal,
 ) -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
+    def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
             content=_sse(

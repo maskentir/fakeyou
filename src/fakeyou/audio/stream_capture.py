@@ -2,16 +2,16 @@ import asyncio
 import base64
 import binascii
 import time
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
-from importlib.resources import files
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, override, runtime_checkable
 
 from pipecat.frames.frames import InputAudioRawFrame, StartFrame
 from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_transport import TransportParams
+from playwright.async_api import Error as PlaywrightError
 
 from fakeyou.audio.audio import (
     DEFAULT_STREAM_POLICY,
@@ -27,8 +27,19 @@ from fakeyou.audio.audio import (
 from fakeyou.audio.deaf import DeafVerdict
 from fakeyou.audio.playback import PlaybackPort
 from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE, POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.numbers import real_number
+from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
+from fakeyou.foundation.polling import PageEvaluator, PollingLoop
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.observability.faults import record_consumer_fault
+from fakeyou.observability.faults import (
+    ConsumerSink,
+    Fault,
+    create_poll_guard,
+    record_consumer_fault,
+)
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 
@@ -38,7 +49,7 @@ CAPTURE_DRAIN_JS = (
 )
 
 SESSION_SILENCE_SECONDS = 30.0
-EARLY_AUDIO_BYTES = 160000
+EARLY_AUDIO_BYTES = CAPTURE_SAMPLE_RATE * PCM16_SAMPLE_BYTES * 5
 STREAM_FLEET_SLOTS = 4
 
 
@@ -55,13 +66,15 @@ DEFAULT_REGISTRY_TIMING = RegistryTiming()
 class DrainPolling:
     poll_interval_seconds: float = 0.25
     heartbeat_polls: int = 40
+    max_consecutive_failures: int = DEFAULTS.audio.drain_max_consecutive_failures
+    failure_journal_every: int = DEFAULTS.audio.drain_failure_journal_every
 
 
 DEFAULT_DRAIN_POLLING = DrainPolling()
 
 
 def load_capture_script() -> str:
-    return (files("fakeyou") / "assets" / "stream_capture.js").read_text(encoding="utf-8")
+    return read_package_text("assets", "stream_capture.js")
 
 
 class StreamAudioInput(BaseInputTransport):
@@ -70,6 +83,7 @@ class StreamAudioInput(BaseInputTransport):
         self._early: list[InputAudioRawFrame] = []
         self._early_bytes = 0
         self._capture: tuple[int, float] | None = None
+        self._audio_in_queue: Any = None
 
     def note_capture(self, seq: int, capture_ms: float) -> None:
         self._capture = (seq, capture_ms)
@@ -78,6 +92,7 @@ class StreamAudioInput(BaseInputTransport):
     def last_capture(self) -> tuple[int, float] | None:
         return self._capture
 
+    @override
     async def start(self, frame: StartFrame) -> None:
         await super().start(frame)
         await self.set_transport_ready(frame)
@@ -86,9 +101,9 @@ class StreamAudioInput(BaseInputTransport):
         for buffered in early:
             await self.push_audio_frame(buffered)
 
-    async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
+    async def feed(self, audio: bytes, sample_rate: int = CAPTURE_SAMPLE_RATE) -> None:
         frame = InputAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1)
-        if getattr(self, "_audio_in_queue", None) is None:
+        if self._audio_in_queue is None:
             self._early.append(frame)
             self._early_bytes += len(audio)
             while self._early and self._early_bytes > EARLY_AUDIO_BYTES:
@@ -143,10 +158,10 @@ def _parse_csrcs(raw_csrcs: Any) -> tuple[int, ...]:
 
 
 def _parse_number(entry: Mapping[str, Any], key: str) -> float:
-    value = entry.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    value = real_number(entry.get(key))
+    if value is None:
         raise _drain_error(f"{key} is not a number")
-    return float(value)
+    return value
 
 
 def _parse_pcm(pcm_b64: Any) -> bytes:
@@ -174,13 +189,36 @@ def _parse_entry(entry: Any) -> StreamChunk:
     )
 
 
-def parse_drain(payload: Mapping[str, Any]) -> list[StreamChunk]:
+@dataclass(frozen=True, slots=True)
+class DrainBatch:
+    chunks: list[StreamChunk]
+    skipped: int
+    first_error: MeetingAudioError | None
+
+    @property
+    def error_type(self) -> str | None:
+        if self.first_error is None:
+            return None
+        return type(self.first_error).__name__
+
+
+def parse_drain(payload: Mapping[str, Any]) -> DrainBatch:
     if not isinstance(payload, Mapping):
         raise _drain_error("payload is not a mapping")
     streams = payload.get("streams")
     if not isinstance(streams, list):
         raise _drain_error("streams is not a list")
-    return [_parse_entry(entry) for entry in streams]
+    chunks: list[StreamChunk] = []
+    skipped = 0
+    first_error: MeetingAudioError | None = None
+    for entry in streams:
+        try:
+            chunks.append(_parse_entry(entry))
+        except MeetingAudioError as error:
+            skipped += 1
+            if first_error is None:
+                first_error = error
+    return DrainBatch(chunks=chunks, skipped=skipped, first_error=first_error)
 
 
 def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) -> tuple[str, ...]:
@@ -309,7 +347,7 @@ class StreamRegistry:
         self._silence_seconds = timing.silence_seconds
         self._binder = binder
         self._journal = journal
-        self._recorder = recorder
+        self.recorder = recorder
         self._sessions: dict[int, StreamSession] = {}
         self._roster_seen: dict[str, float] = {}
 
@@ -376,12 +414,15 @@ class StreamRegistry:
             self._binder.observe_stream(chunk.slot, chunk.csrcs)
         session.input.note_capture(chunk.seq, chunk.page_ms)
         await session.input.feed(chunk.pcm)
-        if self._recorder is not None:
+        if self.recorder is not None:
             try:
-                self._recorder.write_chunk(chunk.slot, chunk.seq, chunk.page_ms, chunk.pcm)
-            except Exception as error:
+                self.recorder.write_chunk(chunk.slot, chunk.seq, chunk.page_ms, chunk.pcm)
+            except (OSError, ValueError) as error:
                 record_consumer_fault(
-                    None, self._journal, source="audio", detail="audio_persist", error=error
+                    ConsumerSink(journal=self._journal),
+                    source="audio",
+                    detail="audio_persist",
+                    error=error,
                 )
 
     def prune(self) -> None:
@@ -401,27 +442,68 @@ class SupportsCaptureRegistry(Protocol):
     def capture_registry(self) -> StreamRegistry: ...
 
 
-class CaptureDrainLoop:
+class CaptureDrainLoop(PollingLoop):
     def __init__(
         self,
-        page: Any,
+        page: PageEvaluator,
         registry: StreamRegistry,
         *,
         polling: DrainPolling = DEFAULT_DRAIN_POLLING,
-        journal: Journal | None = None,
+        sinks: ConsumerSink | None = None,
         twin_name: str | None = None,
     ) -> None:
+        super().__init__(
+            poll_interval_seconds=polling.poll_interval_seconds,
+            guard=create_poll_guard(sinks, source="audio", operation="capture_drain"),
+        )
         self._page = page
         self._registry = registry
-        self._poll_interval = polling.poll_interval_seconds
-        self._journal = journal
+        self._journal = sinks.journal if sinks is not None else None
         self._heartbeat_polls = polling.heartbeat_polls
         self._twin_name = twin_name
+        self._faults = sinks.faults if sinks is not None else None
+        self._max_consecutive_failures = polling.max_consecutive_failures
+        self._failure_journal_every = polling.failure_journal_every
         self._polls = 0
         self._fails = 0
+        self._consecutive_failures = 0
+        self._failure: MeetingAudioError | None = None
         self._rescued_seen: dict[int, int] = {}
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
+
+    def fail(self, message: str, *, cause: BaseException) -> None:
+        if self._failure is not None:
+            return
+        self._failure = MeetingAudioError(message)
+        if self._faults is not None:
+            self._faults.record(Fault(source="audio", kind="unavailable", detail=message))
+        if self._journal is not None:
+            self._journal.record(
+                "drain_poll_exhausted",
+                source="transport",
+                consecutive=self._consecutive_failures,
+                error_type=type(cause).__name__,
+            )
+
+    def raise_if_failed(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+
+    def _note_failure(self, stage: str, error: BaseException, *, skipped: int = 0) -> None:
+        self._consecutive_failures += 1
+        consecutive = self._consecutive_failures
+        if self._journal is not None and (
+            consecutive == 1 or consecutive % self._failure_journal_every == 0
+        ):
+            self._journal.record(
+                "drain_poll_failed",
+                source="transport",
+                stage=stage,
+                error_type=type(error).__name__,
+                consecutive=consecutive,
+                skipped=skipped,
+            )
+        if consecutive >= self._max_consecutive_failures:
+            self.fail(f"capture drain failed {consecutive} times in a row", cause=error)
 
     def _heartbeat(self, batch: Mapping[str, Any], chunks: list[StreamChunk]) -> None:
         if self._journal is None or self._heartbeat_polls <= 0:
@@ -472,62 +554,112 @@ class CaptureDrainLoop:
             roster_post_filter=len(parse_roster(batch, twin_name=self._twin_name)),
         )
 
-    async def poll(self) -> bool:
+    async def _fetch_batch(self) -> Mapping[str, Any] | None:
         try:
-            batch = await self._page.evaluate(CAPTURE_DRAIN_JS)
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                batch = await self._page.evaluate(CAPTURE_DRAIN_JS)
             if not isinstance(batch, Mapping):
-                self._fails += 1
-                return False
-            self._registry.update_roster(parse_roster(batch, twin_name=self._twin_name))
-            self._registry.note_roster(parse_roster_names(batch, twin_name=self._twin_name))
-            chunks = parse_drain(batch)
-            for chunk in chunks:
+                raise MeetingAudioError("capture batch is not a mapping")
+        except (MeetingAudioError, PlaywrightError, TimeoutError) as error:
+            self._fails += 1
+            self._note_failure("evaluate", error)
+            return None
+        else:
+            return batch
+
+    async def _feed_chunks(self, chunks: list[StreamChunk]) -> bool:
+        failed = False
+        for chunk in chunks:
+            try:
                 await self._registry.feed(chunk)
-            for slot, health in parse_health(batch).items():
-                if health.rescued > self._rescued_seen.get(slot, 0):
-                    self._rescued_seen[slot] = health.rescued
-                    if self._journal is not None:
-                        self._journal.record(
-                            "tap_slot_rescued",
-                            source="transport",
-                            slot=slot,
-                            rescued=health.rescued,
-                            stalled=health.stalled,
-                        )
-            if self._journal is not None:
-                for slot in parse_released(batch):
+            except RuntimeError as error:
+                failed = True
+                self._note_failure("feed", error)
+        return failed
+
+    def _settle_batch(self, batch: Mapping[str, Any], parsed: DrainBatch) -> None:
+        for slot, health in parse_health(batch).items():
+            if health.rescued > self._rescued_seen.get(slot, 0):
+                self._rescued_seen[slot] = health.rescued
+                if self._journal is not None:
                     self._journal.record(
-                        "tap_slot_dropped",
+                        "tap_slot_rescued",
                         source="transport",
                         slot=slot,
+                        rescued=health.rescued,
+                        stalled=health.stalled,
                     )
-            self._registry.prune()
-            self._polls += 1
-            self._heartbeat(batch, chunks)
-            return True
-        except Exception:
-            self._fails += 1
+        if self._journal is not None:
+            for slot in parse_released(batch):
+                self._journal.record(
+                    "tap_slot_dropped",
+                    source="transport",
+                    slot=slot,
+                )
+        self._registry.prune()
+        self._polls += 1
+        self._heartbeat(batch, parsed.chunks)
+
+    async def poll(self) -> bool:
+        if self._failure is not None:
             return False
+        batch = await self._fetch_batch()
+        if batch is None:
+            return False
+        try:
+            parsed = parse_drain(batch)
+        except MeetingAudioError as error:
+            self._fails += 1
+            self._note_failure("parse", error)
+            return False
+        self._registry.update_roster(parse_roster(batch, twin_name=self._twin_name))
+        self._registry.note_roster(parse_roster_names(batch, twin_name=self._twin_name))
+        failed = await self._feed_chunks(parsed.chunks)
+        self._settle_batch(batch, parsed)
+        if parsed.skipped and parsed.first_error is not None:
+            failed = True
+            self._note_failure("parse", parsed.first_error, skipped=parsed.skipped)
+        if not failed:
+            self._consecutive_failures = 0
+        return True
 
-    async def start(self) -> None:
-        if self._task is not None or self._closed:
-            return
-        self._task = asyncio.create_task(self._poll_loop())
+    @override
+    async def _poll_once(self) -> None:
+        await self.poll()
 
-    async def close(self) -> None:
-        task, self._task = self._task, None
-        self._closed = True
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    @override
+    def _record_poll_failure(self, error: Exception) -> None:
+        self._fails += 1
+        self._note_failure("poll", error)
 
-    async def _poll_loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._poll_interval)
+
+async def run_fleet_calls(calls: Iterable[Callable[[], Awaitable[None]]], operation: str) -> None:
+    errors: list[Exception] = []
+
+    async def attempt(call: Callable[[], Awaitable[None]]) -> None:
+        try:
+            await call()
+        except (RuntimeError, OSError) as error:
+            errors.append(error)
+
+    async with asyncio.TaskGroup() as group:
+        for call in calls:
+            group.create_task(attempt(call))
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise MeetingAudioError(f"fleet {operation} failed") from errors[0]
+
+
+async def tick_slot(
+    session: MeetingAudioSession, *, is_busy: bool, remote_participants: int | None
+) -> DeafVerdict | Exception:
+    try:
+        return await session.maintenance_tick(
+            is_busy=is_busy, remote_participants=remote_participants
+        )
+    except (MeetingAudioError, OSError) as error:
+        return error
 
 
 class StreamFleetSession:
@@ -565,7 +697,10 @@ class StreamFleetSession:
         await self._voice().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
 
     async def stop_playback(self) -> None:
-        await asyncio.gather(*(session.stop_playback() for session in self._sessions))
+        await run_fleet_calls(
+            [session.stop_playback for session in self._sessions],
+            "stop_playback",
+        )
 
     def raise_if_failed(self) -> None:
         failures: list[MeetingAudioError] = []
@@ -591,16 +726,21 @@ class StreamFleetSession:
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
     ) -> DeafVerdict:
-        verdicts: list[DeafVerdict] = []
-        for session in self._sessions:
-            try:
-                verdicts.append(
-                    await session.maintenance_tick(
-                        is_busy=is_busy, remote_participants=remote_participants
-                    )
+        async with asyncio.TaskGroup() as group:
+            tasks = [
+                group.create_task(
+                    tick_slot(session, is_busy=is_busy, remote_participants=remote_participants)
                 )
-            except MeetingAudioError:
+                for session in self._sessions
+            ]
+        verdicts: list[DeafVerdict] = []
+        for task in tasks:
+            result = task.result()
+            if isinstance(result, MeetingAudioError):
                 continue
+            if isinstance(result, Exception):
+                raise result
+            verdicts.append(result)
         if verdicts:
             if all(verdict == "alone" for verdict in verdicts):
                 return "alone"
@@ -611,7 +751,7 @@ class StreamFleetSession:
         raise MeetingAudioError("stream fleet is exhausted")
 
     async def stop(self) -> None:
-        await asyncio.gather(*(session.stop() for session in self._sessions))
+        await run_fleet_calls([session.stop for session in self._sessions], "stop")
 
 
 @dataclass(frozen=True, slots=True)

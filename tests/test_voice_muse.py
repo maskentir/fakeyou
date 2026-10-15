@@ -6,7 +6,7 @@ import time
 import unicodedata
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from pipecat.frames.frames import (
@@ -19,7 +19,7 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.meta.stt import MetaSTTService
+from pipecat.services.meta.stt import MetaSTTService, MetaSTTSettings
 from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
@@ -27,7 +27,7 @@ from fakeyou.audio.voice import SPEECH_LANGUAGES, MuseSTTOptions, create_muse_st
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
-from tests.fakes import FakeSTT
+from tests._audio_fakes import FakeSTT
 
 
 class _Collector(FrameProcessor):
@@ -35,11 +35,18 @@ class _Collector(FrameProcessor):
         super().__init__()
         self.final: asyncio.Queue[TranscriptionFrame] = asyncio.Queue()
 
+    @override
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame):
             await self.final.put(frame)
         await self.push_frame(frame, direction)
+
+
+class _UrlRecordingSTT(MetaSTTService):
+    def __init__(self, *, url: str, **kwargs: Any) -> None:
+        super().__init__(url=url, **kwargs)
+        self.connect_url = url
 
 
 def _normalise(text: str) -> str:
@@ -104,22 +111,28 @@ async def test_endpointing_harness_uses_configured_muse_model_url_and_language(
         observed.update(stt=stt, pcm=pcm, sample_rate=sample_rate, expected=expected, secret=secret)
 
     monkeypatch.setattr(sys.modules[__name__], "_run_pipeline", run_pipeline)
+    build_stt = create_muse_stt
+
+    def recording_stt(**kwargs: Any) -> MetaSTTService:
+        return build_stt(**kwargs, service_class=_UrlRecordingSTT)
+
+    monkeypatch.setattr(sys.modules[__name__], "create_muse_stt", recording_stt)
 
     await test_muse_endpointing_transcribes_realtime_wav()
 
     service = observed["stt"]
-    assert isinstance(service, MetaSTTService)
+    assert isinstance(service, _UrlRecordingSTT)
     assert observed["pcm"] == b"\0\0"
     assert observed["sample_rate"] == 24_000
     assert observed["expected"] == "hello there"
     assert observed["secret"] == "test-key"
 
-    stt_settings = service._settings
-    assert stt_settings is not None
+    stt_settings = service.settings
+    assert isinstance(stt_settings, MetaSTTSettings)
     assert stt_settings.model == "custom-muse-model"
     assert stt_settings.language == "English"
     assert stt_settings.mode == "ENDPOINTING"
-    assert service._url == "wss://muse.example.test/asr"
+    assert service.connect_url == "wss://muse.example.test/asr"
 
 
 async def _run_pipeline(

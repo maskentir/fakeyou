@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from fakeyou.audio.voice_activity import VoiceActivityTracker, VoiceAttribution
+from fakeyou.foundation.jsonl import read_jsonl
+from fakeyou.foundation.timeparse import parse_iso_datetime
 
 SOURCE_ACTIVE_THRESHOLD = 0.01
 DOMINANT_MARGIN = 0.5
@@ -234,12 +236,9 @@ def reference_precision(
 
 
 def _parse_wall(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
         return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    return parse_iso_datetime(value)
 
 
 def _percentile(values: Sequence[float], rank: float) -> float | None:
@@ -646,20 +645,6 @@ def _label_stability(
     return (stable / denominator) if denominator else None
 
 
-def _load_rows(path: Path) -> list[Mapping[str, Any]]:
-    rows: list[Mapping[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, Mapping):
-            rows.append(row)
-    return rows
-
-
 def voice_fixture_from_probe(
     probe_path: Path,
     record_path: Path,
@@ -668,7 +653,9 @@ def voice_fixture_from_probe(
     twin_name: str,
     speakers: SpeakerAliases,
 ) -> dict[str, Any]:
-    probe_rows = _load_rows(probe_path)
+    probe = read_jsonl(probe_path)
+    probe_rows = probe.rows
+    record = read_jsonl(record_path)
     pages = [row for row in probe_rows if row.get("kind") == "page"]
     wall_offset = _median(
         [
@@ -718,7 +705,7 @@ def voice_fixture_from_probe(
             ]
         events.append({"kind": "page", "mono_ms": float(row["mono_ms"]), "batch": batch})
     if wall_offset is not None:
-        for row in _load_rows(record_path):
+        for row in record.rows:
             at = _parse_wall(row.get("at"))
             if row.get("kind") == "transcript" and at is not None:
                 events.append(
@@ -739,7 +726,12 @@ def voice_fixture_from_probe(
         }
         for turn in json.loads(truth_path.read_text(encoding="utf-8"))
     ]
-    return {"twin_name": twin_name, "events": events, "truth": truth}
+    return {
+        "twin_name": twin_name,
+        "events": events,
+        "truth": truth,
+        "skipped_rows": probe.skipped + record.skipped,
+    }
 
 
 def replay_voice_labels(fixture: Mapping[str, Any]) -> dict[str, Any]:

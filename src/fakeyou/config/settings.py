@@ -1,19 +1,71 @@
+import ipaddress
 import os
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Literal, Self, get_args, get_origin, override
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource
 
 from fakeyou.catalog.config import API_KEY_OF_ROLE, ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, SessionId, TwinName
+from fakeyou.config.identifiers import SessionIdField, parse_session_id
+from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, TwinName
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
-OptionalURL = Annotated[str | None, BeforeValidator(lambda value: None if value == "" else value)]
+
+_SECURE_ENDPOINT_SCHEMES = frozenset({"https", "wss"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _require_secure_endpoint(value: Any, info: ValidationInfo) -> Any:
+    if not isinstance(value, str) or value == "":
+        return value
+    try:
+        parsed = urlsplit(value)
+    except (ValueError, UnicodeError):
+        raise ValueError(
+            f"{info.field_name} must use https or wss "
+            "(http/ws allowed only for loopback or dotless service hosts)"
+        ) from None
+    host = parsed.hostname or ""
+    if parsed.scheme.lower() in _SECURE_ENDPOINT_SCHEMES and host:
+        return value
+    if host and (_is_loopback_host(host) or "." not in host):
+        return value
+    raise ValueError(
+        f"{info.field_name} must use https or wss "
+        "(http/ws allowed only for loopback or dotless service hosts)"
+    )
+
+
+def _optional_secure_url(value: Any, info: ValidationInfo) -> Any:
+    if value == "":
+        return None
+    return _require_secure_endpoint(value, info)
+
+
+OptionalURL = Annotated[str | None, BeforeValidator(_optional_secure_url)]
+SecureURL = Annotated[str, BeforeValidator(_require_secure_endpoint)]
 
 
 def export_dotenv() -> None:
@@ -40,8 +92,8 @@ class EndpointSettings(Section):
 
 
 class IdentitySettings(Section):
-    owner_id: SessionId = "local_owner"
-    twin_id: SessionId = "local_twin"
+    owner_id: SessionIdField = parse_session_id("local_owner", field="owner_id")
+    twin_id: SessionIdField = parse_session_id("local_twin", field="twin_id")
     twin_name: TwinName = "Fakeyou Twin"
     voiceprint_enabled: bool = False
     voiceprint_threshold: float = 0.60
@@ -54,16 +106,22 @@ class IdentitySettings(Section):
     )
     voiceprint_policy_version: str = "v1"
     voiceprint_calibration_path: str = ""
+    voiceprint_timeout_seconds: PositiveSeconds = 5.0
 
 
 class PathSettings(Section):
     journal_dir: Path = Path(".runtime/journals")
     record_dir: Path = Path(".runtime/meetings")
     browser_profile_dir: Path = Path(".runtime/profiles")
+    browser_output_dir: Path = Path(".runtime/browser")
 
 
 class DatabaseSettings(Section):
     url: SecretStr | None = None
+    connect_timeout_seconds: PositiveSeconds = 5.0
+    statement_timeout_seconds: PositiveSeconds = 30.0
+    send_timeout_seconds: PositiveSeconds = 5.0
+    keepalive_idle_seconds: PositiveSeconds = 30.0
 
 
 class SpeechSettings(Section):
@@ -95,7 +153,7 @@ class OpenAIReply(ReplyBase):
 class CompatibleReply(ReplyBase):
     langchain_provider: ClassVar[str] = "openai"
     provider: Literal["openai_compatible"] = "openai_compatible"
-    base_url: str = Field(min_length=1)
+    base_url: SecureURL = Field(min_length=1)
     reasoning_effort: ReasoningEffort | None = None
     extra_body: dict[str, Any] | None = None
 
@@ -135,7 +193,7 @@ class OpenAITTS(TTSBase):
     provider: Literal["openai"] = "openai"
     model: str = "gpt-4o-mini-tts"
     voice: str = "alloy"
-    base_url: str = "https://api.openai.com/v1"
+    base_url: SecureURL = "https://api.openai.com/v1"
 
     @model_validator(mode="after")
     def valid_voice(self) -> Self:
@@ -150,7 +208,7 @@ class MiniMaxTTS(TTSBase):
     provider: Literal["minimax"] = "minimax"
     model: str = "speech-2.8-turbo"
     voice: str = "Indonesian_CalmWoman"
-    base_url: str = "https://api.minimax.io/v1/t2a_v2"
+    base_url: SecureURL = "https://api.minimax.io/v1/t2a_v2"
 
 
 TTSSettings = Annotated[OpenAITTS | MiniMaxTTS, Field(discriminator="provider")]
@@ -160,18 +218,26 @@ class STTSettings(Section):
     provider: Literal["muse"] = "muse"
     model: str = "muse-voice-transcribe-1.0"
     api_key: SecretStr | None = None
-    url: str = "wss://api.meta.ai/v1/asr/realtime"
+    url: SecureURL = "wss://api.meta.ai/v1/asr/realtime"
     mode: STTMode = "ENDPOINTING"
-    preroll_ms: float = 500.0
-    idle_reconnect_seconds: float = 0.0
-    ready_timeout_seconds: float = 10.0
+    preroll_ms: float = Field(default=500.0, ge=0.0, le=10_000.0)
+    idle_reconnect_seconds: float = Field(default=0.0, ge=0.0, le=86_400.0)
+    ready_timeout_seconds: PositiveSeconds = Field(default=10.0, le=300.0)
+    diarize_timeout_seconds: PositiveSeconds = 60.0
+    diarize_max_retries: int = Field(default=3, ge=0, le=10)
 
 
 class VADSettings(Section):
-    confidence: float = 0.7
-    start_secs: float = 0.2
-    stop_secs: float = 0.2
-    min_volume: float = 0.6
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    start_secs: float = Field(default=0.2, ge=0.0, le=60.0)
+    stop_secs: float = Field(default=0.2, ge=0.0, le=60.0)
+    min_volume: float = Field(default=0.6, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def non_empty_window(self) -> Self:
+        if self.start_secs + self.stop_secs <= 0:
+            raise ValueError("VAD requires a non-empty start/stop window")
+        return self
 
 
 class StoreSettings(Section):
@@ -186,6 +252,8 @@ class MemoryLLMBase(EndpointSettings):
     model: str = "gpt-5.5"
     small_model: str = "gpt-4.1-nano"
     api_key: SecretStr | None = None
+    timeout_seconds: PositiveSeconds = 60.0
+    max_retries: int = Field(default=2, ge=0)
 
 
 class OpenAIMemoryLLM(MemoryLLMBase):
@@ -195,7 +263,7 @@ class OpenAIMemoryLLM(MemoryLLMBase):
 
 class GenericMemoryLLM(MemoryLLMBase):
     client: Literal["openai_generic"] = "openai_generic"
-    base_url: str = Field(min_length=1)
+    base_url: SecureURL = Field(min_length=1)
 
 
 class AnthropicMemoryLLM(MemoryLLMBase):
@@ -215,6 +283,8 @@ class EmbedderSettings(EndpointSettings):
     api_key: SecretStr | None = None
     base_url: OptionalURL = "https://api.openai.com/v1"
     dim: int = Field(default=1024, gt=0)
+    timeout_seconds: PositiveSeconds = 60.0
+    max_retries: int = Field(default=2, ge=0)
 
 
 RecallStrategy = Literal["tool", "prefetch"]
@@ -242,6 +312,8 @@ class MemorySettings(Section):
     embedder: EmbedderSettings = Field(default_factory=EmbedderSettings)
     recall: RecallSettings = Field(default_factory=RecallSettings)
     ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
+    close_callback_seconds: PositiveSeconds = 5.0
+    close_hard_seconds: PositiveSeconds = 30.0
 
 
 class ConversationSettings(Section):
@@ -251,12 +323,15 @@ class ConversationSettings(Section):
     activation_seconds: PositiveSeconds = 30.0
     sentence_streaming: bool = False
     participant_policy_enabled: bool = False
+    participant_evidence_max_bytes: int = Field(default=8388608, gt=0)
     attribution_probe_enabled: bool = False
     voice_labels_enabled: bool = False
     meet_actions_enabled: bool = False
+    meet_chat_per_minute: int = Field(default=3, gt=0)
     per_stream_enabled: bool = False
     pre_generate_enabled: bool = False
     pregen_fuzzy_restart_enabled: bool = False
+    history_max_tokens: int = Field(default=32000, gt=0)
 
 
 class MeetingSettings(Section):
@@ -279,6 +354,9 @@ class BrowserSettings(Section):
 class AudioSettings(Section):
     persist_enabled: bool = False
     retention_days: int = Field(default=30, gt=0)
+    drain_max_consecutive_failures: int = Field(default=40, gt=0)
+    drain_failure_journal_every: int = Field(default=10, gt=0)
+    pactl_timeout_seconds: PositiveSeconds = 5.0
 
 
 class AudioHealthSettings(Section):
@@ -293,10 +371,13 @@ class PreflightSettings(Section):
 
 class WorkerSettings(Section):
     audio: bool = False
+    docker_timeout_seconds: PositiveSeconds = 30.0
+    start_timeout_seconds: PositiveSeconds = 600.0
 
 
 class VisualSettings(Section):
     enabled: bool = False
+    max_concurrent: int = Field(default=2, gt=0)
     provider: Literal["openai", "openai_compatible", "anthropic", "google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = None
@@ -382,6 +463,7 @@ class Settings(Configuration, BaseSettings):
     )
 
     @classmethod
+    @override
     def settings_customise_sources(
         cls,
         _settings_cls: type[BaseSettings],

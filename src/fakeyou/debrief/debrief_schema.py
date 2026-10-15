@@ -11,7 +11,7 @@ from pydantic import (
 )
 
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.foundation.invariants import SessionId
+from fakeyou.config.identifiers import IDENTIFIER_BODY, SessionIdField
 
 ABSENT_CLAIMS = frozenset({"", "null", "none", "unknown", "n/a"})
 
@@ -61,7 +61,7 @@ class ObjectiveFinding(BaseModel):
 
     objective_id: Annotated[
         str,
-        StringConstraints(pattern=r"^(objective|question):[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
+        StringConstraints(pattern=rf"^(objective|question):{IDENTIFIER_BODY}$"),
     ]
     status: Literal["addressed", "open", "uncertain"]
     evidence: Annotated[tuple[EvidenceRef, ...], Field(max_length=10)]
@@ -94,9 +94,9 @@ class DebriefReport(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     schema_version: Literal["meeting_debrief/v1"]
-    owner_id: SessionId
-    twin_id: SessionId
-    meeting_id: SessionId
+    owner_id: SessionIdField
+    twin_id: SessionIdField
+    meeting_id: SessionIdField
     record_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
     context_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None
     correction_sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None

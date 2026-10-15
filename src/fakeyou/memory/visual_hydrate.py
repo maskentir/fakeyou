@@ -3,7 +3,7 @@ import base64
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -62,6 +62,7 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         self._max_images = max_images
         self._journal = journal
 
+    @override
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
@@ -75,6 +76,7 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         messages = [hydrated if message is speech[-1] else message for message in request.messages]
         return self._strip_response(await handler(request.override(messages=messages)))
 
+    @override
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         messages = state.get("messages", [])
         tagged = [
@@ -89,6 +91,7 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
             trimmed.append(await self._trim(message))
         return {"messages": trimmed}
 
+    @override
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         messages = state.get("messages", [])
         if not messages:

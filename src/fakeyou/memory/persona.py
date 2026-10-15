@@ -1,7 +1,6 @@
 import asyncio
-import hashlib
 import json
-from importlib.resources import files
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import NAMESPACE_URL, uuid5
@@ -9,9 +8,12 @@ from uuid import NAMESPACE_URL, uuid5
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import RecallStrategy
+from fakeyou.config.identifiers import SessionIdField, parse_session_id
+from fakeyou.config.settings import RecallStrategy, Settings
 from fakeyou.conversation.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
-from fakeyou.foundation.invariants import SessionId, TwinName
+from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.foundation.invariants import TwinName
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.speakers import TWIN_SPEAKER
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
@@ -210,8 +212,8 @@ RECALL_RULES: dict[RecallStrategy, str] = {
 class PersonaProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    owner_id: SessionId
-    twin_id: SessionId
+    owner_id: SessionIdField
+    twin_id: SessionIdField
     display_name: TwinName
     role: ProfileText
     language: PersonaLanguage = "id"
@@ -235,6 +237,32 @@ async def load_persona(path: Path, *, owner_id: str, twin_id: str) -> PersonaPro
     if (profile.owner_id, profile.twin_id) != (owner_id, twin_id):
         raise FakeYouError(ErrorCode.PERSONA_IDENTITY_MISMATCH)
     return profile
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorIdentity:
+    persona_path: Path | None
+    owner_id: str | None = None
+    twin_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.owner_id is not None:
+            parse_session_id(self.owner_id, field="--owner-id")
+        if self.twin_id is not None:
+            parse_session_id(self.twin_id, field="--twin-id")
+
+
+async def load_operator_persona(identity: OperatorIdentity, settings: Settings) -> PersonaProfile:
+    if identity.persona_path is None:
+        raise FakeYouError(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason="persona path is missing")
+    try:
+        return await load_persona(
+            identity.persona_path,
+            owner_id=identity.owner_id or settings.identity.owner_id,
+            twin_id=identity.twin_id or settings.identity.twin_id,
+        )
+    except OSError as error:
+        raise FakeYouError(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=error.strerror) from None
 
 
 def build_system_prompt(
@@ -306,14 +334,10 @@ def refuse_meet_tool(tool_name: PersonaTool, *, journal: Journal | None) -> str:
 
 
 def persona_digest(profile: PersonaProfile) -> str:
-    payload = profile.model_dump(mode="json")
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return canonical_json_digest(profile.model_dump(mode="json"), compact=True)
 
 
-_NUMBER_VOCABULARY: dict[str, list[str]] = json.loads(
-    (files("fakeyou") / "number_vocabulary.json").read_text(encoding="utf-8")
-)
+_NUMBER_VOCABULARY: dict[str, list[str]] = json.loads(read_package_text("number_vocabulary.json"))
 
 
 def number_keywords(language: str) -> tuple[str, ...]:

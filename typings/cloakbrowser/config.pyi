@@ -1,0 +1,1 @@
+IGNORE_DEFAULT_ARGS: list[str]

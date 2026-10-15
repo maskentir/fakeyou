@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,12 +25,11 @@ from fakeyou.debrief import debrief_schema as schema
 from fakeyou.debrief import debrief_sources as sources
 from fakeyou.diarization.correction_labels import describe_correction_speakers
 from fakeyou.diarization.diarize_correction import correction_digest
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import MeetingBrief, context_path, validate_brief_scope
-from fakeyou.persistence.ingestion_status import write_atomically
-
-REPORT_FILE_NAME = "debrief.json"
-MARKDOWN_FILE_NAME = "debrief.md"
+from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.layout import REPORT_FILE_NAME, MeetingDir
 
 _EXTRACTION_RULES = (
     "Extract a source-backed meeting debrief. Write item text in Indonesian, preserving quotes, "
@@ -102,7 +102,7 @@ def _finding_ids(brief: MeetingBrief | None) -> tuple[str, ...]:
 
 @after_model
 def _require_native_response(
-    state: AgentState[schema.DebriefDraft], runtime: Runtime[None]
+    state: AgentState[schema.DebriefDraft], _runtime: Runtime[None]
 ) -> None:
     if not isinstance(state.get("structured_response"), schema.DebriefDraft):
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT)
@@ -155,6 +155,10 @@ async def _extract_chunk(
     return draft
 
 
+class DebriefStopRequested(Exception):
+    pass
+
+
 async def _wait_for_chunk(
     models: DebriefModels,
     chunk: tuple[sources.SourceEntry, ...],
@@ -163,13 +167,13 @@ async def _wait_for_chunk(
     stop: asyncio.Event,
 ) -> schema.DebriefDraft:
     if stop.is_set():
-        raise asyncio.CancelledError
+        raise DebriefStopRequested
     extraction = asyncio.create_task(_extract_chunk(models, chunk, brief))
     stopped = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait((extraction, stopped), return_when=asyncio.FIRST_COMPLETED)
         if stop.is_set():
-            raise asyncio.CancelledError
+            raise DebriefStopRequested
         return await extraction
     finally:
         for task in (extraction, stopped):
@@ -187,7 +191,7 @@ async def generate_debrief(
     journal: Journal | None = None,
 ) -> schema.DebriefDraft:
     if stop.is_set():
-        raise asyncio.CancelledError
+        raise DebriefStopRequested
     chunks = sources.chunk_sources(snapshot.sources)
     drafts: list[schema.DebriefDraft] = []
     for index, chunk in enumerate(chunks, start=1):
@@ -205,16 +209,15 @@ async def generate_debrief(
         try:
             draft = await _wait_for_chunk(models, chunk, brief=brief, stop=stop)
             sources.validate_draft(draft, sources={entry.id: entry for entry in chunk}, brief=brief)
-        except BaseException as error:
-            if journal is not None and request_id is not None:
-                journal.request_failed(request_id, error=type(error).__name__)
-            raise
-        else:
             if journal is not None and request_id is not None:
                 journal.request_finished(request_id, item_count=len(draft.items))
             drafts.append(draft)
+        finally:
+            error = sys.exception()
+            if error is not None and journal is not None and request_id is not None:
+                journal.request_failed(request_id, error=type(error).__name__)
     if stop.is_set():
-        raise asyncio.CancelledError
+        raise DebriefStopRequested
     merged = merge_drafts(drafts)
     present = {finding.objective_id for finding in merged.findings}
     missing = tuple(
@@ -260,7 +263,7 @@ def merge_drafts(drafts: Sequence[schema.DebriefDraft]) -> schema.DebriefDraft:
 
 
 def _labels() -> dict[str, str]:
-    raw = json.loads(Path(__file__).with_name("debrief_labels.json").read_text(encoding="utf-8"))
+    raw = json.loads(read_package_text("debrief", "debrief_labels.json"))
     if not isinstance(raw, dict) or not all(
         isinstance(k, str) and isinstance(v, str) for k, v in raw.items()
     ):
@@ -363,7 +366,8 @@ def render_debrief(
 
 
 def _pending_recovery(record_path: Path) -> bool:
-    return any(record_path.parent.glob(f"{REPORT_FILE_NAME}.*.rollback"))
+    layout = MeetingDir.from_record_path(record_path)
+    return any(layout.dir.glob(f"{REPORT_FILE_NAME}.*.rollback"))
 
 
 def read_debrief(record_path: Path) -> schema.DebriefReport:
@@ -371,7 +375,7 @@ def read_debrief(record_path: Path) -> schema.DebriefReport:
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_PUBLICATION_RECOVERY)
     try:
         return schema.DebriefReport.model_validate_json(
-            record_path.with_name(REPORT_FILE_NAME).read_bytes()
+            MeetingDir.from_record_path(record_path).debrief_json.read_bytes()
         )
     except (OSError, ValueError):
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_CANONICAL_INVALID) from None
@@ -434,31 +438,33 @@ def write_debrief(record_path: Path, report: schema.DebriefReport) -> None:
     ).encode("utf-8")
     canonical = (report.model_dump_json(indent=2) + "\n").encode("utf-8")
     _current_report(record_path, report)
-    write_atomically(record_path.with_name(MARKDOWN_FILE_NAME), markdown)
+    layout = MeetingDir.from_record_path(record_path)
+    write_atomically(layout.debrief_md, markdown)
     _current_report(record_path, report)
-    canonical_path = record_path.with_name(REPORT_FILE_NAME)
+    canonical_path = layout.debrief_json
     backup = canonical_path.with_name(f"{canonical_path.name}.{uuid4().hex}.rollback")
     previous_exists = canonical_path.exists()
     if previous_exists:
         os.link(canonical_path, backup)
+    replaced = False
     try:
         write_atomically(canonical_path, canonical)
-    except BaseException:
-        if previous_exists:
+        replaced = True
+    finally:
+        if replaced:
+            backup.unlink(missing_ok=True)
+        elif previous_exists:
             os.replace(backup, canonical_path)
             backup.unlink(missing_ok=True)
         else:
             canonical_path.unlink(missing_ok=True)
-        raise
-    else:
-        backup.unlink(missing_ok=True)
 
 
 def rebuild_debrief_markdown(record_path: Path) -> None:
     report = read_debrief(record_path)
     _current_report(record_path, report)
     write_atomically(
-        record_path.with_name(MARKDOWN_FILE_NAME),
+        MeetingDir.from_record_path(record_path).debrief_md,
         render_debrief(report, speaker_names=describe_correction_speakers(record_path)).encode(
             "utf-8"
         ),
@@ -472,7 +478,7 @@ def debrief_report_status(
 ) -> Literal["available", "stale", "missing", "invalid"]:
     if _pending_recovery(record_path):
         return "invalid"
-    if not record_path.with_name(REPORT_FILE_NAME).exists():
+    if not MeetingDir.from_record_path(record_path).debrief_json.exists():
         return "missing"
     try:
         report = read_debrief(record_path)

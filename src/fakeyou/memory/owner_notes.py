@@ -1,5 +1,4 @@
 import hashlib
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -14,41 +13,39 @@ from neo4j.exceptions import ConstraintError
 from neo4j.time import DateTime as Neo4jDateTime
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.foundation.invariants import IDENTIFIER_PATTERN
+from fakeyou.config.identifiers import verify_memory_group_id
 
 OWNER_NOTE_SOURCE = "owner note"
 
 NoteStatus = Literal["pending", "active", "superseded"]
 
-_GROUP_PATTERN = re.compile(IDENTIFIER_PATTERN)
-
-_INTENT_CREATE_QUERY = (
+INTENT_CREATE_QUERY = (
     "CREATE (n:FakeyouOwnerNote {uuid: $uuid, group_id: $group_id, digest: $digest, "
     "status: 'pending', source_at: $source_at, recorded_at: $recorded_at, "
     "target_uuid: $target_uuid}) RETURN n.uuid AS uuid"
 )
-_CONTROL_LOAD_QUERY = (
+CONTROL_LOAD_QUERY = (
     "MATCH (n:FakeyouOwnerNote {uuid: $uuid}) WHERE n.group_id = $group_id "
     "RETURN n.uuid AS uuid, n.group_id AS group_id, n.digest AS digest, "
     "n.status AS status, n.source_at AS source_at, n.recorded_at AS recorded_at, "
     "n.target_uuid AS target_uuid, n.superseded_by AS superseded_by"
 )
-_STATES_QUERY = (
+STATES_QUERY = (
     "MATCH (n:FakeyouOwnerNote) WHERE n.uuid IN $uuids AND n.group_id = $group_id "
     "RETURN n.uuid AS uuid, n.status AS status"
 )
-_INDEX_QUERY = "CREATE CONSTRAINT IF NOT EXISTS FOR (n:FakeyouOwnerNote) REQUIRE n.uuid IS UNIQUE"
-_LOCK_TARGET_QUERY = (
+INDEX_QUERY = "CREATE CONSTRAINT IF NOT EXISTS FOR (n:FakeyouOwnerNote) REQUIRE n.uuid IS UNIQUE"
+LOCK_TARGET_QUERY = (
     "MATCH (t:FakeyouOwnerNote {uuid: $target_uuid}) WHERE t.group_id = $group_id "
     "SET t.uuid = t.uuid RETURN t.status AS status"
 )
-_PUBLISH_NOTE_QUERY = (
+PUBLISH_NOTE_QUERY = (
     "MATCH (n:FakeyouOwnerNote {uuid: $uuid}) "
     "WHERE n.group_id = $group_id AND n.status = 'pending' "
     "MATCH (e:Episodic {uuid: $uuid}) WHERE e.group_id = $group_id "
     "SET n.status = 'active' MERGE (n)-[:SOURCE_EPISODE]->(e) RETURN n.uuid AS uuid"
 )
-_PUBLISH_CORRECTION_QUERY = (
+PUBLISH_CORRECTION_QUERY = (
     "MATCH (n:FakeyouOwnerNote {uuid: $uuid}) "
     "WHERE n.group_id = $group_id AND n.status = 'pending' "
     "MATCH (t:FakeyouOwnerNote {uuid: $target_uuid}) "
@@ -59,7 +56,7 @@ _PUBLISH_CORRECTION_QUERY = (
     "MERGE (n)-[:SOURCE_EPISODE]->(e) MERGE (n)-[:SUPERSEDES]->(t) "
     "MERGE (t)-[:SOURCE_EPISODE]->(te) RETURN n.uuid AS uuid"
 )
-_PUBLISH_LEGACY_CORRECTION_QUERY = (
+PUBLISH_UNTRACKED_CORRECTION_QUERY = (
     "MATCH (n:FakeyouOwnerNote {uuid: $uuid}) "
     "WHERE n.group_id = $group_id AND n.status = 'pending' "
     "MATCH (e:Episodic {uuid: $uuid}) WHERE e.group_id = $group_id "
@@ -71,7 +68,7 @@ _PUBLISH_LEGACY_CORRECTION_QUERY = (
     "MERGE (n)-[:SOURCE_EPISODE]->(e) MERGE (n)-[:SUPERSEDES]->(t) "
     "MERGE (t)-[:SOURCE_EPISODE]->(te) RETURN n.uuid AS uuid"
 )
-_FORGET_CHAIN_QUERY = (
+FORGET_CHAIN_QUERY = (
     "MATCH (e:Episodic {uuid: $uuid}) WHERE e.group_id = $group_id "
     "OPTIONAL MATCH (:FakeyouOwnerNote {uuid: $uuid, group_id: $group_id})"
     "<-[:SUPERSEDES]-(incoming:FakeyouOwnerNote {group_id: $group_id}) "
@@ -80,7 +77,7 @@ _FORGET_CHAIN_QUERY = (
     "RETURN count(DISTINCT incoming) AS incoming, "
     "count(DISTINCT pending) AS pending_correctors"
 )
-_CONTROL_DELETE_QUERY = (
+CONTROL_DELETE_QUERY = (
     "MATCH (n:FakeyouOwnerNote {uuid: $uuid}) WHERE n.group_id = $group_id DETACH DELETE n"
 )
 
@@ -136,11 +133,6 @@ class _NoteAttempt:
     body: str
     source_at: datetime | None
     target: str | None
-
-
-def _require_group(group_id: str) -> None:
-    if not _GROUP_PATTERN.fullmatch(group_id):
-        raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
 
 
 def _require_aware(value: datetime, name: str) -> None:
@@ -210,7 +202,7 @@ def _stored_from_record(record: Any) -> _StoredNote:
 
 
 async def _load_control(memory: Graphiti, group_id: str, uuid: str) -> _StoredNote | None:
-    result = await memory.driver.execute_query(_CONTROL_LOAD_QUERY, uuid=uuid, group_id=group_id)
+    result = await memory.driver.execute_query(CONTROL_LOAD_QUERY, uuid=uuid, group_id=group_id)
     for record in result.records:
         return _stored_from_record(record)
     return None
@@ -284,20 +276,20 @@ async def _publish_note(memory: Graphiti, *, group_id: str, operation: _Operatio
         async with memory.driver.transaction() as tx:
             if operation.target is None:
                 rows = await _run_rows(
-                    tx, _PUBLISH_NOTE_QUERY, uuid=operation.uuid, group_id=group_id
+                    tx, PUBLISH_NOTE_QUERY, uuid=operation.uuid, group_id=group_id
                 )
                 if not rows:
                     raise NoteConflictError(ErrorCode.NOTE_NOT_PENDING)
                 return
             locked = await _run_rows(
-                tx, _LOCK_TARGET_QUERY, target_uuid=operation.target, group_id=group_id
+                tx, LOCK_TARGET_QUERY, target_uuid=operation.target, group_id=group_id
             )
             if locked:
                 if locked[0]["status"] != "active":
                     raise NoteConflictError(ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE)
                 rows = await _run_rows(
                     tx,
-                    _PUBLISH_CORRECTION_QUERY,
+                    PUBLISH_CORRECTION_QUERY,
                     uuid=operation.uuid,
                     group_id=group_id,
                     target_uuid=operation.target,
@@ -313,7 +305,7 @@ async def _publish_note(memory: Graphiti, *, group_id: str, operation: _Operatio
                 raise FakeYouError(ErrorCode.NOTE_TARGET_SNAPSHOT_MISSING)
             rows = await _run_rows(
                 tx,
-                _PUBLISH_LEGACY_CORRECTION_QUERY,
+                PUBLISH_UNTRACKED_CORRECTION_QUERY,
                 uuid=operation.uuid,
                 group_id=group_id,
                 target_uuid=operation.target,
@@ -435,7 +427,7 @@ async def remember_owner_note(
     source_at: datetime | None = None,
     identity: NoteIdentity = DEFAULT_NOTE_IDENTITY,
 ) -> OwnerNoteResult:
-    _require_group(group_id)
+    verify_memory_group_id(group_id)
     body = text.strip()
     if not body:
         raise FakeYouError(ErrorCode.NOTE_BODY_BLANK)
@@ -470,7 +462,7 @@ async def remember_owner_note(
         raise NoteConflictError(ErrorCode.NOTE_ID_IN_USE) from None
     try:
         await memory.driver.execute_query(
-            _INTENT_CREATE_QUERY,
+            INTENT_CREATE_QUERY,
             uuid=operation,
             group_id=group_id,
             digest=_digest(group_id, body, effective, target),
@@ -499,11 +491,11 @@ async def remember_owner_note(
 async def read_note_states(
     memory: Graphiti, *, group_id: str, episode_uuids: list[str]
 ) -> dict[str, NoteStatus]:
-    _require_group(group_id)
+    verify_memory_group_id(group_id)
     wanted = sorted(set(episode_uuids))
     if not wanted:
         return {}
-    result = await memory.driver.execute_query(_STATES_QUERY, uuids=wanted, group_id=group_id)
+    result = await memory.driver.execute_query(STATES_QUERY, uuids=wanted, group_id=group_id)
     states: dict[str, NoteStatus] = {}
     for record in result.records:
         uuid_value = _record_text(record, "uuid")
@@ -514,11 +506,11 @@ async def read_note_states(
 
 
 async def ensure_note_indexes(memory: Graphiti) -> None:
-    await memory.driver.execute_query(_INDEX_QUERY)
+    await memory.driver.execute_query(INDEX_QUERY)
 
 
 async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: str) -> None:
-    _require_group(group_id)
+    verify_memory_group_id(group_id)
     if not episode_uuid.strip():
         raise FakeYouError(ErrorCode.NOTE_EPISODE_UUID_BLANK)
     try:
@@ -529,7 +521,7 @@ async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: st
         raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY)
     control = await _load_control(memory, group_id, episode_uuid)
     result = await memory.driver.execute_query(
-        _FORGET_CHAIN_QUERY, uuid=episode_uuid, group_id=group_id
+        FORGET_CHAIN_QUERY, uuid=episode_uuid, group_id=group_id
     )
     incoming = 0
     pending_correctors = 0
@@ -550,4 +542,4 @@ async def forget_owner_note(memory: Graphiti, *, group_id: str, episode_uuid: st
     ):
         raise FakeYouError(ErrorCode.NOTE_IN_CORRECTION_CHAIN)
     await memory.remove_episode(episode_uuid)
-    await memory.driver.execute_query(_CONTROL_DELETE_QUERY, uuid=episode_uuid, group_id=group_id)
+    await memory.driver.execute_query(CONTROL_DELETE_QUERY, uuid=episode_uuid, group_id=group_id)

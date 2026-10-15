@@ -269,3 +269,76 @@ def test_retired_error_names_are_gone(name: str) -> None:
     ]
 
     assert offenders == []
+
+
+BROAD_CATCH_CONTAINERS = {
+    "src/fakeyou/observability/cleanup.py",
+    "src/fakeyou/observability/faults.py",
+    "src/fakeyou/observability/journal.py",
+}
+
+
+def _is_broad_catch(annotation: ast.expr | None) -> bool:
+    if annotation is None:
+        return True
+    if isinstance(annotation, ast.Name):
+        return annotation.id in {"Exception", "BaseException"}
+    if isinstance(annotation, ast.Attribute):
+        return annotation.attr in {"Exception", "BaseException"}
+    if isinstance(annotation, ast.Tuple):
+        return any(_is_broad_catch(item) for item in annotation.elts)
+    return False
+
+
+@pytest.mark.parametrize("path", SOURCE_FILES, ids=_relative)
+def test_broad_catches_live_only_in_observability_containers(path: Path) -> None:
+    if _relative(path) in BROAD_CATCH_CONTAINERS:
+        return
+    offenders = [
+        node.lineno
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.ExceptHandler)
+        and _is_broad_catch(node.type)
+        and not any(isinstance(child, ast.Raise) for child in ast.walk(node))
+    ]
+
+    assert offenders == []
+
+
+def _identifiers(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, ast.alias):
+            names.add(node.asname or node.name)
+    return names
+
+
+@pytest.mark.parametrize("path", PYTHON_FILES, ids=_relative)
+def test_python_files_carry_no_compatibility_names(path: Path) -> None:
+    names = _identifiers(ast.parse(path.read_text()))
+
+    assert sorted(name for name in names if "legacy" in name.lower()) == []
+
+
+@pytest.mark.parametrize("path", SOURCE_FILES, ids=_relative)
+def test_suppress_never_takes_a_broad_exception(path: Path) -> None:
+    offenders = [
+        node.lineno
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "suppress"
+        and any(
+            isinstance(arg, ast.Name) and arg.id in {"Exception", "BaseException"}
+            for arg in node.args
+        )
+    ]
+
+    assert offenders == []

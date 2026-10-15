@@ -1,8 +1,8 @@
 import asyncio
+import os
 import signal
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import (
-    AsyncExitStack,
     ExitStack,
     asynccontextmanager,
     contextmanager,
@@ -35,10 +35,12 @@ from fakeyou.conversation.conversation import (
     LoopGeneration,
     LoopInteraction,
     LoopTiming,
+    MeetingAgent,
     StreamingLangGraphResponder,
     ToolResultCallback,
     conversation_thread_id,
 )
+from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, open_database, require_url
@@ -64,6 +66,7 @@ from fakeyou.memory.persona import (
     refuse_meet_tool,
 )
 from fakeyou.memory.visual_hydrate import create_visual_hydrate_middleware, create_visual_resolver
+from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import (
@@ -83,6 +86,7 @@ class VoiceprintLive:
     matcher: VoiceprintMatcher
     embedder: SpeakerEmbedder
     min_seconds: float
+    timeout_seconds: float
     owners: Mapping[str, str]
     artifact: CalibrationArtifact | None = None
     slot_taps: dict[str, TurnAudioTap] = field(default_factory=dict)
@@ -116,6 +120,7 @@ def build_voiceprint_live(
         ),
         embedder=embedder,
         min_seconds=settings.identity.voiceprint_min_seconds,
+        timeout_seconds=settings.identity.voiceprint_timeout_seconds,
         owners={},
         artifact=artifact,
     )
@@ -128,14 +133,14 @@ def open_voiceprint(settings: Settings) -> Iterator[VoiceprintLive | None]:
         return
     with open_database(settings) as engine:
         require_current(engine)
-        embedder = _load_voiceprint_embedder(settings)
+        embedder = load_voiceprint_embedder(settings)
         artifact = _load_voiceprint_artifact(settings)
         yield build_voiceprint_live(
             settings, store=VoiceprintStore(engine), embedder=embedder, artifact=artifact
         )
 
 
-def _load_voiceprint_embedder(settings: Settings) -> SpeakerEmbedder:
+def load_voiceprint_embedder(settings: Settings) -> SpeakerEmbedder:
     if not settings.identity.voiceprint_model_path:
         raise FakeYouError(ErrorCode.VOICEPRINT_MODEL_PATH_MISSING)
     return load_embedder(
@@ -169,19 +174,41 @@ def create_visual_captioner(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SignalHandlers:
+    installed: tuple[str, ...]
+    unavailable: tuple[str, ...]
+
+
 @contextmanager
-def stop_signal_handlers(stop: asyncio.Event) -> Iterator[None]:
+def stop_signal_handlers(
+    stop: asyncio.Event, *, force_exit: Callable[[int], None] = os._exit
+) -> Iterator[SignalHandlers]:
     loop = asyncio.get_running_loop()
+    signaled = False
+
+    def _handle(signum: int) -> None:
+        nonlocal signaled
+        if signaled:
+            force_exit(128 + signum)
+            return
+        signaled = True
+        stop.set()
+
     with ExitStack() as handlers:
+        installed: list[str] = []
+        unavailable: list[str] = []
         for candidate in (signal.SIGINT, signal.SIGTERM):
             previous = signal.getsignal(candidate)
             try:
-                loop.add_signal_handler(candidate, stop.set)
+                loop.add_signal_handler(candidate, _handle, candidate)
             except (NotImplementedError, RuntimeError, ValueError):
+                unavailable.append(signal.Signals(candidate).name)
                 continue
+            installed.append(signal.Signals(candidate).name)
             handlers.callback(signal.signal, candidate, previous)
             handlers.callback(loop.remove_signal_handler, candidate)
-        yield
+        yield SignalHandlers(installed=tuple(installed), unavailable=tuple(unavailable))
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +227,11 @@ DEFAULT_AGENT_WIRING = AgentWiring()
 class LoopBehavior:
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None]
     wake_phrases: Sequence[str] = ()
+    twin_names: Sequence[str] = ()
     barge_in: bool = False
     on_tool_result: ToolResultCallback | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
+    others_speaking: Callable[[], bool] | None = None
 
 
 def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
@@ -255,6 +284,12 @@ class _ConversationBuilder:
         fallback = create_fallback_chat_model(self._settings)
         if fallback is not None:
             self._middleware.append(ModelFallbackMiddleware(fallback))
+
+    def add_history(self) -> None:
+        self._middleware.append(
+            HistoryTrimMiddleware(max_tokens=self._settings.conversation.history_max_tokens)
+        )
+        self._middleware.append(OrphanToolCallMiddleware())
 
     def wired_visual(self) -> VisualCaptionResolver | None:
         if not _visual_wired(self._settings, self._agent):
@@ -332,7 +367,7 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
-    def build_responder(self, agent: Any, thread_id: str) -> ConversationResponder:
+    def build_responder(self, agent: MeetingAgent, thread_id: str) -> ConversationResponder:
         if self._settings.conversation.sentence_streaming:
             return StreamingLangGraphResponder(
                 agent,
@@ -356,9 +391,11 @@ class _ConversationBuilder:
             interaction=LoopInteraction(
                 on_transition=self._behavior.on_transition,
                 wake_phrases=self._behavior.wake_phrases,
+                twin_names=self._behavior.twin_names,
                 barge_in=self._behavior.barge_in,
                 barge_in_min_words=conversation_settings.barge_in_min_words,
                 participant_policy_enabled=conversation_settings.participant_policy_enabled,
+                others_speaking=self._behavior.others_speaking,
             ),
             timing=LoopTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
@@ -389,11 +426,17 @@ async def open_conversation(
     builder = _ConversationBuilder(settings, agent, behavior, diagnostics)
     builder.build_persona()
     model = create_chat_model(settings)
-    async with AsyncExitStack() as resources:
+    async with TeardownStack(faults=diagnostics.faults) as resources:
         checkpointer = await resources.enter_async_context(
-            open_checkpointer(require_url(configured_url(settings)))
+            open_checkpointer(
+                require_url(configured_url(settings)),
+                connect_timeout_seconds=settings.database.connect_timeout_seconds,
+                statement_timeout_seconds=settings.database.statement_timeout_seconds,
+                keepalive_idle_seconds=settings.database.keepalive_idle_seconds,
+            )
         )
         builder.add_greeting()
+        builder.add_history()
         builder.add_memory(builder.wired_visual())
         builder.add_visual()
         builder.add_meet_tools()

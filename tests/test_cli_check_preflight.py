@@ -14,13 +14,14 @@ import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
 from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
-from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.config.settings import (
     CompatibleReply,
     GoogleReply,
     MiniMaxTTS,
     Settings,
 )
+from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
@@ -30,9 +31,11 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
+from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration.assembly import LoopBehavior
-from tests._cli_support import BASE_HOSTS, _join_with_audio, with_muse_fallback
-from tests.fakes import SessionRun, env_file_opt
+from tests._cli_support import BASE_HOSTS, AudioJoin, with_muse_fallback
+from tests._fakes_common import env_file_opt
+from tests._runtime_fakes import SessionRun
 
 
 def test_main_exits_2_on_input_error(
@@ -131,18 +134,25 @@ def test_default_pa_pins_audio_constants() -> None:
 
 @pytest.mark.asyncio
 async def test_join_audio_wires_journal_and_preflight_hosts(
+    audio_join: AudioJoin,
     session_run: SessionRun,
-    join: Callable[..., Any],
     settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured = await _join_with_audio(
-        tmp_path, monkeypatch, settings=settings, join=join, session_run=session_run
-    )
+    captured = session_run
 
-    journal = captured["open_audio"].keywords["diagnostics"].journal
-    assert journal._meeting_id == "meeting-9"
+    async def probe(_config: Any, **kwargs: Any) -> SessionResult:
+        kwargs["open_audio"].keywords["diagnostics"].journal.record("wiring_probe", source="audio")
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+
+    session_run.effect = probe
+    await audio_join()
+
+    rows = [
+        json.loads(line)
+        for line in (settings.paths.journal_dir / "meeting-9.jsonl").read_text().splitlines()
+    ]
+    [probed] = [row for row in rows if row["event"] == "wiring_probe"]
+    assert probed["meeting_id"] == "meeting-9"
     assert captured["preflight_hosts"] == BASE_HOSTS
     assert captured["preflight_budget_seconds"] == 5.0
 
@@ -266,6 +276,7 @@ def test_chat_model_passes_provider_request_fields_as_extra_body(
 def test_settings_read_extra_body_as_json(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    del settings
     monkeypatch.setenv("FAKEYOU_REPLY__PROVIDER", "openai_compatible")
     monkeypatch.setenv("FAKEYOU_REPLY__BASE_URL", "https://api.minimax.io/v1")
     monkeypatch.setenv("FAKEYOU_REPLY__EXTRA_BODY", '{"reasoning_split": true}')
@@ -366,19 +377,19 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 
     created: dict[str, Any] = {}
 
-    def fake_agent(model: Any, **kwargs: Any) -> SimpleNamespace:
+    def fake_agent(_model: Any, **kwargs: Any) -> SimpleNamespace:
         created.update(kwargs)
         return SimpleNamespace(name="agent")
 
     monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)
-    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
     settings = with_muse_fallback(settings)
     config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
 
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -386,6 +397,8 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     assert [type(item) for item in created["middleware"]] == [
         greeting_type,
         ModelFallbackMiddleware,
+        HistoryTrimMiddleware,
+        OrphanToolCallMiddleware,
     ]
 
 
@@ -406,16 +419,16 @@ async def test_open_conversation_wires_sentence_streaming_flag(
         return StubLoop()
 
     monkeypatch.setattr(
-        assembly, "create_meeting_agent", lambda *args, **kwargs: SimpleNamespace(name="agent")
+        assembly, "create_meeting_agent", lambda *_args, **_kwargs: SimpleNamespace(name="agent")
     )
-    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(assembly, "ConversationLoop", fake_loop)
     config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
 
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
     assert type(seen["responder"]) is LangGraphResponder
@@ -425,7 +438,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
     assert isinstance(seen["responder"], StreamingLangGraphResponder)

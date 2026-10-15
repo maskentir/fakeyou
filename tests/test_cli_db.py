@@ -19,7 +19,9 @@ from fakeyou.db.tables import voiceprints
 
 @pytest.fixture
 def unversioned_database_url(blank_database_url: str) -> str:
-    engine = create_engine_for_url(blank_database_url)
+    engine = create_engine_for_url(
+        blank_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         voiceprints.create(engine)
     finally:

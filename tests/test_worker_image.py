@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.config.identifiers import SessionId
 
 GRACEFUL_CHILD = (
     'trap "sleep 2; echo graceful-done; exit 0" TERM; echo child-started; '
@@ -116,12 +117,37 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
 
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
+def test_worker_image_ships_the_managed_local_audio_transport() -> None:
+    probe = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "run",
+            "-T",
+            "--rm",
+            "--no-deps",
+            "meeting-worker",
+            "python",
+            "-c",
+            "import pyaudio;"
+            "from fakeyou.audio.local_transport import ManagedLocalAudioTransport;"
+            "assert callable(ManagedLocalAudioTransport.terminate);"
+            "print('local-transport-ok')",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "local-transport-ok" in probe.stdout, probe.stdout + probe.stderr
+
+
+@pytest.mark.container
+@pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
 def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path: Path) -> None:
     from fakeyou.worker.worker_backend import DockerWorkerBackend, compose_override
 
     meeting_id = f"probe-{uuid4().hex[:8]}"
     override = tmp_path / "override.yml"
-    override.write_text(compose_override(meeting_id, role="worker"), encoding="utf-8")
+    override.write_text(compose_override(SessionId(meeting_id), role="worker"), encoding="utf-8")
     name = f"fakeyou-worker-{meeting_id}"
     try:
         started = subprocess.run(
@@ -160,7 +186,7 @@ def test_compose_override_labels_are_queryable_by_meeting_id(tmp_path: Path) -> 
 
 
 def _postgres_dsn() -> str:
-    password = os.environ.get("POSTGRES_PASSWORD", "fakeyou-local-only")
+    password = os.environ["POSTGRES_PASSWORD"]
     return f"postgresql://fakeyou:{password}@127.0.0.1:5432/fakeyou"
 
 

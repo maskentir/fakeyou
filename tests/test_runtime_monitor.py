@@ -1,0 +1,184 @@
+import asyncio
+from pathlib import Path
+from typing import Any
+
+import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.orchestration.lifecycle import MeetingLifecycle
+from fakeyou.orchestration.runtime import MeetingWorker
+from tests._fakes_common import FakeClock
+from tests._meet_browser_fakes import meet_page
+from tests._persistence_fakes import RecordingJournal
+from tests._runtime_support import mining_payload, session_config
+
+
+def _bare_worker(**overrides: Any) -> MeetingWorker:
+    clock = FakeClock()
+    return MeetingWorker(
+        session_config(**overrides),
+        MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver()),
+        meet_page([]),
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+    )
+
+
+async def _wait_for_faults(reporter: FaultReporter, count: int = 1) -> None:
+    for _ in range(200):
+        if reporter.total() >= count:
+            return
+        await asyncio.sleep(0.01)
+
+
+async def test_monitor_propagates_unexpected_starter_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _bare_worker()
+
+    async def boom() -> None:
+        raise ValueError("bug")
+
+    monkeypatch.setattr(worker, "start_voice_activity", boom)
+    with pytest.raises(ValueError, match="bug"):
+        await worker.monitor(0.0)
+
+
+async def test_monitor_propagates_unexpected_capture_start_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _bare_worker()
+
+    async def boom(*, enabled: bool) -> None:
+        del enabled
+        raise ValueError("bug")
+
+    monkeypatch.setattr(worker, "start_capture_drain", boom)
+    with pytest.raises(ValueError, match="bug"):
+        await worker.monitor(0.0)
+
+
+async def test_disable_camera_best_effort_propagates_unexpected_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _bare_worker()
+
+    async def boom(*args: Any) -> bool:
+        del args
+        raise ValueError("bug")
+
+    monkeypatch.setattr("fakeyou.orchestration.runtime.disable_meeting_camera", boom)
+    with pytest.raises(ValueError, match="bug"):
+        await worker.disable_camera_best_effort()
+
+
+async def test_participant_evidence_writer_bug_surfaces_as_poll_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = tmp_path / "evidence.jsonl"
+    clock = FakeClock()
+    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
+    await lifecycle.initialize()
+    worker = MeetingWorker(
+        session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        lifecycle,
+        meet_page([], evaluates=[mining_payload() for _ in range(10)]),
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+    )
+
+    def boom_write(raw: Any, mono_ms: float) -> bool:
+        del mono_ms
+        del raw
+        raise ValueError("bug")
+
+    monkeypatch.setattr(ParticipantEvidenceWriter, "write", boom_write)
+    await worker.start_participant_observer()
+    assert worker.observer is not None
+    await asyncio.sleep(0.6)
+    failures = worker.observer.poll_failures
+    await worker.close_participant_observer()
+
+    assert failures >= 1
+
+
+async def test_start_voice_activity_records_poll_faults(journal: RecordingJournal) -> None:
+    from fakeyou.audio.voice_activity import VoiceActivityTracker
+
+    reporter = FaultReporter(journal=journal)
+    worker = _bare_worker()
+    worker.faults = reporter
+    worker.voice_activity = VoiceActivityTracker(twin_name="twin")
+    await worker.start_voice_activity()
+    try:
+        await _wait_for_faults(reporter)
+        assert reporter.total() >= 1
+    finally:
+        await worker.close_voice_activity()
+
+
+async def test_start_probe_drain_records_poll_faults(
+    journal: RecordingJournal, tmp_path: Path
+) -> None:
+    reporter = FaultReporter(journal=journal)
+    worker = _bare_worker(attribution_probe_path=tmp_path / "probe.jsonl")
+    worker.faults = reporter
+    await worker.start_probe_drain()
+    try:
+        await _wait_for_faults(reporter)
+        assert reporter.total() >= 1
+    finally:
+        await worker.close_probe_drain()
+
+
+async def test_start_participant_observer_records_poll_faults(
+    journal: RecordingJournal, tmp_path: Path
+) -> None:
+    reporter = FaultReporter(journal=journal)
+    worker = _bare_worker(
+        participant_policy_enabled=True,
+        participant_evidence_path=tmp_path / "evidence.jsonl",
+    )
+    worker.faults = reporter
+    await worker.start_participant_observer()
+    try:
+        await _wait_for_faults(reporter)
+        assert reporter.total() >= 1
+    finally:
+        await worker.close_participant_observer()
+
+
+async def test_start_capture_drain_records_poll_faults(journal: RecordingJournal) -> None:
+    reporter = FaultReporter(journal=journal)
+    worker = _bare_worker()
+    worker.faults = reporter
+    await worker.start_capture_drain(enabled=True)
+    try:
+        await _wait_for_faults(reporter)
+        assert reporter.total() >= 1
+    finally:
+        await worker.close_capture_drain()
+
+
+async def test_start_visual_observer_records_poll_faults(
+    journal: RecordingJournal, tmp_path: Path
+) -> None:
+    from fakeyou.visual.visual_store import VisualStore
+
+    reporter = FaultReporter(journal=journal)
+    worker = _bare_worker(visual_enabled=True)
+    worker.faults = reporter
+    worker.visual_store = VisualStore(tmp_path / "visual")
+    await worker.start_visual_observer()
+    try:
+        await _wait_for_faults(reporter)
+        assert reporter.total() >= 1
+    finally:
+        await worker.close_visual_observer()

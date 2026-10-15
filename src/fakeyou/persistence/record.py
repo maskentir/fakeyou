@@ -7,11 +7,15 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 
+from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.persistence.layout import MeetingDir
 
-RECORD_FILE_NAME = "record.jsonl"
+RECORD_SYNC_INTERVAL = 20
+_TAIL_BLOCK_BYTES = 8192
 
 
 class _Entry(BaseModel):
@@ -78,8 +82,8 @@ RecordEntry = Annotated[
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 
 
-def meeting_record_path(root: Path, meeting_id: str) -> Path:
-    return root / meeting_id / RECORD_FILE_NAME
+def meeting_record_path(root: Path, meeting_id: SessionId) -> Path:
+    return MeetingDir(root, meeting_id).record
 
 
 def repaired_order(entries: Sequence[RecordEntry]) -> list[RecordEntry]:
@@ -99,13 +103,51 @@ def repaired_order(entries: Sequence[RecordEntry]) -> list[RecordEntry]:
     return fixed
 
 
-def load_meeting_record(path: Path, *, repair: bool = True) -> list[RecordEntry]:
-    entries = [
-        _RECORD_ENTRY.validate_json(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def load_meeting_record(
+    path: Path, *, repair: bool = True, journal: Journal | None = None
+) -> list[RecordEntry]:
+    text = path.read_text(encoding="utf-8")
+    lines = [(index, line) for index, line in enumerate(text.splitlines()) if line.strip()]
+    torn_tail = bool(text.rsplit("\n", 1)[-1].strip())
+    entries: list[RecordEntry] = []
+    for index, line in lines:
+        if torn_tail and index == lines[-1][0]:
+            try:
+                entries.append(_RECORD_ENTRY.validate_json(line))
+            except ValueError:
+                if journal is not None:
+                    journal.record(
+                        "record_torn_line_dropped", source="meeting_record", bytes_skipped=len(line)
+                    )
+            break
+        entries.append(_RECORD_ENTRY.validate_json(line))
     return repaired_order(entries) if repair else entries
+
+
+def _drop_torn_tail(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r+b") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        if size == 0:
+            return 0
+        handle.seek(size - 1)
+        if handle.read(1) == b"\n":
+            return 0
+        end = size
+        cut = 0
+        while end > 0:
+            start = max(0, end - _TAIL_BLOCK_BYTES)
+            handle.seek(start)
+            position = handle.read(end - start).rfind(b"\n")
+            if position != -1:
+                cut = start + position + 1
+                break
+            end = start
+        handle.truncate(cut)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return size - cut
 
 
 class MeetingRecord:
@@ -114,12 +156,17 @@ class MeetingRecord:
         path: Path,
         *,
         faults: FaultReporter | None = None,
+        journal: Journal | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        dropped = _drop_torn_tail(path)
+        if dropped and journal is not None:
+            journal.record("record_tail_dropped", source="meeting_record", bytes_dropped=dropped)
         self._file = path.open("a", encoding="utf-8")
         self._faults = faults
         self._now = now
+        self._unsynced = 0
         self._seen: set[str] = set()
         self._seen_visual: set[str] = set()
         self._closed = False
@@ -190,6 +237,10 @@ class MeetingRecord:
         try:
             self._file.write(entry.model_dump_json() + "\n")
             self._file.flush()
+            self._unsynced += 1
+            if self._unsynced >= RECORD_SYNC_INTERVAL:
+                os.fsync(self._file.fileno())
+                self._unsynced = 0
         except (OSError, ValueError) as error:
             if self._faults is not None:
                 self._faults.record(classify_exception("meeting_record", error))

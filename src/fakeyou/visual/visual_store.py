@@ -3,17 +3,20 @@ import json
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
+from fakeyou.foundation.jsonl import read_jsonl
+from fakeyou.foundation.timeparse import assume_utc, parse_iso_datetime
 from fakeyou.observability.journal import Journal
 
 VISUAL_RING_SIZE = 90
 VISUAL_DEDUP_HAMMING_MAX = 8
 VISUAL_SIDECAR_NAME = "visuals.jsonl"
 VISUAL_KIND = "presentation"
+VISUAL_RANGE_KIND = "range"
 VISUAL_FRAME_SUFFIX = ".jpg"
 VISUAL_THUMB_SUFFIX = ".thumb.jpg"
 VISUAL_JOIN_TOLERANCE_MS = 2000.0
@@ -119,27 +122,24 @@ class VisualStore:
         self._persist_range(frame_id, page_ms, stamp)
 
     def _persist_range(self, frame_id: str, page_ms: float, stamp: str) -> None:
+        row = {
+            "visual_id": frame_id,
+            "kind": VISUAL_RANGE_KIND,
+            "visible_to": stamp,
+            "visible_to_page_ms": page_ms,
+        }
         try:
-            lines = self.sidecar.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
-        updated = False
-        rows: list[str] = []
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                rows.append(line)
-                continue
-            if isinstance(row, dict) and row.get("visual_id") == frame_id:
-                row["visible_to"] = stamp
-                row["visible_to_page_ms"] = page_ms
-                rows.append(json.dumps(row, ensure_ascii=False))
-                updated = True
-            else:
-                rows.append(line)
-        if updated:
-            self.sidecar.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            self.sidecar.parent.mkdir(parents=True, exist_ok=True)
+            with self.sidecar.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except OSError as error:
+            if self._journal is not None:
+                self._journal.record(
+                    "visual_range_persist_failed",
+                    source="browser",
+                    frame_id=frame_id,
+                    error_type=type(error).__name__,
+                )
 
     def _drop_files(self, frame: VisualFrame) -> None:
         for candidate in (frame.path, frame.thumb_path):
@@ -176,13 +176,10 @@ def frames_in_window(
 
 
 def _wall_ms(stamp: str) -> float | None:
-    try:
-        parsed = datetime.fromisoformat(stamp)
-    except ValueError:
+    parsed = parse_iso_datetime(stamp)
+    if parsed is None:
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.timestamp() * 1000.0
+    return assume_utc(parsed).timestamp() * 1000.0
 
 
 def _wall_end_ms(frame: VisualFrame, start_ms: float) -> float:
@@ -218,3 +215,17 @@ def visual_refs_for_utterance(
         frame.frame_id
         for frame in frames_in_window(frames, capture_ms, capture_ms, tolerance_ms=tolerance_ms)
     )
+
+
+def read_visual_sidecar(path: Path) -> list[dict[str, Any]]:
+    frames: dict[str, dict[str, Any]] = {}
+    for row in read_jsonl(path).rows:
+        visual_id = row.get("visual_id")
+        if not isinstance(visual_id, str):
+            continue
+        if row.get("kind") == VISUAL_KIND:
+            frames[visual_id] = dict(row)
+        elif row.get("kind") == VISUAL_RANGE_KIND and visual_id in frames:
+            frames[visual_id]["visible_to"] = row.get("visible_to")
+            frames[visual_id]["visible_to_page_ms"] = row.get("visible_to_page_ms")
+    return list(frames.values())

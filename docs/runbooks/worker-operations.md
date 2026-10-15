@@ -86,7 +86,7 @@ job ingest tidak pernah tampil sebagai worker meeting.
 fakeyou worker stop OPC-1 --timeout 30
 ```
 
-Stop mengirim `docker stop` (grace 30 detik bila timeout ≥ 30,
+Stop mengirim `docker stop` (grace 45 detik bila timeout ≥ 45,
 atau sebesar timeout), menunggu `session_finished` sampai timeout,
 lalu `docker kill` bila container masih jalan (`escalated: true`). Sesi yang berhenti normal tercatat
 `stopped_by_owner`. Stop pada meeting yang sudah ended melaporkan
@@ -179,6 +179,12 @@ Contoh nilai (ganti password sesuai `.env`):
 FAKEYOU_DATABASE__URL=postgresql://fakeyou:password@127.0.0.1:5432/fakeyou
 FAKEYOU_COMPOSE_WORKER_DATABASE_URL=postgresql://fakeyou:password@postgres:5432/fakeyou
 ```
+
+`POSTGRES_PASSWORD` wajib ada di `.env`. Compose menolak menyalakan
+`postgres` tanpa nilai itu, dan password dalam kedua URL harus sama
+dengan nilainya. Volume `postgres_data` yang sudah ada tetap memakai
+password saat pertama kali diinisialisasi; setelah mengganti password,
+jalankan `ALTER USER` di dalam database sebelum mengubah `.env`.
 
 Service `postgres` ikut dinyalakan tanpa profil dan memiliki healthcheck.
 Service worker menunggu healthcheck itu lewat `depends_on`. Tes

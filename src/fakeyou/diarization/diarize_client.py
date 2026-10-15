@@ -1,4 +1,5 @@
 import json
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -6,7 +7,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import STTSettings, require_secret
 
 _BASE_URL = "https://api.meta.ai/v1"
 _MODEL = "muse-voice-transcribe-1.0"
@@ -38,13 +41,44 @@ def _encode_request(chunk: bytes) -> tuple[str, bytes]:
     return boundary, head + chunk + tail
 
 
+def _retryable_http(error: OSError) -> bool:
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == 429 or error.code >= 500
+    return True
+
+
+def _post_chunk(
+    call: Callable[..., Any],
+    request: urllib.request.Request,
+    *,
+    timeout_seconds: float,
+    max_retries: int,
+    sleep: Callable[[float], None],
+) -> bytes:
+    attempt = 0
+    while True:
+        try:
+            with call(request, timeout=timeout_seconds) as response:
+                payload: bytes = response.read()
+                return payload
+        except OSError as error:
+            if attempt >= max_retries or not _retryable_http(error):
+                raise DiarizeError(
+                    ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason=type(error).__name__
+                ) from error
+            sleep(2.0**attempt)
+            attempt += 1
+
+
 def transcribe_chunk(
     chunk: bytes,
+    settings: STTSettings,
     *,
-    api_key: str,
     base_url: str = _BASE_URL,
-    opener: Callable[[urllib.request.Request], Any] | None = None,
+    opener: Callable[..., Any] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[DiarizedTurn]:
+    api_key = require_secret(settings.api_key, ConfigKey.STT_API_KEY)
     boundary, body = _encode_request(chunk)
     call = urllib.request.urlopen if opener is None else opener
     request = urllib.request.Request(
@@ -56,11 +90,13 @@ def transcribe_chunk(
         },
         method="POST",
     )
-    try:
-        with call(request) as response:
-            raw = response.read()
-    except (urllib.error.HTTPError, urllib.error.URLError) as error:
-        raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason=str(error)) from error
+    raw = _post_chunk(
+        call,
+        request,
+        timeout_seconds=settings.diarize_timeout_seconds,
+        max_retries=settings.diarize_max_retries,
+        sleep=sleep,
+    )
     try:
         payload = json.loads(raw.decode("utf-8"))
         return [

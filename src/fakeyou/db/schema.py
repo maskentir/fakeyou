@@ -13,14 +13,14 @@ from sqlalchemy import Column, Connection, Engine, Table, func, inspect, select
 from sqlalchemy.types import TypeEngine
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.db.tables import include_object, metadata, voiceprints
+from fakeyou.db.tables import include_name, metadata, voiceprints
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 SCHEMA_LOCK_KEY = 735812049172
 COMPARE_OPTIONS: dict[str, Any] = {
     "compare_type": True,
     "compare_server_default": True,
-    "include_object": include_object,
+    "include_name": include_name,
 }
 
 

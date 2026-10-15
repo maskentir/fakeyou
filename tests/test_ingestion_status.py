@@ -1,3 +1,4 @@
+import asyncio
 import fcntl
 import json
 import os
@@ -10,11 +11,20 @@ from typing import Any
 
 import pytest
 
-from fakeyou.catalog.errors import ErrorCode
+import fakeyou.persistence.lease as lease
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.memory.ingest_status import (
+    IngestOutcome,
+    IngestSummary,
+    finish_ingest,
+    ingest_state,
+    terminal_outcome,
+)
+from fakeyou.memory.ingestion import IngestResult
+from fakeyou.observability.faults import FaultReporter
 from fakeyou.persistence.brief import context_path
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
-    LeaseError,
     RecordLockError,
     hash_meeting_record,
     lock_path,
@@ -23,6 +33,9 @@ from fakeyou.persistence.ingestion_status import (
     status_path,
     write_status,
 )
+from fakeyou.persistence.lease import LeaseError
+from tests._error_support import message_pattern
+from tests._persistence_fakes import RecordingJournal
 
 
 def test_old_status_json_without_new_fields_loads_with_defaults(tmp_path: Path) -> None:
@@ -107,18 +120,25 @@ def test_status_rejects_extra_fields_negative_counts_and_naive_time() -> None:
         pending_status(updated_at=datetime(2026, 10, 3, 8, 0))
 
 
-def test_read_status_returns_none_when_missing_or_corrupt(tmp_path: Path) -> None:
-    path = tmp_path / "ingestion.json"
+def test_read_status_returns_none_when_missing(tmp_path: Path) -> None:
+    assert read_status(tmp_path / "ingestion.json") is None
 
-    assert read_status(path) is None
-    path.write_text("{not json", encoding="utf-8")
-    assert read_status(path) is None
-    path.write_text(json.dumps({"meeting_id": "meeting-9"}), encoding="utf-8")
-    assert read_status(path) is None
-    path.write_text(
-        json.dumps({**pending_status().model_dump(mode="json"), "extra": True}), encoding="utf-8"
-    )
-    assert read_status(path) is None
+
+def test_read_status_raises_the_catalog_error_for_corrupt_content(tmp_path: Path) -> None:
+    path = tmp_path / "ingestion.json"
+    unknown_field = {**pending_status().model_dump(mode="json"), "extra": True}
+
+    for content in (
+        "{not json",
+        json.dumps({"meeting_id": "meeting-9"}),
+        json.dumps(unknown_field),
+    ):
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(
+            FakeYouError, match=message_pattern(ErrorCode.INGESTION_STATUS_CORRUPT)
+        ) as caught:
+            read_status(path)
+        assert caught.value.code is ErrorCode.INGESTION_STATUS_CORRUPT
 
 
 def test_atomic_status_failure_keeps_previous_file(
@@ -127,7 +147,8 @@ def test_atomic_status_failure_keeps_previous_file(
     path = tmp_path / "ingestion.json"
     path.write_text("previous", encoding="utf-8")
 
-    def reject_replace(source: Any, target: Any) -> None:
+    def reject_replace(_source: Any, target: Any) -> None:
+        del target
         raise OSError("replace failed")
 
     monkeypatch.setattr("os.replace", reject_replace)
@@ -143,7 +164,7 @@ def test_status_fsync_failure_keeps_previous_file(
     path = tmp_path / "ingestion.json"
     path.write_text("previous", encoding="utf-8")
 
-    def reject_fsync(fd: int) -> None:
+    def reject_fsync(_fd: int) -> None:
         raise OSError("fsync failed")
 
     monkeypatch.setattr("os.fsync", reject_fsync)
@@ -299,7 +320,7 @@ def test_record_lock_keeps_its_heartbeat_fresh_while_held(tmp_path: Path) -> Non
     assert not lock_path(record).exists()
 
 
-def test_record_lock_takes_over_a_live_pid_with_a_stale_heartbeat(
+def test_record_lock_refuses_a_live_same_host_owner_even_with_a_stale_heartbeat(
     tmp_path: Path,
 ) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
@@ -318,9 +339,59 @@ def test_record_lock_takes_over_a_live_pid_with_a_stale_heartbeat(
         encoding="utf-8",
     )
 
-    with record_lock(record, purpose="ingestion", stale_after_seconds=60.0) as token:
-        assert json.loads(path.read_text(encoding="utf-8"))["token"] == token
-    assert not path.exists()
+    with pytest.raises(RecordLockError, match=message_pattern(ErrorCode.RECORD_LOCKED)) as caught:
+        with record_lock(record, purpose="ingestion", stale_after_seconds=60.0):
+            pytest.fail("a live same-host owner must keep the lock")
+    assert caught.value.code is ErrorCode.RECORD_LOCKED
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "stale"
+
+
+def test_record_lock_reports_a_lease_lost_after_repeated_heartbeat_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    failed = threading.Event()
+    attempts: list[str] = []
+
+    def always_fail(path: Path, owner: dict[str, Any], token: str) -> None:
+        del path, owner
+        attempts.append(token)
+        if len(attempts) >= lease.LEASE_HEARTBEAT_MAX_FAILURES:
+            failed.set()
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(lease, "refresh_in_place", always_fail)
+
+    with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.LEASE_LOST)) as caught:
+        with record_lock(record, purpose="meeting", stale_after_seconds=0.03):
+            assert failed.wait(timeout=5)
+    assert caught.value.code is ErrorCode.LEASE_LOST
+
+
+def _hold_while_another_writer_takes_over(record: Path) -> None:
+    with record_lock(record, purpose="meeting", stale_after_seconds=0.03):
+        lock_path(record).write_text(
+            json.dumps(
+                {
+                    "host": socket.gethostname(),
+                    "pid": os.getpid(),
+                    "purpose": "ingestion",
+                    "token": "foreign",
+                    "heartbeat": datetime.now(UTC).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        time.sleep(0.3)
+
+
+def test_record_lock_reports_a_lease_taken_over_while_held(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+
+    with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.LEASE_LOST)) as caught:
+        _hold_while_another_writer_takes_over(record)
+    assert caught.value.code is ErrorCode.LEASE_LOST
+    assert json.loads(lock_path(record).read_text(encoding="utf-8"))["token"] == "foreign"
 
 
 def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
@@ -331,7 +402,7 @@ def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
         time.sleep(0.6)
         monkeypatch.setattr(
-            "fakeyou.persistence.ingestion_status.socket.gethostname", lambda: "other-container"
+            "fakeyou.persistence.lease.socket.gethostname", lambda: "other-container"
         )
         with pytest.raises(RecordLockError, match="locked") as error:
             with record_lock(record, purpose="ingestion", stale_after_seconds=0.3):
@@ -412,7 +483,9 @@ def test_stale_takeover_blocks_second_acquirer_until_release(tmp_path: Path) -> 
     )
 
     with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
-        with pytest.raises(RecordLockError) as error:
+        with pytest.raises(
+            RecordLockError, match=message_pattern(ErrorCode.RECORD_LOCKED)
+        ) as error:
             with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
                 pass
         assert error.value.code is ErrorCode.RECORD_LOCKED
@@ -428,7 +501,9 @@ def test_lease_acquisition_fails_while_lock_file_held(tmp_path: Path) -> None:
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:
-        with pytest.raises(RecordLockError) as error:
+        with pytest.raises(
+            RecordLockError, match=message_pattern(ErrorCode.RECORD_LOCKED)
+        ) as error:
             with record_lock(record, purpose="meeting", stale_after_seconds=60.0):
                 pass
         assert error.value.code is ErrorCode.RECORD_LOCKED
@@ -441,20 +516,18 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
-    real_write = __import__(
-        "fakeyou.persistence.ingestion_status", fromlist=["write_atomically"]
-    ).write_atomically
+    real_refresh = lease.refresh_in_place
     calls: list[str] = []
 
-    def fail_once(path: Path, data: bytes) -> None:
-        calls.append("write")
+    def fail_once(path: Path, owner: dict[str, Any], token: str) -> bool:
+        calls.append("refresh")
         if len(calls) == 1:
             raise OSError("transient write error")
-        real_write(path, data)
+        return real_refresh(path, owner, token)
 
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
         first = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
-        monkeypatch.setattr("fakeyou.persistence.ingestion_status.write_atomically", fail_once)
+        monkeypatch.setattr(lease, "refresh_in_place", fail_once)
         time.sleep(0.6)
         second = json.loads(lock_path(record).read_text(encoding="utf-8"))["heartbeat"]
         assert len(calls) >= 2
@@ -464,7 +537,7 @@ def test_record_lock_retries_the_heartbeat_after_a_transient_write_error(
 
 
 def test_describe_lease_reports_absent_live_stale_and_corrupt(tmp_path: Path) -> None:
-    from fakeyou.persistence.ingestion_status import describe_lease
+    from fakeyou.persistence.lease import describe_lease
 
     record = tmp_path / "meeting-9" / "record.jsonl"
     path = lock_path(record)
@@ -520,7 +593,189 @@ def test_record_lock_refuses_a_corrupt_lock_file(tmp_path: Path) -> None:
 def test_errors_raised_inside_a_record_lock_body_keep_their_own_code(tmp_path: Path) -> None:
     record = tmp_path / "meeting-record.jsonl"
 
-    with pytest.raises(LeaseError) as caught, record_lock(record, purpose="debrief"):
+    with (
+        pytest.raises(LeaseError, match=message_pattern(ErrorCode.LEASE_LOCKED)) as caught,
+        record_lock(record, purpose="debrief"),
+    ):
         raise LeaseError(ErrorCode.LEASE_LOCKED, path=tmp_path)
 
     assert caught.value.code is ErrorCode.LEASE_LOCKED
+
+
+def test_refresh_lease_reraises_unexpected_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stop = threading.Event()
+
+    def boom(path: Path, owner: dict[str, Any], token: str) -> None:
+        del path, owner, token
+        stop.set()
+        raise KeyError("bug")
+
+    monkeypatch.setattr(lease, "refresh_in_place", boom)
+
+    with pytest.raises(KeyError, match="bug"):
+        lease.refresh_lease(tmp_path / "lease.json", {"token": "token"}, "token", 0.03, stop)
+
+
+def test_refresh_lease_retries_os_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stop = threading.Event()
+    calls: list[str] = []
+
+    def flaky(path: Path, owner: dict[str, Any], token: str) -> None:
+        del path, owner, token
+        calls.append("refresh")
+        stop.set()
+        raise OSError("disk full")
+
+    monkeypatch.setattr(lease, "refresh_in_place", flaky)
+    assert lease.refresh_lease(tmp_path / "lease.json", {"token": "token"}, "token", 0.03, stop)
+
+    assert len(calls) == 1
+
+
+def test_read_status_reports_corrupt_bytes_to_journal(tmp_path: Path) -> None:
+    path = tmp_path / "ingestion.json"
+    path.write_text("{not json", encoding="utf-8")
+    journal = RecordingJournal()
+
+    with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.INGESTION_STATUS_CORRUPT)):
+        read_status(path, journal=journal)
+
+    [row] = journal.events("ingestion_status_rejected")
+    assert row["error_type"] == "ValidationError"
+    assert row["path"] == str(path)
+
+
+def test_terminal_outcome_keeps_the_stored_progress_of_an_existing_status() -> None:
+    existing = IngestionStatus(
+        meeting_id="meeting-1",
+        group_id="twin_group",
+        status="pending",
+        windows=4,
+        resumed_from=1,
+        ingested=2,
+        record_sha256="stored",
+    )
+
+    outcome = terminal_outcome("failed", "record_changed", "fresh", existing)
+
+    assert outcome == IngestOutcome(
+        state="failed",
+        windows=4,
+        resumed_from=1,
+        ingested=2,
+        facts=0,
+        completed=False,
+        record_sha256="stored",
+        reason="record_changed",
+    )
+
+
+def test_terminal_outcome_without_a_status_uses_zero_progress_and_the_fallback_hash() -> None:
+    outcome = terminal_outcome("interrupted", "stop_requested", "fresh")
+
+    assert outcome == IngestOutcome(
+        state="interrupted",
+        windows=0,
+        resumed_from=0,
+        ingested=0,
+        facts=0,
+        completed=False,
+        record_sha256="fresh",
+        reason="stop_requested",
+    )
+
+
+@pytest.mark.parametrize(
+    ("completed", "stop_requested", "expected"),
+    [
+        (True, False, ("completed", None)),
+        (False, True, ("interrupted", "stop_requested")),
+        (False, False, ("failed", "episode_failed")),
+    ],
+)
+def test_ingest_state_maps_the_result_and_the_stop_signal(
+    *, completed: bool, stop_requested: bool, expected: tuple[str, str | None]
+) -> None:
+    result = IngestResult(windows=1, resumed_from=0, ingested=0, facts=0, completed=completed)
+    stop = asyncio.Event()
+    if stop_requested:
+        stop.set()
+
+    assert ingest_state(result, stop) == expected
+
+
+def test_finish_ingest_persists_the_outcome_and_summarises_it(tmp_path: Path) -> None:
+    status_file = tmp_path / "ingestion.json"
+    write_status(
+        status_file,
+        IngestionStatus(
+            meeting_id="meeting-1",
+            group_id="twin_group",
+            status="pending",
+            episode_uuids={0: "uuid-a"},
+        ),
+    )
+    faults = FaultReporter(journal=RecordingJournal())
+
+    summary = finish_ingest(
+        status_file,
+        IngestOutcome(
+            state="completed",
+            windows=2,
+            resumed_from=0,
+            ingested=2,
+            facts=3,
+            completed=True,
+            record_sha256="abc",
+            reason=None,
+            episode_uuids={1: "uuid-b"},
+        ),
+        meeting_id="meeting-1",
+        group_id="twin_group",
+        faults=faults,
+    )
+
+    assert summary == IngestSummary(
+        meeting_id="meeting-1",
+        state="completed",
+        windows=2,
+        resumed_from=0,
+        ingested=2,
+        facts=3,
+        completed=True,
+        succeeded=True,
+    )
+    status = read_status(status_file)
+    assert status is not None
+    assert status.episode_uuids == {0: "uuid-a", 1: "uuid-b"}
+
+
+def test_finish_ingest_reports_failure_when_the_status_cannot_be_written(
+    tmp_path: Path,
+) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+
+    summary = finish_ingest(
+        blocker / "ingestion.json",
+        IngestOutcome(
+            state="completed",
+            windows=1,
+            resumed_from=0,
+            ingested=1,
+            facts=1,
+            completed=True,
+            record_sha256="abc",
+            reason=None,
+        ),
+        meeting_id="meeting-1",
+        group_id="twin_group",
+        faults=faults,
+    )
+
+    assert (summary.completed, summary.succeeded) == (True, False)
+    assert len(journal.events("fault_recorded")) == 1

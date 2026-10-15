@@ -3,14 +3,19 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from importlib.resources import files
 from itertools import count
-from math import isfinite
 from operator import itemgetter
 from string import ascii_uppercase
-from typing import Any, Literal
+from typing import Any, Literal, override
 
+from playwright.async_api import Error as PlaywrightError
+
+from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.numbers import finite_float
+from fakeyou.foundation.polling import PageEvaluator, PollingLoop
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.identity.identity import ResolveRefusal, SpeakerRegistry
+from fakeyou.observability.faults import ConsumerSink, create_poll_guard
 
 VOICE_ACTIVITY_DRAIN_JS = (
     "() => { const tracker = window.__fakeyouVoiceActivity;"
@@ -22,6 +27,7 @@ FRAME_LAG_MS = 300.0
 ACTIVE_LEVEL = 0.01
 DOMINANT_MARGIN = 0.5
 MEET_AUDIO_SLOTS = 3
+OTHERS_SPEAKING_HANGOVER_MS = 500.0
 DEPARTURE_GRACE_MS = 3000.0
 RETENTION_MS = 120_000.0
 CLOCK_ANCHORS = 20
@@ -45,7 +51,7 @@ BinderRefusal = ResolveRefusal
 
 
 def load_voice_activity_script() -> str:
-    return (files("fakeyou") / "assets" / "voice_activity.js").read_text(encoding="utf-8")
+    return read_package_text("assets", "voice_activity.js")
 
 
 def voice_label(index: int) -> str:
@@ -151,12 +157,6 @@ class VoiceAttribution:
         }
 
 
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value) if isfinite(value) else None
-
-
 def _overlaps(spans: Sequence[tuple[float, float]], others: Iterable[tuple[float, float]]) -> bool:
     return any(
         start < other_end and other_start < end
@@ -227,10 +227,16 @@ class VoiceActivityTracker:
     def observe_self_speech(self, *, active: bool) -> None:
         self._self_speech.mark(active=active, at_ms=self.now_ms())
 
+    def others_speaking(self, *, hangover_ms: float = OTHERS_SPEAKING_HANGOVER_MS) -> bool:
+        now = self.now_ms()
+        cursor = now - hangover_ms
+        own = self._self_speech.since(cursor, now)
+        return any(not _overlaps([span], own) for span in self._speech.since(cursor, now))
+
     def observe_batch(
         self, batch: Mapping[str, Any], *, sent_ms: float, received_ms: float
     ) -> None:
-        page_ms = _number(batch.get("page_ms"))
+        page_ms = finite_float(batch.get("page_ms"))
         if page_ms is None:
             return
         instance = batch.get("instance")
@@ -246,7 +252,7 @@ class VoiceActivityTracker:
         for entry in batch.get("levels") or ():
             if not isinstance(entry, Sequence) or len(entry) != 3:
                 continue
-            at, slot, level = (_number(value) for value in entry)
+            at, slot, level = (finite_float(value) for value in entry)
             if at is None or slot is None or level is None or not slot.is_integer():
                 continue
             self._levels.append((at, int(slot), level))
@@ -254,7 +260,9 @@ class VoiceActivityTracker:
             self._observe_frame(entry)
         local = batch.get("local")
         if isinstance(local, list):
-            self._local_slots = frozenset(int(slot) for slot in local if _number(slot) is not None)
+            self._local_slots = frozenset(
+                int(slot) for slot in local if finite_float(slot) is not None
+            )
         participants = batch.get("participants")
         if isinstance(participants, list):
             self._observe_roster(participants, received_ms)
@@ -361,7 +369,7 @@ class VoiceActivityTracker:
     def _observe_frame(self, entry: Any) -> None:
         if not isinstance(entry, Sequence) or len(entry) != 4:
             return
-        at, slot, level = (_number(value) for value in entry[:3])
+        at, slot, level = (finite_float(value) for value in entry[:3])
         sources = entry[3]
         if at is None or slot is None or level is None or not slot.is_integer():
             return
@@ -370,7 +378,7 @@ class VoiceActivityTracker:
         csrcs = frozenset(
             int(value)
             for value in sources
-            if (number := _number(value)) is not None and number.is_integer()
+            if (number := finite_float(value)) is not None and number.is_integer()
         )
         self._frames.append((at, int(slot), level, csrcs))
         for csrc in csrcs:
@@ -426,55 +434,40 @@ class VoiceActivityTracker:
             self._frames.popleft()
 
 
-class VoiceActivityLoop:
+class VoiceActivityLoop(PollingLoop):
     def __init__(
         self,
-        page: Any,
+        page: PageEvaluator,
         tracker: VoiceActivityTracker,
         *,
         poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
+        sinks: ConsumerSink | None = None,
     ) -> None:
+        super().__init__(
+            poll_interval_seconds=poll_interval_seconds,
+            guard=create_poll_guard(sinks, source="audio", operation="voice_activity"),
+        )
         self._page = page
         self._tracker = tracker
-        self._poll_interval = poll_interval_seconds
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self.polls = 0
-        self.poll_failures = 0
-        self.last_poll_error: str | None = None
 
     async def poll(self) -> bool:
         self.polls += 1
         try:
             sent = self._tracker.now_ms()
-            batch = await self._page.evaluate(VOICE_ACTIVITY_DRAIN_JS)
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                batch = await self._page.evaluate(VOICE_ACTIVITY_DRAIN_JS)
             received = self._tracker.now_ms()
             if not isinstance(batch, Mapping):
                 self.poll_failures += 1
                 return False
             self._tracker.observe_batch(batch, sent_ms=sent, received_ms=received)
-            return True
-        except Exception as error:
+        except (PlaywrightError, TimeoutError) as error:
             self.poll_failures += 1
             self.last_poll_error = type(error).__name__
             return False
+        else:
+            return True
 
-    async def start(self) -> None:
-        if self._task is not None or self._closed:
-            return
-        self._task = asyncio.create_task(self._poll_loop())
-
-    async def close(self) -> None:
-        task, self._task = self._task, None
-        self._closed = True
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    async def _poll_loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._poll_interval)
+    @override
+    async def _poll_once(self) -> None:
+        await self.poll()

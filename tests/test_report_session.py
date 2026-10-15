@@ -1,6 +1,4 @@
-from fakeyou.observability.report import (
-    build_session_report,
-)
+from fakeyou.observability.report import build_session_report
 from tests._report_support import answered_turn, row
 
 
@@ -187,3 +185,8 @@ def test_session_report_summarizes_pregeneration() -> None:
         "p95": 3.0,
         "max": 3.0,
     }
+
+
+def test_report_carries_journal_corrupt_lines() -> None:
+    assert build_session_report([])["journal"] == {"corrupt_lines": 0}
+    assert build_session_report([], corrupt_lines=2)["journal"] == {"corrupt_lines": 2}

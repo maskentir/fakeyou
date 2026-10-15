@@ -14,6 +14,8 @@ import pytest
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import IdentitySettings
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, cosine, load_embedder
+from tests._error_support import message_pattern
+from tests._voiceprint_fakes import InertExtractor
 
 
 class StubExtractorConfig:
@@ -38,7 +40,9 @@ def test_cosine_orthogonal_vectors_is_zero() -> None:
 def test_load_embedder_rejects_wrong_sha256(tmp_path: Path) -> None:
     model = tmp_path / "tiny.onnx"
     model.write_bytes(b"not a model")
-    with pytest.raises(FakeYouError) as excinfo:
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH)
+    ) as excinfo:
         load_embedder(str(model), "0" * 64)
     assert excinfo.value.code is ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH
     assert "sha256" in str(excinfo.value)
@@ -46,7 +50,7 @@ def test_load_embedder_rejects_wrong_sha256(tmp_path: Path) -> None:
 
 
 def test_embed_rejects_empty_utterances() -> None:
-    embedder = SpeakerEmbedder(object())
+    embedder = SpeakerEmbedder(InertExtractor())
     with pytest.raises(ValueError, match="utterances must contain at least one utterance"):
         embedder.embed([])
     with pytest.raises(ValueError, match="utterance must contain at least one sample"):
@@ -60,7 +64,10 @@ def test_load_embedder_without_extra_raises_a_catalog_error(
     data = b"not a model"
     model.write_bytes(data)
     monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
-    with pytest.raises(FakeYouError) as excinfo:
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.VOICEPRINT_EXTRA_MISSING),
+    ) as excinfo:
         load_embedder(str(model), hashlib.sha256(data).hexdigest())
     assert excinfo.value.code is ErrorCode.VOICEPRINT_EXTRA_MISSING
     message = str(excinfo.value)

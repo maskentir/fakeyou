@@ -1,11 +1,18 @@
+import asyncio
+import traceback
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any
 
+from fakeyou.foundation.polling import PollGuard
 from fakeyou.foundation.taxonomy import FaultKind, Subsystem
 from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import ProviderFault, trim_detail
+from fakeyou.observability.provider_faults import ProviderFault, classify_exception, trim_detail
 
 _MAX_FAULT_RECORDS = 128
+
+BUG_ERRORS = (AssertionError, AttributeError, IndexError, KeyError, TypeError, ValueError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,19 +26,121 @@ class Fault:
     first_at: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ConsumerSink:
+    faults: "FaultReporter | None" = None
+    journal: Journal | None = None
+
+
 def record_consumer_fault(
-    faults: "FaultReporter | None",
-    journal: Journal | None,
+    sink: ConsumerSink,
     *,
     source: Subsystem,
     detail: str,
     error: BaseException,
+    operation: str | None = None,
 ) -> None:
-    fault = Fault(source=source, kind="callback_failed", detail=f"{detail}: {type(error).__name__}")
-    if faults is not None:
-        faults.record(fault)
-    elif journal is not None:
-        journal.record("fault_recorded", source=fault.source, kind=fault.kind, detail=fault.detail)
+    fault = Fault(
+        source=source,
+        kind="callback_failed",
+        detail=f"{detail}: {type(error).__name__}",
+        operation=operation,
+    )
+    if sink.faults is not None:
+        sink.faults.record(fault)
+    elif sink.journal is not None:
+        sink.journal.record(
+            "fault_recorded",
+            source=fault.source,
+            kind=fault.kind,
+            detail=fault.detail,
+            operation=fault.operation,
+        )
+
+
+async def guard_consumer(
+    call: Callable[[], Awaitable[None]],
+    *,
+    sink: ConsumerSink,
+    source: Subsystem,
+    detail: str,
+    timeout_seconds: float = 10.0,
+) -> None:
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await call()
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        record_consumer_fault(sink, source=source, detail=detail, error=error)
+
+
+def guard_observer(
+    call: Callable[[], None],
+    *,
+    sink: ConsumerSink,
+    source: Subsystem,
+    detail: str,
+    operation: str | None = None,
+) -> None:
+    try:
+        call()
+    except Exception as error:
+        record_consumer_fault(sink, source=source, detail=detail, error=error, operation=operation)
+
+
+async def guard_poll(
+    call: Callable[[], Awaitable[None]],
+    *,
+    sink: ConsumerSink,
+    source: Subsystem,
+    operation: str,
+) -> Exception | None:
+    try:
+        await call()
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        if sink.faults is not None:
+            sink.faults.record(classify_exception(source, error, operation=operation))
+        else:
+            record_consumer_fault(
+                sink, source=source, detail=operation, error=error, operation=operation
+            )
+        return error
+    return None
+
+
+def create_poll_guard(
+    sink: ConsumerSink | None, *, source: Subsystem, operation: str
+) -> PollGuard | None:
+    if sink is None:
+        return None
+    return partial(guard_poll, sink=sink, source=source, operation=operation)
+
+
+async def capture_error[T](
+    call: Callable[[], Awaitable[T]],
+) -> tuple[T | None, Exception | None]:
+    try:
+        return await call(), None
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        return None, error
+
+
+TRACEBACK_MAX_FRAMES = 5
+TRACEBACK_MAX_CHARS = 2000
+
+
+def bounded_traceback(error: BaseException) -> str:
+    footer = "".join(traceback.format_exception_only(error)).strip()
+    tail = traceback.extract_tb(error.__traceback__)[-TRACEBACK_MAX_FRAMES:]
+    lines = [footer]
+    for frame in reversed(tail):
+        lines.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}')
+    return "\n".join(lines)[:TRACEBACK_MAX_CHARS]
 
 
 class FaultReporter:
@@ -67,8 +176,16 @@ class FaultReporter:
                 operation=fault.operation,
                 first_at=first_at or "",
             )
-        except Exception:
-            return
+        except Exception as error:
+            self._report_failure("record", error)
+
+    def _report_failure(self, operation: str, error: Exception) -> None:
+        self.journal.record(
+            "fault_report_failed",
+            source="runtime",
+            operation=operation,
+            error_type=type(error).__name__,
+        )
 
     def summaries(self) -> tuple[Fault, ...]:
         rows = sorted(
@@ -104,7 +221,8 @@ class FaultReporter:
                     "total": self._total,
                 }
             }
-        except Exception:
+        except Exception as error:
+            self._report_failure("report", error)
             return None
 
     def total(self) -> int:

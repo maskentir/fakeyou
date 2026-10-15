@@ -17,18 +17,13 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.meet.meet_actions import ActionOutcome, MeetActionResult
+from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.persistence.ingestion_status import (
-    LeaseError,
-    RecordLockError,
-    file_lease,
-    leased,
-    write_atomically,
-)
-
-ACTIONS_FILE_NAME = "actions.json"
-LEDGER_LOCK_FILE_NAME = "actions.lock"
+from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.ingestion_status import RecordLockError
+from fakeyou.persistence.layout import MeetingDir
+from fakeyou.persistence.lease import LeaseError, file_lease, leased
 
 MAX_ACTION_ATTEMPTS = 3
 
@@ -90,11 +85,11 @@ class LedgerResult:
 
 
 def actions_path(record_path: Path) -> Path:
-    return record_path.parent / ACTIONS_FILE_NAME
+    return MeetingDir.from_record_path(record_path).actions
 
 
 def ledger_lock_path(record_path: Path) -> Path:
-    return record_path.parent / LEDGER_LOCK_FILE_NAME
+    return MeetingDir.from_record_path(record_path).actions_lock
 
 
 def _ledger_locked(_error: LeaseError, *, path: Path) -> RecordLockError:
@@ -439,16 +434,20 @@ class _MeetActionExecutor:
                 self._journal.meet_action_started(
                     action=intent.kind, action_id=self._action_id, attempt=attempt
                 )
-            try:
-                effect = await self._effects.act()
-            except ProviderFault as fault:
-                outcome = await self._fault_outcome(intent, fault, attempt)
+
+            async def act() -> MeetActionResult:
+                return await self._effects.act()
+
+            effect, error = await capture_error(act)
+            if isinstance(error, ProviderFault):
+                outcome = await self._fault_outcome(intent, error, attempt)
                 if isinstance(outcome, LedgerResult):
                     return outcome
                 intent, attempt = outcome
                 continue
-            except Exception as error:
+            if error is not None:
                 return self.record_failure(intent, type(error).__name__, "act raised")
+            assert effect is not None
             return await self._effect_outcome(intent, effect, attempt)
 
 

@@ -1,5 +1,11 @@
 name: fakeyou
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   meeting-worker:
     profiles: ["audio"]
@@ -9,6 +15,22 @@ services:
       target: runtime
     image: fakeyou-meeting-worker:local
     init: true
+    logging: *default-logging
+    # Runs as the unprivileged twin user with no Linux capabilities and a read-only root
+    # filesystem. Writable paths are tmpfs mounts or the .runtime bind mount only.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /tmp/.X11-unix:rw,noexec,nosuid,nodev,size=1m,mode=1777
+      - /home/twin/.cache:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700
+      - /home/twin/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 1024
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_MEM_LIMIT:-4g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_CPUS:-2}
     shm_size: 1gb
     # Bypass the Docker Desktop embedded DNS forwarder; it stopped resolving
     # mid-call during live runs (EAI_NONAME killed STT reconnects and wedged TTS).
@@ -22,6 +44,11 @@ services:
     environment:
       FAKEYOU_DATABASE__URL: ${FAKEYOU_COMPOSE_WORKER_DATABASE_URL:-}
       FAKEYOU_BROWSER__HEADLESS: "false"
+      # cloakbrowser always passes --no-sandbox (its stealth args cannot be disabled per launch),
+      # so Chromium runs without its sandbox here and in every environment. The container
+      # hardening above (cap_drop, no-new-privileges, read_only) is the isolation layer.
+      # The browser binary is baked into the image; no runtime update check or download.
+      CLOAKBROWSER_AUTO_UPDATE: "false"
       # PULSE defaults follow src/fakeyou/foundation/invariants.py as source of truth; override via env.
       PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
       PULSE_SINK: ${PULSE_SINK:-agent_output}
@@ -30,10 +57,12 @@ services:
     volumes:
       - ./.runtime/audio:/workspace/.runtime
       - ./examples:/workspace/examples:ro
-    stop_grace_period: 45s
+    # Must cover the worker's teardown budget: docker stop waits this long before SIGKILL.
+    stop_grace_period: 136s
 
   neo4j:
-    image: neo4j:5.26.31-community
+    image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
+    logging: *default-logging
     environment:
       NEO4J_AUTH: neo4j/${FAKEYOU_MEMORY__STORE__PASSWORD:?Set FAKEYOU_MEMORY__STORE__PASSWORD in .env before starting neo4j}
     ports:
@@ -42,15 +71,16 @@ services:
     volumes:
       - neo4j_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null"]
+      test: ["CMD-SHELL", "NEO4J_USERNAME=neo4j NEO4J_PASSWORD=\"$${NEO4J_AUTH#*/}\" cypher-shell 'RETURN 1' >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
 
   embeddings:
-    image: ${FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9}
+    image: ${FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9@sha256:798cd7615e060a72ccbdf19aa0ada52289c6a0147490195bafaece6ce04d70f1}
     profiles: ["embeddings"]
+    logging: *default-logging
     command:
       - --model-id
       - ${FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID:-ibm-granite/granite-embedding-97m-multilingual-r2}
@@ -70,11 +100,12 @@ services:
       start_period: 30s
 
   postgres:
-    image: postgres:17.11-alpine
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    logging: *default-logging
     environment:
       POSTGRES_DB: fakeyou
       POSTGRES_USER: fakeyou
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fakeyou-local-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting postgres}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

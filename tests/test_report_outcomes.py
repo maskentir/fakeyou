@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import fakeyou.cli.diagnostics as cli_diagnostics
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.observability.report import (
     build_session_report,
@@ -233,7 +234,7 @@ def test_diagnostics_report_surfaces_both_outcomes(
         "\n".join(json.dumps(entry) for entry in rows) + "\n", encoding="utf-8"
     )
 
-    cli_diagnostics.show_session_report("m9", tmp_path, settings)
+    cli_diagnostics.show_session_report(SessionId("m9"), tmp_path, settings)
 
     printed = json.loads(capsys.readouterr().out)
     assert printed["meeting_id"] == "m9"

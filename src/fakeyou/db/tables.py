@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import MutableMapping
+from typing import Literal
+
 from sqlalchemy import (
     Boolean,
     Column,
@@ -31,12 +34,20 @@ voiceprints = Table(
 )
 
 
-def include_object(
-    obj: object,
+def include_name(
     name: str | None,
-    type_: str,
-    reflected: bool,
-    compare_to: object | None,
+    type_: Literal[
+        "schema",
+        "table",
+        "column",
+        "index",
+        "unique_constraint",
+        "foreign_key_constraint",
+        "check_constraint",
+    ],
+    _parent_names: MutableMapping[
+        Literal["schema_name", "table_name", "schema_qualified_table_name"], str | None
+    ],
 ) -> bool:
     if type_ == "table":
         return name is not None and name in metadata.tables

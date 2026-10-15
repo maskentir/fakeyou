@@ -5,12 +5,13 @@ import subprocess
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 from unittest.mock import patch
 
+from graphiti_core import Graphiti
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
@@ -18,71 +19,70 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly
 from evals._shared import sanitized_role
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import LangGraphResponder, ToolResultCallback
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.brief import MeetingBrief
 
 ROOT = Path(__file__).resolve().parent.parent
-CANDIDATE_FILES = (
-    "src/fakeyou/__init__.py",
-    "src/fakeyou/agent.py",
-    "src/fakeyou/assembly.py",
-    "src/fakeyou/audio.py",
-    "src/fakeyou/brief.py",
-    "src/fakeyou/browser.py",
-    "src/fakeyou/checkpoint.py",
-    "src/fakeyou/cli/join.py",
-    "src/fakeyou/cli/__init__.py",
-    "src/fakeyou/cli/chat.py",
-    "src/fakeyou/cli/diagnostics.py",
-    "src/fakeyou/cli/errors.py",
-    "src/fakeyou/cli/main.py",
-    "src/fakeyou/cli/memory.py",
-    "src/fakeyou/conversation.py",
-    "src/fakeyou/cleanup.py",
-    "src/fakeyou/deaf.py",
-    "src/fakeyou/faults.py",
-    "src/fakeyou/greetings.py",
-    "src/fakeyou/greetings_vocabulary.json",
-    "src/fakeyou/ingestion_status.py",
-    "src/fakeyou/ingestion.py",
-    "src/fakeyou/invariants.py",
-    "src/fakeyou/journal.py",
-    "src/fakeyou/lifecycle.py",
-    "src/fakeyou/memory.py",
-    "src/fakeyou/meet.py",
-    "src/fakeyou/owner_notes.py",
-    "src/fakeyou/participants.py",
-    "src/fakeyou/participant_observer.py",
-    "src/fakeyou/participation.py",
-    "src/fakeyou/persona.py",
-    "src/fakeyou/playback.py",
-    "src/fakeyou/preflight.py",
-    "src/fakeyou/provider_faults.py",
-    "src/fakeyou/providers.py",
-    "src/fakeyou/provenance.py",
-    "src/fakeyou/record.py",
-    "src/fakeyou/report.py",
-    "src/fakeyou/runtime.py",
-    "src/fakeyou/session.py",
-    "src/fakeyou/settings.py",
-    "src/fakeyou/taxonomy.py",
-    "src/fakeyou/voice.py",
-    "src/fakeyou/watchdog.py",
+DEBRIEF_SOURCES = frozenset({"src/fakeyou/debrief", "src/fakeyou/cli/debrief.py"})
+PACKAGE_SUFFIXES = frozenset({".py", ".json", ".js"})
+EVAL_FILES = (
+    "evals/_brief.py",
+    "evals/_replay.py",
+    "evals/_shared.py",
+    "evals/_trust.py",
     "evals/runtime_evidence.py",
-    "evals/test_brief_eval.py",
-    "evals/test_trust_eval.py",
+    "evals/test_brief_artifacts_eval.py",
+    "evals/test_brief_gate_eval.py",
+    "evals/test_brief_replay_eval.py",
     "evals/test_replay_eval.py",
+    "evals/test_trust_artifacts_eval.py",
+    "evals/test_trust_gate_eval.py",
+    "evals/test_trust_native_eval.py",
+    "evals/test_trust_provenance_eval.py",
+    "evals/test_trust_recall_eval.py",
+    "evals/test_trust_replay_eval.py",
     "evals/fixtures/brief-scenarios.json",
     "evals/fixtures/trust-scenarios.json",
     "examples/persona.example.json",
-    "tests/fakes.py",
+    "tests/_audio_fakes.py",
+    "tests/_conversation_fakes.py",
+    "tests/_fakes_common.py",
+    "tests/_meet_browser_fakes.py",
+    "tests/_memory_fakes.py",
+    "tests/_persistence_fakes.py",
+    "tests/_runtime_fakes.py",
+    "tests/_visual_fakes.py",
+    "tests/_voiceprint_fakes.py",
     "pyproject.toml",
     "uv.lock",
 )
+
+
+def _package_files(root: Path) -> list[str]:
+    return sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "src" / "fakeyou").rglob("*")
+        if path.is_file() and path.suffix in PACKAGE_SUFFIXES
+    )
+
+
+def _in_debrief_scope(name: str) -> bool:
+    return any(name == item or name.startswith(f"{item}/") for item in DEBRIEF_SOURCES)
+
+
+def candidate_files(root: Path = ROOT) -> tuple[str, ...]:
+    runtime = tuple(name for name in _package_files(root) if not _in_debrief_scope(name))
+    return (*runtime, *EVAL_FILES)
+
+
+def debrief_files(root: Path = ROOT) -> tuple[str, ...]:
+    return tuple(name for name in _package_files(root) if _in_debrief_scope(name))
 
 
 def _file_hashes(root: Path, paths: list[str]) -> dict[str, str | None]:
@@ -95,14 +95,12 @@ def _file_hashes(root: Path, paths: list[str]) -> dict[str, str | None]:
 
 
 def _digest(hashes: dict[str, str | None]) -> str:
-    return hashlib.sha256(
-        json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return canonical_json_digest(hashes, compact=True)
 
 
 def capture_candidate(fixture_path: Path, *, root: Path = ROOT) -> dict[str, Any]:
     fixture_name = fixture_path.resolve().relative_to(root.resolve()).as_posix()
-    paths = sorted(set(CANDIDATE_FILES) | {fixture_name})
+    paths = sorted(set(candidate_files(root)) | {fixture_name})
     hashes = _file_hashes(root, paths)
     commit = "unknown"
     dirty = True
@@ -132,8 +130,9 @@ def capture_candidate(fixture_path: Path, *, root: Path = ROOT) -> dict[str, Any
 
 
 def finish_candidate(candidate: dict[str, Any], *, root: Path = ROOT) -> dict[str, Any]:
-    hashes = _file_hashes(root, sorted(candidate["start_files"]))
-    changed = [name for name, digest in hashes.items() if candidate["start_files"][name] != digest]
+    names = sorted(set(candidate["start_files"]) | set(candidate_files(root)))
+    hashes = _file_hashes(root, names)
+    changed = [name for name in names if candidate["start_files"].get(name) != hashes[name]]
     return {
         **candidate,
         "finished_at": datetime.now(UTC).isoformat(),
@@ -189,6 +188,7 @@ class ModelCallCounter(AsyncCallbackHandler):
         self.usage: list[dict[str, Any] | None] = []
         self.running: dict[Any, tuple[dict[str, Any], float]] = {}
 
+    @override
     async def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:
         self.calls += 1
         recorded: set[Any] = set()
@@ -212,6 +212,7 @@ class ModelCallCounter(AsyncCallbackHandler):
                         entry["output_source"] = "native middleware ToolMessage sent to model"
                     break
 
+    @override
     async def on_tool_start(
         self, serialized: Any, input_str: str, *, run_id: Any, **kwargs: Any
     ) -> None:
@@ -235,16 +236,19 @@ class ModelCallCounter(AsyncCallbackHandler):
         self.trajectory.append(entry)
         self.running[run_id] = (entry, time.monotonic())
 
+    @override
     async def on_tool_end(self, output: Any, *, run_id: Any, **kwargs: Any) -> None:
         entry, started = self.running.pop(run_id)
         entry["output"] = output.text if isinstance(output, ToolMessage) else str(output)
         entry["duration_ms"] = (time.monotonic() - started) * 1000
 
+    @override
     async def on_tool_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
         entry, started = self.running.pop(run_id)
         entry["exception"] = f"{type(error).__name__}: {error}"
         entry["duration_ms"] = (time.monotonic() - started) * 1000
 
+    @override
     async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         message = None
         for batch in getattr(response, "generations", None) or []:
@@ -263,56 +267,68 @@ def record_tool_results(trajectory: list[dict[str, Any]]) -> ToolResultCallback:
     return record
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ResponderContext:
+    settings: Settings
+    profile: PersonaProfile
+    meeting_id: str
+    memory: Graphiti | None
+    brief: MeetingBrief | None
+    fallback: BaseChatModel | None
+    counter: ModelCallCounter
+    trajectory: list[dict[str, Any]]
+
+
 @asynccontextmanager
 async def native_responder(
     model: BaseChatModel,
-    *,
-    settings: Settings,
-    profile: PersonaProfile,
-    meeting_id: str,
-    memory: Any,
-    brief: MeetingBrief | None,
-    fallback: BaseChatModel | None,
-    counter: ModelCallCounter,
-    trajectory: list[dict[str, Any]],
+    context: ResponderContext,
 ) -> AsyncIterator[LangGraphResponder]:
+    settings = context.settings
+    profile = context.profile
     if settings.conversation.sentence_streaming:
         raise ValueError("these evals prove only the non-streaming native responder")
     if settings.conversation.max_spoken_sentences > 2:
         raise ValueError("these evals require a spoken cap of at most two sentences")
 
     @asynccontextmanager
-    async def checkpointer(url: str) -> AsyncIterator[InMemorySaver]:
+    async def checkpointer(url: str, **_kwargs: Any) -> AsyncIterator[InMemorySaver]:
+        del url
         yield InMemorySaver()
 
     config = SessionConfig(
         owner_id=profile.owner_id,
         twin_id=profile.twin_id,
-        meeting_id=meeting_id,
+        meeting_id=SessionId(context.meeting_id),
         link="https://meet.google.com/eval-only",
         twin_name=profile.display_name,
     )
-    counter.trajectory = trajectory
+    context.counter.trajectory = context.trajectory
     with (
         patch.object(assembly, "create_chat_model", return_value=model),
-        patch.object(assembly, "create_fallback_chat_model", return_value=fallback),
+        patch.object(assembly, "create_fallback_chat_model", return_value=context.fallback),
         patch.object(assembly, "open_checkpointer", checkpointer),
         patch.object(assembly, "require_url", lambda url: url or "eval-in-memory"),
     ):
         async with assembly.open_conversation(
             settings,
             config,
-            agent=assembly.AgentWiring(profile=profile, brief=brief, graphiti=memory),
+            agent=assembly.AgentWiring(
+                profile=profile, brief=context.brief, graphiti=context.memory
+            ),
             behavior=assembly.LoopBehavior(
                 on_transition=lambda *_: None,
                 wake_phrases=(profile.display_name,),
-                on_tool_result=record_tool_results(counter.tool_results),
+                on_tool_result=record_tool_results(context.counter.tool_results),
             ),
         ) as conversation:
-            responder = conversation._responder
+            responder = conversation.responder
             if not isinstance(responder, LangGraphResponder):
                 raise TypeError("expected the native non-streaming responder")
-            yield replace(responder, agent=responder.agent.with_config(callbacks=[counter]))
+            yield replace(
+                responder,
+                agent=responder.agent.with_config(callbacks=[context.counter]),
+            )
 
 
 async def respond_with_deadline(

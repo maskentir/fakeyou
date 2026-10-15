@@ -14,15 +14,16 @@ from fakeyou.conversation.conversation import (
     LangGraphResponder,
     LoopInteraction,
     LoopTiming,
-    _is_bare_ack,
-    _request_messages,
+    is_bare_ack,
+    request_messages,
 )
-from fakeyou.foundation.transcript import (
-    TranscriptEvent,
-)
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
+from tests._audio_fakes import FakeReplyAudio
+from tests._conversation_fakes import FakeResponder
 from tests._conversation_support import event
-from tests.fakes import FakeClock, FakeReplyAudio, FakeResponder, RecordingJournal
+from tests._fakes_common import FakeClock
+from tests._persistence_fakes import RecordingJournal
 
 
 async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> None:
@@ -310,6 +311,32 @@ def test_policy_requires_configured_aliases() -> None:
         )
 
 
+async def test_policy_yields_the_floor_while_others_are_speaking(journal: RecordingJournal) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    busy = [True]
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(
+            wake_phrases=["Rani Twin"],
+            participant_policy_enabled=True,
+            others_speaking=lambda: busy[0],
+        ),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "Rani Twin, what is blocking the release?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert responder.calls == []
+    [decision] = journal.events("policy_decided")
+    assert (decision["action"], decision["reason"]) == ("silent", "floor_occupied")
+
+    busy[0] = False
+    await loop.handle_transcript(event("t2", "Rani Twin, what is blocking the release?"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert len(responder.calls) == 1
+    await loop.close()
+
+
 async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = ConversationLoop(
@@ -505,11 +532,11 @@ def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
         datetime.now(UTC).isoformat(),
         "meeting_audio",
         "Rani Twin, hello",
-        True,
+        finalized=True,
         participant_id="spaces/x/devices/1",
         speaker_evidence_id="e1",
     )
-    (known,) = _request_messages([addressed])
+    (known,) = request_messages([addressed])
     assert known.additional_kwargs["meeting_event"] == {
         "timestamp": addressed.timestamp,
         "source": "meeting_audio",
@@ -518,7 +545,7 @@ def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
         "stream_id": "",
         "speaker_status": "observed",
     }
-    (anonymous,) = _request_messages([event("t2", "Hello")])
+    (anonymous,) = request_messages([event("t2", "Hello")])
     assert anonymous.additional_kwargs["meeting_event"]["speaker_status"] == "unknown"
 
 
@@ -533,12 +560,12 @@ def test_bare_ack_vocabulary_is_pinned() -> None:
 
 @pytest.mark.parametrize("text", ACK_CASES["observed_bare"] + ACK_CASES["isolated"])
 def test_observed_single_token_acks_match_exactly(text: str) -> None:
-    assert _is_bare_ack(text)
+    assert is_bare_ack(text)
 
 
 @pytest.mark.parametrize("text", ACK_CASES["replies"] + ACK_CASES["blanks"])
 def test_substantive_text_is_never_a_bare_ack(text: str) -> None:
-    assert not _is_bare_ack(text)
+    assert not is_bare_ack(text)
 
 
 @pytest.mark.parametrize("text", ACK_CASES["isolated"])
@@ -674,3 +701,104 @@ async def test_addressed_text_replies_inside_wake_window_ack_runs(
     [decided] = journal.events("ack_decided")
     assert decided["transcript_id"] == "t3"
     await loop.close()
+
+
+async def test_wake_phrase_must_match_a_whole_word() -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(wake_phrases=["Rani"]),
+        timing=LoopTiming(clock=clock),
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("one", "Ranier, what is the status?"))
+    await loop.wait_idle()
+    assert responder.calls == []
+    await loop.handle_transcript(event("two", "Rani, what is the status?"))
+    await loop.wait_idle()
+    assert len(responder.calls) == 1
+    await loop.close()
+
+
+async def test_unaddressed_finals_stay_silent_when_only_the_twin_name_is_an_alias() -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(twin_names=["Rani"]),
+        timing=LoopTiming(clock=clock),
+    )
+    loop.bind(audio)
+    for ident, text in (
+        ("one", "Let's review the budget."),
+        ("two", "Who owns the migration?"),
+        ("three", "Sounds good to me."),
+    ):
+        await loop.handle_transcript(event(ident, text))
+        await loop.wait_idle()
+    assert responder.calls == []
+    assert audio.spoken == []
+    await loop.handle_transcript(event("four", "Rani, what is blocking the release?"))
+    await loop.wait_idle()
+    assert len(responder.calls) == 1
+    await loop.close()
+
+
+async def test_explicit_wake_phrase_replaces_the_default_twin_name() -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(wake_phrases=["hey fakeyou"], twin_names=["Rani"]),
+        timing=LoopTiming(clock=clock),
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("one", "Rani, what is the status?"))
+    await loop.wait_idle()
+    assert responder.calls == []
+    await loop.close()
+
+
+async def test_unaddressed_speech_yields_the_floor_without_a_reply() -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(twin_names=["Rani"], barge_in=True),
+        timing=LoopTiming(clock=clock),
+    )
+    loop.bind(audio)
+    audio.speaking = True
+    await loop.handle_transcript(event("one", "let's review the budget"))
+    await loop.wait_idle()
+    assert responder.calls == []
+    assert audio.stops == 1
+    await loop.close()
+
+
+async def _assert_speaking_twin_keeps_the_floor(text: str) -> None:
+    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(twin_names=["Rani"], barge_in=True),
+        timing=LoopTiming(clock=clock),
+    )
+    loop.bind(audio)
+    audio.speaking = True
+    await loop.handle_transcript(event("one", text))
+    await loop.wait_idle()
+    assert responder.calls == []
+    assert audio.stops == 0
+    await loop.close()
+
+
+@pytest.mark.parametrize("text", ACK_CASES["vocabulary"])
+async def test_bare_ack_while_speaking_does_not_yield_the_floor(text: str) -> None:
+    await _assert_speaking_twin_keeps_the_floor(text)
+
+
+@pytest.mark.parametrize("text", ACK_CASES["backchannels"])
+def test_english_backchannels_are_bare_acks(text: str) -> None:
+    assert is_bare_ack(text)
+
+
+@pytest.mark.parametrize("text", ACK_CASES["backchannels"])
+async def test_backchannel_while_speaking_does_not_yield_the_floor(text: str) -> None:
+    await _assert_speaking_twin_keeps_the_floor(text)

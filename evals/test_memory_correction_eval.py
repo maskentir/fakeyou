@@ -1,5 +1,4 @@
 import json
-import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +9,7 @@ import pytest
 from evals._correction import (
     answer_queries,
     load_correction_fixture,
+    probe_memory_store,
     query_matches,
     superseded_serve_rate,
     write_fixture_record,
@@ -18,12 +18,7 @@ from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.memory.ingestion import IngestScope, MeetingScope, ingest_corrections, ingest_meeting
-from fakeyou.memory.memory import (
-    RECALL_EMPTY_RESULT,
-    ensure_indexes,
-    open_graphiti_memory,
-    verify_memory_connection,
-)
+from fakeyou.memory.memory import RECALL_EMPTY_RESULT, open_graphiti_memory
 from fakeyou.orchestration.providers import memory_config
 from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.persistence.record import load_meeting_record
@@ -387,19 +382,11 @@ async def test_live_memory_correction_gate(tmp_path: Path) -> None:
         pytest.skip(str(error))
     group_id = f"memcorr-{uuid.uuid4().hex[:8]}"
     async with open_graphiti_memory(config) as memory:
-        try:
-            await verify_memory_connection(memory)
-            await ensure_indexes(memory)
-        except Exception as error:
-            pytest.skip(f"memory store is unreachable: {error}")
-        started = time.monotonic()
+        probe_error = await probe_memory_store(memory)
+        if probe_error is not None:
+            pytest.skip(f"memory store is unreachable: {probe_error}")
         summary = await run_memory_correction(memory, record_path, fixture, group_id=group_id)
-        duration = time.monotonic() - started
     metrics = summary["metrics"]
-    print(f"\nfixture: {FIXTURE.name} group: {group_id} duration_s: {duration:.1f}")
-    print(f"metrics: {json.dumps(metrics, sort_keys=True)}")
-    print(f"validity: {json.dumps(summary['validity'], sort_keys=True)}")
-    print(f"changed_edges: {summary['changed_edges']} matches: {summary['matches']}")
     if not eval_is_valid(summary["validity"]):
         validity_json = json.dumps(summary["validity"], sort_keys=True)
         pytest.fail(f"INVALID memory-correction run: {validity_json}")

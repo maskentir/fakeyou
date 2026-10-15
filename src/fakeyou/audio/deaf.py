@@ -1,5 +1,3 @@
-import math
-import struct
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -7,6 +5,8 @@ from typing import Literal
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import PCM_CHANNELS
+from fakeyou.foundation.numbers import rms
+from fakeyou.foundation.pcm import PCM16_FULL_SCALE, PCM16_SAMPLE_BYTES, decode_pcm16
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.faults import Fault, FaultReporter
 from fakeyou.observability.journal import Journal
@@ -29,18 +29,18 @@ _VERDICT_SOURCES: dict[DeafVerdict, Subsystem] = {
 
 
 def rms_level(pcm: bytes, *, channels: int = PCM_CHANNELS) -> float:
-    stride = 2 * max(channels, 1)
+    stride = PCM16_SAMPLE_BYTES * max(channels, 1)
     count = len(pcm) // stride
     if count == 0:
         return 0.0
-    values = struct.unpack(f"<{count * max(channels, 1)}h", pcm[: count * stride])
-    return math.sqrt(sum(v * v for v in values) / len(values)) / 32768.0
+    values = decode_pcm16(pcm[: count * stride])
+    return rms(values) / PCM16_FULL_SCALE
 
 
 def audio_duration_ms(num_bytes: int, sample_rate: int, channels: int) -> float:
     if sample_rate <= 0 or num_bytes <= 0:
         return 0.0
-    samples = num_bytes // (2 * max(channels, 1))
+    samples = num_bytes // (PCM16_SAMPLE_BYTES * max(channels, 1))
     return samples / sample_rate * 1000
 
 

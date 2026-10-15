@@ -6,8 +6,9 @@ from typing import Annotated, Any, Protocol, runtime_checkable
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
+from fakeyou.config.identifiers import SessionIdField
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.foundation.invariants import PositiveSeconds, SessionId, TwinName
+from fakeyou.foundation.invariants import PositiveSeconds, TwinName
 from fakeyou.foundation.taxonomy import MeetingPhase, TerminalReason
 
 
@@ -61,9 +62,9 @@ class MeetingConversation(Protocol):
 
 @dataclass(frozen=True, slots=True, config=ConfigDict(hide_input_in_errors=True))
 class SessionConfig:
-    owner_id: SessionId
-    twin_id: SessionId
-    meeting_id: SessionId
+    owner_id: SessionIdField
+    twin_id: SessionIdField
+    meeting_id: SessionIdField
     link: str
     twin_name: TwinName
     lobby_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.lobby_timeout_seconds
@@ -78,6 +79,21 @@ class SessionConfig:
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     database_url: str | None = field(default=None, repr=False)
+    database_connect_timeout_seconds: PositiveSeconds = DEFAULTS.database.connect_timeout_seconds
+    database_statement_timeout_seconds: PositiveSeconds = (
+        DEFAULTS.database.statement_timeout_seconds
+    )
+    database_keepalive_idle_seconds: PositiveSeconds = DEFAULTS.database.keepalive_idle_seconds
+    lifecycle_send_timeout_seconds: PositiveSeconds = DEFAULTS.database.send_timeout_seconds
+    drain_max_consecutive_failures: Annotated[int, Field(ge=1)] = (
+        DEFAULTS.audio.drain_max_consecutive_failures
+    )
+    drain_failure_journal_every: Annotated[int, Field(ge=1)] = (
+        DEFAULTS.audio.drain_failure_journal_every
+    )
+    participant_evidence_max_bytes: Annotated[int, Field(ge=1)] = (
+        DEFAULTS.conversation.participant_evidence_max_bytes
+    )
     browser_profile_dir: Path | None = None
     warmup_browser: bool = DEFAULTS.browser.warmup
     headless: bool = DEFAULTS.browser.headless

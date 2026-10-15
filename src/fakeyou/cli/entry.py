@@ -15,6 +15,7 @@ def _export_embedding_dim() -> None:
 
 
 def main() -> None:
+    os.umask(0o077)
     export_dotenv()
     _export_embedding_dim()
     from fakeyou.cli.main import main as run_cli

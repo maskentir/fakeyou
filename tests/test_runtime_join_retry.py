@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.orchestration.runtime import (
@@ -11,17 +12,9 @@ from fakeyou.orchestration.runtime import (
     run_join_with_retry,
     run_meeting_session,
 )
-from tests.fakes import (
-    ENDED,
-    IN_CALL,
-    LINK,
-    LOBBY,
-    FakeClock,
-    FakePageSession,
-    FakeSaverSession,
-    RecordingJournal,
-    meet_page,
-)
+from tests._fakes_common import LINK, FakeClock
+from tests._meet_browser_fakes import ENDED, IN_CALL, LOBBY, FakePageSession, meet_page
+from tests._persistence_fakes import FakeSaverSession, RecordingJournal
 
 
 def _scripted(
@@ -42,14 +35,11 @@ async def _retry(
     journal: RecordingJournal,
     clock: FakeClock,
     should_stop: Callable[[], bool],
-    rng: Callable[[float, float], float],
-    max_attempts: int = 3,
-    base: float = 2.0,
-    cap: float = 30.0,
+    policy: JoinRetryPolicy,
 ) -> tuple[JoinResult, int]:
     return await run_join_with_retry(
         attempt,
-        policy=JoinRetryPolicy(max_attempts, base, cap, rng),
+        policy=policy,
         sleep=clock.sleep,
         record=journal.record,
         should_stop=should_stop,
@@ -61,7 +51,13 @@ async def test_join_retry_succeeds_after_transient_failures() -> None:
     clock = FakeClock()
     journal = RecordingJournal()
 
-    result, attempts = await _retry(attempt, journal, clock, lambda: False, lambda low, high: 1.0)
+    result, attempts = await _retry(
+        attempt,
+        journal,
+        clock,
+        lambda: False,
+        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
+    )
 
     assert result.status == "admitted"
     assert attempts == 3
@@ -81,7 +77,13 @@ async def test_join_retry_terminal_statuses_do_not_retry(status: JoinStatus) -> 
     clock = FakeClock()
     journal = RecordingJournal()
 
-    result, attempts = await _retry(attempt, journal, clock, lambda: False, lambda low, high: 1.0)
+    result, attempts = await _retry(
+        attempt,
+        journal,
+        clock,
+        lambda: False,
+        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
+    )
 
     assert result.status == status
     assert attempts == 1
@@ -95,7 +97,13 @@ async def test_join_retry_exhaustion_returns_last_result() -> None:
     clock = FakeClock()
     journal = RecordingJournal()
 
-    result, attempts = await _retry(attempt, journal, clock, lambda: False, lambda low, high: 0.5)
+    result, attempts = await _retry(
+        attempt,
+        journal,
+        clock,
+        lambda: False,
+        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 0.5),
+    )
 
     assert result.status == "timeout"
     assert attempts == 3
@@ -109,7 +117,13 @@ async def test_join_retry_stop_wins_before_retry() -> None:
     clock = FakeClock()
     journal = RecordingJournal()
 
-    result, attempts = await _retry(attempt, journal, clock, lambda: True, lambda low, high: 1.0)
+    result, attempts = await _retry(
+        attempt,
+        journal,
+        clock,
+        lambda: True,
+        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
+    )
 
     assert result.status == "aborted"
     assert attempts == 1
@@ -131,7 +145,7 @@ async def test_join_retry_stop_during_backoff_aborts() -> None:
 
     result, attempts = await run_join_with_retry(
         attempt,
-        policy=JoinRetryPolicy(3, 2.0, 30.0, lambda low, high: 1.0),
+        policy=JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
         sleep=sleep_and_stop,
         record=journal.record,
         should_stop=lambda: stopped,
@@ -156,7 +170,7 @@ async def test_join_retry_delay_uses_capped_full_jitter() -> None:
         return high if value is None else value
 
     result, attempts = await _retry(
-        attempt, journal, clock, lambda: False, scripted_rng, max_attempts=4, cap=5.0
+        attempt, journal, clock, lambda: False, JoinRetryPolicy(4, 2.0, 5.0, scripted_rng)
     )
 
     assert result.status == "admitted"
@@ -192,9 +206,9 @@ async def test_worker_join_retries_timeout_then_admits() -> None:
     journal = RecordingJournal()
     clock = FakeClock()
     config = SessionConfig(
-        owner_id="owner-1",
-        twin_id="twin-1",
-        meeting_id="meeting-1",
+        owner_id=SessionId("owner-1"),
+        twin_id=SessionId("twin-1"),
+        meeting_id=SessionId("meeting-1"),
         link=LINK,
         twin_name="Twin",
         lobby_timeout_seconds=5.0,

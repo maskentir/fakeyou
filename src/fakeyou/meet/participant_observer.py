@@ -1,45 +1,103 @@
 import asyncio
 import json
-import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any
+from typing import Any, override
 
-from fakeyou.foundation.participants import Participant, SpeakerSample
+from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.polling import PageEvaluator, PollingLoop, PollSchedule
+from fakeyou.observability.faults import ConsumerSink, Fault, FaultReporter, create_poll_guard
 
 POLL_INTERVAL_SECONDS = 0.25
-TIMELINE_RETENTION_SECONDS = 120.0
+DEFAULT_PARTICIPANT_SCHEDULE = PollSchedule(interval_seconds=POLL_INTERVAL_SECONDS)
 QUERY_METHOD_MINING = "dom_mining"
-EVIDENCE_FILE_NAME = "participants.jsonl"
 
 
 def observer_epoch(meeting_id: str, generation: int = 1) -> str:
     return f"{meeting_id}:e{generation}"
 
 
-def append_participant_evidence(
-    path: Path,
-    raw: Mapping[str, Any],
-    mono_ms: float,
-    *,
-    epoch: str,
-    method: str = QUERY_METHOD_MINING,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
+_DROPPED_TILE_FIELDS = frozenset({"html", "cls"})
+
+
+def _evidence_record(
+    raw: Mapping[str, Any], mono_ms: float, *, epoch: str, method: str
+) -> dict[str, Any]:
+    tiles: list[Any] = []
+    raw_tiles = raw.get("tiles", [])
+    if isinstance(raw_tiles, list):
+        for tile in raw_tiles:
+            if not isinstance(tile, dict):
+                tiles.append(tile)
+                continue
+            tiles.append({k: v for k, v in tile.items() if k not in _DROPPED_TILE_FIELDS})
+    return {
         "wall": datetime.now(UTC).isoformat(),
         "mono_ms": mono_ms,
         "epoch": epoch,
         "method": method,
-        "tiles": raw.get("tiles", []),
+        "tiles": tiles,
         "people": raw.get("people", []),
         "self_seen": bool(raw.get("selfSeen", False)),
         "page_speaking": raw.get("pageSpeaking", []),
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+class ParticipantEvidenceWriter:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        epoch: str,
+        method: str = QUERY_METHOD_MINING,
+        max_bytes: int,
+        faults: FaultReporter | None = None,
+    ) -> None:
+        self._path = path
+        self._epoch = epoch
+        self._method = method
+        self._max_bytes = max_bytes
+        self._faults = faults
+        self._last_digest: str | None = None
+        self._capped = False
+
+    def write(self, raw: Mapping[str, Any], mono_ms: float) -> bool:
+        record = _evidence_record(raw, mono_ms, epoch=self._epoch, method=self._method)
+        content = {
+            "tiles": record["tiles"],
+            "people": record["people"],
+            "self_seen": record["self_seen"],
+            "page_speaking": record["page_speaking"],
+        }
+        digest = canonical_json_digest(content, ensure_ascii=False)
+        if digest == self._last_digest:
+            return False
+        line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+        current = self._path.stat().st_size if self._path.exists() else 0
+        if current + len(line) > self._max_bytes:
+            self._record_capped()
+            return False
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("ab") as handle:
+            handle.write(line)
+        self._last_digest = digest
+        return True
+
+    def _record_capped(self) -> None:
+        if self._capped:
+            return
+        self._capped = True
+        if self._faults is None:
+            return
+        self._faults.record(
+            Fault(
+                source="browser",
+                kind="unavailable",
+                detail=f"participant evidence capped at {self._max_bytes} bytes",
+            )
+        )
 
 
 OBSERVE_JS = """() => {
@@ -99,98 +157,34 @@ OBSERVE_JS = """() => {
 }"""
 
 
-class ParticipantObserver:
+def _is_observation(raw: Any) -> bool:
+    return isinstance(raw, dict) and isinstance(raw.get("tiles"), list)
+
+
+class ParticipantObserver(PollingLoop):
+    _COMPENSATE_SLEEP = True
+
     def __init__(
         self,
-        page: Any,
+        page: PageEvaluator,
         *,
-        epoch: str,
-        monotonic: Callable[[], float] = time.monotonic,
-        on_poll: Callable[[Mapping[str, Any], float], None] | None = None,
-        poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
+        on_poll: Callable[[Mapping[str, Any], float], None],
+        schedule: PollSchedule = DEFAULT_PARTICIPANT_SCHEDULE,
+        sinks: ConsumerSink | None = None,
     ) -> None:
+        super().__init__(
+            poll_interval_seconds=schedule.interval_seconds,
+            monotonic=schedule.monotonic,
+            guard=create_poll_guard(sinks, source="browser", operation="participant_observer"),
+        )
         self._page = page
-        self._epoch = epoch
-        self._monotonic = monotonic
         self._on_poll = on_poll
-        self._poll_interval = poll_interval_seconds
-        self._samples: list[SpeakerSample] = []
-        self._roster: dict[str, Participant] = {}
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self.polls = 0
-        self.poll_failures = 0
-        self.last_poll_error: str | None = None
 
-    @property
-    def epoch(self) -> str:
-        return self._epoch
-
-    async def start(self) -> None:
-        if self._task is not None or self._closed:
-            return
-        self._task = asyncio.create_task(self._poll_loop())
-
-    async def close(self) -> None:
-        task, self._task = self._task, None
-        self._closed = True
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    def reset_epoch(self, epoch: str) -> None:
-        self._epoch = epoch
-        self._samples = []
-        self._roster = {}
-
-    def snapshot(self) -> tuple[tuple[SpeakerSample, ...], Mapping[str, Participant]]:
-        return tuple(self._samples), MappingProxyType(dict(self._roster))
-
-    async def _poll_loop(self) -> None:
-        while True:
-            started = self._monotonic()
-            self.polls += 1
-            try:
-                raw = await self._page.evaluate(OBSERVE_JS)
-                self._ingest(raw, started)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                self.poll_failures += 1
-                self.last_poll_error = type(error).__name__
-            elapsed = self._monotonic() - started
-            await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
-
-    def _ingest(self, raw: Any, at_seconds: float) -> None:
-        if not isinstance(raw, dict):
-            return
-        tiles = raw.get("tiles")
-        if not isinstance(tiles, list):
-            return
-        at_ms = at_seconds * 1000.0
-        roster: dict[str, Participant] = {}
-        active: list[str] = []
-        for tile in tiles:
-            if not isinstance(tile, dict):
-                continue
-            key = tile.get("key")
-            if not isinstance(key, str) or not key:
-                continue
-            label = tile.get("label")
-            roster[key] = Participant(
-                key,
-                label if isinstance(label, str) else "",
-                self._epoch,
-                bool(tile.get("self")),
-            )
-            if tile.get("speaking"):
-                active.append(key)
-        self._roster = roster
-        self._samples.append(SpeakerSample(at_ms, self._epoch, tuple(active)))
-        cutoff = at_ms - TIMELINE_RETENTION_SECONDS * 1000.0
-        self._samples = [sample for sample in self._samples if sample.at_ms >= cutoff]
-        if self._on_poll is not None:
-            self._on_poll(raw, at_ms)
+    @override
+    async def _poll_once(self) -> None:
+        started = self._monotonic()
+        self.polls += 1
+        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+            raw = await self._page.evaluate(OBSERVE_JS)
+        if _is_observation(raw):
+            await asyncio.to_thread(self._on_poll, raw, started * 1000.0)

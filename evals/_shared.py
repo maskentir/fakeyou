@@ -1,8 +1,45 @@
+import gc
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from fakeyou.config.settings import Settings
+
 CREDENTIAL_MARKERS = ("key", "token", "secret", "password", "passwd", "auth", "credential")
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ArtifactMeta:
+    settings: Settings
+    fixture: dict[str, Any]
+    fixture_path: Path
+    source_commit: str
+    mode: str
+    model_name: str
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ReplayOptions:
+    settings: Settings | None = None
+    fallback: BaseChatModel | None = None
+    fixture_path: Path | None = None
+
+
+@contextmanager
+def suspended_gc() -> Iterator[None]:
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 def sanitize_url(value: str) -> str:
@@ -18,7 +55,7 @@ def sanitize_url(value: str) -> str:
         port = f":{parts.port}" if parts.port else ""
         netloc = f"{host}{port}"
         return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-    except Exception:
+    except (TypeError, ValueError):
         return value
 
 

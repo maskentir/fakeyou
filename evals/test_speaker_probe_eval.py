@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from evals._shared import ReplayOptions
 from evals._trust import contract_model, replay_trust, strategy_settings
 from evals.runtime_evidence import finish_candidate
 from fakeyou.catalog.errors import FakeYouError
@@ -95,7 +96,7 @@ async def test_contract_probe_replay_covers_every_variant() -> None:
         partial(contract_model, recall_tool=False),
         fixture,
         1,
-        settings=strategy_settings("prefetch"),
+        options=ReplayOptions(settings=strategy_settings("prefetch")),
     )
 
     assert all(turn["exception"] is None for turn in score.turns)
@@ -173,13 +174,9 @@ async def test_live_speaker_probe_measures_denial_rate(tmp_path: Path) -> None:
         lambda _case: model,
         fixture,
         SPEAKER_RUNS,
-        settings=settings,
-        fallback=create_fallback_chat_model(settings),
+        options=ReplayOptions(settings=settings, fallback=create_fallback_chat_model(settings)),
     )
-    summary = _write_probe_artifacts(target, score=score, settings=settings, fixture=fixture)
-    print(f"\nlive speaker probe model: {settings.reply.model}")
-    effort = getattr(settings.reply, "reasoning_effort", None)
-    print(f"reasoning: {effort} overall: {summary['overall']}")
+    _write_probe_artifacts(target, score=score, settings=settings, fixture=fixture)
     assert len(score.turns) == len(EXPECTED_VARIANT_IDS) * SPEAKER_RUNS
     assert sum(1 for turn in score.turns if turn.get("exception")) == 0
     if os.environ.get("SPEAKER_MEASURE_FIX", "") == "":

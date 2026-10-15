@@ -1,14 +1,12 @@
 import json
 import sys
-from pathlib import Path
 from typing import Any
 
 from fakeyou.catalog.errors import CATALOG, ErrorCode
 from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
+from fakeyou.foundation.resources import read_package_text
 
-PROSE: dict[str, Any] = json.loads(
-    Path(__file__).with_name("error_catalog.json").read_text(encoding="utf-8")
-)
+PROSE: dict[str, Any] = json.loads(read_package_text("catalog", "error_catalog.json"))
 
 
 def _cell(text: str) -> str:

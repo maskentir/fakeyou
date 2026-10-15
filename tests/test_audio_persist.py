@@ -3,6 +3,7 @@ import json
 import os
 import wave
 from pathlib import Path
+from typing import override
 
 import pytest
 from pipecat.transports.base_transport import TransportParams
@@ -11,7 +12,14 @@ from pydantic import ValidationError
 from fakeyou.audio.stream_capture import StreamAudioInput, StreamChunk, StreamRegistry
 from fakeyou.config.settings import AudioSettings, Configuration
 from fakeyou.observability.journal import Journal
-from fakeyou.persistence.audio_persist import AudioRecordingSummary, SlotAudioWriter
+from fakeyou.persistence.audio_persist import (
+    HEADER_PATCH_INTERVAL,
+    MAX_SLOTS,
+    METADATA_INTERVAL,
+    AudioRecordingSummary,
+    SlotAudioWriter,
+    read_slot_anchors,
+)
 
 
 class FakeClock:
@@ -52,11 +60,18 @@ def test_sequential_chunks_produce_readable_wav(tmp_path: Path) -> None:
         assert handle.getsampwidth() == 2
         assert handle.getnframes() == 240
     sidecar = json.loads((tmp_path / "audio" / "slots.json").read_text())
-    assert sidecar["schema"] == "slot_audio/v1"
+    assert sidecar["schema"] == "slot_audio/v2"
     assert sidecar["slots"] == {
-        "0": {"seq_start": 0, "seq_end": 2, "frames": 240, "gaps_filled": 0}
+        "0": {
+            "seq_start": 0,
+            "seq_end": 2,
+            "frames": 240,
+            "gaps_filled": 0,
+            "gaps_truncated": 0,
+            "restarts": 0,
+        }
     }
-    assert sidecar["anchors"] == [
+    assert read_slot_anchors(tmp_path / "audio") == [
         {"slot": 0, "seq": seq, "page_ms": 1000.0 + seq * 20.0, "mono": 1000.5 + seq * 0.5}
         for seq in range(3)
     ]
@@ -97,8 +112,7 @@ def test_duplicate_and_old_chunks_are_dropped(tmp_path: Path) -> None:
     with wave.open(str(tmp_path / "audio" / "slot-0.wav"), "rb") as handle:
         assert handle.getnframes() == 160
         assert handle.readframes(160) == _pcm(5, 80) + _pcm(5, 80)
-    sidecar = json.loads((tmp_path / "audio" / "slots.json").read_text())
-    assert len(sidecar["anchors"]) == 2
+    assert len(read_slot_anchors(tmp_path / "audio")) == 2
 
 
 def test_two_slots_produce_two_wavs_and_shared_sidecar(tmp_path: Path) -> None:
@@ -125,11 +139,12 @@ def test_two_slots_produce_two_wavs_and_shared_sidecar(tmp_path: Path) -> None:
         "seq_end": 2,
         "frames": 120,
         "gaps_filled": 0,
+        "gaps_truncated": 0,
+        "restarts": 0,
     }
-    assert len(sidecar["anchors"]) == 5
-    assert {tuple(sorted(anchor)) for anchor in sidecar["anchors"]} == {
-        ("mono", "page_ms", "seq", "slot")
-    }
+    anchors = read_slot_anchors(tmp_path / "audio")
+    assert len(anchors) == 5
+    assert {tuple(sorted(anchor)) for anchor in anchors} == {("mono", "page_ms", "seq", "slot")}
 
 
 def test_close_is_idempotent_and_journals_single_finished_event(tmp_path: Path) -> None:
@@ -194,6 +209,7 @@ class _SilentInput(StreamAudioInput):
         super().__init__(TransportParams(audio_in_enabled=True))
         self.fed: list[bytes] = []
 
+    @override
     async def feed(self, audio: bytes, sample_rate: int = 16000) -> None:
         self.fed.append(audio)
 
@@ -268,3 +284,64 @@ async def test_registry_write_failure_records_fault_and_keeps_session(
     assert len(faults) == 1
     assert faults[0]["source"] == "audio"
     assert str(faults[0]["detail"]).startswith("audio_persist")
+
+
+def test_anchors_are_appended_while_recording_so_a_crash_keeps_them(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+    for seq in range(3):
+        writer.write_chunk(0, seq, 1000.0 + seq * 20.0, _pcm(7, 80))
+
+    assert [row["seq"] for row in read_slot_anchors(tmp_path / "audio")] == [0, 1, 2]
+    writer.close()
+
+
+def test_wav_header_describes_the_audio_written_before_close(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+    for seq in range(HEADER_PATCH_INTERVAL):
+        writer.write_chunk(0, seq, 1000.0 + seq, _pcm(3, 80))
+
+    with wave.open(str(tmp_path / "audio" / "slot-0.wav"), "rb") as handle:
+        assert handle.getnframes() == HEADER_PATCH_INTERVAL * 80
+    writer.close()
+
+
+def test_slots_metadata_is_written_before_close(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+    for seq in range(METADATA_INTERVAL):
+        writer.write_chunk(0, seq, 1000.0 + seq, _pcm(3, 80))
+
+    sidecar = json.loads((tmp_path / "audio" / "slots.json").read_text())
+    assert sidecar["slots"]["0"]["seq_end"] == METADATA_INTERVAL - 1
+    writer.close()
+
+
+def test_gap_fill_is_capped_so_one_jump_cannot_write_unbounded_silence(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+    writer.write_chunk(0, 0, 1000.0, _pcm(4, 80))
+    writer.write_chunk(0, 1_000_000, 2000.0, _pcm(4, 80))
+    summary = writer.close()
+
+    assert summary.bytes_total == 160 + 64_000 + 160
+    sidecar = json.loads((tmp_path / "audio" / "slots.json").read_text())
+    assert sidecar["slots"]["0"]["gaps_truncated"] == 1
+
+
+def test_sequence_restart_beyond_the_reorder_window_is_kept_not_dropped(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+    for seq in range(100):
+        writer.write_chunk(0, seq, 1000.0 + seq, _pcm(1, 80))
+    writer.write_chunk(0, 0, 9000.0, _pcm(2, 80))
+    writer.write_chunk(0, 1, 9020.0, _pcm(2, 80))
+    summary = writer.close()
+
+    assert summary.chunks == 102
+    sidecar = json.loads((tmp_path / "audio" / "slots.json").read_text())
+    assert sidecar["slots"]["0"]["restarts"] == 1
+
+
+def test_slot_outside_the_bound_is_refused(tmp_path: Path) -> None:
+    writer = _writer(tmp_path / "audio", FakeClock(), [])
+
+    with pytest.raises(ValueError, match="outside"):
+        writer.write_chunk(MAX_SLOTS, 0, 1000.0, _pcm(1, 80))
+    writer.close()

@@ -115,7 +115,7 @@ class OpenAISpeechSynthesizer:
         sentence_index: int | None = None,
         transcript_id: str | None = None,
     ) -> AsyncIterator[bytes]:
-        return _journaled_stream(
+        return journaled_stream(
             self._journal,
             text,
             self._stream_pcm,
@@ -131,6 +131,14 @@ class OpenAISpeechSynthesizer:
     @property
     def client(self) -> AsyncOpenAI:
         return self._client
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def voice(self) -> str:
+        return self._voice
 
     @property
     def journal(self) -> Journal | None:
@@ -187,7 +195,7 @@ class MiniMaxSpeechSynthesizer:
         sentence_index: int | None = None,
         transcript_id: str | None = None,
     ) -> AsyncIterator[bytes]:
-        return _journaled_stream(
+        return journaled_stream(
             self._journal,
             text,
             self._stream_pcm,
@@ -203,6 +211,14 @@ class MiniMaxSpeechSynthesizer:
     @property
     def client(self) -> httpx2.AsyncClient:
         return self._client
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def voice(self) -> str:
+        return self._voice
 
     @property
     def journal(self) -> Journal | None:
@@ -290,7 +306,7 @@ def _record_first_pcm(
     journal.record("synthesis_pcm_emitted", source="tts", **pcm)
 
 
-async def _journaled_stream(
+async def journaled_stream(
     journal: Journal | None,
     text: str,
     open_stream: Callable[[str], AsyncGenerator[bytes]],

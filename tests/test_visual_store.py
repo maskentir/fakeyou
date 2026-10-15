@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import random
 import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 from PIL import Image
 
+from fakeyou.observability.faults import ConsumerSink
 from fakeyou.visual.visual_observer import VISUAL_SCAN_JS, VisualObserver
 from fakeyou.visual.visual_store import (
     VISUAL_JOIN_TOLERANCE_MS,
@@ -18,9 +19,10 @@ from fakeyou.visual.visual_store import (
     append_visual,
     frames_in_window,
     hamming_distance,
+    read_visual_sidecar,
     visual_refs_for_utterance,
 )
-from tests.fakes import RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 
 PRESENT_SCAN: dict[str, Any] = {
     "labels": [
@@ -143,8 +145,7 @@ async def test_dedup_drops_near_duplicate(tmp_path: Path) -> None:
     append_visual(store, third)
     assert [frame.frame_id for frame in store.frames] == [first.frame_id, third.frame_id]
     assert store.duplicates_suppressed == 1
-    rows = (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 2
+    assert len(read_visual_sidecar(tmp_path / "visuals.jsonl")) == 2
     suppressed = journal.events("duplicate_suppressed")
     assert len(suppressed) == 1
     assert suppressed[0]["visual_id"] == second.frame_id
@@ -167,9 +168,9 @@ async def test_ring_spills_to_disk(tmp_path: Path) -> None:
         f"ring-{index:03d}" for index in range(1, 91)
     ]
     assert store.duplicates_suppressed == 0
-    rows = (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 91
-    assert json.loads(rows[0])["visual_id"] == "ring-000"
+    frames_on_disk = read_visual_sidecar(tmp_path / "visuals.jsonl")
+    assert len(frames_on_disk) == 91
+    assert frames_on_disk[0]["visual_id"] == "ring-000"
     assert await asyncio.to_thread(_file_exists, frames[0].path)
 
 
@@ -245,14 +246,10 @@ def test_static_slide_asked_late_still_cites(tmp_path: Path) -> None:
     [current] = store.frames
     assert current.visible_to_page_ms == 1006000.0
     assert current.visible_to_at == "2026-10-09T23:13:49+00:00"
-    rows = [
-        json.loads(line)
-        for line in (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
-    ]
-    assert len(rows) == 1
-    assert rows[0]["visual_id"] == "static-slide"
-    assert rows[0]["visible_to"] == "2026-10-09T23:13:49+00:00"
-    assert rows[0]["visible_to_page_ms"] == 1006000.0
+    [folded] = read_visual_sidecar(tmp_path / "visuals.jsonl")
+    assert folded["visual_id"] == "static-slide"
+    assert folded["visible_to"] == "2026-10-09T23:13:49+00:00"
+    assert folded["visible_to_page_ms"] == 1006000.0
 
 
 def test_replaced_frame_outside_range_yields_nothing(tmp_path: Path) -> None:
@@ -278,10 +275,7 @@ def test_replaced_frame_outside_range_yields_nothing(tmp_path: Path) -> None:
     assert first.visible_to_at == "2026-10-09T03:10:10+00:00"
     assert second.visible_to_page_ms is None
     assert second.visible_to_at is None
-    rows = {
-        json.loads(line)["visual_id"]: json.loads(line)
-        for line in (tmp_path / "visuals.jsonl").read_text(encoding="utf-8").splitlines()
-    }
+    rows = {row["visual_id"]: row for row in read_visual_sidecar(tmp_path / "visuals.jsonl")}
     assert rows["range-first"]["visible_to"] == "2026-10-09T03:10:10+00:00"
     assert rows["range-first"]["visible_to_page_ms"] == 210000.0
     assert rows["range-second"]["visible_to"] is None
@@ -328,7 +322,7 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
     )
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
-    observer = VisualObserver(page, store, journal=journal)
+    observer = VisualObserver(page, store, sinks=ConsumerSink(journal=journal))
     assert await observer.poll() is None
     first = await observer.poll()
     assert first is not None
@@ -345,3 +339,24 @@ async def test_journal_has_no_bytes(tmp_path: Path) -> None:
         assert "base64" not in line.lower()
         assert len(line.encode()) < 4096
         assert re.search(r"[A-Za-z0-9+/=]{100,}", line) is None
+
+
+def test_persist_range_read_failure_is_journaled(tmp_path: Path) -> None:
+    journal = RecordingJournal()
+    store = VisualStore(tmp_path, journal=journal)
+    first = timed_frame(
+        "frame-a", tmp_path, 0x0000000000000000, 100000.0, "2026-10-09T03:10:00+00:00"
+    )
+    store.append(first)
+    store.sidecar.unlink()
+    store.sidecar.mkdir()
+    second = timed_frame(
+        "frame-b", tmp_path, 0xFFFFFFFFFFFFFFFF, 110000.0, "2026-10-09T03:10:10+00:00"
+    )
+
+    with pytest.raises(OSError, match="Is a directory"):
+        store.append(second)
+
+    [row] = journal.events("visual_range_persist_failed")
+    assert row["frame_id"] == "frame-a"
+    assert row["error_type"] == "IsADirectoryError"

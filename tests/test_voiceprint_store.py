@@ -14,7 +14,7 @@ from fakeyou.db.voiceprint_store import (
     pack_embedding,
     unpack_embedding,
 )
-from tests.fakes import DATABASE_URL
+from tests._fakes_common import DATABASE_URL
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(hours=1)
@@ -128,7 +128,7 @@ def test_touch_used_updates_only_an_existing_person(
     ids=["negative-with-owner", "positive-without-owner"],
 )
 def test_is_negative_and_owner_name_round_trip(
-    migrated_engine: Engine, is_negative: bool, owner_name: str
+    migrated_engine: Engine, *, is_negative: bool, owner_name: str
 ) -> None:
     store = VoiceprintStore(migrated_engine)
     store.save(make_record(is_negative=is_negative, owner_name=owner_name))
@@ -146,7 +146,9 @@ def test_pack_and_unpack_embedding_round_trip() -> None:
 
 
 def test_store_is_accepted_where_a_voiceprint_repository_is_annotated() -> None:
-    engine = create_engine_for_url(DATABASE_URL)
+    engine = create_engine_for_url(
+        DATABASE_URL, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         repository: VoiceprintRepository = VoiceprintStore(engine)
     finally:

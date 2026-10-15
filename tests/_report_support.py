@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 START = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 
@@ -13,14 +13,14 @@ def row(seconds: float, event: str, **fields: Any) -> dict[str, Any]:
     }
 
 
+class TurnEvidence(TypedDict, total=False):
+    recall: bool
+    participant_id: str
+    speaker_evidence_id: str
+
+
 def answered_turn(
-    offset: float,
-    transcript_id: str,
-    reply: str,
-    *,
-    recall: bool = False,
-    participant_id: str = "unknown",
-    speaker_evidence_id: str | None = None,
+    offset: float, transcript_id: str, reply: str, **evidence: Unpack[TurnEvidence]
 ) -> list[dict[str, Any]]:
     rows = [
         row(offset, "speech_stopped", source="audio"),
@@ -29,12 +29,12 @@ def answered_turn(
             "transcript_finalized",
             transcript_id=transcript_id,
             text="When is the demo?",
-            participant_id=participant_id,
-            speaker_evidence_id=speaker_evidence_id,
+            participant_id=evidence.get("participant_id", "unknown"),
+            speaker_evidence_id=evidence.get("speaker_evidence_id"),
         ),
         row(offset + 0.4, "agent_started", request_id=f"{transcript_id}:1"),
     ]
-    if recall:
+    if evidence.get("recall", False):
         rows.append(
             row(offset + 1.0, "tool_finished", tool="recall_meeting_context", duration_ms=500)
         )

@@ -1,4 +1,3 @@
-import json
 import math
 import statistics
 from collections import Counter
@@ -8,6 +7,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from fakeyou.config.identifiers import SessionId
+from fakeyou.foundation.jsonl import read_jsonl
+from fakeyou.foundation.numbers import finite_float, real_number
+from fakeyou.foundation.timeparse import parse_iso_datetime
 from fakeyou.observability.journal import JOURNAL_BACKUP_COUNT, journal_path
 
 LATENCY_STAGES = (
@@ -56,15 +59,12 @@ _MEET_ACTION_TERMINAL = {
     "meet_action_failed": "failed",
     "meet_action_rejected": "rejected",
 }
-VISUAL_BUDGET_P95 = 12.0
-VISUAL_BUDGET_MAX = 30.0
-VISUAL_STABILITY_MIN = 0.95
 
 
 SessionState = Literal["fresh", "unfinished", "finished"]
 
 
-def describe_session(journal_dir: Path, meeting_id: str) -> SessionState:
+def describe_session(journal_dir: Path, meeting_id: SessionId) -> SessionState:
     rows = read_journal(journal_path(journal_dir, meeting_id))
     if not rows:
         return "fresh"
@@ -74,19 +74,23 @@ def describe_session(journal_dir: Path, meeting_id: str) -> SessionState:
 
 
 def read_journal(path: Path) -> list[dict[str, Any]]:
+    rows, _ = _read_journal_counted(path)
+    return rows
+
+
+def read_journal_with_corrupt(path: Path) -> tuple[list[dict[str, Any]], int]:
+    return _read_journal_counted(path)
+
+
+def _read_journal_counted(path: Path) -> tuple[list[dict[str, Any]], int]:
     files = [Path(f"{path}.{index}") for index in range(JOURNAL_BACKUP_COUNT, 0, -1)] + [path]
     rows: list[dict[str, Any]] = []
+    corrupt = 0
     for file in files:
-        if not file.exists():
-            continue
-        for line in file.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
+        read = read_jsonl(file)
+        rows.extend(read.rows)
+        corrupt += read.skipped
+    return rows, corrupt
 
 
 def summarize(values: list[float]) -> dict[str, float | int | None]:
@@ -153,12 +157,10 @@ class _ReportState:
 
 
 def _parse_row_at(row: dict[str, Any]) -> datetime | None:
-    if "at" not in row:
+    at = row.get("at")
+    if not isinstance(at, str):
         return None
-    try:
-        return datetime.fromisoformat(row["at"])
-    except (TypeError, ValueError):
-        return None
+    return parse_iso_datetime(at)
 
 
 def _apply_speech_event(state: _ReportState, row: dict[str, Any], at: datetime | None) -> None:
@@ -414,14 +416,14 @@ def _apply_session_event(state: _ReportState, row: dict[str, Any], _at: datetime
 
 
 def _apply_stt_turn(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
-    interims = row.get("interims")
-    if isinstance(interims, bool) or not isinstance(interims, (int, float)):
+    interims = real_number(row.get("interims"))
+    if interims is None:
         return
-    state.turn_interims.append(float(interims))
-    delay = row.get("first_interim_to_final_ms")
-    if isinstance(delay, bool) or not isinstance(delay, (int, float)):
+    state.turn_interims.append(interims)
+    delay = real_number(row.get("first_interim_to_final_ms"))
+    if delay is None:
         return
-    state.turn_delays.append(float(delay))
+    state.turn_delays.append(delay)
 
 
 def _apply_capture_polled(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
@@ -437,24 +439,14 @@ def _apply_capture_polled(state: _ReportState, row: dict[str, Any], _at: datetim
 def _apply_visual_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
     if row.get("event") == "visual_captured":
         state.visual_frames += 1
-        duration = row.get("duration_ms")
-        if (
-            isinstance(duration, (int, float))
-            and not isinstance(duration, bool)
-            and math.isfinite(duration)
-            and duration >= 0
-        ):
-            state.visual_capture_ms.append(float(duration))
+        duration = finite_float(row.get("duration_ms"))
+        if duration is not None and duration >= 0:
+            state.visual_capture_ms.append(duration)
     else:
         state.visual_captioned += 1
-        cost = row.get("cost_usd")
-        if (
-            isinstance(cost, (int, float))
-            and not isinstance(cost, bool)
-            and math.isfinite(cost)
-            and cost >= 0
-        ):
-            state.visual_cost_usd += float(cost)
+        cost = finite_float(row.get("cost_usd"))
+        if cost is not None and cost >= 0:
+            state.visual_cost_usd += cost
 
 
 def _apply_pregeneration_finished(
@@ -469,9 +461,9 @@ def _apply_pregeneration_finished(
     if "norm_dist_bucket" in row:
         state.norm_dist_buckets[str(row.get("norm_dist_bucket"))] += 1
     if outcome == "adopted":
-        duration = row.get("duration_ms")
-        if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-            state.overlaps.append(float(duration) / 1000)
+        duration = real_number(row.get("duration_ms"))
+        if duration is not None:
+            state.overlaps.append(duration / 1000)
 
 
 def _apply_meet_action(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
@@ -572,8 +564,11 @@ def _ingestion_section(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _assemble_report(state: _ReportState, turn_reports: list[dict[str, Any]]) -> dict[str, Any]:
+def _assemble_report(
+    state: _ReportState, turn_reports: list[dict[str, Any]], *, corrupt_lines: int
+) -> dict[str, Any]:
     return {
+        "journal": {"corrupt_lines": corrupt_lines},
         "startup": _startup_report(state.milestones),
         "session_outcome": _session_outcome(state.result),
         "ingestion_outcome": _ingestion_outcome(state.ingest_runs),
@@ -640,7 +635,7 @@ def _assemble_report(state: _ReportState, turn_reports: list[dict[str, Any]]) ->
     }
 
 
-def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def build_session_report(rows: list[dict[str, Any]], *, corrupt_lines: int = 0) -> dict[str, Any]:
     state = _ReportState()
     for row in rows:
         event = row.get("event")
@@ -652,7 +647,7 @@ def build_session_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
             handler(state, row, at)
     _close_pending(state)
     turn_reports = [_turn_report(turn, state.excluded) for turn in state.turns.values()]
-    return _assemble_report(state, turn_reports)
+    return _assemble_report(state, turn_reports, corrupt_lines=corrupt_lines)
 
 
 def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -726,10 +721,8 @@ def _meet_entry(
 
 def _merge_meet_attempts(entry: dict[str, Any], row: dict[str, Any]) -> None:
     for key in ("attempt", "attempts"):
-        value = row.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            continue
-        if math.isfinite(value) and value >= 1 and value > entry["attempts"]:
+        value = finite_float(row.get(key))
+        if value is not None and value >= 1 and value > entry["attempts"]:
             entry["attempts"] = int(value)
 
 
@@ -836,11 +829,12 @@ def _synthesis_turn(
 
 
 def _duration_kind(value: Any) -> str:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    number = real_number(value)
+    if number is None:
         return "invalid"
-    if not math.isfinite(value):
+    if not math.isfinite(number):
         return "nonfinite"
-    if value < 0:
+    if number < 0:
         return "invalid"
     return "valid"
 

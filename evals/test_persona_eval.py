@@ -18,7 +18,8 @@ from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.memory.memory import create_memory_tools
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt
 from fakeyou.orchestration.providers import create_chat_model
-from tests.fakes import OfflineJudge, ToolCallingFakeModel, make_graphiti, recall_call
+from tests._conversation_fakes import OfflineJudge, ToolCallingFakeModel, recall_call
+from tests._memory_fakes import make_graphiti
 
 EXAMPLE_PROFILE = PersonaProfile.model_validate_json(
     (Path(__file__).resolve().parent.parent / "examples" / "persona.example.json").read_bytes()
@@ -175,6 +176,7 @@ def test_live_persona_quality(scenario: str) -> None:
 
     @tool(description="Search long-term meeting memory for relevant context.")
     def recall_meeting_context(query: str) -> str:
+        del query
         return recalled_context
 
     agent = create_meeting_agent(

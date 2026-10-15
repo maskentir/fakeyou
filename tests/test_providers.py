@@ -3,12 +3,14 @@ import json
 import socket
 import time
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
+from _pytest.outcomes import Failed
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
@@ -18,6 +20,7 @@ from pydantic import SecretStr
 from fakeyou.audio.voice import create_speech_synthesizer
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import CompatibleReply, MemorySettings, Settings, require_secret
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -32,7 +35,7 @@ from fakeyou.memory.memory import (
 from fakeyou.memory.owner_notes import NoteIdentity, read_note_states, remember_owner_note
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import (
     create_chat_model,
@@ -59,10 +62,10 @@ async def _close_memory(memory: Any) -> None:
     await _close_memory(memory)
 
 
-def _fail_provider(error: Exception, provider: str) -> None:
+def _provider_failure(error: Exception, provider: str) -> Failed:
     status = getattr(error, "status_code", None)
     detail = f" ({status})" if isinstance(status, int) else ""
-    pytest.fail(f"{provider} failed: {type(error).__name__}{detail}", pytrace=False)
+    return Failed(f"{provider} failed: {type(error).__name__}{detail}", pytrace=False)
 
 
 @pytest.mark.live
@@ -95,7 +98,7 @@ async def test_configured_agent_returns_a_response_and_executes_tool() -> None:
                 config={"recursion_limit": 8},
             )
     except Exception as error:
-        _fail_provider(error, f"{settings.reply.model} agent")
+        raise _provider_failure(error, f"{settings.reply.model} agent") from error
 
     messages = result["messages"]
     assert any(
@@ -124,7 +127,7 @@ async def test_configured_tts_streams_pcm_audio() -> None:
                     [chunk async for chunk in synthesizer.stream("Hello from the test meeting.")]
                 )
         except Exception as error:
-            _fail_provider(error, f"{settings.tts.provider} TTS")
+            raise _provider_failure(error, f"{settings.tts.provider} TTS") from error
     finally:
         await synthesizer.aclose()
 
@@ -174,7 +177,7 @@ async def test_graphiti_fact_survives_client_reopen() -> None:
             matches = await memory.search(f"{marker} jasmine tea", group_ids=[group_id])
             assert any(marker in edge.fact for edge in matches)
     except Exception as error:
-        _fail_provider(error, "Graphiti add/reopen/search")
+        raise _provider_failure(error, "Graphiti add/reopen/search") from error
     finally:
         if episode_uuid is not None and memory is None:
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -195,8 +198,8 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
     employers = {"Heronfield Analytics": f"owner_a_{run}", "Larkmoor Logistics": f"owner_b_{run}"}
     profiles = {
         employer: PersonaProfile(
-            owner_id=owner_id,
-            twin_id=f"twin_{run}",
+            owner_id=SessionId(owner_id),
+            twin_id=SessionId(f"twin_{run}"),
             display_name="Synthetic Twin",
             role="Synthetic live isolation check",
             allowed_tools=frozenset({"recall_meeting_context"}),
@@ -231,7 +234,7 @@ async def test_graphiti_persona_namespaces_stay_isolated_after_reopen() -> None:
                     memory, profile.memory_group, f"Where does {attendee} work?"
                 )
     except Exception as error:
-        _fail_provider(error, "Graphiti persona isolation")
+        raise _provider_failure(error, "Graphiti persona isolation") from error
     finally:
         if episode_uuids and memory is None:
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -285,15 +288,15 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
     project = f"Orchid{run}"
     meeting_id = f"live-ingest-{run}"
     profile = PersonaProfile(
-        owner_id=f"owner_{run}",
-        twin_id=f"twin_{run}",
+        owner_id=SessionId(f"owner_{run}"),
+        twin_id=SessionId(f"twin_{run}"),
         display_name="Rani Twin",
         role="Synthetic live ingestion check",
         allowed_tools=frozenset({"recall_meeting_context"}),
         ingest_transcripts=True,
         vocabulary=(project, "Budi"),
     )
-    record_path = meeting_record_path(tmp_path, meeting_id)
+    record_path = meeting_record_path(tmp_path, SessionId(meeting_id))
     meeting = json.loads(LIVE_INGESTION_MEETING.read_text(encoding="utf-8"))
     record = MeetingRecord(record_path)
     record.add_twin_speech(meeting["twin_speech"].format(project=project))
@@ -357,7 +360,7 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
             )
             leftover = await _group_node_count(memory, profile.memory_group)
     except Exception as error:
-        _fail_provider(error, "Graphiti recorded meeting ingestion")
+        raise _provider_failure(error, "Graphiti recorded meeting ingestion") from error
     finally:
         if memory is None and ingested:
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -371,9 +374,6 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
                 await _close_memory(memory)
 
     episodes = [json.loads(line) for line in lines if '"memory_episode_' in line]
-    summary = [(row["utterances"], row["facts"], round(row["duration_ms"])) for row in episodes]
-    print(f"\nepisodes (utterances, facts, ms): {summary}\nrecalled:\n{recalled}")
-    print(f"corrected:\n{corrected}")
     assert (first.windows, first.ingested, first.completed) == (1, 1, True)
     assert (again.resumed_from, again.ingested, again.completed) == (1, 0, True)
     assert not [line for line in lines if '"event":"fault_recorded"' in line]
@@ -428,10 +428,9 @@ async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down()
                 config={"recursion_limit": 8},
             )
     except Exception as error:
-        _fail_provider(error, "model fallback")
+        raise _provider_failure(error, "model fallback") from error
     elapsed = time.monotonic() - started
 
-    print(f"\nfallback answered in {elapsed:.2f}s: {result['messages'][-1].text}")
     assert any(
         isinstance(message, ToolMessage) and message.content == "agenda-marker-904"
         for message in result["messages"]
@@ -497,13 +496,12 @@ async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
             )
             assert reopened == fix
     except Exception as error:
-        _fail_provider(error, "Graphiti owner note roundtrip")
+        raise _provider_failure(error, "Graphiti owner note roundtrip") from error
     finally:
         if memory is None:
-            try:
-                memory = await asyncio.to_thread(create_graphiti_memory, config)
-            except Exception:
-                memory = None
+            memory, _ = await capture_error(
+                lambda: asyncio.to_thread(create_graphiti_memory, config)
+            )
         if memory is not None:
             try:
                 async with asyncio.timeout(120):
@@ -555,7 +553,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path)
             assert first.recorded_at >= old_source
             assert first.facts
             assert first.episode_uuid == str(note_id)
-            record_path = meeting_record_path(tmp_path, meeting_id)
+            record_path = meeting_record_path(tmp_path, SessionId(meeting_id))
             record = MeetingRecord(record_path)
             record.add_twin_speech(f"Opening synthetic check for {project}.")
             record.add_transcript(
@@ -634,7 +632,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path)
             assert await _group_node_count(memory, comparison_id) == comparison_snapshot
             assert project not in await _recall(memory, comparison_id, "jasmine tea")
     except Exception as error:
-        _fail_provider(error, "Graphiti trust roundtrip")
+        raise _provider_failure(error, "Graphiti trust roundtrip") from error
     finally:
         if memory is None and touched:
             memory = await asyncio.to_thread(create_graphiti_memory, config)
@@ -643,10 +641,7 @@ async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path)
                 async with asyncio.timeout(180):
                     await forget_meeting(memory, group_id=group_id, meeting_id=meeting_id)
                     for episode_uuid in owned:
-                        try:
-                            await memory.remove_episode(episode_uuid)
-                        except Exception:
-                            pass
+                        _, _ = await capture_error(partial(memory.remove_episode, episode_uuid))
                     for target in (group_id, comparison_id):
                         await memory.driver.execute_query(
                             "MATCH (n:FakeyouOwnerNote {group_id: $group_id}) DETACH DELETE n",

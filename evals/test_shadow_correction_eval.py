@@ -1,11 +1,9 @@
 import json
-import re
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from graphiti_core.nodes import EpisodicNode
@@ -14,30 +12,26 @@ import fakeyou.memory.memory as memory_module
 from evals._correction import (
     answer_queries,
     load_correction_fixture,
+    probe_memory_store,
     query_matches,
     superseded_serve_rate,
     write_fixture_record,
 )
 from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.config.identifiers import is_identifier
 from fakeyou.config.settings import Settings
+from fakeyou.foundation.timeparse import require_iso_datetime
 from fakeyou.memory.ingestion import IngestScope, MeetingScope, ingest_corrections, ingest_meeting
-from fakeyou.memory.memory import (
-    create_memory_tools,
-    ensure_indexes,
-    open_graphiti_memory,
-    verify_memory_connection,
-)
+from fakeyou.memory.memory import create_memory_tools, open_graphiti_memory
 from fakeyou.orchestration.providers import memory_config
 from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.persistence.record import load_meeting_record
-from tests.fakes import make_graphiti
-
-SHADOW_GROUP_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+from tests._memory_fakes import make_graphiti
 
 
 def valid_group_id(group_id: str) -> bool:
-    return SHADOW_GROUP_PATTERN.fullmatch(group_id) is not None
+    return is_identifier(group_id)
 
 
 def shadow_group_id(prod_group: str, stamp: str) -> str:
@@ -49,21 +43,31 @@ def _utc_stamp() -> str:
 
 
 def fixture_base_at(fixture: dict[str, Any], offset_minutes: int) -> datetime:
-    return datetime.fromisoformat(str(fixture["base_at"])) + timedelta(minutes=offset_minutes)
+    return require_iso_datetime(str(fixture["base_at"])) + timedelta(minutes=offset_minutes)
 
 
 def stale_served(answer: str, stale: str) -> bool:
     return token_present(stale, answer)
 
 
+class GroupAnswers(NamedTuple):
+    prod: str
+    shadow: str
+
+
+class GroupNames(NamedTuple):
+    prod: str
+    shadow: str
+
+
 def diff_row(
     query_id: str,
-    prod: str,
-    shadow: str,
+    answers: GroupAnswers,
     present: list[str],
     absent: list[str],
     stale: str,
 ) -> dict[str, Any]:
+    prod, shadow = answers.prod, answers.shadow
     return {
         "query_id": query_id,
         "prod": prod,
@@ -96,8 +100,10 @@ def build_diff_report(
     rows = [
         diff_row(
             str(item["id"]),
-            prod_answers.get(str(item["id"]), ""),
-            shadow_answers.get(str(item["id"]), ""),
+            GroupAnswers(
+                prod=prod_answers.get(str(item["id"]), ""),
+                shadow=shadow_answers.get(str(item["id"]), ""),
+            ),
             [str(token) for token in item["present"]],
             [str(token) for token in item["absent"]],
             stale,
@@ -135,10 +141,9 @@ async def run_shadow_dual(
     record_prod: Path,
     record_shadow: Path,
     fixture: dict[str, Any],
-    *,
-    prod_group: str,
-    shadow_group: str,
+    groups: GroupNames,
 ) -> dict[str, Any]:
+    prod_group, shadow_group = groups.prod, groups.shadow
     meeting_id = str(fixture["meeting_id"])
     twin_name = str(fixture["twin_name"])
     queries = [dict(item) for item in fixture["queries"]]
@@ -297,12 +302,13 @@ async def test_shadow_dual_run_offline(tmp_path: Path, monkeypatch: pytest.Monke
             created_at=fixture_base_at(fixture, index),
         )
 
-    async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
+    async def get_by_uuids(_driver: Any, uuids: list[str]) -> list[Any]:
         return [stored[uuid] for uuid in uuids if uuid in stored]
 
     async def active_states(
         _memory: Any, *, group_id: str, episode_uuids: list[str]
     ) -> dict[str, str]:
+        del group_id
         return dict.fromkeys(episode_uuids, "active")
 
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
@@ -345,27 +351,19 @@ async def test_live_shadow_dual_run(tmp_path: Path) -> None:
     except (FakeYouError, ValueError) as error:
         pytest.skip(str(error))
     async with open_graphiti_memory(config) as memory:
-        try:
-            await verify_memory_connection(memory)
-            await ensure_indexes(memory)
-        except Exception as error:
-            pytest.skip(f"memory store is unreachable: {error}")
-        started = time.monotonic()
+        probe_error = await probe_memory_store(memory)
+        if probe_error is not None:
+            pytest.skip(f"memory store is unreachable: {probe_error}")
         dual = await run_shadow_dual(
             memory,
             record_prod,
             record_shadow,
             fixture,
-            prod_group=prod_group,
-            shadow_group=shadow_group,
+            GroupNames(prod=prod_group, shadow=shadow_group),
         )
-        duration = time.monotonic() - started
     report = dual["report"]
     artifact = tmp_path / "shadow-diff-report.json"
     artifact.write_text(diff_report_json(report), encoding="utf-8")
-    print(f"\nfixture: memcorr-v1 prod: {prod_group} shadow: {shadow_group}")
-    print(f"duration_s: {duration:.1f} aggregate: {json.dumps(report['aggregate'])}")
-    print(f"artifact: {artifact}")
 
     assert dual["prod_completed"] is True
     assert dual["shadow_completed"] is True

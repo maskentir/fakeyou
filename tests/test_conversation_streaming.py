@@ -2,7 +2,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
@@ -15,6 +15,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
     ConversationLoop,
@@ -27,14 +28,12 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.session import ConversationError
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
+from tests._audio_fakes import FakeReplyAudio
+from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel, recall_call
 from tests._conversation_support import AgentT, event
-from tests.fakes import (
-    FakeReplyAudio,
-    FakeResponder,
-    RecordingJournal,
-    ToolCallingFakeModel,
-    recall_call,
-)
+from tests._error_support import message_pattern
+from tests._persistence_fakes import RecordingJournal
+from tests._pregen_support import StreamingResponder
 
 
 class ScriptedStream:
@@ -118,6 +117,8 @@ class ScriptedAgent:
     async def ainvoke(
         self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
+        del config
+        del kwargs
         self.ainvoke_calls.append(payload)
         return {"messages": [AIMessage(content=self.fallback_reply)]}
 
@@ -306,6 +307,7 @@ async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal)
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
+        del query
         raise RuntimeError("graph down")
 
     agent = create_meeting_agent(
@@ -335,6 +337,7 @@ async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> 
     from langchain.agents.middleware import ModelFallbackMiddleware
 
     class FailingChatModel(ToolCallingFakeModel):
+        @override
         async def _agenerate(
             self,
             messages: list[BaseMessage],
@@ -643,4 +646,86 @@ async def test_streamed_speak_passes_transcript_id_to_session(journal: Recording
     await loop.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.transcripts == ["t1", "t1"]
+    await loop.close()
+
+
+async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
+    journal: RecordingJournal,
+) -> None:
+    agent = ScriptedAgent(
+        {
+            "t1": [
+                ("chunk", "First sentence here. ", "model"),
+                ("error", FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)),
+            ]
+        }
+    )
+    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+
+    seen: list[str] = []
+
+    async def _drain() -> None:
+        async for sentence in responder.stream_sentences(
+            [event("t1", "hi")], lambda: None, request_id="req-1"
+        ):
+            seen.append(sentence)
+
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+    ) as caught:
+        await _drain()
+
+    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
+    assert seen == ["First sentence here."]
+
+
+async def test_stream_error_before_first_sentence_skips_recovery_for_domain_error(
+    journal: RecordingJournal,
+) -> None:
+    agent = ScriptedAgent(
+        {"t1": [("error", FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED))]}
+    )
+    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+    ) as caught:
+        async for _ in responder.stream_sentences(
+            [event("t1", "hi")], lambda: None, request_id="req-1"
+        ):
+            pass
+
+    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
+    assert len(agent.streams) == 1
+
+
+async def test_speaking_time_does_not_count_against_the_response_budget() -> None:
+    class SlowReplyAudio(FakeReplyAudio):
+        @override
+        async def speak(
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+        ) -> None:
+            await asyncio.sleep(0.2)
+            await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+
+    responder = StreamingResponder(["First sentence.", "Second sentence."])
+    audio = SlowReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        timing=LoopTiming(response_timeout_seconds=0.1),
+        generation=LoopGeneration(sentence_streaming=True),
+    )
+    loop.bind(audio)
+
+    await loop.handle_transcript(event("t1", "question"))
+    await asyncio.wait_for(loop.wait_idle(), 3)
+
+    assert audio.spoken == ["First sentence.", "Second sentence."]
+    loop.raise_if_failed()
     await loop.close()

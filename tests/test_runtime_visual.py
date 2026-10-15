@@ -9,24 +9,13 @@ from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.lifecycle import MeetingLifecycle
-from fakeyou.orchestration.runtime import SessionWiring, _MeetingWorker, run_meeting_session
+from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
-from tests.fakes import (
-    CLIP_BOX,
-    ENDED,
-    IN_CALL,
-    LINK,
-    PRESENT_SCAN,
-    FakeClock,
-    FakePageSession,
-    FakeSaverSession,
-    FakeShotPage,
-    RecordingJournal,
-    caption_model,
-    meet_page,
-    shot_bytes,
-)
+from tests._fakes_common import LINK, FakeClock
+from tests._meet_browser_fakes import ENDED, IN_CALL, FakePageSession, meet_page
+from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._visual_fakes import CLIP_BOX, PRESENT_SCAN, FakeShotPage, caption_model, shot_bytes
 
 
 def _config(**overrides: Any) -> SessionConfig:
@@ -108,7 +97,7 @@ async def test_worker_wires_captioner_and_callback_into_observer(tmp_path: Path)
     lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
     await lifecycle.initialize()
     clock = FakeClock()
-    worker = _MeetingWorker(
+    worker = MeetingWorker(
         _config(visual_enabled=True),
         lifecycle,
         cast(Page, page),

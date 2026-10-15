@@ -8,9 +8,9 @@ import pytest
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.worker import worker_start, worker_status, worker_stop
 from fakeyou.config.settings import Settings
+from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.worker.worker_backend import (
     WorkerStarted,
     WorkerStartRequest,
@@ -159,7 +159,8 @@ def test_worker_stop_prints_the_terminal_reason(
 
 
 def test_worker_commands_never_print_secrets(
-    settings: Settings, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from pydantic import SecretStr
 
@@ -268,7 +269,7 @@ def test_worker_ingest_exits_nonzero_unless_completed(
 
     backend = FakeBackend()
 
-    def interrupted(meeting_id: str, **kwargs: Any) -> WorkerIngest:
+    def interrupted(meeting_id: str, **_kwargs: Any) -> WorkerIngest:
         return WorkerIngest(meeting_id=meeting_id, status="interrupted")
 
     backend_any = cast(Any, backend)
@@ -320,3 +321,21 @@ def test_worker_ingest_dispatches_meeting_and_identity(
     assert call["meeting_id"] == "meeting-9"
     assert call["identity"] == OperatorIdentity(Path("p.json"), "o1", "t1")
     assert set(call) == {"meeting_id", "identity", "settings"}
+
+
+def test_worker_cli_passes_configured_docker_timeout(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fakeyou.cli.worker as cli_worker
+
+    settings.worker.docker_timeout_seconds = 7.5
+    captured: dict[str, Any] = {}
+
+    def fake_backend_class(**kwargs: Any) -> FakeBackend:
+        captured.update(kwargs)
+        return FakeBackend()
+
+    monkeypatch.setattr(cli_worker, "DockerWorkerBackend", fake_backend_class)
+    worker_status(meeting_id=None, settings=settings)
+
+    assert captured["timing"].timeout_seconds == 7.5

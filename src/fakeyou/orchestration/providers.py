@@ -124,6 +124,8 @@ async def open_persona_memory(settings: Settings) -> AsyncIterator[Graphiti]:
         try:
             async with asyncio.timeout(MEMORY_CONNECT_TIMEOUT_SECONDS):
                 await verify_memory_connection(memory)
+        except FakeYouError:
+            raise
         except Exception as error:
             raise classify_exception("memory", error) from error
         yield memory

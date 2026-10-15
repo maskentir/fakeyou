@@ -42,3 +42,24 @@ Uji live Muse memiliki [runbook](live-muse-test.md) dan fixture sintetis Bahasa 
 Guest join Google Meet, audio/video bridge, TTS live, reasoning model live, ingestion/retrieval Graphiti dengan model, turn-taking, interruption, serta avatar. PostgreSQL tersedia sebagai konfigurasi/dependency, belum sebagai backend CLI. CI sudah disiapkan tetapi belum dijalankan di GitHub.
 
 Neo4j dibiarkan berjalan untuk pengembangan. `docker compose stop` menghentikannya tanpa menghapus named volume.
+
+## Pemeriksaan supply chain dan container (2026-10-11)
+
+Hasil pada branch `refactor/hardening`. Perintah yang sama dijalankan oleh `.github/workflows/check.yml`.
+
+| Pemeriksaan | Perintah | Hasil |
+| --- | --- | --- |
+| Audit dependency Python | `uv export --frozen --no-hashes --all-groups --all-extras --no-emit-project`, lalu `uvx pip-audit==2.10.1 --no-deps --strict -r <berkas>` | 166 paket terkunci, 0 kerentanan |
+| Lockfile npm | `npm ci --ignore-scripts` | Berhasil; 0 kerentanan |
+| Audit npm produksi | `npm audit --omit=dev --audit-level=high` | 0 kerentanan |
+| Pemindai secret pada riwayat git | `gitleaks git --log-opts="--all" --redact --exit-code 1` dengan gitleaks 8.30.1 | 3 temuan ditinjau dan tercatat di `.gitleaksignore`; 0 tersisa |
+| Konfigurasi Compose | `docker compose --profile audio --profile embeddings config --quiet` | Lulus; tanpa `POSTGRES_PASSWORD` gagal dengan pesan `:?` |
+| Image worker | `docker compose --profile audio build meeting-worker` | Lulus; tag `fakeyou-meeting-worker:local` |
+| Tes container | `uv run pytest -m container -q -p no:cacheprovider` | 5 lulus |
+| Browser headed dalam container | Peluncuran CloakBrowser di Xvfb dengan root filesystem read-only | Lulus; profil di tmpfs |
+| Healthcheck Neo4j | `docker compose -p <proyek-uji> up -d --wait neo4j` | Healthy; `cypher-shell` membaca `NEO4J_USERNAME` dan `NEO4J_PASSWORD` dari env |
+
+Catatan operator:
+
+- Volume `postgres_data` yang sudah ada menerima password bawaan repo (`fakeyou-local-only`). Bila `POSTGRES_PASSWORD` di `.env` berbeda, autentikasi dari host gagal sampai salah satunya diubah. Jangan menghapus volume tanpa memastikan checkpoint tidak lagi diperlukan.
+- Pemindaian gitleaks memakai `.gitleaksignore` dengan tiga fingerprint: dua baris pada `docs/refactor-plan.md` di riwayat yang sudah dihapus dari HEAD, dan satu kunci TLS self-signed untuk tes `tests/fixtures/preflight-localhost-key.pem`.

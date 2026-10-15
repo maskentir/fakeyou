@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
+import pytest
 from pipecat.frames.frames import (
     InputAudioRawFrame,
     TranscriptionFrame,
@@ -12,16 +15,18 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-import fakeyou.cli.join as join_module
+import fakeyou.orchestration.transcript as transcript_module
 from fakeyou.audio.voice_activity import SlotBinder, VoiceAttribution
-from fakeyou.cli.join import LiveScoring, TranscriptSinks, build_transcript_callback
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintRecord
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.identity.verify import CalibrationArtifact
 from fakeyou.orchestration.assembly import VoiceprintLive, build_voiceprint_live
+from fakeyou.orchestration.transcript import LiveScoring, TranscriptSinks, build_transcript_callback
 from fakeyou.persistence.record import MeetingRecord, meeting_record_path
-from tests.fakes import FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
+from tests._persistence_fakes import RecordingJournal
+from tests._voiceprint_fakes import FakeEmbedder, InMemoryVoiceprints, make_record
 
 
 def build_live(
@@ -40,6 +45,7 @@ async def prime_turn_tap(live: Any, stream_id: str, payload: bytes) -> None:
     pushed: list[Any] = []
 
     async def sink(frame: Any, direction: Any) -> None:
+        del direction
         pushed.append(frame)
         return None
 
@@ -68,6 +74,16 @@ class _ScriptedVoiceActivity:
         return self._attributions.pop(0)
 
 
+class _SlowEmbedder(FakeEmbedder):
+    def __init__(self) -> None:
+        super().__init__((1.0, 0.0))
+
+    @override
+    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
+        time.sleep(0.5)
+        return super().embed(utterances)
+
+
 async def test_final_scores_turn_and_notes_honest_margin(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -75,7 +91,7 @@ async def test_final_scores_turn_and_notes_honest_margin(
     await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
     registry, binder = bound_binder()
     journal = RecordingJournal()
-    record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
@@ -99,6 +115,34 @@ async def test_final_scores_turn_and_notes_honest_margin(
     journal.close()
 
 
+async def test_scoring_timeout_records_a_fault_and_keeps_the_callback_alive(
+    settings: Settings, tmp_path: Path
+) -> None:
+    settings.identity.voiceprint_timeout_seconds = 0.01
+    live = build_live(settings, [make_record("alice", (1.0, 0.0))], _SlowEmbedder())
+    await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
+    registry, binder = bound_binder()
+    journal = RecordingJournal()
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
+    callback = build_transcript_callback(
+        sinks=TranscriptSinks(journal, record, None, faults=None),
+        binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
+        per_stream_enabled=True,
+    )
+    frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
+    frame.transport_source = "slot-0"
+
+    await callback(frame)
+
+    [fault] = journal.events("fault_recorded")
+    assert fault["detail"] == "voiceprint_scoring_timeout: TimeoutError"
+    assert journal.events("transcript_finalized") != []
+    record.close()
+    journal.close()
+
+
 async def test_short_clip_skips_scoring_without_decision(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -106,7 +150,7 @@ async def test_short_clip_skips_scoring_without_decision(
     await prime_turn_tap(live, "slot-0", b"\x02" * 320)
     registry, binder = bound_binder()
     journal = RecordingJournal()
-    record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
@@ -134,7 +178,7 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
     registry = SpeakerRegistry()
     binder = SlotBinder(registry=registry)
     journal = RecordingJournal()
-    record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=binder,
@@ -151,11 +195,17 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
     await prime_turn_tap(live, "slot-0", b"\x0b" * 3200)
     seen: list[bytes] = []
 
-    def capture(clip: bytes, embedder: Any, matcher: Any, *, min_seconds: float) -> Any:
+    async def capture(
+        clip: bytes, embedder: Any, matcher: Any, *, min_seconds: float, timeout_seconds: float
+    ) -> Any:
+        del embedder
+        del matcher
+        del min_seconds
+        del timeout_seconds
         seen.append(clip)
         return None
 
-    monkeypatch.setattr(join_module, "score_turn_audio", capture)
+    monkeypatch.setattr(transcript_module, "score_turn_audio_async", capture)
     fresh = TranscriptionFrame("Fresh.", "", "2026-10-06T01:00:04+00:00", finalized=True)
     fresh.transport_source = "slot-0"
     await callback(fresh)
@@ -179,7 +229,7 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
         ]
     )
     journal = RecordingJournal()
-    record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
         binder=SlotBinder(registry=registry),
@@ -192,11 +242,17 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
     await prime_turn_tap(live, "", b"\x0b" * 3200)
     seen: list[bytes] = []
 
-    def capture(clip: bytes, embedder: Any, matcher: Any, *, min_seconds: float) -> Any:
+    async def capture(
+        clip: bytes, embedder: Any, matcher: Any, *, min_seconds: float, timeout_seconds: float
+    ) -> Any:
+        del embedder
+        del matcher
+        del min_seconds
+        del timeout_seconds
         seen.append(clip)
         return None
 
-    monkeypatch.setattr(join_module, "score_turn_audio", capture)
+    monkeypatch.setattr(transcript_module, "score_turn_audio_async", capture)
     await callback(TranscriptionFrame("Fresh.", "", "2026-10-06T01:00:04+00:00", finalized=True))
 
     assert seen == [b"\x0b" * 3200]
@@ -204,10 +260,11 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
     journal.close()
 
 
-async def test_disabled_voiceprint_never_scores(settings: Settings, tmp_path: Path) -> None:
+@pytest.mark.usefixtures("settings")
+async def test_disabled_voiceprint_never_scores(tmp_path: Path) -> None:
     registry, binder = bound_binder()
     journal = RecordingJournal()
-    record = MeetingRecord(meeting_record_path(tmp_path, "meeting-9"))
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
@@ -252,7 +309,7 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     registry, binder = bound_binder()
     binder.note_roster([{"id": "dev-a", "name": "Maya"}])
     journal = RecordingJournal()
-    record_path = meeting_record_path(tmp_path, "meeting-9")
+    record_path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
@@ -281,7 +338,7 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     assert [row["display_claim"] for row in transcripts] == ["Maya"]
 
 
-async def test_legacy_transcript_carries_display_claim(tmp_path: Path) -> None:
+async def test_mixed_stream_transcript_carries_display_claim(tmp_path: Path) -> None:
     registry = SpeakerRegistry()
     binder = SlotBinder(registry=registry)
     binder.update_roster(["dev-a"])
@@ -302,7 +359,7 @@ async def test_legacy_transcript_carries_display_claim(tmp_path: Path) -> None:
         ]
     )
     journal = RecordingJournal()
-    record_path = meeting_record_path(tmp_path, "meeting-9")
+    record_path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, None, faults=None),
@@ -323,3 +380,70 @@ async def test_legacy_transcript_carries_display_claim(tmp_path: Path) -> None:
         if (row := json.loads(line))["kind"] == "transcript"
     ]
     assert [row["display_claim"] for row in transcripts] == ["Maya"]
+
+
+async def test_scoring_bug_records_a_fault_then_propagates(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = build_live(settings, [make_record("alice", (1.0, 0.0))], FakeEmbedder((1.0, 0.0)))
+    await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
+    registry, binder = bound_binder()
+    journal = RecordingJournal()
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
+    callback = build_transcript_callback(
+        sinks=TranscriptSinks(journal, record, None, faults=None),
+        binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
+        per_stream_enabled=True,
+    )
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        del args
+        del kwargs
+        raise KeyError("scoring bug")
+
+    monkeypatch.setattr(transcript_module, "score_turn_audio_async", boom)
+    frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
+    frame.transport_source = "slot-0"
+
+    with pytest.raises(KeyError, match="scoring bug"):
+        await callback(frame)
+
+    [fault] = journal.events("fault_recorded")
+    assert fault["detail"] == "voiceprint_scoring: KeyError"
+    record.close()
+    journal.close()
+
+
+async def test_scoring_operational_error_records_a_fault_and_keeps_callback_alive(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = build_live(settings, [make_record("alice", (1.0, 0.0))], FakeEmbedder((1.0, 0.0)))
+    await prime_turn_tap(live, "slot-0", b"\x02" * 96000)
+    registry, binder = bound_binder()
+    journal = RecordingJournal()
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
+    callback = build_transcript_callback(
+        sinks=TranscriptSinks(journal, record, None, faults=None),
+        binder=binder,
+        voice_activity=None,
+        scoring=LiveScoring(live, registry),
+        per_stream_enabled=True,
+    )
+
+    async def boom(*args: Any, **kwargs: Any) -> Any:
+        del args
+        del kwargs
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(transcript_module, "score_turn_audio_async", boom)
+    frame = TranscriptionFrame("Hello.", "", "2026-10-06T01:00:03+00:00", finalized=True)
+    frame.transport_source = "slot-0"
+
+    await callback(frame)
+
+    [fault] = journal.events("fault_recorded")
+    assert fault["detail"] == "voiceprint_scoring: RuntimeError"
+    record.close()
+    journal.close()

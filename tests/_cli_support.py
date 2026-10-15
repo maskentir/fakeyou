@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -6,7 +7,7 @@ from dataclasses import fields
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Protocol, TypedDict, Unpack
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,7 +20,9 @@ import fakeyou.cli.join as cli_join
 import fakeyou.cli.memory as cli_memory
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
+import fakeyou.orchestration.join_preflight as join_preflight
 import fakeyou.orchestration.providers as providers
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import (
     CompatibleReply,
     Settings,
@@ -41,38 +44,49 @@ from fakeyou.persistence.brief import (
     context_path,
 )
 from fakeyou.persistence.record import meeting_record_path
-from tests.fakes import (
-    FakeReplyAudio,
-)
+from tests._audio_fakes import FakeReplyAudio
 
 
-def _enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+def enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
     monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
-    monkeypatch.setattr(cli_join, "find_spec", lambda name: SimpleNamespace())
+    monkeypatch.setattr(join_preflight, "find_spec", lambda _name: SimpleNamespace())
 
 
-async def _join_with_audio(
-    tmp_path: Path,
+class AudioJoinOptions(TypedDict, total=False):
+    barge_in: bool
+    conversation_enabled: bool
+    persona_path: Path
+    twin_name: str | None
+    wake_phrase: str
+
+
+class AudioJoin(Protocol):
+    def __call__(self, **options: Unpack[AudioJoinOptions]) -> Coroutine[Any, Any, None]: ...
+
+
+async def join_with_audio(
     monkeypatch: pytest.MonkeyPatch,
     *,
     join: Callable[..., Coroutine[Any, Any, Any]],
     settings: Settings,
-    session_run: Any,
-    **overrides: Any,
-) -> Any:
+    **options: Unpack[AudioJoinOptions],
+) -> None:
     settings.stt.api_key = SecretStr("muse-key")
-    _enable_audio_platform(monkeypatch)
-    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    enable_audio_platform(monkeypatch)
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(value: Any, url: Any = None) -> AsyncIterator[InMemorySaver]:
+    async def fake_saver(
+        value: Any, url: Any = None, **_kwargs: Any
+    ) -> AsyncIterator[InMemorySaver]:
+        del url
+        del value
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
-    captured = session_run
-    arguments = {
+    arguments: dict[str, Any] = {
         "twin_name": None,
         "owner_id": None,
         "twin_id": None,
@@ -83,9 +97,8 @@ async def _join_with_audio(
         "settings": settings,
         "audio_enabled": True,
     }
-    arguments.update(overrides)
+    arguments.update(options)
     await join("https://meet.google.com/abc-defg-hij", **arguments)
-    return captured
 
 
 PERSONA_DATA = {
@@ -108,7 +121,7 @@ def write_persona(tmp_path: Path, **overrides: object) -> Path:
     return path
 
 
-def persona_join_arguments(tmp_path: Path, settings: Settings, **overrides: Any) -> dict[str, Any]:
+def persona_join_arguments(settings: Settings, **overrides: Any) -> dict[str, Any]:
     arguments = {
         "twin_name": None,
         "owner_id": None,
@@ -179,7 +192,7 @@ def expected_context(brief: MeetingBrief, profile: PersonaProfile) -> MeetingCon
 
 
 def meeting_context_file(settings: Settings, meeting_id: str = "meeting-9") -> Path:
-    return context_path(meeting_record_path(settings.paths.record_dir, meeting_id))
+    return context_path(meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)))
 
 
 async def seed_conversation_thread(settings: Settings, meeting_id: str) -> str:
@@ -195,31 +208,49 @@ async def seed_conversation_thread(settings: Settings, meeting_id: str) -> str:
     return thread_id
 
 
-async def _join_persona_conversation(
+SETTLE_TIMEOUT_SECONDS = 5.0
+
+
+class PersonaConversation(TypedDict, total=False):
+    graphiti: MagicMock
+    transcripts: tuple[str, ...]
+    settle: Callable[[], Coroutine[Any, Any, Any]]
+    persona_overrides: dict[str, Any]
+    audio: FakeReplyAudio
+    on_start: Callable[[], Any]
+    native_checkpointer: bool
+    brief_path: Path
+    memory: bool
+    meeting_id: str
+    resume: bool
+
+
+async def join_persona_conversation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     join: Callable[..., Coroutine[Any, Any, Any]],
     settings: Settings,
     model: FakeMessagesListChatModel,
-    graphiti: MagicMock | None = None,
-    transcripts: tuple[str, ...] = ("When does Orchid launch?",),
-    settle: Callable[[], Coroutine[Any, Any, Any]] | None = None,
-    persona_overrides: dict[str, Any] | None = None,
-    audio: FakeReplyAudio | None = None,
-    on_start: Callable[[], Any] | None = None,
-    native_checkpointer: bool = False,
-    **overrides: Any,
+    **script: Unpack[PersonaConversation],
 ) -> tuple[dict[str, Any], FakeReplyAudio, dict[str, Any]]:
+    graphiti = script.pop("graphiti", None)
+    transcripts = script.pop("transcripts", ("Rani Twin, when does Orchid launch?",))
+    settle = script.pop("settle", None)
+    on_start = script.pop("on_start", None)
+    persona_overrides = script.pop("persona_overrides", {})
     settings.stt.api_key = SecretStr("muse-key")
-    _enable_audio_platform(monkeypatch)
+    enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
     @asynccontextmanager
-    async def memory_saver(_value: Any, url: Any = None) -> AsyncIterator[InMemorySaver]:
+    async def memory_saver(
+        _value: Any, url: Any = None, **_kwargs: Any
+    ) -> AsyncIterator[InMemorySaver]:
+        del url
         yield InMemorySaver()
 
-    if not native_checkpointer:
+    if not script.pop("native_checkpointer", False):
         monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
     if graphiti is not None:
         monkeypatch.setattr(
@@ -238,7 +269,7 @@ async def _join_persona_conversation(
         return create_meeting_agent(agent_model, **kwargs)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", recording_agent)
-    audio = audio if audio is not None else FakeReplyAudio()
+    audio = script.pop("audio", FakeReplyAudio())
     outcome: dict[str, Any] = {}
 
     async def run(config: Any, wiring: Any = None, **kwargs: Any) -> SessionResult:
@@ -262,19 +293,15 @@ async def _join_persona_conversation(
                 timestamp=f"2026-09-30T00:00:0{index}+00:00",
             )
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
-        if settle is None:
-            await loop.wait_idle()
-        else:
-            await settle()
+        await asyncio.wait_for(
+            loop.wait_idle() if settle is None else settle(), timeout=SETTLE_TIMEOUT_SECONDS
+        )
         outcome["phase"] = loop.phase
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     monkeypatch.setattr(cli_join, "run_meeting_session", run)
     arguments = persona_join_arguments(
-        tmp_path,
-        settings,
-        persona_path=write_persona(tmp_path, **(persona_overrides or {})),
-        **overrides,
+        settings, persona_path=write_persona(tmp_path, **persona_overrides), **script
     )
     await join(MEET_LINK, **arguments)
     return created, audio, outcome
@@ -294,7 +321,7 @@ def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list
     return opened
 
 
-async def _thread_exists(settings: Settings, thread_id: str) -> bool:
+async def thread_exists(settings: Settings, thread_id: str) -> bool:
     async with open_checkpointer(require_url(configured_url(settings))) as saver:
         return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
 
@@ -303,7 +330,7 @@ def write_record(settings: Settings, meeting_id: str) -> None:
     from fakeyou.foundation.transcript import TranscriptEvent
     from fakeyou.persistence.record import MeetingRecord
 
-    record = MeetingRecord(meeting_record_path(settings.paths.record_dir, meeting_id))
+    record = MeetingRecord(meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)))
     record.add_transcript(
         TranscriptEvent(
             id="t1",
@@ -346,7 +373,8 @@ def write_ingest_windows(settings: Settings, meeting_id: str, count: int) -> Non
     start = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
     moments = iter(start + timedelta(seconds=61 * index) for index in range(count))
     record = MeetingRecord(
-        meeting_record_path(settings.paths.record_dir, meeting_id), now=lambda: next(moments)
+        meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)),
+        now=lambda: next(moments),
     )
     for index in range(count):
         moment = start + timedelta(seconds=61 * index)

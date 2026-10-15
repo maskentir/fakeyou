@@ -2,12 +2,17 @@
 
 Koreksi pasca-sesi untuk atribusi speaker ("siapa bilang apa") memakai
 endpoint file Muse Voice Transcribe mode `DIARIZATION`. Job ini tidak
-pernah menulis `record.jsonl`; hasilnya dua sidecar di direktori sesi:
+pernah menulis `record.jsonl`; hasilnya tiga sidecar di direktori sesi:
 
 - `diarization.rttm` — giliran bicara format RTTM.
 - `diarization.json` — skema `diarization_correction/v1`: `schema`,
   `record_sha256`, `turns[]` berisi `start_ms`/`end_ms`/`speaker`/
   `corrected_uuid`. Tanpa teks transkrip.
+- `correction_labels.json` — `corrected_uuid` → nama tampilan Meet
+  (`display_claim` transkrip yang jatuh di dalam giliran itu). Ikatan
+  pertama bertahan saat `diarize run` diulang; nama yang muncul di dua
+  giliran berbeda menjadi `null`. Label selalu tampil sebagai
+  *unverified* di ingest dan debrief.
 
 ## Kapan menjalankan
 
@@ -34,8 +39,9 @@ Satu-satunya choke point baca adalah `load_corrected_record` dari
 tengah `capture_ms`-nya jatuh dalam rentang giliran mendapat
 `corrected_speaker_uuid`; entri di luar semua rentang (lebih dari
 `tolerance_ms`, bawaan 2000) tetap `None`. Waktu giliran relatif
-terhadap WAV campuran; offset awal sesi dibaca dari `anchors` di
-`audio/slots.json`.
+terhadap WAV campuran; offset awal sesi dibaca dari `audio/anchors.jsonl`
+(satu baris JSON per chunk, ditulis per chunk). Baris rusak selain baris
+terakhir yang terpotong menghentikan koreksi dengan `DIARIZE_INPUT_UNREADABLE`.
 
 Untuk ringkasan cepat tanpa kode:
 

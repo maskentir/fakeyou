@@ -2,17 +2,20 @@ import asyncio
 import random
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.audio.audio import MeetingAudioError
 from fakeyou.audio.stream_capture import (
     CaptureDrainLoop,
+    DrainPolling,
     StreamRegistry,
     SupportsCaptureRegistry,
     load_capture_script,
@@ -22,7 +25,7 @@ from fakeyou.audio.voice_activity import (
     VoiceActivityTracker,
     load_voice_activity_script,
 )
-from fakeyou.catalog.errors import FakeYouError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
@@ -35,7 +38,11 @@ from fakeyou.conversation.session import (
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import require_url
 from fakeyou.foundation.attribution_probe import AttributionProbe, ProbeDrainLoop, load_probe_script
-from fakeyou.foundation.invariants import AGENT_MIC_SOURCE_NAME, MEETING_SINK_NAME
+from fakeyou.foundation.invariants import (
+    AGENT_MIC_SOURCE_NAME,
+    LEAVE_BUDGET_SECONDS,
+    MEETING_SINK_NAME,
+)
 from fakeyou.foundation.taxonomy import MeetingPhase, TerminalReason
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
@@ -66,49 +73,72 @@ from fakeyou.meet.meet_actions import (
     send_chat,
 )
 from fakeyou.meet.participant_observer import (
+    DEFAULT_PARTICIPANT_SCHEDULE,
     QUERY_METHOD_MINING,
+    ParticipantEvidenceWriter,
     ParticipantObserver,
-    append_participant_evidence,
     observer_epoch,
 )
 from fakeyou.meet.watchdog import UIWatchdog, WatchdogCheck
-from fakeyou.observability.cleanup import close_safely
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
+from fakeyou.observability.cleanup import TeardownStack, close_safely
+from fakeyou.observability.faults import (
+    ConsumerSink,
+    FaultReporter,
+    bounded_traceback,
+    capture_error,
+    create_poll_guard,
+    guard_consumer,
+)
 from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.observability.provider_faults import (
+    ProviderFault,
+    classify_exception,
+    trim_detail,
+)
 from fakeyou.orchestration.lifecycle import (
     LifecycleAttribution,
     LifecycleEventKind,
+    LifecyclePersistence,
     MeetingLifecycle,
 )
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.visual.visual_caption import VisualCaption, VisualCaptioner
-from fakeyou.visual.visual_observer import CaptionSink, PollSchedule, VisualObserver
+from fakeyou.visual.visual_observer import (
+    DEFAULT_POLL_SCHEDULE,
+    CaptionSink,
+    VisualObserver,
+)
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
 
 
 @asynccontextmanager
-async def _session_resources(faults: FaultReporter | None) -> AsyncIterator[AsyncExitStack]:
-    stack = AsyncExitStack()
+async def session_resources(faults: FaultReporter | None) -> AsyncIterator[TeardownStack]:
+    stack = TeardownStack(faults=faults)
     try:
         yield stack
     finally:
-        await close_safely(stack.aclose, source="runtime", operation="teardown", faults=faults)
+        await stack.aclose()
 
 
 def _fault_report(faults: FaultReporter | None) -> dict[str, Any] | None:
     return faults.report() if faults is not None else None
 
 
+def _failure_detail(error: BaseException) -> str:
+    return trim_detail(str(error)) or type(error).__name__
+
+
+MEET_CHAT_MAX_CHARS = 500
+_MEET_CHAT_WINDOW_SECONDS = 60.0
+
+
 def _fault_suffix(faults: FaultReporter | None) -> str:
-    try:
-        summaries = faults.summaries() if faults is not None else ()
-    except Exception:
+    reported = faults.report() if faults is not None else None
+    if not reported:
         return ""
-    if not summaries:
-        return ""
-    top = summaries[0]
-    return f" [{top.source}_degraded: {top.kind}x{top.count}]"
+    top = reported["faults"]["kinds"][0]
+    return f" [{top['source']}_degraded: {top['kind']}x{top['count']}]"
 
 
 _JOIN_EVENTS: dict[JoinStatus, tuple[LifecycleEventKind, LifecycleAttribution]] = {
@@ -189,11 +219,6 @@ async def _until_stopped[T](operation: Coroutine[Any, Any, T], stop: asyncio.Eve
         await asyncio.gather(running, stopping, return_exceptions=True)
 
 
-WRITE_ACTION_BUDGET_P95_SECONDS = 12.0
-WRITE_ACTION_BUDGET_MAX_SECONDS = 30.0
-WRITE_ACTION_STABILITY_MIN = 0.95
-
-
 class MeetActionDispatcher:
     def __init__(
         self,
@@ -201,11 +226,14 @@ class MeetActionDispatcher:
         *,
         meeting_id: str,
         enabled: bool,
+        chat_per_minute: int,
         journal: Journal | None = None,
     ) -> None:
         self._record_path = record_path
         self._meeting_id = meeting_id
         self._enabled = enabled
+        self._chat_per_minute = chat_per_minute
+        self._chat_sent: list[float] = []
         self._journal = journal
         self._signals = DEFAULT_MEET_ACTION_SIGNALS
         self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
@@ -226,10 +254,28 @@ class MeetActionDispatcher:
         return self._closed
 
     def request(self, kind: MeetActionKind, *, action_id: str, text: str = "") -> str:
+        if kind == "send_chat":
+            self._check_chat(action_id, text)
         task = asyncio.create_task(self._execute(kind, action_id, text, self._generation))
         self._pending[task] = (kind, action_id)
         task.add_done_callback(self._finish)
         return action_id
+
+    def _check_chat(self, action_id: str, text: str) -> None:
+        if len(text) > MEET_CHAT_MAX_CHARS:
+            self._reject("send_chat", action_id, "chat_too_long")
+            raise FakeYouError(ErrorCode.MEET_CHAT_TOO_LONG, limit=MEET_CHAT_MAX_CHARS)
+        if PREFETCH_EVIDENCE_PREFIX in text:
+            self._reject("send_chat", action_id, "chat_evidence_rejected")
+            raise FakeYouError(ErrorCode.MEET_CHAT_EVIDENCE_REJECTED)
+        now = self._monotonic()
+        self._chat_sent = [
+            sent for sent in self._chat_sent if now - sent < _MEET_CHAT_WINDOW_SECONDS
+        ]
+        if len(self._chat_sent) >= self._chat_per_minute:
+            self._reject("send_chat", action_id, "chat_rate_limited")
+            raise FakeYouError(ErrorCode.MEET_CHAT_RATE_LIMITED, limit=self._chat_per_minute)
+        self._chat_sent.append(now)
 
     def bind_page(
         self,
@@ -263,7 +309,13 @@ class MeetActionDispatcher:
         await asyncio.gather(*list(self._pending), return_exceptions=True)
 
     def _finish(self, task: asyncio.Task[None]) -> None:
-        self._pending.pop(task, None)
+        meta = self._pending.pop(task, None)
+        if meta is None or task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            kind, action_id = meta
+            self._fail(kind, action_id, type(error).__name__)
 
     def _reject(self, kind: MeetActionKind, action_id: str, reason: str) -> None:
         if self._journal is not None:
@@ -320,7 +372,7 @@ class MeetActionDispatcher:
                 ),
                 stop,
             )
-        except Exception as error:
+        except FakeYouError as error:
             self._fail(kind, action_id, type(error).__name__)
             return
         if outcome is None:
@@ -336,7 +388,7 @@ class _MonitorScan:
 
 
 @dataclass
-class _MeetingWorker:
+class MeetingWorker:
     config: SessionConfig
     lifecycle: MeetingLifecycle
     page: Page
@@ -376,7 +428,7 @@ class _MeetingWorker:
             return
         try:
             await _until_stopped(disable_meeting_camera(self.page, self.sleep), self.stop)
-        except Exception as error:
+        except RuntimeError as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="camera"))
 
@@ -388,7 +440,7 @@ class _MeetingWorker:
                 "owner_stopped", "owner_action", "owner stopped before guest join"
             )
         try:
-            async with _session_resources(self.faults) as resources:
+            async with session_resources(self.faults) as resources:
                 started = self.monotonic()
                 try:
                     self.audio = await _until_stopped(
@@ -396,7 +448,9 @@ class _MeetingWorker:
                     )
                 except MeetingAudioError as error:
                     return await self.finish(
-                        "infra_failed", "system_fault", f"meeting audio could not start: {error}"
+                        "infra_failed",
+                        "system_fault",
+                        f"meeting audio could not start: {_failure_detail(error)}",
                     )
                 if self.audio is None:
                     return await self.finish(
@@ -415,17 +469,17 @@ class _MeetingWorker:
                 return await self.run_admitted(self.audio, self.monotonic())
         except ConversationError as error:
             self.audio = None
-            return await self.finish("conversation_failed", "system_fault", str(error))
+            return await self.finish("conversation_failed", "system_fault", _failure_detail(error))
         except MeetingAudioError as error:
             self.audio = None
-            return await self.finish("audio_failed", "system_fault", str(error))
+            return await self.finish("audio_failed", "system_fault", _failure_detail(error))
         finally:
             self.audio = None
 
     async def _start_capture_guarded(self, *, enabled: bool) -> None:
         try:
             await self.start_capture_drain(enabled=enabled)
-        except Exception as error:
+        except RuntimeError as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="stream_capture"))
 
@@ -438,7 +492,7 @@ class _MeetingWorker:
             enabled = await _until_stopped(
                 enable_meeting_microphone(self.page, self.sleep), self.stop
             )
-        except Exception as error:
+        except RuntimeError as error:
             raise MeetingAudioError("meeting microphone could not be enabled") from error
         if enabled is None or self.stop.is_set():
             return await self.finish(
@@ -535,20 +589,28 @@ class _MeetingWorker:
             return
         epoch = observer_epoch(self.config.meeting_id)
         faults = self.faults
+        writer = ParticipantEvidenceWriter(
+            evidence_path,
+            epoch=epoch,
+            method=QUERY_METHOD_MINING,
+            max_bytes=self.config.participant_evidence_max_bytes,
+            faults=faults,
+        )
 
         def persist(raw: Any, mono_ms: float) -> None:
             try:
-                append_participant_evidence(
-                    evidence_path, raw, mono_ms, epoch=epoch, method=QUERY_METHOD_MINING
-                )
-            except Exception as error:
+                writer.write(raw, mono_ms)
+            except OSError as error:
                 if faults is not None:
                     faults.record(
                         classify_exception("browser", error, operation="participant_evidence")
                     )
 
         self.observer = ParticipantObserver(
-            self.page, epoch=epoch, monotonic=self.monotonic, on_poll=persist
+            self.page,
+            on_poll=persist,
+            schedule=replace(DEFAULT_PARTICIPANT_SCHEDULE, monotonic=self.monotonic),
+            sinks=ConsumerSink(faults=self.faults, journal=self.journal),
         )
         await self.observer.start()
         self.record(
@@ -577,14 +639,26 @@ class _MeetingWorker:
         if probe_path is None:
             return
         probe = AttributionProbe(probe_path, monotonic=self.monotonic)
-        self.probe_drain = ProbeDrainLoop(self.page, probe)
+        self.probe_drain = ProbeDrainLoop(
+            self.page,
+            probe,
+            guard=create_poll_guard(
+                ConsumerSink(faults=self.faults, journal=self.journal),
+                source="browser",
+                operation="attribution_probe",
+            ),
+        )
         await self.probe_drain.start()
         self.record("attribution_probe_started", source="runtime")
 
     async def start_voice_activity(self) -> None:
         if self.voice_loop is not None or self.voice_activity is None:
             return
-        self.voice_loop = VoiceActivityLoop(self.page, self.voice_activity)
+        self.voice_loop = VoiceActivityLoop(
+            self.page,
+            self.voice_activity,
+            sinks=ConsumerSink(faults=self.faults, journal=self.journal),
+        )
         await self.voice_loop.start()
         self.record("voice_activity_started", source="runtime")
 
@@ -622,7 +696,11 @@ class _MeetingWorker:
         self.capture_drain = CaptureDrainLoop(
             self.page,
             self.capture_registry,
-            journal=self.journal,
+            polling=DrainPolling(
+                max_consecutive_failures=self.config.drain_max_consecutive_failures,
+                failure_journal_every=self.config.drain_failure_journal_every,
+            ),
+            sinks=ConsumerSink(faults=self.faults, journal=self.journal),
             twin_name=self.config.twin_name,
         )
         await self.capture_drain.start()
@@ -642,9 +720,9 @@ class _MeetingWorker:
         self.visual_observer = VisualObserver(
             self.page,
             self.visual_store,
-            journal=self.journal,
-            schedule=PollSchedule(monotonic=self.monotonic),
+            schedule=replace(DEFAULT_POLL_SCHEDULE, monotonic=self.monotonic),
             captions=CaptionSink(self.visual_captioner, self.visual_on_caption),
+            sinks=ConsumerSink(faults=self.faults, journal=self.journal),
         )
         await self.visual_observer.start()
         self.record("visual_observer_started", source="runtime")
@@ -665,7 +743,7 @@ class _MeetingWorker:
     async def _start_guarded(self, starter: Callable[[], Awaitable[None]], operation: str) -> None:
         try:
             await starter()
-        except Exception as error:
+        except RuntimeError as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation=operation))
 
@@ -701,6 +779,8 @@ class _MeetingWorker:
     async def _service_audio(
         self, remote_participants: int | None, presence_at: float
     ) -> str | None:
+        if self.capture_drain is not None:
+            self.capture_drain.raise_if_failed()
         if self.audio is None:
             return None
         self.audio.raise_if_failed()
@@ -862,7 +942,9 @@ class _MeetingWorker:
         if self.lifecycle.state["phase"] != "leaving":
             return detail
         try:
-            async with asyncio.timeout(min(8.0, self.config.leave_timeout_seconds)):
+            async with asyncio.timeout(
+                min(LEAVE_BUDGET_SECONDS, self.config.leave_timeout_seconds)
+            ):
                 left = await leave_meeting(
                     self.page,
                     self.signals,
@@ -870,7 +952,7 @@ class _MeetingWorker:
                     self.monotonic,
                     self.config.leave_timeout_seconds,
                 )
-        except Exception as error:
+        except (PlaywrightError, TimeoutError) as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="leave"))
             await self.lifecycle.send(
@@ -948,7 +1030,7 @@ async def _collect_preflight_probes(
     try:
         async with asyncio.timeout(budget):
             return await _until_stopped(preflight(), stop_event)
-    except Exception as error:
+    except (OSError, TimeoutError) as error:
         if faults is not None:
             faults.record(classify_exception("preflight", error))
         return []
@@ -986,7 +1068,7 @@ async def _run_preflight_phase(
 
 
 async def _open_session_page(
-    resources: AsyncExitStack,
+    resources: TeardownStack,
     config: SessionConfig,
     open_page: Callable[..., AbstractAsyncContextManager[Page]],
     open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None,
@@ -1019,7 +1101,7 @@ async def _open_session_page(
 
 
 async def _run_session_worker(
-    worker: _MeetingWorker, meet_dispatcher: MeetActionDispatcher | None
+    worker: MeetingWorker, meet_dispatcher: MeetActionDispatcher | None
 ) -> str:
     try:
         return await worker.run()
@@ -1032,7 +1114,7 @@ async def _launch_session_browser(
     config: SessionConfig,
     hooks: SessionWiring,
     stop_event: asyncio.Event,
-    resources: AsyncExitStack,
+    resources: TeardownStack,
     lifecycle: MeetingLifecycle,
 ) -> str:
     page = await _open_session_page(
@@ -1046,7 +1128,7 @@ async def _launch_session_browser(
         hooks.meet_dispatcher.bind_page(
             page, sleep=hooks.sleep, monotonic=hooks.monotonic, stop=stop_event
         )
-    worker = _MeetingWorker(
+    worker = MeetingWorker(
         config,
         lifecycle,
         page,
@@ -1067,11 +1149,11 @@ async def _launch_session_browser(
     return await _run_session_worker(worker, hooks.meet_dispatcher)
 
 
-async def _startup_session(
+async def startup_session(
     config: SessionConfig,
     hooks: SessionWiring,
     stop_event: asyncio.Event,
-    resources: AsyncExitStack,
+    resources: TeardownStack,
     lifecycle: MeetingLifecycle,
 ) -> str:
     if stop_event.is_set():
@@ -1119,6 +1201,7 @@ async def _record_conversation_failure(
         source="runtime",
         error=str(error),
         error_type=type(error).__name__,
+        traceback=bounded_traceback(error),
     )
     await lifecycle.send("conversation_failed", "system_fault", detail)
     return detail
@@ -1133,32 +1216,49 @@ async def _record_browser_failure(
         source="runtime",
         error=str(error),
         error_type=type(error).__name__,
+        traceback=bounded_traceback(error),
     )
     await lifecycle.send("browser_failed", "system_fault", detail)
     return detail
 
 
-async def _drive_session(
+async def drive_session(
     config: SessionConfig,
     hooks: SessionWiring,
     stop_event: asyncio.Event,
-    resources: AsyncExitStack,
+    resources: TeardownStack,
     lifecycle: MeetingLifecycle,
 ) -> str:
     journal = _resolve_journal(hooks, config)
     if lifecycle.state["phase"] == "ended":
         return "session already ended"
+
+    async def attempt() -> str:
+        return await startup_session(config, hooks, stop_event, resources, lifecycle)
+
     try:
-        return await _startup_session(config, hooks, stop_event, resources, lifecycle)
+        outcome, error = await capture_error(attempt)
     except asyncio.CancelledError:
-        await lifecycle.send("cancelled", "owner_action", "session task cancelled; closing browser")
+        await guard_consumer(
+            partial(
+                lifecycle.send,
+                "cancelled",
+                "owner_action",
+                "session task cancelled; closing browser",
+            ),
+            sink=ConsumerSink(faults=hooks.faults, journal=journal),
+            source="runtime",
+            detail="cancel_lifecycle",
+        )
         raise
-    except FakeYouError:
-        raise
-    except ConversationError as error:
-        return await _record_conversation_failure(lifecycle, journal, error)
-    except Exception as error:
+    if error is not None:
+        if isinstance(error, FakeYouError):
+            raise error
+        if isinstance(error, ConversationError):
+            return await _record_conversation_failure(lifecycle, journal, error)
         return await _record_browser_failure(lifecycle, journal, error)
+    assert outcome is not None
+    return outcome
 
 
 async def run_meeting_session(
@@ -1167,17 +1267,32 @@ async def run_meeting_session(
     hooks = wiring if wiring is not None else SessionWiring()
     _validate_session_audio(hooks)
     stop_event = hooks.stop if hooks.stop is not None else asyncio.Event()
-    async with _session_resources(hooks.faults) as resources:
+    async with session_resources(hooks.faults) as resources:
         if hooks.conversation is not None:
             resources.push_async_callback(hooks.conversation.close)
         saver = await resources.enter_async_context(
             hooks.saver_factory()
             if hooks.saver_factory is not None
-            else open_checkpointer(require_url(config.database_url))
+            else open_checkpointer(
+                require_url(config.database_url),
+                connect_timeout_seconds=config.database_connect_timeout_seconds,
+                statement_timeout_seconds=config.database_statement_timeout_seconds,
+                keepalive_idle_seconds=config.database_keepalive_idle_seconds,
+            )
         )
-        lifecycle = MeetingLifecycle(config.owner_id, config.twin_id, config.meeting_id, saver)
+        lifecycle = MeetingLifecycle(
+            config.owner_id,
+            config.twin_id,
+            config.meeting_id,
+            saver,
+            persistence=LifecyclePersistence(
+                send_timeout_seconds=config.lifecycle_send_timeout_seconds,
+                faults=hooks.faults,
+                journal=_resolve_journal(hooks, config),
+            ),
+        )
         await lifecycle.initialize(resume=config.resume)
-        detail = await _drive_session(config, hooks, stop_event, resources, lifecycle)
+        detail = await drive_session(config, hooks, stop_event, resources, lifecycle)
     return _terminal_result(
         lifecycle.state["phase"],
         lifecycle.state["terminal_reason"],

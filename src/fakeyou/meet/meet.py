@@ -6,9 +6,11 @@ from functools import partial
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 
 JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed"]
 CallState = Literal["in_call", "removed", "ended", "lobby", "unknown"]
@@ -34,6 +36,9 @@ WAITING_ROOM_MARKERS = (
 )
 
 _LOCATION_PROBE = "(() => location.href)()"
+PREPARE_TIMEOUT_SECONDS = 120.0
+CALL_STATE_TIMEOUT_SECONDS = 5.0
+CAPTCHA_PROBE_TIMEOUT_SECONDS = 2.0
 
 _CAPTCHA_PROBE = """(() => {
   try {
@@ -133,35 +138,46 @@ def _is_in_call(content: str, signals: MeetSignals) -> bool:
     return _admitted_marker(signals) in content and not _is_waiting(content)
 
 
-async def _page_host(page: Page) -> str | None:
+async def _page_host(page: Page, *, poll_interval_seconds: float) -> str | None:
     try:
-        current = await page.evaluate(_LOCATION_PROBE)
-    except Exception:
+        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * poll_interval_seconds):
+            current = await page.evaluate(_LOCATION_PROBE)
+    except (PlaywrightError, TimeoutError):
         return None
     return urlparse(str(current)).hostname
 
 
+def _landed_host_failure(page: Page, link: str) -> str | None:
+    landed = urlparse(page.url).hostname
+    if landed == urlparse(link).hostname:
+        return None
+    return f"navigation landed on an unexpected host: {landed or 'unknown'}"
+
+
 async def _has_live_captcha(page: Page) -> bool:
     try:
-        return await page.evaluate(_CAPTCHA_PROBE) is True
-    except Exception:
+        async with asyncio.timeout(CAPTCHA_PROBE_TIMEOUT_SECONDS):
+            return await page.evaluate(_CAPTCHA_PROBE) is True
+    except (PlaywrightError, TimeoutError):
         return False
 
 
-async def _open_meeting_page(page: Page, link: str, init_scripts: Sequence[str] = ()) -> str | None:
+async def _open_meeting_page(
+    page: Page, link: str, init_scripts: Sequence[str] = (), *, poll_interval_seconds: float
+) -> str | None:
     target = with_pinned_meet_locale(link)
     for script in init_scripts:
         await page.add_init_script(script)
     try:
         response = await page.goto(target, wait_until="domcontentloaded", timeout=60000)
-    except Exception:
+    except PlaywrightError:
         response = None
         failed = True
     else:
         failed = response is not None and not response.ok
     if not failed:
-        return None
-    current_host = await _page_host(page)
+        return _landed_host_failure(page, link)
+    current_host = await _page_host(page, poll_interval_seconds=poll_interval_seconds)
     if current_host is not None and current_host == urlparse(link).hostname:
         return None
     return (
@@ -181,12 +197,12 @@ async def click_when_ready(
         try:
             target = locate().first
             await target.wait_for(state="visible", timeout=_CLICK_WAIT_MS)
-        except Exception:
+        except PlaywrightError:
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
             continue
         try:
             await target.click(timeout=_CLICK_TIMEOUT_MS)
-        except Exception as error:
+        except PlaywrightError as error:
             last_error = type(error).__name__
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
             continue
@@ -203,7 +219,7 @@ async def _dismiss_media_dialog(
     try:
         if await locator.count() == 0:
             return None
-    except Exception as error:
+    except PlaywrightError as error:
         return f"finding {signals.continue_without_media!r} failed: ({type(error).__name__})"
     return await click_when_ready(
         partial(page.locator, f'text="{signals.continue_without_media}"'),
@@ -221,7 +237,7 @@ async def _enter_twin_name(
     field = page.get_by_placeholder(signals.name_field)
     try:
         found = await field.count()
-    except Exception as error:
+    except PlaywrightError as error:
         return f"finding the name field failed: ({type(error).__name__})"
     if found == 0:
         return f"name field {signals.name_field!r} not found on the lobby page"
@@ -235,7 +251,7 @@ async def _enter_twin_name(
         return failure
     try:
         await page.keyboard.type(twin_name, delay=TYPE_DELAY_MS)
-    except Exception as error:
+    except PlaywrightError as error:
         return f"typing the twin name failed: ({type(error).__name__})"
     return None
 
@@ -253,8 +269,8 @@ async def _click_join(
             locator = page.locator(f'text="{label}"')
             try:
                 found = await locator.count()
-            except Exception:
-                continue
+            except PlaywrightError:
+                found = 0
             if found == 0:
                 continue
             failure = await click_when_ready(
@@ -287,7 +303,9 @@ async def _prepare_lobby(
     polling: JoinPolling,
     init_scripts: Sequence[str],
 ) -> str | None:
-    failure = await _open_meeting_page(page, request.link, init_scripts)
+    failure = await _open_meeting_page(
+        page, request.link, init_scripts, poll_interval_seconds=request.poll_interval_seconds
+    )
     if failure is not None:
         return failure
     failure = await _dismiss_media_dialog(page, signals, polling.sleep)
@@ -301,12 +319,20 @@ async def _prepare_lobby(
     )
 
 
-async def _poll_content(page: Page, abort: Callable[[], bool] | None) -> str | JoinResult:
+async def _poll_content(
+    page: Page, abort: Callable[[], bool] | None, *, poll_interval_seconds: float
+) -> str | JoinResult:
     if abort is not None and abort():
         return JoinResult(status="aborted", detail="stop requested while waiting for admission")
     try:
-        return await page.content()
-    except Exception as error:
+        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * poll_interval_seconds):
+            return await page.content()
+    except TimeoutError:
+        return JoinResult(
+            status="failed",
+            detail="reading lobby page content timed out",
+        )
+    except PlaywrightError as error:
         return JoinResult(
             status="failed",
             detail=f"reading lobby page content failed: ({type(error).__name__})",
@@ -344,8 +370,9 @@ async def _timeout_outcome(
     else:
         detail = f"no admission within {request.lobby_timeout_seconds} seconds"
     try:
-        rechecked = await page.content()
-    except Exception:
+        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * request.poll_interval_seconds):
+            rechecked = await page.content()
+    except (PlaywrightError, TimeoutError):
         return JoinResult(status="timeout", detail=detail)
     if _is_in_call(rechecked, signals):
         return JoinResult(status="admitted", detail="guest admitted to the call")
@@ -359,13 +386,45 @@ async def request_guest_join(
     polling: JoinPolling = DEFAULT_JOIN_POLLING,
     init_scripts: Sequence[str] = (),
 ) -> JoinResult:
-    failure = await _prepare_lobby(page, request, signals, polling, init_scripts)
-    if failure is not None:
-        return JoinResult(status="failed", detail=failure)
+    attempt_timeout = (
+        PREPARE_TIMEOUT_SECONDS
+        + request.lobby_timeout_seconds
+        + 4 * POLL_TIMEOUT_MULTIPLIER * request.poll_interval_seconds
+    )
+    try:
+        async with asyncio.timeout(attempt_timeout):
+            try:
+                async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
+                    failure = await _prepare_lobby(page, request, signals, polling, init_scripts)
+            except TimeoutError:
+                return JoinResult(
+                    status="failed",
+                    detail=(
+                        f"lobby preparation did not finish within {PREPARE_TIMEOUT_SECONDS} seconds"
+                    ),
+                )
+            if failure is not None:
+                return JoinResult(status="failed", detail=failure)
+            return await _await_admission(page, request, signals, polling)
+    except TimeoutError:
+        return JoinResult(
+            status="timeout",
+            detail=f"no admission within {request.lobby_timeout_seconds} seconds",
+        )
+
+
+async def _await_admission(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    polling: JoinPolling,
+) -> JoinResult:
     deadline = polling.monotonic() + request.lobby_timeout_seconds
     captcha_since: float | None = None
     while True:
-        content = await _poll_content(page, polling.abort)
+        content = await _poll_content(
+            page, polling.abort, poll_interval_seconds=request.poll_interval_seconds
+        )
         if isinstance(content, JoinResult):
             return content
         if _is_explicit_denial(content):
@@ -386,7 +445,11 @@ async def observe_call_state(
     page: Page,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
 ) -> CallObservation:
-    content = await page.content()
+    try:
+        async with asyncio.timeout(CALL_STATE_TIMEOUT_SECONDS):
+            content = await page.content()
+    except TimeoutError:
+        return CallObservation(state="unknown", detail="call state could not be read in time")
     if signals.removed in content:
         return CallObservation(state="removed", detail="guest was removed from the call")
     if signals.ended in content:
@@ -436,7 +499,7 @@ async def toggle_control(
     try:
         if await page.locator(selectors.desired).first.is_visible():
             return True
-    except Exception as error:
+    except PlaywrightError as error:
         raise RuntimeError(f"checking {control} state failed: {error}") from error
     failure = await click_when_ready(
         partial(page.locator, selectors.toggle), f"{control} button", sleep
@@ -445,7 +508,7 @@ async def toggle_control(
         raise RuntimeError(failure)
     try:
         await page.locator(selectors.desired).first.wait_for(state="visible", timeout=10000)
-    except Exception as error:
+    except PlaywrightError as error:
         raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
     return True
 
@@ -460,7 +523,7 @@ async def leave_meeting(
     locator = page.locator(f'button[aria-label="{signals.leave_call}"]')
     try:
         found = await locator.count()
-    except Exception as error:
+    except PlaywrightError as error:
         return LeaveResult(
             status="failed", detail=f"finding the leave button failed: ({type(error).__name__})"
         )

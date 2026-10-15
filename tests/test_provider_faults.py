@@ -6,12 +6,14 @@ import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from pipecat.utils.errors import ErrorCategory
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.observability.provider_faults import (
     ERROR_CATEGORY_KINDS,
     FaultEvidence,
     ProviderFault,
     classify_exception,
     classify_http,
+    trim_detail,
 )
 
 
@@ -40,7 +42,7 @@ def _status_error(status: int) -> APIStatusError:
         (302, "unknown", False),
     ],
 )
-def test_classify_http_status_matrix(status: int, kind: str, retryable: bool) -> None:
+def test_classify_http_status_matrix(status: int, kind: str, *, retryable: bool) -> None:
     fault = classify_http("tts", status, "backend words")
 
     assert fault.source == "tts"
@@ -73,7 +75,7 @@ def test_classify_http_truncates_backend_detail() -> None:
     ],
 )
 def test_error_category_map_covers_all_nine_values(
-    category: ErrorCategory, kind: str, retryable: bool
+    category: ErrorCategory, kind: str, *, retryable: bool
 ) -> None:
     assert ERROR_CATEGORY_KINDS[category.name] == (kind, retryable)
 
@@ -130,7 +132,7 @@ def test_httpx2_network_errors_map_to_unavailable(error: httpx2.NetworkError) ->
     assert fault.retryable is True
 
 
-def test_legacy_httpx_error_is_not_specially_classified() -> None:
+def test_httpx_v1_error_is_not_specially_classified() -> None:
     fault = classify_exception("tts", httpx.ConnectError("legacy boom"))
 
     assert fault.kind == "unknown"
@@ -154,9 +156,38 @@ def test_unknown_error_carries_class_name_only() -> None:
     assert fault.detail == "ValueError"
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        AssertionError("broken"),
+        AttributeError("gone"),
+        IndexError("range"),
+        KeyError("k"),
+        TypeError("t"),
+    ],
+)
+def test_programming_errors_are_labelled_internal_not_provider_faults(
+    error: BaseException,
+) -> None:
+    fault = classify_exception("agent", error)
+
+    assert fault.kind == "unknown"
+    assert fault.detail == f"internal:{type(error).__name__}"
+
+
 def test_cancelled_error_is_never_classified() -> None:
     with pytest.raises(asyncio.CancelledError):
         classify_exception("tts", asyncio.CancelledError())
+
+
+def test_domain_error_forwards_its_code_into_the_fault() -> None:
+    fault = classify_exception(
+        "tts", FakeYouError(ErrorCode.DIARIZE_INPUT_UNREADABLE, reason="ValueError")
+    )
+
+    assert fault.kind == "unknown"
+    assert fault.detail == ErrorCode.DIARIZE_INPUT_UNREADABLE.value
+    assert fault.retryable is False
 
 
 def test_provider_fault_passes_through_unchanged() -> None:
@@ -172,6 +203,30 @@ def test_provider_fault_renders_source_and_kind() -> None:
 
     assert str(fault).startswith("agent timeout")
     assert isinstance(fault, Exception)
+
+
+def test_trim_detail_masks_every_url_scheme() -> None:
+    assert trim_detail("dial wss://example.com/asr?token=abc failed") == "dial <url> failed"
+    assert trim_detail("ws://127.0.0.1:9/x") == "<url>"
+    assert trim_detail("see https://example.com/a?b=c now") == "see <url> now"
+
+
+def test_trim_detail_masks_bearer_basic_and_vendor_keys() -> None:
+    assert trim_detail("auth Bearer top-secret-value") == "auth Bearer <redacted>"
+    assert trim_detail("auth Basic dXNlcjpwYXNz") == "auth Basic <redacted>"
+    assert trim_detail("key sk-abcdefghij1234567890 rejected") == "key <redacted> rejected"
+    assert (
+        trim_detail("header x-goog-api-key: AIzaSecretValue") == "header x-goog-api-key: <redacted>"
+    )
+    assert (
+        trim_detail('{"x-goog-api-key": "AIzaSyD-secret-value"}')
+        == '{"x-goog-api-key": <redacted>}'
+    )
+
+
+def test_trim_detail_keeps_ordinary_prose_intact() -> None:
+    assert trim_detail("basic training failed") == "basic training failed"
+    assert trim_detail("connection reset by peer") == "connection reset by peer"
 
 
 def test_provider_fault_truncates_long_detail() -> None:

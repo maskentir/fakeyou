@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.persistence.brief import (
-    CONTEXT_FILE_NAME,
     MAX_BRIEF_BYTES,
     MAX_CONTEXT_BYTES,
     MeetingBrief,
@@ -23,6 +22,8 @@ from fakeyou.persistence.brief import (
     validate_brief_scope,
     write_meeting_context,
 )
+from fakeyou.persistence.layout import CONTEXT_FILE_NAME
+from tests._error_support import message_pattern
 
 EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples" / "meeting-brief.example.json"
 SCOPE = {"owner_id": "demo_owner", "twin_id": "demo_twin", "meeting_id": "brief-demo-1003"}
@@ -85,7 +86,10 @@ def test_example_brief_loads_with_its_own_scope(brief: MeetingBrief) -> None:
 
 
 def test_meeting_scope_cannot_be_changed(brief: MeetingBrief) -> None:
-    with pytest.raises(FakeYouError) as caught:
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH),
+    ) as caught:
         validate_brief_scope(
             brief,
             owner_id=brief.owner_id,
@@ -99,7 +103,10 @@ def test_meeting_scope_cannot_be_changed(brief: MeetingBrief) -> None:
 def test_scope_mismatch_is_rejected_without_echoing_ids(brief: MeetingBrief, field: str) -> None:
     scope = {**SCOPE, field: "other-session"}
 
-    with pytest.raises(FakeYouError) as error:
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH),
+    ) as error:
         validate_brief_scope(brief, **scope)
     assert error.value.code is ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH
 
@@ -111,7 +118,10 @@ def test_scope_mismatch_is_rejected_without_echoing_ids(brief: MeetingBrief, fie
 def test_load_rejects_a_brief_for_another_scope(tmp_path: Path, field: str) -> None:
     path = write_brief_file(tmp_path, EXAMPLE_BRIEF.read_bytes())
 
-    with pytest.raises(FakeYouError) as caught:
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH),
+    ) as caught:
         load_meeting_brief(path, **{**SCOPE, field: "other-session"})
     assert caught.value.code is ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH
 
@@ -436,8 +446,8 @@ def with_changes(change: Callable[[dict[str, Any]], object]) -> Callable[[bytes]
 @pytest.mark.parametrize(
     "corrupt",
     [
-        lambda content: b"{not json",
-        lambda content: b"",
+        lambda _content: b"{not json",
+        lambda _content: b"",
         truncated,
         with_changes(lambda payload: payload.update(schema_version="meeting_context/v2")),
         with_changes(lambda payload: payload.pop("schema_version")),
@@ -512,10 +522,11 @@ def test_context_rejects_a_hash_of_another_brief(brief: MeetingBrief) -> None:
 def test_failed_first_context_write_leaves_no_snapshot_or_temp_file(
     tmp_path: Path, brief: MeetingBrief, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def reject_replace(source: Path, target: Path) -> None:
+    def reject_replace(_source: Path, target: Path) -> None:
+        del target
         raise OSError("replace failed")
 
-    monkeypatch.setattr("fakeyou.persistence.ingestion_status.os.replace", reject_replace)
+    monkeypatch.setattr("fakeyou.persistence.files.os.replace", reject_replace)
     with pytest.raises(OSError, match="replace failed"):
         write_meeting_context(tmp_path / CONTEXT_FILE_NAME, context_for(brief))
 
@@ -526,7 +537,7 @@ def test_failed_first_context_write_leaves_no_snapshot_or_temp_file(
     "changed",
     [
         lambda brief: context_for(brief, persona_sha256="b" * 64),
-        lambda brief: context_for(parse_brief(brief_data(knowledge_scope="persona_memory"))),
+        lambda _brief: context_for(parse_brief(brief_data(knowledge_scope="persona_memory"))),
     ],
     ids=["persona", "brief"],
 )
@@ -554,10 +565,11 @@ def test_rewriting_the_same_snapshot_does_not_touch_the_file(
     write_meeting_context(path, context_for(brief))
     first = path.read_bytes()
 
-    def reject_replace(source: Path, target: Path) -> None:
+    def reject_replace(_source: Path, target: Path) -> None:
+        del target
         raise OSError("replace must not run")
 
-    monkeypatch.setattr("fakeyou.persistence.ingestion_status.os.replace", reject_replace)
+    monkeypatch.setattr("fakeyou.persistence.files.os.replace", reject_replace)
     write_meeting_context(path, context_for(load_meeting_brief(EXAMPLE_BRIEF, **SCOPE)))
 
     assert path.read_bytes() == first

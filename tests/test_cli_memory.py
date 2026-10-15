@@ -11,18 +11,21 @@ from pydantic import SecretStr
 
 import fakeyou.cli.main as cli_main
 import fakeyou.cli.memory as cli_memory
-from fakeyou.catalog.errors import ErrorCode
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli._operator import OperatorIdentity
-from fakeyou.cli.memory import IngestOutcome, _finish_ingest, ingest_recorded_meeting
+from fakeyou.cli.memory import ingest_recorded_meeting
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.memory import ingest_service
+from fakeyou.memory.ingest_status import IngestOutcome, finish_ingest
 from fakeyou.memory.ingestion import EpisodeNameError, MeetingScope, ingest_corrections
-from fakeyou.memory.persona import PersonaProfile
+from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.lifecycle import meeting_thread_id
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     read_status,
@@ -31,7 +34,10 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 from fakeyou.worker.worker_backend import DockerWorkerBackend
-from tests.fakes import FINISHED_ROWS, FakeRunner, make_graphiti, write_journal
+from tests._error_support import message_pattern
+from tests._memory_fakes import make_graphiti
+from tests._persistence_fakes import FINISHED_ROWS, RecordingJournal, write_journal
+from tests._runtime_fakes import FakeRunner
 
 PERSONA_DATA = {
     "owner_id": "settings-owner",
@@ -50,7 +56,7 @@ def _write_persona(tmp_path: Path) -> Path:
 
 
 def _write_record(settings: Settings, meeting_id: str) -> None:
-    record = MeetingRecord(meeting_record_path(settings.paths.record_dir, meeting_id))
+    record = MeetingRecord(meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)))
     record.add_transcript(
         TranscriptEvent(
             id="t1",
@@ -67,14 +73,15 @@ def _write_record(settings: Settings, meeting_id: str) -> None:
 
 
 def _write_audio_slots(settings: Settings, meeting_id: str) -> Path:
-    audio_dir = meeting_record_path(settings.paths.record_dir, meeting_id).parent / "audio"
+    audio_dir = (
+        meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)).parent / "audio"
+    )
     audio_dir.mkdir(parents=True, exist_ok=True)
     (audio_dir / "slots.json").write_text(
         json.dumps(
             {
-                "schema": "slot_audio/v1",
+                "schema": "slot_audio/v2",
                 "slots": {"0": {"seq_start": 0, "seq_end": 10, "frames": 1600, "gaps_filled": 0}},
-                "anchors": [],
             }
         ),
         encoding="utf-8",
@@ -89,12 +96,15 @@ def _write_audio_slots(settings: Settings, meeting_id: str) -> Path:
 
 
 def _stub_transcribe(monkeypatch: pytest.MonkeyPatch, turns: list[tuple[int, int, str]]) -> None:
-    def fake(chunk: bytes, *, api_key: str, opener: Any = None) -> list[DiarizedTurn]:
+    def fake(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+        del chunk
+        del opener
+        del settings
         return [
             DiarizedTurn(start_ms=start, end_ms=end, speaker=name) for start, end, name in turns
         ]
 
-    monkeypatch.setattr("fakeyou.cli.diarize.transcribe_chunk", fake)
+    monkeypatch.setattr("fakeyou.diarization.diarize_service.transcribe_chunk", fake)
 
 
 def _fake_memory(monkeypatch: pytest.MonkeyPatch, memory: Any) -> None:
@@ -131,7 +141,7 @@ def test_finish_ingest_preserves_correction_progress(tmp_path: Path) -> None:
     )
     faults = FaultReporter(journal=Journal("meeting-1", echo=False))
 
-    ok = _finish_ingest(
+    summary = finish_ingest(
         status_file,
         IngestOutcome(
             state="completed",
@@ -149,7 +159,7 @@ def test_finish_ingest_preserves_correction_progress(tmp_path: Path) -> None:
         faults=faults,
     )
 
-    assert ok is True
+    assert summary.succeeded is True
     status = read_status(status_file)
     assert status is not None
     assert status.correction_windows == {0: "uuid-fix"}
@@ -167,18 +177,18 @@ async def test_ingest_auto_runs_diarization_before_live_ingest(
     _stub_transcribe(monkeypatch, [(0, 90000, "A")])
     graphiti = make_graphiti(episode_prefix="uuid-")
     _fake_memory(monkeypatch, graphiti)
-    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     sidecar = record_path.parent / "diarization.json"
     seen: dict[str, bool] = {}
-    real_ingest = cli_memory.ingest_until_stopped
+    real_ingest = ingest_service.ingest_until_stopped
 
     async def guarded(*args: Any, **kwargs: Any) -> Any:
         seen["sidecar_present"] = sidecar.exists()
         return await real_ingest(*args, **kwargs)
 
-    monkeypatch.setattr(cli_memory, "ingest_until_stopped", guarded)
+    monkeypatch.setattr(ingest_service, "ingest_until_stopped", guarded)
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
@@ -198,28 +208,31 @@ async def test_ingest_no_correct_skips_diarization_entirely(
     _write_record(settings, "meeting-9")
     _write_audio_slots(settings, "meeting-9")
 
-    def exploding(chunk: bytes, *, api_key: str, opener: Any = None) -> list[DiarizedTurn]:
+    def exploding(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+        del chunk
+        del opener
+        del settings
         raise AssertionError("diarization must not run")
 
-    monkeypatch.setattr("fakeyou.cli.diarize.transcribe_chunk", exploding)
+    monkeypatch.setattr("fakeyou.diarization.diarize_service.transcribe_chunk", exploding)
     graphiti = make_graphiti()
     _fake_memory(monkeypatch, graphiti)
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         no_correct=True,
         settings=settings,
     )
 
-    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     assert not (record_path.parent / "diarization.json").exists()
     assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
 
 
 @pytest.mark.parametrize(("argv", "expected"), [(["--no-correct"], True), ([], False)])
 def test_memory_ingest_dispatch_passes_no_correct(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: bool
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], *, expected: bool
 ) -> None:
     calls: list[dict[str, Any]] = []
 
@@ -248,14 +261,17 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
     _write_record(settings, "meeting-9")
     _write_audio_slots(settings, "meeting-9")
 
-    def failing(chunk: bytes, *, api_key: str, opener: Any = None) -> list[DiarizedTurn]:
+    def failing(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+        del chunk
+        del opener
+        del settings
         raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason="timeout")
 
-    monkeypatch.setattr("fakeyou.cli.diarize.transcribe_chunk", failing)
+    monkeypatch.setattr("fakeyou.diarization.diarize_service.transcribe_chunk", failing)
     graphiti = make_graphiti()
     _fake_memory(monkeypatch, graphiti)
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(_write_persona(tmp_path), None, None),
         twin_name=None,
         settings=settings,
@@ -268,8 +284,8 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
         if row.get("event") == "fault_recorded" and row.get("source") == "stt"
     ]
     assert len(faults) == 1
-    assert faults[0].get("detail") == "transcription request failed: timeout"
-    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    assert faults[0].get("detail") == "diarize.transcription_failed"
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     status = read_status(status_path(record_path))
     assert status is not None
     assert status.status == "completed"
@@ -286,13 +302,13 @@ async def test_ingest_rerun_writes_zero_new_correction_episodes(
     _fake_memory(monkeypatch, graphiti)
     persona_path = _write_persona(tmp_path)
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
     )
     group_id = PersonaProfile.model_validate(PERSONA_DATA).memory_group
-    record_path = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     first = await ingest_corrections(graphiti, record_path, MeetingScope(group_id, "meeting-9"))
 
     assert first.completed is True
@@ -302,7 +318,7 @@ async def test_ingest_rerun_writes_zero_new_correction_episodes(
     ]
     assert corrected == ["meeting-9:w00000:corrected"]
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         no_correct=True,
@@ -324,15 +340,18 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     _write_audio_slots(settings, "meeting-9")
     _write_record(settings, "meeting-10")
 
-    def exploding(chunk: bytes, *, api_key: str, opener: Any = None) -> list[DiarizedTurn]:
+    def exploding(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+        del chunk
+        del opener
+        del settings
         raise AssertionError("diarization must not run")
 
-    monkeypatch.setattr("fakeyou.cli.diarize.transcribe_chunk", exploding)
+    monkeypatch.setattr("fakeyou.diarization.diarize_service.transcribe_chunk", exploding)
     first_memory = make_graphiti()
     _fake_memory(monkeypatch, first_memory)
     persona_path = _write_persona(tmp_path)
     await ingest_recorded_meeting(
-        meeting_id="meeting-9",
+        meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
@@ -341,7 +360,7 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     second_memory = make_graphiti()
     _fake_memory(monkeypatch, second_memory)
     await ingest_recorded_meeting(
-        meeting_id="meeting-10",
+        meeting_id=SessionId("meeting-10"),
         identity=OperatorIdentity(persona_path, None, None),
         twin_name=None,
         settings=settings,
@@ -350,7 +369,7 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     assert [episode["name"] for episode in first_memory.added] == ["meeting-9:w00000"]
     assert [episode["name"] for episode in second_memory.added] == ["meeting-10:w00000"]
     for meeting_id in ("meeting-9", "meeting-10"):
-        record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+        record_path = meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
         assert not (record_path.parent / "diarization.json").exists()
         faults = [
             row
@@ -366,11 +385,12 @@ def test_worker_ingest_routes_through_memory_ingest_without_skip(tmp_path: Path)
     backend = DockerWorkerBackend(
         runner=runner,
         journal_dir=tmp_path / "journals",
-        record_dir=tmp_path / "meetings",
+        record_dir=Path(".runtime/meetings"),
         project_dir=tmp_path,
     )
     write_journal(tmp_path / "journals" / "meeting-9.jsonl", FINISHED_ROWS)
-    record = meeting_record_path(tmp_path / "meetings", "meeting-9")
+    meetings = tmp_path / ".runtime" / "audio" / "meetings"
+    record = meeting_record_path(meetings, SessionId("meeting-9"))
     path = status_path(record)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_status(
@@ -378,7 +398,7 @@ def test_worker_ingest_routes_through_memory_ingest_without_skip(tmp_path: Path)
         IngestionStatus(meeting_id="meeting-9", group_id="group-1", status="completed"),
     )
     runtime = tmp_path / ".runtime" / "audio"
-    runtime.mkdir(parents=True)
+    runtime.mkdir(parents=True, exist_ok=True)
     persona = runtime / "persona.json"
     persona.write_text("{}", encoding="utf-8")
 
@@ -401,13 +421,15 @@ async def test_ingest_episode_name_error_keeps_hint_on_stderr(
     _fake_memory(monkeypatch, make_graphiti())
 
     async def failing(*args: Any, **kwargs: Any) -> Any:
+        del args
+        del kwargs
         raise EpisodeNameError(ErrorCode.INGESTION_EPISODE_NAME_INVALID, meeting_id="meeting-9")
 
-    monkeypatch.setattr(cli_memory, "ingest_until_stopped", failing)
+    monkeypatch.setattr(ingest_service, "ingest_until_stopped", failing)
 
     with pytest.raises(SystemExit) as exit:
         await ingest_recorded_meeting(
-            meeting_id="meeting-9",
+            meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(_write_persona(tmp_path), None, None),
             twin_name=None,
             no_correct=True,
@@ -416,3 +438,63 @@ async def test_ingest_episode_name_error_keeps_hint_on_stderr(
 
     assert exit.value.code == ExitCode.FAILURE
     assert "--keep-record" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_forget_meeting_files_threads_database_timeouts_to_the_checkpointer(
+    settings: Settings, postgres_checkpoints: dict[str, Any]
+) -> None:
+    from urllib.parse import parse_qsl, urlsplit
+
+    from fakeyou.memory.forget import forget_meeting_files
+
+    settings.database.connect_timeout_seconds = 7.0
+    settings.database.statement_timeout_seconds = 9.0
+    settings.database.keepalive_idle_seconds = 11.0
+    profile = PersonaProfile(
+        owner_id=settings.identity.owner_id,
+        twin_id=settings.identity.twin_id,
+        display_name="Settings Twin",
+        role="Project coordinator",
+        allowed_tools=frozenset(),
+    )
+
+    await forget_meeting_files(settings, profile, SessionId("meeting-forget"), meeting_thread_id)
+
+    (conninfo,) = postgres_checkpoints
+    params = dict(parse_qsl(urlsplit(conninfo).query))
+    assert params["connect_timeout"] == "7"
+    assert "statement_timeout=9000" in params["options"]
+    assert params["keepalives_idle"] == "11"
+
+
+def test_finish_ingest_reports_corrupt_status(tmp_path: Path) -> None:
+    status_file = tmp_path / "ingestion.json"
+    status_file.write_text("{corrupt", encoding="utf-8")
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.INGESTION_STATUS_CORRUPT)
+    ) as caught:
+        finish_ingest(
+            status_file,
+            IngestOutcome(
+                state="completed",
+                windows=1,
+                resumed_from=0,
+                ingested=1,
+                facts=1,
+                completed=True,
+                record_sha256="abc",
+                reason=None,
+                episode_uuids={0: "uuid-a"},
+            ),
+            meeting_id="meeting-1",
+            group_id="twin_group",
+            faults=faults,
+        )
+
+    assert caught.value.code is ErrorCode.INGESTION_STATUS_CORRUPT
+    assert status_file.read_text(encoding="utf-8") == "{corrupt"
+    assert len(journal.events("ingestion_status_rejected")) == 1

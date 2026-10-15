@@ -1,8 +1,10 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.identifiers import parse_session_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,16 +21,35 @@ class MeetingRequest:
     meeting_id: str | None = None
     wake_phrase: str | None = None
     barge_in: bool = False
+    owner_id: str | None = None
+    twin_id: str | None = None
+
+
+_MEET_CODE_PATH = re.compile(r"/[a-z]{3}-[a-z]{4}-[a-z]{3}")
+_ALLOWED_LINK_QUERY: dict[str, re.Pattern[str]] = {
+    "authuser": re.compile(r"\d+"),
+    "hl": re.compile(r"[a-zA-Z-]+"),
+}
 
 
 def _check_link(link: str) -> None:
     parsed = urlparse(link)
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "meet.google.com"
-        or parsed.path.strip("/") == ""
+        or parsed.netloc.lower() != "meet.google.com"
+        or parsed.fragment
+        or _MEET_CODE_PATH.fullmatch(parsed.path) is None
+        or not _link_query_allowed(parsed.query)
     ):
         raise FakeYouError(ErrorCode.MEETING_LINK_INVALID)
+
+
+def _link_query_allowed(query: str) -> bool:
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        pattern = _ALLOWED_LINK_QUERY.get(key)
+        if pattern is None or pattern.fullmatch(value) is None:
+            return False
+    return True
 
 
 def _check_timeouts(lobby_timeout: float | None, duration: float | None) -> None:
@@ -67,7 +88,7 @@ def _check_brief(
         raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_CONVERSE)
     if brief_path is not None and persona_path is None:
         raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PERSONA)
-    if brief_path is not None and not meeting_id:
+    if brief_path is not None and meeting_id is None:
         raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_MEETING_ID)
 
 
@@ -76,6 +97,18 @@ def _check_addressing(wake_phrase: str | None, *, barge_in: bool, conversation: 
         raise FakeYouError(ErrorCode.MEETING_WAKE_PHRASE_REQUIRES_CONVERSE)
     if barge_in and not conversation:
         raise FakeYouError(ErrorCode.MEETING_BARGE_IN_REQUIRES_CONVERSE)
+
+
+def _check_identifiers(
+    *, meeting_id: str | None, owner_id: str | None, twin_id: str | None
+) -> None:
+    for field, value in (
+        ("--meeting-id", meeting_id),
+        ("--owner-id", owner_id),
+        ("--twin-id", twin_id),
+    ):
+        if value is not None:
+            parse_session_id(value, field=field)
 
 
 def validate_meeting_request(request: MeetingRequest) -> None:
@@ -96,4 +129,7 @@ def validate_meeting_request(request: MeetingRequest) -> None:
     )
     _check_addressing(
         request.wake_phrase, barge_in=request.barge_in, conversation=request.conversation
+    )
+    _check_identifiers(
+        meeting_id=request.meeting_id, owner_id=request.owner_id, twin_id=request.twin_id
     )

@@ -4,11 +4,10 @@ import hashlib
 import math
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-
-SAMPLE_RATE = 16000
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -18,10 +17,22 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+class EmbeddingStream(Protocol):
+    def accept_waveform(self, sample_rate: float, waveform: list[float]) -> None: ...
+
+    def input_finished(self) -> None: ...
+
+
+class EmbeddingExtractor(Protocol):
+    def create_stream(self) -> EmbeddingStream: ...
+
+    def compute(self, stream: Any, /) -> list[float]: ...
+
+
 class SpeakerEmbedder:
     model_id: str | None = None
 
-    def __init__(self, extractor: Any, *, model_id: str | None = None) -> None:
+    def __init__(self, extractor: EmbeddingExtractor, *, model_id: str | None = None) -> None:
         self._extractor = extractor
         self.model_id = model_id
 
@@ -44,7 +55,7 @@ class SpeakerEmbedder:
 
     def _embed_one(self, utterance: Sequence[float]) -> list[float]:
         stream = self._extractor.create_stream()
-        stream.accept_waveform(sample_rate=SAMPLE_RATE, waveform=list(utterance))
+        stream.accept_waveform(sample_rate=CAPTURE_SAMPLE_RATE, waveform=list(utterance))
         stream.input_finished()
         return [float(value) for value in self._extractor.compute(stream)]
 

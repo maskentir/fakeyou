@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
+import time
 from collections.abc import Sequence
+from typing import override
+
+import pytest
 
 from fakeyou.db.voiceprint_store import VoiceprintRecord
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.identity.identity import SpeakerRegistry
-from fakeyou.identity.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder
 from fakeyou.identity.voiceprint_match import (
     CLIP_GRID_MS,
     CLIP_PAD_MS,
@@ -16,10 +22,12 @@ from fakeyou.identity.voiceprint_match import (
     apply_voice_scores,
     cut_turn_clip,
     score_turn_audio,
+    score_turn_audio_async,
 )
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
-from tests.fakes import CONSENT_AT, FakeEmbedder, InMemoryVoiceprints, RecordingJournal, make_record
+from tests._persistence_fakes import RecordingJournal
+from tests._voiceprint_fakes import CONSENT_AT, FakeEmbedder, InMemoryVoiceprints, make_record
 
 
 def make_negative(person_id: str, embedding: tuple[float, ...]) -> VoiceprintRecord:
@@ -267,8 +275,96 @@ def test_score_turn_audio_at_min_seconds_embeds_and_matches() -> None:
     assert len(utterance) == 48000
 
 
+def test_score_turn_audio_scales_int16_samples_to_unit_floats() -> None:
+    embedder = FakeEmbedder((1.0, 0.0))
+    matcher = VoiceprintMatcher(InMemoryVoiceprints([make_record("alice", (1.0, 0.0))]))
+    clip = struct.pack("<4h", 0, 16384, -32768, 32767)
+
+    scores = score_turn_audio(clip, embedder, matcher, min_seconds=0.0)
+
+    assert scores is not None
+    [utterances] = embedder.calls
+    [utterance] = utterances
+    assert list(utterance) == pytest.approx([0.0, 0.5, -1.0, 32767 / 32768.0])
+
+
+class _CountingVoiceprints(InMemoryVoiceprints):
+    def __init__(self, records: list[VoiceprintRecord]) -> None:
+        super().__init__(records)
+        self.loads = 0
+
+    @override
+    def load_all(self) -> list[VoiceprintRecord]:
+        self.loads += 1
+        return super().load_all()
+
+
+def test_matcher_loads_voiceprints_once_per_session() -> None:
+    store = _CountingVoiceprints([make_record("alice", (1.0, 0.0))])
+    matcher = VoiceprintMatcher(store)
+
+    matcher.match((1.0, 0.0))
+    store.save(make_record("bob", (0.0, 1.0)))
+    second = matcher.match((1.0, 0.0))
+
+    assert store.loads == 1
+    assert second.person_id == "alice"
+
+
+class _SleepingEmbedder(SpeakerEmbedder):
+    def __init__(self, delay_seconds: float) -> None:
+        self._delay = delay_seconds
+        self.threads: list[int] = []
+
+    @override
+    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
+        self.threads.append(threading.get_ident())
+        time.sleep(self._delay)
+        return (1.0, 0.0)
+
+
+async def test_score_turn_audio_async_scores_off_the_event_loop() -> None:
+    embedder = _SleepingEmbedder(0.01)
+    matcher = VoiceprintMatcher(InMemoryVoiceprints([make_record("alice", (1.0, 0.0))]))
+
+    scores = await score_turn_audio_async(
+        b"\x00" * 96000, embedder, matcher, min_seconds=3.0, timeout_seconds=5.0
+    )
+
+    assert scores is not None
+    assert scores.outcome == "verified"
+    assert embedder.threads != [threading.get_ident()]
+
+
+class _GatedEmbedder(SpeakerEmbedder):
+    def __init__(self) -> None:
+        self.release = threading.Event()
+
+    @override
+    def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
+        self.release.wait(5.0)
+        return (1.0, 0.0)
+
+
+async def test_score_turn_audio_async_times_out_slow_scoring() -> None:
+    embedder = _GatedEmbedder()
+    matcher = VoiceprintMatcher(InMemoryVoiceprints([make_record("alice", (1.0, 0.0))]))
+
+    try:
+        with pytest.raises(TimeoutError):
+            await score_turn_audio_async(
+                b"\x00" * 96000,
+                embedder,
+                matcher,
+                min_seconds=3.0,
+                timeout_seconds=0.05,
+            )
+    finally:
+        embedder.release.set()
+
+
 def _turn_audio(seconds: float) -> bytes:
-    total = int(seconds * SAMPLE_RATE)
+    total = int(seconds * CAPTURE_SAMPLE_RATE)
     samples = [
         int(20000.0 * math.sin(index * 0.05) + 5000.0 * math.sin(index * 0.013))
         for index in range(total)
@@ -280,6 +376,7 @@ class ContentEmbedder(SpeakerEmbedder):
     def __init__(self) -> None:
         self.calls = 0
 
+    @override
     def embed(self, utterances: Sequence[Sequence[float]]) -> tuple[float, ...]:
         self.calls += 1
         flat = [sample for utterance in utterances for sample in utterance]

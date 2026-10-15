@@ -3,7 +3,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from graphiti_core.nodes import EpisodicNode
@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import RecallSettings, RecallStrategy
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
@@ -29,7 +30,8 @@ from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, PersonaTool, me
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import MeetingBrief
-from tests.fakes import ToolCallingFakeModel, make_graphiti
+from tests._conversation_fakes import ToolCallingFakeModel
+from tests._memory_fakes import make_graphiti
 
 GROUP = "team_alpha"
 EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples/meeting-brief.example.json"
@@ -53,12 +55,13 @@ def stored_memory(monkeypatch: pytest.MonkeyPatch, **options: Any) -> Any:
         created_at=datetime(2026, 9, 30, 9, tzinfo=UTC),
     )
 
-    async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
+    async def get_by_uuids(_driver: Any, uuids: list[str]) -> list[Any]:
         return [episode for uuid in uuids if uuid == "e1"]
 
     async def active_states(
         _memory: Any, *, group_id: str, episode_uuids: list[str]
     ) -> dict[str, Any]:
+        del group_id
         return dict.fromkeys(episode_uuids, "active")
 
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
@@ -421,6 +424,7 @@ async def test_prefetch_ignores_messages_that_are_not_meeting_speech(
 
 
 class FailingModel(ToolCallingFakeModel):
+    @override
     async def _agenerate(
         self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
     ) -> Any:
@@ -481,7 +485,9 @@ async def opened_agent(
 ) -> dict[str, Any]:
     created: dict[str, Any] = {}
 
-    def fake_agent(model: Any, *, tools: Any = (), checkpointer: Any = None, **kwargs: Any) -> Any:
+    def fake_agent(
+        _model: Any, *, tools: Any = (), _checkpointer: Any = None, **kwargs: Any
+    ) -> Any:
         created["tools"] = [tool.name for tool in tools]
         created["middleware"] = [type(item).__name__ for item in kwargs["middleware"]]
         created["persona"] = kwargs["persona"]
@@ -498,7 +504,7 @@ async def opened_agent(
     config = SessionConfig(
         owner_id=profile.owner_id,
         twin_id=profile.twin_id,
-        meeting_id="prefetch-wiring",
+        meeting_id=SessionId("prefetch-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Demo Twin",
     )
@@ -506,7 +512,7 @@ async def opened_agent(
         settings,
         config,
         agent=assembly.AgentWiring(profile=profile, **options),
-        behavior=assembly.LoopBehavior(on_transition=lambda *args: None),
+        behavior=assembly.LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
     return created
@@ -524,6 +530,7 @@ async def test_open_conversation_wires_memory_by_recall_strategy(
     monkeypatch: pytest.MonkeyPatch,
     strategy: RecallStrategy,
     tools: list[str],
+    *,
     prefetch: bool,
 ) -> None:
     created = await opened_agent(
@@ -615,3 +622,29 @@ async def test_cancelled_prefetch_closes_its_journal_request_without_a_fault(
     events = [(entry["event"], entry.get("error")) for entry in memory_rows(lines)]
     assert events == [("request_started", None), ("request_failed", "CancelledError")]
     assert faults.recorded == []
+
+
+async def test_prefetch_bounds_hanging_episode_lookup_with_single_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(
+        monkeypatch,
+        facts=["Demo Orchid moved to Friday"],
+        episodes={"Demo Orchid moved to Friday": ["e1"]},
+    )
+    gate = asyncio.Event()
+
+    async def hanging_lookup(_driver: Any, _uuids: list[str]) -> list[Any]:
+        await gate.wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", hanging_lookup)
+    agent, model = prefetch_agent(
+        memory, [AIMessage(content="Friday.")], recall=RecallSettings(timeout_seconds=0.05)
+    )
+
+    await asyncio.wait_for(turn(agent, participant("When is the Orchid demo?", "t1")), 2)
+
+    [evidence] = evidence_messages(model_calls(model)[0])
+    assert evidence.content == PREFETCH_UNAVAILABLE_EVIDENCE
+    assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "unavailable"

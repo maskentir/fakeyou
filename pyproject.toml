@@ -20,11 +20,13 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "mcp>=1.26,<2",
     "neo4j>=6.3,<7",
+    "numpy>=2.5,<3",
     "openai==3.19.2",
     "pillow>=12.3,<13",
     "pipecat-ai[silero,webrtc]==1.12.0",
     "playwright>=1.63,<2",
     "psycopg[binary,pool]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.10,<3",
     "python-dotenv>=1.2,<2",
@@ -49,6 +51,7 @@ dev = [
     "pytest>=8,<10",
     "pytest-asyncio>=1,<2",
     "ruff>=0.14,<1",
+    "websockets>=16,<17",
 ]
 
 [project.scripts]
@@ -81,28 +84,48 @@ select = [
     "C901",
     "PLR0913",
     "PT",
+    "TRY002",
+    "TRY004",
+    "TRY201",
+    "TRY203",
+    "TRY300",
+    "TRY400",
+    "TRY401",
+    "S110",
+    "S112",
+    "RUF006",
+    "BLE001",
+]
+
+[tool.ruff.lint.flake8-pytest-style]
+raises-require-match-for = [
+    "BaseException",
+    "Exception",
+    "ValueError",
+    "OSError",
+    "IOError",
+    "EnvironmentError",
+    "socket.error",
+    "fakeyou.catalog.errors.FakeYouError",
+    "fakeyou.debrief.debrief_schema.DebriefValidationError",
+    "fakeyou.worker.worker_backend.WorkerError",
+    "fakeyou.diarization.diarize_client.DiarizeError",
+    "fakeyou.diarization.diarize_correction.StaleDiarizationError",
+    "fakeyou.persistence.ingestion_status.RecordLockError",
+    "fakeyou.persistence.ingestion_status.LeaseError",
+    "fakeyou.memory.owner_notes.NoteConflictError",
+    "fakeyou.meet.meet_action_ledger.LedgerError",
+    "fakeyou.meet.browser.ProfileInUseError",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "src/fakeyou/cli/output.py" = ["T201"]
-"src/fakeyou/observability/journal.py" = ["T201"]
-# Framework-imposed signatures: alembic include_object, langchain tool schema,
-# pipecat keyword caller, and the CLI dispatcher passing settings= to handlers.
-"src/fakeyou/db/tables.py" = ["FBT001", "ARG001"]
-"src/fakeyou/memory/memory.py" = ["FBT001", "FBT002"]
-"src/fakeyou/audio/audio.py" = ["ARG002"]
-"src/fakeyou/conversation/conversation.py" = ["ARG002"]
-# LangChain middleware hooks are keyword-dispatched; renaming breaks them.
-"src/fakeyou/debrief/debrief.py" = ["ARG001"]
-"src/fakeyou/foundation/greetings.py" = ["ARG002"]
-"src/fakeyou/memory/visual_hydrate.py" = ["ARG002"]
-"src/fakeyou/cli/calibrate.py" = ["ARG001"]
-"src/fakeyou/cli/voiceprint.py" = ["ARG001"]
+# H4e: broad catches live only in the observability containers by design.
+"src/fakeyou/observability/cleanup.py" = ["BLE001"]
+"src/fakeyou/observability/faults.py" = ["BLE001"]
+"src/fakeyou/observability/journal.py" = ["T201", "BLE001"]
 # D4 typer cut-over: command signatures mirror the CLI surface (framework-imposed).
 "src/fakeyou/cli/main.py" = ["PLR0913"]
-# P7 owns tests/evals shape; the P5 rules gate src only until then.
-"tests/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]
-"evals/*" = ["T201", "FBT", "ARG", "SLF", "C901", "PLR0913"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
@@ -129,16 +152,10 @@ DEP002 = ["langchain-anthropic", "langchain-google-genai", "langchain-openai"]
 python_version = "3.12"
 platform = "linux"
 strict = true
+enable_error_code = ["explicit-override"]
 untyped_calls_exclude = ["deepeval.models.base_model.DeepEvalBaseLLM"]
 files = ["src/fakeyou", "tests", "evals"]
-
-[[tool.mypy.overrides]]
-module = ["cloakbrowser", "cloakbrowser.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["sherpa_onnx", "sherpa_onnx.*"]
-ignore_missing_imports = true
+mypy_path = "typings"
 
 [tool.importlinter]
 root_package = "fakeyou"
@@ -171,8 +188,6 @@ modules = [
     "fakeyou.cli.voiceprint",
     "fakeyou.cli.worker",
 ]
-# memory-ingest reuses the diarize_run command handler until P6 splits handlers from services.
-ignore_imports = ["fakeyou.cli.memory -> fakeyou.cli.diarize"]
 
 [[tool.importlinter.contracts]]
 name = "domain packages respect the layer order"

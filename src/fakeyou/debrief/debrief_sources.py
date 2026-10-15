@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import TypeAdapter, ValidationError
 
+from fakeyou.audio.voice_activity import voice_speaker_name
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefValidationError, EvidenceRef
 from fakeyou.diarization.diarize_client import DiarizeError
@@ -286,3 +287,12 @@ def validate_draft(
             sources[reference.entry_id].kind == "participant" for reference in finding.evidence
         ):
             raise DebriefValidationError(ErrorCode.DEBRIEF_ADDRESSED_NEEDS_PARTICIPANT)
+
+
+def voice_speaker_labels(sources: Sequence[SourceEntry]) -> list[str]:
+    labels: list[str] = []
+    for entry in sources:
+        label = voice_speaker_name(entry.participant_id, entry.display_claim)
+        if label is not None and label not in labels:
+            labels.append(label)
+    return labels

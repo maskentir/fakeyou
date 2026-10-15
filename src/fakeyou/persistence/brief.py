@@ -1,5 +1,3 @@
-import hashlib
-import json
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -13,8 +11,10 @@ from pydantic import (
 )
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.foundation.invariants import SessionId
-from fakeyou.persistence.ingestion_status import write_atomically
+from fakeyou.config.identifiers import IdentifierField, SessionIdField
+from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.layout import MeetingDir
 
 BriefPermission = Literal[
     "explain_facts", "discuss_options", "ask_brief_questions", "meet_act", "meet_chat"
@@ -23,7 +23,6 @@ KnowledgeScope = Literal["brief_only", "persona_memory"]
 BriefText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
-CONTEXT_FILE_NAME = "meeting-context.json"
 MAX_BRIEF_BYTES = 64 * 1024
 MAX_CONTEXT_BYTES = 1024 * 1024
 
@@ -31,7 +30,7 @@ MAX_CONTEXT_BYTES = 1024 * 1024
 class BriefItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    id: SessionId
+    id: IdentifierField
     text: BriefText
 
 
@@ -39,9 +38,9 @@ class MeetingBrief(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     schema_version: Literal["meeting_brief/v1"]
-    owner_id: SessionId
-    twin_id: SessionId
-    meeting_id: SessionId
+    owner_id: SessionIdField
+    twin_id: SessionIdField
+    meeting_id: SessionIdField
     agenda: Annotated[tuple[BriefText, ...], Field(max_length=20)] = ()
     objectives: Annotated[tuple[BriefItem, ...], Field(max_length=20)] = ()
     approved_facts: Annotated[tuple[BriefItem, ...], Field(max_length=30)] = ()
@@ -67,9 +66,7 @@ class MeetingBrief(BaseModel):
 
 
 def brief_digest(brief: MeetingBrief) -> str:
-    payload = brief.model_dump(mode="json")
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return canonical_json_digest(brief.model_dump(mode="json"), compact=True)
 
 
 class MeetingContext(BaseModel):
@@ -105,7 +102,7 @@ def load_meeting_brief(path: Path, *, owner_id: str, twin_id: str, meeting_id: s
 
 
 def context_path(record_path: Path) -> Path:
-    return record_path.parent / CONTEXT_FILE_NAME
+    return MeetingDir.from_record_path(record_path).context
 
 
 def read_meeting_context(path: Path) -> MeetingContext | None:

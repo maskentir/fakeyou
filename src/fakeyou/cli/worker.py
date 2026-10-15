@@ -4,10 +4,11 @@ import os
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli._operator import OperatorIdentity
 from fakeyou.cli.output import emit_json
 from fakeyou.config.settings import Settings
+from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.worker.worker_backend import (
+    DockerTiming,
     DockerWorkerBackend,
     WorkerBackend,
     WorkerStartRequest,
@@ -19,7 +20,9 @@ def _backend(settings: Settings, backend: WorkerBackend | None) -> WorkerBackend
         backend
         if backend is not None
         else DockerWorkerBackend(
-            journal_dir=settings.paths.journal_dir, record_dir=settings.paths.record_dir
+            journal_dir=settings.paths.journal_dir,
+            record_dir=settings.paths.record_dir,
+            timing=DockerTiming(timeout_seconds=settings.worker.docker_timeout_seconds),
         )
     )
 

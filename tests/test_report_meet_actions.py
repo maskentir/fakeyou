@@ -1,14 +1,12 @@
 from datetime import timedelta
 from typing import Any
 
-from fakeyou.observability.report import (
-    build_session_report,
-)
-from fakeyou.orchestration.runtime import (
+from evals._budgets import (
     WRITE_ACTION_BUDGET_MAX_SECONDS,
     WRITE_ACTION_BUDGET_P95_SECONDS,
     WRITE_ACTION_STABILITY_MIN,
 )
+from fakeyou.observability.report import build_session_report
 from tests._report_support import START, answered_turn, row
 
 

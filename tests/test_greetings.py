@@ -10,7 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.foundation.greetings import create_greeting_middleware, neutral_greeting
-from tests.fakes import ToolCallingFakeModel
+from tests._conversation_fakes import ToolCallingFakeModel
 
 CASES: dict[str, Any] = json.loads(
     (Path(__file__).parent / "fixtures" / "greeting-cases.json").read_text(encoding="utf-8")

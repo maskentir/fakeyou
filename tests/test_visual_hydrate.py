@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -13,11 +13,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from PIL import Image
 
 import fakeyou.orchestration.assembly as assembly_module
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
     StreamingLangGraphResponder,
-    _request_messages,
+    request_messages,
 )
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.greetings import create_greeting_middleware
@@ -35,7 +36,8 @@ from fakeyou.memory.visual_hydrate import (
 from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
-from tests.fakes import ToolCallingFakeModel, make_graphiti
+from tests._conversation_fakes import ToolCallingFakeModel
+from tests._memory_fakes import make_graphiti
 
 AT = "2026-10-09T03:10:00+00:00"
 SPOKEN_AT = "2026-10-09T03:12:00+00:00"
@@ -96,7 +98,7 @@ def participant(text: str, message_id: str, refs: tuple[str, ...] = ()) -> Human
         speaker_evidence_id=None,
         visual_refs=refs,
     )
-    (message,) = _request_messages([event])
+    (message,) = request_messages([event])
     return message
 
 
@@ -122,6 +124,7 @@ class RecordingSaver(InMemorySaver):
         super().__init__()
         self.dumps: list[str] = []
 
+    @override
     def put(
         self,
         config: RunnableConfig,
@@ -132,6 +135,7 @@ class RecordingSaver(InMemorySaver):
         self.dumps.append(json.dumps(checkpoint, default=str))
         return super().put(config, checkpoint, metadata, new_versions)
 
+    @override
     async def aput(
         self,
         config: RunnableConfig,
@@ -410,6 +414,42 @@ async def test_prefetch_appends_latest_caption() -> None:
     )
 
 
+async def test_failing_visual_caption_is_recorded_as_fault_and_journal() -> None:
+    from fakeyou.observability.diagnostics import Diagnostics
+    from fakeyou.observability.faults import FaultReporter
+    from tests._persistence_fakes import RecordingJournal
+
+    async def failing(_ref: str) -> str:
+        raise RuntimeError("visual unavailable")
+
+    journal = RecordingJournal()
+    reporter = FaultReporter(journal=journal)
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Unknown.")], seen=[])
+    guarded = create_meeting_agent(
+        model,
+        checkpointer=InMemorySaver(),
+        persona="PERSONA",
+        middleware=[
+            create_memory_prefetch_middleware(
+                make_graphiti(),
+                group_id="team_alpha",
+                diag=Diagnostics(faults=reporter, journal=journal),
+                visual_caption=failing,
+            )
+        ],
+    )
+    result = await turn(
+        guarded, participant("What shows revenue?", "c3", ("frame-a",)), "caption-traced"
+    )
+
+    assert result["messages"][-1].content == "Unknown."
+    [event] = journal.events("visual_caption_failed")
+    assert event["source"] == "memory"
+    assert event["stage"] == "caption"
+    assert event["error_type"] == "RuntimeError"
+    assert reporter.total() >= 1
+
+
 async def test_streaming_unchanged(tmp_path: Path) -> None:
     store, frames = stored_frames(tmp_path, 2)
     captioner, visual = captioner_for(["Frame caption."])
@@ -562,7 +602,10 @@ async def test_assembly_registers_hydrate_after_prefetch(
 ) -> None:
     created: dict[str, Any] = {}
 
-    def fake_agent(model: Any, *, tools: Any = (), checkpointer: Any = None, **kwargs: Any) -> Any:
+    def fake_agent(
+        _model: Any, *, tools: Any = (), _checkpointer: Any = None, **kwargs: Any
+    ) -> Any:
+        del tools
         created["middleware"] = [type(item).__name__ for item in kwargs["middleware"]]
         return SimpleNamespace(name="agent")
 
@@ -585,7 +628,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
     config = SessionConfig(
         owner_id=profile.owner_id,
         twin_id=profile.twin_id,
-        meeting_id="visual-wiring",
+        meeting_id=SessionId("visual-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Visual Twin",
     )
@@ -600,7 +643,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
     names = created["middleware"]
@@ -610,7 +653,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
         wired,
         config,
         agent=AgentWiring(profile=profile, graphiti=make_graphiti()),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
     assert "VisualHydrateMiddleware" not in created["middleware"]

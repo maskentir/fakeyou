@@ -810,11 +810,13 @@
   window.__fakeyouStreamCapture = {
     drain,
     pending,
-    attachTestTones,
-    setTestTone,
-    releaseTestTrack,
-    stallTestSlot,
-    endTestTrack,
-    poisonTestSlot,
   };
+  if (window.__fakeyouTestHooks === true) {
+    window.__fakeyouStreamCapture.attachTestTones = attachTestTones;
+    window.__fakeyouStreamCapture.setTestTone = setTestTone;
+    window.__fakeyouStreamCapture.releaseTestTrack = releaseTestTrack;
+    window.__fakeyouStreamCapture.stallTestSlot = stallTestSlot;
+    window.__fakeyouStreamCapture.endTestTrack = endTestTrack;
+    window.__fakeyouStreamCapture.poisonTestSlot = poisonTestSlot;
+  }
 })();

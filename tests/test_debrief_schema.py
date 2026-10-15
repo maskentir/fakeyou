@@ -323,7 +323,7 @@ def test_should_expose_validation_error_as_value_error() -> None:
     assert str(error) == "invalid evidence reference"
 
 
-def test_should_default_correction_digest_for_legacy_reports(
+def test_should_default_correction_digest_for_reports_without_one(
     report_payload: dict[str, Any],
 ) -> None:
     report = DebriefReport.model_validate(report_payload)

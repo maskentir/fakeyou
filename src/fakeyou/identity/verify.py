@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fakeyou.foundation.numbers import finite_float
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import Fault
 
@@ -38,14 +38,6 @@ class VerifiedDecision:
     margin: float
 
 
-def _artifact_number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if not math.isfinite(value):
-        return None
-    return float(value)
-
-
 def _artifact_text(value: Any) -> str | None:
     if not isinstance(value, str) or not value:
         return None
@@ -72,10 +64,10 @@ def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
         return None
     if not isinstance(raw, dict):
         return None
-    theta = _artifact_number(raw.get("theta_llr"))
-    floor = _artifact_number(raw.get("margin_floor"))
-    slope = _artifact_number(raw.get("platt_a"))
-    bias = _artifact_number(raw.get("platt_b"))
+    theta = finite_float(raw.get("theta_llr"))
+    floor = finite_float(raw.get("margin_floor"))
+    slope = finite_float(raw.get("platt_a"))
+    bias = finite_float(raw.get("platt_b"))
     version = _artifact_text(raw.get("platt_version"))
     report = _artifact_text(raw.get("report_id"))
     model = _artifact_text(raw.get("model_version"))
@@ -94,7 +86,7 @@ def load_calibration_artifact(path: str | Path) -> CalibrationArtifact | None:
         return None
     cohort: list[float] = []
     for entry in cohort_raw:
-        number = _artifact_number(entry)
+        number = finite_float(entry)
         if number is None:
             return None
         cohort.append(number)

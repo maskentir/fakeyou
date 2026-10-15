@@ -1,16 +1,23 @@
 import asyncio
 import hashlib
 import io
-import math
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal, Protocol, override
 
 from PIL import Image
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import FloatRect
 
-from fakeyou.observability.journal import Journal
+from fakeyou.catalog.errors import FakeYouError
+from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.numbers import finite_float, real_number
+from fakeyou.foundation.polling import PageEvaluator, PollingLoop, PollSchedule
+from fakeyou.observability.faults import ConsumerSink, create_poll_guard
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.persistence.files import write_atomically
 from fakeyou.visual.visual_caption import VisualCaption, VisualCaptioner
 from fakeyou.visual.visual_store import (
     VISUAL_FRAME_SUFFIX,
@@ -102,32 +109,37 @@ def _scan_shows_presenting(scan: Any) -> bool:
     )
 
 
-def _content_box(found: Any) -> dict[str, float] | None:
+class VisualPage(PageEvaluator, Protocol):
+    async def screenshot(
+        self,
+        *,
+        type: Literal["jpeg", "png", "webp"] | None = None,
+        quality: int | None = None,
+        clip: FloatRect | None = None,
+    ) -> bytes: ...
+
+
+def _content_box(found: Any) -> FloatRect | None:
     if not isinstance(found, dict):
         return None
     values: dict[str, float] = {}
     for key in ("x", "y", "width", "height"):
-        value = found.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return None
-        number = float(value)
-        if not math.isfinite(number):
+        number = finite_float(found.get(key))
+        if number is None:
             return None
         values[key] = number
     if values["x"] < 0 or values["y"] < 0:
         return None
     if values["width"] < VISUAL_MIN_CLIP_WIDTH or values["height"] < VISUAL_MIN_CLIP_HEIGHT:
         return None
-    return values
+    return FloatRect(x=values["x"], y=values["y"], width=values["width"], height=values["height"])
 
 
 def _scan_page_ms(scan: Any) -> float:
     if isinstance(scan, dict):
-        value = scan.get("page_ms")
-        if isinstance(value, bool):
-            pass
-        elif isinstance(value, (int, float)) and value > 0:
-            return float(value)
+        value = real_number(scan.get("page_ms"))
+        if value is not None and value > 0:
+            return value
     return datetime.now(UTC).timestamp() * 1000.0
 
 
@@ -145,13 +157,30 @@ def _encode_thumb(image: Image.Image) -> bytes:
     return _encode_jpeg(thumb)
 
 
-@dataclass(frozen=True, slots=True)
-class PollSchedule:
-    monotonic: Callable[[], float] = time.monotonic
-    interval_seconds: float = VISUAL_POLL_INTERVAL_SECONDS
+def prepare_frame(raw: bytes, page_ms: float, directory: Path) -> tuple[VisualFrame, int]:
+    image = Image.open(io.BytesIO(raw)).convert("RGB")
+    jpeg = _encode_jpeg(image)
+    thumb = _encode_thumb(image)
+    digest = hashlib.sha256(jpeg).hexdigest()
+    frame_id = f"{int(page_ms):013d}-{digest[:8]}"
+    captured_at = datetime.now(UTC).isoformat()
+    frame_path = directory / f"{frame_id}{VISUAL_FRAME_SUFFIX}"
+    thumb_path = directory / f"{frame_id}{VISUAL_THUMB_SUFFIX}"
+    write_atomically(frame_path, jpeg)
+    write_atomically(thumb_path, thumb)
+    frame = VisualFrame(
+        frame_id=frame_id,
+        captured_page_ms=page_ms,
+        captured_at=captured_at,
+        sha256=digest,
+        path=str(frame_path),
+        thumb_path=str(thumb_path),
+        dhash=dhash_image(jpeg),
+    )
+    return frame, len(jpeg)
 
 
-DEFAULT_POLL_SCHEDULE = PollSchedule()
+DEFAULT_POLL_SCHEDULE = PollSchedule(interval_seconds=VISUAL_POLL_INTERVAL_SECONDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,52 +192,43 @@ class CaptionSink:
 DEFAULT_CAPTION_SINK = CaptionSink()
 
 
-class VisualObserver:
+class VisualObserver(PollingLoop):
+    _COMPENSATE_SLEEP = True
+
     def __init__(
         self,
-        page: Any,
+        page: VisualPage,
         store: VisualStore,
         *,
-        journal: Journal | None = None,
         schedule: PollSchedule = DEFAULT_POLL_SCHEDULE,
         captions: CaptionSink = DEFAULT_CAPTION_SINK,
+        sinks: ConsumerSink | None = None,
     ) -> None:
+        super().__init__(
+            poll_interval_seconds=schedule.interval_seconds,
+            monotonic=schedule.monotonic,
+            guard=create_poll_guard(sinks, source="browser", operation="visual_observer"),
+        )
         self._page = page
         self._store = store
-        self._journal = journal
-        self._monotonic = schedule.monotonic
-        self._poll_interval = schedule.interval_seconds
+        self._journal = sinks.journal if sinks is not None else None
         self._captioner = captions.captioner
         self._on_caption = captions.on_caption
         self._hits = 0
         self._presenting = False
-        self._task: asyncio.Task[None] | None = None
         self._eager: set[asyncio.Task[None]] = set()
-        self._closed = False
-        self.polls = 0
-        self.poll_failures = 0
-        self.last_poll_error: str | None = None
         self.caption_failures = 0
         self.last_caption_error: str | None = None
+        self.capture_failures = 0
+        self.last_capture_error: str | None = None
 
     @property
     def presenting(self) -> bool:
         return self._presenting
 
-    async def start(self) -> None:
-        if self._task is not None or self._closed:
-            return
-        self._task = asyncio.create_task(self._poll_loop())
-
+    @override
     async def close(self) -> None:
-        task, self._task = self._task, None
-        self._closed = True
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await super().close()
         eager, self._eager = set(self._eager), set()
         for pending in eager:
             pending.cancel()
@@ -222,10 +242,12 @@ class VisualObserver:
 
     async def poll(self) -> VisualFrame | None:
         try:
-            scan = await self._page.evaluate(VISUAL_SCAN_JS)
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                scan = await self._page.evaluate(VISUAL_SCAN_JS)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (PlaywrightError, TimeoutError) as error:
+            self._record_capture_failure(type(error).__name__, stage="scan")
             self._hits = 0
             self._presenting = False
             return None
@@ -239,19 +261,10 @@ class VisualObserver:
             return None
         return await self._capture(scan)
 
-    async def _poll_loop(self) -> None:
-        while True:
-            started = self._monotonic()
-            self.polls += 1
-            try:
-                await self.poll()
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                self.poll_failures += 1
-                self.last_poll_error = type(error).__name__
-            elapsed = self._monotonic() - started
-            await asyncio.sleep(max(0.0, self._poll_interval - elapsed))
+    @override
+    async def _poll_once(self) -> None:
+        self.polls += 1
+        await self.poll()
 
     async def _caption_and_emit(self, frame: VisualFrame) -> None:
         captioner = self._captioner
@@ -261,7 +274,7 @@ class VisualObserver:
             caption = await captioner.caption_frame(frame)
         except asyncio.CancelledError:
             raise
-        except Exception as error:
+        except (OSError, ProviderFault, RuntimeError, FakeYouError) as error:
             self._record_caption_failure(type(error).__name__, stage="caption")
             return
         if caption is None:
@@ -271,8 +284,19 @@ class VisualObserver:
             return
         try:
             callback(frame, caption)
-        except Exception as error:
+        except (OSError, RuntimeError) as error:
             self._record_caption_failure(type(error).__name__, stage="emit")
+
+    def _record_capture_failure(self, error_type: str, *, stage: str) -> None:
+        self.capture_failures += 1
+        self.last_capture_error = error_type
+        if self._journal is not None:
+            self._journal.record(
+                "visual_capture_failed",
+                source="browser",
+                stage=stage,
+                error_type=error_type,
+            )
 
     def _record_caption_failure(self, error_type: str, *, stage: str) -> None:
         self.caption_failures += 1
@@ -291,48 +315,44 @@ class VisualObserver:
         task = asyncio.create_task(self._caption_and_emit(frame))
         self._eager.add(task)
         task.add_done_callback(self._eager.discard)
+        task.add_done_callback(self._eager_finished)
+
+    def _eager_finished(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            return
+        self._record_caption_failure(type(error).__name__, stage="eager")
 
     async def _capture(self, scan: Any) -> VisualFrame | None:
         started = self._monotonic()
         try:
-            found = await self._page.evaluate(VISUAL_CONTENT_BOX_JS)
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                found = await self._page.evaluate(VISUAL_CONTENT_BOX_JS)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (PlaywrightError, TimeoutError):
             found = None
         box = _content_box(found)
         try:
-            if box is not None:
-                raw = await self._page.screenshot(
-                    clip=box, type="jpeg", quality=VISUAL_JPEG_QUALITY
-                )
-                capture = "clip"
-            else:
-                raw = await self._page.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
-                capture = "full"
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                if box is not None:
+                    raw = await self._page.screenshot(
+                        clip=box, type="jpeg", quality=VISUAL_JPEG_QUALITY
+                    )
+                    capture = "clip"
+                else:
+                    raw = await self._page.screenshot(type="jpeg", quality=VISUAL_JPEG_QUALITY)
+                    capture = "full"
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (PlaywrightError, TimeoutError) as error:
+            self._record_capture_failure(type(error).__name__, stage="screenshot")
             return None
-        image = Image.open(io.BytesIO(bytes(raw))).convert("RGB")
-        jpeg = _encode_jpeg(image)
-        thumb = _encode_thumb(image)
-        digest = hashlib.sha256(jpeg).hexdigest()
         page_ms = _scan_page_ms(scan)
-        frame_id = f"{int(page_ms):013d}-{digest[:8]}"
-        captured_at = datetime.now(UTC).isoformat()
-        frame_path = self._store.directory / f"{frame_id}{VISUAL_FRAME_SUFFIX}"
-        thumb_path = self._store.directory / f"{frame_id}{VISUAL_THUMB_SUFFIX}"
-        frame_path.write_bytes(jpeg)
-        thumb_path.write_bytes(thumb)
-        frame = VisualFrame(
-            frame_id=frame_id,
-            captured_page_ms=page_ms,
-            captured_at=captured_at,
-            sha256=digest,
-            path=str(frame_path),
-            thumb_path=str(thumb_path),
-            dhash=dhash_image(jpeg),
+        frame, jpeg_bytes = await asyncio.to_thread(
+            prepare_frame, bytes(raw), page_ms, self._store.directory
         )
         duplicates = self._store.duplicates_suppressed
         append_visual(self._store, frame)
@@ -343,9 +363,9 @@ class VisualObserver:
             self._journal.record(
                 "visual_captured",
                 source="browser",
-                visual_id=frame_id,
+                visual_id=frame.frame_id,
                 kind=VISUAL_KIND,
-                chars=len(jpeg),
+                chars=jpeg_bytes,
                 duration_ms=(self._monotonic() - started) * 1000,
                 capture=capture,
             )

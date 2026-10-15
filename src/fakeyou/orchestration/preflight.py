@@ -7,10 +7,10 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.observability.provider_faults import trim_detail
+from fakeyou.observability.provider_faults import safe_endpoint, trim_detail
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +63,10 @@ async def probe_endpoint(
     parts = _endpoint_parts(endpoint)
     if parts is None:
         return ProbeResult(
-            host=_safe_endpoint(endpoint), ok=False, latency_ms=0.0, detail="invalid endpoint"
+            host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+            ok=False,
+            latency_ms=0.0,
+            detail="invalid endpoint",
         )
     host, port, secure, verify_certificate = parts
     try:
@@ -74,7 +77,7 @@ async def probe_endpoint(
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
         server_name = host if secure and _is_dns_name(host) else None
-        operation = _connect_and_close(host, port, context, server_name)
+        operation = connect_and_close(host, port, context, server_name)
         if timeout_seconds is None:
             await operation
         else:
@@ -82,18 +85,24 @@ async def probe_endpoint(
                 await operation
     except asyncio.CancelledError:
         raise
-    except BaseException as error:
+    except (OSError, TimeoutError) as error:
         detail = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
         return ProbeResult(
-            host=_safe_endpoint(endpoint), ok=False, latency_ms=_elapsed(started), detail=detail
+            host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+            ok=False,
+            latency_ms=_elapsed(started),
+            detail=detail,
         )
     detail = "tls handshake ok" if secure else "tcp connect ok"
     return ProbeResult(
-        host=_safe_endpoint(endpoint), ok=True, latency_ms=_elapsed(started), detail=detail
+        host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+        ok=True,
+        latency_ms=_elapsed(started),
+        detail=detail,
     )
 
 
-async def _connect_and_close(
+async def connect_and_close(
     host: str, port: int, context: ssl.SSLContext | None, server_name: str | None
 ) -> None:
     reader, writer = await asyncio.open_connection(
@@ -101,7 +110,7 @@ async def _connect_and_close(
     )
     del reader
     writer.close()
-    with suppress(Exception):
+    with suppress(OSError):
         await writer.wait_closed()
 
 
@@ -119,25 +128,6 @@ def _elapsed(started: float) -> float:
 
 def _trim(detail: str, limit: int = 300) -> str:
     return (trim_detail(detail) or "")[:limit]
-
-
-def _safe_endpoint(endpoint: str) -> str:
-    if not isinstance(endpoint, str):
-        return "<invalid endpoint>"
-    try:
-        parsed = urlsplit(endpoint)
-        if parsed.hostname is None:
-            return trim_detail(endpoint) or "<invalid endpoint>"
-        host = parsed.hostname
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        netloc = host
-        if parsed.port is not None:
-            netloc = f"{netloc}:{parsed.port}"
-        safe = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
-        return trim_detail(safe) or "<invalid endpoint>"
-    except (ValueError, UnicodeError):
-        return trim_detail(endpoint) or "<invalid endpoint>"
 
 
 def _collect_results(

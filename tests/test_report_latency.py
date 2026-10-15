@@ -4,6 +4,7 @@ from pathlib import Path
 from fakeyou.observability.report import (
     build_session_report,
     read_journal,
+    read_journal_with_corrupt,
 )
 from tests._report_support import answered_turn, row
 
@@ -198,3 +199,18 @@ def test_report_ignores_speech_that_started_before_the_interrupted_playback() ->
     ]
 
     assert build_session_report(rows)["interruptions"]["speech_to_stop_seconds"]["count"] == 0
+
+
+def test_read_journal_with_corrupt_counts_unparsable_lines(tmp_path: Path) -> None:
+    base = tmp_path / "m1.jsonl"
+    base.write_text(
+        json.dumps(row(0, "first")) + "\nnot json\n" + json.dumps(row(1, "second")) + "\n",
+        encoding="utf-8",
+    )
+    Path(f"{base}.1").write_text("also not json\n", encoding="utf-8")
+
+    rows, corrupt = read_journal_with_corrupt(base)
+
+    assert [entry["event"] for entry in rows] == ["first", "second"]
+    assert corrupt == 2
+    assert [entry["event"] for entry in read_journal(base)] == ["first", "second"]

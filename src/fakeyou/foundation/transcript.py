@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from langchain_core.messages import BaseMessage
 from pipecat.frames.frames import TranscriptionFrame
 
+from fakeyou.foundation.timeparse import assume_utc, parse_iso_datetime
+
 
 @dataclass(frozen=True, slots=True)
 class TranscriptEvent:
@@ -62,13 +64,10 @@ def transcript_event(
 
 
 def _merge_stamp(timestamp: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(timestamp)
-    except ValueError:
+    parsed = parse_iso_datetime(timestamp)
+    if parsed is None:
         return datetime.min.replace(tzinfo=UTC)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
+    return assume_utc(parsed)
 
 
 def transcript_stamp(event: TranscriptEvent) -> datetime:

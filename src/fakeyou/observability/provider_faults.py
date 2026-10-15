@@ -1,7 +1,8 @@
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import get_args
+from typing import Any, get_args
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
@@ -23,10 +24,14 @@ ERROR_CATEGORY_KINDS: dict[str, tuple[ProviderFaultKind, bool]] = {
 
 MAX_DETAIL_CHARS = 300
 _FAULT_KINDS = frozenset(get_args(ProviderFaultKind))
-_SECRET = re.compile(r"(?i)(bearer\s+|api[_-]?key[=:]\s*|token[=:]\s*)[^\s,;]+")
-_URL = re.compile(r"https?://[^\s]+")
+_SECRET = re.compile(
+    r"(?i)(bearer\s+|api[_-]?key[=:]\s*|token[=:]\s*|x-goog-api-key\s*[:=]\s*)[^\s,;]+"
+)
+_BASIC_AUTH = re.compile(r"(Basic\s+)[A-Za-z0-9+/=]{8,}")
+_BARE_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")
+_URL = re.compile(r"(?i)[a-z][a-z0-9+.-]*://\S+")
 _JSON_SECRET = re.compile(
-    r'(?i)("(?:api[_-]?key|authorization|token|password|secret|body)"\s*:\s*)[^,}]+'
+    r'(?i)("(?:api[_-]?key|authorization|token|password|secret|body|x-goog-api-key)"\s*:\s*)[^,}]+'
 )
 
 
@@ -35,8 +40,28 @@ def trim_detail(detail: str | None) -> str | None:
         return None
     safe = _URL.sub("<url>", detail)
     safe = _SECRET.sub(r"\1<redacted>", safe)
+    safe = _BASIC_AUTH.sub(r"\1<redacted>", safe)
+    safe = _BARE_KEY.sub("<redacted>", safe)
     safe = _JSON_SECRET.sub(r"\1<redacted>", safe)
     return safe[:MAX_DETAIL_CHARS] or None
+
+
+def safe_endpoint(endpoint: Any) -> str:
+    if not isinstance(endpoint, str):
+        return "<invalid endpoint>"
+    try:
+        parsed = urlsplit(endpoint)
+        if parsed.hostname is None:
+            return endpoint
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = host
+        if parsed.port is not None:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    except (ValueError, UnicodeError):
+        return endpoint
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +157,9 @@ def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
     )
 
 
+_PROGRAMMING_ERRORS = (AssertionError, AttributeError, IndexError, KeyError, TypeError)
+
+
 def classify_exception(
     source: Subsystem, error: BaseException, *, operation: str | None = None
 ) -> ProviderFault:
@@ -139,6 +167,12 @@ def classify_exception(
         raise error
     if isinstance(error, ProviderFault):
         return error
+    if isinstance(error, _PROGRAMMING_ERRORS):
+        fault = ProviderFault(
+            source, "unknown", evidence=FaultEvidence(detail=f"internal:{type(error).__name__}")
+        )
+        fault.operation = operation
+        return fault
     fault = _classify(source, error)
     fault.operation = operation
     return fault
@@ -149,7 +183,7 @@ def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
     if categorized is not None:
         return categorized
     if isinstance(error, FakeYouError):
-        return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=str(error)))
+        return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=error.code.value))
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):

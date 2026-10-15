@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import fakeyou.orchestration.assembly as assembly_module
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import VISUAL_GUIDANCE
 from fakeyou.conversation.session import SessionConfig
@@ -13,7 +14,8 @@ from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
-from tests.fakes import ToolCallingFakeModel, make_graphiti
+from tests._conversation_fakes import ToolCallingFakeModel
+from tests._memory_fakes import make_graphiti
 
 
 def _wired_settings(settings: Settings) -> Settings:
@@ -36,14 +38,16 @@ def _config(profile: PersonaProfile) -> SessionConfig:
     return SessionConfig(
         owner_id=profile.owner_id,
         twin_id=profile.twin_id,
-        meeting_id="visual-wiring",
+        meeting_id=SessionId("visual-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Visual Twin",
     )
 
 
 def _capture(created: dict[str, Any]) -> Any:
-    def fake_agent(model: Any, *, tools: Any = (), checkpointer: Any = None, **kwargs: Any) -> Any:
+    def fake_agent(
+        _model: Any, *, tools: Any = (), _checkpointer: Any = None, **kwargs: Any
+    ) -> Any:
         created["tools"] = [tool.name for tool in tools]
         created["middleware"] = [type(item).__name__ for item in kwargs["middleware"]]
         created["persona"] = kwargs["persona"]
@@ -71,7 +75,7 @@ async def test_assembly_registers_describe_frame_when_visual_wired(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -93,7 +97,7 @@ async def test_assembly_registers_describe_frame_without_profile(
         wired,
         _config(_profile(settings)),
         agent=AgentWiring(visual_store=store, visual_captioner=captioner),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -123,7 +127,7 @@ async def test_assembly_omits_visual_tooling_when_flag_off(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         pass
 

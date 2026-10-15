@@ -3,12 +3,16 @@ from asyncio.subprocess import DEVNULL, PIPE
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn, Protocol
+from functools import partial
+from typing import Any, Literal, Protocol
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import PCM_CHANNELS, PCM_FORMAT
+from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.taxonomy import Subsystem
+from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 
@@ -67,7 +71,7 @@ async def _cleanup_process(proc: asyncio.subprocess.Process) -> None:
     with suppress(ProcessLookupError):
         proc.kill()
     if proc.stdin is not None:
-        with suppress(Exception):
+        with suppress(OSError):
             proc.stdin.close()
     try:
         async with asyncio.timeout(CLEANUP_TIMEOUT_SECONDS):
@@ -130,7 +134,9 @@ def create_paplay_stream_runner(*, sink: str, rate: int) -> PlayStream:
     return play
 
 
-def create_pactl_muter(*, sink: str) -> SetMuted:
+def create_pactl_muter(
+    *, sink: str, timeout_seconds: float = DEFAULTS.audio.pactl_timeout_seconds
+) -> SetMuted:
     async def apply(*, muted: bool) -> None:
         value = "1" if muted else "0"
         try:
@@ -145,11 +151,14 @@ def create_pactl_muter(*, sink: str) -> SetMuted:
         except OSError as error:
             raise PlaybackError(f"pactl is unavailable: {error}") from error
         try:
-            _, stderr = await proc.communicate()
+            async with asyncio.timeout(timeout_seconds):
+                _, stderr = await proc.communicate()
             if proc.returncode != 0:
                 raise PlaybackError(
                     f"pactl sink mute failed: {stderr.decode(errors='replace')[:200]}"
                 )
+        except TimeoutError as error:
+            raise PlaybackError(f"pactl sink mute timed out after {timeout_seconds}s") from error
         finally:
             if proc.returncode is None:
                 await _cleanup_process(proc)
@@ -260,19 +269,21 @@ class PlaybackEngine:
             and not self._closed
         )
 
-    def _translate_stream_error(self, error: Exception) -> NoReturn:
-        fault = classify_exception("tts", error)
-        if fault is error:
-            raise error
-        raise fault from error
-
     async def _close_stream(self, chunks: AsyncIterator[bytes] | None) -> None:
-        if chunks is None:
-            return
-        close = getattr(chunks, "aclose", None)
-        if close is not None:
-            with suppress(Exception):
-                await close()
+        if isinstance(chunks, SupportsAclose):
+            await close_safely(
+                chunks.aclose, source="playback", operation="close_stream", faults=self._faults
+            )
+
+    async def _paced_chunks(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        iterator = chunks.__aiter__()
+        while True:
+            try:
+                async with asyncio.timeout(self._synth_timeout_seconds):
+                    chunk = await anext(iterator)
+            except StopAsyncIteration:
+                return
+            yield chunk
 
     async def _retryable_stream(
         self,
@@ -290,19 +301,22 @@ class PlaybackEngine:
                 )
                 if not hasattr(chunks, "__aiter__"):
                     raise TypeError("stream() must return an async iterator")
-                async with asyncio.timeout(self._synth_timeout_seconds):
-                    async for chunk in chunks:
-                        if chunk:
-                            emitted = True
-                        yield chunk
-                return
+                async for chunk in self._paced_chunks(chunks):
+                    if chunk:
+                        emitted = True
+                    yield chunk
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 if self._should_retry(error, attempt, emitted=emitted, generation=generation):
                     self._record_retry(streaming=True)
                     continue
-                self._translate_stream_error(error)
+                fault = classify_exception("tts", error)
+                if fault is error:
+                    raise
+                raise fault from error
+            else:
+                return
             finally:
                 await self._close_stream(chunks)
 
@@ -363,11 +377,14 @@ class PlaybackEngine:
         await self._mute()
 
     async def _close_audio(self, audio: AsyncIterator[bytes]) -> None:
-        close = getattr(audio, "aclose", None)
-        if close is not None:
-            with suppress(Exception):
-                async with asyncio.timeout(self._cleanup_timeout_seconds):
-                    await close()
+        if isinstance(audio, SupportsAclose):
+            await close_safely(
+                audio.aclose,
+                source="playback",
+                operation="close_audio",
+                faults=self._faults,
+                timeout_seconds=self._cleanup_timeout_seconds,
+            )
 
     async def _consume_audio(self, audio: AsyncIterator[bytes]) -> None:
         try:
@@ -393,18 +410,30 @@ class PlaybackEngine:
             worker.cancel()
             with suppress(asyncio.CancelledError):
                 await worker
-        with suppress(Exception):
-            await self._synthesizer.aclose()
+        await close_safely(self._synthesizer.aclose, source="tts", faults=self._faults)
 
     def _ensure_worker(self) -> None:
         if self._worker is None or self._worker.done():
             self._worker = asyncio.create_task(self._run())
+            self._worker.add_done_callback(self._check_worker)
+
+    def _check_worker(self, worker: asyncio.Task[None]) -> None:
+        if worker.cancelled():
+            return
+        error = worker.exception()
+        if error is not None:
+            self._record_fault("playback", error)
+            self._emit("playback_failed", "", f"{type(error).__name__}: {error}")
 
     def _emit(self, kind: PlaybackEventKind, text: str, detail: str = "") -> None:
         if self._on_event is None:
             return
-        with suppress(Exception):
-            self._on_event(PlaybackEvent(kind, text, detail))
+        guard_observer(
+            partial(self._on_event, PlaybackEvent(kind, text, detail)),
+            sink=ConsumerSink(faults=self._faults, journal=self._journal),
+            source="playback",
+            detail="playback_event",
+        )
 
     def _record_fault(self, source: Subsystem, error: BaseException) -> None:
         if self._faults is None:
@@ -428,7 +457,7 @@ class PlaybackEngine:
             await self._set_muted(muted=True)
         except asyncio.CancelledError:
             raise
-        except Exception as error:
+        except (OSError, TimeoutError, PlaybackError) as error:
             self._emit("mute_failed", "", f"{type(error).__name__}: {error}")
             self._record_fault("playback", error)
             return
@@ -442,7 +471,7 @@ class PlaybackEngine:
             await self._set_muted(muted=False)
         except asyncio.CancelledError:
             raise
-        except Exception as error:
+        except (OSError, TimeoutError, PlaybackError) as error:
             self._emit("mute_failed", "", f"{type(error).__name__}: {error}")
             self._record_fault("playback", error)
         self._muted = False
@@ -485,7 +514,7 @@ class PlaybackEngine:
             if self._must_raise_cancel(play_task):
                 raise
             self._emit("playback_dropped", text, "interrupted")
-        except Exception as error:
+        except (OSError, PlaybackError, ProviderFault) as error:
             self._emit("playback_failed", text, f"{type(error).__name__}: {error}")
             self._record_fault("playback", error)
         else:
@@ -511,12 +540,14 @@ class PlaybackEngine:
             if done.cancelled():
                 await self._close_audio(audio)
                 continue
+            unmuted = False
             try:
                 await self._unmute()
-            except BaseException:
-                await self._close_audio(audio)
-                self._settle_done(done)
-                raise
+                unmuted = True
+            finally:
+                if not unmuted:
+                    await self._close_audio(audio)
+                    self._settle_done(done)
             if generation != self._generation or done.cancelled() or self._closed:
                 await self._drop_stale(audio, text, done)
                 continue

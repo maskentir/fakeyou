@@ -1,6 +1,9 @@
+import asyncio
 import inspect
-from typing import Any
+import json
+from typing import Any, override
 
+import httpx2
 import pytest
 from graphiti_core import Graphiti
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
@@ -14,9 +17,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from neo4j.exceptions import ConstraintError
 from neo4j.time import DateTime as Neo4jDateTime
-from pipecat.frames.frames import Frame, TranscriptionFrame
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.frames.frames import EndFrame, Frame, TranscriptionFrame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
+from pipecat.workers.runner import WorkerRunner
+from websockets.asyncio.server import ServerConnection, serve
 
 from fakeyou.config.settings import STTSettings
 
@@ -58,25 +65,46 @@ def test_meta_stt_exposes_keywords_language_bias_and_mode() -> None:
     assert STTSettings.model_fields["model"].default == META_STT_MODEL
 
 
-async def test_meta_stt_drops_diarization_speaker_labels() -> None:
-    frames: list[TranscriptionFrame] = []
-    stt = MetaSTTService(api_key="key", sample_rate=16000)
+class TranscriptCollector(FrameProcessor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finals: list[TranscriptionFrame] = []
+        self.received = asyncio.Event()
 
-    async def collect(frame: Frame, direction: FrameDirection | None = None) -> None:
+    @override
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame):
-            frames.append(frame)
+            self.finals.append(frame)
+            self.received.set()
+        await self.push_frame(frame, direction)
 
-    async def no_metrics(*_args: Any, **_kwargs: Any) -> None:
-        return None
 
-    stt_any: Any = stt
-    stt_any.push_frame = collect
-    stt_any.emit_stt_usage_metrics = no_metrics
-    stt_any._trace_transcription = no_metrics
-    await stt._handle_message({"type": "speaker", "label": "A"})
-    await stt._handle_message({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
+async def test_meta_stt_drops_diarization_speaker_labels() -> None:
+    async def meta_server(connection: ServerConnection) -> None:
+        await connection.recv()
+        await connection.send(json.dumps({"sessionId": "s1"}))
+        await connection.send(json.dumps({"type": "speaker", "label": "A"}))
+        await connection.send(
+            json.dumps({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
+        )
+        await connection.wait_closed()
 
-    [frame] = frames
+    async with serve(meta_server, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        stt = MetaSTTService(api_key="key", url=f"ws://127.0.0.1:{port}", sample_rate=16000)
+        collector = TranscriptCollector()
+        worker = PipelineWorker(Pipeline([stt, collector]), cancel_on_idle_timeout=False)
+
+        async def end_after_transcript() -> None:
+            await asyncio.wait_for(collector.received.wait(), timeout=5)
+            await worker.queue_frame(EndFrame())
+
+        runner = WorkerRunner()
+        await runner.add_workers(worker)
+        await asyncio.gather(runner.run(), end_after_transcript())
+
+    [frame] = collector.finals
     assert frame.text == "Hello."
     assert frame.result is not None
     assert "speaker" not in frame.result
@@ -84,7 +112,7 @@ async def test_meta_stt_drops_diarization_speaker_labels() -> None:
 
 
 def test_tool_error_middleware_filters_by_tool_name() -> None:
-    middleware = ToolErrorMiddleware(lambda error, request: "unavailable", tools=["recall"])
+    middleware = ToolErrorMiddleware(lambda _error, _request: "unavailable", tools=["recall"])
 
     assert middleware.on_error is not None
     assert "tools" in inspect.signature(ToolErrorMiddleware.__init__).parameters
@@ -117,17 +145,41 @@ def test_init_chat_model_forwards_google_reasoning_effort() -> None:
 
 
 def test_init_chat_model_sends_extra_body_fields_in_the_request() -> None:
-    model = init_chat_model(
-        "openai:MiniMax-M2.7-highspeed",
-        api_key="key",
-        base_url="https://api.minimax.io/v1",
-        extra_body={"reasoning_split": True},
-    )
+    sent: list[dict[str, Any]] = []
 
-    assert isinstance(model, ChatOpenAI)
-    payload = model._get_request_payload([("user", "hello")])
+    def provider(request: httpx2.Request) -> httpx2.Response:
+        sent.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json={
+                "id": "completion-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "MiniMax-M2.7-highspeed",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
 
-    assert payload["extra_body"] == {"reasoning_split": True}
+    with httpx2.Client(transport=httpx2.MockTransport(provider)) as http_client:
+        model = init_chat_model(
+            "openai:MiniMax-M2.7-highspeed",
+            api_key="key",
+            base_url="https://api.minimax.io/v1",
+            extra_body={"reasoning_split": True},
+            http_client=http_client,
+        )
+        assert isinstance(model, ChatOpenAI)
+        model.invoke("hello")
+
+    [body] = sent
+    assert body["reasoning_split"] is True
+    assert body["messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_init_chat_model_builds_claude_with_the_reply_timeout_and_retries() -> None:
@@ -165,7 +217,7 @@ async def test_checkpointer_reports_whether_a_thread_has_a_checkpoint() -> None:
     from langchain_core.messages import AIMessage
 
     from fakeyou.db.checkpoint import open_checkpointer
-    from tests.fakes import DATABASE_URL
+    from tests._fakes_common import DATABASE_URL
 
     async with open_checkpointer(DATABASE_URL) as saver:
         assert await saver.aget_tuple({"configurable": {"thread_id": "meeting:a"}}) is None

@@ -1,7 +1,10 @@
+import asyncio
 import operator
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, NotRequired, TypedDict, cast, get_args
+from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -9,7 +12,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.foundation.taxonomy import MeetingPhase, TerminalReason
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.db.checkpoint import is_checkpoint_error
+from fakeyou.foundation.taxonomy import FaultKind, MeetingPhase, TerminalReason
+from fakeyou.observability.faults import Fault, FaultReporter
+from fakeyou.observability.journal import Journal
 
 LifecycleAttribution = Literal["host_action", "system_fault", "owner_action", "policy"]
 LifecycleEventKind = Literal[
@@ -53,12 +60,16 @@ _TRANSITIONS: dict[tuple[MeetingPhase, str], _Transition] = {
     ("preparing", "join_requested"): _Transition("lobby", effect="join_requested"),
     ("preparing", "owner_stopped"): _Transition("ended", reason="stopped_by_owner"),
     ("preparing", "browser_failed"): _Transition("ended", reason="browser_failure"),
+    ("preparing", "audio_failed"): _Transition("ended", reason="audio_failure"),
+    ("preparing", "conversation_failed"): _Transition("ended", reason="conversation_failure"),
     ("lobby", "admitted"): _Transition("admitted"),
     ("lobby", "denied"): _Transition("ended", reason="denied_by_host"),
     ("lobby", "blocked"): _Transition("ended", reason="blocked_by_platform"),
     ("lobby", "lobby_timed_out"): _Transition("ended", reason="lobby_timeout_reached"),
     ("lobby", "owner_stopped"): _Transition("ended", reason="stopped_by_owner"),
     ("lobby", "browser_failed"): _Transition("ended", reason="browser_failure"),
+    ("lobby", "audio_failed"): _Transition("ended", reason="audio_failure"),
+    ("lobby", "conversation_failed"): _Transition("ended", reason="conversation_failure"),
     ("lobby", "connection_lost"): _Transition("disconnected"),
     ("admitted", "owner_stopped"): _Transition(
         "leaving", effect="leave_requested", pending_reason="stopped_by_owner"
@@ -88,6 +99,8 @@ _TRANSITIONS: dict[tuple[MeetingPhase, str], _Transition] = {
     ("leaving", "leave_sent"): _Transition("ended", reason="left_by_owner"),
     ("leaving", "owner_stopped"): _Transition("leaving"),
     ("leaving", "browser_failed"): _Transition("ended", reason="browser_failure"),
+    ("leaving", "audio_failed"): _Transition("ended", reason="audio_failure"),
+    ("leaving", "conversation_failed"): _Transition("ended", reason="conversation_failure"),
 }
 
 
@@ -95,6 +108,7 @@ class LifecycleEvent(TypedDict):
     kind: LifecycleEventKind
     attribution: LifecycleAttribution
     detail: str
+    event_id: str
 
 
 class LifecycleEvidence(TypedDict):
@@ -104,6 +118,7 @@ class LifecycleEvidence(TypedDict):
     event: str
     attribution: str
     detail: str
+    event_id: str | None
 
 
 class MeetingLifecycleState(TypedDict):
@@ -157,6 +172,7 @@ def build_evidence(
         "event": event["kind"],
         "attribution": event["attribution"],
         "detail": event["detail"],
+        "event_id": event.get("event_id"),
     }
 
 
@@ -235,6 +251,24 @@ def apply_lifecycle_event(state: MeetingLifecycleState) -> LifecycleUpdate:
     return update
 
 
+def fold_lifecycle_events(
+    state: MeetingLifecycleState, events: Sequence[LifecycleEvent]
+) -> MeetingLifecycleState:
+    for event in events:
+        try:
+            update = apply_lifecycle_event({**state, "event": event})
+        except ValueError:
+            continue
+        merged: dict[str, Any] = dict(state)
+        for key, value in update.items():
+            if key in ("evidence", "external_effects") and isinstance(value, list):
+                merged[key] = [*merged[key], *value]
+            else:
+                merged[key] = value
+        state = cast(MeetingLifecycleState, merged)
+    return state
+
+
 def create_lifecycle_graph(
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
@@ -245,15 +279,33 @@ def create_lifecycle_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
+@dataclass(frozen=True, slots=True)
+class LifecyclePersistence:
+    send_timeout_seconds: float = DEFAULTS.database.send_timeout_seconds
+    faults: FaultReporter | None = None
+    journal: Journal | None = None
+
+
+DEFAULT_PERSISTENCE = LifecyclePersistence()
+
+
 class MeetingLifecycle:
     def __init__(
-        self, owner_id: str, twin_id: str, meeting_id: str, checkpointer: BaseCheckpointSaver[Any]
+        self,
+        owner_id: str,
+        twin_id: str,
+        meeting_id: str,
+        checkpointer: BaseCheckpointSaver[Any],
+        *,
+        persistence: LifecyclePersistence = DEFAULT_PERSISTENCE,
     ) -> None:
         self._graph = create_lifecycle_graph(checkpointer)
         self._config: RunnableConfig = {
             "configurable": {"thread_id": meeting_thread_id(twin_id, meeting_id)}
         }
         self.state = initial_lifecycle_state(owner_id, twin_id, meeting_id)
+        self._persistence = persistence
+        self._pending: list[LifecycleEvent] = []
 
     async def initialize(self, *, resume: bool = False) -> None:
         saved = await self._graph.aget_state(self._config)
@@ -292,11 +344,70 @@ class MeetingLifecycle:
                 },
             )
 
+    async def _reconcile_head(self, head: LifecycleEvent) -> bool:
+        saved = await self._graph.aget_state(self._config)
+        if not saved.values:
+            return False
+        applied = any(
+            entry.get("event_id") == head["event_id"] for entry in saved.values["evidence"]
+        )
+        if not applied:
+            return False
+        self.state = cast(MeetingLifecycleState, saved.values)
+        del self._pending[0]
+        return True
+
     async def send(
         self, kind: LifecycleEventKind, attribution: LifecycleAttribution, detail: str
     ) -> None:
-        updated = await self._graph.ainvoke(
-            {"event": {"kind": kind, "attribution": attribution, "detail": detail}},
-            self._config,
+        carried = len(self._pending)
+        self._pending.append(
+            {
+                "kind": kind,
+                "attribution": attribution,
+                "detail": detail,
+                "event_id": uuid4().hex,
+            }
         )
-        self.state = cast(MeetingLifecycleState, updated)
+        try:
+            async with asyncio.timeout(self._persistence.send_timeout_seconds):
+                while self._pending:
+                    if carried > 0:
+                        carried -= 1
+                        if await self._reconcile_head(self._pending[0]):
+                            continue
+                    try:
+                        updated = await self._graph.ainvoke(
+                            {"event": self._pending[0]},
+                            self._config,
+                        )
+                    except Exception as error:
+                        if is_checkpoint_error(error):
+                            raise
+                        del self._pending[0]
+                        raise
+                    self.state = cast(MeetingLifecycleState, updated)
+                    del self._pending[0]
+        except Exception as error:
+            if not is_checkpoint_error(error):
+                raise
+            if not self._pending:
+                return
+            if self.state["phase"] != "admitted":
+                raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
+            self._degrade_pending(error)
+
+    def _degrade_pending(self, error: Exception) -> None:
+        self.state = fold_lifecycle_events(self.state, self._pending)
+        detail = f"lifecycle persist queued: {type(error).__name__}"
+        kind: FaultKind = "timeout" if isinstance(error, TimeoutError) else "unavailable"
+        if self._persistence.faults is not None:
+            self._persistence.faults.record(Fault(source="runtime", kind=kind, detail=detail))
+        if self._persistence.journal is not None:
+            self._persistence.journal.record(
+                "lifecycle_persist_queued",
+                source="runtime",
+                kind=self._pending[-1]["kind"],
+                error_type=type(error).__name__,
+                detail=detail,
+            )

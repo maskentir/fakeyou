@@ -10,10 +10,11 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
-import fakeyou.cli.join as cli_join
 import fakeyou.orchestration.assembly as assembly
+import fakeyou.orchestration.join_preflight as join_preflight
 import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
 
@@ -58,7 +59,7 @@ def seed_unfinished_session(settings: Settings) -> None:
     from fakeyou.observability.journal import journal_path
     from fakeyou.persistence.record import meeting_record_path
 
-    record = meeting_record_path(settings.paths.record_dir, "meeting-9")
+    record = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(
         '{"kind": "transcript", "at": "2026-10-05T02:00:00+00:00",'
@@ -69,7 +70,7 @@ def seed_unfinished_session(settings: Settings) -> None:
         ' "text": "Hi there."}\n',
         encoding="utf-8",
     )
-    journal = journal_path(settings.paths.journal_dir, "meeting-9")
+    journal = journal_path(settings.paths.journal_dir, SessionId("meeting-9"))
     journal.parent.mkdir(parents=True, exist_ok=True)
     journal.write_text(
         '{"event": "join_requested", "meeting_id": "meeting-9",'
@@ -82,7 +83,7 @@ def seed_finished_session(settings: Settings) -> None:
     from fakeyou.observability.journal import journal_path
 
     seed_unfinished_session(settings)
-    journal = journal_path(settings.paths.journal_dir, "meeting-9")
+    journal = journal_path(settings.paths.journal_dir, SessionId("meeting-9"))
     with journal.open("a", encoding="utf-8") as handle:
         handle.write(
             '{"event": "session_finished", "meeting_id": "meeting-9",'
@@ -118,9 +119,13 @@ async def test_join_resume_writes_markers_and_rejoins(
 
     assert session_run["config"].meeting_id == "meeting-9"
     assert session_run["config"].resume is True
-    journal_rows = journal_path(settings.paths.journal_dir, "meeting-9").read_text(encoding="utf-8")
+    journal_rows = journal_path(settings.paths.journal_dir, SessionId("meeting-9")).read_text(
+        encoding="utf-8"
+    )
     assert '"event":"session_resumed"' in journal_rows.replace(" ", "")
-    entries = load_meeting_record(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    entries = load_meeting_record(
+        meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
+    )
     assert entries[-1].kind == "resume"
     assert entries[-1].attempt == 2
 
@@ -143,9 +148,13 @@ async def test_join_resume_detects_a_live_checkpoint_without_journal(
     await join(LINK, meeting_id="meeting-9", resume=True)
 
     assert session_run["config"].meeting_id == "meeting-9"
-    journal_rows = journal_path(settings.paths.journal_dir, "meeting-9").read_text(encoding="utf-8")
+    journal_rows = journal_path(settings.paths.journal_dir, SessionId("meeting-9")).read_text(
+        encoding="utf-8"
+    )
     assert '"event":"session_resumed"' in journal_rows.replace(" ", "")
-    entries = load_meeting_record(meeting_record_path(settings.paths.record_dir, "meeting-9"))
+    entries = load_meeting_record(
+        meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
+    )
     assert entries[-1].kind == "resume"
 
 
@@ -171,16 +180,17 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
     monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
-    monkeypatch.setattr(cli_join, "find_spec", lambda name: SimpleNamespace())
-    monkeypatch.setattr(providers, "init_chat_model", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(join_preflight, "find_spec", lambda _name: SimpleNamespace())
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
 
     @asynccontextmanager
-    async def fake_saver(url: str) -> AsyncIterator[InMemorySaver]:
+    async def fake_saver(url: str, **_kwargs: Any) -> AsyncIterator[InMemorySaver]:
+        del url
         yield InMemorySaver()
 
     monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
     monkeypatch.setattr(
-        assembly, "create_meeting_agent", lambda *a, **k: SimpleNamespace(name="agent")
+        assembly, "create_meeting_agent", lambda *_a, **_k: SimpleNamespace(name="agent")
     )
     from fakeyou.memory.persona import PersonaProfile, persona_digest
     from fakeyou.persistence.brief import (
@@ -196,7 +206,7 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     brief = MeetingBrief.model_validate(BRIEF_DATA)
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     write_meeting_context(
-        context_path(meeting_record_path(settings.paths.record_dir, "meeting-9")),
+        context_path(meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))),
         MeetingContext(
             schema_version="meeting_context/v1",
             brief=brief,

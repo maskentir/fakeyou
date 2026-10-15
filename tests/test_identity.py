@@ -10,7 +10,7 @@ DISPLAY_CLAIM_RENDER_READERS = frozenset(
         "persistence/record.py",
         "debrief/debrief.py",
         "debrief/debrief_sources.py",
-        "cli/debrief.py",
+        "diarization/correction_labels.py",
         "foundation/transcript.py",
     }
 )

@@ -1,31 +1,26 @@
-import fcntl
-import json
-import os
-import socket
-import threading
-import uuid
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.observability.journal import Journal
+from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.layout import MeetingDir
+from fakeyou.persistence.lease import (
+    LOCK_STALE_AFTER_SECONDS,
+    LeaseError,
+    LockPurpose,
+    file_lease,
+    leased,
+)
 
 IngestionState = Literal["not_requested", "pending", "completed", "interrupted", "failed"]
-LockPurpose = Literal["meeting", "ingestion", "forget", "debrief", "diarization"]
-
-INGESTION_FILE_NAME = "ingestion.json"
-
-LOCK_STALE_AFTER_SECONDS = 60.0
-
-
-class LeaseError(FakeYouError):
-    pass
 
 
 class RecordLockError(LeaseError):
@@ -52,132 +47,39 @@ class IngestionStatus(BaseModel):
 
 
 def status_path(record_path: Path) -> Path:
-    return record_path.parent / INGESTION_FILE_NAME
+    return MeetingDir.from_record_path(record_path).ingestion
 
 
 def lock_path(record_path: Path) -> Path:
-    return record_path.parent.parent / f"{record_path.parent.name}.lock"
+    return MeetingDir.from_record_path(record_path).lock
 
 
 def hash_meeting_record(record_path: Path) -> str:
     return sha256(record_path.read_bytes()).hexdigest()
 
 
-def read_status(path: Path) -> IngestionStatus | None:
+def read_status(path: Path, *, journal: Journal | None = None) -> IngestionStatus | None:
     try:
         raw = path.read_bytes()
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
     try:
         return IngestionStatus.model_validate_json(raw)
-    except ValueError:
-        return None
+    except ValueError as error:
+        if journal is not None:
+            journal.record(
+                "ingestion_status_rejected",
+                source="memory_ingest",
+                error_type=type(error).__name__,
+                path=str(path),
+            )
+        raise FakeYouError(
+            ErrorCode.INGESTION_STATUS_CORRUPT, path=path, reason=type(error).__name__
+        ) from error
 
 
 def write_status(path: Path, status: IngestionStatus) -> None:
     write_atomically(path, status.model_dump_json().encode("utf-8"))
-
-
-def write_atomically(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _parse_heartbeat(raw_heartbeat: Any) -> datetime | None:
-    if raw_heartbeat is None:
-        return None
-    if not isinstance(raw_heartbeat, str):
-        raise ValueError("heartbeat must be an iso string")
-    heartbeat = datetime.fromisoformat(raw_heartbeat)
-    if heartbeat.tzinfo is None or heartbeat.utcoffset() is None:
-        raise ValueError("heartbeat must carry timezone")
-    return heartbeat
-
-
-def _lock_owner(path: Path) -> dict[str, Any] | None:
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    pid = data.get("pid")
-    purpose = data.get("purpose")
-    token = data.get("token")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return None
-    if purpose not in ("meeting", "ingestion", "forget", "debrief", "diarization"):
-        return None
-    if not isinstance(token, str) or not token:
-        return None
-    host = data.get("host")
-    if host is not None and (not isinstance(host, str) or not host):
-        return None
-    try:
-        heartbeat = _parse_heartbeat(data.get("heartbeat"))
-    except ValueError:
-        return None
-    return {"host": host, "pid": pid, "purpose": purpose, "token": token, "heartbeat": heartbeat}
-
-
-LeaseState = Literal["absent", "live", "stale", "corrupt"]
-
-
-def describe_lease(
-    path: Path, *, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
-) -> LeaseState:
-    if not path.exists():
-        return "absent"
-    owner = _lock_owner(path)
-    if owner is None:
-        return "corrupt"
-    if _owner_recoverable(owner, stale_after_seconds):
-        return "stale"
-    return "live"
-
-
-def _process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
-@contextmanager
-def leased(
-    lease: AbstractContextManager[str], translate: Callable[[LeaseError], Exception]
-) -> Iterator[str]:
-    stack = ExitStack()
-    try:
-        token = stack.enter_context(lease)
-    except LeaseError as error:
-        raise translate(error) from error
-    with stack:
-        yield token
 
 
 def _record_lock_error(error: LeaseError, *, record_path: Path) -> RecordLockError:
@@ -198,113 +100,3 @@ def record_lock(
     )
     with leased(lease, partial(_record_lock_error, record_path=record_path)) as token:
         yield token
-
-
-@contextmanager
-def _acquisition_guard(path: Path) -> Iterator[int]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
-    try:
-        yield fd
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
-def _read_fd(fd: int) -> bytes:
-    chunks: list[bytes] = []
-    while True:
-        chunk = os.read(fd, 65536)
-        if not chunk:
-            return b"".join(chunks)
-        chunks.append(chunk)
-
-
-@contextmanager
-def file_lease(
-    path: Path, *, purpose: LockPurpose, stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS
-) -> Iterator[str]:
-    token = uuid.uuid4().hex
-    host = socket.gethostname()
-    owner_payload = {"host": host, "pid": os.getpid(), "purpose": purpose, "token": token}
-    with _acquisition_guard(path) as fd:
-        raw = _read_fd(fd)
-        owner = _lock_owner(path) if raw else None
-        if raw and owner is None:
-            raise LeaseError(ErrorCode.RECORD_LOCK_CORRUPT, path=path) from None
-        if owner is not None and not _owner_recoverable(owner, stale_after_seconds):
-            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
-        try:
-            os.ftruncate(fd, 0)
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, _lease_payload(owner_payload))
-            os.fsync(fd)
-        except OSError:
-            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
-        try:
-            current = os.stat(path)
-        except FileNotFoundError:
-            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
-        written = os.fstat(fd)
-        if (current.st_ino, current.st_dev) != (written.st_ino, written.st_dev):
-            raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
-    stop = threading.Event()
-    heartbeat = threading.Thread(
-        target=_refresh_lease,
-        args=(path, owner_payload, token, stale_after_seconds, stop),
-        daemon=True,
-    )
-    heartbeat.start()
-    try:
-        yield token
-    finally:
-        stop.set()
-        heartbeat.join(timeout=5.0)
-        owner = _lock_owner(path)
-        if owner is not None and owner["token"] == token:
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
-
-
-def _lease_payload(owner: dict[str, Any]) -> bytes:
-    return json.dumps({**owner, "heartbeat": datetime.now(UTC).isoformat()}).encode()
-
-
-def _owner_recoverable(owner: dict[str, Any], stale_after_seconds: float) -> bool:
-    if owner["host"] is None:
-        return not _process_alive(owner["pid"])
-    heartbeat: datetime | None = owner["heartbeat"]
-    if heartbeat is None:
-        return True
-    if (datetime.now(UTC) - heartbeat).total_seconds() > stale_after_seconds:
-        return True
-    return owner["host"] == socket.gethostname() and not _process_alive(owner["pid"])
-
-
-def _refresh_lease(
-    path: Path,
-    owner: dict[str, Any],
-    token: str,
-    stale_after_seconds: float,
-    stop: threading.Event,
-) -> None:
-    interval = max(stale_after_seconds / 3, 0.05)
-    while not stop.wait(interval):
-        current = _lock_owner(path)
-        if current is None or current["token"] != token:
-            return
-        if stop.is_set():
-            return
-        try:
-            write_atomically(path, _lease_payload(owner))
-        except Exception:
-            continue

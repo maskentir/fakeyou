@@ -2,17 +2,21 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.stream_capture import (
     StreamChunk,
 )
 from fakeyou.audio.voice_activity import SlotBinder
-from fakeyou.cli.join import TranscriptSinks
+from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.journal import Journal
-from tests._capture_support import _recording_registry
-from tests.fakes import FakeClock, meet_page
+from fakeyou.orchestration.transcript import TranscriptSinks
+from tests._capture_support import recording_registry
+from tests._fakes_common import FakeClock
+from tests._meet_browser_fakes import meet_page
+from tests._persistence_fakes import RecordingJournal
 
 
 def _chunk(slot: int, seq: int, page_ms: float = 1000.0) -> StreamChunk:
@@ -24,7 +28,7 @@ def _chunk(slot: int, seq: int, page_ms: float = 1000.0) -> StreamChunk:
 async def test_registry_forwards_pcm_to_slot_inputs() -> None:
     from fakeyou.audio.stream_capture import StreamChunk
 
-    registry, made = _recording_registry(FakeClock().monotonic)
+    registry, made = recording_registry(FakeClock().monotonic)
     await registry.feed(
         StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
     )
@@ -47,7 +51,7 @@ async def test_registry_releases_session_after_silence() -> None:
     from fakeyou.audio.stream_capture import StreamChunk
 
     clock = FakeClock(now=1000.0)
-    registry, _ = _recording_registry(clock.monotonic)
+    registry, _ = recording_registry(clock.monotonic)
     chunk = StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
     await registry.feed(chunk)
     assert set(registry.sessions) == {0}
@@ -64,7 +68,7 @@ async def test_registry_releases_session_after_silence() -> None:
 async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     lines: list[str] = []
     journal = Journal("meeting-9", emit=lines.append, echo=False)
-    registry, _ = _recording_registry(FakeClock().monotonic, journal=journal)
+    registry, _ = recording_registry(FakeClock().monotonic, journal=journal)
     await registry.feed(_chunk(slot=0, seq=0))
     await registry.feed(_chunk(slot=0, seq=2))
     await registry.feed(_chunk(slot=0, seq=0))
@@ -143,13 +147,13 @@ def test_stream_ids_change_transcript_identity() -> None:
 
 
 def test_request_messages_carry_stream_id() -> None:
-    from fakeyou.conversation.conversation import _request_messages
+    from fakeyou.conversation.conversation import request_messages
     from fakeyou.foundation.transcript import CaptureContext, transcript_event
 
     event = transcript_event(
         _frame("hello", "2026-10-06T01:00:01+00:00"), "a", "e1", CaptureContext("slot-2")
     )
-    (message,) = _request_messages([event])
+    (message,) = request_messages([event])
     assert message.additional_kwargs["meeting_event"]["stream_id"] == "slot-2"
 
 
@@ -164,7 +168,7 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
         meeting_record_path,
     )
 
-    path = meeting_record_path(tmp_path, "meeting-9")
+    path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(path)
     frame = TranscriptionFrame("hello", "", "2026-10-06T01:00:01+00:00", finalized=True)
     record.add_transcript(transcript_event(frame, "a", "e1", CaptureContext("slot-1")))
@@ -172,10 +176,10 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
     [entry] = load_meeting_record(path)
     assert isinstance(entry, TranscriptEntry)
     assert entry.stream_id == "slot-1"
-    legacy = {
+    unslotted = {
         "kind": "transcript",
         "at": "2026-10-06T01:00:02+00:00",
-        "id": "event-legacy",
+        "id": "event-unslotted",
         "spoken_at": "2026-10-06T01:00:02+00:00",
         "source": "meeting_audio",
         "text": "Legacy.",
@@ -183,7 +187,7 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
         "speaker_evidence_id": None,
     }
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(legacy) + "\n")
+        handle.write(json.dumps(unslotted) + "\n")
     entries = load_meeting_record(path)
     assert isinstance(entries[1], TranscriptEntry)
     assert entries[1].stream_id == ""
@@ -194,7 +198,7 @@ async def test_registry_observes_streams_and_roster_into_binder() -> None:
 
     clock = FakeClock()
     binder = SlotBinder()
-    registry, _ = _recording_registry(clock.monotonic, binder)
+    registry, _ = recording_registry(clock.monotonic, binder)
     registry.update_roster(["host", "guest"])
     await registry.feed(
         StreamChunk(slot=0, seq=0, csrcs=(111,), level=0.4, page_ms=1000.0, pcm=b"\x00\x01")
@@ -245,7 +249,7 @@ async def test_capture_drain_poll_updates_binder_roster() -> None:
     }
     page = meet_page([], evaluates=[payload])
     binder = SlotBinder()
-    registry, _ = _recording_registry(FakeClock().monotonic, binder)
+    registry, _ = recording_registry(FakeClock().monotonic, binder)
     loop = CaptureDrainLoop(page, registry)
     assert await loop.poll() is True
     outcome = binder.resolve(0)
@@ -258,8 +262,8 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 
     from pipecat.frames.frames import TranscriptionFrame
 
-    from fakeyou.cli.join import build_transcript_callback
     from fakeyou.observability.journal import Journal
+    from fakeyou.orchestration.transcript import build_transcript_callback
     from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
@@ -280,11 +284,11 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
             self.events.append(event)
 
     async def run(
-        per_stream: bool, tag: str
+        *, per_stream: bool, tag: str
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[TranscriptEvent]]:
         lines: list[str] = []
         journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
-        path = meeting_record_path(tmp_path, tag)
+        path = meeting_record_path(tmp_path, SessionId(tag))
         record = MeetingRecord(path, now=lambda: now)
         conversation = _Conversation()
         callback = build_transcript_callback(
@@ -305,8 +309,8 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
         return rows, entries, conversation.events
 
-    mixed_rows, mixed_entries, mixed_events = await run(False, "mixed-9")
-    stream_rows, stream_entries, stream_events = await run(True, "stream-9")
+    mixed_rows, mixed_entries, mixed_events = await run(per_stream=False, tag="mixed-9")
+    stream_rows, stream_entries, stream_events = await run(per_stream=True, tag="stream-9")
     assert [event.text for event in mixed_events] == [event.text for event in stream_events]
     assert [event.text for event in mixed_events] == [
         "Let us start with the demo.",
@@ -361,9 +365,9 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
 
     from pipecat.frames.frames import TranscriptionFrame
 
-    from fakeyou.cli.join import build_transcript_callback
     from fakeyou.foundation.transcript import TranscriptEvent
     from fakeyou.observability.journal import Journal
+    from fakeyou.orchestration.transcript import build_transcript_callback
     from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
@@ -386,8 +390,8 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
         async def handle_transcript(self, event: TranscriptEvent) -> None:
             seen.append(event)
 
-    journal = Journal("meeting-9", emit=lambda line: None, now=lambda: now, echo=False)
-    path = meeting_record_path(tmp_path, "meeting-9")
+    journal = Journal("meeting-9", emit=lambda _line: None, now=lambda: now, echo=False)
+    path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
         sinks=TranscriptSinks(journal, record, cast(Any, _Conversation())),
@@ -408,6 +412,72 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
 
 
 async def test_registry_feed_stamps_capture_clock_on_input() -> None:
-    registry, made = _recording_registry(FakeClock().monotonic)
+    registry, made = recording_registry(FakeClock().monotonic)
     await registry.feed(_chunk(slot=0, seq=4, page_ms=1234.5))
     assert made[0].last_capture == (4, 1234.5)
+
+
+async def test_drain_poll_propagates_unexpected_input_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fakeyou.audio.stream_capture import CaptureDrainLoop
+
+    payload = {
+        "streams": [
+            {
+                "slot": 0,
+                "seq": 0,
+                "csrcs": [111],
+                "level": 0.4,
+                "page_ms": 1000.0,
+                "pcm_b64": "AAP//w==",
+            }
+        ],
+        "roster": [],
+        "dropped": 0,
+    }
+    page = meet_page([], evaluates=[payload])
+    registry, _made = recording_registry(FakeClock().monotonic)
+    loop = CaptureDrainLoop(page, registry)
+
+    async def boom(_chunk: StreamChunk) -> None:
+        raise AttributeError("bug")
+
+    monkeypatch.setattr(registry, "feed", boom)
+    with pytest.raises(AttributeError, match="bug"):
+        await loop.poll()
+
+
+async def test_registry_feed_propagates_unexpected_recorder_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.persistence.audio_persist import SlotAudioWriter
+
+    registry, _made = recording_registry(FakeClock().monotonic)
+    writer = SlotAudioWriter(tmp_path / "rec")
+
+    def boom(_slot: int, _seq: int, _page_ms: float, _pcm: bytes) -> None:
+        raise KeyError("bug")
+
+    monkeypatch.setattr(writer, "write_chunk", boom)
+    monkeypatch.setattr(registry, "recorder", writer)
+    with pytest.raises(KeyError, match="bug"):
+        await registry.feed(_chunk(slot=0, seq=0))
+
+
+async def test_registry_feed_records_closed_writer_as_persist_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fakeyou.persistence.audio_persist import SlotAudioWriter
+
+    journal = RecordingJournal()
+    registry, _made = recording_registry(FakeClock().monotonic, journal=journal)
+    writer = SlotAudioWriter(tmp_path / "rec")
+    writer.close()
+    monkeypatch.setattr(registry, "recorder", writer)
+
+    await registry.feed(_chunk(slot=0, seq=0))
+
+    [row] = journal.events("fault_recorded")
+    assert row["kind"] == "callback_failed"
+    assert row["detail"] == "audio_persist: ValueError"

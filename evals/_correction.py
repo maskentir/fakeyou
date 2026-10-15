@@ -3,11 +3,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from graphiti_core import Graphiti
+
 from evals._shared import token_present
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.diarization.diarize_client import DiarizedTurn
 from fakeyou.diarization.diarize_correction import write_correction_bundle
-from fakeyou.memory.memory import search_memory_evidence
+from fakeyou.foundation.timeparse import require_iso_datetime
+from fakeyou.memory.memory import ensure_indexes, search_memory_evidence, verify_memory_connection
+from fakeyou.observability.faults import capture_error
 from fakeyou.persistence.record import TranscriptEntry
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,7 +35,7 @@ def superseded_serve_rate(answers: list[str], stale: str) -> float:
 
 
 def write_fixture_record(target: Path, fixture: dict[str, Any]) -> Path:
-    base = datetime.fromisoformat(str(fixture["base_at"]))
+    base = require_iso_datetime(str(fixture["base_at"]))
     lines: list[str] = []
     counter = 0
     for window in fixture["windows"]:
@@ -78,3 +82,12 @@ async def answer_queries(
             memory, str(item["query"]), group_id=group_id, recall=recall
         )
     return answers
+
+
+async def probe_memory_store(memory: Graphiti) -> Exception | None:
+    async def _probe() -> None:
+        await verify_memory_connection(memory)
+        await ensure_indexes(memory)
+
+    _, failure = await capture_error(_probe)
+    return failure

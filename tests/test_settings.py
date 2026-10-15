@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -15,9 +15,10 @@ from fakeyou.config.settings import (
     MeetingSettings,
     MemorySettings,
     Settings,
+    STTSettings,
     require_secret,
 )
-from tests.fakes import env_file_opt
+from tests._fakes_common import env_file_opt
 
 
 @pytest.fixture(autouse=True)
@@ -229,3 +230,12 @@ def test_env_example_is_valid_when_its_optional_blocks_are_enabled(
     monkeypatch.setenv("FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS", "300")
 
     Settings(**env_file_opt(env_file))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("idle_reconnect_seconds", 90_000.0), ("diarize_max_retries", 11)],
+)
+def test_stt_reconnect_and_retry_limits_have_ceilings(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        STTSettings.model_validate({field: value})

@@ -67,7 +67,7 @@ Jalankan ringkasan atas tiga berkas sesi:
 ```sh
 .venv/bin/python -c "
 from pathlib import Path
-from fakeyou.probe_replay import summarize_probe_session
+from fakeyou.audio.probe_replay import summarize_probe_session
 import json
 report = summarize_probe_session(
     Path('record-dir/attribution-probe.jsonl'),

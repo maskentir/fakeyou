@@ -14,6 +14,7 @@ AgentT = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
 def event(
     id: str,
     text: str = "hello",
+    *,
     finalized: bool = True,
     participant_id: str = "unknown",
     speaker_evidence_id: str | None = None,

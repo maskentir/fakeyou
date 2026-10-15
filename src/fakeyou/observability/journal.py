@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -11,6 +12,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.provider_faults import ProviderFault, trim_detail
 
@@ -32,11 +34,11 @@ _SENSITIVE = {
 }
 
 
-def journal_path(directory: Path, meeting_id: str) -> Path:
+def journal_path(directory: Path, meeting_id: SessionId) -> Path:
     return directory / f"{meeting_id}.jsonl"
 
 
-def journal_files(directory: Path, meeting_id: str) -> tuple[Path, ...]:
+def journal_files(directory: Path, meeting_id: SessionId) -> tuple[Path, ...]:
     path = journal_path(directory, meeting_id)
     return (path, *(Path(f"{path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)))
 
@@ -91,6 +93,7 @@ class Journal:
         self._max_bytes = max(0, file.max_bytes if file is not None else JOURNAL_MAX_BYTES)
         self._file_handler: RotatingFileHandler | None = None
         self._started: dict[str, JournalTiming] = {}
+        self.dropped = 0
         self._logger = logging.Logger(f"fakeyou.observability.journal.{uuid.uuid4().hex}")
         self._logger.propagate = False
         if self._path is not None:
@@ -105,8 +108,17 @@ class Journal:
                 handler.setFormatter(logging.Formatter("%(message)s"))
                 self._file_handler = handler
                 self._logger.addHandler(handler)
-            except BaseException:
+            except OSError:
                 self._file_handler = None
+
+    def _note_dropped(self, error: BaseException) -> None:
+        self.dropped += 1
+        if self.dropped != 1:
+            return
+        try:
+            print(f"journal write failed: {type(error).__name__}", file=sys.stderr)
+        except (OSError, ValueError):
+            return
 
     def record(self, event: str, *, source: Subsystem, **fields: Any) -> str | None:
         try:
@@ -121,18 +133,20 @@ class Journal:
             line = _encode_bounded(row, self._max_bytes)
             try:
                 self._logger.info(line.rstrip("\n"))
-            except BaseException:
-                pass
+            except (OSError, ValueError) as error:
+                self._note_dropped(error)
             try:
                 if self._emit is not None:
                     self._emit(line.rstrip("\n"))
                 elif self._echo:
                     print(line, end="", flush=True, file=sys.stderr)
-            except BaseException:
-                pass
-            return at
-        except BaseException:
+            except Exception as error:
+                self._note_dropped(error)
+        except (RecursionError, ValueError) as error:
+            self._note_dropped(error)
             return None
+        else:
+            return at
 
     def close(self) -> None:
         handler, self._file_handler = self._file_handler, None
@@ -140,7 +154,7 @@ class Journal:
             self._logger.removeHandler(handler)
             try:
                 handler.close()
-            except BaseException:
+            except (OSError, ValueError):
                 pass
 
     @contextmanager
@@ -161,7 +175,7 @@ class Journal:
             self.record(started, **timing.fields)
         try:
             yield timing
-        except Exception as error:
+        except (Exception, asyncio.CancelledError) as error:
             timing.fields.setdefault(elapsed_key, timing.elapsed_ms)
             if isinstance(error, ProviderFault):
                 timing.fields["kind"] = error.kind

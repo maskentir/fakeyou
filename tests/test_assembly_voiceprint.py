@@ -14,7 +14,8 @@ from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintStore
 from fakeyou.identity.verify import CalibrationArtifact
 from fakeyou.orchestration.assembly import VoiceprintLive, build_voiceprint_live, open_voiceprint
-from tests.fakes import FakeEmbedder, InMemoryVoiceprints, make_record
+from tests._error_support import message_pattern
+from tests._voiceprint_fakes import FakeEmbedder, InMemoryVoiceprints, make_record
 
 
 def enable_voiceprint(settings: Settings) -> Settings:
@@ -23,7 +24,7 @@ def enable_voiceprint(settings: Settings) -> Settings:
 
 
 def stub_embedder(monkeypatch: pytest.MonkeyPatch, embedder: FakeEmbedder) -> None:
-    monkeypatch.setattr(assembly, "_load_voiceprint_embedder", lambda settings: embedder)
+    monkeypatch.setattr(assembly, "load_voiceprint_embedder", lambda _settings: embedder)
 
 
 def test_disabled_flag_yields_no_live_bundle(settings: Settings) -> None:
@@ -40,7 +41,13 @@ def test_enabled_flag_without_database_url_raises(
     enable_voiceprint(settings)
     settings.database.url = url
 
-    with pytest.raises(FakeYouError) as caught, open_voiceprint(settings):
+    with (
+        pytest.raises(
+            FakeYouError,
+            match=message_pattern(ErrorCode.DATABASE_URL_MISSING),
+        ) as caught,
+        open_voiceprint(settings),
+    ):
         pass
 
     assert caught.value.code is ErrorCode.DATABASE_URL_MISSING
@@ -52,7 +59,12 @@ def test_enabled_flag_with_unmigrated_database_raises(
     enable_voiceprint(settings)
     settings.database.url = SecretStr(blank_database_url)
 
-    with pytest.raises(FakeYouError) as caught, open_voiceprint(settings):
+    with (
+        pytest.raises(
+            FakeYouError, match=message_pattern(ErrorCode.DATABASE_SCHEMA_EMPTY)
+        ) as caught,
+        open_voiceprint(settings),
+    ):
         pass
 
     assert caught.value.code is ErrorCode.DATABASE_SCHEMA_EMPTY
@@ -61,7 +73,13 @@ def test_enabled_flag_with_unmigrated_database_raises(
 def test_enabled_flag_without_model_path_raises(migrated_settings: Settings) -> None:
     enable_voiceprint(migrated_settings)
 
-    with pytest.raises(FakeYouError) as caught, open_voiceprint(migrated_settings):
+    with (
+        pytest.raises(
+            FakeYouError,
+            match=message_pattern(ErrorCode.VOICEPRINT_MODEL_PATH_MISSING),
+        ) as caught,
+        open_voiceprint(migrated_settings),
+    ):
         pass
 
     assert caught.value.code is ErrorCode.VOICEPRINT_MODEL_PATH_MISSING
@@ -74,7 +92,13 @@ def test_enabled_flag_with_broken_calibration_path_raises(
     stub_embedder(monkeypatch, FakeEmbedder((1.0, 0.0)))
     migrated_settings.identity.voiceprint_calibration_path = str(tmp_path / "missing.json")
 
-    with pytest.raises(FakeYouError) as caught, open_voiceprint(migrated_settings):
+    with (
+        pytest.raises(
+            FakeYouError,
+            match=message_pattern(ErrorCode.VOICEPRINT_CALIBRATION_INVALID),
+        ) as caught,
+        open_voiceprint(migrated_settings),
+    ):
         pass
 
     assert caught.value.code is ErrorCode.VOICEPRINT_CALIBRATION_INVALID

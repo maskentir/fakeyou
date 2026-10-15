@@ -13,7 +13,7 @@ milestone memori tepercaya. Acuan kontrak berada pada
 - Persona dan namespace sintetis baru untuk acceptance. Jangan memakai data
   `acc2`/`acc3`, persona privat, atau merekonstruksi waktu historis.
 - Flag streaming kalimat tetap mati. Konfirmasi sebelum setiap gate:
-  `uv run --no-sync python -c "from fakeyou.settings import Settings;
+  `uv run --no-sync python -c "from fakeyou.config.settings import Settings;
   print(Settings().conversation.sentence_streaming)"` harus mencetak `False`.
 - Image worker dibangun dari source commit kandidat dan diverifikasi dengan
   hash file sebelum sesi Meet (lihat bagian container).
@@ -25,9 +25,9 @@ source kandidat sebelum Meet:
 
 ```sh
 docker compose build meeting-worker
-sha256sum src/fakeyou/provenance.py src/fakeyou/owner_notes.py \
-  src/fakeyou/memory.py src/fakeyou/ingestion.py \
-  src/fakeyou/cli/main.py src/fakeyou/cli/memory.py
+sha256sum src/fakeyou/foundation/provenance.py src/fakeyou/memory/owner_notes.py \
+  src/fakeyou/memory/memory.py src/fakeyou/memory/ingestion.py \
+  src/fakeyou/cli/main.py src/fakeyou/memory/ingest_service.py
 docker compose run --rm --no-deps -T meeting-worker fakeyou check
 uv run --no-sync pytest tests/test_worker_image.py -m container -q
 ```
@@ -41,12 +41,12 @@ import hashlib
 from pathlib import Path
 
 names = [
-    "src/fakeyou/provenance.py",
-    "src/fakeyou/owner_notes.py",
-    "src/fakeyou/memory.py",
-    "src/fakeyou/ingestion.py",
+    "src/fakeyou/foundation/provenance.py",
+    "src/fakeyou/memory/owner_notes.py",
+    "src/fakeyou/memory/memory.py",
+    "src/fakeyou/memory/ingestion.py",
     "src/fakeyou/cli/main.py",
-    "src/fakeyou/cli/memory.py",
+    "src/fakeyou/memory/ingest_service.py",
 ]
 for name in names:
     print(name, hashlib.sha256(Path("/workspace/" + name).read_bytes()).hexdigest())

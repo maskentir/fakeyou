@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.meet import (
@@ -24,6 +25,7 @@ _CHAT_FIELD_ATTEMPTS = NAME_FIELD_ATTEMPTS
 _PANEL_TIMEOUT_MS = 10000
 _ECHO_TIMEOUT_SECONDS = 10.0
 _ECHO_POLL_SECONDS = 1.0
+_ECHO_READ_TIMEOUT_SECONDS = 2.0
 _SETTLE_SECONDS = 3.0
 _SETTLE_POLL_SECONDS = 0.5
 
@@ -159,11 +161,15 @@ async def _await_own_echo(
     echo_item = _echo_item_selector(signals)
     deadline = monotonic() + _ECHO_TIMEOUT_SECONDS
     while True:
-        content = await page.content()
+        try:
+            async with asyncio.timeout(_ECHO_READ_TIMEOUT_SECONDS):
+                content = await page.content()
+        except TimeoutError:
+            content = ""
         if text in content:
             try:
                 found = await page.locator(echo_item).count()
-            except Exception:
+            except PlaywrightError:
                 found = 0
             if found > 0:
                 return True
@@ -200,7 +206,7 @@ async def send_chat(
             await page.locator(CHAT_INPUT_SELECTOR).first.wait_for(
                 state="visible", timeout=_PANEL_TIMEOUT_MS
             )
-        except Exception as error:
+        except PlaywrightError as error:
             return MeetActionResult(
                 outcome="failed",
                 detail=f"chat input never appeared: {type(error).__name__} (chars={chars})",
@@ -219,7 +225,7 @@ async def send_chat(
     try:
         await page.keyboard.type(text, delay=TYPE_DELAY_MS)
         await page.keyboard.press("Enter")
-    except Exception as error:
+    except PlaywrightError as error:
         return MeetActionResult(
             outcome="failed",
             detail=f"typing the chat message failed: {type(error).__name__} (chars={chars})",

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import math
-import struct
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Literal
 
-from fakeyou.db.voiceprint_store import VoiceprintRepository
+from fakeyou.db.voiceprint_store import VoiceprintRecord, VoiceprintRepository
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
+from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, pcm16_to_floats
 from fakeyou.identity.verify import DEFAULT_VERIFICATION_INPUTS, VerificationInputs, decide_verified
-from fakeyou.identity.voiceprint_embed import SAMPLE_RATE, SpeakerEmbedder, cosine
+from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, cosine
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import Fault
 
@@ -42,12 +46,15 @@ class VoiceprintMatcher:
         self._store = store
         self._threshold = threshold
         self._min_margin = min_margin
+        self._records: list[VoiceprintRecord] | None = None
 
     def match(self, embedding: Sequence[float]) -> VoiceScores:
+        if self._records is None:
+            self._records = self._store.load_all()
         ranked: list[tuple[float, str, str, datetime]] = []
         best_negative = EMPTY_SCORE
         has_negative = False
-        for record in self._store.load_all():
+        for record in self._records:
             score = cosine(embedding, record.embedding)
             if record.is_negative:
                 has_negative = True
@@ -74,10 +81,10 @@ def cut_turn_clip(audio: bytes, start_ms: float, end_ms: float) -> bytes:
     finish = max(start_ms, end_ms)
     outer_start = math.floor(begin / CLIP_GRID_MS) * CLIP_GRID_MS - CLIP_PAD_MS
     outer_finish = math.ceil(finish / CLIP_GRID_MS) * CLIP_GRID_MS + CLIP_PAD_MS
-    total_ms = len(audio) / (SAMPLE_RATE * 2) * 1000.0
+    total_ms = len(audio) / (CAPTURE_SAMPLE_RATE * PCM16_SAMPLE_BYTES) * 1000.0
     clamped_start = min(max(outer_start, 0.0), total_ms)
     clamped_finish = min(max(outer_finish, 0.0), total_ms)
-    bytes_per_ms = SAMPLE_RATE * 2 / 1000.0
+    bytes_per_ms = CAPTURE_SAMPLE_RATE * PCM16_SAMPLE_BYTES / 1000.0
     first = int(clamped_start * bytes_per_ms) // 2 * 2
     last = int(clamped_finish * bytes_per_ms) // 2 * 2
     return audio[first:last]
@@ -91,11 +98,29 @@ def score_turn_audio(
     min_seconds: float,
 ) -> VoiceScores | None:
     usable = len(clip) - len(clip) % 2
-    if usable <= 0 or usable / (SAMPLE_RATE * 2) < min_seconds:
+    if usable <= 0 or usable / (CAPTURE_SAMPLE_RATE * PCM16_SAMPLE_BYTES) < min_seconds:
         return None
-    samples = struct.unpack("<" + "h" * (usable // 2), clip[:usable])
-    utterance = [sample / 32768.0 for sample in samples]
-    return matcher.match(embedder.embed([utterance]))
+    samples = pcm16_to_floats(clip[:usable])
+    return matcher.match(embedder.embed([samples]))
+
+
+_scoring_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="voiceprint-scoring")
+
+
+async def score_turn_audio_async(
+    clip: bytes,
+    embedder: SpeakerEmbedder,
+    matcher: VoiceprintMatcher,
+    *,
+    min_seconds: float,
+    timeout_seconds: float,
+) -> VoiceScores | None:
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout(timeout_seconds):
+        return await loop.run_in_executor(
+            _scoring_executor,
+            partial(score_turn_audio, clip, embedder, matcher, min_seconds=min_seconds),
+        )
 
 
 @dataclass(frozen=True, slots=True)

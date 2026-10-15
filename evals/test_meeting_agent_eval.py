@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from tests.fakes import OfflineJudge, ToolCallingFakeModel
+from tests._conversation_fakes import OfflineJudge, ToolCallingFakeModel
 
 
 def test_meeting_agent_tool_trajectory_is_correct() -> None:

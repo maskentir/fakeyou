@@ -12,7 +12,7 @@ from fakeyou.audio.deaf import (
     rms_level,
 )
 from fakeyou.observability.faults import FaultReporter
-from tests.fakes import RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 
 
 @pytest.fixture

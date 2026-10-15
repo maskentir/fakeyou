@@ -3,11 +3,15 @@ import json
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
-PROBE_FILE_NAME = "attribution-probe.jsonl"
+from playwright.async_api import Error as PlaywrightError
+
+from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE, POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.polling import PageEvaluator, PollGuard, PollingLoop
+from fakeyou.foundation.resources import read_package_text
+
 PROBE_DRAIN_JS = (
     "() => { const probe = window.__fakeyouAttributionProbe;"
     " if (!probe) return null; return probe.drain(); }"
@@ -15,7 +19,7 @@ PROBE_DRAIN_JS = (
 
 
 def load_probe_script() -> str:
-    return (files("fakeyou") / "assets" / "attribution_probe.js").read_text(encoding="utf-8")
+    return read_package_text("assets", "attribution_probe.js")
 
 
 def append_probe_batch(path: Path, batch: Mapping[str, Any], *, mono_ms: float, wall: str) -> None:
@@ -32,7 +36,7 @@ class AttributionProbe:
         *,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], str] | None = None,
-        sample_rate: int = 16000,
+        sample_rate: int = CAPTURE_SAMPLE_RATE,
     ) -> None:
         self._path = path
         self._monotonic = monotonic
@@ -72,55 +76,37 @@ class AttributionProbe:
         )
 
 
-class ProbeDrainLoop:
+class ProbeDrainLoop(PollingLoop):
     def __init__(
         self,
-        page: Any,
+        page: PageEvaluator,
         probe: AttributionProbe,
         *,
         poll_interval_seconds: float = 1.0,
+        guard: PollGuard | None = None,
     ) -> None:
+        super().__init__(poll_interval_seconds=poll_interval_seconds, guard=guard)
         self._page = page
         self._probe = probe
-        self._poll_interval = poll_interval_seconds
-        self._task: asyncio.Task[None] | None = None
-        self._closed = False
-        self.polls = 0
-        self.poll_failures = 0
-        self.last_poll_error: str | None = None
 
     async def poll(self) -> bool:
         self.polls += 1
         try:
             before_ms = self._probe.monotonic() * 1000.0
-            batch = await self._page.evaluate(PROBE_DRAIN_JS)
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                batch = await self._page.evaluate(PROBE_DRAIN_JS)
             after_ms = self._probe.monotonic() * 1000.0
             if not isinstance(batch, Mapping):
                 self.poll_failures += 1
                 return False
             self._probe.append_page_batch(batch, mono_ms=(before_ms + after_ms) / 2.0)
-            return True
-        except Exception as error:
+        except (OSError, PlaywrightError, TimeoutError) as error:
             self.poll_failures += 1
             self.last_poll_error = type(error).__name__
             return False
+        else:
+            return True
 
-    async def start(self) -> None:
-        if self._task is not None or self._closed:
-            return
-        self._task = asyncio.create_task(self._poll_loop())
-
-    async def close(self) -> None:
-        task, self._task = self._task, None
-        self._closed = True
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    async def _poll_loop(self) -> None:
-        while True:
-            await self.poll()
-            await asyncio.sleep(self._poll_interval)
+    @override
+    async def _poll_once(self) -> None:
+        await self.poll()

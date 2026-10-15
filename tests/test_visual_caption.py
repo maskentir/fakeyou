@@ -1,16 +1,18 @@
+import asyncio
 import base64
 import io
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from PIL import Image
-from pydantic import SecretStr
+from pydantic import PrivateAttr, SecretStr
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
 from fakeyou.conversation.agent import create_visual_tools
+from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.orchestration import providers
 from fakeyou.orchestration.providers import create_visual_chat_model
 from fakeyou.visual.visual_caption import (
@@ -22,7 +24,10 @@ from fakeyou.visual.visual_caption import (
     frame_ref,
 )
 from fakeyou.visual.visual_store import VisualFrame, VisualStore, append_visual
-from tests.fakes import FakeClock, FakeVisualModel, RecordingJournal, caption_model
+from tests._error_support import message_pattern
+from tests._fakes_common import FakeClock
+from tests._persistence_fakes import RecordingJournal
+from tests._visual_fakes import FakeVisualModel, caption_model
 
 AT = "2026-10-09T03:10:00+00:00"
 
@@ -336,3 +341,229 @@ async def test_cached_caption_disabled_returns_none(tmp_path: Path) -> None:
 
     assert captioner.cached_caption(frame) is None
     assert len(model.seen) == 0
+
+
+class _GatedVisualModel(FakeVisualModel):
+    _gate: asyncio.Event = PrivateAttr()
+    _started: asyncio.Event = PrivateAttr()
+    _arrivals: int = PrivateAttr(default=0)
+    _in_flight: int = PrivateAttr(default=0)
+    _peak: int = PrivateAttr(default=0)
+
+    def __init__(
+        self,
+        text: str,
+        total_tokens: int,
+        gate: asyncio.Event,
+        started: asyncio.Event,
+    ) -> None:
+        super().__init__(
+            responses=[
+                AIMessage(
+                    content=text,
+                    usage_metadata={
+                        "input_tokens": total_tokens - 100,
+                        "output_tokens": 100,
+                        "total_tokens": total_tokens,
+                    },
+                )
+            ]
+        )
+        self._gate = gate
+        self._started = started
+
+    @property
+    def arrivals(self) -> int:
+        return self._arrivals
+
+    @property
+    def peak(self) -> int:
+        return self._peak
+
+    @override
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> AIMessage:
+        self._arrivals += 1
+        self._in_flight += 1
+        self._peak = max(self._peak, self._in_flight)
+        self._started.set()
+        try:
+            await self._gate.wait()
+            response = self.responses[0]
+            assert isinstance(response, AIMessage)
+            return response
+        finally:
+            self._in_flight -= 1
+
+
+async def test_concurrent_captions_share_one_budget_reservation(
+    tmp_path: Path,
+) -> None:
+    from fakeyou.visual.visual_caption import payload_bytes
+
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    first_path = shot_file(tmp_path, "first.jpg", 64, 48)
+    second_path = shot_file(tmp_path, "second.jpg", 64, 48)
+    _, width, height = payload_bytes(first_path.read_bytes())
+    single_usd = estimate_tokens(width, height) * VISUAL_USD_PER_MTOK / 1_000_000
+    first = frame_for(tmp_path, "0000000000008-eeeeffff", first_path, "11" * 32, 1700000000000.0)
+    second = frame_for(tmp_path, "0000000000009-gggghhhh", second_path, "22" * 32, 1700000002000.0)
+    model = _GatedVisualModel("A slide.", 1100, gate, started)
+    captioner = VisualCaptioner(
+        model, settings=VisualSettings(enabled=True, budget_usd=1.5 * single_usd)
+    )
+    first_task = asyncio.create_task(captioner.caption_frame(first))
+    await started.wait()
+    second_task = asyncio.create_task(captioner.caption_frame(second))
+    for _ in range(100):
+        if model.arrivals == 2 or second_task.done():
+            break
+        await asyncio.sleep(0.01)
+    gate.set()
+    results = await asyncio.gather(first_task, second_task)
+
+    assert results[0] is not None
+    assert results[1] is None
+    assert model.arrivals == 1
+    assert captioner.spent_usd == 1100 * VISUAL_USD_PER_MTOK / 1_000_000
+
+
+async def test_caption_concurrency_is_bounded_by_semaphore(tmp_path: Path) -> None:
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    first_path = shot_file(tmp_path, "first.jpg", 64, 48)
+    second_path = shot_file(tmp_path, "second.jpg", 64, 48)
+    first = frame_for(tmp_path, "0000000000008-eeeeffff", first_path, "11" * 32, 1700000000000.0)
+    second = frame_for(tmp_path, "0000000000009-gggghhhh", second_path, "22" * 32, 1700000002000.0)
+    model = _GatedVisualModel("A slide.", 10, gate, started)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True, max_concurrent=1))
+    first_task = asyncio.create_task(captioner.caption_frame(first))
+    await started.wait()
+    second_task = asyncio.create_task(captioner.caption_frame(second))
+    await asyncio.sleep(0.05)
+    assert model.arrivals == 1
+    gate.set()
+    results = await asyncio.gather(first_task, second_task)
+
+    assert results[0] is not None
+    assert results[1] is not None
+    assert model.peak == 1
+
+
+async def test_concurrent_captions_share_one_call_reservation(
+    tmp_path: Path,
+) -> None:
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    first_path = shot_file(tmp_path, "first.jpg", 64, 48)
+    second_path = shot_file(tmp_path, "second.jpg", 64, 48)
+    first = frame_for(tmp_path, "0000000000008-eeeeffff", first_path, "11" * 32, 1700000000000.0)
+    second = frame_for(tmp_path, "0000000000009-gggghhhh", second_path, "22" * 32, 1700000002000.0)
+    model = _GatedVisualModel("A slide.", 10, gate, started)
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True, max_calls=1))
+    first_task = asyncio.create_task(captioner.caption_frame(first))
+    await started.wait()
+    second_task = asyncio.create_task(captioner.caption_frame(second))
+    for _ in range(100):
+        if model.arrivals == 2 or second_task.done():
+            break
+        await asyncio.sleep(0.01)
+    gate.set()
+    results = await asyncio.gather(first_task, second_task)
+
+    assert results[0] is not None
+    assert results[1] is None
+    assert model.arrivals == 1
+
+
+async def test_failed_caption_refunds_its_budget_reservation(tmp_path: Path) -> None:
+    path = shot_file(tmp_path, "shared.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000007-aaaabbbb", path, "aa" * 32, 1700000000000.0)
+
+    class _FailingModel(FakeVisualModel):
+        @override
+        async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> AIMessage:
+            raise RuntimeError("provider exploded")
+
+    model = _FailingModel(responses=[AIMessage(content="unused")])
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True, budget_usd=0.001))
+    with pytest.raises(ProviderFault, match="llm unknown") as caught:
+        await captioner.caption_frame(frame)
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert captioner.spent_usd == 0.0
+
+
+async def test_malformed_response_frees_its_reservation_for_the_next_caption(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    first_path = shot_file(tmp_path, "first.jpg", 64, 48)
+    second_path = shot_file(tmp_path, "second.jpg", 64, 48)
+    first = frame_for(tmp_path, "0000000000011-aaaabbbb", first_path, "11" * 32, 1700000000000.0)
+    second = frame_for(tmp_path, "0000000000012-ccccdddd", second_path, "22" * 32, 1700000002000.0)
+
+    calls: list[str] = []
+
+    class _MalformedOnceModel(FakeVisualModel):
+        @override
+        async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+            calls.append("call")
+            if len(calls) == 1:
+                return SimpleNamespace()
+            return await super().ainvoke(input, config, **kwargs)
+
+    captioner = VisualCaptioner(
+        _MalformedOnceModel(responses=[AIMessage(content="A slide.")]),
+        settings=VisualSettings(enabled=True, max_calls=1),
+    )
+    with pytest.raises(AttributeError, match="usage_metadata"):
+        await captioner.caption_frame(first)
+
+    assert await captioner.caption_frame(second) is not None
+
+
+async def test_caption_payload_processing_leaves_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio as asyncio_module
+
+    calls: list[str] = []
+    real_to_thread = asyncio_module.to_thread
+
+    async def spy(func: Any, /, *args: Any, **kwargs: Any) -> Any:
+        calls.append(getattr(func, "__name__", "?"))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio_module, "to_thread", spy)
+    path = shot_file(tmp_path, "shared.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000007-aaaabbbb", path, "aa" * 32, 1700000000000.0)
+    model = caption_model("A slide with quarterly numbers.")
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+
+    assert await captioner.caption_frame(frame) is not None
+    assert "payload_bytes" in calls
+
+
+async def test_domain_error_from_model_passes_through_uncaptioned(
+    tmp_path: Path,
+) -> None:
+    path = shot_file(tmp_path, "passthrough.jpg", 64, 48)
+    frame = frame_for(tmp_path, "0000000000008-aaaabbbb", path, "bb" * 32, 1700000000000.0)
+
+    class _DomainFailingModel(FakeVisualModel):
+        @override
+        async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> AIMessage:
+            raise FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)
+
+    model = _DomainFailingModel(responses=[AIMessage(content="unused")])
+    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True, budget_usd=0.001))
+
+    with pytest.raises(
+        FakeYouError,
+        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+    ) as caught:
+        await captioner.caption_frame(frame)
+
+    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED

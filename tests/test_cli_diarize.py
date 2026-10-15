@@ -12,15 +12,19 @@ import pytest
 from pydantic import SecretStr
 
 import fakeyou.cli.main as cli_main
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli.diarize import diarize_run, diarize_show
+from fakeyou.cli.diarize import diarize_show
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.diarization.correction_labels import read_correction_labels
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
-from fakeyou.diarization.diarize_correction import write_correction_bundle
+from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
+from fakeyou.diarization.diarize_service import diarize_run, sidecar_turn_count
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
 from fakeyou.persistence.ingestion_status import lock_path, record_lock
 from fakeyou.persistence.record import meeting_record_path
+from tests._error_support import message_pattern
 
 SECRET_KEY = "super-secret-stt-key"
 
@@ -51,9 +55,9 @@ def _write_slot_wav(path: Path, samples: list[int]) -> None:
 def _write_session(
     settings: Settings, meeting_id: str, *, seq_starts: dict[int, int], frames: int = 1600
 ) -> tuple[Path, Path]:
-    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text('{"kind": "resume", "at": "2026-10-08T00:00:00+00:00"}\n')
+    record_path.write_text('{"kind": "resume", "at": "2026-10-08T00:00:00+00:00", "attempt": 1}\n')
     audio_dir = record_path.parent / "audio"
     slots = {
         str(slot): {
@@ -66,7 +70,7 @@ def _write_session(
     }
     (audio_dir).mkdir(parents=True, exist_ok=True)
     (audio_dir / "slots.json").write_text(
-        json.dumps({"schema": "slot_audio/v1", "slots": slots, "anchors": []}),
+        json.dumps({"schema": "slot_audio/v2", "slots": slots}),
         encoding="utf-8",
     )
     for slot in seq_starts:
@@ -95,7 +99,7 @@ def test_diarize_run_refuses_missing_api_key(settings: Settings) -> None:
     assert settings.stt.api_key is None
 
     with pytest.raises(FakeYouError, match="FAKEYOU_STT__API_KEY") as error:
-        diarize_run("m1", settings=settings)
+        diarize_run(SessionId("m1"), settings=settings)
 
     assert error.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
@@ -104,11 +108,15 @@ def test_diarize_run_maps_client_error_without_secret_text(settings: Settings) -
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         return _FakeResponse(b"not-json{{{")
 
-    with pytest.raises(DiarizeError) as error:
-        diarize_run("m1", settings=settings, opener=opener)
+    with pytest.raises(
+        DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID)
+    ) as error:
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert SECRET_KEY not in str(error.value)
     assert error.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID
@@ -119,12 +127,14 @@ def test_diarize_run_refuses_concurrent_run_via_lease(settings: Settings) -> Non
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("locked run must not transcribe")
 
     with record_lock(record_path, purpose="meeting"):
         with pytest.raises(FakeYouError, match="locked") as error:
-            diarize_run("m1", settings=settings, opener=opener)
+            diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert error.value.code is ErrorCode.RECORD_LOCKED
 
@@ -133,10 +143,12 @@ def test_diarize_run_releases_diarization_lease_on_success(settings: Settings) -
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         return _FakeResponse(_turns_payload([(0, 5000, "A")]))
 
-    assert diarize_run("m1", settings=settings, opener=opener) == 0
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
     assert not lock_path(record_path).exists()
 
 
@@ -144,11 +156,13 @@ def test_diarize_run_refuses_unequal_seq_start(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0, 1: 5})
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("misaligned run must not transcribe")
 
     with pytest.raises(FakeYouError, match="misaligned") as error:
-        diarize_run("m1", settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert error.value.code is ErrorCode.DIARIZE_SLOT_MISALIGNED
 
@@ -157,29 +171,39 @@ def test_diarize_run_refuses_nonzero_seq_start(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 3, 1: 3})
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("misaligned run must not transcribe")
 
     with pytest.raises(FakeYouError, match="zero") as error:
-        diarize_run("m1", settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert error.value.code is ErrorCode.DIARIZE_SLOT_NOT_AT_ZERO
 
 
 def test_diarize_run_maps_empty_audio_dir_to_input_unreadable(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
-    record_path = meeting_record_path(settings.paths.record_dir, "m1")
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("m1"))
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text("{}\n")
     (record_path.parent / "audio").mkdir(parents=True, exist_ok=True)
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("empty run must not transcribe")
 
-    with pytest.raises(FakeYouError) as error:
-        diarize_run("m1", settings=settings, opener=opener)
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
+    ) as error:
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
+    assert str(error.value).startswith(
+        "diarization input cannot be read: FileNotFoundError: [Errno 2] No such file or directory"
+    )
+    assert "slots.json" in str(error.value)
 
 
 def test_diarize_run_maps_missing_slot_wavs_to_input_unreadable(settings: Settings) -> None:
@@ -189,12 +213,19 @@ def test_diarize_run_maps_missing_slot_wavs_to_input_unreadable(settings: Settin
     assert list(audio_dir.glob("slot-*.wav")) == []
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("wav-less run must not transcribe")
 
-    with pytest.raises(FakeYouError, match="no slot wav files") as error:
-        diarize_run("m1", settings=settings, opener=opener)
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
+    ) as error:
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
+    assert str(error.value).startswith(
+        "diarization input cannot be read: FileNotFoundError: no slot wav files in "
+    )
     assert record_path.read_bytes() == before
 
 
@@ -203,10 +234,12 @@ def test_diarize_run_writes_sidecar_and_keeps_record_identical(settings: Setting
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0, 1: 0})
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         return _FakeResponse(_turns_payload([(0, 5000, "A"), (6000, 12000, "B")]))
 
-    assert diarize_run("m1", settings=settings, opener=opener) == 0
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
 
     assert record_path.read_bytes() == before
     payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
@@ -227,7 +260,7 @@ def test_diarize_run_writes_sidecar_and_keeps_record_identical(settings: Setting
 def test_diarize_run_offsets_chunk_turns_by_chunk_start(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import fakeyou.cli.diarize as cli_diarize
+    import fakeyou.diarization.diarize_service as cli_diarize
 
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
@@ -242,16 +275,18 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
         return buffer.getvalue()
 
     chunks = [chunk_wav(10), chunk_wav(10)]
-    monkeypatch.setattr(cli_diarize, "split_chunks", lambda frames, rate, **kwargs: chunks)
+    monkeypatch.setattr(cli_diarize, "split_chunks", lambda _frames, _rate, **_kwargs: chunks)
     calls = {"count": 0}
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         calls["count"] += 1
         if calls["count"] == 1:
             return _FakeResponse(_turns_payload([(0, 5000, "A")]))
         return _FakeResponse(_turns_payload([(0, 5000, "B")]))
 
-    assert diarize_run("m1", settings=settings, opener=opener) == 0
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
 
     payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
     assert [(turn["start_ms"], turn["end_ms"], turn["speaker"]) for turn in payload["turns"]] == [
@@ -264,7 +299,7 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import fakeyou.audio.diarize_mix as diarize_mix
-    import fakeyou.cli.diarize as cli_diarize
+    import fakeyou.diarization.diarize_service as cli_diarize
 
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0})
@@ -275,7 +310,7 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
         handle.setsampwidth(2)
         handle.setframerate(CAPTURE_SAMPLE_RATE)
         handle.writeframes(bytes(6 * 60 * CAPTURE_SAMPLE_RATE * 2))
-    monkeypatch.setattr(cli_diarize, "mix_session_slots", lambda audio_dir: buffer.getvalue())
+    monkeypatch.setattr(cli_diarize, "mix_session_slots", lambda _audio_dir: buffer.getvalue())
 
     real_split = diarize_mix.split_chunks
     seen: dict[str, Any] = {}
@@ -288,13 +323,14 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
 
     sizes: list[int] = []
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del timeout
         data = request.data
         assert isinstance(data, (bytes, bytearray))
         sizes.append(len(data))
         return _FakeResponse(_turns_payload([]))
 
-    assert diarize_run("m1", settings=settings, opener=opener) == 0
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
 
     assert seen.get("max_minutes") == 5.0
     assert len(sizes) == 2
@@ -307,13 +343,20 @@ def test_diarize_run_maps_corrupt_slot_wav_to_input_unreadable(settings: Setting
     (audio_dir / "slot-0.wav").write_bytes(b"not a wav file" * 8)
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request) -> _FakeResponse:
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
         raise AssertionError("corrupt run must not transcribe")
 
-    with pytest.raises(FakeYouError) as error:
-        diarize_run("m1", settings=settings, opener=opener)
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
+    ) as error:
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
 
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
+    assert str(error.value) == (
+        "diarization input cannot be read: Error: file does not start with RIFF id"
+    )
     assert isinstance(error.value.__cause__, wave.Error)
     assert record_path.read_bytes() == before
 
@@ -354,7 +397,7 @@ def _show_line(index: int, capture_ms: float) -> str:
 
 
 def _show_session(settings: Settings, meeting_id: str, captures: list[float]) -> Path:
-    record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(
         "".join(_show_line(index, capture) + "\n" for index, capture in enumerate(captures)),
@@ -363,7 +406,7 @@ def _show_session(settings: Settings, meeting_id: str, captures: list[float]) ->
     audio_dir = record_path.parent / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
     (audio_dir / "slots.json").write_text(
-        json.dumps({"schema": "slot_audio/v1", "slots": {}, "anchors": []}),
+        json.dumps({"schema": "slot_audio/v2", "slots": {}}),
         encoding="utf-8",
     )
     write_correction_bundle(
@@ -380,7 +423,7 @@ def test_diarize_show_prints_turns_coverage_and_ok_status(
 ) -> None:
     _show_session(settings, "m1", [1000.0, 2000.0, 20000.0])
 
-    assert diarize_show("m1", settings=settings) == 0
+    assert diarize_show(SessionId("m1"), settings=settings) == 0
 
     lines = capsys.readouterr().out.splitlines()
     assert "turns: 1" in lines
@@ -396,7 +439,7 @@ def test_diarize_show_exits_stale_when_record_changed(
         handle.write(_show_line(9, 1100.0) + "\n")
 
     with pytest.raises(SystemExit) as exit:
-        diarize_show("m1", settings=settings)
+        diarize_show(SessionId("m1"), settings=settings)
 
     assert exit.value.code is ExitCode.INPUT_REJECTED
     assert "stale" in capsys.readouterr().out
@@ -412,7 +455,7 @@ def test_diarize_show_reports_invalid_schema_without_stale_label(
     sidecar.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(DiarizeError, match="schema") as error:
-        diarize_show("m1", settings=settings)
+        diarize_show(SessionId("m1"), settings=settings)
 
     assert error.value.code is ErrorCode.DIARIZE_SCHEMA_UNSUPPORTED
     assert "stale" not in capsys.readouterr().out
@@ -428,19 +471,19 @@ def test_diarize_show_reports_invalid_turns_without_stale_label(
     sidecar.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(DiarizeError, match="turns are invalid") as error:
-        diarize_show("m1", settings=settings)
+        diarize_show(SessionId("m1"), settings=settings)
 
     assert error.value.code is ErrorCode.DIARIZE_TURNS_INVALID
     assert "stale" not in capsys.readouterr().out
 
 
 def test_diarize_show_refuses_missing_sidecar(settings: Settings) -> None:
-    record_path = meeting_record_path(settings.paths.record_dir, "m1")
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("m1"))
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record_path.write_text(_show_line(0, 1000.0) + "\n", encoding="utf-8")
 
     with pytest.raises(FakeYouError, match="no diarization correction") as error:
-        diarize_show("m1", settings=settings)
+        diarize_show(SessionId("m1"), settings=settings)
 
     assert error.value.code is ErrorCode.DIARIZE_CORRECTION_MISSING
 
@@ -461,3 +504,207 @@ def test_diarize_show_dispatches_meeting_id(monkeypatch: pytest.MonkeyPatch) -> 
     [call] = calls
     assert call["meeting_id"] == "m1"
     assert set(call) == {"meeting_id", "settings"}
+
+
+@pytest.mark.parametrize("command", ["run", "show"])
+def test_diarize_rejects_path_traversal_before_the_handler_runs(
+    command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def handler(*args: Any, **kwargs: Any) -> None:
+        del args
+        del kwargs
+        pytest.fail("a traversal meeting ID must not reach the diarize handler")
+
+    monkeypatch.setattr(cli_main, f"diarize_{command}", handler)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "diarize", command, "--meeting-id", "../../x"])
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == ExitCode.INPUT_REJECTED
+    expected = render_error(ErrorCode.SESSION_ID_INVALID, field="--meeting-id", value="../../x")
+    assert expected in capsys.readouterr().err
+
+
+def test_diarize_run_uses_configured_transcription_budget(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    settings.stt.diarize_timeout_seconds = 7.5
+    settings.stt.diarize_max_retries = 0
+    _write_session(settings, "m1", seq_starts={0: 0})
+    seen: dict[str, Any] = {}
+
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        seen["timeout"] = timeout
+        return _FakeResponse(_turns_payload([(0, 1000, "A")]))
+
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert seen["timeout"] == 7.5
+
+
+def test_sidecar_turn_count_reports_none_when_sidecar_corrupt(settings: Settings) -> None:
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("m9"))
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    (record_path.parent / "diarization.json").write_text("{corrupt", encoding="utf-8")
+
+    assert sidecar_turn_count(record_path) is None
+
+
+def test_sidecar_turn_count_reports_zero_when_sidecar_missing(settings: Settings) -> None:
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("m9"))
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+
+    assert sidecar_turn_count(record_path) == 0
+
+
+def test_sidecar_turn_count_reports_none_when_turns_unusable(settings: Settings) -> None:
+    record_path = meeting_record_path(settings.paths.record_dir, SessionId("m9"))
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    (record_path.parent / "diarization.json").write_text(
+        json.dumps({"schema": "diarization_correction/v1", "turns": "oops"}), encoding="utf-8"
+    )
+
+    assert sidecar_turn_count(record_path) is None
+
+
+def test_diarize_show_reports_unreadable_turns_when_sidecar_lost_mid_stale(
+    settings: Settings, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fakeyou.diarization.diarize_service as cli_diarize
+
+    record_path = _show_session(settings, "m1", [1000.0])
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(_show_line(9, 1100.0) + "\n")
+    monkeypatch.setattr(cli_diarize, "sidecar_turn_count", lambda _record: None)
+
+    with pytest.raises(SystemExit) as exit:
+        diarize_show(SessionId("m1"), settings=settings)
+
+    assert exit.value.code is ExitCode.INPUT_REJECTED
+    lines = capsys.readouterr().out.splitlines()
+    assert "turns: unreadable" in lines
+    assert any(line.startswith("status: stale") for line in lines)
+
+
+def test_diarize_show_reports_unreadable_turns_when_sidecar_lost_mid_show(
+    settings: Settings, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import fakeyou.diarization.diarize_service as cli_diarize
+
+    _show_session(settings, "m1", [1000.0])
+    monkeypatch.setattr(cli_diarize, "sidecar_turn_count", lambda _record: None)
+
+    assert diarize_show(SessionId("m1"), settings=settings) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert "turns: unreadable" in lines
+
+
+def _claimed_line(index: int, capture_ms: float, claim: str | None) -> str:
+    return json.dumps(
+        {
+            "kind": "transcript",
+            "at": "2026-10-08T00:00:00+00:00",
+            "id": f"event-{index}",
+            "spoken_at": "2026-10-08T00:00:00+00:00",
+            "source": "meeting_audio",
+            "text": "hello world",
+            "participant_id": "unknown",
+            "speaker_evidence_id": None,
+            "capture_ms": capture_ms,
+            "display_claim": claim,
+        }
+    )
+
+
+def test_diarize_run_binds_corrected_speakers_to_display_claims(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+    record_path.write_text(
+        "".join(
+            _claimed_line(index, capture, claim) + "\n"
+            for index, (capture, claim) in enumerate(
+                [(1000.0, "Maya"), (7000.0, "Budi"), (13500.0, None)]
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
+        return _FakeResponse(
+            _turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "C")])
+        )
+
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+
+    assert read_correction_labels(record_path) == {
+        correction_uuid("A", 0): "Maya",
+        correction_uuid("B", 6000): "Budi",
+    }
+
+
+def test_diarize_run_rejects_an_unreadable_record_before_transcribing(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+    record_path.write_text('{"kind": "transcript"}\n', encoding="utf-8")
+
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
+        raise AssertionError("an unreadable record must not reach transcription")
+
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
+    ) as error:
+        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+
+    assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
+    assert not (record_path.parent / "diarization.json").exists()
+
+
+def test_diarize_run_names_a_speaker_with_several_turns(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+    record_path.write_text(
+        "".join(
+            _claimed_line(index, capture, claim) + "\n"
+            for index, (capture, claim) in enumerate(
+                [(1000.0, "Maya"), (7000.0, "Budi"), (13500.0, "Maya")]
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
+        return _FakeResponse(
+            _turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "A")])
+        )
+
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+
+    assert read_correction_labels(record_path) == {
+        correction_uuid("A", 0): "Maya",
+        correction_uuid("B", 6000): "Budi",
+        correction_uuid("A", 13000): "Maya",
+    }
+
+
+def test_unstamped_claims_never_bind_a_label(settings: Settings) -> None:
+    settings.stt.api_key = SecretStr(SECRET_KEY)
+    record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
+    record_path.write_text(
+        _claimed_line(0, 0.0, "Ghost") + "\n" + _claimed_line(1, 1000.0, "Maya") + "\n",
+        encoding="utf-8",
+    )
+
+    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
+        del request
+        del timeout
+        return _FakeResponse(_turns_payload([(0, 5000, "A")]))
+
+    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+
+    assert read_correction_labels(record_path) == {correction_uuid("A", 0): "Maya"}

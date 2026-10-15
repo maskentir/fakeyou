@@ -2,14 +2,16 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import os
 import statistics
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from graphiti_core.nodes import EpisodicNode
@@ -17,17 +19,21 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 
 import fakeyou.memory.memory as memory_module
-from evals._shared import token_present
+from evals._shared import ArtifactMeta, ReplayOptions, sanitized_role, token_present
 from evals.runtime_evidence import (
     ModelCallCounter,
+    ResponderContext,
     capture_candidate,
     finish_candidate,
     native_responder,
+    prepare_artifact_directory,
     respond_with_deadline,
     runtime_metadata,
 )
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import cap_spoken_reply
+from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.foundation.timeparse import require_iso_datetime
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import (
     PersonaProfile,
@@ -36,10 +42,17 @@ from fakeyou.memory.persona import (
     memory_wiring,
     persona_digest,
 )
-from tests.fakes import ToolCallingFakeModel, make_graphiti, recall_call
+from fakeyou.observability.faults import capture_error
+from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from tests._memory_fakes import make_graphiti
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "trust-scenarios.json"
+TRUST_RUNS = 3
+USEFULNESS_THRESHOLD = 0.9
+MIN_USEFUL_PAIRS = 79
+JUDGE_MODEL = "gpt-4.1-mini"
+EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
     "answered",
@@ -50,7 +63,65 @@ AID_CHECKS = (
 )
 
 
-def trust_gate(
+def _review_identity(
+    review: dict[str, object], *, expected_case_ids: set[str] | frozenset[str], runs: int
+) -> tuple[str, int] | None:
+    verdict = review.get("verdict")
+    if review.get("skipped", False) is not False or (
+        isinstance(verdict, str) and verdict.strip().lower() in {"skip", "skipped"}
+    ):
+        return None
+    case_id = review.get("case_id")
+    run_index = review.get("run_index")
+    if not isinstance(case_id, str) or case_id not in expected_case_ids:
+        return None
+    if not isinstance(run_index, int) or isinstance(run_index, bool):
+        return None
+    if run_index < 0 or run_index >= runs:
+        return None
+    return case_id, run_index
+
+
+def _review_flags(review: dict[str, object]) -> tuple[bool, bool] | None:
+    severe = review.get("severe")
+    positive = review.get("useful")
+    reason = review.get("reason")
+    if type(severe) is not bool or type(positive) is not bool:
+        return None
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    return severe, positive
+
+
+def _review_mode_ok(review: dict[str, object]) -> bool:
+    mode = review.get("mode", "contract")
+    if not isinstance(mode, str) or mode not in REVIEW_MODES:
+        return False
+    if mode != "live":
+        return True
+    source_ref = review.get("source_ref")
+    if not isinstance(source_ref, str) or not source_ref.strip():
+        return False
+    checked = review.get("checked")
+    return isinstance(checked, list) and "all_turns" in checked
+
+
+def _checked_review(
+    review: object, *, expected_case_ids: set[str] | frozenset[str], runs: int
+) -> tuple[tuple[str, int], bool, bool] | None:
+    if not isinstance(review, dict):
+        return None
+    identity = _review_identity(review, expected_case_ids=expected_case_ids, runs=runs)
+    if identity is None:
+        return None
+    flags = _review_flags(review)
+    if flags is None or not _review_mode_ok(review):
+        return None
+    severe, positive = flags
+    return identity, severe, positive
+
+
+def _valid_gate_shape(
     reviews: list[dict[str, object]], *, expected_case_ids: set[str] | frozenset[str], runs: int
 ) -> bool:
     if not isinstance(reviews, list):
@@ -62,44 +133,21 @@ def trust_gate(
     for expected in expected_case_ids:
         if not isinstance(expected, str) or not expected:
             return False
-    if len(reviews) != len(expected_case_ids) * runs:
+    return len(reviews) == len(expected_case_ids) * runs
+
+
+def trust_gate(
+    reviews: list[dict[str, object]], *, expected_case_ids: set[str] | frozenset[str], runs: int
+) -> bool:
+    if not _valid_gate_shape(reviews, expected_case_ids=expected_case_ids, runs=runs):
         return False
     seen: set[tuple[str, int]] = set()
     useful = 0
     for review in reviews:
-        if not isinstance(review, dict):
+        checked = _checked_review(review, expected_case_ids=expected_case_ids, runs=runs)
+        if checked is None:
             return False
-        verdict = review.get("verdict")
-        if review.get("skipped", False) is not False or (
-            isinstance(verdict, str) and verdict.strip().lower() in {"skip", "skipped"}
-        ):
-            return False
-        case_id = review.get("case_id")
-        run_index = review.get("run_index")
-        severe = review.get("severe")
-        positive = review.get("useful")
-        reason = review.get("reason")
-        if not isinstance(case_id, str) or case_id not in expected_case_ids:
-            return False
-        if not isinstance(run_index, int) or isinstance(run_index, bool):
-            return False
-        if run_index < 0 or run_index >= runs:
-            return False
-        if type(severe) is not bool or type(positive) is not bool:
-            return False
-        if not isinstance(reason, str) or not reason.strip():
-            return False
-        mode = review.get("mode", "contract")
-        if not isinstance(mode, str) or mode not in REVIEW_MODES:
-            return False
-        if mode == "live":
-            source_ref = review.get("source_ref")
-            if not isinstance(source_ref, str) or not source_ref.strip():
-                return False
-            checked = review.get("checked")
-            if not isinstance(checked, list) or "all_turns" not in checked:
-                return False
-        pair = (case_id, run_index)
+        pair, severe, positive = checked
         if pair in seen:
             return False
         seen.add(pair)
@@ -175,8 +223,8 @@ def build_case_memory(
     for uuid, item in spec.get("stored", {}).items():
         raw_group = str(item["group"])
         resolved = group_id if raw_group == "own" else raw_group
-        source_at = datetime.fromisoformat(str(item["source_at"]))
-        recorded_at = datetime.fromisoformat(str(item.get("recorded_at", item["source_at"])))
+        source_at = require_iso_datetime(str(item["source_at"]))
+        recorded_at = require_iso_datetime(str(item.get("recorded_at", item["source_at"])))
         stored[str(uuid)] = SimpleNamespace(
             uuid=str(uuid),
             group_id=resolved,
@@ -205,7 +253,7 @@ def case_storage(memory: Any, stored: dict[str, Any], states: dict[str, str]) ->
             yield
 
 
-def score_aids(case: dict[str, Any], reply: str, recalled: bool) -> dict[str, bool]:
+def score_aids(case: dict[str, Any], reply: str, *, recalled: bool) -> dict[str, bool]:
     return {
         "answered": bool(reply.strip()),
         "within_two_sentences": cap_spoken_reply(reply) == reply.strip(),
@@ -230,18 +278,15 @@ async def replay_trust(
     model_factory: Callable[[dict[str, Any]], BaseChatModel],
     fixture: dict[str, Any],
     runs: int,
-    *,
-    settings: Settings | None = None,
-    fallback: BaseChatModel | None = None,
-    fixture_path: Path = FIXTURE,
+    options: ReplayOptions | None = None,
 ) -> TrustScore:
-    candidate = capture_candidate(fixture_path)
-    settings = settings if settings is not None else Settings()
+    options = options or ReplayOptions()
+    candidate = capture_candidate(options.fixture_path or FIXTURE)
+    settings = options.settings if options.settings is not None else Settings()
+    fallback = options.fallback
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
     candidate["persona_sha256"] = persona_digest(profile)
-    candidate["fixture_payload_sha256"] = hashlib.sha256(
-        json.dumps(fixture, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    candidate["fixture_payload_sha256"] = canonical_json_digest(fixture, compact=True)
     names = meeting_tool_names(profile, None, memory_requested=True)
     strategy = settings.memory.recall.strategy
     bound, prefetch = memory_wiring(names, strategy)
@@ -265,14 +310,16 @@ async def replay_trust(
                 counter = ModelCallCounter()
                 async with native_responder(
                     model_factory(case),
-                    settings=settings,
-                    profile=profile,
-                    memory=memory,
-                    brief=None,
-                    fallback=fallback,
-                    counter=counter,
-                    trajectory=trajectory,
-                    meeting_id=f"trust-eval-{case['id']}-{run}",
+                    ResponderContext(
+                        settings=settings,
+                        profile=profile,
+                        memory=memory,
+                        brief=None,
+                        fallback=fallback,
+                        counter=counter,
+                        trajectory=trajectory,
+                        meeting_id=f"trust-eval-{case['id']}-{run}",
+                    ),
                 ) as responder:
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
@@ -290,12 +337,14 @@ async def replay_trust(
                             speaker_evidence_id=None,
                         )
                         started = time.monotonic()
-                        try:
-                            reply = await respond_with_deadline(responder, event, settings)
-                            error: str | None = None
-                        except Exception as exc:
+                        answered, failure = await capture_error(
+                            partial(respond_with_deadline, responder, event, settings)
+                        )
+                        error: str | None = None
+                        reply = answered or ""
+                        if failure is not None:
                             reply = ""
-                            error = f"{type(exc).__name__}: {exc}"
+                            error = f"{type(failure).__name__}: {failure}"
                         latency = time.monotonic() - started
                         calls = trajectory[seen_tools:]
                         evidence = [
@@ -329,7 +378,9 @@ async def replay_trust(
                                 "latency_seconds": latency,
                                 "exception": error,
                                 "aids": score_aids(
-                                    case, reply, bool(evidence or counter.prefetch[seen_prefetch:])
+                                    case,
+                                    reply,
+                                    recalled=bool(evidence or counter.prefetch[seen_prefetch:]),
                                 )
                                 if rated
                                 else {},
@@ -369,9 +420,10 @@ def passing_trust_reviews(
 class EvalDelayedModel(ToolCallingFakeModel):
     cancelled: bool = False
 
+    @override
     async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
         try:
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)
         except asyncio.CancelledError:
             self.cancelled = True
             raise
@@ -384,3 +436,107 @@ def strategy_settings(strategy: str) -> Settings:
     return settings.model_copy(
         update={"memory": settings.memory.model_copy(update={"recall": recall})}
     )
+
+
+def judge_available() -> bool:
+    return bool(os.environ.get("EVAL_JUDGE_API_KEY", "").strip())
+
+
+def write_trust_artifacts(directory: Path, *, score: TrustScore, meta: ArtifactMeta) -> None:
+    prepare_artifact_directory(directory)
+    dumped = meta.settings.model_dump(mode="json")
+    reply_raw = dumped.get("reply", {})
+    fallback_raw = dumped.get("reply_fallback")
+    manifest = {
+        "created_at": datetime.now(UTC).isoformat(),
+        "mode": meta.mode,
+        "model": meta.model_name,
+        "source_commit": score.candidate.get("source_commit", meta.source_commit),
+        "dirty": score.candidate.get("dirty_at_start"),
+        "candidate": score.candidate,
+        "provenance_valid": score.candidate.get("unchanged") is True
+        and score.runtime == runtime_metadata(meta.settings),
+        "runtime": score.runtime,
+        "fixture_name": meta.fixture_path.name,
+        "fixture_sha256": score.candidate.get("fixture_sha256"),
+        "persona": str(meta.fixture.get("persona", "")),
+        "persona_sha256": score.candidate.get("persona_sha256"),
+        "fixture_payload_sha256": score.candidate.get("fixture_payload_sha256"),
+        "runs": len({turn["run_index"] for turn in score.turns}),
+        "cases": len(meta.fixture["cases"]),
+        "turns": len(score.turns),
+        "rated_pairs": len(rated_pairs(score)),
+        "sentence_streaming": dumped.get("conversation", {}).get("sentence_streaming"),
+        "thresholds": {
+            "usefulness_min": USEFULNESS_THRESHOLD,
+            "min_useful_pairs": MIN_USEFUL_PAIRS,
+            "severe_max": 0,
+        },
+        "judge": {
+            "available": judge_available(),
+            "model": JUDGE_MODEL,
+            "note": "Independent meaning review is recorded in reviews.json, never self-assessed.",
+        },
+        "review": {
+            "required_live_checks": ["all_turns"],
+            "scope": "One verdict per case/run covers every turn, including unrated turns; "
+            "any severe earlier response makes that case/run severe.",
+        },
+        "reply": sanitized_role(reply_raw) if isinstance(reply_raw, dict) else {},
+        "reply_fallback": sanitized_role(fallback_raw) if isinstance(fallback_raw, dict) else None,
+        "response_timeout_seconds": dumped.get("conversation", {}).get("response_timeout_seconds"),
+        "recall_timeout_seconds": dumped.get("memory", {}).get("recall", {}).get("timeout_seconds"),
+        "latency": score.latency_summary(),
+        "model_calls": sum(int(turn.get("model_calls", 0)) for turn in score.turns),
+        "recall_calls": sum(len(turn.get("recall_evidence", [])) for turn in score.turns),
+    }
+    (directory / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    (directory / "turns.json").write_text(
+        json.dumps(score.turns, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    (directory / "prompts.json").write_text(
+        json.dumps(score.prompts, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
+
+def summarize_trust(
+    reviews: list[dict[str, object]],
+    *,
+    expected_case_ids: set[str],
+    runs: int,
+    score: TrustScore | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    gate = trust_gate(reviews, expected_case_ids=expected_case_ids, runs=runs)
+    severe = sum(1 for review in reviews if review.get("severe") is True)
+    useful = sum(1 for review in reviews if review.get("useful") is True)
+    pairs: set[tuple[str, int]] = set()
+    for review in reviews:
+        case_id = review.get("case_id")
+        run_index = review.get("run_index")
+        if isinstance(case_id, str) and isinstance(run_index, int):
+            pairs.add((case_id, run_index))
+    expected_pairs = {(case_id, run) for case_id in expected_case_ids for run in range(runs)}
+    summary: dict[str, Any] = {
+        "reviews_seen": len(reviews),
+        "reviews_expected": len(expected_case_ids) * runs,
+        "pairs_complete": pairs == expected_pairs,
+        "severe_count": severe,
+        "useful_count": useful,
+        "usefulness": round(useful / len(reviews), 3) if reviews else None,
+        "gate_passed": gate,
+        "contract_only": all(review.get("mode", "contract") == "contract" for review in reviews),
+    }
+    if score is not None:
+        summary["provenance_valid"] = (
+            score.candidate.get("unchanged") is True
+            and settings is not None
+            and score.runtime == runtime_metadata(settings)
+        )
+        summary["gate_passed"] = gate and summary["provenance_valid"]
+        summary["latency"] = score.latency_summary()
+        summary["aids"] = score.aid_rates()
+        summary["exceptions"] = sum(1 for turn in score.turns if turn.get("exception"))
+    return summary

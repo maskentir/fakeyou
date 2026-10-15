@@ -1,3 +1,5 @@
+from typing import override
+
 from pipecat.frames.frames import (
     AudioRawFrame,
     Frame,
@@ -15,6 +17,7 @@ class _Sink(FrameProcessor):
         super().__init__(enable_direct_mode=True)
         self.frames: list[Frame] = []
 
+    @override
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         self.frames.append(frame)

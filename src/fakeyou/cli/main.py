@@ -10,14 +10,13 @@ import typer
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
-from fakeyou.cli._operator import OperatorIdentity
-from fakeyou.cli.audio import audio_purge_expired
+from fakeyou.cli.audio import audio_purge_expired, visual_purge_expired
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat
 from fakeyou.cli.db import db_stamp, db_status, db_upgrade
 from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
-from fakeyou.cli.diarize import diarize_run, diarize_show
+from fakeyou.cli.diarize import diarize_show
 from fakeyou.cli.join import JoinOptions, join_meeting
 from fakeyou.cli.memory import (
     CorrectionTarget,
@@ -30,8 +29,6 @@ from fakeyou.cli.memory import (
 )
 from fakeyou.cli.output import emit_error
 from fakeyou.cli.voiceprint import (
-    EnrollSubject,
-    LivenessGate,
     voiceprint_challenge,
     voiceprint_delete,
     voiceprint_enroll,
@@ -40,7 +37,12 @@ from fakeyou.cli.voiceprint import (
     voiceprint_verify,
 )
 from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
+from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.checkpoint import is_database_error
+from fakeyou.diarization.diarize_service import diarize_run
+from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
+from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.worker.worker_backend import WorkerStartRequest
 
@@ -129,6 +131,13 @@ audio_app = typer.Typer(
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
 )
+visual_app = typer.Typer(
+    help="Manage persisted meeting visual evidence",
+    add_completion=False,
+    no_args_is_help=False,
+    pretty_exceptions_enable=False,
+    rich_markup_mode=None,
+)
 diarize_app = typer.Typer(
     help="Run offline speaker correction for one meeting",
     add_completion=False,
@@ -141,6 +150,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(voiceprint_app, name="voiceprint")
 app.add_typer(calibrate_app, name="calibrate")
 app.add_typer(audio_app, name="audio")
+app.add_typer(visual_app, name="visual")
 app.add_typer(diarize_app, name="diarize")
 
 
@@ -232,7 +242,9 @@ def memory_forget_command(
     asyncio.run(
         forget_memory(
             identity=_operator_identity(persona_path, owner_id, twin_id),
-            meeting_id=meeting_id,
+            meeting_id=parse_session_id(meeting_id, field="--meeting-id")
+            if meeting_id is not None
+            else None,
             episode_uuid=episode_uuid,
             settings=_load_settings(),
             keep_record=keep_record,
@@ -259,7 +271,7 @@ def memory_ingest_command(
 ) -> None:
     asyncio.run(
         ingest_recorded_meeting(
-            meeting_id=meeting_id,
+            meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
             identity=_operator_identity(persona_path, owner_id, twin_id),
             twin_name=twin_name,
             settings=_load_settings(),
@@ -296,7 +308,11 @@ def report_command(
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
     journal_dir: Annotated[Path | None, typer.Option("--journal-dir")] = None,
 ) -> None:
-    show_session_report(meeting_id=meeting_id, journal_dir=journal_dir, settings=_load_settings())
+    show_session_report(
+        meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
+        journal_dir=journal_dir,
+        settings=_load_settings(),
+    )
 
 
 @app.command("debrief", help="Generate a source-backed meeting debrief for operator review")
@@ -311,7 +327,7 @@ def debrief_command(
 ) -> None:
     asyncio.run(
         debrief_meeting(
-            meeting_id=meeting_id,
+            meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
             identity=_operator_identity(persona_path, owner_id, twin_id),
             force=force,
             settings=_load_settings(),
@@ -558,7 +574,7 @@ def voiceprint_enroll_command(
 @voiceprint_app.command("challenge", help="Issue an enrollment liveness challenge")
 @_guard_interrupts
 def voiceprint_challenge_command() -> None:
-    voiceprint_challenge(settings=_load_settings())
+    voiceprint_challenge()
 
 
 @voiceprint_app.command("verify", help="Verify an audio clip against a voiceprint")
@@ -600,9 +616,7 @@ def calibrate_lock_command(
     out: Annotated[str, typer.Option("--out")],
     model_version: Annotated[str | None, typer.Option("--model-version")] = None,
 ) -> None:
-    calibrate_lock(
-        dev_journals=dev_journals, out=out, settings=_load_settings(), model_version=model_version
-    )
+    calibrate_lock(dev_journals=dev_journals, out=out, model_version=model_version)
 
 
 @calibrate_app.command("eval", help="Evaluate calibration on eval score journals")
@@ -616,7 +630,6 @@ def calibrate_eval_command(
     calibrate_eval(
         eval_journals=eval_journals,
         artifact=artifact,
-        settings=_load_settings(),
         model_version=model_version,
     )
 
@@ -631,13 +644,25 @@ def audio_purge_expired_command(
     audio_purge_expired(root=root, days=days, settings=_load_settings())
 
 
+@visual_app.command("purge-expired", help="Delete meeting visual evidence past retention")
+@_guard_interrupts
+def visual_purge_expired_command(
+    *,
+    root: Annotated[Path | None, typer.Option("--root")] = None,
+    days: Annotated[int | None, typer.Option("--days")] = None,
+) -> None:
+    visual_purge_expired(root=root, days=days, settings=_load_settings())
+
+
 @diarize_app.command("run", help="Mix slot audio and write diarization sidecars")
 @_guard_interrupts
 def diarize_run_command(
     *,
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
 ) -> None:
-    diarize_run(meeting_id=meeting_id, settings=_load_settings())
+    diarize_run(
+        meeting_id=parse_session_id(meeting_id, field="--meeting-id"), settings=_load_settings()
+    )
 
 
 @diarize_app.command("show", help="Show diarization correction coverage")
@@ -646,7 +671,9 @@ def diarize_show_command(
     *,
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
 ) -> None:
-    diarize_show(meeting_id=meeting_id, settings=_load_settings())
+    diarize_show(
+        meeting_id=parse_session_id(meeting_id, field="--meeting-id"), settings=_load_settings()
+    )
 
 
 def main() -> None:
@@ -660,6 +687,10 @@ def main() -> None:
         _report(FakeYouError(ErrorCode.INPUT_INVALID, reason=_describe(error)))
     except ProviderFault as fault:
         _report(FakeYouError(ErrorCode.PROVIDER_UNAVAILABLE, reason=fault))
+    except Exception as error:
+        if not is_database_error(error):
+            raise
+        _report(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
 
 
 def _report(error: FakeYouError) -> NoReturn:

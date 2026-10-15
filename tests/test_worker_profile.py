@@ -29,7 +29,7 @@ async def test_join_uses_a_per_meeting_guest_profile(
 
 @pytest.mark.asyncio
 async def test_join_refuses_a_second_worker_on_a_signed_in_profile(
-    settings: Settings, join: Any, session_run: Any, tmp_path: Path
+    join: Any, session_run: Any, tmp_path: Path
 ) -> None:
     profile = tmp_path / "signed-in"
 
@@ -41,7 +41,7 @@ async def test_join_refuses_a_second_worker_on_a_signed_in_profile(
 
 @pytest.mark.asyncio
 async def test_join_releases_the_signed_in_profile_after_the_session(
-    settings: Settings, join: Any, session_run: Any, tmp_path: Path
+    join: Any, session_run: Any, tmp_path: Path
 ) -> None:
     profile = tmp_path / "signed-in"
 

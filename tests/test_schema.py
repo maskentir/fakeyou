@@ -40,7 +40,9 @@ BASELINE_COLUMNS = [
 
 @pytest.fixture
 def blank_engine(blank_database_url: str) -> Iterator[Engine]:
-    engine = create_engine_for_url(blank_database_url)
+    engine = create_engine_for_url(
+        blank_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         yield engine
     finally:
@@ -211,7 +213,9 @@ def test_baseline_downgrade_refuses_to_drop_biometric_data(migrated_engine: Engi
 def test_upgrade_waits_while_another_session_holds_the_schema_lock(
     blank_engine: Engine, blank_database_url: str
 ) -> None:
-    holder_engine = create_engine_for_url(blank_database_url)
+    holder_engine = create_engine_for_url(
+        blank_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         with holder_engine.connect() as holder, ThreadPoolExecutor(max_workers=1) as pool:
             transaction = holder.begin()

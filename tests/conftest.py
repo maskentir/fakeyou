@@ -1,6 +1,7 @@
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -17,7 +18,7 @@ from sqlalchemy.engine import make_url
 
 import fakeyou.cli.join as cli_join
 import fakeyou.db.checkpoint as checkpoint_module
-from fakeyou.cli._operator import OperatorIdentity
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import (
     BrowserSettings,
     DatabaseSettings,
@@ -33,14 +34,13 @@ from fakeyou.config.settings import (
 )
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.db.schema import upgrade
-from tests.fakes import (
-    DATABASE_URL,
-    FakeAudio,
-    PCMStream,
-    RecordingJournal,
-    SessionRun,
-    make_graphiti,
-)
+from fakeyou.memory.persona import OperatorIdentity
+from tests._audio_fakes import FakeAudio, PCMStream
+from tests._cli_support import AudioJoin, join_with_audio
+from tests._fakes_common import DATABASE_URL
+from tests._memory_fakes import make_graphiti
+from tests._persistence_fakes import RecordingJournal
+from tests._runtime_fakes import SessionRun
 
 TEST_DATABASE_ENV = "TEST_DATABASE_URL"
 REAL_DATABASE_FIXTURE = "blank_database_url"
@@ -68,13 +68,25 @@ def postgres_checkpoints(
         yield savers
         return
 
-    class FakeAsyncPostgresSaver:
-        @classmethod
-        @asynccontextmanager
-        async def from_conn_string(cls, conn_string: str) -> AsyncIterator[MemoryPostgresSaver]:
-            yield savers.setdefault(conn_string, MemoryPostgresSaver())
+    class FakeConnectionPool:
+        def __init__(self, conninfo: str, **_kwargs: Any) -> None:
+            self.conninfo = conninfo
 
-    monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", FakeAsyncPostgresSaver)
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        @staticmethod
+        async def check_connection(_connection: object) -> None:
+            return None
+
+    def fake_saver(pool: FakeConnectionPool) -> MemoryPostgresSaver:
+        return savers.setdefault(pool.conninfo, MemoryPostgresSaver())
+
+    monkeypatch.setattr(checkpoint_module, "AsyncConnectionPool", FakeConnectionPool)
+    monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", fake_saver)
     yield savers
 
 
@@ -97,9 +109,13 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
         paths=PathSettings(
             journal_dir=tmp_path / "journals",
             record_dir=tmp_path / "meetings",
+            browser_profile_dir=tmp_path / "profiles",
+            browser_output_dir=tmp_path / "browser",
         ),
         identity=IdentitySettings(
-            owner_id="settings-owner", twin_id="settings-twin", twin_name="Settings Twin"
+            owner_id=SessionId("settings-owner"),
+            twin_id=SessionId("settings-twin"),
+            twin_name="Settings Twin",
         ),
         browser=BrowserSettings(headless=True),
         memory=MemorySettings(
@@ -140,7 +156,9 @@ def blank_database_url() -> Iterator[str]:
 
 @pytest.fixture
 def migrated_database_url(blank_database_url: str) -> str:
-    engine = create_engine_for_url(blank_database_url)
+    engine = create_engine_for_url(
+        blank_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         upgrade(engine)
     finally:
@@ -150,7 +168,9 @@ def migrated_database_url(blank_database_url: str) -> str:
 
 @pytest.fixture
 def migrated_engine(migrated_database_url: str) -> Iterator[Engine]:
-    engine = create_engine_for_url(migrated_database_url)
+    engine = create_engine_for_url(
+        migrated_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
     try:
         yield engine
     finally:
@@ -217,6 +237,13 @@ def join(settings: Settings) -> Callable[..., Any]:
         return await cli_join.join_meeting(link, *args, options=bundled, settings=request_settings)
 
     return go
+
+
+@pytest.fixture
+def audio_join(
+    monkeypatch: pytest.MonkeyPatch, join: Callable[..., Any], settings: Settings
+) -> AudioJoin:
+    return partial(join_with_audio, monkeypatch, join=join, settings=settings)
 
 
 @pytest.fixture

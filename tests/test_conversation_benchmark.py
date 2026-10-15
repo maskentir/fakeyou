@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 
-from evals.test_replay_eval import (
+from evals._replay import (
     FIXTURE,
     ReplayScore,
     load_fixture,
@@ -15,7 +15,7 @@ from evals.test_replay_eval import (
     write_replay_artifacts,
 )
 from fakeyou.config.settings import CompatibleReply, Settings
-from tests.fakes import ToolCallingFakeModel, recall_call
+from tests._conversation_fakes import ToolCallingFakeModel, recall_call
 
 
 class StepClock:
@@ -31,7 +31,7 @@ class StepClock:
 
 def test_replay_artifacts_mask_role_credentials(tmp_path: Path, settings: Settings) -> None:
     score = ReplayScore()
-    score.add("answered", True)
+    score.add("answered", passed=True)
     score.latencies.append(1.0)
     score.turns.append(
         {
@@ -76,7 +76,7 @@ def test_replay_artifacts_sanitize_url_and_extra_body(tmp_path: Path, settings: 
     )
     marked_settings = settings.model_copy(update={"reply": marked})
     score = ReplayScore()
-    score.add("answered", True)
+    score.add("answered", passed=True)
     score.latencies.append(0.5)
     score.turns.append(
         {
@@ -113,9 +113,9 @@ def test_replay_artifact_records_sample_counts_and_fixture_hash(
     tmp_path: Path, settings: Settings
 ) -> None:
     score = ReplayScore()
-    score.add("answered", True)
-    score.add("answered", False)
-    score.add("must_mention", True)
+    score.add("answered", passed=True)
+    score.add("answered", passed=False)
+    score.add("must_mention", passed=True)
     score.latencies.extend([0.4, 0.6])
     score.turns.extend(
         [
@@ -162,7 +162,7 @@ def test_replay_artifact_records_sample_counts_and_fixture_hash(
 async def test_replay_records_per_turn_results_with_controlled_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import evals.test_replay_eval as replay_module
+    import evals._replay as replay_module
 
     fixture = load_fixture()
     expected_turns = sum(len(session["turns"]) for session in fixture["sessions"])
@@ -183,7 +183,7 @@ async def test_replay_records_per_turn_results_with_controlled_clock(
 
 
 async def test_replay_counts_stable_when_reply_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    import evals.test_replay_eval as replay_module
+    import evals._replay as replay_module
 
     monkeypatch.setattr(replay_module, "time", StepClock(2000.0, 0.25))
     fixture: dict[str, Any] = {
@@ -214,11 +214,14 @@ async def test_replay_counts_stable_when_reply_empty(monkeypatch: pytest.MonkeyP
 async def test_replay_counts_stable_when_recall_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     from langchain_core.tools import tool
 
-    import evals.test_replay_eval as replay_module
+    import evals._replay as replay_module
 
     def failing_tool(facts: list[str]) -> Any:
+        del facts
+
         @tool(description="Search long-term meeting memory for relevant context.")
         def recall_meeting_context(query: str) -> str:
+            del query
             raise RuntimeError("recall unavailable")
 
         return recall_meeting_context

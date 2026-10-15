@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
+
+from fakeyou.foundation.timeparse import assume_utc, require_iso_datetime
 
 SCRIPT_WINDOW_BEFORE_SECONDS = 10.0
 SCRIPT_WINDOW_AFTER_SECONDS = 30.0
@@ -85,10 +86,7 @@ def score_pairs(pairs: Sequence[tuple[str, str]]) -> dict[str, float | int]:
 
 
 def _moment(value: Any) -> float:
-    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.timestamp()
+    return assume_utc(require_iso_datetime(str(value))).timestamp()
 
 
 def score_script(

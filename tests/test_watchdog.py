@@ -1,12 +1,25 @@
+import asyncio
 from typing import Any, cast
 from unittest.mock import DEFAULT, AsyncMock, MagicMock
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import CallObservation, CallState
 from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
+
+
+class _ImmediateTimeout:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def __aenter__(self) -> None:
+        raise TimeoutError()
+
+    async def __aexit__(self, *_args: Any) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -142,7 +155,7 @@ async def test_should_escalate_when_allowlisted_dismissal_fails(
     page: MagicMock, observe: AsyncMock
 ) -> None:
     dialog = show_dialog(page, "This meeting is being recorded Got it")
-    dialog.button.click.side_effect = RuntimeError("detached")
+    dialog.button.click.side_effect = PlaywrightError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
@@ -172,7 +185,7 @@ async def test_should_escalate_when_camera_dismissal_fails(
     page: MagicMock, observe: AsyncMock
 ) -> None:
     dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG)
-    dialog.button.click.side_effect = RuntimeError("detached")
+    dialog.button.click.side_effect = PlaywrightError("detached")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
     result = await watchdog.check()
@@ -185,11 +198,23 @@ async def test_should_not_claim_recovery_when_observation_fails(
     show_dialog(page, "Unknown dialog")
     watchdog = UIWatchdog(cast(Page, page), observe=observe)
     await watchdog.check()
-    observe.side_effect = RuntimeError("disconnected")
+    observe.side_effect = PlaywrightError("disconnected")
     result = await watchdog.check()
     assert [event.kind for event in result.events] == ["watchdog_failed"]
     assert result.observation.state == "unknown"
     assert result.next_check_seconds == 5
+
+
+async def test_should_count_a_check_timeout_as_an_observation_failure(
+    page: MagicMock, observe: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+    monkeypatch.setattr(asyncio, "timeout", _ImmediateTimeout)
+
+    result = await watchdog.check()
+
+    assert result.observation_failed is True
+    assert [event.kind for event in result.events] == ["watchdog_failed"]
 
 
 async def test_should_ignore_hidden_dialogs(page: MagicMock, observe: AsyncMock) -> None:
@@ -202,10 +227,10 @@ async def test_should_preserve_call_observation_when_modal_scan_fails(
     page: MagicMock, observe: AsyncMock, state: CallState
 ) -> None:
     observe.return_value = CallObservation(state, "definitive observation")
-    page.locator.side_effect = RuntimeError("https://secret.example/token")
+    page.locator.side_effect = PlaywrightError("https://secret.example/token")
     result = await UIWatchdog(cast(Page, page), observe=observe).check()
     assert result.observation.state == state
-    assert result.events[0].detail == "RuntimeError"
+    assert result.events[0].detail == "Error"
 
 
 @pytest.mark.parametrize(
@@ -270,3 +295,60 @@ async def test_should_read_visible_people_count_and_dismiss_only_safe_fixture_mo
         unknown = await watchdog.check()
         assert unknown.events[0].kind == "manual_action_required"
         assert await real_page.get_by_role("dialog").count() == 1
+
+
+async def test_dismiss_bug_propagates_instead_of_failing_watchdog(
+    page: MagicMock, observe: AsyncMock
+) -> None:
+    dialog = show_dialog(page, "This meeting is being recorded Got it")
+    dialog.button.click.side_effect = ValueError("bug")
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+    await watchdog.check()
+
+    with pytest.raises(ValueError, match="bug"):
+        await watchdog.check()
+
+
+async def test_observe_bug_propagates_instead_of_failing_watchdog(
+    page: MagicMock, observe: AsyncMock
+) -> None:
+    show_dialog(page, "Unknown dialog")
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+    await watchdog.check()
+    observe.side_effect = ValueError("bug")
+
+    with pytest.raises(ValueError, match="bug"):
+        await watchdog.check()
+
+
+async def test_modal_scan_bug_propagates_instead_of_failing_watchdog(
+    page: MagicMock, observe: AsyncMock
+) -> None:
+    show_dialog(page, "Unknown dialog")
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+    await watchdog.check()
+    page.locator.side_effect = ValueError("bug")
+
+    with pytest.raises(ValueError, match="bug"):
+        await watchdog.check()
+
+
+async def test_non_string_dialog_text_fails_watchdog_not_check(
+    page: MagicMock, observe: AsyncMock
+) -> None:
+    dialog = show_dialog(page, "Unknown dialog")
+    dialog.evaluate = AsyncMock(return_value=12345)
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+
+    result = await watchdog.check()
+
+    assert [event.kind for event in result.events] == ["watchdog_failed"]
+
+
+async def test_participant_count_bug_propagates(page: MagicMock) -> None:
+    from fakeyou.meet.watchdog import read_participant_count
+
+    page.get_by_role.return_value.evaluate_all = AsyncMock(side_effect=ValueError("bug"))
+
+    with pytest.raises(ValueError, match="bug"):
+        await read_participant_count(cast(Page, page))

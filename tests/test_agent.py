@@ -8,13 +8,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly_module
 import fakeyou.orchestration.providers as providers_module
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior, open_conversation
-from tests.fakes import ToolCallingFakeModel
+from tests._conversation_fakes import ToolCallingFakeModel
 
 
 def test_default_persona_instructs_brief_spoken_replies() -> None:
@@ -97,9 +98,9 @@ async def test_production_agent_short_circuits_greeting_without_model(
 
     monkeypatch.setattr(assembly_module, "create_meeting_agent", recording_agent)
     config = SessionConfig(
-        owner_id="owner-1",
-        twin_id="twin-1",
-        meeting_id="mount-1",
+        owner_id=SessionId("owner-1"),
+        twin_id=SessionId("twin-1"),
+        meeting_id=SessionId("mount-1"),
         link="https://meet.google.com/aaa-bbbb-ccc",
         twin_name="Mount Twin",
     )
@@ -116,7 +117,7 @@ async def test_production_agent_short_circuits_greeting_without_model(
         settings,
         config,
         agent=AgentWiring(profile=profile),
-        behavior=LoopBehavior(on_transition=lambda *args: None),
+        behavior=LoopBehavior(on_transition=lambda *_args: None),
     ):
         [agent] = built
         result = await agent.ainvoke(

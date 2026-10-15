@@ -1,5 +1,6 @@
 import re
 import string
+from typing import override
 
 import pytest
 
@@ -8,9 +9,11 @@ from fakeyou.catalog.exit_codes import ExitCode
 
 
 class Placeholder:
+    @override
     def __format__(self, format_spec: str) -> str:
         return "value"
 
+    @override
     def __repr__(self) -> str:
         return "value"
 
@@ -90,9 +93,12 @@ def test_format_specs_are_applied_by_the_catalog() -> None:
 
 
 def test_conversion_flag_is_applied_by_the_catalog() -> None:
-    error = FakeYouError(ErrorCode.WORKER_MEETING_ID_INVALID, meeting_id="a b")
+    error = FakeYouError(ErrorCode.SESSION_ID_INVALID, field="--meeting-id", value="a b")
 
-    assert str(error) == "invalid meeting ID: 'a b'"
+    assert str(error) == (
+        "invalid --meeting-id: 'a b'; use 1-128 letters, numbers, '_' or '-', "
+        "starting with a letter or number"
+    )
 
 
 def test_exit_code_classification_is_deliberate() -> None:
@@ -159,6 +165,9 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.MEETING_STARTED_WITH_BRIEF,
         ErrorCode.MEETING_UNFINISHED_SESSION,
         ErrorCode.MEETING_WAKE_PHRASE_REQUIRES_CONVERSE,
+        ErrorCode.MEET_CHAT_EVIDENCE_REJECTED,
+        ErrorCode.MEET_CHAT_RATE_LIMITED,
+        ErrorCode.MEET_CHAT_TOO_LONG,
         ErrorCode.MEMORY_EPISODE_NOT_UUID,
         ErrorCode.MEMORY_FORGET_TARGET_REQUIRED,
         ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH,
@@ -182,7 +191,9 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.NOTE_SOURCE_AT_FUTURE,
         ErrorCode.NOTE_TIME_NOT_AWARE,
         ErrorCode.PERSONA_IDENTITY_MISMATCH,
+        ErrorCode.SESSION_ID_INVALID,
         ErrorCode.VISUAL_PROVIDER_UNSUPPORTED,
+        ErrorCode.VISUAL_RETENTION_DAYS_NOT_POSITIVE,
         ErrorCode.VISUAL_ROOT_MISSING,
         ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED,
         ErrorCode.VOICEPRINT_CALIBRATION_INVALID,
@@ -197,11 +208,11 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.WORKER_FILE_MISSING,
         ErrorCode.WORKER_FILE_NOT_VISIBLE,
         ErrorCode.WORKER_INGEST_NO_FINISHED_SESSION,
-        ErrorCode.WORKER_MEETING_ID_INVALID,
         ErrorCode.WORKER_NOT_RUNNING,
         ErrorCode.WORKER_TIMEOUT_NEGATIVE,
     }
     assert {code for code, spec in CATALOG.items() if spec.exit_code is ExitCode.INFRA_FAILURE} == {
+        ErrorCode.BROWSER_NODE_MISSING,
         ErrorCode.DATABASE_UNREACHABLE,
         ErrorCode.DOCKER_PS_FAILED,
         ErrorCode.DOCKER_UNAVAILABLE,

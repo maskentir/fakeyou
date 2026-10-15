@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.meet import (
@@ -23,7 +24,7 @@ WatchdogEventKind = Literal[
     "watchdog_failed",
 ]
 
-_DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
+DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
 _PEOPLE_COUNT = re.compile(r"People\s*[-–:]\s*(\d+)\s+participants?", re.IGNORECASE)
 _DIALOG_XPATH = '(//*[@role="dialog" or @role="alertdialog"] | //dialog[@open])'
 
@@ -113,6 +114,7 @@ class UIWatchdog:
                     self._last_observation,
                     (WatchdogEvent("watchdog_failed", "", "TimeoutError"),),
                     5.0,
+                    observation_failed=True,
                 )
 
     def _sweep_expired(self, now: float, events: list[WatchdogEvent]) -> None:
@@ -150,22 +152,23 @@ class UIWatchdog:
         self, modal: _Modal, action: str, *, strict: bool, events: list[WatchdogEvent]
     ) -> bool:
         try:
-            target = self._page.locator(_DIALOG_SELECTOR).nth(modal.index)
+            target = self._page.locator(DIALOG_SELECTOR).nth(modal.index)
             current = await target.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
             single_button = await target.get_by_role("button").count() == 1 if strict else True
-            if (
+            matched = (
                 isinstance(current, str)
                 and " ".join(current.split()) == modal.text
                 and single_button
-            ):
+            )
+            if matched:
                 await self._page.locator(_dialog_button_xpath(modal.index, action)).first.click(
                     timeout=2000
                 )
-                return True
-            return False
-        except Exception as error:
+        except PlaywrightError as error:
             events.append(WatchdogEvent("watchdog_failed", modal.fingerprint, type(error).__name__))
             return False
+        else:
+            return matched
 
     async def _handle_modal(self, modal: _Modal, now: float, events: list[WatchdogEvent]) -> None:
         if modal.fingerprint in self._handled or self._stable[modal.fingerprint] < 2:
@@ -189,7 +192,7 @@ class UIWatchdog:
         self._sweep_expired(now, events)
         try:
             observation = await self._observe(self._page, self._signals)
-        except Exception as error:
+        except PlaywrightError as error:
             self._quiet_checks = 0
             self._lobby_detail = None
             self._lobby_checks = 0
@@ -204,7 +207,7 @@ class UIWatchdog:
         self._last_observation = observation
         try:
             modals = await self._read_modals()
-        except Exception as error:
+        except (PlaywrightError, TypeError) as error:
             self._quiet_checks = 0
             self._stable.clear()
             events.append(WatchdogEvent("watchdog_failed", "", type(error).__name__))
@@ -237,7 +240,7 @@ class UIWatchdog:
         return observation
 
     async def _read_modals(self) -> list[_Modal]:
-        dialogs = self._page.locator(_DIALOG_SELECTOR)
+        dialogs = self._page.locator(DIALOG_SELECTOR)
         result: list[_Modal] = []
         seen: set[str] = set()
         for index in range(min(await dialogs.count(), 32)):
@@ -265,7 +268,7 @@ async def read_participant_count(page: Page) -> int | None:
                     && style.visibility !== 'hidden' && style.display !== 'none';
             }).map(el => (el.getAttribute('aria-label') || '').slice(0, 200))"""
         )
-    except Exception:
+    except PlaywrightError:
         return None
     if not isinstance(labels, list):
         return None

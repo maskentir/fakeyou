@@ -12,8 +12,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from PIL import Image
 
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import VisualSettings
 from fakeyou.observability.journal import Journal
+from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.visual.visual_store import VisualFrame
 
 VISUAL_MAX_EDGE = 1568
@@ -41,7 +43,7 @@ def frame_ref(frame: VisualFrame) -> str:
     return f"frame:{frame.sha256[:8]}@{frame.captured_at}"
 
 
-def _payload_bytes(data: bytes) -> tuple[bytes, int, int]:
+def payload_bytes(data: bytes) -> tuple[bytes, int, int]:
     image = Image.open(io.BytesIO(data)).convert("RGB")
     width, height = image.size
     edge = max(width, height)
@@ -79,6 +81,8 @@ class VisualCaptioner:
         self._cache: dict[str, tuple[VisualCaption, float]] = {}
         self._spent_usd = 0.0
         self._calls = 0
+        self._reserved_usd = 0.0
+        self._semaphore = asyncio.Semaphore(self._settings.max_concurrent)
 
     @property
     def spent_usd(self) -> float:
@@ -94,33 +98,32 @@ class VisualCaptioner:
             return None
         return caption
 
+    def _record_exhausted(self, frame: VisualFrame) -> None:
+        if self._journal is not None:
+            self._journal.record(
+                "budget_exhausted",
+                source="llm",
+                visual_id=frame.frame_id,
+                spent_usd=self._spent_usd,
+                budget_usd=self._settings.budget_usd,
+            )
+
     async def caption_frame(self, frame: VisualFrame) -> VisualCaption | None:
         hit = self.cached_caption(frame)
         if hit is not None:
             return hit
         data = await asyncio.to_thread(Path(frame.path).read_bytes)
-        payload, width, height = _payload_bytes(data)
+        payload, width, height = await asyncio.to_thread(payload_bytes, data)
         estimate = estimate_tokens(width, height)
-        if self._spent_usd + estimate * VISUAL_USD_PER_MTOK / 1_000_000 > self._settings.budget_usd:
-            if self._journal is not None:
-                self._journal.record(
-                    "budget_exhausted",
-                    source="llm",
-                    visual_id=frame.frame_id,
-                    spent_usd=self._spent_usd,
-                    budget_usd=self._settings.budget_usd,
-                )
+        estimate_usd = estimate * VISUAL_USD_PER_MTOK / 1_000_000
+        if self._spent_usd + self._reserved_usd + estimate_usd > self._settings.budget_usd:
+            self._record_exhausted(frame)
             return None
         if self._calls >= self._settings.max_calls:
-            if self._journal is not None:
-                self._journal.record(
-                    "budget_exhausted",
-                    source="llm",
-                    visual_id=frame.frame_id,
-                    spent_usd=self._spent_usd,
-                    budget_usd=self._settings.budget_usd,
-                )
+            self._record_exhausted(frame)
             return None
+        self._reserved_usd += estimate_usd
+        self._calls += 1
         started = self._monotonic()
         message = HumanMessage(
             content=[
@@ -132,25 +135,40 @@ class VisualCaptioner:
                 {"type": "text", "text": VISUAL_CAPTION_PROMPT},
             ]
         )
-        response = await self._model.ainvoke([message])
-        tokens = _usage_total(response.usage_metadata, estimate)
-        cost = tokens * VISUAL_USD_PER_MTOK / 1_000_000
-        caption = VisualCaption(
-            visual_id=frame.frame_id,
-            text=response.text,
-            tokens=tokens,
-            cost_usd=cost,
-        )
-        self._spent_usd += cost
-        self._calls += 1
-        self._cache[frame.sha256] = (caption, self._monotonic())
-        if self._journal is not None:
-            self._journal.record(
-                "visual_captioned",
-                source="llm",
+        charged = False
+        try:
+            try:
+                async with self._semaphore:
+                    response = await self._model.ainvoke([message])
+            except asyncio.CancelledError:
+                raise
+            except FakeYouError:
+                raise
+            except Exception as error:
+                raise classify_exception("llm", error) from error
+            tokens = _usage_total(response.usage_metadata, estimate)
+            cost = tokens * VISUAL_USD_PER_MTOK / 1_000_000
+            caption = VisualCaption(
                 visual_id=frame.frame_id,
+                text=response.text,
                 tokens=tokens,
                 cost_usd=cost,
-                duration_ms=(self._monotonic() - started) * 1000,
             )
-        return caption
+            self._reserved_usd -= estimate_usd
+            self._spent_usd += cost
+            self._cache[frame.sha256] = (caption, self._monotonic())
+            if self._journal is not None:
+                self._journal.record(
+                    "visual_captioned",
+                    source="llm",
+                    visual_id=frame.frame_id,
+                    tokens=tokens,
+                    cost_usd=cost,
+                    duration_ms=(self._monotonic() - started) * 1000,
+                )
+            charged = True
+            return caption
+        finally:
+            if not charged:
+                self._reserved_usd -= estimate_usd
+                self._calls -= 1

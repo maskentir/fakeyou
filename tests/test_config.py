@@ -62,6 +62,7 @@ def test_config_keys_are_upper_snake_case_with_the_prefix(key: ConfigKey) -> Non
     ("role", "key"), sorted(API_KEY_OF_ROLE.items()), ids=lambda item: str(item)
 )
 def test_api_key_roles_resolve_to_their_settings_section(role: str, key: ConfigKey) -> None:
+    del key
     assert _resolves((*role.split("."), "api_key"))
 
 
@@ -103,3 +104,19 @@ def test_compose_only_keys_cover_every_compose_variable() -> None:
     cataloged = {key.value for key in COMPOSE_ONLY_KEYS}
 
     assert referenced - cataloged == set()
+
+
+def test_compose_settings_variables_resolve_to_a_settings_field() -> None:
+    compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text(encoding="utf-8")
+    referenced = {
+        key
+        for key in re.findall(r"FAKEYOU_[A-Z0-9_]+", compose)
+        if not key.startswith("FAKEYOU_COMPOSE_")
+    }
+    unresolved = {
+        key
+        for key in referenced
+        if not _resolves(tuple(key.removeprefix(ENV_PREFIX).lower().split(NESTED_DELIMITER)))
+    }
+
+    assert unresolved == set()

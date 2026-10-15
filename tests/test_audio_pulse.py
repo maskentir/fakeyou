@@ -38,7 +38,7 @@ from fakeyou.foundation.invariants import (
     PLAYBACK_SAMPLE_RATE,
 )
 from fakeyou.meet.browser import open_direct_page
-from tests.fakes import FakeSTT
+from tests._audio_fakes import FakeSTT
 
 PAGE = "<!doctype html><html><body><h1>Audio fixture</h1></body></html>"
 
@@ -54,6 +54,8 @@ class _ToneSynth:
     async def stream(
         self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
     ) -> AsyncIterator[bytes]:
+        del sentence_index
+        del transcript_id
         if not text.strip():
             raise ValueError("cannot synthesize blank text")
         audio = self._audio()

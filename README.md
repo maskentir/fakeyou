@@ -93,7 +93,7 @@ docker compose up -d --wait postgres
 uv run fakeyou db upgrade
 ```
 
-PostgreSQL menyimpan checkpoint percakapan untuk CLI dan worker. `FAKEYOU_DATABASE__URL` wajib diset di `.env` (lihat `.env.example`) dan harus berskema `postgresql://` atau `postgresql+psycopg://`. Worker Compose memakai URL yang sama dari dalam jaringan Compose lewat `FAKEYOU_COMPOSE_WORKER_DATABASE_URL`. Service `postgres` ikut dinyalakan tanpa profil dan memiliki healthcheck; worker menunggu healthcheck itu lewat `depends_on`. Semua proses memakai database yang sama, sehingga tidak ada file checkpoint lokal yang dibagi antar proses. Checkpoint LangGraph dimigrasi oleh LangGraph sendiri.
+PostgreSQL menyimpan checkpoint percakapan untuk CLI dan worker. `FAKEYOU_DATABASE__URL` wajib diset di `.env` (lihat `.env.example`) dan harus berskema `postgresql://` atau `postgresql+psycopg://`. `POSTGRES_PASSWORD` juga wajib diisi dan harus sama dengan password di URL; Compose menolak menyalakan `postgres` tanpa nilai itu. Volume `postgres_data` menyimpan password saat pertama kali diinisialisasi, sehingga mengubah `.env` tidak mengubahnya; ganti password di dalam database dengan `ALTER USER`, lalu sesuaikan `.env`. Worker Compose memakai URL yang sama dari dalam jaringan Compose lewat `FAKEYOU_COMPOSE_WORKER_DATABASE_URL`. Service `postgres` ikut dinyalakan tanpa profil dan memiliki healthcheck; worker menunggu healthcheck itu lewat `depends_on`. Semua proses memakai database yang sama, sehingga tidak ada file checkpoint lokal yang dibagi antar proses. Checkpoint LangGraph dimigrasi oleh LangGraph sendiri.
 
 Schema tabel `voiceprints` dikelola dengan Alembic (`src/fakeyou/db/migrations`). `fakeyou db upgrade` menerapkan migrasi sampai head. `fakeyou db status`, `db upgrade`, dan `db stamp` mencetak JSON berisi `current`, `head`, dan `differences`; `differences` kosong berarti skema database sama dengan model. Migrasi berjalan di bawah advisory lock, sehingga beberapa worker yang start bersamaan tidak saling menimpa. Database lama yang sudah punya tabel `voiceprints` tanpa riwayat migrasi perlu satu kali `fakeyou db stamp` setelah tabelnya dicek cocok dengan baseline; `db upgrade` menolak database seperti itu dan menunjuk perintah ini.
 
@@ -102,6 +102,8 @@ Schema tabel `voiceprints` dikelola dengan Alembic (`src/fakeyou/db/migrations`)
 `voice.py` menyediakan STT Muse melalui `create_muse_stt` serta sintesis streaming OpenAI/MiniMax; `playback.py` mengalirkan PCM ke `paplay`. Baca [komposisi suara](docs/reference/voice.md). Tidak ada custom WebSocket Muse atau VAD.
 
 Aktifkan respons agent dengan `--audio --converse` pada worker Linux. `--audio` saja mempertahankan mode transkripsi dan uji `--speak`. Dengan `--audio`, pipeline audio dan STT dibuka sebelum twin meminta masuk, sehingga twin sudah mendengar saat di-admit; mikrofon, ucapan awal, dan jawaban baru aktif setelah admission. Gagal membuka audio mengakhiri sesi sebagai `infra_failure` tanpa mengetuk meeting. Lihat [kontrak conversation dan batas replay](docs/plans/conversation.md) dan [hasil refactor](docs/reports/2026-09-28-conversation-refactor.md).
+
+Twin hanya menjawab transkrip final yang menyebut namanya: `--wake-phrase` (dipisah koma) bila diberikan, atau nama twin bila tidak. Transkrip lain dicatat tetapi tidak dijawab, sehingga percakapan antar peserta tidak diinterupsi. Bila twin sedang berbicara, transkrip final yang bukan jawaban singkat (`oke`, `ya`, dan sejenisnya) menghentikan playback, tanpa jawaban baru. Interupsi interim tetap memakai aturan lamanya: dibatasi jendela aktivasi hanya bila `--wake-phrase` diberikan.
 
 ## Persona pemilik
 
@@ -113,6 +115,8 @@ docker compose run --rm meeting-worker fakeyou join https://meet.google.com/xxx-
 ```
 
 Worker membaca `examples/` secara read-only dan menghubungi Neo4j lewat service Compose `bolt://neo4j:7687`; override dengan `FAKEYOU_COMPOSE_WORKER_NEO4J_URI` bila perlu. Simpan profil pribadi di `.runtime/audio/persona.json` (diabaikan Git) lalu pakai `--persona .runtime/persona.json` di dalam worker.
+
+Container `meeting-worker` berjalan sebagai user `twin` tanpa Linux capability, dengan root filesystem read-only, `no-new-privileges`, dan batas jumlah proses. Path tulis hanya berupa tmpfs (`/tmp`, `~/.cache`, `~/.config`) dan bind mount `.runtime/audio`. Chromium selalu berjalan dengan `--no-sandbox` karena cloakbrowser menambahkannya di setiap launch; hardening container menjadi lapisan isolasinya. Batas memori dan CPU default 4 GB dan 2 CPU dapat diubah dengan `FAKEYOU_COMPOSE_WORKER_MEM_LIMIT` dan `FAKEYOU_COMPOSE_WORKER_CPUS`. Log container dirotasi (driver `local`, 10 MB, tiga berkas).
 
 `--persona` memerlukan `--converse`; `--memory` pada `join` memerlukan `--persona` yang mengizinkan `recall_meeting_context` atau `ingest_transcripts`. `owner_id` dan `twin_id` profil harus sama dengan identitas sesi, dan profil ditolak sebelum model, database, browser, atau audio dibuka. Tanpa `--twin-name`, nama di Meet diambil dari `display_name` profil.
 
@@ -242,7 +246,7 @@ uv run --env-file .env pytest tests/test_providers.py -m live
 
 Eval persona live memerlukan `EVAL_JUDGE_API_KEY` tersendiri untuk judge OpenAI; key jawaban aktif tidak dipinjam. Variabel ini hanya untuk evaluator, bukan runtime.
 
-CI menjalankan lint, format, type check, kontrak layering, dependency hygiene, tes offline, evaluasi, build, dan validasi Compose. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
+CI menjalankan lint, format, type check, kontrak layering, dependency hygiene, tes offline, evaluasi, build, dan validasi Compose. Job Python juga mengaudit dependency terkunci dengan `pip-audit`. Job Node memasang lockfile dengan `npm ci --ignore-scripts` lalu menjalankan `npm audit --omit=dev --audit-level=high`. Job `secrets` memindai riwayat git dengan gitleaks 8.30.1 yang diverifikasi checksum-nya; temuan yang sudah ditinjau tercatat di `.gitleaksignore`. Dependabot memperbarui action, lockfile, dan image dasar setiap minggu. Live Muse, TTS, model, retrieval Graphiti, serta Google Meet memerlukan kredensial dan uji tersendiri.
 
 Untuk uji suara sintetis melalui API Muse, ikuti [panduan tes live Muse](docs/runbooks/live-muse-test.md). Tes ini opt-in dan memakai Model API key terpisah dari login OAuth Muse Code.
 

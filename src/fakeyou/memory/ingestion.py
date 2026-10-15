@@ -19,15 +19,16 @@ from fakeyou.diarization.correction_labels import (
     read_correction_labels,
 )
 from fakeyou.diarization.diarize_client import DiarizeError
-from fakeyou.diarization.diarize_correction import JSON_FILE_NAME, load_corrected_record
+from fakeyou.diarization.diarize_correction import load_corrected_record
 from fakeyou.foundation.speakers import (
     TWIN_SPEAKER,
     UNIDENTIFIED_PARTICIPANT,
     VOICE_SPEAKER_SUFFIX,
 )
+from fakeyou.foundation.timeparse import is_aware, parse_iso_datetime
 from fakeyou.memory.memory import meeting_episodes, meeting_saga
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault, classify_exception
 from fakeyou.persistence.ingestion_status import (
@@ -36,6 +37,7 @@ from fakeyou.persistence.ingestion_status import (
     status_path,
     write_status,
 )
+from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.record import (
     RecordEntry,
     TranscriptEntry,
@@ -65,11 +67,8 @@ class Utterance:
 
 
 def _spoken_moment(value: str) -> datetime | None:
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if moment.tzinfo is None or moment.utcoffset() is None:
+    moment = parse_iso_datetime(value)
+    if moment is None or not is_aware(moment):
         return None
     return moment
 
@@ -309,7 +308,7 @@ class _MeetingIngestor:
     async def _add_episode(
         self, spec: _EpisodeSpec, previous_uuid: str | None
     ) -> tuple[str, int] | None:
-        try:
+        async def attempt() -> tuple[str, int]:
             timer_journal = self._diagnostics.journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished=spec.finished,
@@ -332,11 +331,15 @@ class _MeetingIngestor:
                         custom_extraction_instructions=self._instructions,
                     )
                 timing.fields.update(facts=len(result.edges))
-        except Exception as error:
+            return result.episode.uuid, len(result.edges)
+
+        outcome, error = await capture_error(attempt)
+        if error is not None:
             if self._diagnostics.faults is not None:
                 self._diagnostics.faults.record(classify_exception("memory_ingest", error))
             return None
-        return result.episode.uuid, len(result.edges)
+        assert outcome is not None
+        return outcome
 
     async def add_window(
         self, index: int, window: list[Utterance], previous_uuid: str | None
@@ -480,7 +483,7 @@ async def _invalidate_original_edges(
 
 
 def _correction_payload(record_path: Path) -> tuple[dict[str, Any], str] | None:
-    sidecar = record_path.parent / JSON_FILE_NAME
+    sidecar = MeetingDir.from_record_path(record_path).diarization
     if not sidecar.exists():
         return None
     payload = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -618,7 +621,9 @@ class _CorrectionIngestor:
     async def add_one(self, drive: _CorrectionDrive, index: int) -> str | None:
         window = drive.fixed_windows[index]
         written_uuid: str | None = None
-        try:
+
+        async def attempt() -> str:
+            nonlocal written_uuid
             timer_journal = self._diagnostics.journal or Journal("", echo=False)
             with timer_journal.timed(
                 finished="memory_correction_ingested",
@@ -655,12 +660,16 @@ class _CorrectionIngestor:
                     }
                 )
                 write_status(status_path(self._record_path), drive.base)
-        except Exception as error:
+            return result.episode.uuid
+
+        outcome, error = await capture_error(attempt)
+        if error is not None:
             if self._diagnostics.faults is not None:
                 fault = classify_exception("memory_ingest", error)
                 self._diagnostics.faults.record(self._orphan_fault(fault, index, written_uuid))
             return None
-        return result.episode.uuid
+        assert outcome is not None
+        return outcome
 
     async def drive(self, drive_state: _CorrectionDrive) -> None:
         for index in drive_state.changed:
@@ -706,7 +715,7 @@ async def ingest_corrections(
         if [utterance.speaker for utterance in before] != [utterance.speaker for utterance in after]
     ]
     status_file = status_path(record_path)
-    existing = read_status(status_file)
+    existing = read_status(status_file, journal=diagnostics.journal)
     if existing is not None and existing.corrected_at == corrected_at:
         if diagnostics.journal is not None:
             diagnostics.journal.record(

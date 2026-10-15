@@ -17,8 +17,8 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
-| `FAKEYOU_IDENTITY__OWNER_ID` | `identity` | `str` | `local_owner` |
-| `FAKEYOU_IDENTITY__TWIN_ID` | `identity` | `str` | `local_twin` |
+| `FAKEYOU_IDENTITY__OWNER_ID` | `identity` | `fakeyou.config.identifiers.SessionId` | `local_owner` |
+| `FAKEYOU_IDENTITY__TWIN_ID` | `identity` | `fakeyou.config.identifiers.SessionId` | `local_twin` |
 | `FAKEYOU_IDENTITY__TWIN_NAME` | `identity` | `str` | `Fakeyou Twin` |
 | `FAKEYOU_IDENTITY__VOICEPRINT_CALIBRATION_PATH` | `identity` | `str` | - |
 | `FAKEYOU_IDENTITY__VOICEPRINT_ENABLED` | `identity` | `bool` | false |
@@ -29,11 +29,13 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_IDENTITY__VOICEPRINT_POLICY_VERSION` | `identity` | `str` | `v1` |
 | `FAKEYOU_IDENTITY__VOICEPRINT_RETENTION_DAYS` | `identity` | `int` | `90` |
 | `FAKEYOU_IDENTITY__VOICEPRINT_THRESHOLD` | `identity` | `float` | `0.6` |
+| `FAKEYOU_IDENTITY__VOICEPRINT_TIMEOUT_SECONDS` | `identity` | `float` | `5.0` |
 
 ### paths
 
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
+| `FAKEYOU_PATHS__BROWSER_OUTPUT_DIR` | `paths` | `Path` | `.runtime/browser` |
 | `FAKEYOU_PATHS__BROWSER_PROFILE_DIR` | `paths` | `Path` | `.runtime/profiles` |
 | `FAKEYOU_PATHS__JOURNAL_DIR` | `paths` | `Path` | `.runtime/journals` |
 | `FAKEYOU_PATHS__RECORD_DIR` | `paths` | `Path` | `.runtime/meetings` |
@@ -42,6 +44,10 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
+| `FAKEYOU_DATABASE__CONNECT_TIMEOUT_SECONDS` | `database` | `float` | `5.0` |
+| `FAKEYOU_DATABASE__KEEPALIVE_IDLE_SECONDS` | `database` | `float` | `30.0` |
+| `FAKEYOU_DATABASE__SEND_TIMEOUT_SECONDS` | `database` | `float` | `5.0` |
+| `FAKEYOU_DATABASE__STATEMENT_TIMEOUT_SECONDS` | `database` | `float` | `30.0` |
 | `FAKEYOU_DATABASE__URL` | `database` | `SecretStr, None` | - |
 
 ### speech
@@ -142,6 +148,8 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
 | `FAKEYOU_STT__API_KEY` | `stt` | `SecretStr, None` | - |
+| `FAKEYOU_STT__DIARIZE_MAX_RETRIES` | `stt` | `int` | `3` |
+| `FAKEYOU_STT__DIARIZE_TIMEOUT_SECONDS` | `stt` | `float` | `60.0` |
 | `FAKEYOU_STT__IDLE_RECONNECT_SECONDS` | `stt` | `float` | `0.0` |
 | `FAKEYOU_STT__MODE` | `stt` | `Literal['ENDPOINTING', 'PUSH_TO_TALK', 'DIARIZATION']` | `ENDPOINTING` |
 | `FAKEYOU_STT__MODEL` | `stt` | `str` | `muse-voice-transcribe-1.0` |
@@ -163,10 +171,14 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
+| `FAKEYOU_MEMORY__CLOSE_CALLBACK_SECONDS` | `memory` | `float` | `5.0` |
+| `FAKEYOU_MEMORY__CLOSE_HARD_SECONDS` | `memory` | `float` | `30.0` |
 | `FAKEYOU_MEMORY__EMBEDDER__API_KEY` | `memory` | `SecretStr, None` | - |
 | `FAKEYOU_MEMORY__EMBEDDER__BASE_URL` | `memory` | `str, None` | `https://api.openai.com/v1` |
 | `FAKEYOU_MEMORY__EMBEDDER__DIM` | `memory` | `int` | `1024` |
+| `FAKEYOU_MEMORY__EMBEDDER__MAX_RETRIES` | `memory` | `int` | `2` |
 | `FAKEYOU_MEMORY__EMBEDDER__MODEL` | `memory` | `str` | `text-embedding-3-small` |
+| `FAKEYOU_MEMORY__EMBEDDER__TIMEOUT_SECONDS` | `memory` | `float` | `60.0` |
 | `FAKEYOU_MEMORY__INGESTION__EPISODE_TIMEOUT_SECONDS` | `memory` | `float` | `120.0` |
 | `FAKEYOU_MEMORY__INGESTION__WINDOW_SECONDS` | `memory` | `float` | `60.0` |
 | `FAKEYOU_MEMORY__INGESTION__WINDOW_UTTERANCES` | `memory` | `int` | `20` |
@@ -179,12 +191,18 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_MEMORY__LLM__CLIENT (AnthropicMemoryLLM)` | `memory` | `Literal['anthropic']` | `anthropic` |
 | `FAKEYOU_MEMORY__LLM__CLIENT (OpenAIMemoryLLM)` | `memory` | `Literal['openai']` | `openai` |
 | `FAKEYOU_MEMORY__LLM__CLIENT (GenericMemoryLLM)` | `memory` | `Literal['openai_generic']` | `openai_generic` |
+| `FAKEYOU_MEMORY__LLM__MAX_RETRIES (AnthropicMemoryLLM)` | `memory` | `int` | `2` |
+| `FAKEYOU_MEMORY__LLM__MAX_RETRIES (GenericMemoryLLM)` | `memory` | `int` | `2` |
+| `FAKEYOU_MEMORY__LLM__MAX_RETRIES (OpenAIMemoryLLM)` | `memory` | `int` | `2` |
 | `FAKEYOU_MEMORY__LLM__MODEL (AnthropicMemoryLLM)` | `memory` | `str` | `claude-haiku-4-5-20251001` |
 | `FAKEYOU_MEMORY__LLM__MODEL (GenericMemoryLLM)` | `memory` | `str` | `gpt-5.5` |
 | `FAKEYOU_MEMORY__LLM__MODEL (OpenAIMemoryLLM)` | `memory` | `str` | `gpt-5.5` |
 | `FAKEYOU_MEMORY__LLM__SMALL_MODEL (AnthropicMemoryLLM)` | `memory` | `str` | `claude-haiku-4-5-20251001` |
 | `FAKEYOU_MEMORY__LLM__SMALL_MODEL (GenericMemoryLLM)` | `memory` | `str` | `gpt-4.1-nano` |
 | `FAKEYOU_MEMORY__LLM__SMALL_MODEL (OpenAIMemoryLLM)` | `memory` | `str` | `gpt-4.1-nano` |
+| `FAKEYOU_MEMORY__LLM__TIMEOUT_SECONDS (AnthropicMemoryLLM)` | `memory` | `float` | `60.0` |
+| `FAKEYOU_MEMORY__LLM__TIMEOUT_SECONDS (GenericMemoryLLM)` | `memory` | `float` | `60.0` |
+| `FAKEYOU_MEMORY__LLM__TIMEOUT_SECONDS (OpenAIMemoryLLM)` | `memory` | `float` | `60.0` |
 | `FAKEYOU_MEMORY__RECALL__RESULT_LIMIT` | `memory` | `int` | `5` |
 | `FAKEYOU_MEMORY__RECALL__STRATEGY` | `memory` | `Literal['tool', 'prefetch']` | `prefetch` |
 | `FAKEYOU_MEMORY__RECALL__TIMEOUT_SECONDS` | `memory` | `float` | `15.0` |
@@ -201,8 +219,11 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_CONVERSATION__ACTIVATION_SECONDS` | `conversation` | `float` | `30.0` |
 | `FAKEYOU_CONVERSATION__ATTRIBUTION_PROBE_ENABLED` | `conversation` | `bool` | false |
 | `FAKEYOU_CONVERSATION__BARGE_IN_MIN_WORDS` | `conversation` | `int` | `3` |
+| `FAKEYOU_CONVERSATION__HISTORY_MAX_TOKENS` | `conversation` | `int` | `32000` |
 | `FAKEYOU_CONVERSATION__MAX_SPOKEN_SENTENCES` | `conversation` | `int` | `2` |
 | `FAKEYOU_CONVERSATION__MEET_ACTIONS_ENABLED` | `conversation` | `bool` | false |
+| `FAKEYOU_CONVERSATION__MEET_CHAT_PER_MINUTE` | `conversation` | `int` | `3` |
+| `FAKEYOU_CONVERSATION__PARTICIPANT_EVIDENCE_MAX_BYTES` | `conversation` | `int` | `8388608` |
 | `FAKEYOU_CONVERSATION__PARTICIPANT_POLICY_ENABLED` | `conversation` | `bool` | false |
 | `FAKEYOU_CONVERSATION__PER_STREAM_ENABLED` | `conversation` | `bool` | false |
 | `FAKEYOU_CONVERSATION__PREGEN_FUZZY_RESTART_ENABLED` | `conversation` | `bool` | false |
@@ -236,6 +257,9 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
+| `FAKEYOU_AUDIO__DRAIN_FAILURE_JOURNAL_EVERY` | `audio` | `int` | `10` |
+| `FAKEYOU_AUDIO__DRAIN_MAX_CONSECUTIVE_FAILURES` | `audio` | `int` | `40` |
+| `FAKEYOU_AUDIO__PACTL_TIMEOUT_SECONDS` | `audio` | `float` | `5.0` |
 | `FAKEYOU_AUDIO__PERSIST_ENABLED` | `audio` | `bool` | false |
 | `FAKEYOU_AUDIO__RETENTION_DAYS` | `audio` | `int` | `30` |
 
@@ -258,6 +282,8 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
 | `FAKEYOU_WORKER__AUDIO` | `worker` | `bool` | false |
+| `FAKEYOU_WORKER__DOCKER_TIMEOUT_SECONDS` | `worker` | `float` | `30.0` |
+| `FAKEYOU_WORKER__START_TIMEOUT_SECONDS` | `worker` | `float` | `600.0` |
 
 ### visual
 
@@ -268,6 +294,7 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_VISUAL__BUDGET_USD` | `visual` | `float` | `0.5` |
 | `FAKEYOU_VISUAL__ENABLED` | `visual` | `bool` | false |
 | `FAKEYOU_VISUAL__MAX_CALLS` | `visual` | `int` | `120` |
+| `FAKEYOU_VISUAL__MAX_CONCURRENT` | `visual` | `int` | `2` |
 | `FAKEYOU_VISUAL__MAX_IMAGES` | `visual` | `int` | `2` |
 | `FAKEYOU_VISUAL__MAX_RETRIES` | `visual` | `int` | `2` |
 | `FAKEYOU_VISUAL__MODEL` | `visual` | `str` | `gemini-3.8-flash` |
@@ -285,8 +312,10 @@ Kunci ini hanya dibaca `compose.yaml` atau perintah `worker`, dan tidak dipetaka
 | `FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE` | Image service `embeddings` pada `compose.yaml`. |
 | `FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID` | Model embedding yang dijalankan service `embeddings`. |
 | `FAKEYOU_COMPOSE_EMBEDDINGS_REVISION` | Revisi model embedding yang dijalankan service `embeddings`. |
+| `FAKEYOU_COMPOSE_WORKER_CPUS` | Jumlah CPU container `meeting-worker` (`cpus` pada `compose.yaml`); default `2`. |
 | `FAKEYOU_COMPOSE_WORKER_DATABASE_URL` | URL Postgres dari dalam container worker; dipetakan ke `FAKEYOU_DATABASE__URL` oleh `compose.yaml`. |
 | `FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL` | Base URL service embedding lokal; dipetakan ke `FAKEYOU_MEMORY__EMBEDDER__BASE_URL` oleh `compose.yaml`. |
+| `FAKEYOU_COMPOSE_WORKER_MEM_LIMIT` | Batas memori container `meeting-worker` (`mem_limit` pada `compose.yaml`); default `4g`. |
 | `FAKEYOU_COMPOSE_WORKER_NEO4J_URI` | URI Neo4j dari dalam container worker; dipetakan ke `FAKEYOU_MEMORY__STORE__URI` oleh `compose.yaml`. |
 
 ## Variabel non-Settings
@@ -302,7 +331,7 @@ Variabel di luar model `Settings` yang dibaca langsung oleh aplikasi, compose, a
 | `EMBEDDING_DIM` | Ditulis CLI dari `FAKEYOU_MEMORY__EMBEDDER__DIM` agar terbaca library embedding Graphiti. | Mengikuti dim embedder. |
 | `MUSE_EXPECTED_TEXT` | Teks ekspektasi untuk tes live endpointing muse. | Wajib bila tes live dijalankan. |
 | `MUSE_TEST_AUDIO` | File WAV untuk tes live endpointing muse. | Wajib bila tes live dijalankan. |
-| `POSTGRES_PASSWORD` | Password service `postgres` pada `compose.yaml`. | `fakeyou-local-only` |
+| `POSTGRES_PASSWORD` | Password service `postgres` pada `compose.yaml`. Compose menolak start tanpa nilai ini. | Wajib diisi. |
 | `PULSE_SINK` | Sink output audio agen. | `agent_output` |
 | `PULSE_SOURCE` | Sumber monitor PulseAudio untuk audio meeting. | `meeting_audio.monitor` |
 | `SPEAKER_ARTIFACT_DIR` | Direktori artefak eval speaker probe live. | Direktori sementara pytest. |

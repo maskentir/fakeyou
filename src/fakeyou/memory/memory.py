@@ -1,13 +1,13 @@
 import asyncio
 import json
-import re
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol, override
 
 from anthropic import AsyncAnthropic
 from anthropic.resources.messages import AsyncMessages
@@ -46,6 +46,7 @@ from pydantic import BaseModel
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.identifiers import verify_memory_group_id
 from fakeyou.config.settings import (
     DEFAULTS,
     AnthropicMemoryLLM,
@@ -55,7 +56,6 @@ from fakeyou.config.settings import (
     RecallSettings,
     require_secret,
 )
-from fakeyou.foundation.invariants import IDENTIFIER_PATTERN
 from fakeyou.foundation.provenance import (
     OWNER_SPEAKER_IDENTITY,
     UNVERIFIED_SPEAKER_IDENTITY,
@@ -75,8 +75,9 @@ from fakeyou.memory.owner_notes import (
 from fakeyou.memory.owner_notes import (
     forget_owner_note as forget_owner_note,
 )
+from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 
@@ -118,6 +119,7 @@ def meeting_saga(meeting_id: str) -> str:
 
 
 class GraphitiAnthropicMessages(AsyncMessages):
+    @override
     async def create(self, *, temperature: float | None = None, **kwargs: Any) -> Any:
         if temperature is not None:
             kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "temperature": temperature}
@@ -126,6 +128,7 @@ class GraphitiAnthropicMessages(AsyncMessages):
 
 class GraphitiAnthropicSDK(AsyncAnthropic):
     @cached_property
+    @override
     def messages(self) -> GraphitiAnthropicMessages:
         return GraphitiAnthropicMessages(self)
 
@@ -138,6 +141,7 @@ class AnthropicReranker(CrossEncoderClient):
     def __init__(self, client: AnthropicClient) -> None:
         self.client = client
 
+    @override
     async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
         if not passages:
             return []
@@ -159,7 +163,7 @@ class AnthropicReranker(CrossEncoderClient):
 
 
 def create_graphiti_memory(
-    config: MemorySettings, *, resources: AsyncExitStack | None = None
+    config: MemorySettings, *, resources: TeardownStack | None = None
 ) -> Graphiti:
     role = config.llm
     llm_endpoint = role.resolved_base_url
@@ -172,18 +176,33 @@ def create_graphiti_memory(
         base_url=llm_endpoint,
     )
     if isinstance(role, AnthropicMemoryLLM):
-        anthropic_sdk = GraphitiAnthropicSDK(api_key=llm_key, base_url=llm_endpoint)
+        anthropic_sdk = GraphitiAnthropicSDK(
+            api_key=llm_key,
+            base_url=llm_endpoint,
+            timeout=role.timeout_seconds,
+            max_retries=role.max_retries,
+        )
         if resources is not None:
             resources.push_async_callback(anthropic_sdk.close)
         llm_client = AnthropicClient(config=llm_config, client=anthropic_sdk)
     else:
-        openai_sdk = AsyncOpenAI(api_key=llm_key, base_url=llm_endpoint)
+        openai_sdk = AsyncOpenAI(
+            api_key=llm_key,
+            base_url=llm_endpoint,
+            timeout=role.timeout_seconds,
+            max_retries=role.max_retries,
+        )
         if resources is not None:
             resources.push_async_callback(openai_sdk.close)
         llm_client = {OpenAIMemoryLLM: OpenAIClient, GenericMemoryLLM: OpenAIGenericClient}[
             type(role)
         ](config=llm_config, client=openai_sdk)
-    embedding_sdk = AsyncOpenAI(api_key=embedding_key, base_url=config.embedder.resolved_base_url)
+    embedding_sdk = AsyncOpenAI(
+        api_key=embedding_key,
+        base_url=config.embedder.resolved_base_url,
+        timeout=config.embedder.timeout_seconds,
+        max_retries=config.embedder.max_retries,
+    )
     if resources is not None:
         resources.push_async_callback(embedding_sdk.close)
     embedder = OpenAIEmbedder(
@@ -198,7 +217,12 @@ def create_graphiti_memory(
     if isinstance(llm_client, AnthropicClient):
         cross_encoder = AnthropicReranker(llm_client)
     else:
-        reranker_sdk = AsyncOpenAI(api_key=llm_key, base_url=llm_endpoint)
+        reranker_sdk = AsyncOpenAI(
+            api_key=llm_key,
+            base_url=llm_endpoint,
+            timeout=role.timeout_seconds,
+            max_retries=role.max_retries,
+        )
         if resources is not None:
             resources.push_async_callback(reranker_sdk.close)
         cross_encoder = OpenAIRerankerClient(config=llm_config, client=reranker_sdk)
@@ -215,21 +239,18 @@ def create_graphiti_memory(
             embedder=embedder,
             cross_encoder=cross_encoder,
         )
-    except BaseException:
-        if resources is not None:
+    finally:
+        if sys.exception() is not None and resources is not None:
             resources.push_async_callback(driver.close)
-        raise
 
 
 async def _finish_memory_task[T](task: asyncio.Task[T]) -> T:
     cancellation: asyncio.CancelledError | None = None
     while not task.done():
         try:
-            await asyncio.shield(task)
+            await asyncio.wait({task})
         except asyncio.CancelledError as error:
             cancellation = error
-        except Exception:
-            break
     if cancellation is not None:
         raise cancellation
     return task.result()
@@ -239,7 +260,10 @@ async def _finish_memory_task[T](task: asyncio.Task[T]) -> T:
 async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti]:
     if config.embedder.dim != EMBEDDING_DIM:
         raise FakeYouError(ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH)
-    resources = AsyncExitStack()
+    resources = TeardownStack(
+        callback_budget_seconds=config.close_callback_seconds, source="memory"
+    )
+    failed = True
     try:
         construction = asyncio.create_task(
             asyncio.to_thread(create_graphiti_memory, config, resources=resources)
@@ -247,14 +271,24 @@ async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti
         try:
             memory = await _finish_memory_task(construction)
         except asyncio.CancelledError:
-            with suppress(Exception):
-                memory = construction.result()
-                resources.push_async_callback(memory.close)
+            if construction.exception() is None and not construction.cancelled():
+                resources.push_async_callback(construction.result().close)
             raise
         resources.push_async_callback(memory.close)
         yield memory
+        failed = False
     finally:
-        await _finish_memory_task(asyncio.create_task(resources.aclose()))
+        closing = asyncio.create_task(
+            resources.aclose(hard_timeout_seconds=config.close_hard_seconds)
+        )
+        try:
+            errors = await _finish_memory_task(closing)
+        except TimeoutError:
+            if not failed:
+                raise
+            errors = []
+        if errors and not failed:
+            raise errors[0]
 
 
 async def ensure_indexes(memory: Graphiti) -> None:
@@ -327,6 +361,7 @@ class _FactBuffer:
         group_id: str,
         fact: str,
         source_description: str,
+        *,
         flush: bool,
     ) -> str:
         reference_time = datetime.now(UTC)
@@ -352,8 +387,7 @@ class _FactBuffer:
 def create_memory_tools(
     memory: Graphiti, *, group_id: str, recall: RecallSettings = DEFAULTS.memory.recall
 ) -> list[BaseTool]:
-    if not re.fullmatch(IDENTIFIER_PATTERN, group_id):
-        raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
+    verify_memory_group_id(group_id)
     buffer = _FactBuffer()
 
     @tool(
@@ -364,9 +398,9 @@ def create_memory_tools(
         )
     )
     async def remember_meeting_fact(
-        fact: str, source_description: str = "meeting transcript", flush: bool = False
+        fact: str, source_description: str = "meeting transcript", *, flush: bool = False
     ) -> str:
-        return await buffer.remember(memory, group_id, fact, source_description, flush)
+        return await buffer.remember(memory, group_id, fact, source_description, flush=flush)
 
     @tool(description="Search long-term meeting memory for relevant context.")
     async def recall_meeting_context(query: str) -> str:
@@ -404,7 +438,10 @@ def _request_meet_action(
 ) -> str:
     if not dispatcher.enabled or dispatcher.closed:
         return refuse(tool_name, journal=journal)
-    dispatcher.request(request.kind, action_id=request.action_id, text=request.text)
+    try:
+        dispatcher.request(request.kind, action_id=request.action_id, text=request.text)
+    except FakeYouError as error:
+        return str(error)
     return MEET_ACTION_QUEUED
 
 
@@ -582,6 +619,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             for speech_id in ids[-(PREFETCH_RETAINED_EVIDENCE - 1) :]
         }
 
+    @override
     async def awrap_model_call(
         self,
         request: ModelRequest[Any],
@@ -616,14 +654,26 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         return await handler(request.override(messages=assembled))
 
     async def _visual_message(self, speech: list[HumanMessage]) -> HumanMessage | None:
-        if self._visual_caption is None:
+        captioner = self._visual_caption
+        if captioner is None:
             return None
         refs = visual_refs_of(speech[-1])
         if not refs:
             return None
-        try:
-            line = await self._visual_caption(refs[-1])
-        except Exception:
+
+        async def attempt() -> str | None:
+            return await captioner(refs[-1])
+
+        line, error = await capture_error(attempt)
+        if error is not None:
+            if self._faults is not None:
+                self._faults.record(classify_exception("memory", error, operation="visual_caption"))
+            self._journal.record(
+                "visual_caption_failed",
+                source="memory",
+                stage="caption",
+                error_type=type(error).__name__,
+            )
             return None
         if not line:
             return None
@@ -647,16 +697,21 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             source="memory", operation="prefetch", transcript_id=transcript_id
         )
         started = time.monotonic()
+
+        async def search() -> tuple[str, str]:
+            async with asyncio.timeout(self._recall.timeout_seconds):
+                return await search_memory_evidence_pair(
+                    self._memory, query, group_id=self._group_id, recall=self._recall
+                )
+
         try:
-            slim, full = await search_memory_evidence_pair(
-                self._memory, query, group_id=self._group_id, recall=self._recall
-            )
+            outcome_pair, error = await capture_error(search)
         except asyncio.CancelledError:
             self._journal.request_failed(
                 request_id, transcript_id=transcript_id, error="CancelledError"
             )
             raise
-        except Exception as error:
+        if error is not None:
             if self._faults is not None:
                 self._faults.record(classify_exception("memory", error))
             self._journal.request_failed(
@@ -667,6 +722,8 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             )
             outcome, content, evidence_full = "unavailable", PREFETCH_UNAVAILABLE_EVIDENCE, ""
         else:
+            assert outcome_pair is not None
+            slim, full = outcome_pair
             if slim == RECALL_EMPTY_RESULT:
                 if prior:
                     outcome, content = "empty", PREFETCH_ADDITIONAL_EMPTY_EVIDENCE

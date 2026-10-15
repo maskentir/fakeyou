@@ -1,9 +1,9 @@
-import struct
 import wave
 from io import BytesIO
 from pathlib import Path
 
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE
+from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, decode_pcm16, encode_pcm16
 
 _BLOCK_SAMPLES = 960000
 _CHUNK_MINUTES = 10
@@ -17,7 +17,7 @@ def _read_slot_wav(path: Path) -> bytes:
     with wave.open(str(path), "rb") as handle:
         if (
             handle.getnchannels() != 1
-            or handle.getsampwidth() != 2
+            or handle.getsampwidth() != PCM16_SAMPLE_BYTES
             or handle.getframerate() != CAPTURE_SAMPLE_RATE
         ):
             raise ValueError(f"unsupported wav format in {path.name}")
@@ -28,7 +28,7 @@ def _write_wav(payload: bytes, frames_per_second: int) -> bytes:
     buffer = BytesIO()
     with wave.open(buffer, "wb") as handle:
         handle.setnchannels(1)
-        handle.setsampwidth(2)
+        handle.setsampwidth(PCM16_SAMPLE_BYTES)
         handle.setframerate(frames_per_second)
         handle.writeframes(payload)
     return buffer.getvalue()
@@ -39,9 +39,9 @@ def mix_session_slots(audio_dir: Path) -> bytes:
     if not paths:
         raise FileNotFoundError(f"no slot wav files in {audio_dir}")
     tracks = [_read_slot_wav(path) for path in paths]
-    counts = [len(track) // 2 for track in tracks]
+    counts = [len(track) // PCM16_SAMPLE_BYTES for track in tracks]
     longest = max(counts)
-    mixed = bytearray(longest * 2)
+    totals: list[int] = []
     for start in range(0, longest, _BLOCK_SAMPLES):
         stop = min(start + _BLOCK_SAMPLES, longest)
         blocks: list[tuple[int, ...]] = []
@@ -49,7 +49,9 @@ def mix_session_slots(audio_dir: Path) -> bytes:
             low = min(start, count)
             high = min(stop, count)
             if high > low:
-                blocks.append(struct.unpack(f"<{high - low}h", track[low * 2 : high * 2]))
+                blocks.append(
+                    decode_pcm16(track[low * PCM16_SAMPLE_BYTES : high * PCM16_SAMPLE_BYTES])
+                )
             else:
                 blocks.append(())
         bases = [min(start, count) for count in counts]
@@ -64,8 +66,8 @@ def mix_session_slots(audio_dir: Path) -> bytes:
                 total = _MAX_SAMPLE
             elif total < _MIN_SAMPLE:
                 total = _MIN_SAMPLE
-            struct.pack_into("<h", mixed, index * 2, total)
-    return _write_wav(bytes(mixed), CAPTURE_SAMPLE_RATE)
+            totals.append(total)
+    return _write_wav(encode_pcm16(totals), CAPTURE_SAMPLE_RATE)
 
 
 def split_chunks(
@@ -83,8 +85,10 @@ def split_chunks(
         raise ValueError("max minutes must be positive")
     if max_bytes <= _HEADER_BYTES:
         raise ValueError("max bytes must exceed header size")
-    limit = min(int(max_minutes * 60 * frames_per_second * 2), max_bytes - _HEADER_BYTES)
-    limit = limit // 2 * 2
+    limit = min(
+        int(max_minutes * 60 * frames_per_second * PCM16_SAMPLE_BYTES), max_bytes - _HEADER_BYTES
+    )
+    limit = limit // PCM16_SAMPLE_BYTES * PCM16_SAMPLE_BYTES
     if limit <= 0:
         raise ValueError("chunk size limit must be positive")
     return [

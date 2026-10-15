@@ -1,3 +1,4 @@
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -46,6 +47,13 @@ def is_vocative(text: str, aliases: Sequence[str]) -> bool:
         if not rest or rest[0] in _VOCATIVE_BOUNDARY:
             return True
     return False
+
+
+def mentions_whole_phrase(text: str, phrase: str) -> bool:
+    name = phrase.strip().casefold()
+    if not name:
+        return False
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text.casefold()) is not None
 
 
 def same_observed_speaker(previous_id: str | None, current_id: str) -> bool:

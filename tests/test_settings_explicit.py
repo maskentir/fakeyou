@@ -20,9 +20,12 @@ from fakeyou.config.settings import (
     ReplySettings,
     Settings,
     StoreSettings,
+    STTSettings,
     TTSSettings,
+    VADSettings,
 )
-from tests.fakes import env_file_opt
+from tests._error_support import message_pattern
+from tests._fakes_common import env_file_opt
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +46,7 @@ def test_unknown_process_keys_fail_even_when_empty(
 
 def test_unknown_key_is_rejected_without_its_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKEYOU_CHAT_API_KEY", "never-print-me")
-    with pytest.raises(FakeYouError) as error:
+    with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.CONFIG_UNKNOWN_KEY)) as error:
         Settings(**env_file_opt(None))
     assert error.value.code is ErrorCode.CONFIG_UNKNOWN_KEY
     assert str(error.value) == "Unknown configuration key: FAKEYOU_CHAT_API_KEY"
@@ -66,6 +69,124 @@ def test_unknown_dotenv_keys_fail_even_when_empty(tmp_path: Path, name: str) -> 
     path.write_text(f"{name}=\n")
     with pytest.raises(FakeYouError, match="(?i)(relpy|typo|dmi)"):
         Settings(**env_file_opt(path))
+
+
+def test_base_url_requires_tls_unless_loopback_or_service_name() -> None:
+    assert CompatibleReply(base_url="https://example.com/v1").base_url == "https://example.com/v1"
+    assert (
+        CompatibleReply(base_url="http://127.0.0.1:8000/v1").base_url == "http://127.0.0.1:8000/v1"
+    )
+    assert (
+        CompatibleReply(base_url="http://localhost:8000/v1").base_url == "http://localhost:8000/v1"
+    )
+    assert CompatibleReply(base_url="http://[::1]:8000/v1").base_url == "http://[::1]:8000/v1"
+    assert (
+        CompatibleReply(base_url="http://embeddings:8000/v1").base_url
+        == "http://embeddings:8000/v1"
+    )
+    with pytest.raises(ValueError, match="https"):
+        CompatibleReply(base_url="http://example.com/v1")
+    with pytest.raises(ValueError, match="https"):
+        CompatibleReply(base_url="ws://example.com/socket")
+
+
+def test_optional_base_url_keeps_empty_mapping_and_requires_tls() -> None:
+    assert OpenAIReply(base_url="", max_retries=0).base_url is None
+    with pytest.raises(ValueError, match="https"):
+        OpenAIReply(base_url="http://example.com/v1", max_retries=0)
+
+
+def test_stt_url_requires_tls_unless_loopback() -> None:
+    assert STTSettings(url="wss://example.com/x").url == "wss://example.com/x"
+    assert STTSettings(url="ws://127.0.0.1:9/x").url == "ws://127.0.0.1:9/x"
+    with pytest.raises(ValueError, match="https"):
+        STTSettings(url="ws://example.com/x")
+
+
+def test_stt_numeric_settings_are_bounded() -> None:
+    assert STTSettings().preroll_ms == 500.0
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        STTSettings(preroll_ms=-1.0)
+    with pytest.raises(ValueError, match="less than or equal to 10000"):
+        STTSettings(preroll_ms=10_001.0)
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        STTSettings(idle_reconnect_seconds=-1.0)
+    with pytest.raises(ValueError, match="greater than 0"):
+        STTSettings(ready_timeout_seconds=0.0)
+    with pytest.raises(ValueError, match="less than or equal to 300"):
+        STTSettings(ready_timeout_seconds=301.0)
+
+
+def test_vad_settings_are_bounded_with_nonempty_window() -> None:
+    assert VADSettings().confidence == 0.7
+    with pytest.raises(ValueError, match="less than or equal to 1"):
+        VADSettings(confidence=1.5)
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        VADSettings(confidence=-0.1)
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        VADSettings(start_secs=-1.0)
+    with pytest.raises(ValueError, match="less than or equal to 60"):
+        VADSettings(stop_secs=61.0)
+    with pytest.raises(ValueError, match="less than or equal to 1"):
+        VADSettings(min_volume=2.0)
+    with pytest.raises(ValueError, match="non-empty"):
+        VADSettings(start_secs=0.0, stop_secs=0.0)
+
+
+def test_meet_chat_rate_defaults_small_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(**env_file_opt(None)).conversation.meet_chat_per_minute == 3
+    monkeypatch.setenv("FAKEYOU_CONVERSATION__MEET_CHAT_PER_MINUTE", "5")
+    assert Settings(**env_file_opt(None)).conversation.meet_chat_per_minute == 5
+
+
+def test_retired_browser_sandbox_setting_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKEYOU_BROWSER__SANDBOX", "true")
+    with pytest.raises(FakeYouError, match="Unknown configuration key"):
+        Settings(**env_file_opt(None))
+
+
+def test_voiceprint_timeout_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(**env_file_opt(None)).identity.voiceprint_timeout_seconds == 5.0
+    monkeypatch.setenv("FAKEYOU_IDENTITY__VOICEPRINT_TIMEOUT_SECONDS", "7.5")
+    assert Settings(**env_file_opt(None)).identity.voiceprint_timeout_seconds == 7.5
+
+
+def test_drain_resilience_limits_default_and_read_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio = Settings(**env_file_opt(None)).audio
+    assert audio.drain_max_consecutive_failures == 40
+    assert audio.drain_failure_journal_every == 10
+    monkeypatch.setenv("FAKEYOU_AUDIO__DRAIN_MAX_CONSECUTIVE_FAILURES", "5")
+    monkeypatch.setenv("FAKEYOU_AUDIO__DRAIN_FAILURE_JOURNAL_EVERY", "2")
+    audio = Settings(**env_file_opt(None)).audio
+    assert audio.drain_max_consecutive_failures == 5
+    assert audio.drain_failure_journal_every == 2
+
+
+def test_participant_evidence_cap_defaults_and_reads_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(**env_file_opt(None)).conversation.participant_evidence_max_bytes == 8388608
+    monkeypatch.setenv("FAKEYOU_CONVERSATION__PARTICIPANT_EVIDENCE_MAX_BYTES", "1024")
+    assert Settings(**env_file_opt(None)).conversation.participant_evidence_max_bytes == 1024
+
+
+def test_database_timeouts_default_and_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    database = Settings(**env_file_opt(None)).database
+    assert database.connect_timeout_seconds == 5.0
+    assert database.statement_timeout_seconds == 30.0
+    assert database.send_timeout_seconds == 5.0
+    assert database.keepalive_idle_seconds == 30.0
+    monkeypatch.setenv("FAKEYOU_DATABASE__CONNECT_TIMEOUT_SECONDS", "2.0")
+    monkeypatch.setenv("FAKEYOU_DATABASE__STATEMENT_TIMEOUT_SECONDS", "9.0")
+    monkeypatch.setenv("FAKEYOU_DATABASE__SEND_TIMEOUT_SECONDS", "3.0")
+    monkeypatch.setenv("FAKEYOU_DATABASE__KEEPALIVE_IDLE_SECONDS", "11.0")
+    database = Settings(**env_file_opt(None)).database
+    assert database.connect_timeout_seconds == 2.0
+    assert database.statement_timeout_seconds == 9.0
+    assert database.send_timeout_seconds == 3.0
+    assert database.keepalive_idle_seconds == 11.0
 
 
 def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(
@@ -104,6 +225,42 @@ def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[s
     settings = Settings(**env_file_opt(None))
     check_setup(settings)
     assert json.loads(capsys.readouterr().out) == settings.model_dump(mode="json")
+
+
+def test_check_masks_credentials_in_urls_and_extra_body(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from fakeyou.cli.diagnostics import check_setup
+
+    settings = Settings(**env_file_opt(None))
+    settings.reply = CompatibleReply(
+        base_url="https://operator:sekret-pass@custom.example/v1?api_key=sekret-query",
+        extra_body={"session_token": "sekret-token", "top_k": 5},
+    )
+    check_setup(settings)
+    report = capsys.readouterr().out
+
+    assert "sekret-pass" not in report
+    assert "sekret-query" not in report
+    assert "sekret-token" not in report
+    assert "operator" not in report
+    assert "custom.example" in report
+    assert '"top_k": 5' in report
+
+
+def test_check_masks_credentials_in_any_url_setting(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from fakeyou.cli.diagnostics import check_setup
+
+    settings = Settings(**env_file_opt(None))
+    settings.memory.store.uri = "bolt://neo4j:graph-secret@graph.example:7687"
+    check_setup(settings)
+    report = capsys.readouterr().out
+
+    assert "graph-secret" not in report
+    assert "neo4j:" not in report
+    assert "graph.example" in report
 
 
 _REPLY_MATCH = {
@@ -298,7 +455,7 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
         return httpx2.Response(200, content=b'data: {"extra_info": {}}\n\n')
 
     minimax_client = httpx2.AsyncClient(transport=httpx2.MockTransport(minimax_respond))
-    monkeypatch.setattr(httpx2, "AsyncClient", lambda **kwargs: minimax_client)
+    monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kwargs: minimax_client)
     minimax = voice.create_speech_synthesizer(
         MiniMaxTTS(api_key=SecretStr("tts"), model="explicit-minimax", voice="explicit-voice"),
         language="en",
@@ -448,12 +605,11 @@ def test_blank_reply_endpoint_ignores_library_destination_environment(
     assert model is not None
     if provider == "openai":
         assert isinstance(model, ChatOpenAI)
-        client = model.root_client
+        endpoint = (str(model.root_client.base_url), model.root_client.api_key)
     else:
         assert isinstance(model, ChatAnthropic)
-        client = model._client
-    assert str(client.base_url).rstrip("/") == expected
-    assert client.api_key == "reply-role-key"
+        endpoint = (str(model.anthropic_api_url), model.anthropic_api_key.get_secret_value())
+    assert (endpoint[0].rstrip("/"), endpoint[1]) == (expected, "reply-role-key")
     assert expected in preflight_hosts(settings)
 
 
@@ -478,12 +634,12 @@ def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(
     model = create_chat_model(settings)
     assert isinstance(model, ChatGoogleGenerativeAI)
     assert model.client is not None
-    client = model.client._api_client
+    assert isinstance(model.base_url, str)
+    assert model.google_api_key is not None
 
     assert (model.model, model.timeout, model.max_retries) == ("gemini-3.8-flash", 15.0, 0)
-    assert client._http_options.base_url is not None
-    assert client._http_options.base_url.rstrip("/") == "https://generativelanguage.googleapis.com"
-    assert client.api_key == "reply-role-key"
+    assert model.base_url.rstrip("/") == "https://generativelanguage.googleapis.com"
+    assert model.google_api_key.get_secret_value() == "reply-role-key"
     assert "https://generativelanguage.googleapis.com" in preflight_hosts(settings)
 
 
@@ -585,3 +741,61 @@ def test_blank_memory_endpoints_ignore_library_destination_environment(
     targets = preflight_hosts(settings, memory=True)
     assert expected in targets
     assert "https://api.openai.com/v1" in targets
+
+
+def test_history_max_tokens_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(**env_file_opt(None)).conversation.history_max_tokens == 32000
+    monkeypatch.setenv("FAKEYOU_CONVERSATION__HISTORY_MAX_TOKENS", "1024")
+    assert Settings(**env_file_opt(None)).conversation.history_max_tokens == 1024
+
+
+def test_docker_timeout_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(**env_file_opt(None)).worker.docker_timeout_seconds == 30.0
+    monkeypatch.setenv("FAKEYOU_WORKER__DOCKER_TIMEOUT_SECONDS", "7.5")
+    assert Settings(**env_file_opt(None)).worker.docker_timeout_seconds == 7.5
+
+
+def test_diarize_budget_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    stt = Settings(**env_file_opt(None)).stt
+    assert stt.diarize_timeout_seconds == 60.0
+    assert stt.diarize_max_retries == 3
+    monkeypatch.setenv("FAKEYOU_STT__DIARIZE_TIMEOUT_SECONDS", "7.5")
+    monkeypatch.setenv("FAKEYOU_STT__DIARIZE_MAX_RETRIES", "1")
+    stt = Settings(**env_file_opt(None)).stt
+    assert stt.diarize_timeout_seconds == 7.5
+    assert stt.diarize_max_retries == 1
+
+
+def test_memory_sdk_budgets_default_and_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(**env_file_opt(None))
+    assert settings.memory.llm.timeout_seconds == 60.0
+    assert settings.memory.llm.max_retries == 2
+    assert settings.memory.embedder.timeout_seconds == 60.0
+    assert settings.memory.embedder.max_retries == 2
+    monkeypatch.setenv("FAKEYOU_MEMORY__LLM__CLIENT", "openai")
+    monkeypatch.setenv("FAKEYOU_MEMORY__LLM__TIMEOUT_SECONDS", "11.0")
+    monkeypatch.setenv("FAKEYOU_MEMORY__LLM__MAX_RETRIES", "5")
+    monkeypatch.setenv("FAKEYOU_MEMORY__EMBEDDER__TIMEOUT_SECONDS", "12.0")
+    monkeypatch.setenv("FAKEYOU_MEMORY__EMBEDDER__MAX_RETRIES", "6")
+    settings = Settings(**env_file_opt(None))
+    assert settings.memory.llm.timeout_seconds == 11.0
+    assert settings.memory.llm.max_retries == 5
+    assert settings.memory.embedder.timeout_seconds == 12.0
+    assert settings.memory.embedder.max_retries == 6
+
+
+def test_memory_close_budgets_default_and_read_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    memory = Settings(**env_file_opt(None)).memory
+    assert memory.close_callback_seconds == 5.0
+    assert memory.close_hard_seconds == 30.0
+    monkeypatch.setenv("FAKEYOU_MEMORY__CLOSE_CALLBACK_SECONDS", "1.5")
+    monkeypatch.setenv("FAKEYOU_MEMORY__CLOSE_HARD_SECONDS", "2.5")
+    memory = Settings(**env_file_opt(None)).memory
+    assert memory.close_callback_seconds == 1.5
+    assert memory.close_hard_seconds == 2.5
+
+
+def test_visual_max_concurrent_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings(**env_file_opt(None)).visual.max_concurrent == 2
+    monkeypatch.setenv("FAKEYOU_VISUAL__MAX_CONCURRENT", "4")
+    assert Settings(**env_file_opt(None)).visual.max_concurrent == 4

@@ -8,10 +8,9 @@ from pydantic import BaseModel, SecretStr
 
 from fakeyou.catalog.config import COMPOSE_ONLY_KEYS, ENV_PREFIX, NESTED_DELIMITER
 from fakeyou.config.settings import Settings
+from fakeyou.foundation.resources import read_package_text
 
-PROSE: dict[str, Any] = json.loads(
-    Path(__file__).with_name("env_catalog.json").read_text(encoding="utf-8")
-)
+PROSE: dict[str, Any] = json.loads(read_package_text("config", "env_catalog.json"))
 
 
 def _cell(text: str) -> str:
