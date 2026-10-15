@@ -196,3 +196,178 @@ Verifikasi (dijalankan setelah semua perubahan di bagian ini):
 - Default: 8197 lulus, 82 dilewati, 67 tidak dipilih. DB mode: 8236 lulus, 43 dilewati.
 - Static: ruff check dan format (536 file), mypy (418 file), lint-imports (4 kontrak), deptry bersih.
 - Container: image runtime dan test dibangun ulang. `pytest -m container` 6/6, `fakeyou check` exit 0, probe canary 3 ada dan 0 bocor, pulse + transport 2/2. Catatan: build runtime pertama gagal diam-diam; image `:local` lama terdeteksi dan semua hasil container diulang setelah build berhasil.
+
+## 11. Iterasi 4: satu aturan addressing untuk dua mode
+
+Pemicu: sesi live Meet `kyf-live-3` (twin Ugi, mode `--converse` dengan nama twin). Dari sembilan turn skrip standup, dua dijawab padahal seharusnya diam:
+
+- "Eh tunggu bukan itu" dijawab "Oh, maksud lo yang mana tuh?". Jendela aktivasi diperpanjang oleh turn sebelumnya yang dijawab twin, sehingga interjeksi lolos.
+- "Oke" dijawab "Oke, sip." sesaat setelah twin menjawab "makasih". Ack yang berdiri sendiri selalu dijawab.
+
+Speaker sudah teratribusi (`speaker-a` pada 7 dari 8 transkrip), jadi masalahnya bukan identitas pembicara. Yang kurang adalah aturan isi: ack dan interjeksi dari lawan bicara yang sama juga tidak meminta jawaban.
+
+### Perubahan perilaku
+
+- **Satu fungsi keputusan.** `choose_participation` di `foundation/participation.py` adalah satu-satunya aturan. Mode `participant_policy_enabled` dan mode nama twin sama-sama memanggilnya lewat `ConversationLoop._decide`. Sebelumnya ada dua jalur (`_addressed` dan `_policy_allows`) dengan aturan yang berbeda; keduanya dihapus.
+- **Jendela diperpanjang oleh jawaban, bukan oleh nama saja.** Setiap turn yang dijawab twin memperpanjang `activation_seconds`. Turn yang diam tidak memperpanjang jendela.
+- **Interjeksi diam.** Kata pembuka seperti `eh`, `tunggu`, `bentar`, `nanti dulu`, `stop`, `bukan` (daftar `interjections` di `ack_vocabulary.json`) tidak dijawab di dalam jendela. Bila twin sedang bicara, barge-in tetap menghentikan playback.
+- **Ack hanya dijawab bila twin baru bertanya.** `bare_ack` di dalam jendela dijawab hanya bila kalimat terakhir yang diucapkan twin diakhiri `?` (`awaiting_reply`). Setelah pernyataan, ack diam.
+- **Lawan bicara yang lain diam.** Di mode nama twin, turn dari pembicara yang diketahui berbeda dari pembicara yang sedang dilayani tidak dijawab. Speech tanpa atribusi tetap boleh melanjutkan jendela, karena diarization tidak selalu tersedia.
+- **Mode policy tetap ketat.** Di mode policy, turn tanpa atribusi tidak mewarisi jendela. Ini perilaku yang sudah ada dan diuji (`test_policy_unknown_followup_*`).
+- **Label journal `policy_decided` dipakai di kedua mode.** Alasan yang mungkin: `addressed`, `followup_same_speaker`, `followup_answers_question`, `bare_ack`, `interjection`, `not_addressed`, `floor_occupied`. `ack_decided` dengan `bare_ack_run` hanya muncul di mode tanpa nama.
+
+### API internal
+
+- Dihapus: `ConversationLoop._addressed`, `_policy_allows`, `_window_speaker`, `_last_speaker_id`.
+- Baru: `ConversationLoop._decide`, `_note_spoken`, `_engaged_speaker`, `_awaiting_reply`.
+- Baru: `is_other_observed_speaker` di `foundation/participation.py` (keduanya diketahui dan berbeda).
+- `ParticipationContext` mendapat `bare_ack`, `interjection`, `awaiting_reply` dengan default `False`, sehingga pemanggil lama tetap valid.
+
+### Tes
+
+- RED lebih dulu: `tests/test_participation.py` (interjeksi, ack setelah pernyataan, ack setelah pertanyaan, addressed tidak dibungkam, `is_other_observed_speaker`).
+- `tests/test_conversation_policy.py`:
+  - `test_bare_acks_after_a_statement_stay_silent_inside_the_window` menggantikan `test_addressed_text_replies_inside_wake_window_ack_runs`. Tes lama mengharapkan ack dijawab; itu perilaku yang kini diganti.
+  - `test_bare_ack_answers_a_question_the_twin_just_asked` baru.
+  - `test_bare_ack_inside_the_window_is_not_answered` memakai pernyataan sebagai turn pertama. Versi lama memakai pertanyaan, sehingga jawaban twin ikut bertanya dan `oke` memang dijawab.
+  - `test_live_turns_replay_with_the_labelled_answers_and_reasons` mereplay delapan turn live dari `tests/fixtures/addressing-labels-kyf-live-3.json`. Setiap turn diberi label jawab/diam dan alasan `policy_decided`. Turn live berikutnya cukup ditambahkan ke fixture tanpa mengubah tes.
+- Kosakata interjeksi dan pertanyaan tanpa nama ada di `tests/fixtures/ack-cases.json`. File Python tidak boleh memuat kata Indonesia (`test_code_rules.py`), jadi teks uji Indonesia dibaca dari fixture.
+- Hasil: `tests/test_participation.py`, `test_conversation_policy.py`, `test_conversation_streaming.py`, `test_conversation_core_journal.py`, `test_cli_join_audio.py`, `test_report_session.py`: 228 lulus.
+
+### Celah yang belum ditutup
+
+- Aturan ini masih heuristik berbasis kosakata dan tanda `?`. Ia tidak memahami isi. Pertanyaan retoris dari lawan bicara atau interjeksi di tengah kalimat panjang bisa salah klasifikasi.
+- Belum diuji live. Worker `kyf-live-3` masih menjalankan kode sebelum iterasi ini, dan restart membuat twin keluar dan masuk meeting lagi.
+- Langkah berikutnya yang sudah dipertimbangkan: gerbang addressee berbasis model kecil yang membaca beberapa turn terakhir dan memutuskan `reply`, `silent`, atau `yield`. Ia akan menggantikan kosakata, tetapi menambah satu langkah sebelum jawaban. Latensinya harus diukur, dan keputusannya harus dievaluasi terhadap korpus transkrip live (`record.jsonl`), sebelum dipakai.
+
+## 12. Iterasi 5: kegagalan giliran, barge-in default, dan koneksi putus
+
+Pemicu: audit read-only atas bagian twin di luar addressing. Temuan diverifikasi terhadap kode sebelum dikerjakan. Yang diambil dulu adalah tiga celah terbesar terhadap rasa manusiawi: satu error model membuat twin diam sampai akhir panggilan, barge-in mati secara default sehingga twin berbicara di atas lawan bicara, dan twin tetap bicara setelah koneksi putus.
+
+### Perubahan perilaku
+
+- **Satu giliran yang gagal tidak mengakhiri percakapan.** Timeout, error provider, atau bug di satu giliran membuat twin mengucapkan `turn_failed` dari `src/fakeyou/spoken_lines.json` (`id` atau `en`, mengikuti bahasa wicara), lalu tetap mendengarkan. Journal mencatat `turn_failed` dengan tipe error dan urutan kegagalan. Fault tetap direkam.
+- **Batas beruntun.** Setelah `MAX_CONSECUTIVE_TURN_FAILURES` (3) giliran gagal berturut-turut, percakapan gagal seperti sebelumnya dan runtime mencatat `conversation_disabled`. Giliran yang berhasil mereset hitungan. Kegagalan saat memutar kalimat fallback langsung mengakhiri percakapan, karena audio yang gagal terus juga harus berhenti.
+- **Barge-in default ikut `--converse`.** `--barge-in` dan `--no-barge-in` berlaku untuk `join` dan `worker start`. Tanpa `--converse`, barge-in tetap nonaktif. `--barge-in` eksplisit tanpa `--converse` tetap ditolak.
+- **Koneksi putus menahan bicara.** Saat lobby muncul setelah admitted, percakapan di-pause: playback dihentikan, transkrip baru dibuang (`transcript_suppressed`, alasan `paused`), dan balasan yang sedang dibuat dibuang (`turn_suppressed`). Saat tersambung lagi, percakapan di-resume.
+
+### API internal
+
+- Baru: `ConversationLoop._recover_turn`, `ConversationLoop.pause()` (async), `ConversationLoop.resume()`, `MAX_CONSECUTIVE_TURN_FAILURES`, `TURN_FAILED_LINES`, `_resolve_barge_in` di `cli/main.py`.
+- `MeetingConversation` (Protocol) mendapat `pause` dan `resume`. Implementasi test (`FakeConversation`) ikut diperbarui.
+- `MeetingWorker._apply_observation` menjadi `apply_observation`, publik seperti `disable_conversation`.
+- Breaking: default `--barge-in` berubah bila `--converse` aktif, dan kegagalan satu giliran tidak lagi sama dengan kegagalan percakapan.
+
+### Tes
+
+- RED dulu: `tests/test_conversation_recovery.py` (4), `tests/test_conversation_pause.py` (3), `tests/test_runtime_connection.py` (1), `tests/test_cli_barge_in_default.py` (8).
+- Tes lama yang mengharapkan satu error mengakhiri percakapan diubah dan disebut satu per satu: `test_conversation_core_journal.py` (3), `test_conversation_core_adoption.py` (1), `test_conversation_streaming.py` (1), `test_conversation_pregen_adoption.py` (1), `test_conversation_pregen_journal.py` (1). Setiap perubahan kini menguji streak atau fallback.
+
+### Verifikasi
+
+- Ruff check dan format (540 file), mypy (422 file), lint-imports (4 kontrak), deptry: bersih.
+- Default: 8256 lulus, 82 dilewati, 0 gagal. DB mode: 8295 lulus, 43 dilewati.
+- Image runtime dibangun ulang dan kode baru dicek ada di dalamnya. `pytest -m container` 6/6, `fakeyou check` exit 0, pulse + transport 2/2 di image test.
+
+### Yang sudah diukur dan tidak dikerjakan
+
+- **Latensi.** Di live `kyf-live-3`, waktu dari transkrip final sampai suara pertama adalah 4,7 sampai 13,5 detik (median sekitar 6,6 detik). Target dokumen adalah median 3 detik. Streaming kalimat tidak akan menolong: `docs/plans/sentence-streaming.md` mengukur sekitar 94% waktu terjadi sebelum teks pertama keluar, sehingga penghematannya sekitar 0,07 detik. Lever yang tersisa adalah time-to-first-token model (reasoning dan leg tool) dan filler suara yang dimulai segera. Belum dikerjakan, karena menyangkut pilihan model dan aset suara.
+- **Suara orang pertama.** Aturan persona memaksa kalimat seperti "the owner needs to confirm it", dan melarang janji. Itu melindungi dari klaim palsu. Mengubah twin menjadi bicara sebagai pemilik mengubah model identitas dan kejujuran, jadi itu keputusan produk dan belum diubah.
+- **Diam total setelah tiga kegagalan.** Gangguan provider yang berlangsung lebih dari tiga giliran tetap membuat twin diam untuk sisa panggilan. Runtime tidak membuat ulang percakapan. Ini membedakan gangguan dari bug yang berulang, tetapi berarti diam setelah tiga kegagalan.
+- **Rejoin otomatis belum ada.** Pause hanya menahan bicara. Jika panggilan tidak kembali, twin tetap tidak bicara.
+- **Belum diuji live.** Worker `kyf-live-3` masih berjalan dengan kode sebelum iterasi ini. Pengujian live memerlukan restart, dan twin harus di-admit ulang.
+
+## 13. Iterasi 6: pondasi provider TTS
+
+Pemicu: permintaan agar provider TTS bisa diganti tanpa tambalan, dengan Cartesia dan ElevenLabs sekarang dan open-source menyusul. Desain lengkap ada di `docs/plans/tts-provider-switching.md`.
+
+### Breaking change
+
+- `audio/voice.py` (STT) dipindah ke `fakeyou/transcription/muse.py`. Adapter TTS pindah ke `fakeyou/speech/`: `contract.py`, `streaming.py`, `languages.py`, `registry.py`, dan satu file per provider.
+- `SpeechSynthesizer` pindah dari `audio/playback.py` ke `speech/contract.py`.
+- `create_speech_synthesizer` diganti `build_speech_synthesizer`. Pemilihan adapter memakai `match` dengan `assert_never`, sehingga provider yang tidak terdaftar gagal di mypy.
+- `OpenAIVoiceStyle` dihapus, beserta parameter `style` dan `speed` yang tidak dipakai.
+- `journaled_stream` menerima `SpeechTag` (provider, indeks kalimat, id transkrip). Event `synthesis_*` dan `synthesis_pcm_emitted` memuat field `provider`.
+- Settings TTS: empat kelas (OpenAI, MiniMax, Cartesia, ElevenLabs) dalam union yang didiskriminasi `provider`. Nama variabel env tidak berubah.
+- Settings memvalidasi `speech.language` terhadap `tts.languages` saat load. Konfigurasi yang tidak didukung provider gagal lebih awal.
+- Catalog env: baris `FAKEYOU_TTS__PROVIDER` dan `FAKEYOU_REPLY__PROVIDER` digabung menjadi satu baris dengan semua nilai. Sebelumnya setiap kelas menjadi baris sendiri.
+- Tes TTS dipecah menurut subjek: `test_openai_speech.py`, `test_minimax_speech.py`, `test_streaming_speech.py`, `test_registry_conformance.py`, `test_cartesia_speech.py`, dan `test_elevenlabs_speech.py`.
+
+### Verifikasi
+
+- Cartesia diverifikasi langsung lewat env dan registry. Provider dipilih dari environment dan mengalahkan `.env`. Key tidak dicetak.
+- ElevenLabs: tes dengan fake transport saja.
+- Default: 8368 lulus, 82 dilewati, 0 gagal (sebelum perbaikan tes kecil terakhir; diulang setelah itu).
+- Ruff, format, mypy (437 file), lint-imports (4 kontrak, termasuk lapisan `speech`), dan deptry bersih.
+
+### Belum
+
+- Open-source sidecar, profil suara per twin, `fakeyou voice test`, fallback per kalimat, dan penyimpanan key per profil.
+- Header `xi-api-key` dan `language_code` ElevenLabs perlu verifikasi dengan key nyata.
+
+## 14. Iterasi 7: kontrak STT dan keepalive Muse
+
+Pemicu: permintaan agar STT Muse menjadi provider yang mengikuti kontrak, dengan jaminan yang benar di rapat sungguhan. Desain ada di `docs/plans/stt-provider-contract.md`.
+
+### Breaking change
+
+- `audio/voice.py` dihapus. Isinya pindah ke `transcription/muse.py` (`MuseSTTOptions`, `create_muse_stt`, `ManagedMuseSTT`).
+- `audio/audio.py` tidak lagi memuat `ManagedMuseSTT`, `STT_*`, atau `_bounded_frames`.
+- `TranscriptionFrame` pipecat tidak lagi dipakai oleh konsumen. Konsumen menerima `TranscriptUpdate` (`foundation/transcript.py`). Konversi frame terjadi di `muse_update`. Field `transport_source`, `capture_seq`, dan `capture_ms` yang dulu ditempel ke frame sekarang field eksplisit.
+- `transcript_event` menerima `TranscriptUpdate`. Identitas event dihitung dari `timestamp` atau `stream_id:capture_seq`.
+- `create_muse_stt(api_key, options, service_class, journal)`. `url` dan `sample_rate` pindah ke `MuseSTTOptions`.
+- `STT_CONTINUITY_BUFFER_SECONDS = 30` diganti `MUSE_MAX_BACKLOG_SECONDS = 4`. Nilai 30 detik menyebabkan burst setelah rekonek yang melanggar batas backlog Muse.
+- Event journal baru: `stt_audio_dropped` (`dropped_ms`, `reason`) dan `stt_keepalive_started` (`idle_ms`).
+- `TranscriptionError` menggantikan `MeetingAudioError` untuk kegagalan rekonek STT.
+- Layer `fakeyou.transcription` ditambahkan ke kontrak import, di bawah `audio`.
+- File tes: `test_voice.py` menjadi `test_muse.py`, dan `test_voice_muse.py` menjadi `test_muse_stt.py`.
+
+### Verifikasi
+
+- Tes live `test_muse_endpointing_transcribes_realtime_wav` lulus dengan WAV bahasa Inggris dari voice clone, tanpa silence di ujung audio.
+- Default: 8392 lulus, 82 dilewati, 0 gagal. DB mode: 8431 lulus, 43 dilewati.
+- Ruff, format, mypy (439 file), lint-imports (4 kontrak, termasuk `transcription`), dan deptry bersih.
+- Image runtime dibangun ulang dan paket `transcription` terverifikasi ada di dalamnya. `pytest -m container` 6/6, `fakeyou check` exit 0, pulse dan transport di image test 2/2.
+
+### Belum
+
+- Provider STT kedua dan registry STT.
+- Tes rapat live penuh (menunggu link Meet).
+
+## 15. Lepas Pipecat
+
+Pemicu: Pipecat dipakai di tujuh file produksi, tetapi hanya sebagian kecil APInya. Tiga masalah terbukti di kode dan probe live: label speaker Muse tidak sampai ke frame, rekonek dimiliki dua pihak, dan pre-roll menggandakan audio ke STT. Desain dan urutan kerja ada di `docs/plans/drop-pipecat.md`.
+
+### Breaking change
+
+- Dihapus: `PreRollBuffer`, `CaptureObserver`, `SessionPipeline`, `native_transport`, `ManagedMuseSTT`, dan `create_muse_stt`. Juga `LocalAudioTransport` (pyaudio), `MetaSTTService` sebagai basis STT, enum `Language`, impor `VALID_VOICES`, dan pemetaan `ErrorCategory`.
+- Diganti: `match_endofsentence` menjadi `sentencex` di `foundation/sentences.py`. Volume memakai `loudness` di `audio/vad.py`. `SPEECH_LANGUAGES` berbasis string (`speech/languages.py`). Klasifikasi error memakai `ProviderFault` yang sudah ada.
+- `MeetingAudioSession` menerima `run: SessionRun`, menggantikan argumen `pipeline`.
+- `StreamAudioInput` tidak lagi mewarisi `BaseInputTransport`.
+- `TranscriptUpdate.speaker` dihapus. Gantinya `voice_clusters: tuple[str, ...]`, yang berisi label cluster per sesi.
+- Setting `STTSettings.preroll_ms` (env `FAKEYOU_STT__PREROLL_MS`, default 500.0) dihapus.
+- Default `FAKEYOU_STT__MODE` berubah dari `ENDPOINTING` ke `DIARIZATION`. `ENDPOINTING` tetap nilai yang valid.
+- Event journal Muse diganti nama: `stt_socket_lost` menjadi `stt_socket_failed`, `stt_speaker_after_turn` menjadi `stt_speaker_dropped`, `stt_empty_turn` menjadi `stt_turn_skipped`, `stt_final_without_turn` menjadi `stt_final_observed`, `stt_unhandled_message` menjadi `stt_message_skipped`, dan `stt_unparsable_message` menjadi `stt_message_dropped`. Pencarian di journal lama memakai nama lama.
+- Extra `audio` (`pipecat-ai[local]`, pyaudio) dihapus dari `pyproject.toml`. pyaudio dan portaudio tidak lagi dipasang.
+- Dependensi `pipecat-ai[silero,webrtc]` dihapus. Dependensi langsung baru: `onnxruntime~=1.24.3`, `loudness>=0.2,<1`, `sentencex==1.0.31`, dan `websockets>=16,<17`.
+- `uv.lock` diregenerasi.
+- Model `silero_vad.onnx` (2,3 MB, MIT) di-vendor di `src/fakeyou/audio/models/` dengan README yang mencatat sumber, versi, dan sha256.
+
+### Verifikasi
+
+- VAD cocok per jendela dengan golden Pipecat 1.12 (`tests/fixtures/vad-golden-standup-16k.json`). Selisih confidence dan volume paling besar 1e-5, dan state serta urutan event identik.
+- Probe DIARIZATION pada klip 22,5 detik: label `A, B, A, B`, dan label datang sebelum final dalam burst yang sama. Lihat [kontrak STT](../plans/stt-provider-contract.md#2-bukti-live-diarization).
+- Tes live `MUSE_DIARIZATION_AUDIO` (`tests/test_muse_client.py`) tercatat lulus pada S1.
+- Pemeriksaan statis: `pipecat` tidak ada di `pyproject.toml` dan `uv.lock`. `src/` tidak mengimpor `pipecat`, kecuali README model yang mencatat sumber.
+- Gate penuh (ruff, format, mypy, lint-imports, deptry, tes default dan container): lihat gate.
+
+### Belum
+
+- Capture `parec` di container dengan `PULSE_SOURCE` hidup.
+- Rapat Google Meet sungguhan.
+- ElevenLabs dengan key sungguhan.
+- Sesi Muse 60 menit. Meta menyebut close code 1011; belum diuji live.
+- Sisa yang ditemukan saat pemeriksaan:
+  - Empat modul tes masih mengimpor `pipecat` (`tests/test_audio_failures.py`, `test_audio_session.py`, `test_audio_shutdown.py`, `test_audio_stt_reconnect.py`). Di instalasi tanpa Pipecat, modul ini gagal saat dikumpulkan.
+  - `orchestration/join_preflight.py` masih mensyaratkan `find_spec("pyaudio")` untuk join dengan audio. Di instalasi tanpa pyaudio, join itu ditolak.
+  - `docs/runbooks/verification.md` dan `docs/reference/code-standard.md` masih menyebut Pipecat.

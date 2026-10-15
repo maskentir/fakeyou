@@ -1,6 +1,12 @@
 # Status fondasi dan pekerjaan berikutnya
 
-Diperbarui: 5 Oktober 2026. Status mencakup semua milestone yang sudah digabung sejak 2 Oktober (multiparty, brief/delegasi/debrief, memori tepercaya, prefetch, live-trust-latency, unknown-speaker, latency-recovery) serta milestone operasi worker yang berjalan di branch. Langkah lanjut ada di [rencana pengembangan berikutnya](../plans/next-development.md) dan [rencana operasi worker](../plans/worker-operations.md).
+Diperbarui: 15 Oktober 2026. Status mencakup semua milestone yang sudah digabung sejak 2 Oktober (multiparty, brief/delegasi/debrief, memori tepercaya, prefetch, live-trust-latency, unknown-speaker, latency-recovery) serta milestone operasi worker yang berjalan di branch. Langkah lanjut ada di [rencana pengembangan berikutnya](../plans/next-development.md) dan [rencana operasi worker](../plans/worker-operations.md).
+
+## 15 Oktober 2026: Pipecat dilepas
+
+- Pipecat tidak lagi menjadi dependensi. Graf audio (`audio/graph.py`), VAD Silero v5 yang di-vendor (`audio/vad.py`), capture `parec` (`audio/capture.py`), dan klien Muse (`transcription/muse.py`) menggantikannya. Rencana dan checklist ada di [lepas Pipecat](../plans/drop-pipecat.md).
+- Mode Muse default sekarang `DIARIZATION`. Label speaker dicatat sebagai `voice_clusters` pada transkrip. `ENDPOINTING` tetap nilai valid untuk `FAKEYOU_STT__MODE`.
+- Belum diverifikasi: capture `parec` di container dengan `PULSE_SOURCE` hidup, rapat Google Meet sungguhan, ElevenLabs dengan key sungguhan, dan penutupan sesi Muse pada 60 menit.
 
 ## Posisi proyek sekarang
 
@@ -27,7 +33,7 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Setup proyek | Python 3.12, dependency terkunci, lint, typing, build, Compose, dan CI GitHub sudah diperiksa tiap merge | Backend Kubernetes; acceptance dua meeting paralel |
 | Otak: LangChain + LangGraph | Agent native dan loop transkrip→agent→sintesis→playback, pemrosesan berurutan, checkpoint per owner/twin/meeting; brief, delegasi terbatas, dan debrief beralas sumber lulus acceptance live | Latency live (p50 5,05 dtk lawan target ≤3), gap kualitas replay |
 | Memori percakapan | Isolasi `thread_id`, pembukaan ulang, dan round-trip checkpoint PostgreSQL teruji (tes Postgres nyata lewat `TEST_DATABASE_URL`); lanjutan crash `--resume` di branch worker | Acceptance lanjutan crash di dua meeting paralel |
-| Telinga: Muse + Pipecat | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live; capture 16 kHz mono; identitas speaker wajib di transkrip dengan observer dan kebijakan partisipasi | Overlap, dedupe reconnect, dan atribusi nama penuh |
+| Telinga: Muse + graf audio sendiri | Audio peserta Meet→PulseAudio→Muse menghasilkan transkrip final live (sebelum Pipecat dilepas); capture 16 kHz mono; identitas speaker wajib di transkrip dengan observer dan kebijakan partisipasi | Overlap, dedupe reconnect, dan atribusi nama penuh; capture `parec` di container dan Meet live setelah Pipecat dilepas |
 | Mulut: TTS streaming + `paplay` | PCM 24 kHz→virtual microphone→Meet; antrean serial, mute saat diam, barge-in; host mengonfirmasi jawaban utuh | Waktu PCM pertama dan performa lintas lebih banyak sesi |
 | Tangan: CloakBrowser humanized langsung + Playwright MCP | Join, admission, deny, timeout, stop, dan leave terverifikasi live; tool MCP tersedia untuk agent | Tindakan lanjutan (chat, raise hand, mute) dan sesi agent/browser yang terintegrasi |
 | Mata | Tool DOM dan screenshot tersedia | Observasi screenshare/kamera berkelanjutan dan pemahaman visual oleh model multimodal |
@@ -36,7 +42,7 @@ Target akhirnya tetap peserta yang dapat mendengar, memahami pembicaraan dan vis
 | Evaluasi: DeepEval + pytest | Tool trajectory deterministik, wiring persona, 5 skenario kualitas persona live (GEval), harness brief/trust, dan review independen tiap korpus live | Skenario meeting nyata multipihak dan evaluasi memori hasil ingestion |
 | Runtime aplikasi | Worker Linux/PulseAudio, CLI `join`, checkpoint lifecycle, stop/deadline, cleanup audio/percakapan, dan CLI `worker start/status/stop/ingest` dengan lock lease di branch | Backend Kubernetes, penjadwalan, serta antarmuka pengguna |
 
-Sumber implementasi: [agent](../../src/fakeyou/conversation/agent.py), [browser](../../src/fakeyou/meet/browser.py), [voice](../../src/fakeyou/audio/voice.py), [memory](../../src/fakeyou/memory/memory.py), dan [CLI](../../src/fakeyou/cli/).
+Sumber implementasi: [agent](../../src/fakeyou/conversation/agent.py), [browser](../../src/fakeyou/meet/browser.py), [voice](../../src/fakeyou/transcription/muse.py), [memory](../../src/fakeyou/memory/memory.py), dan [CLI](../../src/fakeyou/cli/).
 
 LangGraph menyimpan graph agent dan lifecycle meeting. CLI `chat` menjalankan satu permintaan; CLI `join` memiliki browser sepanjang sesi. Checkpoint tidak mempertahankan resource browser/audio setelah proses mati. Refactor memisahkan konfigurasi, persistence lifecycle, adapter Meet, dan worker; lihat [batas modul dan verifikasi](../reports/2026-09-28-refactor.md).
 
@@ -81,7 +87,7 @@ Uji penalaran dan tool call OpenAI dengan prompt sintetis, TTS dengan kalimat si
 
 ### 1. Runtime sesi dan guest Google Meet
 
-Tentukan runtime media pertama, lalu buat satu worker yang memiliki browser, sesi MCP, pipeline Pipecat, thread LangGraph, dan ruang memori sepanjang meeting. Pilihan runtime perlu mempertimbangkan virtual microphone dan capture audio; macOS pengembangan belum membuktikan jalur deployment Linux.
+Tentukan runtime media pertama, lalu buat satu worker yang memiliki browser, sesi MCP, graf audio, thread LangGraph, dan ruang memori sepanjang meeting. Pilihan runtime perlu mempertimbangkan virtual microphone dan capture audio; macOS pengembangan belum membuktikan jalur deployment Linux.
 
 Definisikan identitas `owner_id`, `twin_id`, `meeting_id`, dan `thread_id`, lalu alur persiapan, lobby, admitted, disconnected, leaving, dan ended. Gunakan state dan persistence resmi LangGraph untuk alur aplikasi. Sediakan stop dari pemilik, deadline lobby, batas durasi, dan cleanup.
 
@@ -93,7 +99,7 @@ Bangun adapter guest: buka link, isi nama twin, atur perangkat, minta masuk, tun
 
 ### 2. Sambungan audio dua arah
 
-Sambungkan audio peserta dari Meet ke input Pipecat/Muse, lalu output TTS ke microphone yang dipakai Meet. Pilih transport yang terbukti pada runtime tahap 1. Capture, format PCM, sample rate, buffering, dan resampling harus mengikuti kontrak library.
+Sambungkan audio peserta dari Meet ke graf audio dan Muse, lalu output TTS ke microphone yang dipakai Meet. Pilih transport yang terbukti pada runtime tahap 1. Capture, format PCM, sample rate, buffering, dan resampling harus mengikuti kontrak Muse.
 
 Pisahkan suara peserta dari output twin agar twin tidak merespons suaranya sendiri. Bawa timestamp sumber, bedakan transkrip sementara/final, dan pertahankan urutan saat reconnect. Catat waktu capture, transkrip final, dan audio keluar.
 
@@ -107,7 +113,7 @@ Hubungkan event transkrip final ke state meeting, konteks agent, dan retrieval m
 
 Gunakan event yang membawa ID, waktu, sumber, status final, dan participant yang diketahui atau `unknown`. Tambahkan transisi mendengar, menimbang respons, berbicara, disela, menunggu, dan bertindak. Definisikan pembatalan agar respons lama tidak diputar setelah konteks berubah.
 
-Pipecat `LangchainProcessor` versi terpasang belum meneruskan seluruh kontrak pesan, tool, dan thread agent kita. Periksa adapter resmi sebelum menulis penghubung tipis untuk kontrak yang belum tercakup; detailnya ada di [voice foundation](voice.md).
+Penghubung antara graf audio dan agent LangChain adalah tanggung jawab kita sendiri. Pipecat dan `LangchainProcessor`-nya sudah dilepas, sehingga kontrak pesan, tool, dan thread agent tidak lagi bergantung pada adapter resmi; detailnya ada di [voice foundation](voice.md).
 
 **Selesai ketika:** peserta bertanya di Meet, twin memakai konteks thread yang benar, lalu jawaban terdengar di meeting yang sama. Replay atau reconnect tidak menggandakan aksi eksternal.
 
@@ -129,17 +135,17 @@ Sambungkan transkrip final ke Graphiti dengan ID sumber, waktu kejadian, provena
 
 Tambahkan observasi participant, active speaker, chat, screenshare, dan perubahan slide. Kirim konteks visual yang relevan ke model multimodal dengan timestamp agar referensi seperti “bagian ini” dapat dikaitkan dengan pembicaraan.
 
-Petakan speaker ke participant hanya jika buktinya cukup. Mode diarization Muse tidak otomatis menghasilkan identitas peserta Meet; adapter Pipecat saat ini juga belum memetakan event speaker ke identitas peserta pada transkrip. Simpan `unknown` ketika ambigu. Probe 30 September membuktikan Muse mengirim label per giliran (`A`, `B`) yang dibuang adapter Pipecat 1.12; rencana pemakaiannya ada di [acceptance 30 September](../reports/2026-09-30-acceptance.md#2a-diarisasi-untuk-atribusi-participant).
+Petakan speaker ke participant hanya jika buktinya cukup. Mode diarization Muse tidak otomatis menghasilkan identitas peserta Meet. Sejak 15 Oktober klien Muse memakai `DIARIZATION` sebagai default dan melampirkan label per giliran (`A`, `B`) sebagai `voice_clusters`, tetapi label itu belum dipetakan ke participant. Simpan `unknown` ketika ambigu. Probe 30 September membuktikan Muse mengirim label per giliran (`A`, `B`) yang dulu dibuang adapter Pipecat 1.12; rencana pemakaiannya ada di [acceptance 30 September](../reports/2026-09-30-acceptance.md#2a-diarisasi-untuk-atribusi-participant).
 
 Susun tindakan Meet yang memeriksa hasilnya: raise/lower hand, chat, mute/unmute, pemilihan perangkat, dan leave. Tambahkan presentasi/screenshare ketika skenario produk memerlukannya.
 
-Gunakan VAD dan strategi giliran Pipecat sebagai dasar. Tambahkan kebijakan meeting untuk mengenali pertanyaan kepada twin, menunggu orang selesai, memilih diam, meminta klarifikasi, dan menghentikan TTS ketika disela.
+Gunakan VAD di graf audio (`audio/vad.py`) sebagai dasar. Tambahkan kebijakan meeting untuk mengenali pertanyaan kepada twin, menunggu orang selesai, memilih diam, meminta klarifikasi, dan menghentikan TTS ketika disela.
 
 **Selesai ketika:** twin dapat menjawab pertanyaan tentang slide, tidak menebak nama pembicara yang ambigu, berhenti bicara ketika disela, serta membuktikan tindakan UI yang diminta berhasil.
 
 **Kemajuan:** observer read-only, kebijakan partisipasi, dan identitas speaker wajib di transkrip sudah digabung (identitas speaker di transkrip sekarang berasal dari `VoiceActivityTracker`); twin tidak menyangkal penutur tak dikenal, dengan 0 penyangkalan pada sondase live. Visual slide dan tindakan UI lanjutan belum dikerjakan.
 
-Iterasi addressing sadar lantai sudah masuk: tanpa `--wake-phrase`, twin hanya menjawab transkrip final yang menyebut namanya (kata utuh, dengan jendela aktivasi setelah disebut), dan transkrip final yang tidak ditujukan menghentikan playback bila twin sedang bicara. Rincian dan keputusan produknya ada di [laporan breaking change](../reports/2026-10-14-breaking-changes-hardening.md#7-iterasi-1-addressing-sadar-lantai-digital-twin). Kosakata backchannel Inggris (`yeah`, `mm-hm`, dan sejenisnya) sudah masuk, sehingga tidak menghentikan twin yang sedang bicara. Belum tersambung: sinyal overlap (`others_speaking`, `ambiguous`) dan endpoint giliran berbasis model.
+Iterasi addressing sadar lantai sudah masuk: tanpa `--wake-phrase`, twin hanya menjawab transkrip final yang menyebut namanya (kata utuh, dengan jendela aktivasi setelah disebut), dan transkrip final yang tidak ditujukan menghentikan playback bila twin sedang bicara. Rincian dan keputusan produknya ada di [laporan breaking change](../reports/2026-10-14-breaking-changes-hardening.md#7-iterasi-1-addressing-sadar-lantai-digital-twin). Kosakata backchannel Inggris (`yeah`, `mm-hm`, dan sejenisnya) sudah masuk, sehingga tidak menghentikan twin yang sedang bicara. Iterasi 4 menyatukan keputusan addressing di satu fungsi (`choose_participation`) untuk kedua mode. Ack yang berdiri sendiri hanya dijawab bila twin baru bertanya, interjeksi di dalam jendela diam, dan lawan bicara lain yang teratribusi diam (bagian 11 laporan). Belum tersambung: `ambiguous` dan endpoint giliran berbasis model. Gerbang addressee berbasis model adalah langkah berikutnya dan belum dibangun. STT Muse sekarang berada di `transcription/` dengan kontrak `TranscriptUpdate` (bagian 14 laporan). Keepalive silence real-time mencegah sesi ditutup saat audio berhenti. Tes live Muse lulus dengan WAV bahasa Inggris. Iterasi 5 (bagian 12 laporan): satu giliran yang gagal tidak lagi mengakhiri percakapan, barge-in default ikut `--converse`, dan koneksi putus menahan bicara. Latensi jawaban (median sekitar 6,6 detik di live) dan suara orang pertama belum dikerjakan.
 
 ### 6. Evaluasi menyeluruh dan kesiapan operasi
 
@@ -161,9 +167,9 @@ Setelah media stabil, pilih kebutuhan suara persona dan avatar/video, kemudian v
 
 ## Library yang dipakai ulang dan kode aplikasi yang diperlukan
 
-Pertahankan LangChain/LangGraph untuk agent dan state, Pipecat untuk pipeline suara, Graphiti untuk memori, Playwright/MCP untuk browser, dan DeepEval untuk evaluasi. Baca dokumentasi serta source versi yang dikunci sebelum integrasi baru.
+Pertahankan LangChain/LangGraph untuk agent dan state, graf audio sendiri untuk suara (dengan `onnxruntime`, `loudness`, `sentencex`, dan `websockets`), Graphiti untuk memori, Playwright/MCP untuk browser, dan DeepEval untuk evaluasi. Baca dokumentasi serta source versi yang dikunci sebelum integrasi baru.
 
-Kode aplikasi tetap diperlukan untuk identitas sesi, alur Google Meet, kontrak event antarlibrary, persona, dan aturan partisipasi. Batasi kode itu pada kebutuhan yang tidak disediakan library. Gunakan dependency injection dan context manager yang sudah ada; hindari membangun ulang agent loop, protokol STT, VAD, database memori, atau tool browser generik.
+Kode aplikasi tetap diperlukan untuk identitas sesi, alur Google Meet, kontrak event antarlibrary, persona, dan aturan partisipasi. Batasi kode itu pada kebutuhan yang tidak disediakan library. Gunakan dependency injection dan context manager yang sudah ada; hindari membangun ulang agent loop, database memori, atau tool browser generik. Protokol STT dan VAD kini ditulis sendiri setelah Pipecat dilepas; lihat [rencana](../plans/drop-pipecat.md).
 
 Pelajaran dari repository referensi:
 

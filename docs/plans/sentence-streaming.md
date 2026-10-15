@@ -73,7 +73,7 @@ async for piece in answer_pieces():
 ### 4.2 Alur ucap per kalimat
 
 - Responder streaming baru di samping `LangGraphResponder`; kontrak `ConversationResponder` lama tetap untuk alur non-stream. Responder baru memakai `agent.astream(..., stream_mode="messages")`, hanya node `model`, cutoff `tool_end` — persis metode probe bukti 2.2.
-- Tiap kalimat siap → `session.speak(kalimat)` berurutan dalam generasi sama; TTS per kalimat memakai synthesizer lama pada [voice.py](../../src/fakeyou/audio/voice.py); journal `synthesis_*` per kalimat beserta `sentence_index`.
+- Tiap kalimat siap → `session.speak(kalimat)` berurutan dalam generasi sama; TTS per kalimat memakai synthesizer lama pada [voice.py](../../src/fakeyou/speech/registry.py); journal `synthesis_*` per kalimat beserta `sentence_index`.
 - Urutan audio dijamin antre [playback.py](../../src/fakeyou/audio/playback.py); tidak ada ucap paralel.
 - Timeout respons lama tetap membungkus seluruh giliran; stream di dalam timeout sama.
 

@@ -57,7 +57,7 @@ Google Meet Media API saat ini masih berstatus Developer Preview. API ini mewaji
 
 ## Pemakaian ulang saat ini versus masa depan
 
-Fondasi saat ini: komposisi agent/checkpoint Python, Playwright MCP native yang menggerakkan CloakBrowser, Muse Voice STT lewat adapter Pipecat, kerangka evaluasi DeepEval/pytest, dan tool memori Graphiti. Capture media live dan fixture transkrip hasil capture masih menjadi pekerjaan mendatang.
+Fondasi saat ini: komposisi agent/checkpoint Python, Playwright MCP native yang menggerakkan CloakBrowser, Muse Voice STT lewat klien sendiri (`transcription/muse.py`), kerangka evaluasi DeepEval/pytest, dan tool memori Graphiti. Capture media live dan fixture transkrip hasil capture masih menjadi pekerjaan mendatang.
 
 Batas Node yang dapat dipakai ulang di masa depan: `@vexa/join` milik Vexa untuk admission Google Meet, `gmeet-capture` milik Vexa untuk PCM per stream dan atribusi, kosakata bukti lifecycle Vexa, dan routing PulseAudio Vexa untuk ucapan keluar setelah transport media dipilih. OpenAI TTS adalah default factory saat ini; transport keluar masih belum ada. Tidak satu pun modul Vexa ini terintegrasi ke fondasi Python saat ini; pemeriksaan registry yang dicatat di atas berlaku untuk package yang diaudit.
 

@@ -1,30 +1,59 @@
 # Fondasi suara
 
-Modul voice memakai adapter Pipecat native untuk capture. `create_muse_stt` membuat `MetaSTTService` untuk Muse Voice Transcribe dengan endpointing oleh model; bahasa mengikuti `FAKEYOU_SPEECH__LANGUAGE` (`id` atau `en`), dan pemanggil dapat meneruskan beberapa language bias, keyword, atau mode `PUSH_TO_TALK` / `DIARIZATION`. Output ucapan dipilih lewat `FAKEYOU_TTS__PROVIDER`: `OpenAISpeechSynthesizer` memakai API streaming response OpenAI native, dan `MiniMaxSpeechSynthesizer` memakai SSE `t2a_v2` MiniMax; keduanya menghasilkan PCM mentah 24 kHz. Hanya jalur streaming yang tersedia; jalur buffered dihapus karena tidak pernah dipakai di produksi.
+Jalur suara tidak memakai Pipecat. Modul `audio/` dan `transcription/` menjalankan graf audio dan klien Muse sendiri. Alasan dan urutan penggantian ada di `docs/plans/drop-pipecat.md`.
 
-Implementasi Pipecat `1.12.0` yang sudah dirilis adalah adapter Muse yang didukung. Pasang dengan `pipecat-ai[meta]`; extra tersebut kosong pada rilis itu karena adapter memakai dependency WebSocket inti Pipecat. Sintesis memakai SDK OpenAI atau `httpx2` secara langsung, di luar pipeline Pipecat. `speech.language` juga menentukan instruksi gaya bicara OpenAI dan `language_boost` MiniMax.
+## Capture
 
-Pipeline voice bersifat capture-only: `transport.input()`, STT, lalu transcript observer yang meneruskan frame transkripsi final ke sesi meeting. Contoh resmi Pipecat `voice-openai.py` merangkai loop percakapan yang lebih lengkap (`transport.input()`, STT, user aggregator, LLM, TTS, `transport.output()`, assistant aggregator); proyek ini menjaga orkestrasi dan playback tetap di luar Pipecat setelah TTS di dalam pipeline sebelumnya menghasilkan suara patah-patah pada run Meet live. `PlaybackEngine` serial kini mengalirkan PCM ke dalam `paplay` pada `agent_output`. Engine ini melakukan mute pada sink output di antara ucapan dan membiarkan source microphone tidak di-mute.
+Ada dua sumber PCM mono 16 kHz, dan keduanya masuk ke antrean `PcmQueue` yang sama:
 
-Engine menangani satu retry untuk timeout sintesis; client speech milik synthesizer menonaktifkan retry SDK. Stream yang macet melewati batas waktu dilaporkan sebagai fault `tts` `timeout`, bukan timeout playback. Retry streaming hanya diizinkan sebelum chunk PCM pertama yang tidak kosong. Stream parsial yang gagal dihentikan tanpa replay. Pembatalan menutup iterator provider dan membersihkan proses player (reap). Dependency journal dan fault diinjeksikan secara eksplisit lewat factory audio.
+- Chromium di slot Meet mengirim PCM lewat `StreamAudioInput` (`audio/stream_input.py`). Audio yang datang sebelum sesi siap disimpan sampai 5 detik.
+- Mode native membaca source PulseAudio dengan `parec` (`audio/capture.py`). Source default-nya `meeting_audio.monitor` (`PULSE_SOURCE` di image audio). `parec` mengikuti jalur yang sama dengan `paplay` untuk output.
 
-Balasan agent memakai `match_endofsentence` milik Pipecat untuk menerapkan batas kalimat yang diucapkan (`FAKEYOU_CONVERSATION__MAX_SPOKEN_SENTENCES`, default 2), dengan menjaga batas singkatan, desimal, dan tanda kutip penutup. Teks `--speak` eksplisit dari operator dikecualikan. Balasan lengkap yang dihasilkan tetap ada di riwayat graph, termasuk draf yang tidak pernah terdengar.
+Kedua sumber dibaca oleh `AudioGraph` (`audio/graph.py`). Urutan per chunk: aktivitas dan probe atribusi, turn tap (untuk klip voiceprint), kirim ke STT, lalu VAD dan event bicara. Pre-roll sudah dihapus. STT menerima audio kontinu, sehingga replay pre-roll hanya menggandakan audio.
 
-Komposisi ini melakukan capture lewat transport audio yang sungguhan. CloakBrowser dan Playwright mengoperasikan halaman Meet dan UI browser; keduanya tidak menyediakan objek transport Pipecat. Audio remote dari Meet masuk lewat source PulseAudio `meeting_audio.monitor`, dan playback mencapai microphone browser melalui remap `agent_mic` dari `agent_output`.
+## VAD
 
-Mode `ENDPOINTING` Muse mengeluarkan batas ucapan yang dideteksi oleh model dan frame transkrip final. `PUSH_TO_TALK` menyerahkan penentuan batas giliran kepada client. `DIARIZATION` menambahkan atribusi speaker dalam lingkup sesi; mode ini tidak memberikan identitas participant yang terverifikasi. VAD tetap menjadi urusan pipeline; kebijakan interupsi berada di loop percakapan. Barge-in dipicu oleh transkrip interim dengan minimal `FAKEYOU_CONVERSATION__BARGE_IN_MIN_WORDS` kata (default 3) dan oleh transkrip final; keduanya menghentikan playback yang aktif/antre, dan satu interupsi dicatat sekali sebagai `barge_in_detected`.
+`audio/vad.py` memakai model Silero v5 (ONNX) yang di-vendor di `audio/models/`. Lapisannya:
 
-Heartbeat capture dan energi adalah sinyal yang terpisah. Frame dengan RMS nol dan kehadiran participant yang baru terdeteksi menghasilkan event journal `capture_silence_detected`, bukan bukti bahwa capture rusak. Frame yang hilang dan ucapan tanpa final mengikuti kebijakan fault/grace yang sudah ada. Lihat laporan verifikasi untuk cakupan yang terukur dan batasan live.
+- `VadAnalyzer`: confidence model dan volume per jendela 512 sampel. Volume memakai BS.1770 dari paket `loudness` (400 ms, dinormalisasi ke 0..1, dihaluskan dengan faktor 0,2).
+- State machine: `QUIET`, `STARTING`, `SPEAKING`, `STOPPING`, dengan `start_secs` dan `stop_secs` dari `FAKEYOU_VAD__*`.
+- `VadController`: event `started`, `stopped`, dan `activity` setiap 0,2 detik audio selama bicara. Jika tidak ada audio selama 1 detik saat bicara, controller menghentikan bicara dan mengembalikan analyzer ke quiet.
 
-Pada Pipecat 1.12.0, adapter Muse mencatat event `speaker`, `speechStart`, dan `speechEnd` secara internal. Adapter tidak memetakan event speaker ke identitas participant pada frame transkripsi. Pipeline di hilir tidak dapat memperlakukan `user_id` transkripsi saat ini sebagai diarisasi Muse yang terverifikasi. [Smoke test live](../runbooks/live-muse-test.md) memeriksa transkripsi final dalam mode `ENDPOINTING`.
+Hasil VAD dicocokkan per jendela dengan golden dari Pipecat 1.12 (`tests/fixtures/vad-golden-standup-16k.json`). Confidence dan volume selisih paling besar 1e-5, dan state serta urutan event identik. Ada dua perbedaan yang disengaja. Reset state model berjalan setiap 5 detik audio, bukan waktu dinding, sehingga hasil replay sama dengan live. Idle timeout juga mengembalikan analyzer ke quiet, sehingga bicara berikutnya selalu diumumkan.
 
-Pipecat 1.12.0 juga menyertakan `LangchainProcessor` di `pipecat.processors.frameworks.langchain`. Processor ini menerima `Runnable` LangChain, hanya mengekstrak pesan plain-text terbaru dari sebuah `LLMContextFrame`, dan mengalirkan output `AIMessageChunk` atau string sebagai objek `TextFrame`. Ini adalah jembatan ringan text-in/text-out: ia tidak meneruskan daftar pesan lengkap, tool call, atau konten multimodal ke runnable. Ia juga memerlukan extra terpisah `pipecat-ai[langchain]`, yang bukan bagian dari kumpulan dependency fondasi ini. Untuk agent LangGraph/LangChain yang sudah ada, pertahankan orkestrasi di luar pipeline voice sampai ada adapter khusus yang memegang kontrak pesan dan tool. Jalur layanan LLM native Pipecat adalah opsi yang kompatibel untuk pipeline percakapan yang lengkap.
+## Speech-to-text Muse
 
-Referensi:
+`transcription/muse.py` memiliki socket. Klien ini tidak merekonek sendiri.
 
-- [Source Muse Pipecat 1.12.0](https://raw.githubusercontent.com/pipecat-ai/pipecat/v1.12.0/src/pipecat/services/meta/stt.py)
-- [Metadata package Pipecat 1.12.0](https://raw.githubusercontent.com/pipecat-ai/pipecat/v1.12.0/pyproject.toml)
-- [Contoh pipeline voice Pipecat](https://github.com/pipecat-ai/pipecat/blob/main/examples/voice/voice-openai.py)
-- [LangchainProcessor Pipecat 1.12.0](https://raw.githubusercontent.com/pipecat-ai/pipecat/v1.12.0/src/pipecat/processors/frameworks/langchain.py)
+- Handshake: `mode` (default `DIARIZATION`, lihat `FAKEYOU_STT__MODE`), `partialMode` `CUMULATIVE`, `audioEncoding` `PCM_16KHZ`, `languageBias` dengan nama bahasa Inggris (`English` atau `Indonesian`, bukan kode), dan `keywords` dari `speech.stt_keywords`.
+- Event giliran: `speechStart`, transkrip parsial, `speaker`, `speechEnd`, `speechComplete`. Teks final diambil dari `speechComplete.transcript` dan di-strip. Final pada `transcript` dengan `final: true` yang berisi teks hanya diteruskan bila tidak ada giliran terbuka. Flush kosong di akhir sesi diabaikan.
+- Label `speaker` dilampirkan ke giliran yang sedang terbuka sebagai `TranscriptUpdate.voice_clusters`. Label ini adalah cluster per sesi (`A`, `B`), bukan identitas participant. Label yang tiba setelah giliran ditutup dicatat sebagai `stt_speaker_dropped`.
+- Backlog ke Muse dibatasi 4 detik. Audio yang melewati batas dibuang dari depan dan dicatat sebagai `stt_audio_dropped`. Muse menolak aliran yang lebih lambat dari real-time, jadi saat capture diam klien mengirim silence 100 ms setiap 100 ms setelah 0,5 detik tanpa audio (`stt_keepalive_started`).
+- Socket yang putus dilaporkan lewat `on_lost`. `MeetingAudioSession` memutuskan rekonek: antrean, backoff 5 detik lalu dikali dua dengan jitter, maksimal tiga percobaan, dan batas 120 detik.
+
+Batas sesi Muse 60 menit berasal dari dokumen Meta dan belum diuji live. Jalur rekonek untuk kasus ini sudah ada, tetapi buffer 4 detik lebih pendek dari jeda rekonek terpanjang.
+
+## Sintesis ucapan
+
+Output dipilih lewat `FAKEYOU_TTS__PROVIDER`: `openai`, `minimax`, `cartesia`, atau `elevenlabs`. Setiap adapter ada di `speech/` dan berbicara HTTP langsung dengan `httpx2` atau SDK OpenAI. Engine menangani satu retry untuk timeout sintesis. Stream yang macet melewati batas waktu dilaporkan sebagai fault `tts` `timeout`. Retry streaming hanya diizinkan sebelum chunk PCM pertama yang tidak kosong, dan stream parsial yang gagal dihentikan tanpa replay. Pembatalan menutup iterator provider dan membersihkan proses.
+
+`speech.language` menentukan instruksi gaya bicara OpenAI, `language_boost` MiniMax, dan bahasa yang diminta Cartesia dan ElevenLabs. Bahasa yang didukung adalah `id` dan `en` (`speech/languages.py`).
+
+## Batas kalimat
+
+Balasan agent dipotong sampai `FAKEYOU_CONVERSATION__MAX_SPOKEN_SENTENCES` kalimat (default 2) oleh `sentence_end` di `foundation/sentences.py`. Fungsi itu memakai `sentencex` dan menjaga batas untuk singkatan, desimal, dan tanda kutip penutup. Golden-nya diambil dari `pipecat.utils.string.match_endofsentence` sebelum Pipecat dihapus. Teks `--speak` eksplisit dari operator dikecualikan. Balasan lengkap tetap ada di riwayat graph, termasuk draf yang tidak pernah terdengar.
+
+## Barge-in dan giliran
+
+VAD tetap menjadi urusan graf audio. Kebijakan interupsi berada di loop percakapan. Barge-in dipicu oleh transkrip interim yang memiliki minimal `BARGE_IN_MIN_WORDS` kata saat twin sedang bicara. Interjeksi pendek menghentikan playback tanpa membalas. Ack pendek hanya dijawab jika twin baru saja bertanya.
+
+## Heartbeat capture
+
+Heartbeat capture dan energi adalah sinyal yang terpisah. Frame dengan RMS nol dan kehadiran participant yang baru terdeteksi menghasilkan event `capture_silence_detected`, bukan bukti bahwa capture rusak. Frame yang hilang dan ucapan tanpa final mengikuti kebijakan fault dan grace yang sudah ada.
+
+## Referensi
+
 - [Meta Muse Voice Transcribe API](https://dev.meta.ai/docs/speech-to-text)
 - [Cookbook streaming Meta](https://dev.meta.ai/docs/cookbook/voice-api-fundamentals)
+- [Silero VAD](https://github.com/snakers4/silero-vad) (MIT)
+- [Smoke test live Muse](../runbooks/live-muse-test.md)

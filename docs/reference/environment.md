@@ -71,12 +71,9 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_REPLY__MODEL (GoogleReply)` | `reply` | `str` | `gemini-3.8-flash` |
 | `FAKEYOU_REPLY__MODEL (CompatibleReply)` | `reply` | `str` | `gpt-4.1-mini` |
 | `FAKEYOU_REPLY__MODEL (OpenAIReply)` | `reply` | `str` | `gpt-4.1-mini` |
-| `FAKEYOU_REPLY__PROVIDER (AnthropicReply)` | `reply` | `Literal['anthropic']` | `anthropic` |
-| `FAKEYOU_REPLY__PROVIDER (GoogleReply)` | `reply` | `Literal['google']` | `google` |
-| `FAKEYOU_REPLY__PROVIDER (OpenAIReply)` | `reply` | `Literal['openai']` | `openai` |
-| `FAKEYOU_REPLY__PROVIDER (CompatibleReply)` | `reply` | `Literal['openai_compatible']` | `openai_compatible` |
+| `FAKEYOU_REPLY__PROVIDER` | `reply` | `Literal['anthropic', 'google', 'openai', 'openai_compatible']` | `openai` |
+| `FAKEYOU_REPLY__REASONING_EFFORT (GoogleReply)` | `reply` | `Literal['low', 'medium', 'high'], None` | `low` |
 | `FAKEYOU_REPLY__REASONING_EFFORT (CompatibleReply)` | `reply` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
-| `FAKEYOU_REPLY__REASONING_EFFORT (GoogleReply)` | `reply` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_REPLY__REASONING_EFFORT (OpenAIReply)` | `reply` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_REPLY__TIMEOUT_SECONDS` | `reply` | `float` | `15.0` |
 
@@ -95,12 +92,9 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_REPLY_FALLBACK__MODEL (GoogleReply)` | `reply_fallback` | `str` | `gemini-3.8-flash` |
 | `FAKEYOU_REPLY_FALLBACK__MODEL (CompatibleReply)` | `reply_fallback` | `str` | `gpt-4.1-mini` |
 | `FAKEYOU_REPLY_FALLBACK__MODEL (OpenAIReply)` | `reply_fallback` | `str` | `gpt-4.1-mini` |
-| `FAKEYOU_REPLY_FALLBACK__PROVIDER (AnthropicReply)` | `reply_fallback` | `Literal['anthropic']` | `anthropic` |
-| `FAKEYOU_REPLY_FALLBACK__PROVIDER (GoogleReply)` | `reply_fallback` | `Literal['google']` | `google` |
-| `FAKEYOU_REPLY_FALLBACK__PROVIDER (OpenAIReply)` | `reply_fallback` | `Literal['openai']` | `openai` |
-| `FAKEYOU_REPLY_FALLBACK__PROVIDER (CompatibleReply)` | `reply_fallback` | `Literal['openai_compatible']` | `openai_compatible` |
+| `FAKEYOU_REPLY_FALLBACK__PROVIDER` | `reply_fallback` | `Literal['anthropic', 'google', 'openai', 'openai_compatible']` | - |
+| `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT (GoogleReply)` | `reply_fallback` | `Literal['low', 'medium', 'high'], None` | `low` |
 | `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT (CompatibleReply)` | `reply_fallback` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
-| `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT (GoogleReply)` | `reply_fallback` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_REPLY_FALLBACK__REASONING_EFFORT (OpenAIReply)` | `reply_fallback` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_REPLY_FALLBACK__TIMEOUT_SECONDS` | `reply_fallback` | `float` | `15.0` |
 
@@ -119,12 +113,9 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_DEBRIEF__MODEL (GoogleReply)` | `debrief` | `str` | `gemini-3.8-flash` |
 | `FAKEYOU_DEBRIEF__MODEL (CompatibleReply)` | `debrief` | `str` | `gpt-4.1-mini` |
 | `FAKEYOU_DEBRIEF__MODEL (OpenAIReply)` | `debrief` | `str` | `gpt-4.1-mini` |
-| `FAKEYOU_DEBRIEF__PROVIDER (AnthropicReply)` | `debrief` | `Literal['anthropic']` | `anthropic` |
-| `FAKEYOU_DEBRIEF__PROVIDER (GoogleReply)` | `debrief` | `Literal['google']` | `google` |
-| `FAKEYOU_DEBRIEF__PROVIDER (OpenAIReply)` | `debrief` | `Literal['openai']` | `openai` |
-| `FAKEYOU_DEBRIEF__PROVIDER (CompatibleReply)` | `debrief` | `Literal['openai_compatible']` | `openai_compatible` |
+| `FAKEYOU_DEBRIEF__PROVIDER` | `debrief` | `Literal['anthropic', 'google', 'openai', 'openai_compatible']` | - |
+| `FAKEYOU_DEBRIEF__REASONING_EFFORT (GoogleReply)` | `debrief` | `Literal['low', 'medium', 'high'], None` | `low` |
 | `FAKEYOU_DEBRIEF__REASONING_EFFORT (CompatibleReply)` | `debrief` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
-| `FAKEYOU_DEBRIEF__REASONING_EFFORT (GoogleReply)` | `debrief` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_DEBRIEF__REASONING_EFFORT (OpenAIReply)` | `debrief` | `Literal['minimal', 'low', 'medium', 'high'], None` | - |
 | `FAKEYOU_DEBRIEF__TIMEOUT_SECONDS` | `debrief` | `float` | `15.0` |
 
@@ -133,15 +124,20 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | Variabel | Bagian | Tipe | Default |
 | --- | --- | --- | --- |
 | `FAKEYOU_TTS__API_KEY` | `tts` | `SecretStr, None` | - |
+| `FAKEYOU_TTS__BASE_URL (CartesiaTTS)` | `tts` | `str` | `https://api.cartesia.ai` |
+| `FAKEYOU_TTS__BASE_URL (ElevenLabsTTS)` | `tts` | `str` | `https://api.elevenlabs.io` |
 | `FAKEYOU_TTS__BASE_URL (MiniMaxTTS)` | `tts` | `str` | `https://api.minimax.io/v1/t2a_v2` |
 | `FAKEYOU_TTS__BASE_URL (OpenAITTS)` | `tts` | `str` | `https://api.openai.com/v1` |
+| `FAKEYOU_TTS__MODEL (ElevenLabsTTS)` | `tts` | `str` | `eleven_multilingual_v2` |
 | `FAKEYOU_TTS__MODEL (OpenAITTS)` | `tts` | `str` | `gpt-4o-mini-tts` |
+| `FAKEYOU_TTS__MODEL (CartesiaTTS)` | `tts` | `str` | `sonic-3` |
 | `FAKEYOU_TTS__MODEL (MiniMaxTTS)` | `tts` | `str` | `speech-2.8-turbo` |
-| `FAKEYOU_TTS__PROVIDER (MiniMaxTTS)` | `tts` | `Literal['minimax']` | `minimax` |
-| `FAKEYOU_TTS__PROVIDER (OpenAITTS)` | `tts` | `Literal['openai']` | `openai` |
+| `FAKEYOU_TTS__PROVIDER` | `tts` | `Literal['cartesia', 'elevenlabs', 'minimax', 'openai']` | `openai` |
 | `FAKEYOU_TTS__SAMPLE_RATE` | `tts` | `int` | `24000` |
 | `FAKEYOU_TTS__VOICE (MiniMaxTTS)` | `tts` | `str` | `Indonesian_CalmWoman` |
 | `FAKEYOU_TTS__VOICE (OpenAITTS)` | `tts` | `str` | `alloy` |
+| `FAKEYOU_TTS__VOICE (CartesiaTTS)` | `tts` | `str` | `f3b7c445-d015-40f7-a665-9595e0bc0c90` |
+| `FAKEYOU_TTS__VOICE (ElevenLabsTTS)` | `tts` | `str` | wajib |
 
 ### stt
 
@@ -151,9 +147,8 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_STT__DIARIZE_MAX_RETRIES` | `stt` | `int` | `3` |
 | `FAKEYOU_STT__DIARIZE_TIMEOUT_SECONDS` | `stt` | `float` | `60.0` |
 | `FAKEYOU_STT__IDLE_RECONNECT_SECONDS` | `stt` | `float` | `0.0` |
-| `FAKEYOU_STT__MODE` | `stt` | `Literal['ENDPOINTING', 'PUSH_TO_TALK', 'DIARIZATION']` | `ENDPOINTING` |
+| `FAKEYOU_STT__MODE` | `stt` | `Literal['ENDPOINTING', 'PUSH_TO_TALK', 'DIARIZATION']` | `DIARIZATION` |
 | `FAKEYOU_STT__MODEL` | `stt` | `str` | `muse-voice-transcribe-1.0` |
-| `FAKEYOU_STT__PREROLL_MS` | `stt` | `float` | `500.0` |
 | `FAKEYOU_STT__PROVIDER` | `stt` | `Literal['muse']` | `muse` |
 | `FAKEYOU_STT__READY_TIMEOUT_SECONDS` | `stt` | `float` | `10.0` |
 | `FAKEYOU_STT__URL` | `stt` | `str` | `wss://api.meta.ai/v1/asr/realtime` |
@@ -329,8 +324,6 @@ Variabel di luar model `Settings` yang dibaca langsung oleh aplikasi, compose, a
 | `DEBRIEF_REVIEWS_PATH` | Path ulasan independen untuk eval debrief live; kosong berarti status `pending`. | Kosong. |
 | `EVAL_JUDGE_API_KEY` | Mengaktifkan judge model live pada eval; kosong berarti judge nonaktif. | Kosong. |
 | `EMBEDDING_DIM` | Ditulis CLI dari `FAKEYOU_MEMORY__EMBEDDER__DIM` agar terbaca library embedding Graphiti. | Mengikuti dim embedder. |
-| `MUSE_EXPECTED_TEXT` | Teks ekspektasi untuk tes live endpointing muse. | Wajib bila tes live dijalankan. |
-| `MUSE_TEST_AUDIO` | File WAV untuk tes live endpointing muse. | Wajib bila tes live dijalankan. |
 | `POSTGRES_PASSWORD` | Password service `postgres` pada `compose.yaml`. Compose menolak start tanpa nilai ini. | Wajib diisi. |
 | `PULSE_SINK` | Sink output audio agen. | `agent_output` |
 | `PULSE_SOURCE` | Sumber monitor PulseAudio untuk audio meeting. | `meeting_audio.monitor` |
@@ -339,3 +332,4 @@ Variabel di luar model `Settings` yang dibaca langsung oleh aplikasi, compose, a
 | `TEST_DATABASE_URL` | URL database untuk fixture postgres pada suite pytest; kosong berarti tes postgres di-skip. | Kosong. |
 | `TRUST_ARTIFACT_DIR` | Direktori artefak eval trust live. | Direktori sementara pytest. |
 | `VOICEPRINT_TEST_MODEL` | Path model ONNX untuk tes embedding voiceprint. | `/tmp/f2-spike/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx` |
+| `MUSE_DIARIZATION_AUDIO` | File WAV mono 16 kHz berisi dua pembicara untuk tes live diarisasi Muse. | Wajib bila tes live dijalankan. |

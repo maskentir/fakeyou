@@ -18,7 +18,7 @@ Dokumen ini adalah hasil historis fondasi. Hasil terbaru tersedia di [laporan re
 | Neo4j 5.26.31 | Container healthy, hanya port loopback |
 | Graphiti schema init | Berhasil; 33 indeks ONLINE |
 | Graphiti startup chat | Konstruksi di worker, setup schema, koneksi Neo4j, dan cleanup lulus |
-| Lifecycle Pipecat | Start, PCM, final transcript, shutdown, dan penolakan error upstream lulus secara lokal |
+| Lifecycle Pipecat (sebelum dilepas) | Start, PCM, final transcript, shutdown, dan penolakan error upstream lulus secara lokal. Pipecat sudah dihapus; ulangi dengan `tests/test_audio_graph_live.py` dan `tests/test_muse_client.py` |
 | Live Muse | 1 passed; audio sintetis Bahasa Indonesia dikirim real-time dan transkrip final cocok |
 | Credential handling CLI | Chat tanpa key gagal sebelum membuka resource eksternal |
 
@@ -26,7 +26,7 @@ Schema Graphiti diuji dengan nilai key sementara yang tidak valid untuk layanan 
 
 DeepEval menggunakan respons model terprogram dan native LangGraph tool loop. Offline judge melempar error bila dipanggil. Skor tersebut memverifikasi kontrak tool dan argumen, bukan kualitas model live.
 
-Tes native Pipecat memverifikasi konstruksi serta konfigurasi Muse dan TTS. Tes live mengirim audio sintetis ke Meta dan menerima transkrip final; TTS belum dipanggil. Pytest melaporkan deprecation warning dari dependency Graphiti/Pipecat; warning tidak disembunyikan.
+Tes klien Muse (`tests/test_muse_client.py`) memverifikasi handshake, perakitan giliran, label diarisasi, backlog, dan keepalive dengan socket palsu. Tes live `test_muse_diarization_splits_turns_and_labels_voices_live` dan `test_two_voice_clip_through_the_audio_graph_yields_attributed_turns` mengirim klip dua pembicara ke Meta dan menerima transkrip final dengan label; TTS belum dipanggil. Pytest melaporkan deprecation warning dari dependency Graphiti/Pipecat; warning tidak disembunyikan.
 
 Uji live Muse memiliki [runbook](live-muse-test.md) dan fixture sintetis Bahasa Indonesia sepanjang 9,076 detik, PCM mono 16-bit 24 kHz. Metadata Muse Code menunjukkan login OAuth, sementara credential bundle di macOS Keychain menyediakan `api_key` untuk Model API. Key dipakai hanya di memory saat pengujian dan disimpan lokal di `.env` dengan permission `600`; file tersebut di-ignore Git. Menurut [dokumentasi Meta](https://dev.meta.ai/help/subscriptions/subscribe-to-muse-code), credential onboarding Muse Code dan API key tambahan memiliki jalur penggunaan yang berbeda.
 
