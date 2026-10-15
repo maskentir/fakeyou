@@ -227,6 +227,19 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_CONVERSATION__SENTENCE_STREAMING` | `conversation` | `bool` | false |
 | `FAKEYOU_CONVERSATION__VOICE_LABELS_ENABLED` | `conversation` | `bool` | false |
 
+### participation_decider
+
+| Variabel | Bagian | Tipe | Default |
+| --- | --- | --- | --- |
+| `FAKEYOU_PARTICIPATION_DECIDER__API_KEY` | `participation_decider` | `SecretStr, None` | - |
+| `FAKEYOU_PARTICIPATION_DECIDER__BASE_URL` | `participation_decider` | `str, None` | - |
+| `FAKEYOU_PARTICIPATION_DECIDER__CLARIFY_THRESHOLD` | `participation_decider` | `float` | `0.5` |
+| `FAKEYOU_PARTICIPATION_DECIDER__MODEL` | `participation_decider` | `str` | `jev-latest` |
+| `FAKEYOU_PARTICIPATION_DECIDER__PRE_GENERATE_ENABLED` | `participation_decider` | `bool` | true |
+| `FAKEYOU_PARTICIPATION_DECIDER__SPEAK_THRESHOLD` | `participation_decider` | `float` | `0.7` |
+| `FAKEYOU_PARTICIPATION_DECIDER__TIMEOUT_SECONDS` | `participation_decider` | `float` | `2.0` |
+| `FAKEYOU_PARTICIPATION_DECIDER__WINDOW_TURNS` | `participation_decider` | `int` | `6` |
+
 ### meeting
 
 | Variabel | Bagian | Tipe | Default |

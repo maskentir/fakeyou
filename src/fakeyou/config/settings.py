@@ -368,6 +368,17 @@ class ConversationSettings(Section):
     history_max_tokens: int = Field(default=32000, gt=0)
 
 
+class ParticipationDeciderSettings(Section):
+    model: str = "jev-latest"
+    base_url: OptionalURL = None
+    api_key: SecretStr | None = None
+    timeout_seconds: PositiveSeconds = 2.0
+    window_turns: int = Field(default=6, gt=0, le=20)
+    speak_threshold: float = Field(default=0.70, gt=0, lt=1)
+    clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
+    pre_generate_enabled: bool = True
+
+
 class MeetingSettings(Section):
     lobby_timeout_seconds: PositiveSeconds = 300.0
     session_duration_seconds: PositiveSeconds = 7200.0
@@ -438,6 +449,7 @@ class Configuration(Section):
     vad: VADSettings = Field(default_factory=VADSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
+    participation_decider: ParticipationDeciderSettings = Field(default_factory=ParticipationDeciderSettings)
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
