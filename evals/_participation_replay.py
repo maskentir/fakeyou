@@ -38,6 +38,19 @@ def load_labels(session: str) -> dict[str, Any]:
     return session_data
 
 
+def summarize_policy(rows: list[dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {"rule": 0, "jev": 0, "stale_pregen": 0}
+    for row in rows:
+        if row.get("event") != "policy_decided":
+            continue
+        source = row.get("decision_source", "rule")
+        if source in summary:
+            summary[source] += 1
+        if row.get("reason") == "jev_stale_silent":
+            summary["stale_pregen"] += 1
+    return summary
+
+
 def replay_record(path: Path, twin_names: tuple[str, ...]) -> list[dict[str, Any]]:
     async def _run() -> list[dict[str, Any]]:
         journal = RecordingJournal(meeting_id="replay")

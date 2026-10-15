@@ -574,8 +574,13 @@ git commit -m "test: add labeled participation corpus with false speak silent ra
 - Latensi observasi 2.9-6.5 detik (median sekitar 4 detik); default timeout menjadi 15.0 agar pregen background tak selalu stale; threshold 0.70/0.50 bertahan karena confidence tepat (0.95) dan salah (0.65-0.80) terpisah rapi.
 
 ## Catatan as-built: contract plus provider Gemini
-
 - Modul decider hanya mengenal contract `ParticipationDecider` (`decide` plus `aclose`); loop memegang protocol, bukan implementasi.
 - `TurnDecision` menggantikan nama khusus vendor; `JevDecider` tetap tersedia untuk nanti saat key TypeSafe ada.
 - `GeminiDecider` memakai REST `generateContent` plus `responseSchema` JSON; transport injeksi seperti Jev sehingga tes offline tanpa network.
 - Settings tambah `provider` (`jev` default, `gemini` alternatif); assembly memilih implementasi dan tetap rule-only saat kredensial belum lengkap.
+
+## Catatan as-built: corpus buatan dipensiunkan
+
+- Corpus 12 baris plus `score_corpus` dihapus; replay rekaman asli dan probe live menggantikan keduanya.
+- `summarize_policy` pindah ke `evals/_participation_replay.py` untuk analisis journal replay dan sesi bayangan.
+- Mekanisme evaluasi berlaku: `docs/runbooks/participation-labeling.md`.

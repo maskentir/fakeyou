@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from evals._participation_replay import load_labels, replay_record, score_replay
+from evals._participation_replay import load_labels, replay_record, score_replay, summarize_policy
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "participation-record-trust-live-s1.jsonl"
 
@@ -18,3 +18,12 @@ def test_replay_agreement_reports_gap_against_human_labels() -> None:
     assert result["turns"] == 13
     assert 0.0 <= result["agreement"] <= 1.0
     assert result["misses"]
+
+
+def test_report_summary_counts_rule_jev_and_stale() -> None:
+    rows = [
+        {"event": "policy_decided", "decision_source": "rule", "reason": "rule_addressed"},
+        {"event": "policy_decided", "decision_source": "jev", "reason": "jev_speak"},
+        {"event": "policy_decided", "decision_source": "jev", "reason": "jev_stale_silent"},
+    ]
+    assert summarize_policy(rows) == {"rule": 1, "jev": 2, "stale_pregen": 1}
