@@ -41,6 +41,7 @@ from fakeyou.conversation.conversation import (
     conversation_thread_id,
 )
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.participation_decider import JevDecider
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, open_database, require_url
@@ -242,6 +243,21 @@ def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
     )
 
 
+def _participation_decider(settings: Settings) -> JevDecider | None:
+    config = settings.participation_decider
+    if not config.pre_generate_enabled:
+        return None
+    api_key = config.api_key.get_secret_value() if config.api_key is not None else ""
+    if not api_key or not config.base_url:
+        return None
+    return JevDecider(
+        api_key=api_key,
+        model=config.model,
+        base_url=config.base_url,
+        timeout_seconds=config.timeout_seconds,
+    )
+
+
 class _ConversationBuilder:
     def __init__(
         self,
@@ -386,6 +402,7 @@ class _ConversationBuilder:
 
     def build_loop(self, responder: ConversationResponder) -> ConversationLoop:
         conversation_settings = self._settings.conversation
+        decider_settings = self._settings.participation_decider
         return ConversationLoop(
             responder,
             interaction=LoopInteraction(
@@ -396,6 +413,9 @@ class _ConversationBuilder:
                 barge_in_min_words=conversation_settings.barge_in_min_words,
                 participant_policy_enabled=conversation_settings.participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
+                jev_decider=_participation_decider(self._settings),
+                jev_speak_threshold=decider_settings.speak_threshold,
+                jev_clarify_threshold=decider_settings.clarify_threshold,
             ),
             timing=LoopTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,

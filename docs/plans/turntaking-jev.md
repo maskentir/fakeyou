@@ -559,3 +559,10 @@ Hasil: PASS
 git add evals/fixtures/participation-corpus.json evals/test_participation_decider_eval.py
 git commit -m "test: add labeled participation corpus with false speak silent rates"
 ```
+
+## Catatan as-built: wiring live (tindak lanjut selesai)
+
+- `LoopInteraction` membawa `jev_decider` plus dua threshold dari settings; `assembly.build_loop` membangun `JevDecider` hanya saat `pre_generate_enabled` aktif dan `api_key` plus `base_url` terisi (tanpa default URL bawaan).
+- Refresh berjalan saat `handle_interim` dan floor bebas, tak blocking; hasil disimpan via `_remember_jev`; `close()` membatalkan task dan menutup decider.
+- Kunci cache dihitung dari event final sebelum final baru (`events[:-1]`) agar kunci saat interim sama dengan kunci saat `_decide`.
+- Tanpa event journal baru; konsumsi tercatat di `policy_decided` existing.

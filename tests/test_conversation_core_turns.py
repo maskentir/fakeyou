@@ -10,6 +10,7 @@ from fakeyou.conversation.conversation import (
     pregen_cache_key,
     settle_turn,
 )
+from fakeyou.conversation.participation_decider import JevDecider
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder
@@ -344,3 +345,40 @@ def test_stale_key_is_rejected():
     assert pregen_cache_key(("old-id",), "explicit", mine=True) != pregen_cache_key(
         ("new-id",), "explicit", mine=True
     )
+
+
+async def test_interim_refresh_feeds_gray_turn_without_blocking(
+    journal: RecordingJournal,
+) -> None:
+    async def _speak(_payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "decision": {"choice": "speak", "confidence": 0.9, "probs": {}},
+            "addressed_to_me": {"probability": 0.9},
+            "others_conversing": {"probability": 0.0},
+            "needs_clarify": {"probability": 0.0},
+        }
+
+    decider = JevDecider(
+        api_key="k",
+        model="jev-latest",
+        base_url="https://x",
+        timeout_seconds=2.0,
+        transport=_speak,
+    )
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(twin_names=["harun"], jev_decider=decider),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "update selesai", participant_id="a"))
+    await loop.handle_interim("next")
+    await asyncio.wait_for(loop.wait_jev_idle(), 2)
+    await loop.handle_transcript(event("t2", "next", participant_id="b"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    reasons = [row["reason"] for row in journal.events("policy_decided")]
+    assert "jev_speak" in reasons
+    assert audio.spoken == ["next"]
+    await loop.close()
+    await decider.aclose()

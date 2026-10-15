@@ -19,7 +19,7 @@ from langchain_core.runnables import Runnable
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.endpointing import SemanticEndpoint
-from fakeyou.conversation.participation_decider import JevDecision
+from fakeyou.conversation.participation_decider import JevDecider, JevDecision
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.db.checkpoint import is_checkpoint_error
 from fakeyou.foundation.participation import (
@@ -40,7 +40,7 @@ from fakeyou.foundation.protocols import (
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.foundation.turn_tracker import empty_turn_state, note_event
+from fakeyou.foundation.turn_tracker import detect_turn_cue, empty_turn_state, note_event
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -699,6 +699,11 @@ def pregen_cache_key(event_ids: tuple[str, ...], cue: str, *, mine: bool) -> tup
 JEV_TO_PARTICIPATION = {"speak": "reply", "silent": "silent", "clarify": "clarify"}
 
 
+def _swallow_jev_refresh_error(task: asyncio.Task[None]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
 def _pregen_failure_reason(task: asyncio.Task[None] | None) -> str | None:
     if task is None or not task.done():
         return None
@@ -721,6 +726,9 @@ class LoopInteraction:
     barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
+    jev_decider: JevDecider | None = None
+    jev_speak_threshold: float = 0.70
+    jev_clarify_threshold: float = 0.50
 
     def __post_init__(self) -> None:
         phrases = tuple(phrase.strip().casefold() for phrase in self.wake_phrases if phrase.strip())
@@ -789,9 +797,12 @@ class ConversationLoop:
         self._engaged_voice: str | None = None
         self._awaiting_reply = False
         self._turn = empty_turn_state()
+        self._jev_decider = interaction.jev_decider
         self._jev_pregen: dict[tuple[str | bool, ...], JevDecision] = {}
-        self._jev_speak_threshold = 0.70
-        self._jev_clarify_threshold = 0.50
+        self._jev_speak_threshold = interaction.jev_speak_threshold
+        self._jev_clarify_threshold = interaction.jev_clarify_threshold
+        self._jev_refresh: asyncio.Task[None] | None = None
+        self._jev_refresh_text = ""
         self._previous_inbound_was_bare_ack = False
         self._activation_seconds = timing.activation_seconds
         self._barge_in_min_words = interaction.barge_in_min_words
@@ -836,6 +847,15 @@ class ConversationLoop:
     @property
     def phase(self) -> ConversationPhase:
         return self._phase
+
+    @property
+    def jev_enabled(self) -> bool:
+        return self._jev_decider is not None
+
+    async def wait_jev_idle(self) -> None:
+        task = self._jev_refresh
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
 
     @property
     def responder(self) -> ConversationResponder | StreamingConversationResponder:
@@ -938,6 +958,7 @@ class ConversationLoop:
 
     async def handle_interim(self, text: str) -> None:
         await self._advance_pregen(text)
+        self._kick_jev_refresh(text)
         session = self._session
         if (
             self._closed
@@ -1084,22 +1105,57 @@ class ConversationLoop:
             self._engaged_speaker = event.participant_id
         return True
 
-    def store_jev_pregen(self, decision: JevDecision) -> None:
+    def _remember_jev(self, key: tuple[str | bool, ...], decision: JevDecision) -> None:
         if len(self._jev_pregen) > 16:
             self._jev_pregen.clear()
-        key = pregen_cache_key(
-            tuple(item.id for item in self._events),
-            self._turn.cue,
-            mine=self._turn.my_turn_likely,
-        )
         self._jev_pregen[key] = decision
 
+    def _cancel_jev_refresh(self) -> None:
+        task = self._jev_refresh
+        self._jev_refresh = None
+        self._jev_refresh_text = ""
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _kick_jev_refresh(self, text: str) -> None:
+        if self._closed or self._failure is not None or self._jev_decider is None:
+            return
+        if self.is_busy or self._pending:
+            return
+        session = self._session
+        if session is not None and session.is_speaking:
+            return
+        cue, _ = detect_turn_cue(text, self._addressing_names)
+        if cue == "none" or not self._events:
+            return
+        running = self._jev_refresh
+        if running is not None and not running.done():
+            if self._jev_refresh_text == text:
+                return
+            running.cancel()
+        self._jev_refresh_text = text
+        task = asyncio.create_task(self._refresh_jev_pregen(cue))
+        task.add_done_callback(_swallow_jev_refresh_error)
+        self._jev_refresh = task
+
+    async def _refresh_jev_pregen(self, cue: str) -> None:
+        decider = self._jev_decider
+        if decider is None or not self._events:
+            return
+        aliases = [name.strip().casefold() for name in self._addressing_names if name.strip()]
+        spoken = {event.participant_id for event in self._events} - {"unknown"}
+        mine = cue == "explicit" or not any(alias in spoken for alias in aliases)
+        key = pregen_cache_key(tuple(event.id for event in self._events), cue, mine=mine)
+        if key in self._jev_pregen:
+            return
+        lines = [f"{event.participant_id}: {event.text}" for event in self._events[-6:]]
+        lines.append(f"turn_cue={cue} mine={mine}")
+        decision = await decider.decide("\n".join(lines))
+        self._remember_jev(key, decision)
+
     def _decide_jev(self, event: TranscriptEvent) -> bool:
-        key = pregen_cache_key(
-            tuple(item.id for item in self._events),
-            self._turn.cue,
-            mine=self._turn.my_turn_likely,
-        )
+        prior = tuple(item.id for item in self._events[:-1])
+        key = pregen_cache_key(prior, self._turn.cue, mine=self._turn.my_turn_likely)
         cached = self._jev_pregen.get(key)
         if cached is None:
             self._record(
@@ -1180,6 +1236,12 @@ class ConversationLoop:
         self._generation += 1
         self._vad_stopped = False
         self._pending.clear()
+        self._cancel_jev_refresh()
+        decider, self._jev_decider = self._jev_decider, None
+        if decider is not None:
+            await close_safely(
+                decider.aclose, source="agent", operation="close_decider", faults=self._faults
+            )
         pregen = self._pregen
         if pregen is not None:
             await self._discard_pregen(_pregen_failure_reason(pregen.task) or "rejected")
