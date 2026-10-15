@@ -1163,10 +1163,17 @@ class ConversationLoop:
         if key in self._jev_pregen:
             return
         lines = [f"{event.participant_id}: {event.text}" for event in self._events[-6:]]
-        names = ", ".join(name for name in self._addressing_names if name.strip())
-        lines.append(f"twin: {names}")
-        lines.append(f"turn_cue={cue} mine={mine}")
-        decision = await decider.decide("\n".join(lines))
+        names = sorted({name.strip().casefold() for name in self._addressing_names if name.strip()})
+        state = json.dumps(
+            {
+                "twin_names": names,
+                "turns": lines,
+                "turn_cue": cue,
+                "mine": mine,
+            },
+            ensure_ascii=False,
+        )
+        decision = await decider.decide(state)
         self._remember_jev(key, decision)
 
     def _decide_jev(self, event: TranscriptEvent) -> bool:
