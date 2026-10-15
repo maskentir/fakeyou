@@ -1,0 +1,3 @@
+from collections.abc import Iterable
+
+def segment(language: str, text: str) -> Iterable[str]: ...

@@ -15,6 +15,7 @@ from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.speech.contract import SpeechSynthesizer
 
 PlaybackEventKind = Literal[
     "playback_started", "playback_finished", "playback_failed", "playback_dropped", "mute_failed"
@@ -26,18 +27,6 @@ class PlaybackEvent:
     kind: PlaybackEventKind
     text: str = ""
     detail: str = ""
-
-
-class SpeechSynthesizer(Protocol):
-    def stream(
-        self,
-        text: str,
-        *,
-        sentence_index: int | None = None,
-        transcript_id: str | None = None,
-    ) -> AsyncIterator[bytes]: ...
-
-    async def aclose(self) -> None: ...
 
 
 PlayStream = Callable[[AsyncIterator[bytes]], Coroutine[Any, Any, None]]

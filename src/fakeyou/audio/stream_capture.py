@@ -7,30 +7,27 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, override, runtime_checkable
 
-from pipecat.frames.frames import InputAudioRawFrame, StartFrame
-from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.transports.base_input import BaseInputTransport
-from pipecat.transports.base_transport import TransportParams
 from playwright.async_api import Error as PlaywrightError
 
 from fakeyou.audio.audio import (
     DEFAULT_STREAM_POLICY,
     MeetingAudioError,
     MeetingAudioSession,
+    SpeechSessionFactory,
     StreamCallbacks,
     StreamComponents,
     StreamPolicy,
     StreamSource,
-    TurnAudioTap,
     open_stream_audio,
 )
 from fakeyou.audio.deaf import DeafVerdict
+from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.audio.playback import PlaybackPort
+from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE, POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import real_number
-from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -49,7 +46,6 @@ CAPTURE_DRAIN_JS = (
 )
 
 SESSION_SILENCE_SECONDS = 30.0
-EARLY_AUDIO_BYTES = CAPTURE_SAMPLE_RATE * PCM16_SAMPLE_BYTES * 5
 STREAM_FLEET_SLOTS = 4
 
 
@@ -75,42 +71,6 @@ DEFAULT_DRAIN_POLLING = DrainPolling()
 
 def load_capture_script() -> str:
     return read_package_text("assets", "stream_capture.js")
-
-
-class StreamAudioInput(BaseInputTransport):
-    def __init__(self, params: TransportParams, **kwargs: Any) -> None:
-        super().__init__(params, **kwargs)
-        self._early: list[InputAudioRawFrame] = []
-        self._early_bytes = 0
-        self._capture: tuple[int, float] | None = None
-        self._audio_in_queue: Any = None
-
-    def note_capture(self, seq: int, capture_ms: float) -> None:
-        self._capture = (seq, capture_ms)
-
-    @property
-    def last_capture(self) -> tuple[int, float] | None:
-        return self._capture
-
-    @override
-    async def start(self, frame: StartFrame) -> None:
-        await super().start(frame)
-        await self.set_transport_ready(frame)
-        early, self._early = self._early, []
-        self._early_bytes = 0
-        for buffered in early:
-            await self.push_audio_frame(buffered)
-
-    async def feed(self, audio: bytes, sample_rate: int = CAPTURE_SAMPLE_RATE) -> None:
-        frame = InputAudioRawFrame(audio=audio, sample_rate=sample_rate, num_channels=1)
-        if self._audio_in_queue is None:
-            self._early.append(frame)
-            self._early_bytes += len(audio)
-            while self._early and self._early_bytes > EARLY_AUDIO_BYTES:
-                dropped = self._early.pop(0)
-                self._early_bytes -= len(dropped.audio)
-            return
-        await self.push_audio_frame(frame)
 
 
 @dataclass(frozen=True)
@@ -329,7 +289,7 @@ def parse_released(payload: Mapping[str, Any]) -> tuple[int, ...]:
 
 
 def _default_input() -> StreamAudioInput:
-    return StreamAudioInput(TransportParams(audio_in_enabled=True))
+    return StreamAudioInput()
 
 
 class StreamRegistry:
@@ -763,7 +723,7 @@ class FleetTopology:
 
 @dataclass(frozen=True, slots=True)
 class SlotFactories:
-    stt: Callable[[int], FrameProcessor] | None = None
+    stt: Callable[[int], SpeechSessionFactory] | None = None
     playback: Callable[[int], PlaybackPort] | None = None
     turn_tap: Callable[[int], TurnAudioTap] | None = None
 
@@ -788,7 +748,7 @@ async def open_stream_fleet(
     async with AsyncExitStack() as stack:
         sessions: list[MeetingAudioSession] = []
         for slot in range(topology.slots):
-            streamer = StreamAudioInput(TransportParams(audio_in_enabled=True))
+            streamer = StreamAudioInput()
             registry.register(slot, streamer)
             slot_callbacks = callbacks if slot == 0 else replace(callbacks, on_playback_event=None)
             sessions.append(
