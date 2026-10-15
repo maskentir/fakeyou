@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -11,7 +10,6 @@ from fakeyou.conversation.conversation import (
     LoopGeneration,
     StreamingLangGraphResponder,
 )
-from fakeyou.conversation.session import ConversationError
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
@@ -191,12 +189,12 @@ async def test_adopted_pregen_stream_failure_fails_the_turn(journal: RecordingJo
     assert journal_has(journal, "pregeneration_finished", outcome="adopted")
     responder.release.set()
 
-    with pytest.raises(ConversationError, match="meeting conversation failed") as caught:
-        await loop.wait_idle()
+    await loop.wait_idle()
 
-    assert isinstance(caught.value.__cause__, RuntimeError)
-    assert str(caught.value.__cause__) == "provider dropped the stream"
-    assert audio.spoken == ["Yes I can."]
+    loop.raise_if_failed()
+    assert [row["error"] for row in journal.events("turn_failed")] == ["RuntimeError"]
+    assert audio.spoken[0] == "Yes I can."
+    assert len(audio.spoken) == 2
     assert responder.merged == []
     [adopted] = journal.events("pregeneration_finished")
     assert journal_has(journal, "agent_failed", request_id=adopted["request_id"])

@@ -21,6 +21,7 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.persistence.record import (
     TranscriptEntry,
     TwinSpeechEntry,
@@ -101,11 +102,9 @@ async def test_join_audio_transcript_reaches_conversation(
         captured.update(kwargs)
         loop = kwargs["conversation"]
         loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
-        frame = SimpleNamespace(
-            id="t1",
+        frame = TranscriptUpdate(
             text="Settings Twin, hello.",
-            finalized=True,
-            user_id="",
+            final=True,
             timestamp="2026-09-28T00:00:00+00:00",
         )
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
@@ -217,14 +216,8 @@ async def test_join_wake_phrase_gates_agent_replies(
         del config
         loop = kwargs["conversation"]
         loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
-        for ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
-            frame = SimpleNamespace(
-                id=ident,
-                text=text,
-                finalized=True,
-                user_id="",
-                timestamp="2026-09-28T00:00:00+00:00",
-            )
+        for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
+            frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
@@ -269,13 +262,7 @@ async def test_join_barge_in_stops_speaking_session(
                 stop_playback=stop_playback,
             )
         )
-        frame = SimpleNamespace(
-            id="t1",
-            text="wait",
-            finalized=True,
-            user_id="",
-            timestamp="2026-09-28T00:00:00+00:00",
-        )
+        frame = TranscriptUpdate(text="wait", final=True, timestamp="2026-09-28T00:00:00+00:00")
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
@@ -356,8 +343,8 @@ async def test_join_routes_interim_transcripts_to_barge_in(
             )
         )
         interim = kwargs["open_audio"].keywords["callbacks"].on_interim
-        await interim(SimpleNamespace(text="wait"))
-        await interim(SimpleNamespace(text="wait a moment"))
+        await interim(TranscriptUpdate(text="wait", final=False))
+        await interim(TranscriptUpdate(text="wait a moment", final=False))
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -401,18 +388,12 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
         del config
         loop = kwargs["conversation"]
         loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
-        for ident, text in (
+        for _ident, text in (
             ("t1", "let's review the budget"),
             ("t2", "who owns the migration"),
             ("t3", "Settings Twin, what is blocking the release?"),
         ):
-            frame = SimpleNamespace(
-                id=ident,
-                text=text,
-                finalized=True,
-                user_id="",
-                timestamp="2026-09-28T00:00:00+00:00",
-            )
+            frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await loop.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")

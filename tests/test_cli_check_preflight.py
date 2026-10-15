@@ -12,7 +12,6 @@ import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
-from fakeyou.audio.voice import MiniMaxSpeechSynthesizer, create_speech_synthesizer
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
 from fakeyou.config.settings import (
     CompatibleReply,
@@ -33,6 +32,8 @@ from fakeyou.foundation.invariants import (
 )
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration.assembly import LoopBehavior
+from fakeyou.speech.minimax import MiniMaxSpeechSynthesizer
+from fakeyou.speech.registry import build_speech_synthesizer
 from tests._cli_support import BASE_HOSTS, AudioJoin, with_muse_fallback
 from tests._fakes_common import env_file_opt
 from tests._runtime_fakes import SessionRun
@@ -319,10 +320,13 @@ def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings: Se
     settings.tts = MiniMaxTTS()
     settings.reply = CompatibleReply(model="MiniMax-M3", base_url="https://api.minimax.io/v1")
     with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
-        create_speech_synthesizer(settings.tts)
+        build_speech_synthesizer(settings.tts, language=settings.speech.language)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
     settings.tts.api_key = SecretStr("minimax-key")
-    assert isinstance(create_speech_synthesizer(settings.tts), MiniMaxSpeechSynthesizer)
+    assert isinstance(
+        build_speech_synthesizer(settings.tts, language=settings.speech.language),
+        MiniMaxSpeechSynthesizer,
+    )
     assert providers.preflight_hosts(settings) == (
         "https://api.minimax.io/v1/t2a_v2",
         "wss://api.meta.ai/v1/asr/realtime",
@@ -333,7 +337,7 @@ def test_minimax_speech_needs_its_own_key_and_is_probed_before_join(settings: Se
 def test_openai_speech_requires_its_own_key(settings: Settings) -> None:
     settings.tts.api_key = None
     with pytest.raises(FakeYouError, match="FAKEYOU_TTS__API_KEY") as caught:
-        create_speech_synthesizer(settings.tts)
+        build_speech_synthesizer(settings.tts, language=settings.speech.language)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 

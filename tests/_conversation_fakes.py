@@ -95,6 +95,12 @@ class FakeConversation:
         if self.fail:
             raise ConversationError("conversation failed")
 
+    async def pause(self) -> None:
+        self.events.append("conversation_paused")
+
+    def resume(self) -> None:
+        self.events.append("conversation_resumed")
+
 
 class FakeResponder:
     def __init__(self, gate: asyncio.Event | None = None) -> None:

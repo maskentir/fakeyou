@@ -1,9 +1,7 @@
 import asyncio
-from typing import Any, cast, override
+from typing import Any, cast
 
 import pytest
-from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from fakeyou.audio.stream_capture import (
     StreamChunk,
@@ -11,34 +9,19 @@ from fakeyou.audio.stream_capture import (
 )
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
+from fakeyou.foundation.transcript import TranscriptUpdate
+from tests._capture_support import echo_stt
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
 
 
 async def test_stream_fleet_tags_transcripts_per_slot() -> None:
-    from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
-    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-
     from fakeyou.audio.audio import StreamCallbacks
     from fakeyou.audio.stream_capture import (
         FleetTopology,
         SlotFactories,
         open_stream_fleet,
     )
-
-    class _EchoSTT(FrameProcessor):
-        def __init__(self, text: str) -> None:
-            super().__init__()
-            self._text = text
-
-        @override
-        async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-            await super().process_frame(frame, direction)
-            if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
-                await self.push_frame(
-                    TranscriptionFrame(self._text, "guest", "", finalized=True), direction
-                )
-            await self.push_frame(frame, direction)
 
     class _Playback:
         @property
@@ -57,8 +40,8 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
     seen: list[tuple[str, str]] = []
     received = asyncio.Event()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
-        seen.append((frame.transport_source or "", frame.text))
+    async def on_transcript(frame: TranscriptUpdate) -> None:
+        seen.append((frame.stream_id or "", frame.text))
         if len(seen) == 2:
             received.set()
 
@@ -66,7 +49,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         topology=FleetTopology(SlotBinder(), 2),
         callbacks=StreamCallbacks(on_transcript),
         factories=SlotFactories(
-            stt=lambda slot: _EchoSTT(f"speech-{slot}"),
+            stt=lambda slot: echo_stt(f"speech-{slot}"),
             playback=lambda _slot: _Playback(),
         ),
     ) as fleet:
@@ -84,21 +67,6 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         )
         await asyncio.wait_for(received.wait(), timeout=10)
     assert sorted(seen) == [("slot-0", "speech-0"), ("slot-1", "speech-1")]
-
-
-class _EchoSTT(FrameProcessor):
-    def __init__(self, text: str) -> None:
-        super().__init__()
-        self._text = text
-
-    @override
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame(self._text, "guest", "", finalized=True), direction
-            )
-        await self.push_frame(frame, direction)
 
 
 class _Playback:
@@ -129,8 +97,8 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
     seen: list[tuple[str, str]] = []
     received = asyncio.Event()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
-        seen.append((frame.transport_source or "", frame.text))
+    async def on_transcript(frame: TranscriptUpdate) -> None:
+        seen.append((frame.stream_id or "", frame.text))
         if len(seen) == 4:
             received.set()
 
@@ -138,7 +106,7 @@ async def test_stream_fleet_covers_fourth_slot() -> None:
         topology=FleetTopology(SlotBinder(), STREAM_FLEET_SLOTS),
         callbacks=StreamCallbacks(on_transcript),
         factories=SlotFactories(
-            stt=lambda slot: _EchoSTT(f"speech-{slot}"),
+            stt=lambda slot: echo_stt(f"speech-{slot}"),
             playback=lambda _slot: _Playback(),
         ),
     ) as fleet:

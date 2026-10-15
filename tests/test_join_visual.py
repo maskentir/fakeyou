@@ -5,9 +5,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from pipecat.frames.frames import TranscriptionFrame
-
 from fakeyou.audio.voice_activity import SlotBinder
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
@@ -81,12 +80,12 @@ async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
         voice_activity=None,
         per_stream_enabled=True,
     )
-    frame = TranscriptionFrame(
-        "What date is shown?", "", "2026-10-09T03:10:05+00:00", finalized=True
+    frame = TranscriptUpdate(
+        text="What date is shown?", final=True, timestamp="2026-10-09T03:10:05+00:00"
     )
-    frame.transport_source = "slot-0"
+    frame = replace(frame, stream_id="slot-0")
     frame_any = cast(Any, frame)
-    frame_any.capture_ms = 100000.0
+    frame_any = replace(frame_any, capture_ms=100000.0)
 
     await callback(frame)
 
@@ -109,8 +108,8 @@ async def test_transcript_callback_falls_back_to_wall_clock(tmp_path: Path) -> N
         voice_activity=None,
         per_stream_enabled=False,
     )
-    frame = TranscriptionFrame(
-        "What is on screen?", "", "2026-10-09T03:10:11+00:00", finalized=True
+    frame = TranscriptUpdate(
+        text="What is on screen?", final=True, timestamp="2026-10-09T03:10:11+00:00"
     )
 
     await callback(frame)
@@ -132,12 +131,12 @@ async def test_transcript_callback_skips_visual_without_store(tmp_path: Path) ->
         voice_activity=None,
         per_stream_enabled=True,
     )
-    frame = TranscriptionFrame(
-        "What date is shown?", "", "2026-10-09T03:10:05+00:00", finalized=True
+    frame = TranscriptUpdate(
+        text="What date is shown?", final=True, timestamp="2026-10-09T03:10:05+00:00"
     )
-    frame.transport_source = "slot-0"
+    frame = replace(frame, stream_id="slot-0")
     frame_any = cast(Any, frame)
-    frame_any.capture_ms = 100000.0
+    frame_any = replace(frame_any, capture_ms=100000.0)
 
     await callback(frame)
 

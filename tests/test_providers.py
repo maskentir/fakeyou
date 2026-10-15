@@ -17,7 +17,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from pydantic import SecretStr
 
-from fakeyou.audio.voice import create_speech_synthesizer
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import SessionId
@@ -43,6 +42,7 @@ from fakeyou.orchestration.providers import (
     memory_config,
 )
 from fakeyou.persistence.record import MeetingRecord, load_meeting_record, meeting_record_path
+from fakeyou.speech.registry import build_speech_synthesizer
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
@@ -116,7 +116,7 @@ async def test_configured_tts_streams_pcm_audio() -> None:
         require_secret(settings.tts.api_key, ConfigKey.TTS_API_KEY)
     except FakeYouError as error:
         pytest.skip(str(error))
-    synthesizer = create_speech_synthesizer(
+    synthesizer = build_speech_synthesizer(
         settings.tts,
         language=settings.speech.language,
     )

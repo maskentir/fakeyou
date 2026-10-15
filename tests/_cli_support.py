@@ -36,6 +36,7 @@ from fakeyou.foundation.invariants import (
     AGENT_SINK_NAME,
     MEETING_MONITOR_SOURCE_NAME,
 )
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.memory.persona import PersonaProfile, persona_digest
 from fakeyou.persistence.brief import (
     MeetingBrief,
@@ -51,7 +52,7 @@ def enable_audio_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
     monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
-    monkeypatch.setattr(join_preflight, "find_spec", lambda _name: SimpleNamespace())
+    monkeypatch.setattr(join_preflight, "parec_available", lambda: True)
 
 
 class AudioJoinOptions(TypedDict, total=False):
@@ -285,14 +286,12 @@ async def join_persona_conversation(
         audio.on_playback_event = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         loop.bind(audio)
         for index, text in enumerate(transcripts):
-            frame = SimpleNamespace(
-                id=f"t{index}",
+            update = TranscriptUpdate(
                 text=text,
-                finalized=True,
-                user_id="",
+                final=True,
                 timestamp=f"2026-09-30T00:00:0{index}+00:00",
             )
-            await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
+            await kwargs["open_audio"].keywords["callbacks"].on_transcript(update)
         await asyncio.wait_for(
             loop.wait_idle() if settle is None else settle(), timeout=SETTLE_TIMEOUT_SECONDS
         )

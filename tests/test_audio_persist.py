@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import override
 
 import pytest
-from pipecat.transports.base_transport import TransportParams
 from pydantic import ValidationError
 
-from fakeyou.audio.stream_capture import StreamAudioInput, StreamChunk, StreamRegistry
+from fakeyou.audio.stream_capture import StreamChunk, StreamRegistry
+from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.config.settings import AudioSettings, Configuration
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import (
@@ -206,7 +206,7 @@ def test_audio_settings_reject_non_positive_retention() -> None:
 
 class _SilentInput(StreamAudioInput):
     def __init__(self) -> None:
-        super().__init__(TransportParams(audio_in_enabled=True))
+        super().__init__()
         self.fed: list[bytes] = []
 
     @override

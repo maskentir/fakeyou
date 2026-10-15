@@ -4,11 +4,9 @@ import httpx
 import httpx2
 import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
-from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.observability.provider_faults import (
-    ERROR_CATEGORY_KINDS,
     FaultEvidence,
     ProviderFault,
     classify_exception,
@@ -58,26 +56,6 @@ def test_classify_http_truncates_backend_detail() -> None:
 
     assert fault.detail is not None
     assert len(fault.detail) <= 300
-
-
-@pytest.mark.parametrize(
-    ("category", "kind", "retryable"),
-    [
-        (ErrorCategory.AUTHENTICATION, "unauthorized", False),
-        (ErrorCategory.AUTHORIZATION, "unauthorized", False),
-        (ErrorCategory.QUOTA, "payment_required", False),
-        (ErrorCategory.RATE_LIMIT, "rate_limited", True),
-        (ErrorCategory.CONNECTIVITY, "unavailable", True),
-        (ErrorCategory.SERVER, "unavailable", True),
-        (ErrorCategory.INVALID_REQUEST, "bad_request", False),
-        (ErrorCategory.APPLICATION, "unknown", False),
-        (ErrorCategory.UNKNOWN, "unknown", False),
-    ],
-)
-def test_error_category_map_covers_all_nine_values(
-    category: ErrorCategory, kind: str, *, retryable: bool
-) -> None:
-    assert ERROR_CATEGORY_KINDS[category.name] == (kind, retryable)
 
 
 def test_sdk_timeout_maps_to_retryable_timeout() -> None:

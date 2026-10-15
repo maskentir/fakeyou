@@ -25,7 +25,6 @@ from fakeyou.conversation.conversation import (
     StreamingLangGraphResponder,
     cap_spoken_reply,
 )
-from fakeyou.conversation.session import ConversationError
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
@@ -548,9 +547,10 @@ async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
     await loop.handle_transcript(event("t1", "hello"))
-    with pytest.raises(ConversationError, match="conversation failed"):
-        await loop.wait_idle()
-    assert audio.spoken == ["First done."]
+    await loop.wait_idle()
+    loop.raise_if_failed()
+    assert audio.spoken.count("First done.") == 1
+    assert len(audio.spoken) == 2
     assert journal.events("agent_finished") == []
     assert agent.ainvoke_calls == []
     await loop.close()

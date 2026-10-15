@@ -3,33 +3,17 @@ from collections.abc import Callable
 from typing import override
 
 import pytest
-from pipecat.frames.frames import AudioRawFrame, Frame, TranscriptionFrame
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.transports.base_transport import TransportParams
 
 from fakeyou.audio.audio import MeetingAudioSession
-from fakeyou.audio.stream_capture import (
-    RegistryTiming,
-    StreamAudioInput,
-    StreamRegistry,
-)
+from fakeyou.audio.stream_capture import RegistryTiming, StreamRegistry
+from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.observability.journal import Journal
+from tests._audio_fakes import FakeSTT
 
 
-class EchoSTT(FrameProcessor):
-    def __init__(self, text: str) -> None:
-        super().__init__()
-        self._text = text
-
-    @override
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if direction == FrameDirection.DOWNSTREAM and isinstance(frame, AudioRawFrame):
-            await self.push_frame(
-                TranscriptionFrame(self._text, "guest", "", finalized=True), direction
-            )
-        await self.push_frame(frame, direction)
+def echo_stt(text: str) -> FakeSTT:
+    return FakeSTT(text, finalized=(True,))
 
 
 class FakePlayback:
@@ -52,7 +36,7 @@ class FakePlayback:
 
 class _RecordingInput(StreamAudioInput):
     def __init__(self) -> None:
-        super().__init__(TransportParams(audio_in_enabled=True))
+        super().__init__()
         self.fed: list[bytes] = []
         self._capture: tuple[int, float] | None = None
 

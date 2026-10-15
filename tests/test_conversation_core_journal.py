@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
+    MAX_CONSECUTIVE_TURN_FAILURES,
     ConversationLoop,
     LangGraphResponder,
     LoopInteraction,
@@ -27,14 +28,21 @@ from tests._conversation_support import AgentT, event
 from tests._persistence_fakes import RecordingJournal
 
 
-async def test_model_timeout_is_observable_without_exposing_provider_error() -> None:
+async def test_model_timeout_is_observable_without_exposing_provider_error(
+    journal: RecordingJournal,
+) -> None:
+    audio = FakeReplyAudio()
     loop = ConversationLoop(
-        FakeResponder(asyncio.Event()), timing=LoopTiming(response_timeout_seconds=0.02)
+        FakeResponder(asyncio.Event()),
+        timing=LoopTiming(response_timeout_seconds=0.02),
+        diagnostics=Diagnostics(journal=journal),
     )
-    loop.bind(FakeReplyAudio())
+    loop.bind(audio)
     await loop.handle_transcript(event("one"))
-    with pytest.raises(ConversationError, match="conversation failed"):
-        await loop.wait_idle()
+    await loop.wait_idle()
+    loop.raise_if_failed()
+    assert [row["error"] for row in journal.events("turn_failed")] == ["TimeoutError"]
+    assert len(audio.spoken) == 1
     await loop.close()
 
 
@@ -46,12 +54,15 @@ class _BuggyResponder(FakeResponder):
         raise ValueError("bug")
 
 
-async def test_responder_bug_fails_turn_with_conversation_error() -> None:
+async def test_responder_bug_fails_the_loop_after_the_failure_limit() -> None:
     journal = RecordingJournal("meeting-bug")
     reporter = FaultReporter(journal=journal)
     loop = ConversationLoop(_BuggyResponder(), diagnostics=Diagnostics(faults=reporter))
     loop.bind(FakeReplyAudio())
-    await loop.handle_transcript(event("t1", "hello"))
+    for index in range(MAX_CONSECUTIVE_TURN_FAILURES - 1):
+        await loop.handle_transcript(event(f"t{index}", "hello"))
+        await loop.wait_idle()
+    await loop.handle_transcript(event("last", "hello"))
     with pytest.raises(ConversationError, match="conversation failed") as caught:
         await loop.wait_idle()
     assert isinstance(caught.value.__cause__, ValueError)
@@ -76,7 +87,7 @@ async def test_agent_error_raises_typed_provider_fault() -> None:
     assert caught.value.__cause__ is not None
 
 
-async def test_responder_error_still_fails_loop() -> None:
+async def test_responder_error_fails_loop_after_the_failure_limit() -> None:
     class Broken:
         async def respond(
             self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
@@ -87,7 +98,10 @@ async def test_responder_error_still_fails_loop() -> None:
 
     loop = ConversationLoop(Broken())
     loop.bind(FakeReplyAudio())
-    await loop.handle_transcript(event("one"))
+    for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
+        await loop.handle_transcript(event(f"one-{index}"))
+        if index < MAX_CONSECUTIVE_TURN_FAILURES - 1:
+            await loop.wait_idle()
     with pytest.raises(ConversationError, match="conversation failed"):
         await loop.wait_idle()
     assert loop.phase == "failed"

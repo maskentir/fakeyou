@@ -1,13 +1,10 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 
-import pytest
-
 from fakeyou.conversation.conversation import (
     ConversationLoop,
     LoopGeneration,
 )
-from fakeyou.conversation.session import ConversationError
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.observability.diagnostics import Diagnostics
@@ -121,8 +118,7 @@ async def test_pregen_error_discard_journal_carries_no_diff(journal: RecordingJo
     await asyncio.sleep(0.05)
     assert len(journal.events("pregeneration_started")) == 1
     await loop.handle_transcript(event("f1", "can you help me today?", finalized=True))
-    with pytest.raises(ConversationError):
-        await loop.wait_idle()
+    await loop.wait_idle()
     [row] = [
         row for row in journal.events("pregeneration_finished") if row.get("reason") == "error"
     ]

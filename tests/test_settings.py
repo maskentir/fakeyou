@@ -159,11 +159,11 @@ def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values() -> No
         MemorySettings.model_validate({"recall": {"strategy": "hybrid"}})
 
 
-def test_vad_defaults_mirror_pipecat() -> None:
-    from pipecat.audio.vad.vad_analyzer import VADParams
+def test_vad_defaults_mirror_the_vad_params_defaults() -> None:
+    from fakeyou.audio.vad import VadParams
 
     vad = Settings(**env_file_opt(None)).vad
-    expected = VADParams()
+    expected = VadParams()
     assert vad.confidence == expected.confidence
     assert vad.start_secs == expected.start_secs
     assert vad.stop_secs == expected.stop_secs
@@ -239,3 +239,12 @@ def test_env_example_is_valid_when_its_optional_blocks_are_enabled(
 def test_stt_reconnect_and_retry_limits_have_ceilings(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
         STTSettings.model_validate({field: value})
+
+
+def test_google_reply_rejects_minimal_reasoning_effort() -> None:
+    from pydantic import ValidationError
+
+    from fakeyou.config.settings import GoogleReply
+
+    with pytest.raises(ValidationError):
+        GoogleReply(reasoning_effort="minimal")

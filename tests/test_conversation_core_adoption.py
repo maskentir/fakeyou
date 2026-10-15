@@ -107,16 +107,16 @@ async def test_adopted_merge_checkpoint_error_is_recorded_as_fault(
     await loop.close()
 
 
-async def test_adopted_merge_unexpected_error_fails_the_conversation(
+async def test_adopted_merge_unexpected_error_is_one_failed_turn(
     journal: RecordingJournal,
 ) -> None:
     responder, audio = _AdoptingResponder(ValueError("bug")), FakeReplyAudio()
     loop, _reporter = await _adopted_turn(responder, audio, journal)
 
-    with pytest.raises(ConversationError, match="conversation failed") as caught:
-        await loop.wait_idle()
+    await loop.wait_idle()
 
-    assert isinstance(caught.value.__cause__, ValueError)
+    loop.raise_if_failed()
+    assert [row["error"] for row in journal.events("turn_failed")] == ["ValueError"]
     await loop.close()
 
 

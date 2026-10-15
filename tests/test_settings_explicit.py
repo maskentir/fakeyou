@@ -104,11 +104,6 @@ def test_stt_url_requires_tls_unless_loopback() -> None:
 
 
 def test_stt_numeric_settings_are_bounded() -> None:
-    assert STTSettings().preroll_ms == 500.0
-    with pytest.raises(ValueError, match="greater than or equal to 0"):
-        STTSettings(preroll_ms=-1.0)
-    with pytest.raises(ValueError, match="less than or equal to 10000"):
-        STTSettings(preroll_ms=10_001.0)
     with pytest.raises(ValueError, match="greater than or equal to 0"):
         STTSettings(idle_reconnect_seconds=-1.0)
     with pytest.raises(ValueError, match="greater than 0"):
@@ -272,7 +267,7 @@ _REPLY_MATCH = {
     '{"provider": "anthropic", "reasoning_effort": "minimal"}': ("Extra inputs are not permitted"),
     '{"extra_body": {}, "provider": "google"}': "Extra inputs are not permitted",
     '{"provider": "google", "reasoning_effort": "unlimited"}': (
-        "Input should be 'minimal', 'low', 'medium' or 'high'"
+        "Input should be 'low', 'medium' or 'high'"
     ),
     '{"model": "google_genai:gemini-3.8-flash", "provider": "google"}': (
         "must not contain a provider prefix"
@@ -299,11 +294,11 @@ def test_invalid_provider_configuration_is_rejected(reply: dict[str, Any]) -> No
         TypeAdapter(ReplySettings).validate_python(reply)
 
 
-def test_google_reply_accepts_reasoning_effort_with_unchanged_default() -> None:
+def test_google_reply_accepts_reasoning_effort_levels_gemini_supports() -> None:
     from fakeyou.config.settings import GoogleReply
 
-    assert GoogleReply().reasoning_effort is None
-    assert GoogleReply(reasoning_effort="low").reasoning_effort == "low"
+    assert GoogleReply().reasoning_effort == "low"
+    assert GoogleReply(reasoning_effort="high").reasoning_effort == "high"
 
 
 @pytest.mark.parametrize(
@@ -421,7 +416,8 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
 
     import httpx2
 
-    import fakeyou.audio.voice as voice
+    import fakeyou.speech.openai as openai_speech
+    import fakeyou.speech.registry as registry
     from fakeyou.config.settings import MiniMaxTTS, OpenAITTS
 
     requests = []
@@ -431,13 +427,13 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
         return httpx2.Response(200, content=b"\x00\x01")
 
     monkeypatch.setattr(
-        voice,
+        openai_speech,
         "AsyncOpenAI",
         lambda **kwargs: __import__("openai").AsyncOpenAI(
             **kwargs, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
         ),
     )
-    synthesizer = voice.create_speech_synthesizer(
+    synthesizer = registry.build_speech_synthesizer(
         OpenAITTS(api_key=SecretStr("tts"), model="explicit-model", voice="nova"),
         language="en",
     )
@@ -456,7 +452,7 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
 
     minimax_client = httpx2.AsyncClient(transport=httpx2.MockTransport(minimax_respond))
     monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kwargs: minimax_client)
-    minimax = voice.create_speech_synthesizer(
+    minimax = registry.build_speech_synthesizer(
         MiniMaxTTS(api_key=SecretStr("tts"), model="explicit-minimax", voice="explicit-voice"),
         language="en",
     )

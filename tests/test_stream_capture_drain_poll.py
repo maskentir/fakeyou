@@ -3,11 +3,8 @@ import base64
 from typing import override
 
 import pytest
-from pipecat.transports.base_transport import TransportParams
 
-from fakeyou.audio.stream_capture import (
-    StreamAudioInput,
-)
+from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.config.identifiers import SessionId
 from tests._capture_support import recording_registry
 from tests._fakes_common import FakeClock
@@ -83,7 +80,7 @@ async def test_drain_poll_survives_a_feed_failure_mid_batch() -> None:
             await super().feed(audio, sample_rate)
 
     def _factory() -> StreamAudioInput:
-        return _FlakyInput(TransportParams(audio_in_enabled=True))
+        return _FlakyInput()
 
     bad_pcm = base64.b64encode(b"\x01\x02").decode("ascii")
     payload = {

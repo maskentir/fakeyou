@@ -180,7 +180,7 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
     monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
-    monkeypatch.setattr(join_preflight, "find_spec", lambda _name: SimpleNamespace())
+    monkeypatch.setattr(join_preflight, "parec_available", lambda: True)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
 
     @asynccontextmanager

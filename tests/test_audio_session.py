@@ -1,16 +1,9 @@
 import asyncio
-from collections.abc import Callable
-from typing import Any, override
+from typing import override
 
 import pytest
-from pipecat.frames.frames import EndFrame, InputAudioRawFrame, TranscriptionFrame
-from pipecat.pipeline.worker import PipelineWorker
-from pipecat.processors.frame_processor import FrameProcessor
-from pipecat.workers.base_worker import BaseWorker
-from pipecat.workers.runner import WorkerRunner
 from pydantic import SecretStr
 
-import fakeyou.audio.audio as audio
 from fakeyou.audio.audio import (
     MeetingAudioError,
     SpeechPipelineSettings,
@@ -19,34 +12,59 @@ from fakeyou.audio.audio import (
     StreamPolicy,
     open_meeting_audio,
 )
+from fakeyou.audio.capture import CaptureError
 from fakeyou.config.settings import OpenAITTS, STTSettings
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.transcription.contract import SpeechSinks
 from tests._audio_fakes import FakeSTT
-from tests._audio_support import FakePlayback, FakeTransport
+from tests._audio_support import FakeCapture, FakePlayback
 from tests._persistence_fakes import RecordingJournal
+
+
+def _policy() -> StreamPolicy:
+    return StreamPolicy(
+        speech=SpeechPipelineSettings(
+            stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
+            tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
+        )
+    )
+
+
+class _CrashingSTT:
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    def send_audio(self, pcm: bytes) -> None:
+        del pcm
+        raise RuntimeError("stt crashed")
+
+
+def _crashing(sinks: SpeechSinks) -> _CrashingSTT:
+    del sinks
+    return _CrashingSTT()
 
 
 async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
     engine = FakePlayback()
     heard: list[str] = []
     received = asyncio.Event()
+    capture = FakeCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         heard.append(frame.text)
         received.set()
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=capture,
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT(), playback=engine),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        policy=_policy(),
     ) as session:
-        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        capture.push(b"\0\0" * 160)
         await asyncio.wait_for(received.wait(), timeout=2)
         assert heard == ["heard"]
         assert engine.spoken == []
@@ -63,19 +81,14 @@ async def test_session_transcribes_final_only_and_speaks_explicitly() -> None:
 async def test_session_threads_sentence_index_to_playback_engine() -> None:
     engine = FakePlayback()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT(), playback=engine),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        policy=_policy(),
     ) as session:
         await session.speak("First sentence.", sentence_index=0)
         await session.speak("Second sentence.", sentence_index=1)
@@ -90,25 +103,20 @@ async def test_session_threads_sentence_index_to_playback_engine() -> None:
 
 
 async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
-    transport = FakeTransport()
+    capture = FakeCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=transport,
+        source=capture,
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(
             stt=FakeSTT(error="secret-provider-key", finalized=()), playback=FakePlayback()
         ),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        policy=_policy(),
     ) as session:
-        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        capture.push(b"\0\0" * 160)
         with pytest.raises(MeetingAudioError) as caught:
             await asyncio.wait_for(session.wait_failed(), timeout=2)
         assert "secret" not in str(caught.value)
@@ -116,22 +124,19 @@ async def test_upstream_error_unblocks_failure_waiter_without_secret() -> None:
             session.raise_if_failed()
 
 
-async def test_unexpected_worker_exit_is_reported() -> None:
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+async def test_unexpected_graph_exit_is_reported() -> None:
+    capture = FakeCapture()
+
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=capture,
         callbacks=StreamCallbacks(on_transcript),
-        components=StreamComponents(stt=FakeSTT(), playback=FakePlayback()),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        components=StreamComponents(stt=_crashing, playback=FakePlayback()),
+        policy=_policy(),
     ) as session:
-        await session.worker.queue_frame(EndFrame())
+        capture.push(b"\0\0" * 160)
         with pytest.raises(MeetingAudioError, match="stopped unexpectedly"):
             await asyncio.wait_for(session.wait_failed(), timeout=2)
 
@@ -144,24 +149,22 @@ async def test_callback_failure_degrades_without_killing_session(
 
     activity = CaptureActivity()
     reporter = FaultReporter(journal=journal)
+    capture = FakeCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         del frame
         raise ValueError("secret-callback-data")
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=capture,
         callbacks=StreamCallbacks(on_transcript),
-        components=StreamComponents(stt=FakeSTT(), playback=FakePlayback(), activity=activity),
-        diagnostics=Diagnostics(faults=reporter),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
+        components=StreamComponents(
+            stt=FakeSTT(faults=reporter), playback=FakePlayback(), activity=activity
         ),
+        diagnostics=Diagnostics(faults=reporter),
+        policy=_policy(),
     ) as session:
-        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        capture.push(b"\0\0" * 160)
         await asyncio.sleep(0.5)
         session.raise_if_failed()
         await session.speak("still alive")
@@ -174,169 +177,79 @@ async def test_callback_failure_degrades_without_killing_session(
         assert kinds.get("callback_failed", 0) >= 1
 
 
-async def test_startup_provider_error_fails_before_timeout() -> None:
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+async def _await_provider_failure(capture: FakeCapture) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
+    async with open_meeting_audio(
+        source=capture,
+        callbacks=StreamCallbacks(on_transcript),
+        components=StreamComponents(
+            stt=FakeSTT(error="startup-secret", finalized=()),
+            playback=FakePlayback(),
+        ),
+        policy=_policy(),
+    ) as session:
+        capture.push(b"\0\0" * 160)
+        await session.wait_failed()
+
+
+async def test_provider_error_on_first_audio_fails_fast_without_secret() -> None:
     async with asyncio.timeout(2):
         with pytest.raises(MeetingAudioError) as caught:
-            async with open_meeting_audio(
-                transport=FakeTransport(),
-                callbacks=StreamCallbacks(on_transcript),
-                components=StreamComponents(
-                    stt=FakeSTT(error="startup-secret", finalized=(), startup=True),
-                    playback=FakePlayback(),
-                ),
-                policy=StreamPolicy(
-                    speech=SpeechPipelineSettings(
-                        stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                        tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-                    )
-                ),
-            ):
-                pass
+            await _await_provider_failure(FakeCapture())
     assert "startup-secret" not in str(caught.value)
 
 
-async def test_native_transport_is_terminated_when_construction_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    terminated = False
-
-    class _PyAudio:
-        def terminate(self) -> None:
-            nonlocal terminated
-            terminated = True
-
-    class _BrokenTransport(FakeTransport):
-        def __init__(self) -> None:
-            super().__init__()
-            self.backend = _PyAudio()
-
+async def test_capture_is_terminated_when_startup_fails() -> None:
+    class _BrokenCapture(FakeCapture):
         @override
-        def input(self) -> FrameProcessor:
-            raise ValueError("secret-construction-error")
+        async def start(self) -> None:
+            raise CaptureError("secret-start-error")
 
-    monkeypatch.setattr(audio, "native_transport", _BrokenTransport)
+    capture = _BrokenCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     with pytest.raises(MeetingAudioError) as caught:
         async with open_meeting_audio(
+            source=capture,
             callbacks=StreamCallbacks(on_transcript),
             components=StreamComponents(stt=FakeSTT(), playback=FakePlayback()),
-            policy=StreamPolicy(
-                speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-                )
-            ),
+            policy=_policy(),
         ):
             pass
-    assert terminated
+    assert capture.terminated == 1
+    assert isinstance(caught.value.__cause__, CaptureError)
     assert "secret" not in str(caught.value)
 
 
-async def test_native_transport_without_backend_still_reports_root_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _BackendlessTransport(FakeTransport):
-        @override
-        def input(self) -> FrameProcessor:
-            raise ValueError("construction-error")
-
-    monkeypatch.setattr(audio, "native_transport", _BackendlessTransport)
-
-    async def on_transcript(frame: TranscriptionFrame) -> None:
-        pass
-
-    with pytest.raises(MeetingAudioError, match="initialization failed") as caught:
-        async with open_meeting_audio(
-            callbacks=StreamCallbacks(on_transcript),
-            components=StreamComponents(stt=FakeSTT(), playback=FakePlayback()),
-            policy=StreamPolicy(
-                speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-                )
-            ),
-        ):
-            pass
-    assert isinstance(caught.value.__cause__, ValueError)
-
-
-async def test_error_handler_registered_before_add_workers(monkeypatch: pytest.MonkeyPatch) -> None:
-    order: list[str] = []
-    original_add_handler = PipelineWorker.add_event_handler
-
-    def recording_add_handler(
-        self: PipelineWorker, event_name: str, handler: Callable[..., Any]
-    ) -> None:
-        order.append(event_name)
-        original_add_handler(self, event_name, handler)
-
-    monkeypatch.setattr(PipelineWorker, "add_event_handler", recording_add_handler)
-    original_add_workers = WorkerRunner.add_workers
-
-    async def recording_add_workers(self: WorkerRunner, *workers: BaseWorker) -> None:
-        order.append("add_workers")
-        await original_add_workers(self, *workers)
-
-    monkeypatch.setattr(WorkerRunner, "add_workers", recording_add_workers)
-
-    async def on_transcript(frame: TranscriptionFrame) -> None:
-        pass
-
-    async with open_meeting_audio(
-        transport=FakeTransport(),
-        callbacks=StreamCallbacks(on_transcript),
-        components=StreamComponents(stt=FakeSTT(), playback=FakePlayback()),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
-    ):
-        pass
-    assert "on_pipeline_error" in order
-    assert order.index("on_pipeline_error") < order.index("add_workers")
-    started_before = [
-        name for name in order[: order.index("add_workers")] if name == "on_pipeline_started"
-    ]
-    assert len(started_before) >= 2
-
-
-async def test_interim_frames_route_to_on_interim_and_tap() -> None:
+async def test_interim_transcripts_route_to_on_interim_and_activity() -> None:
     from fakeyou.audio.deaf import CaptureActivity
 
     activity = CaptureActivity()
     interims: list[str] = []
     finals: list[str] = []
     interim_seen = asyncio.Event()
+    capture = FakeCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         finals.append(frame.text)
 
-    async def on_interim(frame: TranscriptionFrame) -> None:
+    async def on_interim(frame: TranscriptUpdate) -> None:
         interims.append(frame.text)
         interim_seen.set()
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=capture,
         callbacks=StreamCallbacks(on_transcript, on_interim=on_interim),
         components=StreamComponents(
             stt=FakeSTT("partial", finalized=(False,)), playback=FakePlayback(), activity=activity
         ),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
-    ) as session:
-        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        policy=_policy(),
+    ):
+        capture.push(b"\0\0" * 160)
         await asyncio.wait_for(interim_seen.wait(), timeout=2)
         await asyncio.sleep(0.2)
         assert interims == ["partial"]
@@ -347,31 +260,27 @@ async def test_interim_frames_route_to_on_interim_and_tap() -> None:
         assert snapshot.interim_count >= 1
 
 
-async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> None:
+async def test_session_marks_activity_unavailable_on_provider_failure() -> None:
     from fakeyou.audio.deaf import CaptureActivity
 
     activity = CaptureActivity()
+    capture = FakeCapture()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=capture,
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(
             stt=FakeSTT(error="secret-provider-key", finalized=()),
             playback=FakePlayback(),
             activity=activity,
         ),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        policy=_policy(),
     ) as session:
         assert activity.snapshot().available is True
-        await session.worker.queue_frame(InputAudioRawFrame(b"\0\0" * 160, 16_000, 1))
+        capture.push(b"\0\0" * 160)
         with pytest.raises(MeetingAudioError):
             await asyncio.wait_for(session.wait_failed(), timeout=2)
         assert activity.snapshot().available is False
@@ -380,19 +289,14 @@ async def test_pipeline_marks_activity_ready_and_unavailable_on_failure() -> Non
 async def test_session_threads_transcript_id_to_playback_engine() -> None:
     engine = FakePlayback()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT(), playback=engine),
-        policy=StreamPolicy(
-            speech=SpeechPipelineSettings(
-                stt_settings=STTSettings(api_key=SecretStr("muse-secret")),
-                tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-            )
-        ),
+        policy=_policy(),
     ) as session:
         await session.speak("Hello.", sentence_index=0, transcript_id="t9")
         await session.speak("Legacy reply.")

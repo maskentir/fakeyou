@@ -1,7 +1,6 @@
-import asyncio
 import inspect
 import json
-from typing import Any, override
+from typing import Any
 
 import httpx2
 import pytest
@@ -17,15 +16,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from neo4j.exceptions import ConstraintError
 from neo4j.time import DateTime as Neo4jDateTime
-from pipecat.frames.frames import EndFrame, Frame, TranscriptionFrame
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineWorker
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.meta.stt import META_STT_MODEL, MetaSTTService, MetaSTTSettings
-from pipecat.workers.runner import WorkerRunner
-from websockets.asyncio.server import ServerConnection, serve
-
-from fakeyou.config.settings import STTSettings
 
 
 def test_graphiti_add_episode_accepts_the_arguments_ingestion_relies_on() -> None:
@@ -55,60 +45,6 @@ def test_neo4j_driver_keeps_group_ids_in_one_database() -> None:
     driver = Neo4jDriver("bolt://127.0.0.1:9", "neo4j", "password")
 
     assert driver.clone(database="twin_group") is driver
-
-
-def test_meta_stt_exposes_keywords_language_bias_and_mode() -> None:
-    fields = MetaSTTSettings.__dataclass_fields__
-
-    for name in ("keywords", "language_bias", "mode"):
-        assert name in fields
-    assert STTSettings.model_fields["model"].default == META_STT_MODEL
-
-
-class TranscriptCollector(FrameProcessor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.finals: list[TranscriptionFrame] = []
-        self.received = asyncio.Event()
-
-    @override
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        if isinstance(frame, TranscriptionFrame):
-            self.finals.append(frame)
-            self.received.set()
-        await self.push_frame(frame, direction)
-
-
-async def test_meta_stt_drops_diarization_speaker_labels() -> None:
-    async def meta_server(connection: ServerConnection) -> None:
-        await connection.recv()
-        await connection.send(json.dumps({"sessionId": "s1"}))
-        await connection.send(json.dumps({"type": "speaker", "label": "A"}))
-        await connection.send(
-            json.dumps({"type": "speechComplete", "turnId": 0, "transcript": "Hello."})
-        )
-        await connection.wait_closed()
-
-    async with serve(meta_server, "127.0.0.1", 0) as server:
-        port = server.sockets[0].getsockname()[1]
-        stt = MetaSTTService(api_key="key", url=f"ws://127.0.0.1:{port}", sample_rate=16000)
-        collector = TranscriptCollector()
-        worker = PipelineWorker(Pipeline([stt, collector]), cancel_on_idle_timeout=False)
-
-        async def end_after_transcript() -> None:
-            await asyncio.wait_for(collector.received.wait(), timeout=5)
-            await worker.queue_frame(EndFrame())
-
-        runner = WorkerRunner()
-        await runner.add_workers(worker)
-        await asyncio.gather(runner.run(), end_after_transcript())
-
-    [frame] = collector.finals
-    assert frame.text == "Hello."
-    assert frame.result is not None
-    assert "speaker" not in frame.result
-    assert "label" not in frame.result
 
 
 def test_tool_error_middleware_filters_by_tool_name() -> None:

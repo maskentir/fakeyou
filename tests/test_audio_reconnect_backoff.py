@@ -2,7 +2,6 @@ import asyncio
 from typing import override
 
 import pytest
-from pipecat.frames.frames import TranscriptionFrame
 from pydantic import SecretStr
 
 from fakeyou.audio.audio import (
@@ -18,9 +17,10 @@ from fakeyou.audio.audio import (
 )
 from fakeyou.audio.deaf import CaptureActivity
 from fakeyou.config.settings import OpenAITTS, STTSettings
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReconnectableSTT, FakeSTT
-from tests._audio_support import FakePlayback, FakeTransport, build_pipeline, wait_gate
+from tests._audio_support import FakeCapture, FakePlayback, build_run, wait_gate
 from tests._capture_support import settle_reconnect
 from tests._persistence_fakes import RecordingJournal
 
@@ -32,11 +32,11 @@ async def test_unsupported_stt_reconnect_records_without_attempts(
 
     reporter = FaultReporter(journal=journal)
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT(), playback=FakePlayback()),
         diagnostics=Diagnostics(faults=reporter),
@@ -63,11 +63,11 @@ async def test_supported_stt_reconnect_queues_request(
 
     reporter = FaultReporter(journal=journal)
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeReconnectableSTT(), playback=FakePlayback()),
         diagnostics=Diagnostics(faults=reporter),
@@ -98,7 +98,7 @@ async def test_stt_reconnect_lifecycle_is_journaled(
     runner_task = asyncio.create_task(wait_gate(gate))
     stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
-        build_pipeline(FakePlayback(), runner_task),
+        build_run(FakePlayback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),
@@ -140,7 +140,7 @@ def _reconnect_session(
     gate = asyncio.Event()
     runner_task = asyncio.create_task(wait_gate(gate))
     session = MeetingAudioSession(
-        build_pipeline(FakePlayback(), runner_task),
+        build_run(FakePlayback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         diagnostics=Diagnostics(journal=journal),
         runtime=SessionRuntime(now=lambda: clock[0]),

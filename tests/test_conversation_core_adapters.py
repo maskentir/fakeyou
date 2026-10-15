@@ -6,7 +6,6 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
@@ -18,16 +17,20 @@ from fakeyou.conversation.conversation import (
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,
+    TranscriptUpdate,
     transcript_event,
 )
 from tests._conversation_support import AgentT, event
 
 
 def test_frame_adapter_has_stable_event_identity_and_no_invented_participant() -> None:
-    first = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
-    replay = TranscriptionFrame("hello", "unverified-user", "2026-09-28T00:00:00Z", finalized=True)
-    next_utterance = TranscriptionFrame("hello", "", "2026-09-28T00:00:01Z", finalized=True)
-    assert first.id != replay.id
+    first = TranscriptUpdate(text="hello", final=True, timestamp="2026-09-28T00:00:00Z")
+    replay = TranscriptUpdate(text="hello", final=True, timestamp="2026-09-28T00:00:00Z")
+    next_utterance = TranscriptUpdate(text="hello", final=True, timestamp="2026-09-28T00:00:01Z")
+    assert (
+        transcript_event(first, "a", None, CaptureContext("")).id
+        != transcript_event(next_utterance, "a", None, CaptureContext("")).id
+    )
     assert (
         transcript_event(first, "unknown", None, CaptureContext("")).id
         == transcript_event(replay, "p1", "e1", CaptureContext("")).id
@@ -100,7 +103,7 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
     from fakeyou.persistence.record import MeetingRecord, TranscriptEntry, load_meeting_record
 
     event = transcript_event(
-        TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
+        TranscriptUpdate(text="hi", final=True, timestamp="2026-10-06T01:00:01+00:00"),
         "a",
         None,
         CaptureContext("s0", capture_ms=55.5),
@@ -108,7 +111,7 @@ def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
     assert event.capture_ms == 55.5
     assert (
         transcript_event(
-            TranscriptionFrame("hi", "", "2026-10-06T01:00:01+00:00", finalized=True),
+            TranscriptUpdate(text="hi", final=True, timestamp="2026-10-06T01:00:01+00:00"),
             "a",
             None,
             CaptureContext("s0"),

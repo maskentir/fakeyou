@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from sqlalchemy import Engine
 
 import fakeyou.orchestration.assembly as assembly
-from fakeyou.audio.audio import TurnAudioTap
+from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.db.voiceprint_store import VoiceprintStore

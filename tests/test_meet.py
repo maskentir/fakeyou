@@ -3,6 +3,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, cast, override
 
 import pytest
+from cloakbrowser.human.actionability import ElementNotReceivingEventsError
 from playwright.async_api import Error as PlaywrightError
 
 import fakeyou.meet.meet as meet_module
@@ -779,3 +780,47 @@ async def test_lobby_preparation_is_inside_the_join_budget(monkeypatch: pytest.M
 
     assert result.status == "failed"
     assert "lobby preparation did not finish" in result.detail
+
+
+class _OverlayCoveredLocator:
+    def __init__(self, covered_clicks: int) -> None:
+        self.covered_clicks = covered_clicks
+        self.clicks = 0
+
+    @property
+    def first(self) -> "_OverlayCoveredLocator":
+        return self
+
+    async def wait_for(self, **options: object) -> None:
+        del options
+
+    async def click(self, **options: object) -> None:
+        del options
+        self.clicks += 1
+        if self.clicks <= self.covered_clicks:
+            raise ElementNotReceivingEventsError('internal:attr=[placeholder="Your name"i]', "DIV")
+
+
+async def test_click_when_ready_retries_a_click_blocked_by_an_overlay() -> None:
+    locator = _OverlayCoveredLocator(covered_clicks=2)
+    clock = FakeClock()
+
+    failure = await click_when_ready(
+        lambda: cast(Any, locator), "name field", clock.sleep, attempts=3
+    )
+
+    assert failure is None
+    assert locator.clicks == 3
+
+
+async def test_click_when_ready_reports_a_persistent_overlay_instead_of_raising() -> None:
+    locator = _OverlayCoveredLocator(covered_clicks=10)
+    clock = FakeClock()
+
+    failure = await click_when_ready(
+        lambda: cast(Any, locator), "name field", clock.sleep, attempts=2
+    )
+
+    assert failure is not None
+    assert "name field" in failure
+    assert locator.clicks == 2

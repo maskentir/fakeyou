@@ -3,8 +3,8 @@ from typing import Any
 
 import pytest
 
-from fakeyou.audio.audio import CaptureObserver
 from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.graph import AudioGraph, GraphParts
 from fakeyou.audio.voice_activity import (
     VOICE_ACTIVITY_DRAIN_JS,
     VoiceActivityLoop,
@@ -15,6 +15,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
+from tests._audio_support import NullSTT, ScriptedSpeech
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import IN_CALL, FakePageSession, HangingPage, meet_page
 from tests._persistence_fakes import FakeSaverSession, RecordingJournal
@@ -47,15 +48,20 @@ async def test_voice_activity_loop_bounds_a_hung_drain_evaluate() -> None:
 
 
 async def test_capture_observer_reports_vad_edges_to_voice_tracker() -> None:
-    from pipecat.frames.frames import VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
-    from pipecat.processors.frame_processor import FrameDirection
-
     clock = FakeClock(now=10.0)
     tracker = tracker_at(clock)
-    observer = CaptureObserver(CaptureActivity(now=clock.monotonic), voice_activity=tracker)
-    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    speech = ScriptedSpeech()
+    graph = AudioGraph(
+        GraphParts(
+            activity=CaptureActivity(now=clock.monotonic),
+            vad=speech.controller,
+            stt=NullSTT(),
+            voice_activity=tracker,
+        )
+    )
+    await graph.ingest(speech.speaking(8))
     clock.now = 11.0
-    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await graph.ingest(speech.silent(8))
     tracker.observe_batch(
         batch(11_000.0, [[10_300.0, 3, 0.3]]), sent_ms=11_000.0, received_ms=11_000.0
     )

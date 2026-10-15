@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from fakeyou.audio.audio import CaptureObserver
 from fakeyou.audio.deaf import CaptureActivity
+from fakeyou.audio.graph import AudioGraph, GraphParts
 from fakeyou.foundation.attribution_probe import (
     PROBE_DRAIN_JS,
     AttributionProbe,
@@ -12,6 +12,7 @@ from fakeyou.foundation.attribution_probe import (
     append_probe_batch,
     load_probe_script,
 )
+from tests._audio_support import NullSTT, ScriptedSpeech
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import HangingPage, meet_page
 
@@ -115,38 +116,34 @@ async def test_probe_drain_loop_bounds_a_hung_drain_evaluate(tmp_path: Path) -> 
 
 
 async def test_capture_observer_reports_pcm_and_vad_to_probe(tmp_path: Path) -> None:
-    from pipecat.frames.frames import (
-        InputAudioRawFrame,
-        VADUserStartedSpeakingFrame,
-        VADUserStoppedSpeakingFrame,
-    )
-    from pipecat.processors.frame_processor import FrameDirection
-
     clock = FakeClock(now=20.0)
     probe = AttributionProbe(
         tmp_path / "probe.jsonl",
         monotonic=clock.monotonic,
         wall_clock=lambda: "2026-10-05T00:00:00+00:00",
     )
-    observer = CaptureObserver(CaptureActivity(now=clock.monotonic), probe=probe)
-    await observer.process_frame(
-        InputAudioRawFrame(audio=b"\x00" * 640, sample_rate=16000, num_channels=1),
-        FrameDirection.DOWNSTREAM,
+    speech = ScriptedSpeech()
+    graph = AudioGraph(
+        GraphParts(
+            activity=CaptureActivity(now=clock.monotonic),
+            vad=speech.controller,
+            stt=NullSTT(),
+            probe=probe,
+        )
     )
-    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
-    await observer.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    for _ in range(6):
+        await graph.ingest(speech.speaking(1))
+    for _ in range(6):
+        await graph.ingest(speech.silent(1))
     rows = [json.loads(line) for line in probe_path_text(tmp_path).splitlines() if line]
     assert [row["kind"] for row in rows] == ["vad", "vad"]
-    assert rows[0]["audio_ms"] == 20.0
+    assert rows[0]["audio_ms"] == 192.0
     assert rows[0]["active"] is True
 
 
 async def test_capture_observer_survives_probe_io_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from pipecat.frames.frames import VADUserStartedSpeakingFrame
-    from pipecat.processors.frame_processor import FrameDirection
-
     probe = AttributionProbe(tmp_path / "probe.jsonl")
 
     def failing(*, active: bool) -> None:
@@ -154,8 +151,11 @@ async def test_capture_observer_survives_probe_io_failure(
         raise OSError("disk full")
 
     monkeypatch.setattr(probe, "observe_vad", failing)
-    observer = CaptureObserver(CaptureActivity(), probe=probe)
-    await observer.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    speech = ScriptedSpeech()
+    graph = AudioGraph(
+        GraphParts(activity=CaptureActivity(), vad=speech.controller, stt=NullSTT(), probe=probe)
+    )
+    await graph.ingest(speech.speaking(8))
 
 
 async def test_probe_drain_loop_survives_append_failure(

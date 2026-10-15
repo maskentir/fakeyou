@@ -3,21 +3,17 @@ from __future__ import annotations
 import asyncio
 import math
 import struct
-from collections.abc import AsyncIterator, Callable, Sequence
-from typing import TypedDict, Unpack, override
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from functools import partial
+from typing import TypedDict, Unpack, cast, override
 
 import httpx2
-from pipecat.frames.frames import (
-    ErrorFrame,
-    Frame,
-    InputAudioRawFrame,
-    StartFrame,
-    TranscriptionFrame,
-)
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.utils.errors import ErrorCategory
 
 from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.foundation.transcript import TranscriptUpdate
+from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_consumer
+from fakeyou.observability.journal import Journal
+from fakeyou.transcription.contract import SpeechSinks, TranscriptionError
 
 
 class FakeAudio:
@@ -62,57 +58,6 @@ class FakeAudio:
         await asyncio.Event().wait()
 
 
-class STTScript(TypedDict, total=False):
-    user_id: str
-    finalized: Sequence[bool]
-    error: str
-    category: ErrorCategory
-    exception: Exception
-    startup: bool
-    signal: bool
-
-
-class FakeSTT(FrameProcessor):
-    def __init__(self, text: str = "heard", **script: Unpack[STTScript]) -> None:
-        super().__init__()
-        self.text = text
-        self.user_id = script.get("user_id", "guest")
-        self.finalized = script.get("finalized", (False, True))
-        self.error = script.get("error")
-        self.category = script.get("category")
-        self.exception = script.get("exception")
-        self.startup = script.get("startup", False)
-        self.levels: list[float] = []
-        self.signal = asyncio.Event()
-        self.measure_signal = script.get("signal", False)
-
-    @override
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        triggered = (
-            isinstance(frame, StartFrame) if self.startup else isinstance(frame, InputAudioRawFrame)
-        )
-        if triggered:
-            if self.measure_signal and isinstance(frame, InputAudioRawFrame):
-                assert frame.sample_rate == 16_000
-                assert frame.num_channels == 1
-                samples = struct.unpack(f"<{len(frame.audio) // 2}h", frame.audio)
-                level = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
-                self.levels.append(level)
-                if level > 0.02:
-                    self.signal.set()
-            if self.error is not None:
-                await self.push_frame(
-                    ErrorFrame(self.error, category=self.category, exception=self.exception),
-                    FrameDirection.UPSTREAM,
-                )
-            for finalized in self.finalized:
-                await self.push_frame(
-                    TranscriptionFrame(self.text, self.user_id, "", finalized=finalized), direction
-                )
-        await self.push_frame(frame, direction)
-
-
 class PCMStream(httpx2.AsyncByteStream):
     def __init__(self, chunks: Sequence[bytes], error: Exception | None = None) -> None:
         self.chunks = list(chunks)
@@ -124,6 +69,88 @@ class PCMStream(httpx2.AsyncByteStream):
             yield chunk
         if self.error is not None:
             raise self.error
+
+
+class STTScript(TypedDict, total=False):
+    faults: FaultReporter
+    journal: Journal
+    finalized: Sequence[bool]
+    error: str
+    exception: Exception
+    startup: bool
+    signal: bool
+
+
+class FakeSTT:
+    def __init__(self, text: str = "heard", **script: Unpack[STTScript]) -> None:
+        self.text = text
+        self.finalized = script.get("finalized", (False, True))
+        self.error = script.get("error")
+        self.exception = script.get("exception")
+        self.startup = script.get("startup", False)
+        self.faults = script.get("faults")
+        self.journal = script.get("journal")
+        self.levels: list[float] = []
+        self.signal = asyncio.Event()
+        self.measure_signal = script.get("signal", False)
+        self.sinks: SpeechSinks | None = None
+        self.started = 0
+        self.closed = False
+        self.received = 0
+        self._deliveries: set[asyncio.Task[None]] = set()
+
+    def __call__(self, sinks: SpeechSinks) -> FakeSTT:
+        self.sinks = sinks
+        return self
+
+    async def start(self) -> None:
+        self.started += 1
+        if self.startup:
+            self._script_transcripts()
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def send_audio(self, pcm: bytes) -> None:
+        self.received += 1
+        if self.measure_signal:
+            self._measure(pcm)
+        if self.error is not None:
+            self._lose()
+        self._script_transcripts()
+
+    def _measure(self, pcm: bytes) -> None:
+        samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+        level = math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
+        self.levels.append(level)
+        if level > 0.02:
+            self.signal.set()
+
+    async def _deliver(
+        self, sink: Callable[[TranscriptUpdate], Awaitable[None]], update: TranscriptUpdate
+    ) -> None:
+        await guard_consumer(
+            partial(sink, update),
+            sink=ConsumerSink(self.faults, self.journal),
+            source="stt",
+            detail="transcript_consumer",
+        )
+
+    def _lose(self) -> None:
+        assert self.sinks is not None
+        if self.exception is not None:
+            self.sinks.on_lost(cast(TranscriptionError, self.exception))
+        else:
+            self.sinks.on_lost(TranscriptionError(self.error or "provider failure"))
+
+    def _script_transcripts(self) -> None:
+        assert self.sinks is not None
+        for finalized in self.finalized:
+            sink = self.sinks.on_update if finalized else self.sinks.on_interim
+            update = TranscriptUpdate(text=self.text, final=finalized, timestamp="")
+            task = asyncio.get_running_loop().create_task(self._deliver(sink, update))
+            self._deliveries.add(task)
+            task.add_done_callback(self._deliveries.discard)
 
 
 class FakeReconnectableSTT(FakeSTT):

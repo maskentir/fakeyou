@@ -1,9 +1,60 @@
 from fakeyou.foundation.participation import (
     ParticipationContext,
     choose_participation,
+    is_other_observed_speaker,
     is_vocative,
     same_observed_speaker,
 )
+
+
+def _followup(**signals: bool) -> ParticipationContext:
+    return ParticipationContext(
+        addressed=False,
+        followup=True,
+        same_participant=True,
+        ambiguous=False,
+        others_speaking=False,
+        activation_valid=True,
+        **signals,
+    )
+
+
+def test_interjection_inside_the_window_is_silent_for_the_engaged_speaker() -> None:
+    decision = choose_participation(_followup(interjection=True))
+    assert (decision.action, decision.reason) == ("silent", "interjection")
+
+
+def test_bare_ack_after_a_statement_is_silent() -> None:
+    decision = choose_participation(_followup(bare_ack=True, awaiting_reply=False))
+    assert (decision.action, decision.reason) == ("silent", "bare_ack")
+
+
+def test_bare_ack_answering_a_question_gets_a_reply() -> None:
+    decision = choose_participation(_followup(bare_ack=True, awaiting_reply=True))
+    assert (decision.action, decision.reason) == ("reply", "followup_answers_question")
+
+
+def test_addressed_turn_is_not_silenced_by_content_signals() -> None:
+    context = ParticipationContext(
+        addressed=True,
+        followup=False,
+        same_participant=False,
+        ambiguous=False,
+        others_speaking=False,
+        activation_valid=False,
+        interjection=True,
+        bare_ack=True,
+    )
+    decision = choose_participation(context)
+    assert (decision.action, decision.reason) == ("reply", "addressed")
+
+
+def test_other_speaker_is_a_known_different_identity() -> None:
+    assert is_other_observed_speaker("speaker-a", "speaker-b")
+    assert not is_other_observed_speaker("speaker-a", "speaker-a")
+    assert not is_other_observed_speaker("speaker-a", "unknown")
+    assert not is_other_observed_speaker("unknown", "speaker-b")
+    assert not is_other_observed_speaker(None, "speaker-b")
 
 
 def test_explicit_address_unknown_speaker_replies() -> None:

@@ -117,7 +117,7 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
 
 @pytest.mark.container
 @pytest.mark.skipif(not _worker_image_available(), reason="build the meeting worker image first")
-def test_worker_image_ships_the_managed_local_audio_transport() -> None:
+def test_worker_image_ships_the_parec_capture() -> None:
     probe = subprocess.run(
         [
             "docker",
@@ -129,15 +129,16 @@ def test_worker_image_ships_the_managed_local_audio_transport() -> None:
             "meeting-worker",
             "python",
             "-c",
-            "import pyaudio;"
-            "from fakeyou.audio.local_transport import ManagedLocalAudioTransport;"
-            "assert callable(ManagedLocalAudioTransport.terminate);"
-            "print('local-transport-ok')",
+            "import shutil;"
+            "from fakeyou.audio.capture import ParecCapture;"
+            "assert callable(ParecCapture.terminate);"
+            "assert shutil.which('parec');"
+            "print('parec-capture-ok')",
         ],
         capture_output=True,
         text=True,
     )
-    assert "local-transport-ok" in probe.stdout, probe.stdout + probe.stderr
+    assert "parec-capture-ok" in probe.stdout, probe.stdout + probe.stderr
 
 
 @pytest.mark.container

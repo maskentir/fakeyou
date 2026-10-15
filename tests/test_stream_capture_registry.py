@@ -1,16 +1,16 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.stream_capture import (
     StreamChunk,
 )
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.transcript import TranscriptSinks
 from tests._capture_support import recording_registry
@@ -77,8 +77,8 @@ async def test_registry_feed_journals_drain_gap_detected_and_resync() -> None:
     assert [(row["kind"], row["missed"]) for row in gaps] == [("gap", 1), ("resync", 0)]
 
 
-def _frame(text: str, timestamp: str) -> TranscriptionFrame:
-    return TranscriptionFrame(text, user_id="", timestamp=timestamp)
+def _frame(text: str, timestamp: str) -> TranscriptUpdate:
+    return TranscriptUpdate(text=text, final=False, timestamp=timestamp)
 
 
 def test_merge_orders_two_streams_chronologically() -> None:
@@ -158,9 +158,7 @@ def test_request_messages_carry_stream_id() -> None:
 
 
 def test_record_stores_stream_id(tmp_path: Path) -> None:
-    from pipecat.frames.frames import TranscriptionFrame
-
-    from fakeyou.foundation.transcript import CaptureContext, transcript_event
+    from fakeyou.foundation.transcript import CaptureContext, TranscriptUpdate, transcript_event
     from fakeyou.persistence.record import (
         MeetingRecord,
         TranscriptEntry,
@@ -170,7 +168,7 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
 
     path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(path)
-    frame = TranscriptionFrame("hello", "", "2026-10-06T01:00:01+00:00", finalized=True)
+    frame = TranscriptUpdate(text="hello", final=True, timestamp="2026-10-06T01:00:01+00:00")
     record.add_transcript(transcript_event(frame, "a", "e1", CaptureContext("slot-1")))
     record.close()
     [entry] = load_meeting_record(path)
@@ -260,19 +258,22 @@ async def test_capture_drain_poll_updates_binder_roster() -> None:
 async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
-    from pipecat.frames.frames import TranscriptionFrame
-
+    from fakeyou.foundation.transcript import TranscriptUpdate
     from fakeyou.observability.journal import Journal
     from fakeyou.orchestration.transcript import build_transcript_callback
     from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 
     now = datetime(2026, 10, 6, 1, 0, tzinfo=UTC)
     turns = [
-        TranscriptionFrame(
-            "Let us start with the demo.", "", "2026-10-06T01:00:01+00:00", finalized=True
+        TranscriptUpdate(
+            text="Let us start with the demo.",
+            final=True,
+            timestamp="2026-10-06T01:00:01+00:00",
         ),
-        TranscriptionFrame(
-            "Sounds good, sharing now.", "", "2026-10-06T01:00:02+00:00", finalized=True
+        TranscriptUpdate(
+            text="Sounds good, sharing now.",
+            final=True,
+            timestamp="2026-10-06T01:00:02+00:00",
         ),
     ]
 
@@ -299,7 +300,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         )
         for index, frame in enumerate(turns):
             if per_stream:
-                frame.transport_source = f"slot-{index}"
+                frame = replace(frame, stream_id=f"slot-{index}")
             await callback(frame)
         record.close()
         journal.close()
@@ -363,9 +364,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
-    from pipecat.frames.frames import TranscriptionFrame
-
-    from fakeyou.foundation.transcript import TranscriptEvent
+    from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
     from fakeyou.observability.journal import Journal
     from fakeyou.orchestration.transcript import build_transcript_callback
     from fakeyou.persistence.record import MeetingRecord, meeting_record_path
@@ -376,13 +375,19 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     binder.observe_stream(0, [111])
     binder.observe_stream(1, [222])
     frames = [
-        TranscriptionFrame("Welcome to the call.", "", "2026-10-06T01:00:01+00:00", finalized=True),
-        TranscriptionFrame(
-            "Thanks, glad to join.", "", "2026-10-06T01:00:02+00:00", finalized=True
+        TranscriptUpdate(
+            text="Welcome to the call.",
+            final=True,
+            timestamp="2026-10-06T01:00:01+00:00",
+        ),
+        TranscriptUpdate(
+            text="Thanks, glad to join.",
+            final=True,
+            timestamp="2026-10-06T01:00:02+00:00",
         ),
     ]
-    frames[0].transport_source = "slot-0"
-    frames[1].transport_source = "slot-1"
+    frames[0] = replace(frames[0], stream_id="slot-0")
+    frames[1] = replace(frames[1], stream_id="slot-1")
 
     seen: list[TranscriptEvent] = []
 

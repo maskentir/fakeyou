@@ -1,13 +1,11 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any, TypedDict, Unpack, cast, override
+from typing import Any, TypedDict, Unpack, cast
 
-from pipecat.frames.frames import Frame
-from pipecat.pipeline.worker import PipelineWorker
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.workers.runner import WorkerRunner
+import numpy as np
 
-from fakeyou.audio.audio import SessionPipeline
+from fakeyou.audio.audio import SessionRun
+from fakeyou.audio.graph import AudioGraph, PcmQueue
 from fakeyou.audio.playback import (
     PlaybackBackend,
     PlaybackEngine,
@@ -16,34 +14,85 @@ from fakeyou.audio.playback import (
     PlaybackTiming,
     PlayStream,
     SetMuted,
-    SpeechSynthesizer,
 )
+from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.speech.contract import SpeechSynthesizer
 from tests._persistence_fakes import RecordingJournal
 
+SPEECH_WINDOW = b"\x00\x00" * 512
+SPEAKING = 0.99
+SILENT = 0.0
 
-def build_pipeline(engine: PlaybackPort, runner_task: asyncio.Task[None]) -> SessionPipeline:
-    worker = cast(PipelineWorker, object())
-    runner = cast(WorkerRunner, object())
-    return SessionPipeline(worker, runner, runner_task, engine)
+
+class ScriptedSpeechModel:
+    def __init__(self) -> None:
+        self.probability = SILENT
+
+    def predict(self, window: np.ndarray) -> float:
+        del window
+        return self.probability
+
+    def reset(self) -> None:
+        return None
+
+
+class ScriptedSpeech:
+    def __init__(self) -> None:
+        self.model = ScriptedSpeechModel()
+        analyzer = VadAnalyzer(
+            VadParams(min_volume=0.0), model=self.model, model_reset_samples=None
+        )
+        self.controller = VadController(analyzer, audio_idle_timeout_seconds=0)
+
+    def speaking(self, windows: int = 8) -> bytes:
+        self.model.probability = SPEAKING
+        return SPEECH_WINDOW * windows
+
+    def silent(self, windows: int = 8) -> bytes:
+        self.model.probability = SILENT
+        return SPEECH_WINDOW * windows
+
+
+class NullSTT:
+    def __init__(self) -> None:
+        self.received = 0
+
+    def send_audio(self, pcm: bytes) -> None:
+        self.received += len(pcm)
+
+
+def build_run(engine: PlaybackPort, task: asyncio.Task[None]) -> SessionRun:
+    return SessionRun(
+        graph=cast(AudioGraph, object()),
+        task=task,
+        source=FakeCapture(),
+        engine=engine,
+    )
 
 
 async def wait_gate(gate: asyncio.Event) -> None:
     await gate.wait()
 
 
-class FakeTransport:
+class FakeCapture:
     def __init__(self) -> None:
-        self.source = FakeInput()
+        self.queue = PcmQueue()
+        self.started = 0
+        self.terminated = 0
         self.backend: Any = None
 
-    def input(self) -> FrameProcessor:
-        return self.source
+    async def start(self) -> None:
+        self.started += 1
 
     def terminate(self) -> None:
+        self.terminated += 1
         if self.backend is not None:
             self.backend.terminate()
+
+    def push(self, pcm: bytes) -> None:
+        self.queue.put(pcm)
 
 
 class FakePlayback:
@@ -75,13 +124,6 @@ class FakePlayback:
 
     async def close(self) -> None:
         self.closed = True
-
-
-class FakeInput(FrameProcessor):
-    @override
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-        await self.push_frame(frame, direction)
 
 
 class FakeSynth:

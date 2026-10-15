@@ -11,7 +11,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from pipecat.frames.frames import TranscriptionFrame
 from playwright.async_api import Page
 
 from fakeyou.audio.audio import (
@@ -37,6 +36,7 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.meet.browser import open_direct_page
 from tests._audio_fakes import FakeSTT
 
@@ -151,7 +151,7 @@ def _normalise(text: str) -> str:
 async def test_browser_audio_reaches_native_transport_and_agent_tone_reaches_browser() -> None:
     stt = FakeSTT(finalized=(), signal=True)
 
-    async def on_transcript(_frame: TranscriptionFrame) -> None:
+    async def on_transcript(_frame: TranscriptUpdate) -> None:
         pass
 
     async with (
@@ -210,7 +210,7 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
     finals: list[str] = []
     received = asyncio.Event()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         finals.append(frame.text)
         if _normalise(" ".join(finals)) == expected_text:
             received.set()

@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from pipecat.frames.frames import TranscriptionFrame
 from pydantic import SecretStr
 
 import fakeyou.audio.audio as audio
@@ -15,21 +14,22 @@ from fakeyou.audio.audio import (
     open_meeting_audio,
 )
 from fakeyou.audio.playback import PlaybackEngine
-from fakeyou.audio.voice import OpenAISpeechSynthesizer
 from fakeyou.config.settings import MiniMaxTTS, OpenAITTS, STTSettings
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.speech.openai import OpenAISpeechSynthesizer
 from tests._audio_fakes import FakeSTT
-from tests._audio_support import FakePlayback, FakeTransport
+from tests._audio_support import FakeCapture, FakePlayback
 
 
 async def test_injected_playback_engine_is_closed_on_shutdown() -> None:
     engine = FakePlayback()
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT(), playback=engine),
         policy=StreamPolicy(
@@ -56,11 +56,11 @@ async def test_default_playback_engine_closes_speech_client(
 
     monkeypatch.setattr(audio, "create_playback_engine", recording_engine)
 
-    async def on_transcript(frame: TranscriptionFrame) -> None:
+    async def on_transcript(frame: TranscriptUpdate) -> None:
         pass
 
     async with open_meeting_audio(
-        transport=FakeTransport(),
+        source=FakeCapture(),
         callbacks=StreamCallbacks(on_transcript),
         components=StreamComponents(stt=FakeSTT()),
         policy=StreamPolicy(
@@ -97,7 +97,7 @@ def test_default_playback_engine_streams_tts_to_paplay(monkeypatch: pytest.Monke
 
 
 def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
-    from fakeyou.audio.voice import MiniMaxSpeechSynthesizer
+    from fakeyou.speech.minimax import MiniMaxSpeechSynthesizer
 
     engine = create_playback_engine(
         tts_settings=MiniMaxTTS(api_key=SecretStr("k"), voice="Indonesian_CaringMan")
@@ -133,8 +133,9 @@ async def test_playback_engine_threads_pactl_timeout_to_the_muter(
     import stat
     from collections.abc import AsyncIterator
 
-    from fakeyou.audio.playback import PlaybackEvent, SpeechSynthesizer
+    from fakeyou.audio.playback import PlaybackEvent
     from fakeyou.config.settings import TTSSettings
+    from fakeyou.speech.contract import SpeechSynthesizer
 
     pactl = tmp_path / "pactl"
     pactl.write_text("#!/bin/sh\nexec sleep 30\n")
@@ -160,7 +161,7 @@ async def test_playback_engine_threads_pactl_timeout_to_the_muter(
         del settings
         return _StubSynth()
 
-    monkeypatch.setattr(audio, "create_speech_synthesizer", _stub_synth)
+    monkeypatch.setattr(audio, "build_speech_synthesizer", _stub_synth)
     events: list[PlaybackEvent] = []
     engine = create_playback_engine(
         tts_settings=OpenAITTS(api_key=SecretStr("k")),
