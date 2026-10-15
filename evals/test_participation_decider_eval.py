@@ -73,7 +73,7 @@ def test_corpus_harness_measures_false_speak_and_silent() -> None:
         },
         {
             "id": "c2",
-            "text": "kita lanjutin PR kemarin ya",
+            "text": "we will continue yesterday's items",
             "participant_id": "a",
             "label": "silent",
             "reason": "others conversing",
