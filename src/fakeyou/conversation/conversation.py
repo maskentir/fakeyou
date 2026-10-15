@@ -1163,6 +1163,8 @@ class ConversationLoop:
         if key in self._jev_pregen:
             return
         lines = [f"{event.participant_id}: {event.text}" for event in self._events[-6:]]
+        names = ", ".join(name for name in self._addressing_names if name.strip())
+        lines.append(f"twin: {names}")
         lines.append(f"turn_cue={cue} mine={mine}")
         decision = await decider.decide("\n".join(lines))
         self._remember_jev(key, decision)

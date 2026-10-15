@@ -238,7 +238,7 @@ Setiap leaf pada model `Settings` beserta nama environment yang diturunkannya. B
 | `FAKEYOU_PARTICIPATION_DECIDER__PRE_GENERATE_ENABLED` | `participation_decider` | `bool` | true |
 | `FAKEYOU_PARTICIPATION_DECIDER__PROVIDER` | `participation_decider` | `Literal['jev', 'gemini']` | `jev` |
 | `FAKEYOU_PARTICIPATION_DECIDER__SPEAK_THRESHOLD` | `participation_decider` | `float` | `0.7` |
-| `FAKEYOU_PARTICIPATION_DECIDER__TIMEOUT_SECONDS` | `participation_decider` | `float` | `2.0` |
+| `FAKEYOU_PARTICIPATION_DECIDER__TIMEOUT_SECONDS` | `participation_decider` | `float` | `15.0` |
 | `FAKEYOU_PARTICIPATION_DECIDER__WINDOW_TURNS` | `participation_decider` | `int` | `6` |
 
 ### meeting

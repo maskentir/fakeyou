@@ -113,7 +113,8 @@ class JevDecider:
 
 _GEMINI_PROMPT = (
     "Decide whether the twin joins the floor. "
-    "State lists recent turns as speaker: text plus a turn cue line. "
+    "State lists recent turns as speaker: text, then a twin line naming the twin, "
+    "then a turn cue line. "
     "Answer with one decision: speak when the last turn calls the twin by cue, "
     "clarify when the target is unclear and nobody else holds the floor, "
     "silent in all other cases including talk between two other people. "

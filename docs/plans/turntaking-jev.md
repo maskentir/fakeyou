@@ -215,7 +215,7 @@ git commit -m "feat: extend participation context with turn fields"
 
 **Antarmuka:**
 - Memakai: pola `Section`, `PositiveSeconds`, `SecretStr` dari modul settings
-- Menghasilkan: `ParticipationDeciderSettings(model: str = "jev-latest", base_url: OptionalURL = None, api_key: SecretStr | None = None, timeout_seconds: PositiveSeconds = 2.0, window_turns: int = 6, speak_threshold: float = 0.70, clarify_threshold: float = 0.50, pre_generate_enabled: bool = True)`; `Configuration.participation_decider` (env `FAKEYOU_PARTICIPATION_DECIDER__*`)
+- Menghasilkan: `ParticipationDeciderSettings(model: str = "jev-latest", base_url: OptionalURL = None, api_key: SecretStr | None = None, timeout_seconds: PositiveSeconds = 15.0, window_turns: int = 6, speak_threshold: float = 0.70, clarify_threshold: float = 0.50, pre_generate_enabled: bool = True)`; `Configuration.participation_decider` (env `FAKEYOU_PARTICIPATION_DECIDER__*`)
 
 - [ ] **Langkah 1: Tulis tes merah**
 
@@ -241,7 +241,7 @@ class ParticipationDeciderSettings(Section):
     model: str = "jev-latest"
     base_url: OptionalURL = None
     api_key: SecretStr | None = None
-    timeout_seconds: PositiveSeconds = 2.0
+    timeout_seconds: PositiveSeconds = 15.0
     window_turns: int = Field(default=6, gt=0, le=20)
     speak_threshold: float = Field(default=0.70, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
@@ -566,6 +566,12 @@ git commit -m "test: add labeled participation corpus with false speak silent ra
 - Refresh berjalan saat `handle_interim` dan floor bebas, tak blocking; hasil disimpan via `_remember_jev`; `close()` membatalkan task dan menutup decider.
 - Kunci cache dihitung dari event final sebelum final baru (`events[:-1]`) agar kunci saat interim sama dengan kunci saat `_decide`.
 - Tanpa event journal baru; konsumsi tercatat di `policy_decided` existing.
+
+## Catatan as-built: bukti live Gemini Flash
+
+- Probe live 12 baris corpus: 11/12 tepat setelah state memuat baris identitas twin; tanpa baris twin, model tak pernah menilai addressed (pelajaran: identitas twin wajib di state).
+- Satu miss (`next` tanpa histori) menghasilkan clarify, sesuai aturan ambigu; label corpus disesuaikan secara terbuka.
+- Latensi observasi 2.9-6.5 detik (median sekitar 4 detik); default timeout menjadi 15.0 agar pregen background tak selalu stale; threshold 0.70/0.50 bertahan karena confidence tepat (0.95) dan salah (0.65-0.80) terpisah rapi.
 
 ## Catatan as-built: contract plus provider Gemini
 

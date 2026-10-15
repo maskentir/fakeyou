@@ -373,7 +373,7 @@ class ParticipationDeciderSettings(Section):
     provider: Literal["jev", "gemini"] = "jev"
     base_url: OptionalURL = None
     api_key: SecretStr | None = None
-    timeout_seconds: PositiveSeconds = 2.0
+    timeout_seconds: PositiveSeconds = 15.0
     window_turns: int = Field(default=6, gt=0, le=20)
     speak_threshold: float = Field(default=0.70, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
