@@ -17,6 +17,7 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_participation_decider_defaults_are_conservative() -> None:
     decider = Settings().participation_decider
     assert decider.model == "jev-latest"
+    assert decider.provider == "jev"
     assert decider.window_turns == 6
     assert decider.speak_threshold == 0.70
     assert decider.clarify_threshold == 0.50

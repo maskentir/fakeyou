@@ -566,3 +566,10 @@ git commit -m "test: add labeled participation corpus with false speak silent ra
 - Refresh berjalan saat `handle_interim` dan floor bebas, tak blocking; hasil disimpan via `_remember_jev`; `close()` membatalkan task dan menutup decider.
 - Kunci cache dihitung dari event final sebelum final baru (`events[:-1]`) agar kunci saat interim sama dengan kunci saat `_decide`.
 - Tanpa event journal baru; konsumsi tercatat di `policy_decided` existing.
+
+## Catatan as-built: contract plus provider Gemini
+
+- Modul decider hanya mengenal contract `ParticipationDecider` (`decide` plus `aclose`); loop memegang protocol, bukan implementasi.
+- `TurnDecision` menggantikan nama khusus vendor; `JevDecider` tetap tersedia untuk nanti saat key TypeSafe ada.
+- `GeminiDecider` memakai REST `generateContent` plus `responseSchema` JSON; transport injeksi seperti Jev sehingga tes offline tanpa network.
+- Settings tambah `provider` (`jev` default, `gemini` alternatif); assembly memilih implementasi dan tetap rule-only saat kredensial belum lengkap.

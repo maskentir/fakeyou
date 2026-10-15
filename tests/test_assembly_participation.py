@@ -29,8 +29,26 @@ def test_build_loop_attaches_jev_decider_when_configured(settings: Settings) -> 
     )
     loop = _builder(configured).build_loop(FakeResponder())
     assert loop.jev_enabled is True
+    assert loop.jev_provider == "jev"
 
 
 def test_build_loop_skips_jev_decider_without_credentials(settings: Settings) -> None:
     loop = _builder(settings).build_loop(FakeResponder())
     assert loop.jev_enabled is False
+
+
+def test_build_loop_attaches_gemini_decider_without_base_url(
+    settings: Settings,
+) -> None:
+    configured = settings.model_copy(
+        update={
+            "participation_decider": ParticipationDeciderSettings(
+                provider="gemini",
+                model="gemini-3.8-flash",
+                api_key=SecretStr("test-key"),
+            )
+        }
+    )
+    loop = _builder(configured).build_loop(FakeResponder())
+    assert loop.jev_enabled is True
+    assert loop.jev_provider == "gemini"
