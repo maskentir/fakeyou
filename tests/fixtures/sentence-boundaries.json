@@ -1,0 +1,167 @@
+[
+ {
+  "language": "en",
+  "text": "Hello there. How are you? I am fine!",
+  "boundary": 12
+ },
+ {
+  "language": "en",
+  "text": "Dr. Smith arrived at 3.5 pm and spoke briefly.",
+  "boundary": 46
+ },
+ {
+  "language": "en",
+  "text": "She said, \"Dr. S",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "She said, \"Dr. Smith is here.\" Then she left.",
+  "boundary": 30
+ },
+ {
+  "language": "en",
+  "text": "Good morning everyone. Yesterday I finished the migration script.",
+  "boundary": 22
+ },
+ {
+  "language": "en",
+  "text": "Great. Any blockers on your side today?",
+  "boundary": 6
+ },
+ {
+  "language": "en",
+  "text": "No punctuation here",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "   ",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "Wait… what happened?",
+  "boundary": 20
+ },
+ {
+  "language": "en",
+  "text": "Version 2.1 shipped on Monday; next release is Friday.",
+  "boundary": 54
+ },
+ {
+  "language": "en",
+  "text": "e.g. the billing module is flaky. I will fix it.",
+  "boundary": 33
+ },
+ {
+  "language": "en",
+  "text": "He said ok",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "Done.",
+  "boundary": 5
+ },
+ {
+  "language": "en",
+  "text": "U.S. revenue grew 4%. Costs fell.",
+  "boundary": 21
+ },
+ {
+  "language": "id",
+  "text": "Selamat pagi semua. Kemarin saya selesai menulis skrip migrasi.",
+  "boundary": 19
+ },
+ {
+  "language": "id",
+  "text": "Dr. Budi hadir hari ini. Dia akan bicara nanti.",
+  "boundary": 24
+ },
+ {
+  "language": "id",
+  "text": "Ada blocker? Belum ada.",
+  "boundary": 12
+ },
+ {
+  "language": "id",
+  "text": "Tes billing masih gagal, saya perbaiki pagi ini",
+  "boundary": 0
+ },
+ {
+  "language": "id",
+  "text": "Oke, siap! Terima kasih.",
+  "boundary": 10
+ },
+ {
+  "language": "id",
+  "text": "Pukul 10.30 meeting dimulai; tim sudah siap.",
+  "boundary": 44
+ },
+ {
+  "language": "id",
+  "text": "Ini contoh tanpa titik",
+  "boundary": 0
+ },
+ {
+  "language": "en",
+  "text": "Start. Middle without end",
+  "boundary": 6
+ },
+ {
+  "language": "en",
+  "text": "A quote ends here.\" Another",
+  "boundary": 19
+ },
+ {
+  "language": "en",
+  "text": "Mr. and Mrs. Lee said hi. Then left!",
+  "boundary": 25
+ },
+ {
+  "language": "en",
+  "text": "Hello! Hi! Hey!",
+  "boundary": 6
+ },
+ {
+  "language": null,
+  "text": "No language given. Still works.",
+  "boundary": 18
+ },
+ {
+  "language": "EN-us",
+  "text": "Region code works. Yes.",
+  "boundary": 18
+ },
+ {
+  "language": "auto",
+  "text": "Automatic language. Yes.",
+  "boundary": 19
+ },
+ {
+  "language": "en",
+  "text": "Trailing spaces stay out.   ",
+  "boundary": 25
+ },
+ {
+  "language": "en",
+  "text": "Multi\nline text. Second line here.",
+  "boundary": 16
+ },
+ {
+  "language": "fr",
+  "text": "Bonjour à tous. Ça va bien ?",
+  "boundary": 15
+ },
+ {
+  "language": "en",
+  "text": "Done with the list; next item",
+  "boundary": 0
+ }
+]
