@@ -370,6 +370,7 @@ class ConversationSettings(Section):
 
 class ParticipationDeciderSettings(Section):
     model: str = "jev-latest"
+    provider: Literal["jev", "gemini"] = "jev"
     base_url: OptionalURL = None
     api_key: SecretStr | None = None
     timeout_seconds: PositiveSeconds = 2.0

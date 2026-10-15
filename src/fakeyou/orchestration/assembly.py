@@ -41,7 +41,11 @@ from fakeyou.conversation.conversation import (
     conversation_thread_id,
 )
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
-from fakeyou.conversation.participation_decider import JevDecider
+from fakeyou.conversation.participation_decider import (
+    GeminiDecider,
+    JevDecider,
+    ParticipationDecider,
+)
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, open_database, require_url
@@ -243,12 +247,21 @@ def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
     )
 
 
-def _participation_decider(settings: Settings) -> JevDecider | None:
+def _participation_decider(settings: Settings) -> ParticipationDecider | None:
     config = settings.participation_decider
     if not config.pre_generate_enabled:
         return None
     api_key = config.api_key.get_secret_value() if config.api_key is not None else ""
-    if not api_key or not config.base_url:
+    if not api_key:
+        return None
+    if config.provider == "gemini":
+        return GeminiDecider(
+            api_key=api_key,
+            model=config.model,
+            base_url=config.base_url or "https://generativelanguage.googleapis.com",
+            timeout_seconds=config.timeout_seconds,
+        )
+    if not config.base_url:
         return None
     return JevDecider(
         api_key=api_key,

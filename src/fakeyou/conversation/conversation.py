@@ -19,7 +19,12 @@ from langchain_core.runnables import Runnable
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.endpointing import SemanticEndpoint
-from fakeyou.conversation.participation_decider import JevDecider, JevDecision
+from fakeyou.conversation.participation_decider import (
+    GeminiDecider,
+    JevDecider,
+    ParticipationDecider,
+    TurnDecision,
+)
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.db.checkpoint import is_checkpoint_error
 from fakeyou.foundation.participation import (
@@ -726,7 +731,7 @@ class LoopInteraction:
     barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
-    jev_decider: JevDecider | None = None
+    jev_decider: ParticipationDecider | None = None
     jev_speak_threshold: float = 0.70
     jev_clarify_threshold: float = 0.50
 
@@ -798,7 +803,7 @@ class ConversationLoop:
         self._awaiting_reply = False
         self._turn = empty_turn_state()
         self._jev_decider = interaction.jev_decider
-        self._jev_pregen: dict[tuple[str | bool, ...], JevDecision] = {}
+        self._jev_pregen: dict[tuple[str | bool, ...], TurnDecision] = {}
         self._jev_speak_threshold = interaction.jev_speak_threshold
         self._jev_clarify_threshold = interaction.jev_clarify_threshold
         self._jev_refresh: asyncio.Task[None] | None = None
@@ -851,6 +856,15 @@ class ConversationLoop:
     @property
     def jev_enabled(self) -> bool:
         return self._jev_decider is not None
+
+    @property
+    def jev_provider(self) -> str | None:
+        decider = self._jev_decider
+        if isinstance(decider, GeminiDecider):
+            return "gemini"
+        if isinstance(decider, JevDecider):
+            return "jev"
+        return None
 
     async def wait_jev_idle(self) -> None:
         task = self._jev_refresh
@@ -1105,7 +1119,7 @@ class ConversationLoop:
             self._engaged_speaker = event.participant_id
         return True
 
-    def _remember_jev(self, key: tuple[str | bool, ...], decision: JevDecision) -> None:
+    def _remember_jev(self, key: tuple[str | bool, ...], decision: TurnDecision) -> None:
         if len(self._jev_pregen) > 16:
             self._jev_pregen.clear()
         self._jev_pregen[key] = decision
