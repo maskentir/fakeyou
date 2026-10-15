@@ -15,7 +15,6 @@ from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import Runnable
-from pipecat.utils.string import match_endofsentence
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
@@ -25,9 +24,11 @@ from fakeyou.db.checkpoint import is_checkpoint_error
 from fakeyou.foundation.participation import (
     ParticipationContext,
     choose_participation,
+    is_other_observed_speaker,
     is_vocative,
     mentions_whole_phrase,
     same_observed_speaker,
+    same_voice,
 )
 from fakeyou.foundation.protocols import (
     SupportsAclose,
@@ -36,6 +37,7 @@ from fakeyou.foundation.protocols import (
     SupportsPregenSentences,
 )
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.utterance_quality import describe_word_diff, normalize_words
 from fakeyou.observability.cleanup import close_safely
@@ -90,7 +92,14 @@ def _require_replier(
 
 
 _ACK_VOCABULARY: dict[str, Any] = json.loads(read_package_text("ack_vocabulary.json"))
+TURN_FAILED_LINES: dict[str, str] = json.loads(read_package_text("spoken_lines.json"))[
+    "turn_failed"
+]
+MAX_CONSECUTIVE_TURN_FAILURES = 3
 BARE_ACK_VOCABULARY: frozenset[str] = frozenset(_ACK_VOCABULARY["bare_acks"])
+INTERJECTION_OPENERS: tuple[tuple[str, ...], ...] = tuple(
+    tuple(opener.split()) for opener in _ACK_VOCABULARY["interjections"]
+)
 _ACK_EDGE_PUNCTUATION = '.,!;:"“”‘’()[]{}-–—…'
 
 
@@ -100,6 +109,14 @@ def is_bare_ack(text: str) -> bool:
     words = [word.strip(_ACK_EDGE_PUNCTUATION) for word in text.casefold().split()]
     words = [word for word in words if word]
     return len(words) == 1 and words[0] in BARE_ACK_VOCABULARY
+
+
+def is_interjection(text: str) -> bool:
+    if "?" in text:
+        return False
+    words = [word.strip(_ACK_EDGE_PUNCTUATION) for word in text.casefold().split()]
+    words = [word for word in words if word]
+    return any(tuple(words[: len(opener)]) == opener for opener in INTERJECTION_OPENERS)
 
 
 class _ToolActivity(AsyncCallbackHandler):
@@ -379,7 +396,7 @@ class _SentenceStream:
 
     def drain(self) -> Iterator[str]:
         while self.yielded < self.max_sentences:
-            boundary = match_endofsentence(self.buffer, language=self.language)
+            boundary = sentence_end(self.buffer, language=self.language)
             if not boundary:
                 break
             sentence, self.buffer = (
@@ -630,7 +647,7 @@ def cap_spoken_reply(
     remaining = reply.strip()
     sentences: list[str] = []
     for _ in range(max_sentences):
-        boundary = match_endofsentence(remaining, language=language)
+        boundary = sentence_end(remaining, language=language)
         if not boundary:
             sentences.append(remaining)
             break
@@ -759,7 +776,9 @@ class ConversationLoop:
         self._addressing_names = interaction.wake_phrases or interaction.twin_names
         self._others_speaking_signal = interaction.others_speaking
         self._participant_policy_enabled = interaction.participant_policy_enabled
-        self._last_speaker_id: str | None = None
+        self._engaged_speaker: str | None = None
+        self._engaged_voice: str | None = None
+        self._awaiting_reply = False
         self._previous_inbound_was_bare_ack = False
         self._activation_seconds = timing.activation_seconds
         self._barge_in_min_words = interaction.barge_in_min_words
@@ -783,6 +802,9 @@ class ConversationLoop:
         self._active_generation = 0
         self._active_started = 0.0
         self._failure: ConversationError | None = None
+        self._consecutive_turn_failures = 0
+        self._turn_failed_line = TURN_FAILED_LINES[generation.language]
+        self._paused = False
         self._closed = False
         self._interrupted = False
         self._last_interim: str | None = None
@@ -823,11 +845,9 @@ class ConversationLoop:
             raise self._failure
 
     async def _discard_rejected(self, event: TranscriptEvent, *, bare_ack: bool) -> bool:
-        if self._participant_policy_enabled:
-            if self._policy_allows(event):
+        if self._addressing_names or self._participant_policy_enabled:
+            if self._decide(event):
                 return False
-        elif self._addressing_names and not self._addressed(event):
-            pass
         elif bare_ack and self._previous_inbound_was_bare_ack:
             self._record(
                 "ack_decided", transcript_id=event.id, action="silent", reason="bare_ack_run"
@@ -854,6 +874,9 @@ class ConversationLoop:
             or not event.finalized
             or not event.text.strip()
         ):
+            return
+        if self._paused:
+            self._record("transcript_suppressed", transcript_id=event.id, reason="paused")
             return
         if event.id in self._seen:
             return
@@ -995,30 +1018,28 @@ class ConversationLoop:
         self._pregen = pregen
         self._record("pregeneration_started", request_id=request_id, words=len(words))
 
-    def _addressed(self, event: TranscriptEvent) -> bool:
+    def _decide(self, event: TranscriptEvent) -> bool:
         now = self._clock()
-        if any(mentions_whole_phrase(event.text, phrase) for phrase in self._addressing_names):
-            self._active_until = now + self._activation_seconds
-            return True
-        return now < self._active_until
-
-    def _others_speaking(self) -> bool:
-        signal = self._others_speaking_signal
-        return signal is not None and signal()
-
-    def _policy_allows(self, event: TranscriptEvent) -> bool:
-        now = self._clock()
-        addressed = is_vocative(event.text, self._wake_phrases)
-        if addressed:
-            self._active_until = now + self._activation_seconds
+        policy = self._participant_policy_enabled
+        if policy:
+            addressed = is_vocative(event.text, self._wake_phrases)
+            same = self._same_speaker(event)
+        else:
+            addressed = any(
+                mentions_whole_phrase(event.text, phrase) for phrase in self._addressing_names
+            )
+            same = self._same_speaker(event)
         activation_valid = now < self._active_until
         context = ParticipationContext(
             addressed=addressed,
             followup=not addressed and activation_valid,
-            same_participant=same_observed_speaker(self._last_speaker_id, event.participant_id),
+            same_participant=same,
             ambiguous=False,
-            others_speaking=self._others_speaking(),
+            others_speaking=policy and self._others_speaking(),
             activation_valid=activation_valid,
+            bare_ack=is_bare_ack(event.text),
+            interjection=is_interjection(event.text),
+            awaiting_reply=self._awaiting_reply,
         )
         decision = choose_participation(context)
         self._record(
@@ -1029,9 +1050,38 @@ class ConversationLoop:
         )
         if decision.action == "silent":
             return False
+        self._active_until = now + self._activation_seconds
+        if decision.reason == "addressed":
+            self._engaged_voice = (
+                event.voice_clusters[0] if len(event.voice_clusters) == 1 else None
+            )
         if event.participant_id != "unknown":
-            self._last_speaker_id = event.participant_id
+            self._engaged_speaker = event.participant_id
         return True
+
+    def _same_speaker(self, event: TranscriptEvent) -> bool:
+        voice = same_voice(self._engaged_voice, event.voice_clusters)
+        if voice is not None:
+            return voice
+        if self._participant_policy_enabled:
+            return same_observed_speaker(self._engaged_speaker, event.participant_id)
+        return not is_other_observed_speaker(self._engaged_speaker, event.participant_id)
+
+    def _note_spoken(self, text: str) -> None:
+        self._awaiting_reply = text.rstrip().endswith("?")
+
+    def _others_speaking(self) -> bool:
+        signal = self._others_speaking_signal
+        return signal is not None and signal()
+
+    async def pause(self) -> None:
+        self._paused = True
+        session = self._session
+        if session is not None and session.is_speaking:
+            await session.stop_playback()
+
+    def resume(self) -> None:
+        self._paused = False
 
     async def wait_idle(self) -> None:
         if self._task is not None:
@@ -1109,6 +1159,26 @@ class ConversationLoop:
             self._failure.__cause__ = cause
             self._phase = "failed"
 
+    async def _recover_turn(self, error: Exception, generation: int, transcript_id: str) -> None:
+        self._consecutive_turn_failures += 1
+        self._record(
+            "turn_failed",
+            transcript_id=transcript_id,
+            error=type(error).__name__,
+            consecutive=self._consecutive_turn_failures,
+        )
+        if self._closed or self._consecutive_turn_failures >= MAX_CONSECUTIVE_TURN_FAILURES:
+            self._fail(error)
+            return
+        if self._faults is not None:
+            self._faults.record(classify_exception("agent", error))
+        self._move("waiting", transcript_id)
+        session = self._session
+        if session is not None and generation == self._generation:
+            _, speech_error = await capture_error(partial(session.speak, self._turn_failed_line))
+            if speech_error is not None:
+                self._fail(speech_error)
+
     def _tool_started(self, generation: int, event_id: str) -> None:
         if generation == self._generation and not self._closed:
             self._move("acting", event_id)
@@ -1141,6 +1211,9 @@ class ConversationLoop:
     def _live_session(
         self, turn: StreamTurn, stop_mark: int, sentence_index: int
     ) -> MeetingAudio | None:
+        if self._paused:
+            self._record_drop(turn, sentence_index, "paused", "paused")
+            return None
         if self._closed or turn.generation != self._generation or self._stream_stops != stop_mark:
             detail, reason = self._drop_outcome(turn.generation)
             self._record_drop(turn, sentence_index, detail, reason)
@@ -1205,6 +1278,7 @@ class ConversationLoop:
                     self.raise_if_failed()
                     self._interrupted = False
                     self._last_interim = None
+                    self._note_spoken(sentence)
                     await session.speak(
                         sentence, sentence_index=spoken, transcript_id=turn.event_id
                     )
@@ -1342,6 +1416,7 @@ class ConversationLoop:
                     self.raise_if_failed()
                     self._interrupted = False
                     self._last_interim = None
+                    self._note_spoken(sentence)
                     await session.speak(
                         sentence, sentence_index=spoken, transcript_id=turn.event_id
                     )
@@ -1392,7 +1467,7 @@ class ConversationLoop:
             if self._active_turn is worker:
                 self._active_turn = None
         if error is not None:
-            self._fail(error)
+            await self._recover_turn(error, self._active_generation, self._active_transcript_id)
         elif not completed:
             self._turn_dropped()
         if not self._closed and self._failure is None and self._pending:
@@ -1471,6 +1546,9 @@ class ConversationLoop:
         if generation != self._generation or self._closed:
             return
         session = self._session
+        if self._paused:
+            self._record("turn_suppressed", request_id=request_id, reason="paused")
+            return
         if not reply.strip() or session is None:
             self._move("waiting", event_id)
             return
@@ -1486,6 +1564,7 @@ class ConversationLoop:
         self.raise_if_failed()
         self._interrupted = False
         self._last_interim = None
+        self._note_spoken(spoken)
         await session.speak(spoken)
         if generation == self._generation and not self._closed:
             self._move("listening", event_id)
@@ -1516,8 +1595,13 @@ class ConversationLoop:
             self._active_generation = generation
             self._active_started = started
             try:
-                if not await settle_turn(child):
-                    self._turn_dropped()
+                completed, error = await capture_error(partial(settle_turn, child))
             finally:
                 if self._active_turn is child:
                     self._active_turn = None
+            if error is not None:
+                await self._recover_turn(error, generation, event_id)
+            elif completed:
+                self._consecutive_turn_failures = 0
+            else:
+                self._turn_dropped()

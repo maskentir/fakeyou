@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from graphiti_core import Graphiti
-from pipecat.frames.frames import TranscriptionFrame
 
 from fakeyou.audio.audio import (
     SpeechPipelineSettings,
@@ -33,6 +32,7 @@ from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
 from fakeyou.conversation.conversation import ConversationLoop, ConversationPhase
 from fakeyou.conversation.session import MeetingAudio, SessionResult
 from fakeyou.foundation.attribution_probe import AttributionProbe
+from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
 from fakeyou.memory.ingestion import meeting_windows
@@ -304,9 +304,9 @@ def _build_audio_factory(
         per_stream_enabled=prepared.request.settings.conversation.per_stream_enabled,
     )
 
-    async def interim(frame: TranscriptionFrame) -> None:
+    async def interim(update: TranscriptUpdate) -> None:
         if run.conversation is not None:
-            await run.conversation.handle_interim(frame.text)
+            await run.conversation.handle_interim(update.text)
 
     async def vad(*, active: bool) -> None:
         if run.conversation is not None:

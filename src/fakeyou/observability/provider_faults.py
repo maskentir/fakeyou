@@ -10,18 +10,6 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.foundation.taxonomy import ProviderFaultKind, Subsystem
 
-ERROR_CATEGORY_KINDS: dict[str, tuple[ProviderFaultKind, bool]] = {
-    "AUTHENTICATION": ("unauthorized", False),
-    "AUTHORIZATION": ("unauthorized", False),
-    "QUOTA": ("payment_required", False),
-    "RATE_LIMIT": ("rate_limited", True),
-    "CONNECTIVITY": ("unavailable", True),
-    "SERVER": ("unavailable", True),
-    "INVALID_REQUEST": ("bad_request", False),
-    "APPLICATION": ("unknown", False),
-    "UNKNOWN": ("unknown", False),
-}
-
 MAX_DETAIL_CHARS = 300
 _FAULT_KINDS = frozenset(get_args(ProviderFaultKind))
 _SECRET = re.compile(
@@ -135,28 +123,6 @@ def classify_minimax_status(
     return ProviderFault(source, kind, evidence=FaultEvidence(code, detail), retryable=retryable)
 
 
-def category_fault(source: Subsystem, error: object) -> ProviderFault | None:
-    category = getattr(error, "category", None)
-    name = getattr(category, "name", None)
-    if not isinstance(name, str):
-        return None
-    mapped = ERROR_CATEGORY_KINDS.get(name.upper())
-    if mapped is None:
-        return None
-    kind, retryable = mapped
-    status = getattr(error, "status", None)
-    detail = getattr(error, "detail", None)
-    return ProviderFault(
-        source,
-        kind,
-        evidence=FaultEvidence(
-            status=status if isinstance(status, int) else None,
-            detail=detail if isinstance(detail, str) else None,
-        ),
-        retryable=retryable,
-    )
-
-
 _PROGRAMMING_ERRORS = (AssertionError, AttributeError, IndexError, KeyError, TypeError)
 
 
@@ -179,9 +145,6 @@ def classify_exception(
 
 
 def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
-    categorized = category_fault(source, error)
-    if categorized is not None:
-        return categorized
     if isinstance(error, FakeYouError):
         return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=error.code.value))
     if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):

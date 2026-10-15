@@ -12,6 +12,9 @@ class ParticipationContext:
     ambiguous: bool
     others_speaking: bool
     activation_valid: bool
+    bare_ack: bool = False
+    interjection: bool = False
+    awaiting_reply: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,11 +30,17 @@ def choose_participation(context: ParticipationContext) -> ParticipationDecision
         if context.ambiguous:
             return ParticipationDecision("clarify", "addressed_ambiguous")
         return ParticipationDecision("reply", "addressed")
-    if context.followup and context.activation_valid and context.same_participant:
-        if context.ambiguous:
-            return ParticipationDecision("clarify", "followup_ambiguous")
-        return ParticipationDecision("reply", "followup_same_speaker")
-    return ParticipationDecision("silent", "not_addressed")
+    if not (context.followup and context.activation_valid and context.same_participant):
+        return ParticipationDecision("silent", "not_addressed")
+    if context.interjection:
+        return ParticipationDecision("silent", "interjection")
+    if context.bare_ack and not context.awaiting_reply:
+        return ParticipationDecision("silent", "bare_ack")
+    if context.ambiguous:
+        return ParticipationDecision("clarify", "followup_ambiguous")
+    if context.bare_ack:
+        return ParticipationDecision("reply", "followup_answers_question")
+    return ParticipationDecision("reply", "followup_same_speaker")
 
 
 _VOCATIVE_BOUNDARY = frozenset({" ", ",", ".", "!", "?", ";", ":"})
@@ -60,3 +69,15 @@ def same_observed_speaker(previous_id: str | None, current_id: str) -> bool:
     if previous_id is None or previous_id == "unknown" or current_id == "unknown":
         return False
     return previous_id == current_id
+
+
+def same_voice(engaged: str | None, clusters: Sequence[str]) -> bool | None:
+    if engaged is None or not clusters:
+        return None
+    return tuple(clusters) == (engaged,)
+
+
+def is_other_observed_speaker(previous_id: str | None, current_id: str) -> bool:
+    if previous_id is None or previous_id == "unknown" or current_id == "unknown":
+        return False
+    return previous_id != current_id

@@ -1,16 +1,14 @@
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pipecat.frames.frames import TranscriptionFrame
-
 from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
 from fakeyou.conversation.conversation import ConversationLoop
-from fakeyou.foundation.numbers import real_number
 from fakeyou.foundation.timeparse import assume_utc, require_iso_datetime
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,
+    TranscriptUpdate,
     merge_transcripts,
     transcript_event,
     transcript_stamp,
@@ -32,6 +30,7 @@ from fakeyou.observability.faults import (
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.assembly import VoiceprintLive
 from fakeyou.persistence.record import MeetingRecord, VisualDraft
+from fakeyou.transcription.contract import TranscriptSink
 from fakeyou.visual.visual_caption import VisualCaption, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore, visual_refs_for_utterance
 
@@ -44,11 +43,10 @@ def _stream_slot(stream_id: str) -> int | None:
 
 
 def attribute_stream_frame(
-    frame: TranscriptionFrame, binder: SlotBinder | None
+    update: TranscriptUpdate, binder: SlotBinder | None
 ) -> tuple[str, str | None, str, dict[str, Any], float, str | None]:
-    capture_ms = real_number(getattr(frame, "capture_ms", 0.0)) or 0.0
-    source = getattr(frame, "transport_source", "") or ""
-    stream_id = source if isinstance(source, str) else ""
+    capture_ms = update.capture_ms or 0.0
+    stream_id = update.stream_id
     slot = _stream_slot(stream_id)
     roster_size = binder.roster_size if binder is not None else 0
     if binder is None or slot is None:
@@ -117,6 +115,7 @@ async def _emit_transcript(
         spoken_at=event.timestamp,
         finalized=event.finalized,
         stream_id=event.stream_id,
+        voice_clusters=list(event.voice_clusters),
         **(extra or {}),
     )
     record.add_transcript(event)
@@ -141,30 +140,30 @@ class LiveScoring:
 
 def record_visual_caption(
     record: MeetingRecord,
-    frame: VisualFrame,
+    update: VisualFrame,
     caption: VisualCaption,
     *,
     journal: Journal | None = None,
 ) -> None:
     try:
-        captured_at = assume_utc(require_iso_datetime(frame.captured_at))
+        captured_at = assume_utc(require_iso_datetime(update.captured_at))
     except ValueError as error:
         if journal is not None:
             journal.record(
                 "visual_caption_dropped",
                 source="meeting_record",
-                visual_id=frame.frame_id,
+                visual_id=update.frame_id,
                 error_type=type(error).__name__,
             )
         return
     record.add_visual(
         VisualDraft(
-            visual_id=frame.frame_id,
+            visual_id=update.frame_id,
             caption=caption.text,
-            sha256=frame.sha256,
+            sha256=update.sha256,
             captured_at=captured_at,
-            frame_ref=frame_ref(frame),
-            captured_page_ms=frame.captured_page_ms,
+            frame_ref=frame_ref(update),
+            captured_page_ms=update.captured_page_ms,
         )
     )
 
@@ -211,11 +210,11 @@ class TranscriptDrain:
         self._extras: dict[str, dict[str, Any]] = {}
         self._emitted_max: TranscriptEvent | None = None
 
-    async def __call__(self, frame: TranscriptionFrame) -> None:
+    async def __call__(self, update: TranscriptUpdate) -> None:
         if self._per_stream_enabled:
-            await self._per_stream(frame)
+            await self._per_stream(update)
         else:
-            await self._mixed_stream(frame)
+            await self._mixed_stream(update)
 
     def _registry(self) -> SpeakerRegistry | None:
         return self._scoring.registry if self._scoring is not None else None
@@ -299,13 +298,13 @@ class TranscriptDrain:
             )
         self._pending[:] = [event for event in self._pending if event.id not in self._handled]
 
-    async def _per_stream(self, frame: TranscriptionFrame) -> None:
+    async def _per_stream(self, update: TranscriptUpdate) -> None:
         participant_id, evidence_id, stream_id, extra, capture_ms, device = attribute_stream_frame(
-            frame, self._binder
+            update, self._binder
         )
         event = _visual_event(
             transcript_event(
-                frame,
+                update,
                 participant_id,
                 evidence_id,
                 CaptureContext(
@@ -319,22 +318,20 @@ class TranscriptDrain:
         self._pending.append(event)
         self._extras[event.id] = extra
         await self._drain_ordered()
-        await self._score_turn(
-            extra.get("speaker_uuid"), stream_id, device, finalized=frame.finalized
-        )
+        await self._score_turn(extra.get("speaker_uuid"), stream_id, device, finalized=update.final)
 
-    async def _mixed_stream(self, frame: TranscriptionFrame) -> None:
+    async def _mixed_stream(self, update: TranscriptUpdate) -> None:
         voice_activity = self._voice_activity
         attribution = voice_activity.attribute() if voice_activity is not None else None
         speaker_uuid = attribution.speaker_uuid if attribution is not None else None
         display_claim = _claim_for_uuid(self._registry(), speaker_uuid)
         if attribution is None:
             event = transcript_event(
-                frame, "unknown", None, CaptureContext(display_claim=display_claim)
+                update, "unknown", None, CaptureContext(display_claim=display_claim)
             )
         else:
             event = transcript_event(
-                frame,
+                update,
                 attribution.participant_id,
                 attribution.evidence_id,
                 CaptureContext(display_claim=display_claim),
@@ -346,7 +343,7 @@ class TranscriptDrain:
             conversation=self._sinks.conversation,
             extra=attribution.journal_fields() if attribution is not None else None,
         )
-        await self._score_turn(speaker_uuid, "", None, finalized=frame.finalized)
+        await self._score_turn(speaker_uuid, "", None, finalized=update.final)
 
 
 def build_transcript_callback(
@@ -356,7 +353,7 @@ def build_transcript_callback(
     voice_activity: VoiceActivityTracker | None,
     scoring: LiveScoring | None = None,
     per_stream_enabled: bool = False,
-) -> Callable[[TranscriptionFrame], Awaitable[None]]:
+) -> TranscriptSink:
     return TranscriptDrain(
         sinks=sinks,
         binder=binder,

@@ -846,7 +846,7 @@ class MeetingWorker:
                 )
         return None
 
-    async def _apply_observation(self, checked: WatchdogCheck) -> str | None:
+    async def apply_observation(self, checked: WatchdogCheck) -> str | None:
         observation = checked.observation
         if observation.state in ("removed", "ended"):
             kind: LifecycleEventKind = (
@@ -857,8 +857,12 @@ class MeetingWorker:
         phase = self.lifecycle.state["phase"]
         if observation.state == "lobby" and phase == "admitted":
             await self.lifecycle.send("connection_lost", "system_fault", observation.detail)
+            if self.conversation is not None:
+                await self.conversation.pause()
         elif observation.state == "in_call" and phase == "disconnected":
             await self.lifecycle.send("reconnected", "system_fault", observation.detail)
+            if self.conversation is not None:
+                self.conversation.resume()
         return None
 
     async def _scan_once(
@@ -875,7 +879,7 @@ class MeetingWorker:
         finished = await self._record_scan_events(scan, checked, now)
         if finished is not None:
             return finished, False
-        return await self._apply_observation(checked), False
+        return await self.apply_observation(checked), False
 
     async def _monitor_loop(self, admitted_at: float) -> str:
         deadline = admitted_at + self.config.session_duration_seconds

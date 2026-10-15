@@ -1,6 +1,6 @@
 import os
+import shutil
 import sys
-from importlib.util import find_spec
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
@@ -9,12 +9,16 @@ from fakeyou.orchestration.join_types import JoinRequest
 from fakeyou.orchestration.providers import memory_config
 
 
+def parec_available() -> bool:
+    return shutil.which("parec") is not None
+
+
 def _require_audio_platform() -> None:
     if (
         sys.platform != "linux"
         or os.environ.get("PULSE_SOURCE") != MEETING_MONITOR_SOURCE_NAME
         or os.environ.get("PULSE_SINK") != AGENT_SINK_NAME
-        or find_spec("pyaudio") is None
+        or not parec_available()
     ):
         raise FakeYouError(ErrorCode.MEETING_AUDIO_REQUIRES_WORKER)
 

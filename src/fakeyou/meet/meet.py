@@ -6,6 +6,7 @@ from functools import partial
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
+from cloakbrowser.human.actionability import ActionabilityError
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 
@@ -197,12 +198,12 @@ async def click_when_ready(
         try:
             target = locate().first
             await target.wait_for(state="visible", timeout=_CLICK_WAIT_MS)
-        except PlaywrightError:
+        except (PlaywrightError, ActionabilityError):
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
             continue
         try:
             await target.click(timeout=_CLICK_TIMEOUT_MS)
-        except PlaywrightError as error:
+        except (PlaywrightError, ActionabilityError) as error:
             last_error = type(error).__name__
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
             continue

@@ -59,6 +59,10 @@ class MeetingConversation(Protocol):
 
     def raise_if_failed(self) -> None: ...
 
+    async def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
 
 @dataclass(frozen=True, slots=True, config=ConfigDict(hide_input_in_errors=True))
 class SessionConfig:

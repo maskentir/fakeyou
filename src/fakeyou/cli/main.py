@@ -89,6 +89,10 @@ def _operator_identity(
     return OperatorIdentity(persona_path, owner_id, twin_id)
 
 
+def _resolve_barge_in(*, barge_in: bool | None, conversation: bool) -> bool:
+    return conversation if barge_in is None else barge_in
+
+
 app = typer.Typer(
     help="Digital twin integration foundation",
     add_completion=False,
@@ -389,9 +393,12 @@ def join_command(
         ),
     ] = None,
     barge_in: Annotated[
-        bool,
-        typer.Option("--barge-in", help="Let new speech interrupt playback; requires --converse"),
-    ] = False,
+        bool | None,
+        typer.Option(
+            "--barge-in/--no-barge-in",
+            help="Let new speech interrupt playback; defaults on with --converse",
+        ),
+    ] = None,
     resume: Annotated[
         bool, typer.Option("--resume", help="Resume an unfinished session for the same meeting ID")
     ] = False,
@@ -412,7 +419,7 @@ def join_command(
                 memory=memory,
                 conversation_enabled=conversation_enabled,
                 wake_phrase=wake_phrase,
-                barge_in=barge_in,
+                barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
                 brief_path=brief_path,
                 resume=resume,
             ),
@@ -465,7 +472,13 @@ def worker_start_command(
     brief_path: Annotated[Path | None, typer.Option("--brief")] = None,
     memory: Annotated[bool, typer.Option("--memory")] = False,
     wake_phrase: Annotated[str | None, typer.Option("--wake-phrase")] = None,
-    barge_in: Annotated[bool, typer.Option("--barge-in")] = False,
+    barge_in: Annotated[
+        bool | None,
+        typer.Option(
+            "--barge-in/--no-barge-in",
+            help="Let new speech interrupt playback; defaults on with --converse",
+        ),
+    ] = None,
 ) -> None:
     identity = _operator_identity(persona_path, owner_id, twin_id)
     worker_start(
@@ -486,7 +499,7 @@ def worker_start_command(
             brief_path=brief_path,
             memory=memory,
             wake_phrase=wake_phrase,
-            barge_in=barge_in,
+            barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
         ),
         settings=_load_settings(),
     )

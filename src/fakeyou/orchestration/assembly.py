@@ -14,7 +14,7 @@ from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
 from langchain_core.tools import BaseTool
 
-from fakeyou.audio.audio import TurnAudioTap
+from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import (
     Settings,
