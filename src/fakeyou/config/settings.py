@@ -24,6 +24,23 @@ from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds,
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
+OPENAI_VOICES = frozenset(
+    {
+        "alloy",
+        "ash",
+        "ballad",
+        "cedar",
+        "coral",
+        "echo",
+        "fable",
+        "marin",
+        "nova",
+        "onyx",
+        "sage",
+        "shimmer",
+        "verse",
+    }
+)
 
 _SECURE_ENDPOINT_SCHEMES = frozenset({"https", "wss"})
 
@@ -165,12 +182,15 @@ class AnthropicReply(ReplyBase):
     base_url: OptionalURL = "https://api.anthropic.com"
 
 
+GoogleReasoningEffort = Literal["low", "medium", "high"]
+
+
 class GoogleReply(ReplyBase):
     langchain_provider: ClassVar[str] = "google_genai"
     provider: Literal["google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = "https://generativelanguage.googleapis.com"
-    reasoning_effort: ReasoningEffort | None = None
+    reasoning_effort: GoogleReasoningEffort | None = "low"
 
 
 ReplySettings = Annotated[
@@ -181,6 +201,7 @@ ReplySettings = Annotated[
 class TTSBase(Section):
     api_key: SecretStr | None = None
     sample_rate: int = PLAYBACK_SAMPLE_RATE
+    languages: ClassVar[frozenset[str]] = frozenset({"id", "en"})
 
     @model_validator(mode="after")
     def playback_rate(self) -> Self:
@@ -197,9 +218,7 @@ class OpenAITTS(TTSBase):
 
     @model_validator(mode="after")
     def valid_voice(self) -> Self:
-        from pipecat.services.openai.tts import VALID_VOICES
-
-        if self.voice not in VALID_VOICES:
+        if self.voice not in OPENAI_VOICES:
             raise ValueError("unsupported OpenAI voice")
         return self
 
@@ -211,7 +230,23 @@ class MiniMaxTTS(TTSBase):
     base_url: SecureURL = "https://api.minimax.io/v1/t2a_v2"
 
 
-TTSSettings = Annotated[OpenAITTS | MiniMaxTTS, Field(discriminator="provider")]
+class CartesiaTTS(TTSBase):
+    provider: Literal["cartesia"] = "cartesia"
+    model: str = "sonic-3"
+    voice: str = "f3b7c445-d015-40f7-a665-9595e0bc0c90"
+    base_url: SecureURL = "https://api.cartesia.ai"
+
+
+class ElevenLabsTTS(TTSBase):
+    provider: Literal["elevenlabs"] = "elevenlabs"
+    model: str = "eleven_multilingual_v2"
+    voice: str = Field(min_length=1)
+    base_url: SecureURL = "https://api.elevenlabs.io"
+
+
+TTSSettings = Annotated[
+    OpenAITTS | MiniMaxTTS | CartesiaTTS | ElevenLabsTTS, Field(discriminator="provider")
+]
 
 
 class STTSettings(Section):
@@ -219,8 +254,7 @@ class STTSettings(Section):
     model: str = "muse-voice-transcribe-1.0"
     api_key: SecretStr | None = None
     url: SecureURL = "wss://api.meta.ai/v1/asr/realtime"
-    mode: STTMode = "ENDPOINTING"
-    preroll_ms: float = Field(default=500.0, ge=0.0, le=10_000.0)
+    mode: STTMode = "DIARIZATION"
     idle_reconnect_seconds: float = Field(default=0.0, ge=0.0, le=86_400.0)
     ready_timeout_seconds: PositiveSeconds = Field(default=10.0, le=300.0)
     diarize_timeout_seconds: PositiveSeconds = 60.0
@@ -461,6 +495,15 @@ class Settings(Configuration, BaseSettings):
         dotenv_filtering="match_prefix",
         hide_input_in_errors=True,
     )
+
+    @model_validator(mode="after")
+    def speech_language_is_supported_by_tts(self) -> Self:
+        if self.speech.language not in self.tts.languages:
+            raise ValueError(
+                f"speech language {self.speech.language!r} is not supported by "
+                f"the {self.tts.provider!r} TTS provider"
+            )
+        return self
 
     @classmethod
     @override

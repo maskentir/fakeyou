@@ -23,7 +23,10 @@ dependencies = [
     "numpy>=2.5,<3",
     "openai==3.19.2",
     "pillow>=12.3,<13",
-    "pipecat-ai[silero,webrtc]==1.12.0",
+    "loudness>=0.2,<1",
+    "onnxruntime~=1.24.3",
+    "sentencex==1.0.31",
+    "websockets>=16,<17",
     "playwright>=1.63,<2",
     "psycopg[binary,pool]>=3.2,<4",
     "psycopg-pool>=3.2,<4",
@@ -35,8 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-audio = ["pipecat-ai[local]==1.12.0; sys_platform == 'linux'"]
-# Pinned to the last sherpa built against onnxruntime 1.24.x (pipecat's pin);
+# Pinned to the last sherpa built against onnxruntime 1.24.x (the same pin as the dependencies);
 # newer sherpa needs ORT >= 1.28 and breaks the resolver.
 # The macOS sherpa wheel is a thin wrapper that loads the onnxruntime dylib shipped by sherpa-onnx-core;
 # uv's universal lock does not carry that requirement, so it is declared here for darwin only.
@@ -51,7 +53,6 @@ dev = [
     "pytest>=8,<10",
     "pytest-asyncio>=1,<2",
     "ruff>=0.14,<1",
-    "websockets>=16,<17",
 ]
 
 [project.scripts]
@@ -202,6 +203,8 @@ layers = [
     "fakeyou.visual",
     "fakeyou.diarization",
     "fakeyou.audio",
+    "fakeyou.speech",
+    "fakeyou.transcription",
     "fakeyou.identity",
     "fakeyou.meet",
     "fakeyou.persistence",

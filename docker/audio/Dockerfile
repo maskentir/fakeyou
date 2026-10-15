@@ -4,14 +4,14 @@ FROM cloakhq/cloakbrowser@sha256:aed89b504a57fdba0173d4e4cd81100206c3426c759acfe
 FROM base AS builder
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential portaudio19-dev curl ca-certificates \
+    build-essential curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /workspace
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --extra audio --extra voiceprint --no-install-project
+RUN uv sync --frozen --no-dev --extra voiceprint --no-install-project
 COPY src/ src/
-RUN uv sync --frozen --no-dev --extra audio --extra voiceprint \
+RUN uv sync --frozen --no-dev --extra voiceprint \
     && mkdir -p /workspace/models
 RUN curl -fsSL -o /workspace/models/eres2net-voxceleb-en-16k.onnx \
     https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx \
@@ -21,7 +21,7 @@ RUN .venv/bin/python -c "import onnxruntime, os, glob; libs = glob.glob(os.path.
 FROM base AS runtime
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pulseaudio pulseaudio-utils libasound2-plugins libportaudio2 ca-certificates \
+    pulseaudio pulseaudio-utils libasound2-plugins ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 1000 twin \
     && cp -a /root/.cloakbrowser /home/twin/.cloakbrowser \
@@ -53,5 +53,5 @@ FROM runtime AS test
 USER root
 COPY --from=uv /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --extra audio --extra voiceprint
+RUN uv sync --frozen --extra voiceprint
 USER twin

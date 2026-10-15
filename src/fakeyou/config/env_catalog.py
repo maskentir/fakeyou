@@ -110,6 +110,20 @@ def _setting_rows() -> dict[str, list[tuple[str, str, str]]]:
         merged[section] = []
         for field_path in sorted(by_name):
             variants = by_name[field_path]
+            if field_path.endswith(f"{NESTED_DELIMITER}PROVIDER") and len(variants) > 1:
+                values = sorted(
+                    type_name.removeprefix("Literal[").removesuffix("]")
+                    for type_name, _, _ in variants
+                )
+                default_class = getattr(
+                    Settings.model_fields[section].default_factory, "__name__", ""
+                )
+                default = next(
+                    (default for _, default, variant in variants if variant == default_class),
+                    "-",
+                )
+                merged[section].append((field_path, f"Literal[{', '.join(values)}]", default))
+                continue
             first = (variants[0][0], variants[0][1])
             shared = len(variants) == member_counts.get(section, 1)
             if shared and all((type_name, default) == first for type_name, default, _ in variants):
