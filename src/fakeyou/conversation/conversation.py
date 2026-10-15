@@ -734,6 +734,7 @@ class LoopInteraction:
     jev_decider: ParticipationDecider | None = None
     jev_speak_threshold: float = 0.70
     jev_clarify_threshold: float = 0.50
+    shadow: bool = False
 
     def __post_init__(self) -> None:
         phrases = tuple(phrase.strip().casefold() for phrase in self.wake_phrases if phrase.strip())
@@ -808,6 +809,7 @@ class ConversationLoop:
         self._jev_clarify_threshold = interaction.jev_clarify_threshold
         self._jev_refresh: asyncio.Task[None] | None = None
         self._jev_refresh_text = ""
+        self._shadow = interaction.shadow
         self._previous_inbound_was_bare_ack = False
         self._activation_seconds = timing.activation_seconds
         self._barge_in_min_words = interaction.barge_in_min_words
@@ -939,6 +941,9 @@ class ConversationLoop:
             return
         if not self._participant_policy_enabled:
             self._previous_inbound_was_bare_ack = bare_ack
+        if self._shadow:
+            self._record("transcript_suppressed", transcript_id=event.id, reason="shadow")
+            return
         if await self._maybe_adopt_pregen(event):
             return
         self._pending.append(event)

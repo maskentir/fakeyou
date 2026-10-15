@@ -347,6 +347,25 @@ def test_stale_key_is_rejected():
     )
 
 
+async def test_shadow_mode_decides_without_speaking(
+    journal: RecordingJournal,
+) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = ConversationLoop(
+        responder,
+        interaction=LoopInteraction(twin_names=["harun"], shadow=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.bind(audio)
+    await loop.handle_transcript(event("t1", "Harun, status update please", participant_id="a"))
+    await asyncio.wait_for(loop.wait_idle(), 2)
+    assert responder.calls == []
+    assert audio.spoken == []
+    assert [row["reason"] for row in journal.events("policy_decided")] == ["addressed"]
+    assert [row["reason"] for row in journal.events("transcript_suppressed")] == ["shadow"]
+    await loop.close()
+
+
 async def test_interim_refresh_feeds_gray_turn_without_blocking(
     journal: RecordingJournal,
 ) -> None:
