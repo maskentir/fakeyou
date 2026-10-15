@@ -280,3 +280,17 @@ def test_context_is_immutable() -> None:
     else:
         raise AssertionError("ParticipationContext must be frozen")
     assert choose_participation(context).action == "reply"
+
+
+def test_turn_mine_does_not_override_occupied_floor():
+    context = ParticipationContext(
+        addressed=False,
+        followup=True,
+        same_participant=True,
+        ambiguous=False,
+        others_speaking=True,
+        activation_valid=True,
+        turn_cue="explicit",
+        turn_mine=True,
+    )
+    assert choose_participation(context).action == "silent"

@@ -15,6 +15,8 @@ class ParticipationContext:
     bare_ack: bool = False
     interjection: bool = False
     awaiting_reply: bool = False
+    turn_cue: str = "none"
+    turn_mine: bool = False
 
 
 @dataclass(frozen=True, slots=True)
