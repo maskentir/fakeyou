@@ -29,7 +29,7 @@ EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples" / "meeting-b
 SCOPE = {"owner_id": "demo_owner", "twin_id": "demo_twin", "meeting_id": "brief-demo-1003"}
 PERSONA_SHA256 = hashlib.sha256(b"synthetic persona").hexdigest()
 PRIVATE_MARKER = "PRIVATE-MARKER-7f3a"
-EXAMPLE_DIGEST = "71c10c101633d82d64ececefd02618147b7a9e326e60e37345260457e67a7f23"
+EXAMPLE_DIGEST = "c0cf7faf643ad4072fe33bf86cf1d46cb29d4aeaeddc7c3d6d084f09c9cb5115"
 
 
 def test_context_snapshot_rejects_oversize_before_validation(tmp_path: Path) -> None:
@@ -227,7 +227,7 @@ def test_invalid_session_ids_are_rejected(field: str, session_id: str) -> None:
         {"questions": [{"id": "question", "text": False}]},
         {"owner_id": 123},
         {"meeting_id": 1003},
-        {"schema_version": "meeting_brief/v2"},
+        {"schema_version": "meeting_brief/v3"},
         {"schema_version": 1},
     ],
 )

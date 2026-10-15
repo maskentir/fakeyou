@@ -37,11 +37,12 @@ class BriefItem(BaseModel):
 class MeetingBrief(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    schema_version: Literal["meeting_brief/v1"]
+    schema_version: Literal["meeting_brief/v1", "meeting_brief/v2"]
     owner_id: SessionIdField
     twin_id: SessionIdField
     meeting_id: SessionIdField
     agenda: Annotated[tuple[BriefText, ...], Field(max_length=20)] = ()
+    roster_hint: Annotated[tuple[BriefText, ...], Field(max_length=20)] = ()
     objectives: Annotated[tuple[BriefItem, ...], Field(max_length=20)] = ()
     approved_facts: Annotated[tuple[BriefItem, ...], Field(max_length=30)] = ()
     questions: Annotated[tuple[BriefItem, ...], Field(max_length=20)] = ()

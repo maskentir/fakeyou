@@ -13,7 +13,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
-from fakeyou.persistence.brief import brief_digest, read_meeting_context
+from fakeyou.persistence.brief import brief_digest, load_meeting_brief, read_meeting_context
 from tests._cli_support import (
     BRIEF_DATA,
     BRIEF_TEXTS,
@@ -330,3 +330,17 @@ async def test_join_journals_brief_metadata_without_brief_text(
     for text in BRIEF_TEXTS:
         assert text not in journal_text
         assert text not in printed
+
+
+def test_v1_brief_without_roster_hint_still_loads(tmp_path):
+    payload = {
+        "schema_version": "meeting_brief/v1",
+        "owner_id": "o",
+        "twin_id": "t",
+        "meeting_id": "m",
+        "agenda": ["Standup"],
+    }
+    path = tmp_path / "brief.json"
+    path.write_text(json.dumps(payload))
+    brief = load_meeting_brief(path, owner_id="o", twin_id="t", meeting_id="m")
+    assert brief.roster_hint == ()
