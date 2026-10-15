@@ -22,9 +22,18 @@ def build_jev_payload(state_text: str, model: str) -> dict[str, Any]:
         "state": state_text,
         "questions": {
             "decision": {"type": "choice", "options": ["speak", "silent", "clarify"]},
-            "addressed_to_me": {"type": "noul", "instructions": "The last utterance is addressed to the twin"},
-            "others_conversing": {"type": "noul", "instructions": "This is part of a conversation between two other people"},
-            "needs_clarify": {"type": "noul", "instructions": "The referent is ambiguous and a neutral clarification is warranted"},
+            "addressed_to_me": {
+                "type": "noul",
+                "instructions": "The last utterance is addressed to the twin",
+            },
+            "others_conversing": {
+                "type": "noul",
+                "instructions": "This is part of a conversation between two other people",
+            },
+            "needs_clarify": {
+                "type": "noul",
+                "instructions": "The referent is ambiguous and clarification is warranted",
+            },
         },
     }
 
@@ -37,15 +46,31 @@ def parse_jev_response(body: dict[str, Any]) -> JevDecision:
     if action not in ("speak", "silent", "clarify"):
         return JevDecision("silent", 0.0, 0.0, 0.0, 0.0)
     confidence = decision.get("confidence", 0.0)
+
     def _prob(key: str) -> float:
         node = body.get(key)
         value = node.get("probability") if isinstance(node, dict) else None
         return value if isinstance(value, (int, float)) else 0.0
-    return JevDecision(action, float(confidence), _prob("addressed_to_me"), _prob("others_conversing"), _prob("needs_clarify"))
+
+    return JevDecision(
+        action,
+        float(confidence),
+        _prob("addressed_to_me"),
+        _prob("others_conversing"),
+        _prob("needs_clarify"),
+    )
 
 
 class JevDecider:
-    def __init__(self, *, api_key: str, model: str, base_url: str, timeout_seconds: float, transport: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str,
+        timeout_seconds: float,
+        transport: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+    ) -> None:
         self._payload_model = model
         self._url = base_url.rstrip("/") + "/v1/systemone"
         self._headers = {"Authorization": f"Bearer {api_key}"}
@@ -63,11 +88,11 @@ class JevDecider:
                 response = await self._client.post(self._url, headers=self._headers, json=payload)
                 response.raise_for_status()
                 body = response.json()
-        except Exception:
+        except (httpx2.HTTPError, TimeoutError, ValueError):
             return JevDecision("silent", 0.0, 0.0, 0.0, 0.0)
         try:
             return parse_jev_response(body)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             return JevDecision("silent", 0.0, 0.0, 0.0, 0.0)
 
     async def aclose(self) -> None:
