@@ -238,3 +238,35 @@ async def send_chat(
         outcome="failed",
         detail=f"own chat echo not observed within {_ECHO_TIMEOUT_SECONDS} seconds (chars={chars})",
     )
+
+
+async def _readback_visible(page: Page, selector: str) -> bool:
+    try:
+        return await page.locator(selector).first.is_visible()
+    except PlaywrightError:
+        return False
+
+
+async def observe_hand_raised(
+    page: Page, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
+) -> bool:
+    return await _readback_visible(page, _button_prefix_selector(signals.lower_hand))
+
+
+async def observe_hand_lowered(
+    page: Page, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
+) -> bool:
+    return await _readback_visible(page, _button_prefix_selector(signals.raise_hand))
+
+
+async def observe_chat_echoed(
+    page: Page, text: str, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
+) -> bool:
+    try:
+        async with asyncio.timeout(_ECHO_READ_TIMEOUT_SECONDS):
+            content = await page.content()
+    except TimeoutError:
+        return False
+    if text not in content:
+        return False
+    return await _readback_visible(page, _echo_item_selector(signals))
