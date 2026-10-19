@@ -8,14 +8,14 @@ from typing import Any, cast
 
 import pytest
 
-import fakeyou.cli.join as cli_join
 import fakeyou.cli.main as cli_main
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
+import tests._join_runner as cli_join
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import PersonaProfile
-from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
+from fakeyou.orchestration.assembly import AgentWiring, TurnBehavior
 from fakeyou.persistence.brief import MAX_BRIEF_BYTES
 from tests._cli_support import (
     BRIEF_DATA,
@@ -41,11 +41,11 @@ from tests._persona_brief_support import meeting_files, prepare_brief_join
 def test_join_brief_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_join(link: str, **kwargs: Any) -> None:
-        del link
+    async def fake_join(options: Any, **kwargs: Any) -> None:
+        captured["options"] = options
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "run_session", fake_join)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -335,7 +335,7 @@ async def test_open_conversation_rejects_a_brief_without_a_persona(
             settings,
             cast(Any, config),
             agent=AgentWiring(profile=None, brief=meeting_brief(), graphiti=None),
-            behavior=LoopBehavior(on_transition=lambda *_args: None),
+            behavior=TurnBehavior(on_transition=lambda *_args: None),
         ):
             pytest.fail("conversation must not open")
     assert caught.value.code is ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE
@@ -361,7 +361,7 @@ async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
                 brief=meeting_brief(),
                 graphiti=make_graphiti(),
             ),
-            behavior=LoopBehavior(on_transition=lambda *_args: None),
+            behavior=TurnBehavior(on_transition=lambda *_args: None),
         ):
             pytest.fail("conversation must not open")
     assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY

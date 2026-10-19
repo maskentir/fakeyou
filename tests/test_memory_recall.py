@@ -11,6 +11,7 @@ from graphiti_core.search.search_filters import ComparisonOperator
 import fakeyou.memory.memory as memory_module
 from fakeyou.config.settings import DEFAULTS, RecallSettings
 from fakeyou.memory import owner_notes
+from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.memory import create_memory_tools, create_recall_error_middleware
 from tests._memory_fakes import make_graphiti
 from tests._memory_support import fake_episode, recall_tool
@@ -205,10 +206,10 @@ async def test_recall_labels_each_fact_with_its_episode_sources(
 
 async def test_recall_empty_returns_sentinel() -> None:
     memory = make_graphiti(facts=[])
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
 
-    assert await recall.ainvoke({"query": "agenda"}) == memory_module.RECALL_EMPTY_RESULT
-    assert memory_module.RECALL_EMPTY_RESULT.strip() != ""
+    assert await recall.ainvoke({"query": "agenda"}) == RECALL_EMPTY_RESULT
+    assert RECALL_EMPTY_RESULT.strip() != ""
 
 
 async def test_recall_keeps_owner_note_source_when_text_matches_transcript(
@@ -302,7 +303,7 @@ async def test_recall_excludes_pending_superseded_foreign_and_missing_sources(
         },
         fact_groups={"Foreign edge fact.": "team_beta"},
     )
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
 
     raw = await recall.ainvoke({"query": "note fact"})
     payload = json.loads(raw)
@@ -345,9 +346,9 @@ async def test_recall_returns_empty_when_no_evidence_survives(
         facts=["Waiting note fact.", "Missing episode fact."],
         episodes={"Waiting note fact.": ["waiting"], "Missing episode fact.": ["gone"]},
     )
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
 
-    assert await recall.ainvoke({"query": "note fact"}) == memory_module.RECALL_EMPTY_RESULT
+    assert await recall.ainvoke({"query": "note fact"}) == RECALL_EMPTY_RESULT
 
 
 async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
@@ -373,7 +374,7 @@ async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", broken_states)
     memory = make_graphiti(facts=["Live note fact."], episodes={"Live note fact.": ["note-a"]})
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
     middleware = create_recall_error_middleware(FaultReporter(journal=journal))
 
     with pytest.raises(RuntimeError, match="status store offline"):
@@ -420,7 +421,7 @@ async def test_recall_batches_episode_and_status_lookups(
         facts=["Alpha fact.", "Beta fact."],
         episodes={"Alpha fact.": ["note-a", "meet-a"], "Beta fact.": ["note-a"]},
     )
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
 
     await recall.ainvoke({"query": "fact"})
 
@@ -456,7 +457,7 @@ def test_recall_error_middleware_returns_unknown_and_records_fault(
 
 
 async def test_recall_times_out_with_its_configured_budget() -> None:
-    _remember, recall = create_memory_tools(
+    [recall] = create_memory_tools(
         make_graphiti(search_gate=asyncio.Event()),
         group_id="team_alpha",
         recall=RecallSettings(timeout_seconds=0.01),
@@ -468,3 +469,73 @@ async def test_recall_times_out_with_its_configured_budget() -> None:
 
 def test_default_recall_budget_fits_inside_the_reply_deadline() -> None:
     assert DEFAULTS.memory.recall.timeout_seconds < DEFAULTS.conversation.response_timeout_seconds
+
+
+def _owner_rumor_memory(
+    monkeypatch: pytest.MonkeyPatch, *, owner_state: str, invalidated: tuple[str, ...]
+) -> Any:
+    moment = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    stored = {
+        "note": fake_episode("note", "team_alpha", owner_notes.OWNER_NOTE_SOURCE, moment),
+        "meet": fake_episode("meet", "team_alpha", "Google Meet m3 transcript", moment),
+    }
+
+    async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
+        del driver
+        return [stored[uuid] for uuid in uuids if uuid in stored]
+
+    async def scripted_states(
+        _memory: Any, *, group_id: str, episode_uuids: list[str]
+    ) -> dict[str, str]:
+        del group_id
+        return {uuid: owner_state for uuid in episode_uuids}
+
+    monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
+    monkeypatch.setattr(memory_module, "read_note_states", scripted_states)
+    return make_graphiti(
+        facts=[
+            "Owner moved the demo to Friday.",
+            "Unverified speaker said the demo moves to November.",
+        ],
+        episodes={
+            "Owner moved the demo to Friday.": ["note"],
+            "Unverified speaker said the demo moves to November.": ["meet"],
+        },
+        invalidated=invalidated,
+    )
+
+
+async def test_participant_claim_cannot_invalidate_an_active_owner_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = _owner_rumor_memory(
+        monkeypatch, owner_state="active", invalidated=("Owner moved the demo to Friday.",)
+    )
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
+
+    payload = json.loads(await recall.ainvoke({"query": "demo"}))
+
+    assert [fact["text"] for fact in payload["facts"]] == [
+        "Unverified speaker said the demo moves to November.",
+        "Owner moved the demo to Friday.",
+    ]
+    assert [entry.get("search_filter") for entry in memory.searched] == [
+        memory_module.CURRENT_FACTS_FILTER,
+        None,
+    ]
+
+
+async def test_invalidated_facts_without_an_active_owner_note_stay_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = _owner_rumor_memory(
+        monkeypatch,
+        owner_state="superseded",
+        invalidated=(
+            "Owner moved the demo to Friday.",
+            "Unverified speaker said the demo moves to November.",
+        ),
+    )
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
+
+    assert await recall.ainvoke({"query": "demo"}) == RECALL_EMPTY_RESULT

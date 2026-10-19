@@ -360,3 +360,33 @@ def test_persist_range_read_failure_is_journaled(tmp_path: Path) -> None:
     [row] = journal.events("visual_range_persist_failed")
     assert row["frame_id"] == "frame-a"
     assert row["error_type"] == "IsADirectoryError"
+
+
+def _window_frame(frame_id: str, at_ms: float, until_ms: float) -> VisualFrame:
+    return VisualFrame(
+        frame_id=frame_id,
+        captured_page_ms=at_ms,
+        captured_at="2026-10-16T00:00:00Z",
+        sha256="00" * 32,
+        path="",
+        thumb_path="",
+        dhash=0,
+        visible_to_page_ms=until_ms,
+    )
+
+
+def test_refs_include_only_frames_visible_at_capture_ms() -> None:
+    early = _window_frame("f-early", at_ms=1_000.0, until_ms=4_000.0)
+    late = _window_frame("f-late", at_ms=20_000.0, until_ms=30_000.0)
+    assert visual_refs_for_utterance([early, late], capture_ms=3_000.0) == ("f-early",)
+
+
+def test_refs_tolerance_boundary_is_2000ms() -> None:
+    edge = _window_frame("f-edge", at_ms=10_000.0, until_ms=11_000.0)
+    assert visual_refs_for_utterance([edge], capture_ms=13_000.0) == ("f-edge",)
+    assert visual_refs_for_utterance([edge], capture_ms=13_001.0) == ()
+
+
+def test_unparseable_spoken_at_yields_no_refs() -> None:
+    any_frame = _window_frame("f-any", at_ms=1_000.0, until_ms=9_000.0)
+    assert visual_refs_for_utterance([any_frame], spoken_at="not-a-date") == ()

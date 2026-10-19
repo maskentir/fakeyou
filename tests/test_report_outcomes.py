@@ -1,14 +1,7 @@
 import json
 from pathlib import Path
 
-import pytest
-
-import fakeyou.cli.diagnostics as cli_diagnostics
-from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import Settings
-from fakeyou.observability.report import (
-    build_session_report,
-)
+from fakeyou.observability.report import build_session_report, read_journal_with_corrupt
 from tests._report_support import row
 
 
@@ -206,9 +199,7 @@ def test_report_counts_cancel_requested_and_completed() -> None:
     }
 
 
-def test_diagnostics_report_surfaces_both_outcomes(
-    tmp_path: Path, settings: Settings, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_journal_report_surfaces_both_outcomes(tmp_path: Path) -> None:
     rows = [
         row(
             1,
@@ -234,9 +225,8 @@ def test_diagnostics_report_surfaces_both_outcomes(
         "\n".join(json.dumps(entry) for entry in rows) + "\n", encoding="utf-8"
     )
 
-    cli_diagnostics.show_session_report(SessionId("m9"), tmp_path, settings)
-
-    printed = json.loads(capsys.readouterr().out)
+    rows, corrupt = read_journal_with_corrupt(tmp_path / "m9.jsonl")
+    printed = {"meeting_id": "m9", **build_session_report(rows, corrupt_lines=corrupt)}
     assert printed["meeting_id"] == "m9"
     assert printed["session_outcome"] == "completed"
     assert printed["ingestion_outcome"] == "completed"

@@ -23,6 +23,7 @@ from fakeyou.config.settings import (
     STTSettings,
     TTSSettings,
     VADSettings,
+    VisualSettings,
 )
 from tests._error_support import message_pattern
 from tests._fakes_common import env_file_opt
@@ -140,6 +141,24 @@ def test_retired_browser_sandbox_setting_is_rejected(monkeypatch: pytest.MonkeyP
         Settings(**env_file_opt(None))
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "FAKEYOU_CONVERSATION__PRE_GENERATE_ENABLED",
+        "FAKEYOU_PARTICIPATION_DECIDER__PRE_GENERATE_ENABLED",
+        "FAKEYOU_CONVERSATION__MEET_ACTIONS_ENABLED",
+        "FAKEYOU_CONVERSATION__PARTICIPANT_POLICY_ENABLED",
+        "FAKEYOU_MEMORY__STORE__GROUP",
+    ],
+)
+def test_retired_d9_keys_are_rejected_by_name(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(name, "true")
+    with pytest.raises(FakeYouError, match="Unknown configuration key") as caught:
+        Settings(**env_file_opt(None))
+    assert caught.value.code is ErrorCode.CONFIG_UNKNOWN_KEY
+    assert name in str(caught.value)
+
+
 def test_voiceprint_timeout_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings(**env_file_opt(None)).identity.voiceprint_timeout_seconds == 5.0
     monkeypatch.setenv("FAKEYOU_IDENTITY__VOICEPRINT_TIMEOUT_SECONDS", "7.5")
@@ -184,10 +203,44 @@ def test_database_timeouts_default_and_read_env(monkeypatch: pytest.MonkeyPatch)
     assert database.keepalive_idle_seconds == 11.0
 
 
+@pytest.mark.parametrize(
+    "name", ["FAKEYOU_COMPOSE_WORKER_URI", "FAKEYOU_COMPOSE_TYPO", "fakeyou_compose_typo"]
+)
+def test_unregistered_compose_keys_are_rejected(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(name, "ignored")
+    with pytest.raises(FakeYouError, match="Unknown configuration key"):
+        Settings(**env_file_opt(None))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "FAKEYOU_COMPOSE_WORKER_DATABASE_URL",
+        "FAKEYOU_COMPOSE_WORKER_NEO4J_URI",
+        "FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL",
+    ],
+)
+def test_retired_compose_aliases_are_rejected(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(name, "postgresql://localhost/fakeyou")
+    with pytest.raises(FakeYouError, match="Unknown configuration key"):
+        Settings(**env_file_opt(None))
+
+
+@pytest.mark.parametrize("name", ["FAKEYOU_COMPOSE_TYPO", "fakeyou_compose_typo"])
+def test_unregistered_compose_keys_are_rejected_in_dotenv(tmp_path: Path, name: str) -> None:
+    path = tmp_path / ".env"
+    path.write_text(f"{name}=ignored\n")
+    with pytest.raises(FakeYouError, match="Unknown configuration key") as caught:
+        Settings(**env_file_opt(path))
+    assert caught.value.code is ErrorCode.CONFIG_UNKNOWN_KEY
+    assert name.upper() in str(caught.value)
+    assert "ignored" not in str(caught.value)
+
+
 def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("fakeyou_compose_worker_uri", "ignored")
+    monkeypatch.setenv("fakeyou_compose_worker_sessions_mem_limit", "4g")
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated")
     path = tmp_path / ".env"
     path.write_text("FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE=example\nLIBRARY_OPTION=value\n")
@@ -196,7 +249,7 @@ def test_compose_and_unrelated_library_keys_are_allowed_in_both_sources(
 
 
 @pytest.mark.parametrize(
-    "role", ["reply", "reply_fallback", "tts", "stt", "memory.llm", "memory.embedder"]
+    "role", ["reply", "reply_fallback", "tts", "stt", "memory_llm", "memory_embedder"]
 )
 def test_activated_role_never_borrows_a_key(role: str) -> None:
     from fakeyou.config.settings import OpenAIReply
@@ -212,10 +265,71 @@ def test_activated_role_never_borrows_a_key(role: str) -> None:
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
 
 
+def test_require_roles_rejects_unknown_role_by_name() -> None:
+    settings = Settings(**env_file_opt(None))
+    with pytest.raises(FakeYouError, match="unknown provider role: bogus_role") as caught:
+        settings.require_roles("bogus_role")
+    assert caught.value.code is ErrorCode.CONFIG_INVALID
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "reply",
+        "reply_fallback",
+        "debrief",
+        "tts",
+        "stt",
+        "memory_llm",
+        "memory_embedder",
+        "participation_decider",
+        "visual",
+    ],
+)
+def test_every_active_role_requires_its_own_key(role: str) -> None:
+    settings = Settings(
+        **env_file_opt(None),
+        reply=OpenAIReply(max_retries=0),
+        reply_fallback=OpenAIReply(max_retries=0),
+        debrief=OpenAIReply(max_retries=0),
+    )
+    settings.visual.enabled = True
+    with pytest.raises(FakeYouError, match="API_KEY") as caught:
+        settings.require_roles(role)
+    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
+
+
+def test_disabled_roles_do_not_require_keys() -> None:
+    settings = Settings(**env_file_opt(None))
+    settings.participation_decider.enabled = False
+    settings.require_roles("visual", "participation_decider", "reply_fallback")
+    with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__API_KEY"):
+        Settings(**env_file_opt(None)).require_roles("participation_decider")
+
+
+def test_jev_decider_requires_a_base_url() -> None:
+    settings = Settings(**env_file_opt(None))
+    settings.participation_decider.provider = "jev"
+    settings.participation_decider.api_key = SecretStr("decider-secret")
+    with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__BASE_URL"):
+        settings.require_roles("participation_decider")
+
+
+def test_unknown_role_is_a_named_config_error() -> None:
+    with pytest.raises(FakeYouError, match="unknown provider role: memory.llm"):
+        Settings(**env_file_opt(None)).require_roles("memory.llm")
+
+
+def test_enabled_compatible_visual_requires_a_base_url() -> None:
+    with pytest.raises(ValueError, match="FAKEYOU_VISUAL__BASE_URL"):
+        VisualSettings(enabled=True, provider="openai_compatible")
+    assert VisualSettings(provider="openai_compatible").base_url is None
+
+
 def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[str]) -> None:
     import json
 
-    from fakeyou.cli.diagnostics import check_setup
+    from tests._check_support import print_admin_check as check_setup
 
     settings = Settings(**env_file_opt(None))
     check_setup(settings)
@@ -225,7 +339,7 @@ def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[s
 def test_check_masks_credentials_in_urls_and_extra_body(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from fakeyou.cli.diagnostics import check_setup
+    from tests._check_support import print_admin_check as check_setup
 
     settings = Settings(**env_file_opt(None))
     settings.reply = CompatibleReply(
@@ -246,7 +360,7 @@ def test_check_masks_credentials_in_urls_and_extra_body(
 def test_check_masks_credentials_in_any_url_setting(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from fakeyou.cli.diagnostics import check_setup
+    from tests._check_support import print_admin_check as check_setup
 
     settings = Settings(**env_file_opt(None))
     settings.memory.store.uri = "bolt://neo4j:graph-secret@graph.example:7687"
@@ -743,12 +857,6 @@ def test_history_max_tokens_defaults_and_reads_env(monkeypatch: pytest.MonkeyPat
     assert Settings(**env_file_opt(None)).conversation.history_max_tokens == 32000
     monkeypatch.setenv("FAKEYOU_CONVERSATION__HISTORY_MAX_TOKENS", "1024")
     assert Settings(**env_file_opt(None)).conversation.history_max_tokens == 1024
-
-
-def test_docker_timeout_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(**env_file_opt(None)).worker.docker_timeout_seconds == 30.0
-    monkeypatch.setenv("FAKEYOU_WORKER__DOCKER_TIMEOUT_SECONDS", "7.5")
-    assert Settings(**env_file_opt(None)).worker.docker_timeout_seconds == 7.5
 
 
 def test_diarize_budget_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -326,11 +326,11 @@ async def test_join_headless_override(
 def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_join(link: str, **kwargs: Any) -> None:
-        captured["link"] = link
+    async def fake_join(options: Any, **kwargs: Any) -> None:
+        captured["options"] = options
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "run_session", fake_join)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -339,7 +339,7 @@ def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as exited:
         cli_main.main()
     assert exited.value.code == 0
-    assert captured["options"].identity.owner_id == "owner-9"
+    assert captured["options"].owner_id == "owner-9"
 
 
 @pytest.mark.parametrize(
@@ -352,7 +352,7 @@ def test_cli_rejects_owner_alias(
         "join": ["https://meet.google.com/abc-defg-hij"],
         "memory-add": ["A note.", "--persona", "p.json"],
         "memory-forget": ["--meeting-id", "meeting-1", "--persona", "p.json"],
-        "memory-ingest": ["--meeting-id", "meeting-1", "--persona", "p.json"],
+        "memory-ingest": ["--meeting-id", "meeting-1"],
         "memory-reembed": ["--persona", "p.json"],
     }
     monkeypatch.setattr(sys, "argv", ["fakeyou", command, *arguments[command], "--owner", "o"])
@@ -368,11 +368,11 @@ def test_join_headless_flag(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_join(link: str, **kwargs: Any) -> None:
-        del link
+    async def fake_join(options: Any, **kwargs: Any) -> None:
+        captured["options"] = options
         captured.update(kwargs)
 
-    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "run_session", fake_join)
     monkeypatch.setattr(
         sys, "argv", ["fakeyou", "join", "https://meet.google.com/abc-defg-hij", *argv]
     )

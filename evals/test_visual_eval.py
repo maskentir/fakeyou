@@ -10,13 +10,13 @@ from PIL import Image
 import fakeyou.debrief.debrief as debrief_module
 from evals._budgets import VISUAL_BUDGET_MAX, VISUAL_BUDGET_P95, VISUAL_STABILITY_MIN
 from fakeyou.config.settings import VisualSettings
-from fakeyou.conversation.agent import create_visual_tools
 from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefItem, DebriefReport, EvidenceSource
 from fakeyou.debrief.debrief_sources import load_record_snapshot, validate_draft
 from fakeyou.memory.visual_hydrate import visual_clarification
 from fakeyou.observability.report import summarize
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore, frames_in_window
+from fakeyou.visual.visual_tools import create_visual_tools
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._persistence_fakes import RecordingJournal
 

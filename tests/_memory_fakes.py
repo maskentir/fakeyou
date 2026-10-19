@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from functools import partial
 from types import SimpleNamespace
-from typing import Any, TypedDict, Unpack, cast
+from typing import Any, TypedDict, Unpack, cast, get_args, get_origin, override
 from unittest.mock import MagicMock, create_autospec
 
 from graphiti_core import Graphiti
+from graphiti_core.cross_encoder.client import CrossEncoderClient
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
+from graphiti_core.embedder.client import EMBEDDING_DIM, EmbedderClient
+from graphiti_core.llm_client.client import LLMClient
+from graphiti_core.prompts.models import Message
 from neo4j import AsyncDriver
+from pydantic import BaseModel
 
 _QUERY_TOKEN = re.compile(r"[a-z0-9]+")
 INVALIDATED_AT = datetime(2026, 10, 5, tzinfo=UTC)
@@ -232,3 +238,78 @@ class FakeSaga:
     async def delete(self, driver: Any) -> None:
         del driver
         self.deleted.append(self.name)
+
+
+def _filled_value(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin in (list, set, frozenset):
+        return [] if origin is list else origin()
+    if origin is dict:
+        return {}
+    args = [item for item in get_args(annotation) if item is not type(None)]
+    if len(args) < len(get_args(annotation)):
+        return None
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return {
+            name: _filled_value(field.annotation) for name, field in annotation.model_fields.items()
+        }
+    if annotation is str:
+        return ""
+    if annotation is bool:
+        return False
+    if annotation in (int, float):
+        return annotation()
+    return ""
+
+
+class FakeGraphitiLLM(LLMClient):
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.calls: list[str] = []
+
+    @override
+    async def _generate_response(
+        self,
+        messages: list[Message],
+        response_model: type[BaseModel] | None = None,
+        max_tokens: int = 16384,
+        model_size: Any = None,
+    ) -> dict[str, Any]:
+        del messages, max_tokens, model_size
+        if response_model is None:
+            self.calls.append("none")
+            return {}
+        self.calls.append(response_model.__name__)
+        return {
+            name: _filled_value(field.annotation)
+            for name, field in response_model.model_fields.items()
+        }
+
+
+class FakeEmbedder(EmbedderClient):
+    @override
+    async def create(self, input_data: Any) -> list[float]:
+        text = input_data if isinstance(input_data, str) else " ".join(map(str, input_data))
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        return [digest[index % len(digest)] / 255.0 for index in range(EMBEDDING_DIM)]
+
+
+class FakeCrossEncoder(CrossEncoderClient):
+    @override
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        wanted = _query_tokens(query)
+        scored = [
+            (passage, len(wanted & _query_tokens(passage)) / max(len(wanted), 1))
+            for passage in passages
+        ]
+        return sorted(scored, key=lambda item: item[1], reverse=True)
+
+
+def make_real_graphiti(uri: str, *, password: str) -> Graphiti:
+    driver = Neo4jDriver(uri=uri, user="neo4j", password=password, database="neo4j")
+    return Graphiti(
+        graph_driver=driver,
+        llm_client=FakeGraphitiLLM(),
+        embedder=FakeEmbedder(),
+        cross_encoder=FakeCrossEncoder(),
+    )

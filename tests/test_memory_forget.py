@@ -1,8 +1,9 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
+from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.nodes import EpisodicNode, SagaNode
 
 import fakeyou.memory.memory as memory_module
@@ -80,6 +81,36 @@ async def test_forget_episode_only_removes_episodes_in_the_persona_group(
             await forget_episode(memory, group_id="team_alpha", episode_uuid="e1")
         assert caught.value.code is ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY
         assert memory.removed == []
+
+
+async def test_forget_episode_reports_an_absent_episode_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = make_graphiti(saga_episodes={})
+
+    async def missing(driver: Any, uuid: str) -> NoReturn:
+        del driver
+        raise NodeNotFoundError(uuid)
+
+    monkeypatch.setattr(EpisodicNode, "get_by_uuid", missing)
+
+    assert await forget_episode(memory, group_id="team_alpha", episode_uuid="gone") is False
+    assert memory.removed == []
+
+
+async def test_forget_episode_reports_a_removed_episode(monkeypatch: pytest.MonkeyPatch) -> None:
+    memory = make_graphiti(saga_episodes={})
+
+    async def present(driver: Any, uuid: str) -> SimpleNamespace:
+        del driver
+        return SimpleNamespace(
+            uuid=uuid, group_id="team_alpha", source_description="Google Meet m1 transcript"
+        )
+
+    monkeypatch.setattr(EpisodicNode, "get_by_uuid", present)
+
+    assert await forget_episode(memory, group_id="team_alpha", episode_uuid="e1") is True
+    assert memory.removed == ["e1"]
 
 
 async def test_forget_episode_routes_owner_notes_through_chain_rules(

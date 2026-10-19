@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
+import random
 import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 from playwright.async_api import Error as PlaywrightError
 
 from fakeyou.config.settings import VisualSettings
@@ -755,4 +758,32 @@ async def test_shot_failure_is_journaled_and_counted(tmp_path: Path) -> None:
     [row] = journal.events("visual_capture_failed")
     assert row["stage"] == "screenshot"
     assert row["error_type"] == "Error"
+    await observer.close()
+
+
+def _seeded_png(seed: int) -> bytes:
+    image = Image.frombytes("L", (64, 48), random.Random(seed).randbytes(64 * 48)).convert("RGB")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+async def test_presenting_scan_keeps_observing_across_slide_changes(tmp_path: Path) -> None:
+    first = _seeded_png(7)
+    second = _seeded_png(8)
+    page = FakeShotPage(
+        [PRESENT_SCAN, PRESENT_SCAN, PRESENT_SCAN, PRESENT_SCAN],
+        boxes=[dict(CLIP_BOX), dict(CLIP_BOX), dict(CLIP_BOX)],
+        shots=[first, second, second],
+    )
+    store = VisualStore(tmp_path)
+    observer = VisualObserver(page, store)
+
+    assert await observer.poll() is None
+    assert await observer.poll() is not None
+    assert await observer.poll() is not None
+    assert await observer.poll() is not None
+
+    assert len(store.frames) == 2
+    assert store.duplicates_suppressed == 1
     await observer.close()

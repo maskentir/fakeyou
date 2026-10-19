@@ -6,7 +6,7 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import SecretStr
 
-from evals._shared import ArtifactMeta, ReplayOptions
+from evals._shared import ArtifactMeta, ReplayOptions, sanitized_role
 from evals._trust import (
     FIXTURE,
     contract_model,
@@ -18,6 +18,7 @@ from evals._trust import (
 )
 from evals.runtime_evidence import runtime_metadata
 from fakeyou.config.settings import CompatibleReply, OpenAIReply, Settings
+from tests._sanitize_support import assert_no_synthetic_markers, marked_role
 
 
 @pytest.mark.parametrize("role_name", ["reply", "reply_fallback"])
@@ -211,3 +212,13 @@ async def test_candidate_change_preserves_raw_turns_but_invalidates_gate(
     assert manifest["provenance_valid"] is False
     assert manifest["source_commit"] == score.candidate["source_commit"]
     assert len(json.loads((tmp_path / "artifacts/turns.json").read_text())) == 1
+
+
+def test_sanitized_role_drops_unlisted_fields_and_masks_unenumerated_names() -> None:
+    cleaned = sanitized_role(marked_role())
+
+    assert_no_synthetic_markers(cleaned)
+    assert "unlisted_field" not in cleaned
+    assert cleaned["model"] == "marked-model"
+    assert cleaned["base_url"] == "https://synthetic.example/v1"
+    assert cleaned["extra_body"]["routing"] == {"choices": ["start"]}

@@ -1,203 +1,148 @@
-from collections.abc import Callable, Coroutine, Iterable
-from typing import Any
+import asyncio
+from typing import Any, cast
 
 import pytest
 
 from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.meet.meet import JoinResult, JoinStatus
-from fakeyou.orchestration.runtime import (
-    JoinRetryPolicy,
-    SessionWiring,
-    run_join_with_retry,
-    run_meeting_session,
-)
+from fakeyou.conversation.state import LifecycleState
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, JoinResult
+from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
+from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, LOBBY, FakePageSession, meet_page
 from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._runtime_support import INSTANT_JOIN_RETRY, pin_join_jitter, session_config
 
 
-def _scripted(
-    statuses: Iterable[JoinStatus],
-) -> tuple[Callable[[], Coroutine[Any, Any, JoinResult]], list[int]]:
-    outcomes = [JoinResult(status=status, detail=f"{status} detail") for status in statuses]
-    calls: list[int] = []
-
-    async def attempt() -> JoinResult:
-        calls.append(len(calls))
-        return outcomes.pop(0)
-
-    return attempt, calls
+@pytest.fixture(autouse=True)
+def instant_join_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    pin_join_jitter(monkeypatch)
 
 
-async def _retry(
-    attempt: Callable[[], Coroutine[Any, Any, JoinResult]],
-    journal: RecordingJournal,
-    clock: FakeClock,
-    should_stop: Callable[[], bool],
-    policy: JoinRetryPolicy,
-) -> tuple[JoinResult, int]:
-    return await run_join_with_retry(
-        attempt,
-        policy=policy,
-        sleep=clock.sleep,
-        record=journal.record,
-        should_stop=should_stop,
-    )
+class ScriptedGuestJoin:
+    def __init__(self, stop: asyncio.Event, *results: JoinResult, stop_after: int = 0) -> None:
+        self.stop = stop
+        self.results = list(results)
+        self.stop_after = stop_after
+        self.calls = 0
+
+    async def __call__(self, *_args: Any, **_kwargs: Any) -> JoinResult:
+        self.calls += 1
+        if self.calls == self.stop_after:
+            self.stop.set()
+        return self.results.pop(0)
 
 
-async def test_join_retry_succeeds_after_transient_failures() -> None:
-    attempt, calls = _scripted(["timeout", "failed", "admitted"])
+def _joining() -> LifecycleState:
+    state = initial_lifecycle_state("owner-1", "twin-1", "meeting-1")
+    return cast(LifecycleState, {**state, "phase": "joining"})
+
+
+def _worker(stop: asyncio.Event, journal: RecordingJournal) -> MeetingWorker:
     clock = FakeClock()
-    journal = RecordingJournal()
-
-    result, attempts = await _retry(
-        attempt,
-        journal,
-        clock,
-        lambda: False,
-        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
+    return MeetingWorker(
+        session_config(),
+        meet_page([]),
+        stop,
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+        journal=journal,
     )
 
-    assert result.status == "admitted"
-    assert attempts == 3
-    assert len(calls) == 3
-    assert clock.sleeps == [1.0, 1.0]
-    retried = journal.events("join_retried")
-    assert [(row["attempt"], row["status"], row["delay_ms"]) for row in retried] == [
-        (1, "timeout", 1000.0),
-        (2, "failed", 1000.0),
-    ]
-    assert {row["source"] for row in retried} == {"runtime"}
 
-
-@pytest.mark.parametrize("status", ["admitted", "denied", "blocked", "aborted"])
-async def test_join_retry_terminal_statuses_do_not_retry(status: JoinStatus) -> None:
-    attempt, calls = _scripted([status])
-    clock = FakeClock()
+async def test_worker_retryable_attempt_defers_to_the_node_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
     journal = RecordingJournal()
+    guest_join = ScriptedGuestJoin(stop, JoinResult(status="timeout", detail="lobby timeout"))
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
-    result, attempts = await _retry(
-        attempt,
-        journal,
-        clock,
-        lambda: False,
-        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
-    )
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=1, last=False))
 
-    assert result.status == status
-    assert attempts == 1
-    assert len(calls) == 1
-    assert clock.sleeps == []
-    assert journal.events("join_retried") == []
+    assert step.result.status == "timeout"
+    assert step.update == {}
+    assert guest_join.calls == 1
+    assert journal.events("join_finished") == []
+    assert [row["event"] for row in journal.events()] == ["join_requested"]
 
 
-async def test_join_retry_exhaustion_returns_last_result() -> None:
-    attempt, calls = _scripted(["timeout", "failed", "timeout"])
-    clock = FakeClock()
+async def test_worker_stop_after_a_retryable_attempt_aborts_before_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
     journal = RecordingJournal()
-
-    result, attempts = await _retry(
-        attempt,
-        journal,
-        clock,
-        lambda: False,
-        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 0.5),
+    guest_join = ScriptedGuestJoin(
+        stop, JoinResult(status="timeout", detail="lobby timeout"), stop_after=1
     )
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
-    assert result.status == "timeout"
-    assert attempts == 3
-    assert len(calls) == 3
-    assert clock.sleeps == [0.5, 0.5]
-    assert len(journal.events("join_retried")) == 2
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=1, last=False))
+
+    assert step.result == JoinResult(status="aborted", detail="owner stopped before join retry")
+    assert step.update["phase"] == "ended"
+    assert step.update["terminal_reason"] == "stopped_by_owner"
+    assert guest_join.calls == 1
+    [finished] = journal.events("join_finished")
+    assert finished["status"] == "aborted"
+    assert finished["attempts"] == 1
 
 
-async def test_join_retry_stop_wins_before_retry() -> None:
-    attempt, calls = _scripted(["timeout", "admitted"])
-    clock = FakeClock()
+async def test_worker_stop_during_backoff_aborts_the_next_attempt_without_joining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
     journal = RecordingJournal()
+    guest_join = ScriptedGuestJoin(stop)
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
+    stop.set()
 
-    result, attempts = await _retry(
-        attempt,
-        journal,
-        clock,
-        lambda: True,
-        JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
-    )
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=2, last=False))
 
-    assert result.status == "aborted"
-    assert attempts == 1
-    assert len(calls) == 1
-    assert clock.sleeps == []
-    assert journal.events("join_retried") == []
+    assert step.result == JoinResult(status="aborted", detail="owner stopped before join retry")
+    assert step.update["terminal_reason"] == "stopped_by_owner"
+    assert step.update["external_effects"] == [{"effect": "join_requested"}]
+    assert guest_join.calls == 0
+    [finished] = journal.events("join_finished")
+    assert finished["attempts"] == 1
+    assert journal.events("join_requested") == []
 
 
-async def test_join_retry_stop_during_backoff_aborts() -> None:
-    attempt, calls = _scripted(["timeout", "admitted"])
-    clock = FakeClock()
+async def test_worker_stop_before_the_first_attempt_never_requests_a_join(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
     journal = RecordingJournal()
-    stopped = False
+    guest_join = ScriptedGuestJoin(stop)
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
+    stop.set()
 
-    async def sleep_and_stop(delay: float) -> None:
-        nonlocal stopped
-        await clock.sleep(delay)
-        stopped = True
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=1, last=False))
 
-    result, attempts = await run_join_with_retry(
-        attempt,
-        policy=JoinRetryPolicy(3, 2.0, 30.0, lambda _low, _high: 1.0),
-        sleep=sleep_and_stop,
-        record=journal.record,
-        should_stop=lambda: stopped,
-    )
-
-    assert result.status == "aborted"
-    assert attempts == 1
-    assert len(calls) == 1
-    assert len(journal.events("join_retried")) == 1
+    assert step.result == JoinResult(status="aborted", detail="owner stopped before guest join")
+    assert step.update == {"phase": "ended", "terminal_reason": "stopped_by_owner"}
+    assert guest_join.calls == 0
+    assert journal.events() == []
 
 
-async def test_join_retry_delay_uses_capped_full_jitter() -> None:
-    attempt, _calls = _scripted(["timeout", "timeout", "timeout", "admitted"])
-    clock = FakeClock()
+async def test_worker_last_attempt_keeps_the_retryable_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
     journal = RecordingJournal()
-    bounds = []
-    script = [0.0, None, None]
-
-    def scripted_rng(low: float, high: float) -> float:
-        bounds.append((low, high))
-        value = script.pop(0)
-        return high if value is None else value
-
-    result, attempts = await _retry(
-        attempt, journal, clock, lambda: False, JoinRetryPolicy(4, 2.0, 5.0, scripted_rng)
+    guest_join = ScriptedGuestJoin(
+        stop, JoinResult(status="timeout", detail="lobby timeout"), stop_after=1
     )
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
-    assert result.status == "admitted"
-    assert attempts == 4
-    assert bounds == [(0.0, 2.0), (0.0, 4.0), (0.0, 5.0)]
-    delays = [row["delay_ms"] for row in journal.events("join_retried")]
-    assert delays == [0.0, 4000.0, 5000.0]
-    assert len(set(delays)) > 1
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=3, last=True))
 
-
-async def test_join_retry_default_jitter_stays_within_bound() -> None:
-    attempt, _calls = _scripted(["timeout", "admitted"])
-    clock = FakeClock()
-    journal = RecordingJournal()
-
-    result, attempts = await run_join_with_retry(
-        attempt,
-        policy=JoinRetryPolicy(2, 2.0, 30.0),
-        sleep=clock.sleep,
-        record=journal.record,
-        should_stop=lambda: False,
-    )
-
-    assert result.status == "admitted"
-    assert attempts == 2
-    [delay] = clock.sleeps
-    assert 0.0 <= delay <= 2.0
+    assert step.result.status == "timeout"
+    assert step.update["terminal_reason"] == "lobby_timeout_reached"
+    [finished] = journal.events("join_finished")
+    assert finished["attempts"] == 3
 
 
 async def test_worker_join_retries_timeout_then_admits() -> None:
@@ -214,6 +159,7 @@ async def test_worker_join_retries_timeout_then_admits() -> None:
         lobby_timeout_seconds=5.0,
         join_poll_interval_seconds=2.0,
         join_max_attempts=3,
+        **INSTANT_JOIN_RETRY,
     )
 
     result = await run_meeting_session(
@@ -231,6 +177,32 @@ async def test_worker_join_retries_timeout_then_admits() -> None:
     [finished] = journal.events("join_finished")
     assert finished["status"] == "admitted"
     assert finished["attempts"] == 2
-    [retried] = journal.events("join_retried")
-    assert retried["status"] == "timeout"
-    assert retried["source"] == "runtime"
+    attempts = journal.events("join_attempt_finished")
+    assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "retry"), (2, "joined")]
+    assert {row["source"] for row in attempts} == {"runtime"}
+    assert len(journal.events("join_requested")) == 1
+
+
+async def test_session_join_attempts_follow_the_configured_maximum() -> None:
+    browser = FakePageSession(meet_page([LOBBY] * 15))
+    journal = RecordingJournal()
+    clock = FakeClock()
+
+    result = await run_meeting_session(
+        session_config(
+            lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0, join_max_attempts=2
+        ),
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    assert result.terminal_reason == "lobby_timeout_reached"
+    attempts = journal.events("join_attempt_finished")
+    assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "retry"), (2, "failed")]
+    [finished] = journal.events("join_finished")
+    assert finished["attempts"] == 2

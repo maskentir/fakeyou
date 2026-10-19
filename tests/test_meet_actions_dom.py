@@ -1,16 +1,26 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Self, cast
 
 import pytest
+from playwright.async_api import Page
 
 import fakeyou.meet.meet_actions as meet_actions_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
-from fakeyou.meet.meet_actions import MeetActionSignals, lower_hand, raise_hand, send_chat
+from fakeyou.meet.meet_actions import (
+    MeetActionSignals,
+    lower_hand,
+    observe_chat_echoed,
+    observe_hand_lowered,
+    observe_hand_raised,
+    raise_hand,
+    send_chat,
+)
 from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
-from fakeyou.orchestration.runtime import MeetActionDispatcher
+from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from tests._error_support import message_pattern
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import IN_CALL, FakePage, meet_page
@@ -318,3 +328,49 @@ async def test_echo_wait_bounds_each_content_read(monkeypatch: pytest.MonkeyPatc
 
     assert result.failed
     assert time.monotonic() - started < 2.0
+
+
+_RAISED_HAND_PAGE = '<button aria-label="Lower hand"></button>'
+_CHAT_ECHO_PAGE = '<div>hello everyone</div><button aria-label="Pin message"></button>'
+
+
+async def _with_static_page(html: str, check: Callable[[Page], Awaitable[None]]) -> None:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html)
+            await check(page)
+        finally:
+            await browser.close()
+
+
+@pytest.mark.browser
+async def test_hand_readback_sees_raised_hand_only_when_lower_control_is_visible() -> None:
+    async def check(page: Page) -> None:
+        assert await observe_hand_raised(page) is True
+        await page.set_content("<html><body></body></html>")
+        assert await observe_hand_raised(page) is False
+
+    await _with_static_page(_RAISED_HAND_PAGE, check)
+
+
+@pytest.mark.browser
+async def test_hand_lowered_readback_sees_raise_control() -> None:
+    async def check(page: Page) -> None:
+        assert await observe_hand_lowered(page) is True
+        await page.set_content(_RAISED_HAND_PAGE)
+        assert await observe_hand_lowered(page) is False
+
+    await _with_static_page('<button aria-label="Raise hand"></button>', check)
+
+
+@pytest.mark.browser
+async def test_chat_readback_needs_text_and_echo_item() -> None:
+    async def check(page: Page) -> None:
+        assert await observe_chat_echoed(page, "hello everyone") is True
+        assert await observe_chat_echoed(page, "not sent yet") is False
+
+    await _with_static_page(_CHAT_ECHO_PAGE, check)

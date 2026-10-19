@@ -3,12 +3,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
 from fakeyou.observability.faults import FaultReporter
-from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import MeetingWorker
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
@@ -20,7 +18,6 @@ def _bare_worker(**overrides: Any) -> MeetingWorker:
     clock = FakeClock()
     return MeetingWorker(
         session_config(**overrides),
-        MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver()),
         meet_page([]),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
@@ -46,7 +43,7 @@ async def test_monitor_propagates_unexpected_starter_error(
 
     monkeypatch.setattr(worker, "start_voice_activity", boom)
     with pytest.raises(ValueError, match="bug"):
-        await worker.monitor(0.0)
+        await worker.run_monitor(0.0)
 
 
 async def test_monitor_propagates_unexpected_capture_start_error(
@@ -60,7 +57,7 @@ async def test_monitor_propagates_unexpected_capture_start_error(
 
     monkeypatch.setattr(worker, "start_capture_drain", boom)
     with pytest.raises(ValueError, match="bug"):
-        await worker.monitor(0.0)
+        await worker.run_monitor(0.0)
 
 
 async def test_disable_camera_best_effort_propagates_unexpected_error(
@@ -82,11 +79,8 @@ async def test_participant_evidence_writer_bug_surfaces_as_poll_failure(
 ) -> None:
     evidence = tmp_path / "evidence.jsonl"
     clock = FakeClock()
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     worker = MeetingWorker(
         session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
-        lifecycle,
         meet_page([], evaluates=[mining_payload() for _ in range(10)]),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
@@ -122,20 +116,6 @@ async def test_start_voice_activity_records_poll_faults(journal: RecordingJourna
         assert reporter.total() >= 1
     finally:
         await worker.close_voice_activity()
-
-
-async def test_start_probe_drain_records_poll_faults(
-    journal: RecordingJournal, tmp_path: Path
-) -> None:
-    reporter = FaultReporter(journal=journal)
-    worker = _bare_worker(attribution_probe_path=tmp_path / "probe.jsonl")
-    worker.faults = reporter
-    await worker.start_probe_drain()
-    try:
-        await _wait_for_faults(reporter)
-        assert reporter.total() >= 1
-    finally:
-        await worker.close_probe_drain()
 
 
 async def test_start_participant_observer_records_poll_faults(

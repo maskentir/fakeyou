@@ -1,54 +1,56 @@
+from typing import cast
+
+import pytest
 from pydantic import SecretStr
 
 from fakeyou.config.settings import ParticipationDeciderSettings, Settings
+from fakeyou.conversation.conversation import LangGraphResponder, MeetingAgent
+from fakeyou.conversation.participation_decider import StructuredGeminiDecider
+from fakeyou.conversation.participation_graph import DeciderFailure
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration.assembly import (
     DEFAULT_AGENT_WIRING,
-    LoopBehavior,
+    TurnBehavior,
     _ConversationBuilder,
 )
-from tests._conversation_fakes import FakeResponder
+
+
+def _responder() -> LangGraphResponder:
+    return LangGraphResponder(cast(MeetingAgent, object()), "participation-thread")
 
 
 def _builder(settings: Settings) -> _ConversationBuilder:
     return _ConversationBuilder(
         settings,
         DEFAULT_AGENT_WIRING,
-        LoopBehavior(on_transition=lambda *_args: None),
+        TurnBehavior(on_transition=lambda *_args: None),
         Diagnostics(),
     )
 
 
-def test_build_loop_attaches_jev_decider_when_configured(settings: Settings) -> None:
+def test_build_turns_attaches_gemini_decider_when_configured(settings: Settings) -> None:
     configured = settings.model_copy(
         update={
-            "participation_decider": ParticipationDeciderSettings(
-                api_key=SecretStr("test-key"), base_url="https://jev.example"
-            )
+            "participation_decider": ParticipationDeciderSettings(api_key=SecretStr("test-key"))
         }
     )
-    loop = _builder(configured).build_loop(FakeResponder())
-    assert loop.jev_enabled is True
-    assert loop.jev_provider == "jev"
+    turns = _builder(configured).build_turns(_responder())
+    assert turns.lifecycle.jev is not None
+    assert isinstance(turns.decider, StructuredGeminiDecider)
 
 
-def test_build_loop_skips_jev_decider_without_credentials(settings: Settings) -> None:
-    loop = _builder(settings).build_loop(FakeResponder())
-    assert loop.jev_enabled is False
-
-
-def test_build_loop_attaches_gemini_decider_without_base_url(
-    settings: Settings,
-) -> None:
-    configured = settings.model_copy(
-        update={
-            "participation_decider": ParticipationDeciderSettings(
-                provider="gemini",
-                model="gemini-3.8-flash",
-                api_key=SecretStr("test-key"),
-            )
-        }
+def test_build_turns_rejects_enabled_decider_without_credentials(settings: Settings) -> None:
+    keyless = settings.model_copy(
+        update={"participation_decider": ParticipationDeciderSettings(enabled=True)}
     )
-    loop = _builder(configured).build_loop(FakeResponder())
-    assert loop.jev_enabled is True
-    assert loop.jev_provider == "gemini"
+    with pytest.raises(DeciderFailure, match="decider_no_credentials"):
+        _builder(keyless).build_turns(_responder())
+
+
+def test_build_turns_skips_decider_when_disabled(settings: Settings) -> None:
+    disabled = settings.model_copy(
+        update={"participation_decider": ParticipationDeciderSettings(enabled=False)}
+    )
+    turns = _builder(disabled).build_turns(_responder())
+    assert turns.lifecycle.jev is None
+    assert turns.decider is None

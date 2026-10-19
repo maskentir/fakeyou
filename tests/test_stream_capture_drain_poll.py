@@ -207,18 +207,13 @@ async def test_drain_poll_bounds_a_hung_capture_evaluate() -> None:
 async def test_start_capture_drain_respects_enabled_flag() -> None:
     import asyncio
 
-    from langgraph.checkpoint.memory import InMemorySaver
-
     from fakeyou.conversation.session import SessionConfig
     from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
-    from fakeyou.orchestration.lifecycle import MeetingLifecycle
     from fakeyou.orchestration.runtime import MeetingWorker
     from tests._fakes_common import LINK
 
     clock = FakeClock()
     page = meet_page([])
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     worker = MeetingWorker(
         SessionConfig(
             owner_id=SessionId("owner-1"),
@@ -227,7 +222,6 @@ async def test_start_capture_drain_respects_enabled_flag() -> None:
             link=LINK,
             twin_name="Twin",
         ),
-        lifecycle,
         page,
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,

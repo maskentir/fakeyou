@@ -130,3 +130,50 @@ async def test_drain_throughput_within_budget() -> None:
         for chunk in parse_drain(payload).chunks:
             await registry.feed(chunk)
     assert time.monotonic() - started < 5.0
+
+
+def test_drain_missing_seq_is_named_error_and_skipped() -> None:
+    from typing import Any, cast
+
+    from fakeyou.audio.stream_capture import parse_drain
+
+    good = {
+        "slot": 0,
+        "seq": 0,
+        "csrcs": [],
+        "level": 0.1,
+        "page_ms": 10.0,
+        "pcm_b64": base64.b64encode(b"\x00\x00").decode(),
+    }
+    without_seq = {key: value for key, value in good.items() if key != "seq"}
+    parsed = parse_drain(cast(dict[str, Any], {"streams": [without_seq]}))
+    assert parsed.chunks == []
+    assert parsed.skipped == 1
+    assert parsed.first_error is not None
+    assert "seq" in str(parsed.first_error)
+
+
+def test_drain_unknown_chunk_field_never_enters_state() -> None:
+    from typing import Any, cast
+
+    from fakeyou.audio.stream_capture import parse_drain
+
+    entry = {
+        "slot": 0,
+        "seq": 0,
+        "csrcs": [],
+        "level": 0.1,
+        "page_ms": 10.0,
+        "pcm_b64": base64.b64encode(b"\x00\x00").decode(),
+        "surprise": "value",
+    }
+    (chunk,) = parse_drain(cast(dict[str, Any], {"streams": [entry]})).chunks
+    assert not hasattr(chunk, "surprise")
+
+
+def test_packaged_scripts_expose_the_globals_the_drain_reads() -> None:
+    from fakeyou.audio.stream_capture import load_capture_script
+    from fakeyou.audio.voice_activity import load_voice_activity_script
+
+    assert "__fakeyouVoiceActivity" in load_voice_activity_script()
+    assert "__fakeyouStreamCapture" in load_capture_script()

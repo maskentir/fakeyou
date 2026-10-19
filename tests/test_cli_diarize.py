@@ -1,13 +1,13 @@
 import json
 import struct
 import sys
-import urllib.request
 import wave
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import httpx2
 import pytest
 from pydantic import SecretStr
 
@@ -108,15 +108,13 @@ def test_diarize_run_maps_client_error_without_secret_text(settings: Settings) -
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(b"not-json{{{")
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=b"not-json{{{")
 
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID)
     ) as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert SECRET_KEY not in str(error.value)
     assert error.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID
@@ -127,14 +125,12 @@ def test_diarize_run_refuses_concurrent_run_via_lease(settings: Settings) -> Non
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("locked run must not transcribe")
 
     with record_lock(record_path, purpose="meeting"):
         with pytest.raises(FakeYouError, match="locked") as error:
-            diarize_run(SessionId("m1"), settings=settings, opener=opener)
+            diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.RECORD_LOCKED
 
@@ -143,12 +139,12 @@ def test_diarize_run_releases_diarization_lease_on_success(settings: Settings) -
     settings.stt.api_key = SecretStr(SECRET_KEY)
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(_turns_payload([(0, 5000, "A")]))
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=_turns_payload([(0, 5000, "A")]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
     assert not lock_path(record_path).exists()
 
 
@@ -156,13 +152,11 @@ def test_diarize_run_refuses_unequal_seq_start(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 0, 1: 5})
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("misaligned run must not transcribe")
 
     with pytest.raises(FakeYouError, match="misaligned") as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.DIARIZE_SLOT_MISALIGNED
 
@@ -171,13 +165,11 @@ def test_diarize_run_refuses_nonzero_seq_start(settings: Settings) -> None:
     settings.stt.api_key = SecretStr(SECRET_KEY)
     _write_session(settings, "m1", seq_starts={0: 3, 1: 3})
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("misaligned run must not transcribe")
 
     with pytest.raises(FakeYouError, match="zero") as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.DIARIZE_SLOT_NOT_AT_ZERO
 
@@ -189,15 +181,13 @@ def test_diarize_run_maps_empty_audio_dir_to_input_unreadable(settings: Settings
     record_path.write_text("{}\n")
     (record_path.parent / "audio").mkdir(parents=True, exist_ok=True)
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("empty run must not transcribe")
 
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
     ) as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert str(error.value).startswith(
@@ -213,15 +203,13 @@ def test_diarize_run_maps_missing_slot_wavs_to_input_unreadable(settings: Settin
     assert list(audio_dir.glob("slot-*.wav")) == []
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("wav-less run must not transcribe")
 
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
     ) as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert str(error.value).startswith(
         "diarization input cannot be read: FileNotFoundError: no slot wav files in "
@@ -234,12 +222,12 @@ def test_diarize_run_writes_sidecar_and_keeps_record_identical(settings: Setting
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0, 1: 0})
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(_turns_payload([(0, 5000, "A"), (6000, 12000, "B")]))
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=_turns_payload([(0, 5000, "A"), (6000, 12000, "B")]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     assert record_path.read_bytes() == before
     payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
@@ -278,15 +266,15 @@ def test_diarize_run_offsets_chunk_turns_by_chunk_start(
     monkeypatch.setattr(cli_diarize, "split_chunks", lambda _frames, _rate, **_kwargs: chunks)
     calls = {"count": 0}
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         calls["count"] += 1
         if calls["count"] == 1:
-            return _FakeResponse(_turns_payload([(0, 5000, "A")]))
-        return _FakeResponse(_turns_payload([(0, 5000, "B")]))
+            return httpx2.Response(200, content=_turns_payload([(0, 5000, "A")]))
+        return httpx2.Response(200, content=_turns_payload([(0, 5000, "B")]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     payload = json.loads((record_path.parent / "diarization.json").read_text(encoding="utf-8"))
     assert [(turn["start_ms"], turn["end_ms"], turn["speaker"]) for turn in payload["turns"]] == [
@@ -323,14 +311,15 @@ def test_diarize_run_splits_six_minute_mix_with_five_minute_cap(
 
     sizes: list[int] = []
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del timeout
-        data = request.data
+    def opener(request: httpx2.Request) -> httpx2.Response:
+        data = request.read()
         assert isinstance(data, (bytes, bytearray))
         sizes.append(len(data))
-        return _FakeResponse(_turns_payload([]))
+        return httpx2.Response(200, content=_turns_payload([]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     assert seen.get("max_minutes") == 5.0
     assert len(sizes) == 2
@@ -343,15 +332,13 @@ def test_diarize_run_maps_corrupt_slot_wav_to_input_unreadable(settings: Setting
     (audio_dir / "slot-0.wav").write_bytes(b"not a wav file" * 8)
     before = record_path.read_bytes()
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("corrupt run must not transcribe")
 
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
     ) as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert str(error.value) == (
@@ -418,6 +405,12 @@ def _show_session(settings: Settings, meeting_id: str, captures: list[float]) ->
     return record_path
 
 
+def _rewrite_first_show_line(record_path: Path, capture_ms: float) -> None:
+    lines = record_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[0] = _show_line(0, capture_ms) + "\n"
+    record_path.write_text("".join(lines), encoding="utf-8")
+
+
 def test_diarize_show_prints_turns_coverage_and_ok_status(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -435,8 +428,7 @@ def test_diarize_show_exits_stale_when_record_changed(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     record_path = _show_session(settings, "m1", [1000.0])
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(_show_line(9, 1100.0) + "\n")
+    _rewrite_first_show_line(record_path, 1001.0)
 
     with pytest.raises(SystemExit) as exit:
         diarize_show(SessionId("m1"), settings=settings)
@@ -532,12 +524,13 @@ def test_diarize_run_uses_configured_transcription_budget(settings: Settings) ->
     _write_session(settings, "m1", seq_starts={0: 0})
     seen: dict[str, Any] = {}
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        seen["timeout"] = timeout
-        return _FakeResponse(_turns_payload([(0, 1000, "A")]))
+    def opener(request: httpx2.Request) -> httpx2.Response:
+        seen["timeout"] = request.extensions["timeout"]["read"]
+        return httpx2.Response(200, content=_turns_payload([(0, 1000, "A")]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
     assert seen["timeout"] == 7.5
 
 
@@ -572,8 +565,7 @@ def test_diarize_show_reports_unreadable_turns_when_sidecar_lost_mid_stale(
     import fakeyou.diarization.diarize_service as cli_diarize
 
     record_path = _show_session(settings, "m1", [1000.0])
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(_show_line(9, 1100.0) + "\n")
+    _rewrite_first_show_line(record_path, 1001.0)
     monkeypatch.setattr(cli_diarize, "sidecar_turn_count", lambda _record: None)
 
     with pytest.raises(SystemExit) as exit:
@@ -629,14 +621,14 @@ def test_diarize_run_binds_corrected_speakers_to_display_claims(settings: Settin
         encoding="utf-8",
     )
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(
-            _turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "C")])
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, content=_turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "C")])
         )
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     assert read_correction_labels(record_path) == {
         correction_uuid("A", 0): "Maya",
@@ -649,15 +641,13 @@ def test_diarize_run_rejects_an_unreadable_record_before_transcribing(settings: 
     record_path, _ = _write_session(settings, "m1", seq_starts={0: 0})
     record_path.write_text('{"kind": "transcript"}\n', encoding="utf-8")
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("an unreadable record must not reach transcription")
 
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.DIARIZE_INPUT_UNREADABLE)
     ) as error:
-        diarize_run(SessionId("m1"), settings=settings, opener=opener)
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener))
 
     assert error.value.code is ErrorCode.DIARIZE_INPUT_UNREADABLE
     assert not (record_path.parent / "diarization.json").exists()
@@ -676,14 +666,14 @@ def test_diarize_run_names_a_speaker_with_several_turns(settings: Settings) -> N
         encoding="utf-8",
     )
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(
-            _turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "A")])
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, content=_turns_payload([(0, 5000, "A"), (6000, 12000, "B"), (13000, 15000, "A")])
         )
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     assert read_correction_labels(record_path) == {
         correction_uuid("A", 0): "Maya",
@@ -700,11 +690,11 @@ def test_unstamped_claims_never_bind_a_label(settings: Settings) -> None:
         encoding="utf-8",
     )
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(_turns_payload([(0, 5000, "A")]))
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=_turns_payload([(0, 5000, "A")]))
 
-    assert diarize_run(SessionId("m1"), settings=settings, opener=opener) == 0
+    assert (
+        diarize_run(SessionId("m1"), settings=settings, transport=httpx2.MockTransport(opener)) == 0
+    )
 
     assert read_correction_labels(record_path) == {correction_uuid("A", 0): "Maya"}

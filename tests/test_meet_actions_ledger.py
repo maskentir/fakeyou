@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +9,7 @@ from playwright.async_api import Error as PlaywrightError
 
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.meet.meet_action_ledger import (
+    ActionIntent,
     LedgerError,
     LedgerResult,
     MeetActionAddress,
@@ -22,7 +23,7 @@ from fakeyou.meet.meet_action_ledger import (
     reconcile_ledger,
 )
 from fakeyou.meet.meet_actions import MeetActionResult
-from fakeyou.memory.memory import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
 from fakeyou.memory.persona import refuse_meet_tool
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.persistence.ingestion_status import RecordLockError, record_lock
@@ -641,14 +642,18 @@ async def test_double_delivery_retry_then_restart_actuates_exactly_once(
     meeting_id = "meeting-e2e-double"
     journal = RecordingJournal(meeting_id)
     dispatcher, record = task5_dispatcher(tmp_path, meeting_id, journal=journal)
-    page = meet_page([IN_CALL], visible={LOWER_XPATH: False})
+    page = meet_page(
+        [IN_CALL],
+        visible={LOWER_XPATH: False},
+        reveal_on_click={RAISE_XPATH: LOWER_XPATH},
+    )
     clock = FakeClock()
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
     tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
     queued = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-double"))
 
-    assert tool_text(queued) == MEET_ACTION_QUEUED
+    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
     await dispatcher.drain()
     dispatcher.request("raise_hand", action_id="call-e2e-double")
     dispatcher.request("raise_hand", action_id="call-e2e-double")
@@ -735,3 +740,66 @@ async def test_playwright_error_from_act_fails_without_retry(tmp_path: Path) -> 
     assert result.attempts == 1
     assert result.detail == "act raised"
     assert len(calls) == 1
+
+
+def _d6_record(tmp_path: Path) -> Path:
+    return tmp_path / "meeting-d6" / "record.jsonl"
+
+
+async def _run_d6_action(
+    tmp_path: Path,
+    *,
+    tool_call_id: str,
+    act: Callable[[], Awaitable[MeetActionResult]],
+    observe: Callable[[], Awaitable[bool]] | None = None,
+) -> LedgerResult:
+    performed: list[str] = []
+
+    async def act_and_record() -> MeetActionResult:
+        performed.append("act")
+        return await act()
+
+    async def readback_after_act() -> bool:
+        return bool(performed)
+
+    return await execute_meet_action(
+        _d6_record(tmp_path),
+        address=MeetActionAddress(meeting_id="meeting-d6", tool_call_id=tool_call_id),
+        call=MeetActionCall(kind="raise_hand"),
+        effects=MeetActionEffects(act_and_record, observe or readback_after_act),
+    )
+
+
+def _load_d6_intent(tmp_path: Path, tool_call_id: str) -> ActionIntent | None:
+    return MeetActionLedger.load(_d6_record(tmp_path), "meeting-d6").get(tool_call_id)
+
+
+async def test_duplicate_tool_call_id_does_not_repeat_effect(tmp_path: Path) -> None:
+    acted: list[str] = []
+
+    async def act() -> MeetActionResult:
+        acted.append("act")
+        return MeetActionResult(outcome="succeeded", detail="")
+
+    first = await _run_d6_action(tmp_path, tool_call_id="call-d6-1", act=act)
+    second = await _run_d6_action(tmp_path, tool_call_id="call-d6-1", act=act)
+    assert acted == ["act"]
+    assert first.duplicate is False
+    assert second.duplicate is True
+
+
+async def test_observe_comes_from_readback_not_act_result(tmp_path: Path) -> None:
+    async def act() -> MeetActionResult:
+        return MeetActionResult(outcome="succeeded", detail="")
+
+    async def readback_says_no() -> bool:
+        return False
+
+    result = await _run_d6_action(
+        tmp_path, tool_call_id="call-d6-2", act=act, observe=readback_says_no
+    )
+    assert result.succeeded is False
+    intent = _load_d6_intent(tmp_path, "call-d6-2")
+    assert intent is not None
+    assert intent.state != "observed_done"
+    assert intent.observed_after is False

@@ -2,11 +2,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from langgraph.checkpoint.memory import InMemorySaver
-
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.meet.participant_observer import OBSERVE_JS
-from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
 from tests._audio_fakes import FakeAudio
 from tests._fakes_common import FakeClock
@@ -76,11 +73,8 @@ async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path: Path
         payload["tiles"][0]["label"] = f"Budi-{index % 2}"
         payloads.append(payload)
     page = meet_page([], evaluates=payloads)
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     worker = MeetingWorker(
         session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
-        lifecycle,
         page,
         stop,
         DEFAULT_MEET_SIGNALS,
@@ -96,7 +90,7 @@ async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path: Path
     assert len(evidence.read_text(encoding="utf-8").splitlines()) >= 2
 
     stop.set()
-    detail = await worker.monitor(clock.monotonic())
+    detail = await worker.run_monitor(clock.monotonic())
 
     assert detail == "owner requested stop"
     assert worker.observer is None

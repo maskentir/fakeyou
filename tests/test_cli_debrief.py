@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -10,10 +11,10 @@ from typing import Any, NoReturn
 import pytest
 from langchain_core.messages import AIMessage
 
-import fakeyou.cli.debrief as cli_debrief
-import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 import fakeyou.debrief.debrief_service as debrief_service
+import fakeyou.orchestration.providers as providers
+import tests._debrief_runner as debrief_support
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import GoogleReply, Settings
@@ -22,7 +23,7 @@ from fakeyou.debrief.debrief_schema import DebriefDraft
 from fakeyou.diarization.diarize_client import DiarizedTurn
 from fakeyou.diarization.diarize_correction import correction_uuid, write_correction_bundle
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile, persona_digest
-from fakeyou.observability.journal import Journal, JournalFile, journal_path
+from fakeyou.observability.journal import journal_path
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.orchestration.assembly import SignalHandlers
 from fakeyou.persistence.brief import (
@@ -40,6 +41,7 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.record import TranscriptEntry, meeting_record_path
 from tests._conversation_fakes import ToolCallingFakeModel
+from tests._debrief_runner import debrief_in_process
 from tests._error_support import message_pattern
 
 
@@ -49,37 +51,12 @@ async def test_debrief_cancellation_exits_nonzero_without_traceback(
     async def cancel(**_kwargs: Any) -> NoReturn:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(
-        "sys.argv", ["fakeyou", "debrief", "--meeting-id", "m1", "--persona", "p.json"]
-    )
+    monkeypatch.setattr("sys.argv", ["fakeyou", "debrief", "--meeting-id", "m1"])
     monkeypatch.setattr(cli_main, "debrief_meeting", cancel)
     with pytest.raises(SystemExit) as error:
         await asyncio.to_thread(cli_main.main)
     assert error.value.code == 1
     assert "interrupted" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("outcome", ["available", "stale", "missing", "invalid"])
-def test_session_report_has_independent_debrief_status(
-    settings: Settings,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    outcome: str,
-) -> None:
-    journal = Journal(
-        "debrief-test",
-        file=JournalFile(journal_path(settings.paths.journal_dir, SessionId("debrief-test"))),
-        echo=False,
-    )
-    journal.record(
-        "session_finished", source="cli", terminal_reason="stopped_by_owner", exit_code=0
-    )
-    journal.close()
-    monkeypatch.setattr(cli_diagnostics, "debrief_report_status", lambda _path: outcome)
-    cli_diagnostics.show_session_report(SessionId("debrief-test"), None, settings)
-    report = json.loads(capsys.readouterr().out)
-    assert report["debrief"] == {"status": outcome}
-    assert report["result"]["terminal_reason"] == "stopped_by_owner"
 
 
 @pytest.fixture
@@ -116,7 +93,7 @@ def debrief_run(
     )
     return (
         partial(
-            cli_debrief.debrief_meeting,
+            debrief_in_process,
             meeting_id=SessionId("debrief-test"),
             identity=OperatorIdentity(persona_path, None, None),
             force=False,
@@ -166,7 +143,7 @@ async def test_debrief_creates_reviewable_report_and_cache_without_new_call(
 ) -> None:
     run, path, profile = debrief_run
     model = debrief_model()
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: model)
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: model)
     await run()
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "completed"
@@ -177,7 +154,7 @@ async def test_debrief_creates_reviewable_report_and_cache_without_new_call(
     assert report["evidence_sources"][0]["participant_id"] == "unknown"
     assert (path.parent / "debrief.md").exists()
     monkeypatch.setattr(
-        cli_debrief,
+        providers,
         "create_debrief_chat_model",
         lambda _settings: pytest.fail("cache must not call a provider"),
     )
@@ -192,7 +169,7 @@ async def test_debrief_report_names_the_configured_debrief_role(
 ) -> None:
     run, path, _ = debrief_run
     settings.debrief = GoogleReply(model="gemini-3.8-flash")
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     await run()
     report = json.loads((path.parent / "debrief.json").read_text())
     assert (report["provider"], report["model"]) == ("google", "gemini-3.8-flash")
@@ -208,7 +185,7 @@ async def test_debrief_refuses_cross_scope_before_model(
         IngestionStatus(meeting_id="debrief-test", group_id="other-owner", status="pending"),
     )
     monkeypatch.setattr(
-        cli_debrief, "create_debrief_chat_model", lambda _settings: pytest.fail("scope")
+        providers, "create_debrief_chat_model", lambda _settings: pytest.fail("scope")
     )
     with pytest.raises(
         FakeYouError,
@@ -226,7 +203,7 @@ async def test_debrief_refuses_unscoped_record_before_model(
     run, path, profile = debrief_run
     status_path(path).unlink()
     monkeypatch.setattr(
-        cli_debrief, "create_debrief_chat_model", lambda _settings: pytest.fail("scope")
+        providers, "create_debrief_chat_model", lambda _settings: pytest.fail("scope")
     )
     with pytest.raises(
         FakeYouError,
@@ -243,7 +220,7 @@ async def test_debrief_pending_recovery_refuses_provider(
     run, path, profile = debrief_run
     path.with_name("debrief.json.recover.rollback").write_text("previous successful report")
     monkeypatch.setattr(
-        cli_debrief, "create_debrief_chat_model", lambda _settings: pytest.fail("recovery")
+        providers, "create_debrief_chat_model", lambda _settings: pytest.fail("recovery")
     )
     with pytest.raises(FakeYouError, match="recovery") as caught:
         await run()
@@ -255,7 +232,7 @@ async def test_debrief_refuses_live_writer_and_releases_after_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     with record_lock(path, purpose="meeting"):
         with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.RECORD_LOCKED)) as caught:
             await run()
@@ -269,7 +246,7 @@ async def test_force_failure_preserves_existing_canonical_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     await run()
     previous = (path.parent / "debrief.json").read_bytes()
 
@@ -292,7 +269,7 @@ async def test_attempt_write_failure_preserves_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     async def cancel(*args: Any, **_kwargs: Any) -> NoReturn:
         del args
@@ -320,7 +297,7 @@ async def test_provider_faults_keep_their_identity_through_debrief(
     def unavailable(_settings: Any) -> NoReturn:
         raise ProviderFault("llm", "unavailable")
 
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", unavailable)
+    monkeypatch.setattr(providers, "create_debrief_chat_model", unavailable)
     with pytest.raises(ProviderFault) as caught:
         await run()
     assert caught.value.kind == "unavailable"
@@ -333,7 +310,7 @@ async def test_debrief_corrupt_context_refuses_provider(
     run, path, profile = debrief_run
     context_path(path).write_text("{broken")
     monkeypatch.setattr(
-        cli_debrief, "create_debrief_chat_model", lambda _settings: pytest.fail("context")
+        providers, "create_debrief_chat_model", lambda _settings: pytest.fail("context")
     )
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.DEBRIEF_CONTEXT_INVALID)
@@ -351,7 +328,7 @@ async def test_debrief_total_deadline_ignores_the_conversation_budget(
     run, path, profile = debrief_run
     settings.conversation.response_timeout_seconds = 0.01
     settings.debrief = GoogleReply(timeout_seconds=5.0, max_retries=0)
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     async def quick(*args: Any, **_kwargs: Any) -> DebriefDraft:
         del args
@@ -374,7 +351,7 @@ async def test_debrief_enforces_total_response_deadline(
     settings.conversation.response_timeout_seconds = 60.0
     settings.debrief = GoogleReply(timeout_seconds=0.01, max_retries=0)
     cancelled = asyncio.Event()
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     async def slow(*args: Any, **_kwargs: Any) -> None:
         del args
@@ -398,7 +375,7 @@ async def test_model_cannot_publish_after_record_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     async def mutate(*args: Any, **_kwargs: Any) -> DebriefDraft:
         del args
@@ -434,7 +411,7 @@ async def test_debrief_uses_historical_brief_not_changed_persona(
             persona_sha256=persona_digest(profile.model_copy(update={"role": "Previous role"})),
         ),
     )
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     await run()
     assert json.loads((path.parent / "debrief.json").read_text())["context_sha256"] is not None
 
@@ -444,7 +421,7 @@ async def test_owner_stop_raises_interrupted_with_interrupted_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     async def stopped(*args: Any, **_kwargs: Any) -> NoReturn:
         del args
@@ -465,7 +442,7 @@ async def test_stop_set_after_generation_still_records_interrupted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     entered = asyncio.Event()
     proceed = asyncio.Event()
     stops: list[asyncio.Event] = []
@@ -481,7 +458,7 @@ async def test_stop_set_after_generation_still_records_interrupted(
         await proceed.wait()
         return DebriefDraft(items=(), findings=())
 
-    monkeypatch.setattr(cli_debrief, "stop_signal_handlers", capture)
+    monkeypatch.setattr(debrief_support, "stop_signal_handlers", capture)
     monkeypatch.setattr(debrief_service, "generate_debrief", gen)
     task = asyncio.create_task(run())
     await asyncio.wait_for(entered.wait(), 2)
@@ -500,7 +477,7 @@ async def test_debrief_cancellation_keeps_previous_result_and_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, path, profile = debrief_run
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     started = asyncio.Event()
 
     async def wait(*args: Any, **_kwargs: Any) -> None:
@@ -520,18 +497,16 @@ async def test_debrief_cancellation_keeps_previous_result_and_lock(
         pass
 
 
-def test_debrief_dispatch_builds_operator_scope_and_force(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_debrief_dispatch_sends_meeting_and_force_to_the_api_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
 
-    async def fake_debrief(*args: Any, **kwargs: Any) -> None:
-        assert args == ()
+    async def fake_debrief(**kwargs: Any) -> None:
         calls.append(kwargs)
 
     monkeypatch.setattr(cli_main, "debrief_meeting", fake_debrief)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["fakeyou", "debrief", "--meeting-id", "m1", "--persona", "persona.json", "--force"],
-    )
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "debrief", "--meeting-id", "m1", "--force"])
     with pytest.raises(SystemExit) as exited:
         cli_main.main()
 
@@ -539,7 +514,6 @@ def test_debrief_dispatch_builds_operator_scope_and_force(monkeypatch: pytest.Mo
     [call] = calls
     assert call["meeting_id"] == "m1"
     assert call["force"] is True
-    assert call["identity"] == OperatorIdentity(Path("persona.json"), None, None)
 
 
 async def test_debrief_renders_display_claim_as_unverified_speaker_label(
@@ -574,8 +548,8 @@ async def test_debrief_renders_display_claim_as_unverified_speaker_label(
             meeting_id="debrief-claim", group_id=profile.memory_group, status="not_requested"
         ),
     )
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
-    await cli_debrief.debrief_meeting(
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
+    await debrief_in_process(
         meeting_id=SessionId("debrief-claim"),
         identity=OperatorIdentity(persona_path, None, None),
         force=False,
@@ -601,7 +575,7 @@ async def test_corrected_uuid_attribution_keeps_unknown_participant_limitation(
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: datetime(2026, 10, 3, tzinfo=UTC),
     )
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     await run()
     report = json.loads((path.parent / "debrief.json").read_text())
     assert report["evidence_sources"][0]["participant_id"] == correction_uuid("A", 0)
@@ -625,24 +599,16 @@ async def test_stale_sidecar_fallback_is_visible_in_journal(
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: datetime(2026, 10, 3, tzinfo=UTC),
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            TranscriptEntry(
-                at=datetime(2026, 10, 3, tzinfo=UTC),
-                id="t2",
-                spoken_at="2026-10-03T00:01:00+00:00",
-                source="meeting_audio",
-                text="A second voice notes the Monday deadline.",
-                participant_id="unknown",
-                speaker_evidence_id=None,
-            ).model_dump_json()
-            + "\n"
-        )
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    rows = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    last = json.loads(rows[-1])
+    last["capture_ms"] = 1.0
+    rows[-1] = json.dumps(last) + "\n"
+    path.write_text("".join(rows), encoding="utf-8")
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
     await run()
     report = json.loads((path.parent / "debrief.json").read_text())
     assert report["evidence_sources"][0]["participant_id"] == "unknown"
-    rows = [
+    journal_rows = [
         json.loads(line)
         for line in journal_path(settings.paths.journal_dir, SessionId("debrief-test"))
         .read_text()
@@ -651,12 +617,12 @@ async def test_stale_sidecar_fallback_is_visible_in_journal(
     ]
     fallbacks = [
         row
-        for row in rows
+        for row in journal_rows
         if row["event"] == "fault_recorded" and row["source"] == "meeting_record"
     ]
     assert len(fallbacks) >= 1
     assert fallbacks[0]["detail"] == "diarize.stale"
-    [bound] = [row for row in rows if row["event"] == "signal_handlers_bound"]
+    [bound] = [row for row in journal_rows if row["event"] == "signal_handlers_bound"]
     assert bound["signals"] == ["SIGINT", "SIGTERM"]
     assert bound["unavailable"] == []
 
@@ -683,7 +649,7 @@ async def test_debrief_refuses_a_corrupt_status_and_journals_it(
         ),
     )
     status_path(path).write_text("{corrupt", encoding="utf-8")
-    monkeypatch.setattr(cli_debrief, "create_debrief_chat_model", lambda _settings: debrief_model())
+    monkeypatch.setattr(providers, "create_debrief_chat_model", lambda _settings: debrief_model())
 
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.INGESTION_STATUS_CORRUPT)

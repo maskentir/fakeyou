@@ -15,7 +15,6 @@ CONTENT_FIELDS = frozenset({"text", "prompt", "transcript", "completion", "body"
 DYNAMIC_SOURCES = frozenset({"source", "fault.source"})
 SOURCED_HELPERS = {
     ("audio.py", "_record"): "audio",
-    ("conversation.py", "_record"): "agent",
 }
 
 
@@ -105,6 +104,7 @@ def test_journal_durations_are_milliseconds() -> None:
 
 LIFECYCLE_VERBS = frozenset(
     {
+        "activated",
         "admitted",
         "blocked",
         "cancelled",
@@ -114,6 +114,7 @@ LIFECYCLE_VERBS = frozenset(
         "left",
         "lost",
         "out",
+        "prepared",
         "reached",
         "reconnected",
         "removed",

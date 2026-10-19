@@ -16,7 +16,7 @@ from neo4j.exceptions import ServiceUnavailable
 
 import fakeyou.memory.memory as memory_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import DEFAULTS, MemorySettings
+from fakeyou.config.settings import DEFAULTS, IngestionSettings, MemorySettings
 from fakeyou.memory import owner_notes
 from fakeyou.memory.memory import (
     create_memory_tools,
@@ -39,13 +39,11 @@ async def test_memory_tools_keep_group_id_scoped(
     graphiti: MagicMock,
 ) -> None:
     memory = graphiti
-    remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
 
-    await remember.ainvoke({"fact": "Alice owns the agenda"})
-    await remember.ainvoke({"fact": "Alice set the review date"})
     await recall.ainvoke({"query": "agenda"})
 
-    assert memory.added[0]["group_id"] == "team_alpha"
+    assert memory.added == []
     assert memory.searched[0] == {
         "query": "agenda",
         "group_ids": ["team_alpha"],
@@ -266,3 +264,17 @@ async def test_reembed_group_pages_through_entities_and_facts(
         ("e2", [6.0, 1.0]),
         ("e1", [6.0, 1.0]),
     ]
+
+
+def test_create_graphiti_memory_wires_extraction_concurrency() -> None:
+    config = memory_settings().model_copy(
+        update={"ingestion": IngestionSettings(extraction_concurrency=7)}
+    )
+
+    memory = memory_module.create_graphiti_memory(config)
+
+    assert memory.max_coroutines == 7
+
+
+def test_create_graphiti_memory_defaults_extraction_concurrency_to_the_frozen_twenty() -> None:
+    assert memory_module.create_graphiti_memory(memory_settings()).max_coroutines == 20

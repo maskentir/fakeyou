@@ -137,13 +137,24 @@ async def test_join_resume_detects_a_live_checkpoint_without_journal(
     from fakeyou.db.checkpoint import open_checkpointer
     from fakeyou.db.engine import configured_url, require_url
     from fakeyou.observability.journal import journal_path
-    from fakeyou.orchestration.lifecycle import MeetingLifecycle
+    from fakeyou.orchestration.lifecycle import (
+        LifecycleThread,
+        build_lifecycle_graph,
+        initial_lifecycle_state,
+        initialize_lifecycle,
+        meeting_thread_id,
+    )
     from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 
     async with open_checkpointer(require_url(configured_url(settings))) as saver:
-        first = MeetingLifecycle("settings-owner", "settings-twin", "meeting-9", saver)
-        await first.initialize()
-        await first.send("join_requested", "owner_action", "test")
+        first = LifecycleThread(
+            build_lifecycle_graph(saver),
+            meeting_thread_id("settings-twin", "meeting-9"),
+            initial_lifecycle_state("settings-owner", "settings-twin", "meeting-9"),
+        )
+        await initialize_lifecycle(first, resume=False)
+        await first.send("prepared", "owner_action")
+        await first.send("join_requested", "owner_action")
 
     await join(LINK, meeting_id="meeting-9", resume=True)
 

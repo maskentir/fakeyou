@@ -109,6 +109,9 @@ class FakeLocator:
             raise PlaywrightError(f"click failed: {self.selector}")
         if self.selector in self._page.click_failures:
             raise PlaywrightError(f"click failed: {self.selector}")
+        revealed = self._page.reveal_on_click.get(self.selector)
+        if revealed is not None:
+            self._page.visible[revealed] = True
 
 
 class PageScript(TypedDict, total=False):
@@ -121,6 +124,7 @@ class PageScript(TypedDict, total=False):
     goto_failures: int
     final_url: str
     visible: dict[str, bool | Exception]
+    reveal_on_click: dict[str, str]
     wait_failures: Iterable[str]
     on_content: Callable[[int], None]
 
@@ -145,6 +149,7 @@ class FakePage(Page):
         self.click_flaky = dict(script.get("click_flaky", {}))
         self.wait_flaky = dict(script.get("wait_flaky", {}))
         self.visible = dict(script.get("visible", {}))
+        self.reveal_on_click = dict(script.get("reveal_on_click", {}))
         self.wait_failures = set(script.get("wait_failures", ()))
         self.type_failures = set(script.get("type_failures", ()))
         self._goto_failures = script.get("goto_failures", 0)

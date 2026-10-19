@@ -49,6 +49,35 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
     assert score.summary()["turns"] == 2
 
 
+async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
+    fixture = {
+        "persona": "examples/persona.example.json",
+        "sessions": [
+            {
+                "meeting_id": "m1",
+                "memory": [],
+                "turns": [
+                    {"say": "When is the beta launch?", "must_mention": ["14 october"]},
+                ],
+            }
+        ],
+    }
+    replies: list[BaseMessage] = [
+        AIMessage(content="The beta launch is on 14 October 2026. See you there.")
+    ]
+
+    score = await replay(
+        lambda: ToolCallingFakeModel(responses=replies), fixture, runs=1, streaming=True
+    )
+
+    assert score.rate("must_mention") == 1.0
+    assert score.rate("within_two_sentences") == 1.0
+    assert len(score.first_sentence_latencies) == 1
+    assert score.first_sentence_latencies[0] <= score.latencies[0]
+    assert score.summary()["first_sentence_p95_s"] is not None
+    assert "14 October 2026" in score.replies[0]
+
+
 def test_replay_fixture_uses_real_session_transcripts() -> None:
     fixture = load_fixture()
 

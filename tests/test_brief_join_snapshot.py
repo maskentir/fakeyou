@@ -332,7 +332,7 @@ async def test_join_journals_brief_metadata_without_brief_text(
         assert text not in printed
 
 
-def test_v1_brief_without_roster_hint_still_loads(tmp_path):
+def test_v1_brief_without_roster_hint_still_loads(tmp_path: Path) -> None:
     payload = {
         "schema_version": "meeting_brief/v1",
         "owner_id": "o",

@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.runnables.config import var_child_runnable_config
 
-import fakeyou.cli.debrief as cli_debrief
+import fakeyou.orchestration.providers as providers
 from evals._debrief_support import (
     DebriefReview,
     capture_debrief_candidate,
@@ -50,6 +50,7 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.record import meeting_record_path
 from tests._conversation_fakes import ToolCallingFakeModel
+from tests._debrief_runner import debrief_in_process
 from tests._error_support import message_pattern
 from tests._fakes_common import env_file_opt
 
@@ -260,22 +261,20 @@ async def replay_debriefs(
                             raise AssertionError("invalid source reached provider construction")
 
                         stack.enter_context(
-                            patch.object(cli_debrief, "create_debrief_chat_model", refused_provider)
+                            patch.object(providers, "create_debrief_chat_model", refused_provider)
                         )
                     else:
                         model = model_factory(case)
                         stack.enter_context(
-                            patch.object(
-                                cli_debrief, "create_debrief_chat_model", return_value=model
-                            )
+                            patch.object(providers, "create_debrief_chat_model", return_value=model)
                         )
                     stack.enter_context(
-                        patch.object(cli_debrief, "create_fallback_chat_model", return_value=None)
+                        patch.object(providers, "create_fallback_chat_model", return_value=None)
                     )
                 try:
                     _, failure = await capture_error(
                         partial(
-                            cli_debrief.debrief_meeting,
+                            debrief_in_process,
                             meeting_id=SessionId(meeting_id),
                             identity=OperatorIdentity(
                                 persona_path,
@@ -456,12 +455,12 @@ async def test_cli_invalid_sources_fail_before_provider_construction(
         pytest.fail("invalid source reached provider construction")
 
     with (
-        patch.object(cli_debrief, "create_debrief_chat_model", provider_forbidden),
-        patch.object(cli_debrief, "create_fallback_chat_model", provider_forbidden),
+        patch.object(providers, "create_debrief_chat_model", provider_forbidden),
+        patch.object(providers, "create_fallback_chat_model", provider_forbidden),
         record_lock(record, purpose="meeting") if invalid == "lock" else nullcontext(),
         pytest.raises(FakeYouError, match=message_pattern(INVALID_SOURCE_CODES[invalid])) as caught,
     ):
-        await cli_debrief.debrief_meeting(
+        await debrief_in_process(
             meeting_id=SessionId(meeting_id),
             identity=OperatorIdentity(
                 persona, fixture["persona"]["owner_id"], fixture["persona"]["twin_id"]

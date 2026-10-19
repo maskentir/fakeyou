@@ -227,3 +227,17 @@ def test_vendored_silero_model_matches_the_recorded_checksum() -> None:
 
     digest = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
     assert digest == "597d30b3ec076608d059477bb14cfeffdf951bf5cae370d38f65d33bbfe82004"
+
+
+def test_vad_golden_matches_pipecat_oracle() -> None:
+    golden = _golden()
+    analyzer = VadAnalyzer(_params(golden), model=None, model_reset_samples=None)
+    controller = VadController(analyzer, clock=ManualClock())
+
+    events: list[tuple[str, int]] = []
+    for chunk in _chunks(_standup_pcm(), WINDOW):
+        for event in controller.feed(chunk):
+            if event.kind is not VadEventKind.ACTIVITY:
+                events.append((event.kind.value, event.sample))
+
+    assert events == [tuple(pair) for pair in golden["events"]]

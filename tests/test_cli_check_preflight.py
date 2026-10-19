@@ -8,7 +8,6 @@ from typing import Any, NoReturn, cast
 import pytest
 from pydantic import SecretStr
 
-import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
@@ -30,10 +29,10 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
     PLAYBACK_SAMPLE_RATE,
 )
-from fakeyou.memory.persona import OperatorIdentity
-from fakeyou.orchestration.assembly import LoopBehavior
+from fakeyou.orchestration.assembly import TurnBehavior
 from fakeyou.speech.minimax import MiniMaxSpeechSynthesizer
 from fakeyou.speech.registry import build_speech_synthesizer
+from tests._check_support import print_admin_check as check_setup
 from tests._cli_support import BASE_HOSTS, AudioJoin, with_muse_fallback
 from tests._fakes_common import env_file_opt
 from tests._runtime_fakes import SessionRun
@@ -53,24 +52,24 @@ def test_main_exits_2_on_input_error(
     ("argv", "handler", "expected"),
     [
         (
-            ["memory-reembed", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
+            ["memory-reembed", "--twin-id", "t"],
             "reembed_memory",
-            {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
+            {"twin_id": "t"},
         ),
         (
-            ["memory-forget", "--meeting-id", "m1", "--persona", "p.json", "--keep-record"],
-            "forget_memory",
-            {"meeting_id": "m1", "episode_uuid": None, "keep_record": True},
+            ["memory-forget", "--meeting-id", "m1", "--keep-record"],
+            "forget_meeting_memory",
+            {"meeting_id": "m1", "keep_record": True},
         ),
         (
             ["report", "--meeting-id", "m1"],
             "show_session_report",
-            {"meeting_id": "m1", "journal_dir": None},
+            {"meeting_id": "m1"},
         ),
         (
             ["chat", "hello", "--thread", "t1", "--memory"],
-            "chat",
-            {"message": "hello", "thread": "t1", "use_browser": False, "use_memory": True},
+            "chat_via_api",
+            {"message": "hello", "thread": "t1", "memory": True},
         ),
     ],
 )
@@ -85,7 +84,7 @@ def test_main_dispatches_parsed_options_to_the_command_handler(
     async def record_async(**kwargs: Any) -> None:
         calls.append(kwargs)
 
-    sync_handlers = {"show_session_report"}
+    sync_handlers: set[str] = set()
     monkeypatch.setattr(cli_main, handler, record if handler in sync_handlers else record_async)
     monkeypatch.setattr(sys, "argv", ["fakeyou", *argv])
     with pytest.raises(SystemExit) as exited:
@@ -93,7 +92,7 @@ def test_main_dispatches_parsed_options_to_the_command_handler(
 
     assert exited.value.code == 0
     [call] = calls
-    assert isinstance(call.pop("settings"), Settings)
+    assert call.pop("settings") is not None
     assert {key: call[key] for key in expected} == expected
 
 
@@ -105,10 +104,14 @@ def test_compose_pulse_defaults_match_audio_constants() -> None:
 
 def test_compose_worker_reaches_neo4j_service_and_example_profiles() -> None:
     compose = (Path(__file__).resolve().parent.parent / "compose.yaml").read_text()
-    assert (
-        "FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}"
-        in compose
-    )
+    assert "env_file: .env" in compose
+    assert "FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}" in compose
+    remapped = [
+        line
+        for line in compose.splitlines()
+        if line.strip().startswith("FAKEYOU_") and "${FAKEYOU_COMPOSE_WORKER_" in line
+    ]
+    assert remapped == []
     assert "./examples:/workspace/examples:ro" in compose
 
 
@@ -195,7 +198,7 @@ def test_main_reports_unavailable_memory_with_infra_exit_code(
         raise ProviderFault("memory", "unavailable")
 
     monkeypatch.setattr(cli_main, "add_owner_note", unavailable)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--persona", "p.json"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--twin-id", "t"])
     with pytest.raises(SystemExit) as caught:
         cli_main.main()
 
@@ -345,14 +348,14 @@ def test_check_reports_the_speech_provider_defaults(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings.tts = MiniMaxTTS()
-    cli_diagnostics.check_setup(settings)
+    check_setup(settings)
     assert json.loads(capsys.readouterr().out)["tts"] == settings.tts.model_dump(mode="json")
 
 
 def test_check_reports_models_per_role(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cli_diagnostics.check_setup(settings)
+    check_setup(settings)
     report = capsys.readouterr().out
     assert json.loads(report) == settings.model_dump(mode="json")
     assert "test-key" not in report
@@ -388,12 +391,14 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
     settings = with_muse_fallback(settings)
-    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+    config = SimpleNamespace(
+        owner_id="o", twin_id="t", meeting_id="m", participant_policy_enabled=False
+    )
 
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -409,43 +414,53 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 async def test_open_conversation_wires_sentence_streaming_flag(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
+    from fakeyou.conversation.conversation import LangGraphResponder
 
     seen: dict[str, Any] = {}
 
-    class StubLoop:
+    class StubLifecycle:
         async def close(self) -> None:
             pass
 
-    def fake_loop(responder: Any, **kwargs: Any) -> StubLoop:
+        def configure_memory(self, memory: Any) -> None:
+            seen["memory"] = memory
+
+    class StubTurns:
+        lifecycle = StubLifecycle()
+
+    def fake_turns(responder: Any, **kwargs: Any) -> StubTurns:
         seen["responder"] = responder
         seen["kwargs"] = kwargs
-        return StubLoop()
+        return StubTurns()
 
     monkeypatch.setattr(
         assembly, "create_meeting_agent", lambda *_args, **_kwargs: SimpleNamespace(name="agent")
     )
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
-    monkeypatch.setattr(assembly, "ConversationLoop", fake_loop)
-    config = SimpleNamespace(owner_id="o", twin_id="t", meeting_id="m")
+    monkeypatch.setattr(assembly, "build_meeting_turns", fake_turns)
+    config = SimpleNamespace(
+        owner_id="o", twin_id="t", meeting_id="m", participant_policy_enabled=False
+    )
 
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
     assert type(seen["responder"]) is LangGraphResponder
-    assert seen["kwargs"]["generation"].sentence_streaming is False
+    assert seen["kwargs"]["generation"].sentence_streaming is True
 
     settings.conversation.sentence_streaming = True
     async with assembly.open_conversation(
         settings,
         cast(Any, config),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
-    assert isinstance(seen["responder"], StreamingLangGraphResponder)
+    assert type(seen["responder"]) is LangGraphResponder
+    assert seen["responder"].max_sentences == settings.conversation.max_spoken_sentences
+    assert seen["responder"].language == settings.speech.language
     assert seen["kwargs"]["generation"].sentence_streaming is True
 
 
@@ -464,7 +479,7 @@ def test_check_reports_the_fallback_model(
 ) -> None:
     settings = with_muse_fallback(settings)
     assert settings.reply_fallback is not None
-    cli_diagnostics.check_setup(settings)
+    check_setup(settings)
     assert json.loads(capsys.readouterr().out)[
         "reply_fallback"
     ] == settings.reply_fallback.model_dump(mode="json")
@@ -473,7 +488,7 @@ def test_check_reports_the_fallback_model(
 def test_check_reports_no_fallback_by_default(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cli_diagnostics.check_setup(settings)
+    check_setup(settings)
     assert json.loads(capsys.readouterr().out)["reply_fallback"] is None
 
 
@@ -499,7 +514,7 @@ def test_ctrl_c_during_settings_is_reported_as_an_operation_interruption(
     def interrupted_settings(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli_main, "Settings", interrupted_settings)
+    monkeypatch.setattr(cli_main, "client_settings_from_env", interrupted_settings)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "m1"])
 
     with pytest.raises(SystemExit) as caught:

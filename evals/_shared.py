@@ -11,7 +11,35 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from fakeyou.config.settings import Settings
 
-CREDENTIAL_MARKERS = ("key", "token", "secret", "password", "passwd", "auth", "credential")
+CREDENTIAL_MARKERS = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "auth",
+    "credential",
+    "bearer",
+    "signature",
+    "signing",
+    "private",
+    "cookie",
+    "session",
+)
+REDACTED = "**********"
+REDACTED_URL = "<redacted-url>"
+ROLE_PUBLIC_FIELDS = frozenset(
+    {
+        "provider",
+        "model",
+        "base_url",
+        "api_key",
+        "timeout_seconds",
+        "max_retries",
+        "reasoning_effort",
+        "extra_body",
+    }
+)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -43,20 +71,17 @@ def suspended_gc() -> Iterator[None]:
 
 
 def sanitize_url(value: str) -> str:
-    if "://" not in value:
-        return value
     try:
         parts = urlsplit(value)
-        if not parts.scheme or not parts.netloc:
-            return value
-        host = parts.hostname or ""
+        if not parts.scheme or not parts.hostname:
+            return REDACTED_URL
+        host = parts.hostname
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         port = f":{parts.port}" if parts.port else ""
-        netloc = f"{host}{port}"
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+        return urlunsplit((parts.scheme, f"{host}{port}", parts.path, "", ""))
     except (TypeError, ValueError):
-        return value
+        return REDACTED_URL
 
 
 def _is_credential_key(name: str) -> bool:
@@ -69,7 +94,7 @@ def sanitize_extra_body(value: Any) -> Any:
         cleaned: dict[Any, Any] = {}
         for key, item in value.items():
             if isinstance(key, str) and _is_credential_key(key):
-                cleaned[key] = "**********"
+                cleaned[key] = REDACTED
             else:
                 cleaned[key] = sanitize_extra_body(item)
         return cleaned
@@ -83,16 +108,17 @@ def sanitize_extra_body(value: Any) -> Any:
 
 
 def sanitized_role(role: dict[str, Any]) -> dict[str, Any]:
-    cleaned = dict(role)
-    base_url = cleaned.get("base_url")
-    if isinstance(base_url, str):
-        cleaned["base_url"] = sanitize_url(base_url)
-    for key, item in list(cleaned.items()):
-        if key not in ("base_url", "extra_body") and isinstance(item, str) and "://" in item:
-            cleaned[key] = sanitize_url(item)
-    extra = cleaned.get("extra_body")
-    if extra is not None:
-        cleaned["extra_body"] = sanitize_extra_body(extra)
+    cleaned: dict[str, Any] = {}
+    for key in ROLE_PUBLIC_FIELDS & role.keys():
+        value = role[key]
+        if key == "api_key":
+            cleaned[key] = REDACTED if value else value
+        elif key == "extra_body":
+            cleaned[key] = sanitize_extra_body(value) if value is not None else None
+        elif isinstance(value, str) and "://" in value:
+            cleaned[key] = sanitize_url(value)
+        else:
+            cleaned[key] = value
     return cleaned
 
 

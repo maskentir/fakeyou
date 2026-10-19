@@ -105,6 +105,11 @@ def test_exit_code_classification_is_deliberate() -> None:
     rejected = {code for code, spec in CATALOG.items() if spec.exit_code is ExitCode.INPUT_REJECTED}
 
     assert rejected == {
+        ErrorCode.API_FORBIDDEN,
+        ErrorCode.API_NOT_FOUND,
+        ErrorCode.API_RATE_LIMITED,
+        ErrorCode.API_TOKEN_MISSING,
+        ErrorCode.API_UNAUTHORIZED,
         ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE,
         ErrorCode.AUDIO_ROOT_MISSING,
         ErrorCode.CALIBRATE_JOURNAL_LINE_INVALID,
@@ -121,7 +126,6 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.CONFIG_SECRET_MISSING,
         ErrorCode.CONFIG_UNKNOWN_KEY,
         ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED,
-        ErrorCode.CONFIG_WORKER_DATABASE_URL_MISSING,
         ErrorCode.DATABASE_URL_MISSING,
         ErrorCode.DATABASE_URL_SCHEME,
         ErrorCode.DEBRIEF_CONTEXT_INVALID,
@@ -158,7 +162,6 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.MEETING_MEMORY_REQUIRES_CONVERSE,
         ErrorCode.MEETING_MEMORY_REQUIRES_PERSONA,
         ErrorCode.MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST,
-        ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES,
         ErrorCode.MEETING_PERSONA_LANGUAGE_MISMATCH,
         ErrorCode.MEETING_PERSONA_REQUIRES_CONVERSE,
         ErrorCode.MEETING_SPEAK_REQUIRES_AUDIO,
@@ -205,16 +208,14 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH,
         ErrorCode.VOICEPRINT_MODEL_PATH_MISSING,
         ErrorCode.VOICEPRINT_NOT_ENROLLED,
-        ErrorCode.WORKER_FILE_MISSING,
-        ErrorCode.WORKER_FILE_NOT_VISIBLE,
-        ErrorCode.WORKER_INGEST_NO_FINISHED_SESSION,
-        ErrorCode.WORKER_NOT_RUNNING,
-        ErrorCode.WORKER_TIMEOUT_NEGATIVE,
+        ErrorCode.WORKER_JOB_KEYS_MISSING,
     }
     assert {code for code, spec in CATALOG.items() if spec.exit_code is ExitCode.INFRA_FAILURE} == {
+        ErrorCode.API_JOB_TIMEOUT,
+        ErrorCode.API_STREAM_CLOSED,
+        ErrorCode.API_UNREACHABLE,
         ErrorCode.BROWSER_NODE_MISSING,
         ErrorCode.DATABASE_UNREACHABLE,
-        ErrorCode.DOCKER_PS_FAILED,
         ErrorCode.DOCKER_UNAVAILABLE,
         ErrorCode.MEMORY_UNAVAILABLE,
         ErrorCode.PROVIDER_UNAVAILABLE,
@@ -230,3 +231,4 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.CALIBRATE_RELIABILITY_EXCEEDS_BOUND,
         ErrorCode.CALIBRATE_THETA_OUTSIDE_VALLEY,
     }
+    assert CATALOG[ErrorCode.INTERNAL_FAILURE].exit_code is ExitCode.FAILURE

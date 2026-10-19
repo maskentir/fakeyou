@@ -14,17 +14,17 @@ def _event(id: str, text: str, participant_id: str) -> TranscriptEvent:
     )
 
 
-def test_explicit_cue_with_name_sets_my_turn():
+def test_explicit_cue_with_name_sets_my_turn() -> None:
     cue, target = detect_turn_cue("Harun, you're up", ("harun",))
     assert (cue, target) == ("explicit", "harun")
 
 
-def test_quote_about_twin_is_not_a_cue():
+def test_quote_about_twin_is_not_a_cue() -> None:
     cue, _ = detect_turn_cue('she said "Harun agrees"', ("harun",))
     assert cue == "none"
 
 
-def test_unknown_ids_never_join_spoken_order():
+def test_unknown_ids_never_join_spoken_order() -> None:
     state = empty_turn_state()
     state = note_event(state, _event("t1", "hello", "unknown"), ("harun",))
     state = note_event(state, _event("t2", "hello", "unknown"), ("harun",))

@@ -80,8 +80,9 @@ def test_stale_sidecar_falls_back_to_plain_record_and_records_fault(tmp_path: Pa
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: AT,
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+    path.write_bytes(
+        encoded(transcript(text="Rewritten inside the corrected prefix."), transcript(id="entry-2"))
+    )
     faults = FaultReporter(journal=Journal("meeting-1", emit=lambda _line: None))
 
     snapshot = load_record_snapshot(path, faults=faults)
@@ -114,12 +115,37 @@ def test_stale_sidecar_with_no_fault_reporter_uses_live_labels(tmp_path: Path) -
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: AT,
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+    path.write_bytes(
+        encoded(transcript(text="Rewritten inside the corrected prefix."), transcript(id="entry-2"))
+    )
 
     snapshot = load_record_snapshot(path)
 
     assert [entry.participant_id for entry in snapshot.sources] == ["unknown", "unknown"]
+
+
+def test_record_growth_keeps_corrections_on_the_hashed_prefix(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(transcript()))
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    write_correction_bundle(
+        audio_dir,
+        path,
+        [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
+        clock=lambda: AT,
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+    faults = FaultReporter(journal=Journal("meeting-1", emit=lambda _line: None))
+
+    snapshot = load_record_snapshot(path, faults=faults)
+
+    assert [entry.participant_id for entry in snapshot.sources] == [
+        correction_uuid("A", 0),
+        "unknown",
+    ]
+    assert faults.total() == 0
 
 
 @pytest.mark.parametrize("sidecar", ["unsupported_schema", "corrupt_bytes"])
@@ -193,8 +219,9 @@ def test_stale_sidecar_without_fault_reporter_emits_journal_fallback(tmp_path: P
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: AT,
     )
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(transcript(id="entry-2")) + "\n")
+    path.write_bytes(
+        encoded(transcript(text="Rewritten inside the corrected prefix."), transcript(id="entry-2"))
+    )
     lines: list[str] = []
     journal = Journal("meeting-1", emit=lines.append)
 

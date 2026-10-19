@@ -119,3 +119,12 @@ def test_embed_truncated_utterance_stays_close_to_full() -> None:
     full = [rng.uniform(-0.5, 0.5) for _ in range(16000 * 6)]
     half = full[: 16000 * 3]
     assert cosine(embedder.embed([full]), embedder.embed([half])) >= 0.95
+
+
+def test_voiceprint_embedder_rejects_sha_mismatch(tmp_path: Path) -> None:
+    model = tmp_path / "tiny.onnx"
+    model.write_bytes(b"model bytes")
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.VOICEPRINT_MODEL_DIGEST_MISMATCH)
+    ):
+        load_embedder(str(model), "f" * 64)

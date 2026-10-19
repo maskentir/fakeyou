@@ -14,10 +14,10 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA
 from fakeyou.conversation.conversation import (
-    ConversationLoop,
     LangGraphResponder,
     conversation_thread_id,
 )
+from fakeyou.conversation.meeting_turns import MeetingTurns
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
@@ -61,8 +61,8 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     )
 
     loop = captured["conversation"]
-    assert isinstance(loop, ConversationLoop)
-    assert loop.phase == "closed"
+    assert isinstance(loop, MeetingTurns)
+    assert loop.lifecycle.phase == "closed"
     assert created["tools"] == []
     assert created["checkpointer"] is not None
     assert created["persona"] == DEFAULT_PERSONA
@@ -108,7 +108,7 @@ async def test_join_audio_transcript_reaches_conversation(
             timestamp="2026-09-28T00:00:00+00:00",
         )
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
-        await loop.wait_idle()
+        await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -117,7 +117,9 @@ async def test_join_audio_transcript_reaches_conversation(
         conversation_enabled=True,
     )
 
-    assert [event.text for event in captured["conversation"].events] == ["Settings Twin, hello."]
+    assert [event.text for event in captured["conversation"].ingress.events] == [
+        "Settings Twin, hello."
+    ]
     assert agent_calls[0]["configurable"]["thread_id"] == conversation_thread_id(
         "settings-owner", "settings-twin", "meeting-9"
     )
@@ -219,7 +221,7 @@ async def test_join_wake_phrase_gates_agent_replies(
         for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
-        await loop.wait_idle()
+        await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -264,7 +266,7 @@ async def test_join_barge_in_stops_speaking_session(
         )
         frame = TranscriptUpdate(text="wait", final=True, timestamp="2026-09-28T00:00:00+00:00")
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
-        await loop.wait_idle()
+        await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -357,15 +359,6 @@ async def test_join_routes_interim_transcripts_to_barge_in(
     assert stops == [True]
 
 
-async def test_join_rejects_policy_without_wake_phrase(
-    join: Callable[..., Any], settings: Settings
-) -> None:
-    settings.conversation.participant_policy_enabled = True
-    with pytest.raises(FakeYouError, match="wake-phrase") as caught:
-        await join("https://meet.google.com/abc-defg-hij", meeting_id=None)
-    assert caught.value.code is ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES
-
-
 @pytest.mark.asyncio
 async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
     audio_join: AudioJoin,
@@ -395,7 +388,7 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
         ):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
-        await loop.wait_idle()
+        await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run

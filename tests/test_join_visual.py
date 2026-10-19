@@ -8,13 +8,14 @@ from typing import TYPE_CHECKING, Any, cast
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.orchestration.transcript import (
+    TranscriptDrain,
     TranscriptSinks,
     build_transcript_callback,
     record_visual_caption,
 )
 
 if TYPE_CHECKING:
-    from fakeyou.conversation.conversation import ConversationLoop
+    from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.config.identifiers import SessionId
 from fakeyou.persistence.record import (
     MeetingRecord,
@@ -61,9 +62,98 @@ def visual_store(directory: Path) -> VisualStore:
 class _Conversation:
     def __init__(self) -> None:
         self.events: list[Any] = []
+        self.calls: list[tuple[str, Any]] = []
 
-    async def handle_transcript(self, event: Any) -> None:
+    async def receive_final(self, event: Any) -> None:
         self.events.append(event)
+        self.calls.append(("transcript", event.text))
+
+    async def handle_interim(self, text: str) -> None:
+        self.calls.append(("interim", text))
+
+
+INGRESS: tuple[tuple[str, Any], ...] = (
+    ("vad", True),
+    ("interim", "can you help"),
+    ("vad", False),
+    ("final", "can you help me today?"),
+    ("interim", "wait"),
+    ("vad", False),
+)
+INGRESS_CALLS: list[tuple[str, Any]] = [
+    ("interim", "can you help"),
+    ("transcript", "can you help me today?"),
+    ("interim", "wait"),
+]
+
+
+def _ingress_update(text: str, *, final: bool) -> TranscriptUpdate:
+    return TranscriptUpdate(text=text, final=final, timestamp=STAMPS[0])
+
+
+async def _direct_ingress(tmp_path: Path) -> list[tuple[str, Any]]:
+    journal = RecordingJournal("meeting-ingress")
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-ingress")))
+    conversation = _Conversation()
+    callback = build_transcript_callback(
+        sinks=TranscriptSinks(journal, record, cast("TurnIngress", conversation)),
+        binder=SlotBinder(),
+        voice_activity=None,
+    )
+    for kind, value in INGRESS:
+        if kind == "interim":
+            await conversation.handle_interim(value)
+        elif kind == "final":
+            await callback(_ingress_update(value, final=True))
+    record.close()
+    journal.close()
+    return conversation.calls
+
+
+async def _drained_ingress(tmp_path: Path) -> list[tuple[str, Any]]:
+    journal = RecordingJournal("meeting-ingress")
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-ingress")))
+    conversation = _Conversation()
+    drain = TranscriptDrain(
+        sinks=TranscriptSinks(journal, record, cast("TurnIngress", conversation)),
+        binder=SlotBinder(),
+        voice_activity=None,
+    )
+    for kind, value in INGRESS:
+        if kind == "vad":
+            await drain.on_vad(active=value)
+        elif kind == "interim":
+            await drain.on_interim(_ingress_update(value, final=False))
+        else:
+            await drain(_ingress_update(value, final=True))
+    record.close()
+    journal.close()
+    return conversation.calls
+
+
+async def test_drained_ingress_reaches_the_loop_exactly_like_direct_calls(tmp_path: Path) -> None:
+    direct = await _direct_ingress(tmp_path / "direct")
+    drained = await _drained_ingress(tmp_path / "drained")
+
+    assert direct == INGRESS_CALLS
+    assert drained == direct
+
+
+async def test_stop_ingress_is_arbitrated_as_a_stop_event(tmp_path: Path) -> None:
+    journal = RecordingJournal("meeting-stop")
+    record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-stop")))
+    drain = TranscriptDrain(
+        sinks=TranscriptSinks(journal, record, None),
+        binder=SlotBinder(),
+        voice_activity=None,
+    )
+
+    winner = await drain.on_stop()
+
+    assert winner is not None
+    assert winner.kind == "stop"
+    record.close()
+    journal.close()
 
 
 async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
@@ -71,9 +161,7 @@ async def test_transcript_callback_attaches_window_refs(tmp_path: Path) -> None:
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-visual")))
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
-    sinks = TranscriptSinks(
-        journal, record, cast("ConversationLoop", conversation), visual_store=store
-    )
+    sinks = TranscriptSinks(journal, record, cast("TurnIngress", conversation), visual_store=store)
     callback = build_transcript_callback(
         sinks=sinks,
         binder=SlotBinder(),
@@ -99,9 +187,7 @@ async def test_transcript_callback_falls_back_to_wall_clock(tmp_path: Path) -> N
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-visual")))
     conversation = _Conversation()
     store = visual_store(tmp_path / "visual")
-    sinks = TranscriptSinks(
-        journal, record, cast("ConversationLoop", conversation), visual_store=store
-    )
+    sinks = TranscriptSinks(journal, record, cast("TurnIngress", conversation), visual_store=store)
     callback = build_transcript_callback(
         sinks=sinks,
         binder=SlotBinder(),
@@ -126,7 +212,7 @@ async def test_transcript_callback_skips_visual_without_store(tmp_path: Path) ->
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-visual")))
     conversation = _Conversation()
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, cast("ConversationLoop", conversation)),
+        sinks=TranscriptSinks(journal, record, cast("TurnIngress", conversation)),
         binder=SlotBinder(),
         voice_activity=None,
         per_stream_enabled=True,

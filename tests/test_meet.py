@@ -824,3 +824,33 @@ async def test_click_when_ready_reports_a_persistent_overlay_instead_of_raising(
     assert failure is not None
     assert "name field" in failure
     assert locator.clicks == 2
+
+
+_PRESENTATION_BANNER_IN_CALL = IN_CALL + '<div role="banner">Presentation</div>'
+_CALL_STATE_FIXTURES = {
+    "in_call": (IN_CALL, "in_call"),
+    "waiting_room": (LOBBY, "lobby"),
+    "removed": (REMOVED, "removed"),
+    "ended": (ENDED, "ended"),
+    "blank": ("<html><body></body></html>", "unknown"),
+    "presentation_banner": (_PRESENTATION_BANNER_IN_CALL, "in_call"),
+}
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    ("fixture", "expected"),
+    [(name, expected) for name, (_, expected) in _CALL_STATE_FIXTURES.items()],
+)
+async def test_string_match_observer_pins_frozen_call_states(fixture: str, expected: str) -> None:
+    from playwright.async_api import async_playwright
+
+    html, _ = _CALL_STATE_FIXTURES[fixture]
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html)
+            assert (await observe_call_state(page)).state == expected
+        finally:
+            await browser.close()

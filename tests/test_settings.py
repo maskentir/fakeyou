@@ -87,8 +87,8 @@ def test_env_example_values_match_settings_defaults() -> None:
     )
 
 
-def test_conversation_sentence_streaming_defaults_off() -> None:
-    assert Settings().conversation.sentence_streaming is False
+def test_conversation_sentence_streaming_defaults_on() -> None:
+    assert Settings().conversation.sentence_streaming is True
 
 
 def test_conversation_sentence_streaming_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,4 +247,71 @@ def test_google_reply_rejects_minimal_reasoning_effort() -> None:
     from fakeyou.config.settings import GoogleReply
 
     with pytest.raises(ValidationError):
-        GoogleReply(reasoning_effort="minimal")
+        GoogleReply.model_validate({"reasoning_effort": "minimal"})
+
+
+def test_api_settings_default_to_loopback_without_tokens() -> None:
+    api = Settings(**env_file_opt(None)).api
+    assert api.host == "127.0.0.1"
+    assert api.port == 8000
+    assert api.admin_token is None
+    assert api.owner_token is None
+    assert api.rate_limit_per_minute == 120
+
+
+def test_api_settings_read_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKEYOU_API__HOST", "0.0.0.0")
+    monkeypatch.setenv("FAKEYOU_API__PORT", "9001")
+    monkeypatch.setenv("FAKEYOU_API__ADMIN_TOKEN", "admin-secret")
+    monkeypatch.setenv("FAKEYOU_API__OWNER_TOKEN", "owner-secret")
+    monkeypatch.setenv("FAKEYOU_API__RATE_LIMIT_PER_MINUTE", "30")
+    api = Settings(**env_file_opt(None)).api
+    assert api.host == "0.0.0.0"
+    assert api.port == 9001
+    assert api.admin_token is not None
+    assert api.admin_token.get_secret_value() == "admin-secret"
+    assert api.owner_token is not None
+    assert api.owner_token.get_secret_value() == "owner-secret"
+    assert api.rate_limit_per_minute == 30
+
+
+def test_redis_settings_default_and_read_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = Settings(**env_file_opt(None)).transport.redis
+    assert redis.url is None
+    assert redis.stream_max_len == 10000
+    assert redis.lease_seconds == 30.0
+    assert redis.connect_timeout_seconds == 5.0
+    monkeypatch.setenv("FAKEYOU_TRANSPORT__REDIS__URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("FAKEYOU_TRANSPORT__REDIS__STREAM_MAX_LEN", "500")
+    redis = Settings(**env_file_opt(None)).transport.redis
+    assert redis.url is not None
+    assert redis.url.get_secret_value() == "redis://localhost:6379/0"
+    assert redis.stream_max_len == 500
+
+
+def test_extraction_concurrency_defaults_to_frozen_twenty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(**env_file_opt(None)).memory.ingestion.extraction_concurrency == 20
+    monkeypatch.setenv("FAKEYOU_MEMORY__INGESTION__EXTRACTION_CONCURRENCY", "4")
+    assert Settings(**env_file_opt(None)).memory.ingestion.extraction_concurrency == 4
+
+
+def test_memory_store_has_no_group_field() -> None:
+    assert "group" not in Settings(**env_file_opt(None)).memory.store.model_fields
+
+
+def test_example_env_file_loads_under_the_schema(tmp_path: Path) -> None:
+    example = Path(__file__).resolve().parent.parent / ".env.example"
+    active = "\n".join(
+        line
+        for line in example.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(active, encoding="utf-8")
+    settings = Settings(**env_file_opt(env_file))
+    assert settings.api.host == "127.0.0.1"
+    assert settings.participation_decider.enabled is True

@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -10,11 +10,24 @@ from langgraph.checkpoint.memory import InMemorySaver
 import fakeyou.orchestration.runtime as runtime
 from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig, SessionResult
+from fakeyou.conversation.state import LifecycleState
 from fakeyou.meet.meet import CallObservation, JoinResult, LeaveResult
+from fakeyou.orchestration.lifecycle import initial_lifecycle_state
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import FakePage, FakePageSession, meet_page
 from tests._persistence_fakes import FakeSaverSession
+
+INSTANT_JOIN_RETRY: dict[str, Any] = {
+    "join_retry_base_seconds": 0.001,
+    "join_retry_cap_seconds": 0.001,
+}
+
+
+def pin_join_jitter(monkeypatch: pytest.MonkeyPatch, jitter: float = 0.0) -> None:
+    monkeypatch.setattr(
+        "langgraph.pregel._retry.random", SimpleNamespace(uniform=lambda _low, _high: jitter)
+    )
 
 
 def session_config(**overrides: Any) -> SessionConfig:
@@ -24,6 +37,7 @@ def session_config(**overrides: Any) -> SessionConfig:
         "meeting_id": "meeting-1",
         "link": LINK,
         "twin_name": "Twin",
+        **INSTANT_JOIN_RETRY,
     }
     values.update(overrides)
     return SessionConfig(**values)
@@ -45,6 +59,13 @@ async def run_session(
             sleep=clock.sleep,
             monotonic=clock.monotonic,
         ),
+    )
+
+
+def live_state(phase: str) -> LifecycleState:
+    return cast(
+        LifecycleState,
+        {**initial_lifecycle_state("owner-1", "twin-1", "meeting-1"), "phase": phase},
     )
 
 

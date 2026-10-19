@@ -17,9 +17,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 from evals._shared import sanitized_role
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import LangGraphResponder, cap_spoken_reply
+from fakeyou.conversation.conversation import (
+    LangGraphResponder,
+    StreamTrace,
+    cap_spoken_reply,
+    stream_sentences,
+)
+from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.memory import RECALL_EMPTY_RESULT
+from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt
 from fakeyou.observability.faults import capture_error
 
@@ -43,6 +49,7 @@ REQUIRED_CHECKS = (
 class ReplayScore:
     checks: dict[str, list[bool]] = field(default_factory=dict)
     latencies: list[float] = field(default_factory=list)
+    first_sentence_latencies: list[float] = field(default_factory=list)
     replies: list[str] = field(default_factory=list)
     turns: list[dict[str, Any]] = field(default_factory=list)
 
@@ -60,10 +67,17 @@ class ReplayScore:
             if len(latencies) > 1
             else (latencies or [0.0])[0]
         )
+        first = sorted(self.first_sentence_latencies)
+        first_p95 = (
+            statistics.quantiles(first, n=20, method="inclusive")[18]
+            if len(first) > 1
+            else (first[0] if first else None)
+        )
         return {
             "rates": {name: round(self.rate(name), 3) for name in sorted(self.checks)},
             "latency_p50_s": round(statistics.median(latencies), 3) if latencies else None,
             "latency_p95_s": round(p95, 3),
+            "first_sentence_p95_s": round(first_p95, 3) if first_p95 is not None else None,
             "turns": len(self.latencies),
         }
 
@@ -108,8 +122,33 @@ def score_turn(
     return outcome
 
 
+async def _collect_sentences(
+    responder: LangGraphResponder,
+    event: TranscriptEvent,
+    sentences: list[str],
+    score: ReplayScore,
+    started: float,
+) -> bool:
+    async for sentence in stream_sentences(
+        responder.agent,
+        request_messages([event]),
+        responder.thread_config(responder.thread_id),
+        max_sentences=responder.max_sentences,
+        trace=StreamTrace(language=responder.language, request_id=event.id, transcript_id=event.id),
+    ):
+        if not sentences:
+            score.first_sentence_latencies.append(time.monotonic() - started)
+        sentences.append(sentence)
+    return bool(sentences)
+
+
 async def replay(
-    model_factory: Callable[[], BaseChatModel], fixture: dict[str, Any], runs: int
+    model_factory: Callable[[], BaseChatModel],
+    fixture: dict[str, Any],
+    runs: int,
+    *,
+    streaming: bool = False,
+    prompt_builder: Callable[[PersonaProfile], str] = build_system_prompt,
 ) -> ReplayScore:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
     score = ReplayScore()
@@ -118,10 +157,19 @@ async def replay(
             agent = create_meeting_agent(
                 model_factory(),
                 tools=[recall_tool(session["memory"])],
-                persona=build_system_prompt(profile),
+                persona=prompt_builder(profile),
                 checkpointer=InMemorySaver(),
             )
-            responder = LangGraphResponder(agent, f"replay-{run}-{session['meeting_id']}")
+            responder = (
+                LangGraphResponder(
+                    agent,
+                    f"replay-{run}-{session['meeting_id']}",
+                    language=profile.language,
+                    max_sentences=2,
+                )
+                if streaming
+                else LangGraphResponder(agent, f"replay-{run}-{session['meeting_id']}")
+            )
             for index, turn in enumerate(session["turns"]):
                 calls: list[None] = []
                 event = TranscriptEvent(
@@ -133,15 +181,22 @@ async def replay(
                     participant_id="unknown",
                     speaker_evidence_id=None,
                 )
-                started = time.monotonic()
 
                 def _note_tool_start(calls: list[None] = calls) -> None:
                     calls.append(None)
 
-                answered, _ = await capture_error(
-                    partial(responder.respond, [event], _note_tool_start)
-                )
-                reply = answered or ""
+                started = time.monotonic()
+                if streaming:
+                    sentences: list[str] = []
+                    streamed, _ = await capture_error(
+                        partial(_collect_sentences, responder, event, sentences, score, started)
+                    )
+                    reply = " ".join(sentences) if streamed else ""
+                else:
+                    answered, _ = await capture_error(
+                        partial(responder.respond, [event], _note_tool_start)
+                    )
+                    reply = answered or ""
                 latency = time.monotonic() - started
                 score.latencies.append(latency)
                 score.replies.append(reply)

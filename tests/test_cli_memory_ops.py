@@ -3,417 +3,357 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 from uuid import UUID
 
+import httpx2
 import pytest
 
 import fakeyou.cli.memory as cli_memory
-import fakeyou.memory.memory as memory_module
-import fakeyou.memory.owner_note_service as owner_note_service
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.memory import CorrectionTarget
+from fakeyou.catalog.errors import CATALOG, ErrorCode
+from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.cli.client import ApiFailure, ClientSettings
+from fakeyou.cli.memory import NoteDraft
 from fakeyou.config.settings import Settings
 from fakeyou.memory import maintenance
 from fakeyou.memory.maintenance import initialize_indexes, run_reembed
 from fakeyou.memory.memory import ReembedResult
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.memory.owner_note_service import NoteRequest, add_note, correct_note
-from fakeyou.memory.owner_notes import NoteConflictError, NoteIdentity, OwnerNoteResult
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from tests._cli_memory_support import tracked_memory
-from tests._cli_support import PERSONA_DATA, fake_persona_memory, write_persona
+from tests._cli_support import PERSONA_DATA, write_persona
 from tests._memory_fakes import make_graphiti
 
-
-@pytest.mark.asyncio
-async def test_memory_init_builds_indexes(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    events: list[str] = []
-    memory = make_graphiti()
-    memory.events = events
-
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
-
-    await cli_memory.initialize_memory(settings)
-
-    assert events == ["build", "close"]
-    assert "Graphiti indexes initialized." in capsys.readouterr().out
+EPISODE = "a1b2c3d4-0000-4000-8000-000000000001"
+OPERATION = UUID("a1b2c3d4-0000-4000-8000-000000000002")
+SOURCE_AT = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+SETTINGS = ClientSettings(base_url="http://api.test", owner_token="owner-secret", admin_token=None)
+NO_WAIT = 0.0
 
 
-@pytest.mark.asyncio
-async def test_memory_init_closes_memory_when_index_setup_fails(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    events: list[str] = []
-    memory = make_graphiti(fail_build=True)
-    memory.events = events
+def _route(
+    responses: dict[tuple[str, str], httpx2.Response], seen: list[httpx2.Request]
+) -> httpx2.MockTransport:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        key = (request.method, request.url.path)
+        if key not in responses:
+            raise AssertionError(f"unexpected {key}")
+        return responses[key]
 
-    monkeypatch.setattr(memory_module, "create_graphiti_memory", lambda _config, **_kwargs: memory)
-
-    with pytest.raises(RuntimeError, match="index setup failed"):
-        await cli_memory.initialize_memory(settings)
-
-    assert events == ["build", "close"]
+    return httpx2.MockTransport(handler)
 
 
-async def test_memory_add_stores_owner_note_in_persona_group(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    graphiti = make_graphiti()
-    opened = fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict[str, Any]] = []
-    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
-    note_id = UUID("b322d326-37b5-482a-904c-ef982f4dc510")
-
-    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
-        calls.append({"memory": memory, **kwargs})
-        return OwnerNoteResult(
-            episode_uuid=str(note_id),
-            facts=("The Orchid demo moves to Friday.",),
-            source_at=source_at,
-            recorded_at=recorded_at,
-            supersedes=None,
-        )
-
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", remember)
-
-    await cli_memory.add_owner_note(
-        "The Orchid demo moves to Friday.",
-        identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        settings=settings,
-        source_at=source_at,
-        note_id=note_id,
-    )
-
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
-    assert calls == [
-        {
-            "memory": graphiti,
-            "group_id": profile.memory_group,
-            "text": "The Orchid demo moves to Friday.",
-            "source_at": source_at,
-            "identity": NoteIdentity(note_id),
-        }
-    ]
-    assert opened == ["open", "close"]
-    captured = capsys.readouterr()
-    assert json.loads(captured.out) == {
-        "episode_uuid": str(note_id),
-        "facts": ["The Orchid demo moves to Friday."],
-        "source_at": source_at.isoformat(),
-        "recorded_at": recorded_at.isoformat(),
+def _note_view() -> dict[str, Any]:
+    return {
+        "episode_uuid": EPISODE,
+        "facts": ["Orchid moved to Friday"],
+        "source_at": SOURCE_AT.isoformat(),
+        "recorded_at": SOURCE_AT.isoformat(),
         "supersedes": None,
     }
-    assert captured.err == ""
 
 
-async def test_memory_add_generates_and_reports_note_id_before_extraction(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+async def test_memory_add_posts_the_note_with_a_generated_operation_id(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    graphiti = make_graphiti()
-    fake_persona_memory(monkeypatch, graphiti)
-    seen: list[dict[str, Any]] = []
-
-    async def remember(_memory: Any, **kwargs: Any) -> OwnerNoteResult:
-        seen.append(kwargs)
-        return OwnerNoteResult(
-            episode_uuid=str(kwargs["identity"].note_id),
-            facts=("A note.",),
-            source_at=datetime(2026, 9, 30, 6, 40, tzinfo=UTC),
-            recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
-            supersedes=None,
-        )
-
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", remember)
+    seen: list[httpx2.Request] = []
+    monkeypatch.setattr(cli_memory, "uuid4", lambda: OPERATION)
+    transport = _route(
+        {("POST", "/v1/twins/twin-1/notes"): httpx2.Response(201, json=_note_view())}, seen
+    )
 
     await cli_memory.add_owner_note(
-        "A note.",
-        identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        settings=settings,
+        NoteDraft(text="Orchid moved", twin_id="twin-1"), settings=SETTINGS, transport=transport
     )
 
-    [call] = seen
-    assert UUID(str(call["identity"].note_id)) == call["identity"].note_id
-    assert f"note-id {call['identity'].note_id}" in capsys.readouterr().err
-
-
-async def test_memory_add_rejects_future_source_before_opening_memory(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match="future") as caught:
-        await cli_memory.add_owner_note(
-            "A note.",
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-            source_at=datetime(2999, 1, 1, tzinfo=UTC),
-        )
-    assert caught.value.code is ErrorCode.MEMORY_SOURCE_AT_FUTURE
-    assert opened == []
-
-
-async def test_memory_add_propagates_a_note_conflict(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_persona_memory(monkeypatch, make_graphiti())
-
-    async def conflicting(_memory: Any, **_kwargs: Any) -> NoReturn:
-        raise NoteConflictError(ErrorCode.NOTE_PAYLOAD_MISMATCH)
-
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", conflicting)
-
-    with pytest.raises(FakeYouError, match="already in use") as caught:
-        await cli_memory.add_owner_note(
-            "A note.",
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-        )
-    assert caught.value.code is ErrorCode.NOTE_PAYLOAD_MISMATCH
-
-
-async def test_memory_correct_supersedes_target_note(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    graphiti = make_graphiti()
-    opened = fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict[str, Any]] = []
-    target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
-    note_id = UUID("a1b2c3d4-0000-4000-8000-000000000002")
-    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    recorded_at = datetime(2026, 10, 2, 8, tzinfo=UTC)
-
-    async def remember(memory: Any, **kwargs: Any) -> OwnerNoteResult:
-        calls.append({"memory": memory, **kwargs})
-        return OwnerNoteResult(
-            episode_uuid=str(note_id),
-            facts=("The Orchid demo moves to Friday.",),
-            source_at=source_at,
-            recorded_at=recorded_at,
-            supersedes=str(target),
-        )
-
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", remember)
-
-    await cli_memory.correct_owner_note(
-        "The Orchid demo moves to Friday.",
-        target=CorrectionTarget(str(target), note_id),
-        source_at=source_at,
-        identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        settings=settings,
-    )
-
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
-    assert calls == [
-        {
-            "memory": graphiti,
-            "group_id": profile.memory_group,
-            "text": "The Orchid demo moves to Friday.",
-            "source_at": source_at,
-            "identity": NoteIdentity(note_id, target),
-        }
-    ]
-    assert opened == ["open", "close"]
+    body = json.loads(seen[0].content)
+    assert body == {"text": "Orchid moved", "source_at": None, "note_id": str(OPERATION)}
+    assert seen[0].headers["authorization"] == "Bearer owner-secret"
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == {
-        "episode_uuid": str(note_id),
-        "facts": ["The Orchid demo moves to Friday."],
-        "source_at": source_at.isoformat(),
-        "recorded_at": recorded_at.isoformat(),
-        "supersedes": str(target),
-    }
-    assert captured.err == ""
+    assert f"fakeyou: note-id {OPERATION}" in captured.err
+    assert json.loads(captured.out) == _note_view()
 
 
-async def test_memory_correct_generates_note_id_when_missing(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_memory_add_does_not_announce_a_caller_supplied_note_id(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    fake_persona_memory(monkeypatch, make_graphiti())
-    seen: list[dict[str, Any]] = []
-    target = UUID("a1b2c3d4-0000-4000-8000-000000000001")
-    source_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    seen: list[httpx2.Request] = []
+    transport = _route(
+        {("POST", "/v1/twins/twin-1/notes"): httpx2.Response(201, json=_note_view())}, seen
+    )
 
-    async def remember(_memory: Any, **kwargs: Any) -> OwnerNoteResult:
-        seen.append(kwargs)
-        return OwnerNoteResult(
-            episode_uuid=str(kwargs["identity"].note_id),
-            facts=("Fixed.",),
-            source_at=source_at,
-            recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
-            supersedes=str(target),
+    await cli_memory.add_owner_note(
+        NoteDraft(text="x", twin_id="twin-1", source_at=SOURCE_AT, note_id=OPERATION),
+        settings=SETTINGS,
+        transport=transport,
+    )
+
+    assert "note-id" not in capsys.readouterr().err
+    assert json.loads(seen[0].content)["source_at"] == SOURCE_AT.isoformat()
+
+
+async def test_memory_add_maps_a_note_conflict_to_its_catalog_exit() -> None:
+    conflict = httpx2.Response(
+        409,
+        json={"error": {"code": "note.id_in_use", "message": "note id already used"}},
+    )
+    transport = _route({("POST", "/v1/twins/twin-1/notes"): conflict}, [])
+
+    with pytest.raises(ApiFailure, match="note id already used") as caught:
+        await cli_memory.add_owner_note(
+            NoteDraft(text="x", twin_id="twin-1", note_id=OPERATION),
+            settings=SETTINGS,
+            transport=transport,
         )
 
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", remember)
+    assert caught.value.code == "note.id_in_use"
+    assert caught.value.exit_code is CATALOG[ErrorCode.NOTE_ID_IN_USE].exit_code
+
+
+async def test_memory_correct_targets_the_corrections_route_for_the_episode() -> None:
+    seen: list[httpx2.Request] = []
+    transport = _route(
+        {
+            ("POST", f"/v1/twins/twin-1/notes/{EPISODE}/corrections"): httpx2.Response(
+                201, json=_note_view()
+            )
+        },
+        seen,
+    )
 
     await cli_memory.correct_owner_note(
-        "Fixed.",
-        target=CorrectionTarget(str(target), None),
-        source_at=source_at,
-        identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        settings=settings,
+        NoteDraft(text="fixed", twin_id="twin-1", source_at=SOURCE_AT, note_id=OPERATION),
+        episode_uuid=EPISODE,
+        settings=SETTINGS,
+        transport=transport,
     )
 
-    [call] = seen
-    assert call["identity"].supersedes == target
-    assert f"note-id {call['identity'].note_id}" in capsys.readouterr().err
+    assert json.loads(seen[0].content) == {
+        "text": "fixed",
+        "source_at": SOURCE_AT.isoformat(),
+        "note_id": str(OPERATION),
+    }
 
 
-CORRECT_TARGET = "a1b2c3d4-0000-4000-8000-000000000001"
+async def test_memory_correct_requires_a_source_time_before_calling_the_api() -> None:
+    seen: list[httpx2.Request] = []
+    transport = _route({}, seen)
 
-
-CORRECT_SOURCE = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        ("  ", CORRECT_TARGET, CORRECT_SOURCE, ErrorCode.MEMORY_NOTE_TEXT_BLANK, "blank"),
-        ("Fixed.", "not-a-uuid", CORRECT_SOURCE, ErrorCode.MEMORY_EPISODE_NOT_UUID, "UUID"),
-        (
-            "Fixed.",
-            CORRECT_TARGET,
-            datetime(2999, 1, 1, tzinfo=UTC),
-            ErrorCode.MEMORY_SOURCE_AT_FUTURE,
-            "future",
-        ),
-        (
-            "Fixed.",
-            CORRECT_TARGET,
-            datetime(2026, 9, 30, 6, 40),
-            ErrorCode.MEMORY_SOURCE_AT_NAIVE,
-            "timezone",
-        ),
-    ],
-)
-async def test_memory_correct_validates_before_opening_memory(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    case: tuple[str, str, datetime, ErrorCode, str],
-) -> None:
-    text, episode_uuid, source_at, code, match = case
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match=match) as caught:
+    with pytest.raises(ApiFailure):
         await cli_memory.correct_owner_note(
-            text,
-            target=CorrectionTarget(episode_uuid, None),
-            source_at=source_at,
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-        )
-    assert caught.value.code is code
-    assert opened == []
-
-
-async def test_memory_correct_rejects_a_foreign_identity_before_opening_memory(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match="owner_id and twin_id"):
-        await cli_memory.correct_owner_note(
-            "Fixed.",
-            target=CorrectionTarget(CORRECT_TARGET, None),
-            source_at=CORRECT_SOURCE,
-            identity=OperatorIdentity(write_persona(tmp_path), "other-owner", None),
-            settings=settings,
-        )
-    assert opened == []
-
-
-async def test_memory_add_validates_before_opening_memory(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match="blank") as caught:
-        await cli_memory.add_owner_note(
-            "  ",
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-        )
-    assert caught.value.code is ErrorCode.MEMORY_NOTE_TEXT_BLANK
-    assert opened == []
-
-
-async def test_memory_add_rejects_a_foreign_identity_before_opening_memory(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match="owner_id and twin_id"):
-        await cli_memory.add_owner_note(
-            "A note.",
-            identity=OperatorIdentity(write_persona(tmp_path), "other-owner", None),
-            settings=settings,
-        )
-    assert opened == []
-
-
-async def test_add_note_announces_only_a_generated_note_id(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def remember(_memory: Any, **_kwargs: Any) -> OwnerNoteResult:
-        return OwnerNoteResult(
-            episode_uuid="episode-1",
-            facts=("A note.",),
-            source_at=datetime(2026, 9, 30, 6, 40, tzinfo=UTC),
-            recorded_at=datetime(2026, 10, 2, 8, tzinfo=UTC),
-            supersedes=None,
+            NoteDraft(text="fixed", twin_id="twin-1", note_id=OPERATION),
+            episode_uuid=EPISODE,
+            settings=SETTINGS,
+            transport=transport,
         )
 
-    monkeypatch.setattr(owner_note_service, "remember_owner_note", remember)
-    access = OperatorAccess(
-        OperatorIdentity(write_persona(tmp_path), None, None),
-        settings,
-        lambda: tracked_memory([]),
-    )
-    announced: list[UUID] = []
-    given = UUID("b322d326-37b5-482a-904c-ef982f4dc510")
-
-    await add_note(NoteRequest("A note.", None, given), access=access, announce=announced.append)
-    assert announced == []
-
-    await add_note(NoteRequest("A note.", None), access=access, announce=announced.append)
-    [generated] = announced
-    assert isinstance(generated, UUID)
+    assert seen == []
 
 
-async def test_correct_note_rejects_a_non_uuid_target_before_opening_memory(
-    settings: Settings, tmp_path: Path
+async def test_memory_forget_episode_sends_delete_for_the_episode(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    opened: list[str] = []
-    access = OperatorAccess(
-        OperatorIdentity(write_persona(tmp_path), None, None),
-        settings,
-        lambda: tracked_memory(opened),
+    seen: list[httpx2.Request] = []
+    transport = _route(
+        {("DELETE", f"/v1/twins/twin-1/notes/{EPISODE}"): httpx2.Response(204)}, seen
     )
 
-    with pytest.raises(FakeYouError, match="UUID") as caught:
-        await correct_note(
-            NoteRequest("Fixed.", CORRECT_SOURCE),
-            supersedes="not-a-uuid",
-            access=access,
-            announce=lambda _operation: None,
+    await cli_memory.forget_episode_memory(
+        twin_id="twin-1", episode_uuid=EPISODE, settings=SETTINGS, transport=transport
+    )
+
+    assert [request.method for request in seen] == ["DELETE"]
+    assert json.loads(capsys.readouterr().out) == {"removed_episodes": 1}
+
+
+async def test_memory_forget_meeting_prints_the_complete_document(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    document = {
+        "removed_episodes": 2,
+        "record_removed": True,
+        "journal_files_removed": 1,
+        "conversation_thread_removed": True,
+        "browser_profile_removed": False,
+        "stages": [{"stage": "graph", "status": "removed", "detail": None}],
+        "complete": True,
+    }
+    transport = _route(
+        {("POST", "/v1/sessions/m1/forget"): httpx2.Response(200, json=document)}, []
+    )
+
+    await cli_memory.forget_meeting_memory(meeting_id="m1", settings=SETTINGS, transport=transport)
+
+    assert json.loads(capsys.readouterr().out) == document
+
+
+async def test_memory_forget_meeting_fails_when_a_stage_is_incomplete() -> None:
+    document = {
+        "removed_episodes": 0,
+        "record_removed": False,
+        "journal_files_removed": 0,
+        "conversation_thread_removed": False,
+        "browser_profile_removed": False,
+        "stages": [{"stage": "graph", "status": "failed", "detail": "graph is down"}],
+        "complete": False,
+    }
+    transport = _route(
+        {("POST", "/v1/sessions/m1/forget"): httpx2.Response(200, json=document)}, []
+    )
+
+    with pytest.raises(ApiFailure, match="graph is down") as caught:
+        await cli_memory.forget_meeting_memory(
+            meeting_id="m1", settings=SETTINGS, transport=transport
         )
-    assert caught.value.code is ErrorCode.MEMORY_EPISODE_NOT_UUID
-    assert opened == []
+
+    assert caught.value.code == ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE
+    assert caught.value.exit_code is not ExitCode.SUCCESS
+
+
+async def test_reembed_polls_the_job_until_it_completes(capsys: pytest.CaptureFixture[str]) -> None:
+    job = "1-0"
+    polls = iter(
+        [
+            {
+                "job_id": job,
+                "kind": "reembed",
+                "meeting_id": "",
+                "status": "running",
+                "completed": False,
+                "succeeded": False,
+            },
+            {
+                "job_id": job,
+                "kind": "reembed",
+                "meeting_id": "",
+                "status": "done",
+                "completed": True,
+                "succeeded": True,
+            },
+        ]
+    )
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(
+                202,
+                json={
+                    "job_id": job,
+                    "kind": "reembed",
+                    "meeting_id": "",
+                    "status": "queued",
+                    "completed": False,
+                    "succeeded": False,
+                },
+            )
+        return httpx2.Response(200, json=next(polls))
+
+    await cli_memory.reembed_memory(
+        twin_id="twin-1",
+        settings=SETTINGS,
+        interval=NO_WAIT,
+        transport=httpx2.MockTransport(handler),
+    )
+
+    assert json.loads(capsys.readouterr().out)["succeeded"] is True
+
+
+async def test_reembed_reports_a_failed_job_without_claiming_success() -> None:
+    job = "1-0"
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(
+                202,
+                json={
+                    "job_id": job,
+                    "kind": "reembed",
+                    "meeting_id": "",
+                    "status": "queued",
+                    "completed": False,
+                    "succeeded": False,
+                },
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "job_id": job,
+                "kind": "reembed",
+                "meeting_id": "",
+                "status": "failed",
+                "completed": True,
+                "succeeded": False,
+            },
+        )
+
+    with pytest.raises(ApiFailure) as caught:
+        await cli_memory.reembed_memory(
+            twin_id="twin-1",
+            settings=SETTINGS,
+            interval=NO_WAIT,
+            transport=httpx2.MockTransport(handler),
+        )
+
+    assert caught.value.code == ErrorCode.API_JOB_FAILED
+
+
+async def test_reembed_gives_up_after_its_time_limit() -> None:
+    job = "1-0"
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            return httpx2.Response(
+                202,
+                json={
+                    "job_id": job,
+                    "kind": "reembed",
+                    "meeting_id": "",
+                    "status": "queued",
+                    "completed": False,
+                    "succeeded": False,
+                },
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "job_id": job,
+                "kind": "reembed",
+                "meeting_id": "",
+                "status": "running",
+                "completed": False,
+                "succeeded": False,
+            },
+        )
+
+    with pytest.raises(ApiFailure) as caught:
+        await cli_memory.reembed_memory(
+            twin_id="twin-1",
+            settings=SETTINGS,
+            interval=NO_WAIT,
+            limit_seconds=NO_WAIT,
+            transport=httpx2.MockTransport(handler),
+        )
+
+    assert caught.value.code == ErrorCode.API_JOB_TIMEOUT
+    assert caught.value.exit_code is ExitCode.INFRA_FAILURE
+
+
+def test_twin_id_comes_from_the_persona_file_when_not_given(tmp_path: Path) -> None:
+    persona = write_persona(tmp_path)
+
+    assert cli_memory.twin_id_for(persona, None) == str(PERSONA_DATA["twin_id"])
+
+
+def test_an_explicit_twin_id_wins_over_the_persona_file(tmp_path: Path) -> None:
+    assert cli_memory.twin_id_for(write_persona(tmp_path), "explicit") == "explicit"
+
+
+def test_a_missing_persona_file_is_an_unreadable_persona(tmp_path: Path) -> None:
+    with pytest.raises(ApiFailure) as caught:
+        cli_memory.twin_id_for(tmp_path / "absent.json", None)
+
+    assert caught.value.code == ErrorCode.MEMORY_PERSONA_UNREADABLE
 
 
 async def test_initialize_indexes_builds_indexes_through_the_opened_memory() -> None:

@@ -20,10 +20,14 @@ def test_replay_agreement_reports_gap_against_human_labels() -> None:
     assert result["misses"]
 
 
-def test_report_summary_counts_rule_jev_and_stale() -> None:
+def test_report_summary_counts_rule_jev_and_fallback() -> None:
     rows = [
         {"event": "policy_decided", "decision_source": "rule", "reason": "rule_addressed"},
         {"event": "policy_decided", "decision_source": "jev", "reason": "jev_speak"},
-        {"event": "policy_decided", "decision_source": "jev", "reason": "jev_stale_silent"},
+        {
+            "event": "policy_decided",
+            "decision_source": "rules",
+            "reason": "rules_fallback:not_addressed",
+        },
     ]
-    assert summarize_policy(rows) == {"rule": 1, "jev": 2, "stale_pregen": 1}
+    assert summarize_policy(rows) == {"rule": 1, "jev": 1, "decider_fallback": 1}

@@ -101,6 +101,31 @@ def test_twin_ids_count_all_raw_lines_and_tool_output_is_not_a_source(tmp_path: 
     assert sources[1].text == "I will ask the owner."
 
 
+def test_v2_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path: Path) -> None:
+    header = {"kind": "header", "v": 2, "at": "2026-10-03T12:00:00Z"}
+    twin = {"kind": "twin_speech", "at": "2026-10-03T12:00:01Z", "text": "I will ask the owner."}
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(encoded(header, transcript(), twin))
+
+    sources = load_record_snapshot(path).sources
+
+    assert [entry.id for entry in sources] == ["transcript:entry-1", "twin_speech:3"]
+
+
+def test_header_with_an_unknown_version_is_an_invalid_line(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(
+        encoded({"kind": "header", "v": 3, "at": "2026-10-03T12:00:00Z"}, transcript())
+    )
+
+    with pytest.raises(
+        DebriefValidationError, match=message_pattern(ErrorCode.DEBRIEF_RECORD_INVALID_LINE)
+    ) as caught:
+        load_record_snapshot(path)
+
+    assert caught.value.code is ErrorCode.DEBRIEF_RECORD_INVALID_LINE
+
+
 def test_identical_transcript_ids_are_deduplicated(tmp_path: Path) -> None:
     path = tmp_path / "record.jsonl"
     path.write_bytes(encoded(transcript(), transcript(), transcript(id="entry-2")))

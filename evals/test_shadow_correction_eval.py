@@ -244,7 +244,7 @@ async def test_shadow_dual_run_offline(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert valid_group_id(prod_group)
     assert valid_group_id(shadow_group)
-    assert len(create_memory_tools(make_graphiti(), group_id=shadow_group)) == 2
+    assert len(create_memory_tools(make_graphiti(), group_id=shadow_group)) == 1
 
     record_path = write_fixture_record(tmp_path, fixture)
     ingest_store = make_graphiti()

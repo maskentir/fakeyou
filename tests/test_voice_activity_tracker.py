@@ -279,3 +279,49 @@ def test_own_playback_does_not_count_as_others_speaking() -> None:
     clock.now = 10.8
 
     assert tracker.others_speaking() is False
+
+
+def test_overlap_is_unbound_not_loudest_slot() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        batch(11_000.0, [[10_300.0, 3, 0.3], [10_400.0, 4, 0.2]]),
+        sent_ms=11_000.0,
+        received_ms=11_000.0,
+    )
+    attribution = tracker.attribute()
+    assert attribution.bound is False
+    assert attribution.reason == "overlap"
+
+
+def test_twin_own_speech_gets_no_participant_label() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    tracker.observe_self_speech(active=True)
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_self_speech(active=False)
+    tracker.observe_batch(
+        batch(11_000.0, [[10_300.0, 3, 0.3]]), sent_ms=11_000.0, received_ms=11_000.0
+    )
+    attribution = tracker.attribute()
+    assert attribution.bound is False
+    assert not attribution.participant_id.startswith("speaker-")
+
+
+def test_anonymous_label_is_stable_and_never_a_display_name() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    roster = [{"id": "d1", "name": "Budi Santoso"}]
+    speak(tracker, clock, 10.0, 11.0)
+    tracker.observe_batch(
+        batch(11_000.0, [[10_300.0, 3, 0.3]], roster), sent_ms=11_000.0, received_ms=11_000.0
+    )
+    first = tracker.attribute()
+    speak(tracker, clock, 12.0, 13.0)
+    tracker.observe_batch(
+        batch(13_000.0, [[12_300.0, 3, 0.3]], roster), sent_ms=13_000.0, received_ms=13_000.0
+    )
+    second = tracker.attribute()
+    assert first.participant_id == second.participant_id == "speaker-a"
+    assert "Budi" not in first.participant_id

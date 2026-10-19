@@ -14,6 +14,7 @@ from fakeyou.persistence.record import (
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
+    VisualEntry,
 )
 from tests._ingestion_support import START, run, said
 from tests._memory_fakes import make_graphiti
@@ -308,3 +309,51 @@ async def test_ingest_result_carries_episode_uuids_per_window() -> None:
         0: "uuid-meeting-1:w00000",
         1: "uuid-meeting-1:w00001",
     }
+
+
+def long_line(index: int) -> TranscriptEntry:
+    return said(
+        float(index * 61),
+        f"Line {index} covers the Thursday launch plan with the rollout checklist and the "
+        "client demo schedule for all regions this week.",
+    )
+
+
+async def test_resume_over_a_long_saga_issues_one_retrieval() -> None:
+    existing = [
+        SimpleNamespace(uuid=f"old-{index}", name=f"meeting-1:w{index:05d}") for index in range(150)
+    ]
+    existing.append(SimpleNamespace(uuid="old-visual", name="meeting-1:v00000"))
+    memory = make_graphiti(episode_prefix="uuid-", existing=existing)
+    entries: list[RecordEntry] = [long_line(index) for index in range(160)]
+    entries.append(
+        VisualEntry(
+            at=START,
+            visual_id="frame-1",
+            captured_at=START,
+            sha256="a" * 64,
+            caption="Slide one shows the launch plan.",
+            frame_ref="frame:1",
+        )
+    )
+
+    result, _lines = await run(memory, entries)
+
+    assert result.resumed_from == 150
+    saga_retrievals = [call for call in memory.retrieved if call["last_n"] > 1]
+    assert len(saga_retrievals) == 1
+    assert saga_retrievals[0]["last_n"] == 2 * 160 + 1
+    assert [episode["name"] for episode in memory.added] == [
+        f"meeting-1:w{index:05d}" for index in range(150, 160)
+    ]
+    assert memory.added[0]["saga_previous_episode_uuid"] == "old-visual"
+
+
+async def test_resume_from_a_transcript_head_skips_the_saga_retrieval() -> None:
+    existing = [SimpleNamespace(uuid="old-0", name="meeting-1:w00000")]
+    memory = make_graphiti(episode_prefix="uuid-", existing=existing)
+
+    result, _lines = await run(memory, [long_line(index) for index in range(3)])
+
+    assert result.resumed_from == 1
+    assert [call["last_n"] for call in memory.retrieved] == [1]

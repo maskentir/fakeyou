@@ -10,12 +10,14 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.persistence.record import (
     RECORD_SYNC_INTERVAL,
+    RECORD_VERSION,
     MeetingRecord,
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
     load_meeting_record,
     meeting_record_path,
+    read_record_header,
     repaired_order,
 )
 from tests._persistence_fakes import RecordingJournal
@@ -96,7 +98,7 @@ def test_record_is_append_only_json_lines(tmp_path: Path) -> None:
         .splitlines()
     )
 
-    assert [json.loads(line)["kind"] for line in lines] == ["transcript", "twin_speech"]
+    assert [json.loads(line)["kind"] for line in lines] == ["header", "transcript", "twin_speech"]
 
 
 def test_record_keeps_only_new_final_nonblank_transcripts(tmp_path: Path) -> None:
@@ -322,11 +324,12 @@ def test_record_accepts_visual_entry(tmp_path: Path) -> None:
             frame_ref=f"frame:{'ab' * 4}@{NOW.isoformat()}",
         )
     ]
-    [line] = (
+    header_line, line = (
         meeting_record_path(tmp_path, SessionId("meeting-1"))
         .read_text(encoding="utf-8")
         .splitlines()
     )
+    assert json.loads(header_line)["kind"] == "header"
     assert set(json.loads(line)) == {
         "kind",
         "at",
@@ -366,3 +369,104 @@ def test_repaired_order_is_stable_and_pure() -> None:
     ordered = cast(list[TranscriptEntry], repaired_order(entries))
     assert [entry.id for entry in ordered] == ["a", "b"]
     assert [entry.id for entry in entries] == ["b", "a"]
+
+
+def test_new_record_starts_with_a_v2_header(tmp_path: Path) -> None:
+    record = open_record(tmp_path)
+    record.add_transcript(transcript(1, visual_refs=("frame-7",), voice_clusters=("cluster-a",)))
+    record.close()
+    path = meeting_record_path(tmp_path, SessionId("meeting-1"))
+
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0]) == {
+        "kind": "header",
+        "v": 2,
+        "at": "2026-09-30T10:00:00Z",
+    }
+    entries = load_meeting_record(path)
+    assert isinstance(entries[0], TranscriptEntry)
+    assert entries[0].visual_refs == ("frame-7",)
+    assert entries[0].voice_clusters == ("cluster-a",)
+    header = read_record_header(path)
+    assert header is not None
+    assert header.v == RECORD_VERSION == 2
+
+
+def test_v1_record_still_loads_with_empty_refs_and_clusters(tmp_path: Path) -> None:
+    path = meeting_record_path(tmp_path, SessionId("meeting-1"))
+    path.parent.mkdir(parents=True)
+    v1_entry = TranscriptEntry(
+        at=NOW,
+        id="e1",
+        spoken_at=NOW.isoformat(),
+        source="meeting_audio",
+        text="Hi.",
+        participant_id="unknown",
+        speaker_evidence_id=None,
+    )
+    path.write_text(
+        v1_entry.model_dump_json(exclude={"visual_refs", "voice_clusters"}) + "\n", encoding="utf-8"
+    )
+
+    loaded = load_meeting_record(path)
+
+    assert read_record_header(path) is None
+    assert isinstance(loaded[0], TranscriptEntry)
+    assert loaded[0].visual_refs == ()
+    assert loaded[0].voice_clusters == ()
+
+
+def test_reopened_v1_record_is_never_given_a_header(tmp_path: Path) -> None:
+    path = meeting_record_path(tmp_path, SessionId("meeting-1"))
+    path.parent.mkdir(parents=True)
+    path.write_text(TwinSpeechEntry(at=NOW, text="Earlier.").model_dump_json() + "\n")
+
+    record = open_record(tmp_path)
+    record.add_twin_speech("Later.")
+    record.close()
+
+    assert read_record_header(path) is None
+    assert [entry.kind for entry in load_meeting_record(path)] == ["twin_speech", "twin_speech"]
+
+
+def test_reopened_v2_record_keeps_one_header(tmp_path: Path) -> None:
+    first = open_record(tmp_path)
+    first.add_twin_speech("One.")
+    first.close()
+    second = open_record(tmp_path)
+    second.add_twin_speech("Two.")
+    second.close()
+    path = meeting_record_path(tmp_path, SessionId("meeting-1"))
+
+    kinds = [json.loads(line)["kind"] for line in path.read_text(encoding="utf-8").splitlines()]
+
+    assert kinds == ["header", "twin_speech", "twin_speech"]
+    assert len(load_meeting_record(path)) == 2
+
+
+def test_empty_record_has_no_header_and_header_with_other_version_is_rejected(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_text("", encoding="utf-8")
+    assert read_record_header(path) is None
+
+    path.write_text('{"kind": "header", "v": 3, "at": "2026-09-30T10:00:00Z"}\n')
+    with pytest.raises(ValueError, match="validation error"):
+        read_record_header(path)
+    with pytest.raises(ValueError, match="validation error"):
+        load_meeting_record(path)
+
+
+def test_torn_tail_after_a_header_is_dropped_but_the_header_is_not_an_entry(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "meeting-1" / "record.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '{"kind": "header", "v": 2, "at": "2026-09-30T10:00:00Z"}\n{"kind": "twin_sp',
+        encoding="utf-8",
+    )
+    journal = RecordingJournal()
+
+    assert load_meeting_record(path, journal=journal) == []
+    assert [row["event"] for row in journal.events()] == ["record_torn_line_dropped"]

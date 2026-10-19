@@ -6,18 +6,15 @@ from pathlib import Path
 
 import pytest
 
+import fakeyou.orchestration.meet_actions as meet_actions
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet_action_ledger import LedgerError, MeetActionLedger, actions_path
-from fakeyou.meet.meet_actions import lower_hand, raise_hand, send_chat
-from fakeyou.memory.memory import (
-    MEET_ACTION_QUEUED,
-    PREFETCH_EVIDENCE_PREFIX,
-    create_meet_action_tools,
-)
+from fakeyou.meet.meet_actions import MeetActionResult, lower_hand, raise_hand, send_chat
+from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
 from fakeyou.memory.persona import (
     MEET_REFUSAL_TEXT,
     PersonaProfile,
@@ -87,7 +84,6 @@ async def test_actions_refuse_fast_when_not_admitted(action: str) -> None:
 async def test_flag_off_by_default_and_bound_tools_refuse_without_execution(
     tmp_path: Path,
 ) -> None:
-    assert DEFAULTS.conversation.meet_actions_enabled is False
     config = SessionConfig(
         owner_id=SessionId("owner-a"),
         twin_id=SessionId("twin-a"),
@@ -113,8 +109,8 @@ async def test_flag_off_by_default_and_bound_tools_refuse_without_execution(
         tool_call("meet_send_chat", "call-flag-2", {"message": CHAT_TEXT})
     )
 
-    assert tool_text(raised) == MEET_REFUSAL_TEXT
-    assert tool_text(sent) == MEET_REFUSAL_TEXT
+    assert json.loads(tool_text(raised)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
+    assert json.loads(tool_text(sent)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
     await dispatcher.drain()
     assert page.clicked == []
     assert page.typed == []
@@ -160,7 +156,7 @@ async def test_stale_generation_and_closed_requests_cancel_without_dom_touch(
     closed = await closed_tools[0].ainvoke(tool_call("meet_raise_hand", "call-stale-3"))
     await dispatcher.drain()
 
-    assert tool_text(closed) == MEET_REFUSAL_TEXT
+    assert json.loads(tool_text(closed)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
     assert journal.events("meet_action_requested") == []
 
 
@@ -175,10 +171,10 @@ async def test_meet_tool_call_schedules_async_without_sync_side_effects(
         tool_call("meet_send_chat", "call-async-1", {"message": CHAT_TEXT})
     )
 
-    assert tool_text(queued) == MEET_ACTION_QUEUED
+    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
     assert journal.events() == []
     assert actions_path(record).exists() is False
-    page = meet_page([IN_CALL, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
+    page = meet_page([IN_CALL, ECHO_CONTENT, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
     clock = FakeClock()
     pressed = with_enter(page)
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
@@ -297,7 +293,11 @@ async def test_bound_dispatcher_stays_idle_without_tool_calls(tmp_path: Path) ->
 
 def test_meet_dispatcher_defines_no_timers_or_triggers() -> None:
     source = (
-        Path(__file__).resolve().parent.parent / "src" / "fakeyou" / "orchestration" / "runtime.py"
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "fakeyou"
+        / "orchestration"
+        / "meet_actions.py"
     ).read_text(encoding="utf-8")
     [node] = [
         entry
@@ -317,14 +317,18 @@ def test_meet_dispatcher_defines_no_timers_or_triggers() -> None:
 async def test_meet_raise_hand_end_to_end_observed_success(tmp_path: Path) -> None:
     journal = RecordingJournal("meeting-e2e-raise")
     dispatcher, record = task5_dispatcher(tmp_path, "meeting-e2e-raise", journal=journal)
-    page = meet_page([IN_CALL], visible={LOWER_XPATH: False})
+    page = meet_page(
+        [IN_CALL],
+        visible={LOWER_XPATH: False},
+        reveal_on_click={RAISE_XPATH: LOWER_XPATH},
+    )
     clock = FakeClock()
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
     tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
     queued = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-raise"))
 
-    assert tool_text(queued) == MEET_ACTION_QUEUED
+    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
     await dispatcher.drain()
     dispatcher.close()
 
@@ -354,7 +358,7 @@ async def test_meet_chat_end_to_end_observed_success_without_content_leak(
 ) -> None:
     journal = RecordingJournal("meeting-e2e-chat")
     dispatcher, record = task5_dispatcher(tmp_path, "meeting-e2e-chat", journal=journal)
-    page = meet_page([IN_CALL, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
+    page = meet_page([IN_CALL, ECHO_CONTENT, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
     clock = FakeClock()
     pressed = with_enter(page)
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
@@ -364,7 +368,7 @@ async def test_meet_chat_end_to_end_observed_success_without_content_leak(
         tool_call("meet_send_chat", "call-e2e-chat", {"message": CHAT_TEXT})
     )
 
-    assert tool_text(queued) == MEET_ACTION_QUEUED
+    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
     await dispatcher.drain()
     dispatcher.close()
 
@@ -509,3 +513,82 @@ async def test_dispatcher_journals_unexpected_ledger_error_as_failure(
 
     (failed,) = journal.events("meet_action_failed")
     assert failed["reason"] == "ValueError"
+
+
+class _RecordingDispatcher:
+    enabled = True
+    closed = False
+
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, str]] = []
+
+    def request(self, kind: str, *, action_id: str, text: str = "") -> str:
+        self.requests.append((kind, action_id, text))
+        return MEET_ACTION_QUEUED
+
+
+def _refuse_all(tool_name: str, *, journal: object | None) -> str:
+    del journal
+    return f"refused {tool_name}"
+
+
+def test_meet_tools_keep_contract_names_and_args() -> None:
+    tools = create_meet_action_tools(_RecordingDispatcher(), refuse=_refuse_all)
+    assert [tool.name for tool in tools] == [
+        "meet_raise_hand",
+        "meet_lower_hand",
+        "meet_send_chat",
+    ]
+    chat = tools[2]
+    assert set(chat.args) == {"message"}
+    assert set(tools[0].args) == set()
+
+
+def test_no_mute_tool_in_meeting_inventory() -> None:
+    names = [
+        tool.name for tool in create_meet_action_tools(_RecordingDispatcher(), refuse=_refuse_all)
+    ]
+    assert names == ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"]
+
+
+def test_tool_result_is_named_json_with_model_text_separate() -> None:
+    from fakeyou.meet.meet_tools import MeetToolResult, render_tool_result
+
+    rendered = render_tool_result(MeetToolResult("rate_limited", "Please wait."))
+    assert json.loads(rendered) == {"code": "rate_limited", "message": "Please wait."}
+    assert "\n" not in rendered
+
+
+@pytest.mark.browser
+async def test_dispatcher_observes_hand_by_readback_not_act_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from playwright.async_api import async_playwright
+
+    async def act_reports_success(
+        _page: object,
+        _signals: object = None,
+        _sleep: object = None,
+        _monotonic: object = None,
+    ) -> MeetActionResult:
+        return MeetActionResult(outcome="succeeded", detail="hand raised")
+
+    monkeypatch.setattr(meet_actions, "raise_hand", act_reports_success)
+    dispatcher, record = task5_dispatcher(tmp_path, "meeting-d6-dispatch")
+    clock = FakeClock()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(IN_CALL)
+            dispatcher.bind_page(
+                page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
+            )
+            dispatcher.request("raise_hand", action_id="call-d6-3")
+            await dispatcher.drain()
+        finally:
+            await browser.close()
+    intent = MeetActionLedger.load(record, "meeting-d6-dispatch").get("call-d6-3")
+    assert intent is not None
+    assert intent.state != "observed_done"
+    assert intent.observed_after is False

@@ -12,9 +12,10 @@ import pytest
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
+from fakeyou.foundation.participation import same_voice
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.journal import Journal
-from fakeyou.transcription.contract import SpeechSinks, TranscriptionError
+from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
 from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
 
 RATE = 16000
@@ -334,7 +335,7 @@ async def test_keepalive_sends_silence_only_while_capture_is_idle() -> None:
     await asyncio.sleep(0.3)
     silence = socket.audio_sent()
     assert len(silence) >= 3
-    assert all(chunk == bytes(640) for chunk in silence)
+    assert all(chunk and set(chunk) == {0} for chunk in silence)
 
     socket.sent.clear()
     for _ in range(30):
@@ -344,6 +345,18 @@ async def test_keepalive_sends_silence_only_while_capture_is_idle() -> None:
     assert during
     assert all(chunk == AUDIO for chunk in during)
     assert "stt_keepalive_started" in harness.journal.names()
+    await harness.client.close()
+
+
+async def test_keepalive_fills_the_real_time_deficit_not_just_a_fixed_chunk() -> None:
+    socket = FakeSocket()
+    harness = Harness([socket])
+    await harness.client.start()
+
+    await asyncio.sleep(0.5)
+
+    sent = sum(len(chunk) for chunk in socket.audio_sent())
+    assert sent >= 32000 * 0.5 - 640
     await harness.client.close()
 
 
@@ -504,3 +517,102 @@ async def test_muse_diarization_splits_turns_and_labels_voices_live() -> None:
     assert labels[0] != labels[1]
     assert "migration" in finals[0].text.lower()
     assert "blockers" in finals[2].text.lower()
+
+
+async def test_muse_speaker_label_arrives_on_final_voice_clusters() -> None:
+    socket = FakeSocket()
+    harness = Harness([socket])
+    await harness.client.start()
+
+    socket.push({"type": "speechStart", "turnId": 0, "audioProcessedMs": 220})
+    socket.push({"type": "speaker", "label": "cluster-a", "audioProcessedMs": 3480})
+    socket.push({"type": "speechEnd", "turnId": 0, "audioProcessedMs": 3980})
+    socket.push(
+        {
+            "type": "speechComplete",
+            "turnId": 0,
+            "transcript": " hello everyone ",
+            "audioProcessedMs": 3980,
+        }
+    )
+    await _settle()
+
+    assert len(harness.finals) == 1
+    assert harness.finals[0].final is True
+    assert harness.finals[0].text == "hello everyone"
+    assert harness.finals[0].voice_clusters == ("cluster-a",)
+    await harness.client.close()
+
+
+async def test_voice_cluster_labels_reset_with_new_stt_session() -> None:
+    first = FakeSocket()
+    second = FakeSocket(ack={"sessionId": "session-2"})
+    harness = Harness([first, second])
+    await harness.client.start()
+    for event in _turn(0, labels=["cluster-a"], text="First."):
+        first.push(event)
+    await _settle()
+
+    await harness.client.reconnect_when_idle()
+    for event in _turn(0, labels=["cluster-a"], text="Second."):
+        second.push(event)
+    await _settle()
+
+    before, after = (update.voice_clusters for update in harness.finals)
+    assert before == ("cluster-a",)
+    assert len(after) == 1
+    assert same_voice("cluster-a", after) is False
+    await harness.client.close()
+
+
+async def test_label_of_a_turn_cut_by_a_new_session_is_not_inherited() -> None:
+    first = FakeSocket()
+    second = FakeSocket(ack={"sessionId": "session-2"})
+    harness = Harness([first, second])
+    await harness.client.start()
+    first.push({"type": "speechStart", "turnId": 0, "audioProcessedMs": 0})
+    first.push({"type": "speaker", "label": "cluster-a", "audioProcessedMs": 0})
+    await _settle()
+
+    await harness.client.reconnect_when_idle()
+    second.push(
+        {"type": "speechComplete", "turnId": 0, "transcript": " two ", "audioProcessedMs": 0}
+    )
+    await _settle()
+
+    assert [update.voice_clusters for update in harness.finals] == [()]
+    await harness.client.close()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Ingress audio slower than real-time",
+        "Audio processing backlog too large",
+        "ingress audio slower than realtime",
+        "BACKLOG TOO LARGE",
+    ],
+)
+async def test_overload_error_is_a_connection_loss_so_the_session_reconnects(
+    message: str,
+) -> None:
+    socket = FakeSocket()
+    harness = Harness([socket])
+    await harness.client.start()
+
+    socket.push({"type": "error", "message": message})
+    await _settle()
+
+    assert harness.client.socket_dead is True
+    assert [type(error) for error in harness.lost] == [SttConnectionLost]
+
+
+async def test_other_server_errors_are_not_connection_losses() -> None:
+    socket = FakeSocket()
+    harness = Harness([socket])
+    await harness.client.start()
+
+    socket.push({"type": "error", "message": "quota exceeded"})
+    await _settle()
+
+    assert [type(error) for error in harness.lost] == [TranscriptionError]

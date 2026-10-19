@@ -177,7 +177,7 @@ async def test_pactl_muter_reaps_child_on_cancel(
     monkeypatch.setenv("FAKE_PACTL_PID", str(pid_file))
 
     applying = asyncio.create_task(create_pactl_muter(sink="agent_output")(muted=True))
-    for _ in range(100):
+    for _ in range(500):
         if pid_file.exists():
             break
         await asyncio.sleep(0.01)

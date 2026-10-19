@@ -16,10 +16,8 @@ import fakeyou.orchestration.assembly as assembly_module
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import (
-    StreamingLangGraphResponder,
-    request_messages,
-)
+from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -33,7 +31,7 @@ from fakeyou.memory.visual_hydrate import (
     create_visual_resolver,
     visual_clarification,
 )
-from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
+from fakeyou.orchestration.assembly import AgentWiring, TurnBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -477,7 +475,7 @@ async def test_streaming_unchanged(tmp_path: Path) -> None:
             create_visual_hydrate_middleware(store, captioner),
         ],
     )
-    responder = StreamingLangGraphResponder(agent, "visual-stream", language="en", max_sentences=4)
+    responder = LangGraphResponder(agent, "visual-stream", language="en", max_sentences=4)
     first = speech_event("st1", "What shows revenue?", tuple(frame.frame_id for frame in frames))
     sentences = [
         sentence
@@ -643,7 +641,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
     names = created["middleware"]
@@ -653,7 +651,7 @@ async def test_assembly_registers_hydrate_after_prefetch(
         wired,
         config,
         agent=AgentWiring(profile=profile, graphiti=make_graphiti()),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
     assert "VisualHydrateMiddleware" not in created["middleware"]

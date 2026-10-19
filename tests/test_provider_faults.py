@@ -11,6 +11,7 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
     classify_http,
+    safe_endpoint,
     trim_detail,
 )
 
@@ -228,3 +229,10 @@ def test_sdk_error_detail_does_not_include_provider_payload_or_credentials() -> 
     assert fault.detail is None or "raw provider response" not in fault.detail
     assert fault.detail is None or "sk-secret" not in fault.detail
     assert fault.detail is None or "top-secret" not in fault.detail
+
+
+def test_safe_endpoint_never_returns_an_unparseable_endpoint() -> None:
+    marked = "user:SYNTHETIC-VALUE-alpha-731@"
+
+    assert safe_endpoint(marked) == "<invalid endpoint>"
+    assert safe_endpoint("https://api.example.com/v1") == "https://api.example.com/v1"

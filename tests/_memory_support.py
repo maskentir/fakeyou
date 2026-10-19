@@ -54,5 +54,5 @@ def recall_tool(monkeypatch: pytest.MonkeyPatch, memory: Any, episodes: dict[str
 
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
     monkeypatch.setattr(memory_module, "read_note_states", active_states)
-    _remember, recall = create_memory_tools(memory, group_id="team_alpha")
+    [recall] = create_memory_tools(memory, group_id="team_alpha")
     return recall

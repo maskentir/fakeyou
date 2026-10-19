@@ -23,12 +23,29 @@ INDONESIAN = re.compile(
 )
 MODULES = {path.stem for path in SOURCE_FILES} | {"cli"}
 CROSS_CUTTING_SUITES = {
+    "api_admin",
+    "api_app",
+    "api_chat",
+    "api_auth",
+    "api_byof_example",
+    "api_compose",
+    "api_contracts",
+    "api_debrief",
+    "api_events",
+    "api_memory",
+    "api_overrides",
+    "api_schemas",
+    "api_sessions",
     "code_rules",
+    "container_services",
     "documentation",
     "documented_commands",
     "fakes",
+    "suite_isolation",
     "library_contracts",
     "taxonomy",
+    "transport_schemas",
+    "transport_streams",
 }
 FORBIDDEN_FACTORY_PREFIXES = ("make_", "construct_", "new_", "get_", "fetch_", "init_")
 DATABASE_PACKAGE = ROOT / "src" / "fakeyou" / "db"

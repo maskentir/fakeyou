@@ -21,7 +21,13 @@ import fakeyou.orchestration.assembly as assembly
 from evals._shared import sanitized_role
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.conversation import LangGraphResponder, ToolResultCallback
+from fakeyou.conversation.conversation import (
+    LangGraphResponder,
+    StreamTrace,
+    ToolResultCallback,
+    stream_sentences,
+)
+from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -29,17 +35,29 @@ from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.brief import MeetingBrief
 
 ROOT = Path(__file__).resolve().parent.parent
-DEBRIEF_SOURCES = frozenset({"src/fakeyou/debrief", "src/fakeyou/cli/debrief.py"})
+DEBRIEF_SOURCES = frozenset(
+    {
+        "src/fakeyou/debrief",
+        "src/fakeyou/api/debrief.py",
+        "src/fakeyou/cli/debrief.py",
+        "src/fakeyou/worker/debrief.py",
+    }
+)
 PACKAGE_SUFFIXES = frozenset({".py", ".json", ".js"})
 EVAL_FILES = (
     "evals/_brief.py",
+    "evals/_model_gate.py",
+    "evals/_prompt_ab.py",
     "evals/_replay.py",
     "evals/_shared.py",
     "evals/_trust.py",
+    "evals/_wave_report.py",
     "evals/runtime_evidence.py",
     "evals/test_brief_artifacts_eval.py",
     "evals/test_brief_gate_eval.py",
     "evals/test_brief_replay_eval.py",
+    "evals/test_model_gate_eval.py",
+    "evals/test_prompt_ab_eval.py",
     "evals/test_replay_eval.py",
     "evals/test_trust_artifacts_eval.py",
     "evals/test_trust_gate_eval.py",
@@ -47,8 +65,10 @@ EVAL_FILES = (
     "evals/test_trust_provenance_eval.py",
     "evals/test_trust_recall_eval.py",
     "evals/test_trust_replay_eval.py",
+    "evals/test_wave_report_eval.py",
     "evals/fixtures/brief-scenarios.json",
     "evals/fixtures/trust-scenarios.json",
+    "evals/fixtures/wave-report-template.md",
     "examples/persona.example.json",
     "tests/_audio_fakes.py",
     "tests/_conversation_fakes.py",
@@ -62,6 +82,7 @@ EVAL_FILES = (
     "pyproject.toml",
     "uv.lock",
 )
+EVAL_CANDIDATE_SCHEMA = "eval_candidate/v1"
 
 
 def _package_files(root: Path) -> list[str]:
@@ -118,7 +139,7 @@ def capture_candidate(fixture_path: Path, *, root: Path = ROOT) -> dict[str, Any
     except (OSError, subprocess.SubprocessError):
         pass
     return {
-        "schema": "eval_candidate/v1",
+        "schema": EVAL_CANDIDATE_SCHEMA,
         "started_at": datetime.now(UTC).isoformat(),
         "source_commit": commit,
         "dirty_at_start": dirty,
@@ -146,7 +167,11 @@ def finish_candidate(candidate: dict[str, Any], *, root: Path = ROOT) -> dict[st
 def runtime_metadata(settings: Settings) -> dict[str, Any]:
     dumped = settings.model_dump(mode="json")
     return {
-        "proof_scope": "native non-streaming agent/responder; not full ConversationLoop/audio",
+        "proof_scope": (
+            "native sentence-streaming responder; not full turn graph/audio"
+            if settings.conversation.sentence_streaming
+            else "native non-streaming agent/responder; not full turn graph/audio"
+        ),
         "assembly": "fakeyou.orchestration.assembly.open_conversation",
         "boundaries": "supplied model/fallback, synthetic Graphiti, fresh InMemorySaver",
         "reply": sanitized_role(dumped["reply"]),
@@ -280,16 +305,12 @@ class ResponderContext:
 
 
 @asynccontextmanager
-async def native_responder(
+async def _open_native_conversation(
     model: BaseChatModel,
     context: ResponderContext,
+    settings: Settings,
 ) -> AsyncIterator[LangGraphResponder]:
-    settings = context.settings
     profile = context.profile
-    if settings.conversation.sentence_streaming:
-        raise ValueError("these evals prove only the non-streaming native responder")
-    if settings.conversation.max_spoken_sentences > 2:
-        raise ValueError("these evals require a spoken cap of at most two sentences")
 
     @asynccontextmanager
     async def checkpointer(url: str, **_kwargs: Any) -> AsyncIterator[InMemorySaver]:
@@ -316,7 +337,7 @@ async def native_responder(
             agent=assembly.AgentWiring(
                 profile=profile, brief=context.brief, graphiti=context.memory
             ),
-            behavior=assembly.LoopBehavior(
+            behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
                 wake_phrases=(profile.display_name,),
                 on_tool_result=record_tool_results(context.counter.tool_results),
@@ -331,8 +352,72 @@ async def native_responder(
             )
 
 
+@asynccontextmanager
+async def native_responder(
+    model: BaseChatModel,
+    context: ResponderContext,
+) -> AsyncIterator[LangGraphResponder]:
+    settings = context.settings.model_copy(
+        update={
+            "conversation": context.settings.conversation.model_copy(
+                update={"sentence_streaming": False}
+            ),
+            "participation_decider": context.settings.participation_decider.model_copy(
+                update={"enabled": False}
+            ),
+        }
+    )
+    if settings.conversation.max_spoken_sentences > 2:
+        raise ValueError("these evals require a spoken cap of at most two sentences")
+    async with _open_native_conversation(model, context, settings) as responder:
+        yield responder
+
+
 async def respond_with_deadline(
     responder: LangGraphResponder, event: TranscriptEvent, settings: Settings
 ) -> str:
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
         return await responder.respond([event], lambda: None)
+
+
+@asynccontextmanager
+async def native_streaming_responder(
+    model: BaseChatModel,
+    context: ResponderContext,
+) -> AsyncIterator[LangGraphResponder]:
+    if not context.settings.conversation.sentence_streaming:
+        raise ValueError("the streaming eval mode requires sentence streaming")
+    if context.settings.conversation.max_spoken_sentences > 2:
+        raise ValueError("these evals require a spoken cap of at most two sentences")
+    async with _open_native_conversation(model, context, context.settings) as responder:
+        yield responder
+
+
+async def stream_with_deadline(
+    responder: LangGraphResponder,
+    event: TranscriptEvent,
+    settings: Settings,
+    *,
+    request_id: str,
+) -> tuple[list[str], float]:
+    started = time.monotonic()
+    sentences: list[str] = []
+    first_latency = 0.0
+    async with asyncio.timeout(settings.conversation.response_timeout_seconds):
+        async for sentence in stream_sentences(
+            responder.agent,
+            request_messages([event]),
+            responder.thread_config(responder.thread_id),
+            max_sentences=responder.max_sentences,
+            trace=StreamTrace(
+                language=responder.language,
+                journal=responder.journal,
+                request_id=request_id,
+                transcript_id=event.id,
+                on_tool_result=responder.on_tool_result,
+            ),
+        ):
+            if not sentences:
+                first_latency = time.monotonic() - started
+            sentences.append(sentence)
+    return sentences, first_latency

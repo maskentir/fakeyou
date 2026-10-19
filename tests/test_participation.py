@@ -7,7 +7,9 @@ from fakeyou.foundation.participation import (
 )
 
 
-def _followup(**signals: bool) -> ParticipationContext:
+def _followup(
+    *, bare_ack: bool = False, interjection: bool = False, awaiting_reply: bool = False
+) -> ParticipationContext:
     return ParticipationContext(
         addressed=False,
         followup=True,
@@ -15,7 +17,9 @@ def _followup(**signals: bool) -> ParticipationContext:
         ambiguous=False,
         others_speaking=False,
         activation_valid=True,
-        **signals,
+        bare_ack=bare_ack,
+        interjection=interjection,
+        awaiting_reply=awaiting_reply,
     )
 
 
@@ -282,7 +286,7 @@ def test_context_is_immutable() -> None:
     assert choose_participation(context).action == "reply"
 
 
-def test_turn_mine_does_not_override_occupied_floor():
+def test_turn_mine_does_not_override_occupied_floor() -> None:
     context = ParticipationContext(
         addressed=False,
         followup=True,

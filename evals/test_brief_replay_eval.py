@@ -34,7 +34,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import cap_spoken_reply
 from fakeyou.foundation.greetings import neutral_greeting
-from fakeyou.memory.memory import RECALL_EMPTY_RESULT
+from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.persona import persona_digest
 from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.persistence.brief import brief_digest
@@ -90,7 +90,13 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
     fixture = load_brief_fixture()
     profile = fixture_profile(fixture)
     target = brief_artifact_dir(tmp_path)
-    settings = strategy_settings("tool")
+    settings = strategy_settings("tool").model_copy(
+        update={
+            "conversation": strategy_settings("tool").conversation.model_copy(
+                update={"sentence_streaming": False}
+            )
+        }
+    )
     score = await replay_briefs(
         contract_model, fixture, BRIEF_RUNS, options=ReplayOptions(settings=settings)
     )
@@ -189,7 +195,13 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
     memory_case = load_trust_fixture()["cases"][0]
     case = next(case for case in fixture["cases"] if case["needs_recall"])
     case = {**case, "memory": memory_case["memory"]}
-    settings = strategy_settings("tool")
+    settings = strategy_settings("tool").model_copy(
+        update={
+            "conversation": strategy_settings("tool").conversation.model_copy(
+                update={"sentence_streaming": False}
+            )
+        }
+    )
     settings = settings.model_copy(
         update={
             "memory": settings.memory.model_copy(

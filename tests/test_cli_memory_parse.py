@@ -1,6 +1,5 @@
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -9,27 +8,22 @@ from pydantic import SecretStr
 
 import fakeyou.cli.main as cli_main
 import fakeyou.orchestration.providers as providers
-from fakeyou.cli.memory import CorrectionTarget
+from fakeyou.cli.memory import NoteDraft
 from fakeyou.config.settings import EmbedderSettings, Settings
-from fakeyou.memory.persona import OperatorIdentity
 
 
 @pytest.mark.parametrize(
     ("argv", "target", "expected"),
     [
         (
-            ["memory-add", "A note.", "--persona", "p.json", "--owner-id", "o", "--twin-id", "t"],
+            ["memory-add", "A note.", "--twin-id", "t"],
             "add_owner_note",
-            {"identity": OperatorIdentity(Path("p.json"), "o", "t")},
+            {"draft": NoteDraft(text="A note.", twin_id="t")},
         ),
         (
-            ["memory-forget", "--meeting-id", "m1", "--persona", "p.json"],
-            "forget_memory",
-            {
-                "identity": OperatorIdentity(Path("p.json"), None, None),
-                "meeting_id": "m1",
-                "episode_uuid": None,
-            },
+            ["memory-forget", "--meeting-id", "m1"],
+            "forget_meeting_memory",
+            {"meeting_id": "m1", "keep_record": False},
         ),
     ],
 )
@@ -68,8 +62,8 @@ def test_memory_add_parses_optional_source_and_note_id(
             "fakeyou",
             "memory-add",
             "A note.",
-            "--persona",
-            "p.json",
+            "--twin-id",
+            "t",
             "--source-at",
             "2026-09-30T06:40:00+00:00",
             "--note-id",
@@ -80,8 +74,9 @@ def test_memory_add_parses_optional_source_and_note_id(
         cli_main.main()
 
     assert exited.value.code == 0
-    assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    assert captured["note_id"] == UUID("b322d326-37b5-482a-904c-ef982f4dc510")
+    draft = captured["draft"]
+    assert draft.source_at == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    assert draft.note_id == UUID("b322d326-37b5-482a-904c-ef982f4dc510")
 
 
 def test_memory_add_defaults_source_and_note_id_to_none(
@@ -94,13 +89,13 @@ def test_memory_add_defaults_source_and_note_id_to_none(
         captured.update(kwargs)
 
     monkeypatch.setattr(cli_main, "add_owner_note", fake_command)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "A note.", "--persona", "p.json"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "A note.", "--twin-id", "t"])
     with pytest.raises(SystemExit) as exited:
         cli_main.main()
 
     assert exited.value.code == 0
-    assert captured["source_at"] is None
-    assert captured["note_id"] is None
+    assert captured["draft"].source_at is None
+    assert captured["draft"].note_id is None
 
 
 def test_memory_correct_parses_target_source_and_note_id(
@@ -122,8 +117,8 @@ def test_memory_correct_parses_target_source_and_note_id(
             "Fixed note.",
             "--episode",
             "a1b2c3d4-0000-4000-8000-000000000001",
-            "--persona",
-            "p.json",
+            "--twin-id",
+            "t",
             "--source-at",
             "2026-09-30T06:40:00+00:00",
             "--note-id",
@@ -134,28 +129,26 @@ def test_memory_correct_parses_target_source_and_note_id(
         cli_main.main()
 
     assert exited.value.code == 0
-    assert captured["text"] == "Fixed note."
-    assert captured["target"] == CorrectionTarget(
-        "a1b2c3d4-0000-4000-8000-000000000001",
-        UUID("a1b2c3d4-0000-4000-8000-000000000002"),
-    )
-    assert captured["source_at"] == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    assert captured["identity"].persona_path == Path("p.json")
+    draft = captured["draft"]
+    assert draft.text == "Fixed note."
+    assert captured["episode_uuid"] == "a1b2c3d4-0000-4000-8000-000000000001"
+    assert draft.note_id == UUID("a1b2c3d4-0000-4000-8000-000000000002")
+    assert draft.source_at == datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
     "argv",
     [
-        ["memory-add", "A note.", "--persona", "p.json", "--source-at", "2026-09-30T06:40:00"],
-        ["memory-add", "A note.", "--persona", "p.json", "--source-at", "not-a-timestamp"],
-        ["memory-add", "A note.", "--persona", "p.json", "--note-id", "not-a-uuid"],
+        ["memory-add", "A note.", "--twin-id", "t", "--source-at", "2026-09-30T06:40:00"],
+        ["memory-add", "A note.", "--twin-id", "t", "--source-at", "not-a-timestamp"],
+        ["memory-add", "A note.", "--twin-id", "t", "--note-id", "not-a-uuid"],
         [
             "memory-correct",
             "Fixed.",
             "--episode",
             "a1b2c3d4-0000-4000-8000-000000000001",
-            "--persona",
-            "p.json",
+            "--twin-id",
+            "t",
             "--source-at",
             "2026-09-30T06:40:00",
         ],

@@ -14,7 +14,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import SecretStr
 
 import fakeyou.cli.main as cli_main
-import fakeyou.cli.memory as cli_memory
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -22,7 +21,13 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.foundation.greetings import create_greeting_middleware
-from fakeyou.memory.persona import OperatorIdentity, PersonaProfile, build_system_prompt
+from fakeyou.memory.persona import (
+    OperatorIdentity,
+    PersonaProfile,
+    build_system_prompt,
+    memory_group_for,
+    require_persona_group,
+)
 from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import (
     MEET_LINK,
@@ -39,6 +44,7 @@ from tests._cli_support import (
 )
 from tests._conversation_fakes import ToolCallingFakeModel, recall_call
 from tests._error_support import message_pattern
+from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 from tests._runtime_fakes import SessionRun
 
@@ -272,7 +278,15 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
             "num_results": DEFAULTS.memory.recall.search_limit,
         },
     ]
-    assert profile.memory_group != settings.memory.store.group
+    assert profile.memory_group == memory_group_for(profile.owner_id, profile.twin_id)
+    assert (
+        require_persona_group(
+            graphiti.searched[0]["group_ids"][0],
+            owner_id=profile.owner_id,
+            twin_id=profile.twin_id,
+        )
+        == profile.memory_group
+    )
     tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
     [content] = [m.content for m in tool_results]
     assert isinstance(content, str)
@@ -340,7 +354,7 @@ async def test_join_stop_during_recall_cancels_without_late_reply(
 
     assert graphiti.search_cancelled.is_set()
     assert audio.spoken == []
-    assert outcome["conversation"].phase == "closed"
+    assert outcome["conversation"].lifecycle.phase == "closed"
     assert graphiti.events[-1] == "close"
 
 
@@ -355,17 +369,17 @@ async def test_join_persona_reply_keeps_two_sentence_cap(
         tmp_path, monkeypatch, model=model, settings=settings, join=join
     )
 
-    assert audio.spoken == ["Sentence one. Sentence two."]
+    assert audio.spoken == ["Sentence one.", "Sentence two."]
 
 
 def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_join(link: str, **kwargs: Any) -> None:
-        del link
+    async def fake_join(options: Any, **kwargs: Any) -> None:
         captured.update(kwargs)
+        captured["options"] = options
 
-    monkeypatch.setattr(cli_main, "join_meeting", fake_join)
+    monkeypatch.setattr(cli_main, "run_session", fake_join)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -375,7 +389,7 @@ def test_join_persona_flag_reaches_join(monkeypatch: pytest.MonkeyPatch) -> None
         cli_main.main()
 
     assert exited.value.code == 0
-    assert captured["options"].identity.persona_path == Path("p.json")
+    assert captured["options"].persona_path == Path("p.json")
     assert captured["options"].memory is True
     assert captured["options"].brief_path is None
 
@@ -412,7 +426,7 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     assert status.status == "pending"
 
     fake_persona_memory(monkeypatch, graphiti)
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(
             write_persona(tmp_path, ingest_transcripts=True, allowed_tools=[]), None, None
@@ -469,7 +483,7 @@ async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(
     graphiti = make_graphiti()
     fake_persona_memory(monkeypatch, graphiti)
 
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(write_persona(tmp_path, vocabulary=["Orchid"]), None, None),
         twin_name=None,

@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from fakeyou.orchestration.runtime import MeetActionDispatcher
+from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from tests._meet_browser_fakes import IN_CALL, FakePage
 from tests._persistence_fakes import RecordingJournal
 

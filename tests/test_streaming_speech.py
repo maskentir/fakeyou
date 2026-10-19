@@ -289,3 +289,19 @@ async def test_synthesis_tags_transcript_id_on_all_events(
     finally:
         await stream.aclose()
         await synthesizer.aclose()
+
+
+async def test_failed_synthesis_records_the_provider_status(journal: RecordingJournal) -> None:
+    from fakeyou.observability.provider_faults import ProviderFault
+    from fakeyou.speech.streaming import journaled_stream
+
+    async def open_stream(text: str) -> AsyncGenerator[bytes, None]:
+        assert text == "Hello."
+        raise ProviderFault("tts", "unavailable", retryable=True)
+        yield b""
+
+    with pytest.raises(ProviderFault):
+        [_ async for _ in journaled_stream(journal, "Hello.", open_stream, SpeechTag("test"))]
+
+    [failed] = journal.events("synthesis_failed")
+    assert failed["provider_status"] is None

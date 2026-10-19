@@ -1,16 +1,13 @@
 import asyncio
 from typing import cast
 
-from langgraph.checkpoint.memory import InMemorySaver
-
 from fakeyou.conversation.session import MeetingConversation
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, CallObservation
 from fakeyou.meet.watchdog import WatchdogCheck
-from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import MeetingWorker
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
-from tests._runtime_support import session_config
+from tests._runtime_support import live_state, session_config
 
 
 class RecordingConversation:
@@ -28,7 +25,6 @@ def _worker() -> MeetingWorker:
     clock = FakeClock()
     return MeetingWorker(
         session_config(),
-        MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver()),
         meet_page([]),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
@@ -39,9 +35,7 @@ def _worker() -> MeetingWorker:
 
 async def test_lost_connection_pauses_the_conversation_and_reconnect_resumes_it() -> None:
     worker = _worker()
-    await worker.lifecycle.initialize()
-    await worker.lifecycle.send("join_requested", "owner_action", "joining")
-    await worker.lifecycle.send("admitted", "host_action", "in call")
+    worker.begin(live_state("admitted"))
     conversation = RecordingConversation()
     worker.conversation = cast(MeetingConversation, conversation)
 
@@ -52,7 +46,7 @@ async def test_lost_connection_pauses_the_conversation_and_reconnect_resumes_it(
             next_check_seconds=1.0,
         )
     )
-    assert worker.lifecycle.state["phase"] == "disconnected"
+    assert worker.phase_now() == "joining"
     assert conversation.events == ["pause"]
 
     await worker.apply_observation(

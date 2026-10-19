@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,9 @@ from fakeyou.persistence.brief import context_path
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     RecordLockError,
+    finalized_prefix,
     hash_meeting_record,
+    hash_record_prefix,
     lock_path,
     read_status,
     record_lock,
@@ -746,6 +749,7 @@ def test_finish_ingest_persists_the_outcome_and_summarises_it(tmp_path: Path) ->
         facts=3,
         completed=True,
         succeeded=True,
+        stored=True,
     )
     status = read_status(status_file)
     assert status is not None
@@ -777,5 +781,90 @@ def test_finish_ingest_reports_failure_when_the_status_cannot_be_written(
         faults=faults,
     )
 
-    assert (summary.completed, summary.succeeded) == (True, False)
+    assert (summary.completed, summary.succeeded, summary.stored) == (True, False, False)
     assert len(journal.events("fault_recorded")) == 1
+
+
+def test_finalized_prefix_ignores_the_torn_tail(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(b'{"kind": "header", "v": 2}\n{"kind": "transcript"')
+    digest, count = finalized_prefix(path)
+    assert count == len(b'{"kind": "header", "v": 2}\n')
+    assert digest == sha256(b'{"kind": "header", "v": 2}\n').hexdigest()
+
+
+def test_grown_record_keeps_the_stored_prefix_valid(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(b"one\n")
+    digest, count = finalized_prefix(path)
+    with path.open("ab") as handle:
+        handle.write(b"two\n")
+    assert hash_record_prefix(path, count) == digest
+
+
+def test_finalized_prefix_of_a_record_without_newline_is_empty(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(b'{"kind": "transcript"')
+
+    assert finalized_prefix(path) == (sha256(b"").hexdigest(), 0)
+
+
+def test_finalized_prefix_finds_a_newline_beyond_one_block(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    body = b"x" * 20000 + b"\n" + b"y" * 20000
+    path.write_bytes(body)
+
+    assert finalized_prefix(path) == (sha256(b"x" * 20000 + b"\n").hexdigest(), 20001)
+
+
+def test_hash_record_prefix_rejects_a_record_shorter_than_the_prefix(tmp_path: Path) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(b"one\n")
+
+    with pytest.raises(ValueError, match="shorter than the hashed prefix"):
+        hash_record_prefix(path, 10)
+
+
+def test_status_without_record_bytes_still_loads(tmp_path: Path) -> None:
+    path = tmp_path / "ingestion.json"
+    write_status(path, pending_status(record_sha256="abc"))
+
+    loaded = read_status(path)
+
+    assert loaded is not None
+    assert loaded.record_bytes is None
+    assert pending_status(record_sha256="abc", record_bytes=12).record_bytes == 12
+
+
+def test_finish_ingest_persists_the_prefix_byte_count(tmp_path: Path) -> None:
+    path = tmp_path / "meeting-9" / "ingestion.json"
+    finish_ingest(
+        path,
+        IngestOutcome(
+            state="completed",
+            windows=1,
+            resumed_from=0,
+            ingested=1,
+            facts=0,
+            completed=True,
+            record_sha256="abc",
+            reason=None,
+            record_bytes=42,
+        ),
+        meeting_id="meeting-9",
+        group_id="twin_group",
+        faults=FaultReporter(journal=RecordingJournal()),
+    )
+
+    loaded = read_status(path)
+    assert loaded is not None
+    assert (loaded.record_sha256, loaded.record_bytes) == ("abc", 42)
+
+
+def test_terminal_outcome_carries_the_stored_or_fallback_prefix_bytes() -> None:
+    existing = pending_status(record_sha256="stored", record_bytes=7)
+
+    assert terminal_outcome("failed", "record_changed", "fresh", existing).record_bytes == 7
+    assert (
+        terminal_outcome("failed", "provider_timeout", "fresh", fallback_bytes=9).record_bytes == 9
+    )

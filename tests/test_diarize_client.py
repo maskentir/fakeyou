@@ -1,9 +1,7 @@
 import json
-import urllib.error
-import urllib.request
-from email.message import Message
 from typing import Any
 
+import httpx2
 import pytest
 from pydantic import SecretStr
 
@@ -73,18 +71,17 @@ def _request_part(body: bytes) -> dict[str, Any]:
 def test_transcribe_chunk_parses_turns_and_drops_transcript_text() -> None:
     seen: dict[str, Any] = {}
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del timeout
-        seen["url"] = request.full_url
-        seen["method"] = request.get_method()
-        seen["auth"] = request.get_header("Authorization")
-        seen["content_type"] = request.get_header("Content-type")
-        seen["body"] = request.data
-        return _FakeResponse(_turn_payload())
+    def opener(request: httpx2.Request) -> httpx2.Response:
+        seen["url"] = str(request.url)
+        seen["method"] = request.method
+        seen["auth"] = request.headers["authorization"]
+        seen["content_type"] = request.headers["content-type"]
+        seen["body"] = request.read()
+        return httpx2.Response(200, content=_turn_payload())
 
     chunk = b"RIFF" + bytes(60)
     settings = STTSettings(api_key=SecretStr("secret-key"))
-    turns = transcribe_chunk(chunk, settings, opener=opener)
+    turns = transcribe_chunk(chunk, settings, transport=httpx2.MockTransport(opener))
 
     assert turns == [
         DiarizedTurn(start_ms=0, end_ms=3400, speaker="A"),
@@ -107,15 +104,14 @@ def test_transcribe_chunk_parses_turns_and_drops_transcript_text() -> None:
 
 
 def test_transcribe_chunk_http_error_becomes_diarize_error_without_key() -> None:
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del timeout
-        raise urllib.error.HTTPError(request.full_url, 500, "server blew up", Message(), None)
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(500, content=b"server blew up")
 
     settings = STTSettings(api_key=SecretStr("secret-key"), diarize_max_retries=0)
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED)
     ) as group:
-        transcribe_chunk(b"RIFF" + bytes(60), settings, opener=opener)
+        transcribe_chunk(b"RIFF" + bytes(60), settings, transport=httpx2.MockTransport(opener))
 
     assert "secret-key" not in str(group.value)
     assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
@@ -123,20 +119,18 @@ def test_transcribe_chunk_http_error_becomes_diarize_error_without_key() -> None
 
 
 def test_transcribe_chunk_url_error_becomes_diarize_error_without_key() -> None:
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        raise urllib.error.URLError("connection refused")
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("connection refused")
 
     settings = STTSettings(api_key=SecretStr("secret-key"), diarize_max_retries=0)
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED)
     ) as group:
-        transcribe_chunk(b"RIFF" + bytes(60), settings, opener=opener)
+        transcribe_chunk(b"RIFF" + bytes(60), settings, transport=httpx2.MockTransport(opener))
 
     assert "secret-key" not in str(group.value)
     assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
-    assert str(group.value) == "transcription request failed: URLError"
+    assert str(group.value) == "transcription request failed: ConnectError"
 
 
 @pytest.mark.parametrize(
@@ -144,16 +138,14 @@ def test_transcribe_chunk_url_error_becomes_diarize_error_without_key() -> None:
     [b"this is not json", json.dumps({"status": "ok"}).encode("utf-8")],
 )
 def test_transcribe_chunk_malformed_body_becomes_diarize_error(payload: bytes) -> None:
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        return _FakeResponse(payload)
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=payload)
 
     settings = STTSettings(api_key=SecretStr("dummy-key-1"))
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID)
     ) as group:
-        transcribe_chunk(b"RIFF" + bytes(60), settings, opener=opener)
+        transcribe_chunk(b"RIFF" + bytes(60), settings, transport=httpx2.MockTransport(opener))
 
     assert "dummy-key-1" not in str(group.value)
     assert group.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_RESPONSE_INVALID
@@ -208,12 +200,13 @@ def _turns_payload(turns: list[tuple[int, int, str]]) -> bytes:
 def test_transcribe_chunk_passes_timeout_to_the_opener() -> None:
     seen: dict[str, Any] = {}
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        seen["timeout"] = timeout
-        return _FakeResponse(_turns_payload([(0, 1000, "A")]))
+    def opener(request: httpx2.Request) -> httpx2.Response:
+        seen["timeout"] = request.extensions["timeout"]["read"]
+        return httpx2.Response(200, content=_turns_payload([(0, 1000, "A")]))
 
-    turns = transcribe_chunk(b"chunk", _budgeted_settings(0), opener=opener)
+    turns = transcribe_chunk(
+        b"chunk", _budgeted_settings(0), transport=httpx2.MockTransport(opener)
+    )
 
     assert [(turn.start_ms, turn.end_ms, turn.speaker) for turn in turns] == [(0, 1000, "A")]
     assert seen["timeout"] == 7.5
@@ -223,16 +216,16 @@ def test_transcribe_chunk_retries_transient_failures() -> None:
     calls = 0
     sleeps: list[float] = []
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         if calls < 3:
-            raise urllib.error.URLError("connection reset")
-        return _FakeResponse(_turns_payload([(0, 1000, "A")]))
+            raise httpx2.ConnectError("connection reset")
+        return httpx2.Response(200, content=_turns_payload([(0, 1000, "A")]))
 
-    turns = transcribe_chunk(b"chunk", _budgeted_settings(3), opener=opener, sleep=sleeps.append)
+    turns = transcribe_chunk(
+        b"chunk", _budgeted_settings(3), transport=httpx2.MockTransport(opener), sleep=sleeps.append
+    )
 
     assert len(turns) == 1
     assert calls == 3
@@ -242,16 +235,19 @@ def test_transcribe_chunk_retries_transient_failures() -> None:
 def test_transcribe_chunk_retries_retryable_http_status() -> None:
     calls = 0
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise urllib.error.HTTPError("http://x", 503, "busy", Message(), None)
-        return _FakeResponse(_turns_payload([(0, 1000, "A")]))
+            return httpx2.Response(503, content=b"busy")
+        return httpx2.Response(200, content=_turns_payload([(0, 1000, "A")]))
 
-    turns = transcribe_chunk(b"chunk", _budgeted_settings(1), opener=opener, sleep=lambda _: None)
+    turns = transcribe_chunk(
+        b"chunk",
+        _budgeted_settings(1),
+        transport=httpx2.MockTransport(opener),
+        sleep=lambda _: None,
+    )
 
     assert len(turns) == 1
     assert calls == 2
@@ -260,17 +256,20 @@ def test_transcribe_chunk_retries_retryable_http_status() -> None:
 def test_transcribe_chunk_fails_fast_on_fatal_http_status() -> None:
     calls = 0
 
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
+    def opener(_request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        raise urllib.error.HTTPError("http://x", 400, "bad request", Message(), None)
+        return httpx2.Response(400, content=b"bad request")
 
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED)
     ) as error:
-        transcribe_chunk(b"chunk", _budgeted_settings(3), opener=opener, sleep=lambda _: None)
+        transcribe_chunk(
+            b"chunk",
+            _budgeted_settings(3),
+            transport=httpx2.MockTransport(opener),
+            sleep=lambda _: None,
+        )
 
     assert error.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
     assert str(error.value) == "transcription request failed: HTTPError"
@@ -278,15 +277,18 @@ def test_transcribe_chunk_fails_fast_on_fatal_http_status() -> None:
 
 
 def test_transcribe_chunk_maps_timeout_to_diarize_error() -> None:
-    def opener(request: urllib.request.Request, timeout: float) -> _FakeResponse:
-        del request
-        del timeout
-        raise TimeoutError("timed out")
+    def opener(_request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("timed out")
 
     with pytest.raises(
         DiarizeError, match=message_pattern(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED)
     ) as error:
-        transcribe_chunk(b"chunk", _budgeted_settings(2), opener=opener, sleep=lambda _: None)
+        transcribe_chunk(
+            b"chunk",
+            _budgeted_settings(2),
+            transport=httpx2.MockTransport(opener),
+            sleep=lambda _: None,
+        )
 
     assert error.value.code is ErrorCode.DIARIZE_TRANSCRIPTION_FAILED
-    assert str(error.value) == "transcription request failed: TimeoutError"
+    assert str(error.value) == "transcription request failed: ReadTimeout"

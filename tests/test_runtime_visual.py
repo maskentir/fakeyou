@@ -2,13 +2,11 @@ import asyncio
 from pathlib import Path
 from typing import Any, cast
 
-from langgraph.checkpoint.memory import InMemorySaver
 from playwright.async_api import Page
 
 from fakeyou.config.settings import VisualSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
@@ -94,12 +92,9 @@ async def test_worker_wires_captioner_and_callback_into_observer(tmp_path: Path)
     model = caption_model("A launch timeline.")
     captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
     received: list[tuple[str, str]] = []
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     clock = FakeClock()
     worker = MeetingWorker(
         _config(visual_enabled=True),
-        lifecycle,
         cast(Page, page),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,

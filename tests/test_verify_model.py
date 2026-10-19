@@ -165,3 +165,25 @@ def test_embedder_without_model_id_returns_null() -> None:
     )
     assert faults.report() is None
     assert journal.events("name_verified") == []
+
+
+def test_lookalike_roster_claim_does_not_verify() -> None:
+    registry = resolved_registry()
+    journal = RecordingJournal()
+    faults = FaultReporter(journal=journal)
+    row = registry.resolve(0)
+    assert not isinstance(row, str)
+    decision = decide_verified(
+        row.uuid,
+        passing_scores(),
+        VerificationInputs(
+            artifact=stamped_artifact(f"container.onnx:{DIGEST_A}"),
+            claim=f"{claim_of(row)} ",
+            slot=row.slot,
+            embedder=fake_embedder(f"host-other.onnx:{DIGEST_A}"),
+        ),
+        registry,
+        Diagnostics(faults=faults, journal=journal),
+    )
+    assert decision is None
+    assert journal.events("name_verified") == []

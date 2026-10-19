@@ -1,14 +1,6 @@
-import json
 from pathlib import Path
 
 from fakeyou.audio import voice_activity
-from fakeyou.audio.probe_replay import (
-    LABEL_STABILITY_GATE,
-    OVERLAP_UNKNOWN_GATE,
-    SpeakerAliases,
-    replay_voice_labels,
-    voice_fixture_from_probe,
-)
 from fakeyou.audio.voice_activity import voice_label, voice_speaker_name
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.memory.ingestion import extraction_instructions, meeting_windows
@@ -89,57 +81,3 @@ def test_report_counts_voice_unknown_reasons() -> None:
     participation = build_session_report(rows)["participation"]
     assert participation["attributed_utterances"] == 1
     assert participation["unknown_reasons"] == {"overlap": 2}
-
-
-def test_voice_label_replay_gate_on_probe_attr_8() -> None:
-    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    summary = replay_voice_labels(fixture)
-    assert summary["solo_turns"] == 36
-    assert summary["label_stability"] >= LABEL_STABILITY_GATE
-    assert summary["overlap_unknown_rate"] >= OVERLAP_UNKNOWN_GATE
-    assert summary["coverage"] >= 0.9
-    assert summary["purity"] >= LABEL_STABILITY_GATE
-    join_labels = summary["join_labels"]
-    assert sorted(join_labels) == ["Guest 1", "Guest 2", "Guest 3", "Host"]
-    assert len(set(join_labels.values())) == len(join_labels)
-
-
-def test_voice_fixture_carries_encoded_frames(tmp_path: Path) -> None:
-    probe = tmp_path / "probe.jsonl"
-    probe.write_text(
-        json.dumps(
-            {
-                "kind": "page",
-                "page_ms": 1000.0,
-                "mono_ms": 5000.0,
-                "wall": "2026-10-05T10:00:00+00:00",
-                "levels": [],
-                "frames": [
-                    {"page_ms": 900.0, "receiver": 1, "level": 0.4, "csrc": [42, 7]},
-                    {"page_ms": 950.0, "receiver": 1},
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    record = tmp_path / "record.jsonl"
-    record.write_text("", encoding="utf-8")
-    truth = tmp_path / "truth.json"
-    truth.write_text("[]", encoding="utf-8")
-    fixture = voice_fixture_from_probe(
-        probe, record, truth, twin_name="Twin", speakers=SpeakerAliases({}, {})
-    )
-    assert fixture["events"][0]["batch"]["frames"] == [[900.0, 1, 0.4, [42, 7]]]
-
-
-def test_csrc_label_replay_gate_on_live_session() -> None:
-    fixture = json.loads(CSRC_FIXTURE.read_text(encoding="utf-8"))
-    summary = replay_voice_labels(fixture)
-    assert summary["solo_turns"] == 11
-    assert summary["coverage"] >= 0.9
-    assert summary["label_stability"] >= LABEL_STABILITY_GATE
-    assert summary["purity"] >= LABEL_STABILITY_GATE
-    assert summary["overlap_unknown_rate"] >= OVERLAP_UNKNOWN_GATE
-    assert summary["person_labels"] == {"A": ["speaker-a"], "B": ["speaker-b"]}
-    assert set(summary["reasons"]) == {"dominant_csrc"}

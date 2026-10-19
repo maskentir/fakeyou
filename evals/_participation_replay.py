@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fakeyou.conversation.conversation import ConversationLoop, LoopInteraction
+from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._conversation_fakes import FakeResponder
@@ -39,30 +39,30 @@ def load_labels(session: str) -> dict[str, Any]:
 
 
 def summarize_policy(rows: list[dict[str, Any]]) -> dict[str, int]:
-    summary: dict[str, int] = {"rule": 0, "jev": 0, "stale_pregen": 0}
+    summary: dict[str, int] = {"rule": 0, "jev": 0, "decider_fallback": 0}
     for row in rows:
         if row.get("event") != "policy_decided":
             continue
         source = row.get("decision_source", "rule")
         if source in summary:
             summary[source] += 1
-        if row.get("reason") == "jev_stale_silent":
-            summary["stale_pregen"] += 1
+        if str(row.get("reason", "")).startswith("rules_fallback:"):
+            summary["decider_fallback"] += 1
     return summary
 
 
 def replay_record(path: Path, twin_names: tuple[str, ...]) -> list[dict[str, Any]]:
     async def _run() -> list[dict[str, Any]]:
         journal = RecordingJournal(meeting_id="replay")
-        loop = ConversationLoop(
+        turns = build_meeting_turns(
             FakeResponder(),
-            interaction=LoopInteraction(twin_names=twin_names),
+            interaction=TurnInteraction(twin_names=twin_names),
             diagnostics=Diagnostics(journal=journal),
         )
         for turn in load_record_turns(path):
-            await loop.handle_transcript(turn)
-        await loop.wait_idle()
-        await loop.close()
+            await turns.ingress.receive_final(turn)
+        await turns.lifecycle.wait_idle()
+        await turns.lifecycle.close()
         return [
             {
                 "transcript_id": row["transcript_id"],

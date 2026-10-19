@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import SecretStr
 
-import fakeyou.cli.join as cli_join
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
+import tests._join_runner as cli_join
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.config.identifiers import SessionId

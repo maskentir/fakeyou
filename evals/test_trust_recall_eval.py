@@ -8,14 +8,15 @@ from evals._trust import (
     case_storage,
     load_trust_fixture,
 )
-from fakeyou.memory.memory import RECALL_EMPTY_RESULT, create_memory_tools
+from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
+from fakeyou.memory.memory import create_memory_tools
 from fakeyou.memory.persona import PersonaProfile
 
 
 async def recall_output_for(case: dict[str, Any], group_id: str) -> str:
     memory, stored, states = build_case_memory(case, group_id)
     with case_storage(memory, stored, states):
-        _remember, production = create_memory_tools(memory, group_id=group_id)
+        [production] = create_memory_tools(memory, group_id=group_id)
         return str(await production.ainvoke({"query": str(case["turns"][0]["say"])}))
 
 

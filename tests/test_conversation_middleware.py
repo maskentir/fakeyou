@@ -12,7 +12,7 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import LangGraphResponder, StreamingLangGraphResponder
+from fakeyou.conversation.conversation import LangGraphResponder
 from fakeyou.conversation.middleware import (
     HistoryTrimMiddleware,
     OrphanToolCallMiddleware,
@@ -122,7 +122,7 @@ async def test_orphan_middleware_covers_streaming_path() -> None:
             ]
         },
     )
-    responder = StreamingLangGraphResponder(agent, "orphan-stream")
+    responder = LangGraphResponder(agent, "orphan-stream")
 
     stream = responder.stream_sentences(
         [event("new", "new question")], lambda: None, request_id="new:1"

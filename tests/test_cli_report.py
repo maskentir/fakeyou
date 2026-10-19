@@ -1,78 +1,49 @@
 import json
 import sys
-from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
+import httpx2
 import pytest
 
 import fakeyou.cli.diagnostics as cli_diagnostics
 import fakeyou.cli.main as cli_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.config.identifiers import SessionId
+from fakeyou.cli.client import ClientSettings
 from fakeyou.config.settings import Settings
 from tests._error_support import message_pattern
 
+SETTINGS = ClientSettings(base_url="http://api.test", owner_token="owner-secret", admin_token=None)
 
-def test_report_command_prints_summary_from_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+
+async def test_report_prints_the_api_document_for_the_meeting(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    journal_dir = tmp_path / "journals"
-    journal_dir.mkdir()
-    (journal_dir / "meeting-1.jsonl").write_text(
-        json.dumps(
-            {
-                "event": "session_finished",
-                "meeting_id": "meeting-1",
-                "at": "2026-09-30T10:00:00+00:00",
-                "phase": "ended",
-                "terminal_reason": "stopped_by_owner",
-                "exit_code": 0,
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["fakeyou", "report", "--meeting-id", "meeting-1", "--journal-dir", str(journal_dir)],
+    document = {"meeting_id": "meeting-1", "result": {"terminal_reason": "stopped_by_owner"}}
+    seen: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(f"{request.method} {request.url.path}")
+        return httpx2.Response(200, json=document)
+
+    await cli_diagnostics.show_session_report(
+        meeting_id="meeting-1",
+        settings=SETTINGS,
+        transport=httpx2.MockTransport(handler),
     )
 
-    with pytest.raises(SystemExit) as exited:
+    assert seen == ["GET /v1/sessions/meeting-1/report"]
+    assert json.loads(capsys.readouterr().out) == document
+
+
+def test_report_command_rejects_an_invalid_meeting_id_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "bad meeting"])
+    with pytest.raises(SystemExit) as caught:
         cli_main.main()
 
-    assert exited.value.code == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["meeting_id"] == "meeting-1"
-    assert report["result"]["terminal_reason"] == "stopped_by_owner"
-
-
-def test_report_command_rejects_an_unknown_meeting(settings: Settings, tmp_path: Path) -> None:
-    with pytest.raises(FakeYouError, match="no journal") as caught:
-        cli_diagnostics.show_session_report(SessionId("missing"), tmp_path, settings)
-    assert caught.value.code is ErrorCode.DIAGNOSTICS_JOURNAL_MISSING
-
-
-def test_report_command_maps_unreadable_journal_to_report_failed(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    journal_dir = tmp_path / "journals"
-    journal_dir.mkdir()
-    (journal_dir / "meeting-1.jsonl").write_text("{}\n", encoding="utf-8")
-
-    def unreadable(_path: Path) -> NoReturn:
-        raise OSError("disk gone")
-
-    monkeypatch.setattr(cli_diagnostics, "read_journal_with_corrupt", unreadable)
-
-    with pytest.raises(
-        FakeYouError, match=message_pattern(ErrorCode.DIAGNOSTICS_REPORT_FAILED)
-    ) as caught:
-        cli_diagnostics.show_session_report(SessionId("meeting-1"), journal_dir, settings)
-
-    assert caught.value.code is ErrorCode.DIAGNOSTICS_REPORT_FAILED
-    assert str(caught.value) == "session report failed: OSError"
+    assert caught.value.code == 2
+    assert "invalid --meeting-id: 'bad meeting'" in capsys.readouterr().err
 
 
 async def test_browser_tools_command_maps_launch_errors_to_tools_failed(
@@ -97,49 +68,3 @@ async def test_browser_tools_command_maps_launch_errors_to_tools_failed(
 
     assert caught.value.code is ErrorCode.BROWSER_TOOLS_FAILED
     assert str(caught.value) == "browser tools failed: Error"
-
-
-def test_report_command_rejects_an_invalid_meeting_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "report", "--meeting-id", "bad id"])
-
-    with pytest.raises(SystemExit) as caught:
-        cli_main.main()
-
-    assert caught.value.code == ExitCode.INPUT_REJECTED
-    assert "invalid --meeting-id: 'bad id'" in capsys.readouterr().err
-
-
-def test_report_command_surfaces_corrupt_journal_lines(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    journal_dir = tmp_path / "journals"
-    journal_dir.mkdir()
-    (journal_dir / "meeting-1.jsonl").write_text(
-        json.dumps(
-            {
-                "event": "session_finished",
-                "meeting_id": "meeting-1",
-                "at": "2026-09-30T10:00:00+00:00",
-                "phase": "ended",
-                "terminal_reason": "stopped_by_owner",
-                "exit_code": 0,
-            }
-        )
-        + "\nnot json\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["fakeyou", "report", "--meeting-id", "meeting-1", "--journal-dir", str(journal_dir)],
-    )
-
-    with pytest.raises(SystemExit) as exited:
-        cli_main.main()
-
-    assert exited.value.code == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["journal"] == {"corrupt_lines": 1}

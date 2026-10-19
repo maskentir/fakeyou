@@ -10,14 +10,10 @@ from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import (
-    MAX_CONSECUTIVE_TURN_FAILURES,
-    ConversationLoop,
-    LangGraphResponder,
-    LoopInteraction,
-    LoopTiming,
-)
+from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.meeting_turns import TurnInteraction, TurnTiming, build_meeting_turns
 from fakeyou.conversation.session import ConversationError
+from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
@@ -32,18 +28,18 @@ async def test_model_timeout_is_observable_without_exposing_provider_error(
     journal: RecordingJournal,
 ) -> None:
     audio = FakeReplyAudio()
-    loop = ConversationLoop(
+    loop = build_meeting_turns(
         FakeResponder(asyncio.Event()),
-        timing=LoopTiming(response_timeout_seconds=0.02),
+        timing=TurnTiming(response_timeout_seconds=0.02),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.bind(audio)
-    await loop.handle_transcript(event("one"))
-    await loop.wait_idle()
-    loop.raise_if_failed()
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("one"))
+    await loop.lifecycle.wait_idle()
+    loop.lifecycle.raise_if_failed()
     assert [row["error"] for row in journal.events("turn_failed")] == ["TimeoutError"]
     assert len(audio.spoken) == 1
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 class _BuggyResponder(FakeResponder):
@@ -57,17 +53,17 @@ class _BuggyResponder(FakeResponder):
 async def test_responder_bug_fails_the_loop_after_the_failure_limit() -> None:
     journal = RecordingJournal("meeting-bug")
     reporter = FaultReporter(journal=journal)
-    loop = ConversationLoop(_BuggyResponder(), diagnostics=Diagnostics(faults=reporter))
-    loop.bind(FakeReplyAudio())
+    loop = build_meeting_turns(_BuggyResponder(), diagnostics=Diagnostics(faults=reporter))
+    loop.lifecycle.bind(FakeReplyAudio())
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES - 1):
-        await loop.handle_transcript(event(f"t{index}", "hello"))
-        await loop.wait_idle()
-    await loop.handle_transcript(event("last", "hello"))
+        await loop.ingress.receive_final(event(f"t{index}", "hello"))
+        await loop.lifecycle.wait_idle()
+    await loop.ingress.receive_final(event("last", "hello"))
     with pytest.raises(ConversationError, match="conversation failed") as caught:
-        await loop.wait_idle()
+        await loop.lifecycle.wait_idle()
     assert isinstance(caught.value.__cause__, ValueError)
     assert reporter.total() >= 1
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_agent_error_raises_typed_provider_fault() -> None:
@@ -96,16 +92,16 @@ async def test_responder_error_fails_loop_after_the_failure_limit() -> None:
             del on_tool_start
             raise RuntimeError("model exploded")
 
-    loop = ConversationLoop(Broken())
-    loop.bind(FakeReplyAudio())
+    loop = build_meeting_turns(Broken())
+    loop.lifecycle.bind(FakeReplyAudio())
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
-        await loop.handle_transcript(event(f"one-{index}"))
+        await loop.ingress.receive_final(event(f"one-{index}"))
         if index < MAX_CONSECUTIVE_TURN_FAILURES - 1:
-            await loop.wait_idle()
+            await loop.lifecycle.wait_idle()
     with pytest.raises(ConversationError, match="conversation failed"):
-        await loop.wait_idle()
-    assert loop.phase == "failed"
-    await loop.close()
+        await loop.lifecycle.wait_idle()
+    assert loop.lifecycle.phase == "failed"
+    await loop.lifecycle.close()
 
 
 async def test_loop_journals_turn_without_modifying_injected_responder(
@@ -127,14 +123,14 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
             return "ok"
 
     responder = JournaledResponder()
-    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
+    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
 
-    loop.bind(FakeReplyAudio())
-    await loop.handle_transcript(event("one"))
-    await loop.wait_idle()
+    loop.lifecycle.bind(FakeReplyAudio())
+    await loop.ingress.receive_final(event("one"))
+    await loop.lifecycle.wait_idle()
     assert responder.journal is None
     assert [json.loads(line)["event"] for line in lines] == ["agent_started", "agent_finished"]
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 def _recall_then_reply() -> ToolCallingFakeModel:
@@ -339,16 +335,16 @@ async def test_transition_observer_error_is_recorded_as_fault() -> None:
         raise ValueError("bug")
 
     audio = FakeReplyAudio()
-    loop = ConversationLoop(
+    loop = build_meeting_turns(
         FakeResponder(),
-        interaction=LoopInteraction(on_transition=boom),
+        interaction=TurnInteraction(on_transition=boom),
         diagnostics=Diagnostics(faults=reporter),
     )
-    loop.bind(audio)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
 
     (summary,) = reporter.summaries()
     assert summary.operation == "transition_observer"
     assert audio.spoken == ["hello"]
-    await loop.close()
+    await loop.lifecycle.close()

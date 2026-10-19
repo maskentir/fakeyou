@@ -47,22 +47,11 @@ def test_status_check_reports_stale_sidecar_fallback_to_journal(record_path: Pat
         [DiarizedTurn(start_ms=0, end_ms=3400, speaker="A")],
         clock=lambda: AT,
     )
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(
-                {
-                    "kind": "transcript",
-                    "at": AT.isoformat(),
-                    "id": "e2",
-                    "spoken_at": "12:01:00",
-                    "source": "caption",
-                    "text": "A second voice notes the deadline.",
-                    "participant_id": "unknown",
-                    "speaker_evidence_id": None,
-                }
-            )
-            + "\n"
-        )
+    rows = record_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    last = json.loads(rows[-1])
+    last["capture_ms"] = 1.0
+    rows[-1] = json.dumps(last) + "\n"
+    record_path.write_text("".join(rows), encoding="utf-8")
     lines: list[str] = []
     journal = Journal("b2-meeting", emit=lines.append)
 

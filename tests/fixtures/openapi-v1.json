@@ -1,0 +1,94 @@
+{
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/admin/chat/turns": [
+      "post"
+    ],
+    "/v1/admin/check": [
+      "get"
+    ],
+    "/v1/admin/memory-init": [
+      "post"
+    ],
+    "/v1/health": [
+      "get"
+    ],
+    "/v1/jobs/{job_id}": [
+      "get"
+    ],
+    "/v1/sessions": [
+      "get",
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}": [
+      "get"
+    ],
+    "/v1/sessions/{meeting_id}/debrief": [
+      "get"
+    ],
+    "/v1/sessions/{meeting_id}/debriefs": [
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}/events": [
+      "get"
+    ],
+    "/v1/sessions/{meeting_id}/forget": [
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}/ingestion": [
+      "get"
+    ],
+    "/v1/sessions/{meeting_id}/ingestions": [
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}/join": [
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}/report": [
+      "get"
+    ],
+    "/v1/sessions/{meeting_id}/resume": [
+      "post"
+    ],
+    "/v1/sessions/{meeting_id}/stop": [
+      "post"
+    ],
+    "/v1/twins/{twin_id}/notes": [
+      "post"
+    ],
+    "/v1/twins/{twin_id}/notes/{episode_uuid}": [
+      "delete"
+    ],
+    "/v1/twins/{twin_id}/notes/{episode_uuid}/corrections": [
+      "post"
+    ],
+    "/v1/twins/{twin_id}/reembeddings": [
+      "post"
+    ]
+  },
+  "schemas": [
+    "BriefDocument",
+    "BriefItem",
+    "ChatTurn",
+    "ChatTurnView",
+    "DebriefQueued",
+    "DebriefSubmit",
+    "DebriefView",
+    "ForgetMeeting",
+    "ForgetStageView",
+    "ForgetView",
+    "HTTPValidationError",
+    "IngestionSubmit",
+    "IngestionView",
+    "JobView",
+    "MemoryInitView",
+    "NoteCorrect",
+    "NoteCreate",
+    "NoteView",
+    "PersonaProfile",
+    "SessionCreate",
+    "SessionView",
+    "StopSession",
+    "ValidationError"
+  ]
+}

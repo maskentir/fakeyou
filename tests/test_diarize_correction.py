@@ -56,6 +56,7 @@ def test_write_correction_bundle_writes_both_files_with_exact_schema(tmp_path: P
     payload = json.loads(bundle.json_path.read_text(encoding="utf-8"))
     assert payload["schema"] == "diarization_correction/v1"
     assert payload["record_sha256"] == sha256((RECORD_TEXT + "\n").encode("utf-8")).hexdigest()
+    assert payload["record_bytes"] == len((RECORD_TEXT + "\n").encode("utf-8"))
     assert payload["corrected_at"] == FIXED_NOW.isoformat()
     assert payload["turns"] == [
         {
@@ -182,14 +183,66 @@ def test_load_corrected_record_without_sidecar_matches_plain_load(tmp_path: Path
     assert load_corrected_record(record_path) == load_meeting_record(record_path)
 
 
-def test_load_corrected_record_rejects_changed_record_as_stale(tmp_path: Path) -> None:
+def _rewrite_first_line(record_path: Path, capture_ms: float) -> None:
+    lines = record_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[0] = _transcript_line(0, capture_ms) + "\n"
+    record_path.write_text("".join(lines), encoding="utf-8")
+
+
+def _append_line(record_path: Path, index: int, capture_ms: float) -> None:
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(_transcript_line(index, capture_ms) + "\n")
+
+
+def test_write_correction_bundle_hashes_the_finalized_record_prefix(tmp_path: Path) -> None:
+    _, record_path = _record_session(tmp_path, [6000.0, 7000.0], anchors=[])
+    finalized = record_path.read_bytes()
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"kind": "transcript", "torn')
+
+    bundle = write_correction_bundle(
+        record_path.parent / "audio", record_path, _turns(), clock=lambda: FIXED_NOW
+    )
+
+    payload = json.loads(bundle.json_path.read_text(encoding="utf-8"))
+    assert payload["record_bytes"] == len(finalized)
+    assert payload["record_sha256"] == sha256(finalized).hexdigest()
+
+
+def test_appended_record_growth_keeps_the_sidecar_valid(tmp_path: Path) -> None:
     anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
     audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
     write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(_transcript_line(9, 6100.0) + "\n")
+    _append_line(record_path, 9, 6100.0)
+
+    entries = cast(list[TranscriptEntry], load_corrected_record(record_path))
+
+    assert [(entry.id, entry.corrected_speaker_uuid) for entry in entries] == [
+        ("event-0", _expected_uuid("A", 0)),
+        ("event-9", None),
+    ]
+
+
+def test_load_corrected_record_rejects_changed_prefix_as_stale(tmp_path: Path) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    _append_line(record_path, 9, 6100.0)
+    _rewrite_first_line(record_path, 6001.0)
 
     with pytest.raises(DiarizeError, match="stale") as error:
+        load_corrected_record(record_path)
+
+    assert error.value.code is ErrorCode.DIARIZE_STALE
+
+
+def test_load_corrected_record_rejects_truncated_record_as_stale(tmp_path: Path) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0, 7000.0], anchors=anchors)
+    write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    record_path.write_text(_transcript_line(0, 6000.0) + "\n", encoding="utf-8")
+
+    with pytest.raises(StaleDiarizationError, match="stale") as error:
         load_corrected_record(record_path)
 
     assert error.value.code is ErrorCode.DIARIZE_STALE
@@ -200,13 +253,33 @@ def test_stale_error_is_distinguishable_from_invalid_sidecar(tmp_path: Path) -> 
     anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
     audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
     write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(_transcript_line(9, 6100.0) + "\n")
+    _rewrite_first_line(record_path, 6001.0)
 
     with pytest.raises(StaleDiarizationError, match="stale") as error:
         load_corrected_record(record_path)
 
     assert error.value.code is ErrorCode.DIARIZE_STALE
+
+
+@pytest.mark.parametrize("record_bytes", [None, -1, "12", True])
+def test_sidecar_without_a_valid_record_bytes_is_invalid(
+    tmp_path: Path, record_bytes: object
+) -> None:
+    anchors = [{"slot": 0, "seq": 0, "page_ms": 5000.0, "mono": 1.0}]
+    audio_dir, record_path = _record_session(tmp_path, [6000.0], anchors=anchors)
+    bundle = write_correction_bundle(audio_dir, record_path, _turns(), clock=lambda: FIXED_NOW)
+    payload = json.loads(bundle.json_path.read_text(encoding="utf-8"))
+    if record_bytes is None:
+        del payload["record_bytes"]
+    else:
+        payload["record_bytes"] = record_bytes
+    bundle.json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DiarizeError, match="sidecar is invalid") as error:
+        load_corrected_record(record_path)
+
+    assert not isinstance(error.value, StaleDiarizationError)
+    assert error.value.code is ErrorCode.DIARIZE_SIDECAR_INVALID
 
 
 def test_load_corrected_record_leaves_far_entries_unattached(tmp_path: Path) -> None:

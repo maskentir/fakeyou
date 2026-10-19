@@ -8,7 +8,7 @@ import fakeyou.orchestration.assembly as assembly_module
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.orchestration.assembly import LoopBehavior
+from fakeyou.orchestration.assembly import TurnBehavior
 
 
 def _capture(created: dict[str, Any]) -> Any:
@@ -35,7 +35,7 @@ async def test_assembly_registers_history_middlewares(
     async with assembly_module.open_conversation(
         settings,
         config,
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -46,13 +46,13 @@ async def test_assembly_registers_history_middlewares(
 async def test_assembly_teardown_budgets_a_hanging_close(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation.conversation import ConversationLoop
+    from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 
     async def hanging_close(self: Any) -> None:
         del self
         await asyncio.sleep(30.0)
 
-    monkeypatch.setattr(ConversationLoop, "close", hanging_close)
+    monkeypatch.setattr(TurnLifecycle, "close", hanging_close)
     config = SessionConfig(
         owner_id=settings.identity.owner_id,
         twin_id=settings.identity.twin_id,
@@ -65,7 +65,7 @@ async def test_assembly_teardown_budgets_a_hanging_close(
         async with assembly_module.open_conversation(
             settings,
             config,
-            behavior=LoopBehavior(on_transition=lambda *_args: None),
+            behavior=TurnBehavior(on_transition=lambda *_args: None),
         ):
             pass
 

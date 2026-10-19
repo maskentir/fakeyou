@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Iterable
 from typing import Any, cast, override
@@ -10,20 +11,26 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
+    HumanMessage,
     ToolMessage,
 )
 from langchain_core.outputs import ChatResult
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    ConversationLoop,
-    LoopGeneration,
-    LoopInteraction,
-    LoopTiming,
-    StreamingLangGraphResponder,
+    LangGraphResponder,
     cap_spoken_reply,
+    stream_sentences,
+)
+from fakeyou.conversation.meeting_turns import (
+    MeetingTurns,
+    TurnGeneration,
+    TurnInteraction,
+    TurnTiming,
+    build_meeting_turns,
 )
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
@@ -128,8 +135,8 @@ def streamed_loop(
     journal: RecordingJournal,
     language: str = "id",
     **kwargs: Any,
-) -> ConversationLoop:
-    responder = StreamingLangGraphResponder(agent, "thread", journal=journal, language=language)
+) -> MeetingTurns:
+    responder = LangGraphResponder(agent, "thread", journal=journal, language=language)
     interaction_keys = (
         "on_transition",
         "wake_phrases",
@@ -141,27 +148,25 @@ def streamed_loop(
     generation_keys = (
         "max_spoken_sentences",
         "sentence_streaming",
-        "pre_generate_enabled",
-        "pregen_fuzzy_restart_enabled",
     )
-    interaction = LoopInteraction(
+    interaction = TurnInteraction(
         **{key: kwargs.pop(key) for key in interaction_keys if key in kwargs}
     )
-    timing = LoopTiming(**{key: kwargs.pop(key) for key in timing_keys if key in kwargs})
-    generation = LoopGeneration(
+    timing = TurnTiming(**{key: kwargs.pop(key) for key in timing_keys if key in kwargs})
+    generation = TurnGeneration(
         language=language,
         sentence_streaming=True,
         **{key: kwargs.pop(key) for key in generation_keys if key in kwargs},
     )
     assert not kwargs, kwargs
-    loop = ConversationLoop(
+    loop = build_meeting_turns(
         responder,
         interaction=interaction,
         timing=timing,
         generation=generation,
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.bind(audio)
+    loop.lifecycle.bind(audio)
     return loop
 
 
@@ -175,8 +180,8 @@ async def test_streamed_reply_speaks_each_sentence_in_order(journal: RecordingJo
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert " ".join(audio.spoken) == cap_spoken_reply("First sentence here. Second sentence here.")
     [started] = journal.events("agent_started")
@@ -188,7 +193,7 @@ async def test_streamed_reply_speaks_each_sentence_in_order(journal: RecordingJo
     assert {row["request_id"] for row in emitted} == {started["request_id"]}
     assert agent.stream_modes == ["messages"]
     assert journal.events("agent_finished") != []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 @pytest.mark.parametrize("language", ["id", "en"])
@@ -200,13 +205,13 @@ async def test_streamed_reply_matches_cap_across_languages(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language=language)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["Morning update.", "All systems ready."]
     assert " ".join(audio.spoken) == cap_spoken_reply(
         "Morning update. All systems ready.", language=language
     )
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: RecordingJournal) -> None:
@@ -219,13 +224,13 @@ async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["Real answer here.", "Done now."]
     body = "\n".join(journal.lines)
     assert "tool output secret" not in body
     assert "Real answer here" not in body
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streaming_responder_with_flag_off_uses_single_speak(
@@ -233,27 +238,31 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(
 ) -> None:
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
-    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
-    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
-    loop.bind(audio)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    loop = build_meeting_turns(
+        responder,
+        generation=TurnGeneration(sentence_streaming=False),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["One. Two."]
     assert journal.events("answer_text_emitted") == []
     assert journal.events("answer_sentence_emitted") == []
     assert len(agent.ainvoke_calls) == 1
     assert agent.streams == []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_flag_on_with_plain_responder_keeps_old_behavior() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = ConversationLoop(responder, generation=LoopGeneration(sentence_streaming=True))
-    loop.bind(audio)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    loop = build_meeting_turns(responder, generation=TurnGeneration(sentence_streaming=True))
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["hello"]
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_discards_partial_text_before_tool_end(
@@ -269,8 +278,8 @@ async def test_streamed_reply_discards_partial_text_before_tool_end(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "when is demo"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "when is demo"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["The demo is on Friday.", "Doors open at nine."]
     body = "\n".join(journal.lines)
     assert "Checking memor" not in body
@@ -279,7 +288,7 @@ async def test_streamed_reply_discards_partial_text_before_tool_end(
     assert (started_tool["tool"], started_tool["transcript_id"]) == ("recall_meeting_context", "t1")
     [finished_tool] = journal.events("tool_finished")
     assert finished_tool["transcript_id"] == "t1"
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_marks_answer_text_after_tool_end(journal: RecordingJournal) -> None:
@@ -293,12 +302,12 @@ async def test_streamed_reply_marks_answer_text_after_tool_end(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "when is demo"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "when is demo"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["The demo is on Friday."]
     order = [json.loads(line)["event"] for line in journal.lines]
     assert order.index("answer_text_emitted") > order.index("tool_finished")
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal) -> None:
@@ -322,14 +331,14 @@ async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal)
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "when is demo"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "when is demo"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["I do not know the answer.", "Sorry about that."]
     assert "Meeting memory is unavailable" not in " ".join(audio.spoken)
     [failed] = journal.events("tool_failed")
     assert (failed["tool"], failed["transcript_id"]) == ("recall_meeting_context", "t1")
     assert journal.events("agent_finished") != []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> None:
@@ -357,11 +366,11 @@ async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> 
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["Fallback answer here."]
     assert journal.events("agent_finished") != []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_caps_third_sentence_and_stops_stream(
@@ -372,42 +381,42 @@ async def test_streamed_reply_caps_third_sentence_and_stops_stream(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["One.", "Two."]
     assert " ".join(audio.spoken) == cap_spoken_reply("One. Two. Three. Four. Five.")
     [capped] = journal.events("reply_capped")
     assert capped["chars_in"] >= capped["chars_out"] > 0
     assert agent.delivered == 1
     assert agent.streams[0].aclosed
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_without_remainder_records_no_cap(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "One. Two.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["One.", "Two."]
     assert journal.events("reply_capped") == []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == []
-    assert loop.phase == "waiting"
-    await loop.close()
+    assert loop.lifecycle.phase == "waiting"
+    await loop.lifecycle.close()
 
 
 def test_streaming_responder_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
-        StreamingLangGraphResponder(cast(AgentT, ScriptedAgent([])), "thread", max_sentences=0)
+        LangGraphResponder(cast(AgentT, ScriptedAgent([])), "thread", max_sentences=0)
 
 
 async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJournal) -> None:
@@ -425,17 +434,17 @@ async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "first"))
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.handle_transcript(event("t2", "second"))
+    await loop.ingress.receive_final(event("t2", "second"))
     release.set()
-    await loop.wait_idle()
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["First done.", "New answer."]
     [dropped] = journal.events("sentence_dropped")
     assert (dropped["request_id"], dropped["transcript_id"]) == ("t1:1", "t1")
     assert (dropped["sentence_index"], dropped["detail"]) == (1, "stale_generation")
     assert agent.streams[0].aclosed
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_interim_stop_between_sentences_speaks_nothing_further(
@@ -452,13 +461,13 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, barge_in=True)
-    await loop.handle_transcript(event("t1", "first"))
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.handle_interim("wait just a moment")
+    await loop.ingress.handle_interim("wait just a moment")
     assert audio.stops == 1
     release.set()
-    await loop.wait_idle()
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["First done."]
     [dropped] = journal.events("sentence_dropped")
     assert (dropped["transcript_id"], dropped["sentence_index"], dropped["detail"]) == (
@@ -466,7 +475,7 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(
         1,
         "stopped",
     )
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_close_during_stream_cancels_without_trailing_speech(
@@ -483,9 +492,9 @@ async def test_close_during_stream_cancels_without_trailing_speech(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "first"))
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.close()
+    await loop.lifecycle.close()
     assert audio.spoken == ["First done."]
     assert agent.streams[0].aclosed
     assert journal.events("agent_cancelled") != []
@@ -495,8 +504,8 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     [first] = journal.events("answer_text_emitted")
     assert set(first) == {"event", "meeting_id", "at", "source", "request_id", "transcript_id"}
     emitted = journal.events("answer_sentence_emitted")
@@ -516,7 +525,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     assert "First sentence here" not in body
     assert "Second sentence here" not in body
     assert "hello" not in body
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(
@@ -528,14 +537,14 @@ async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["Full reply one.", "Full reply two."]
     [failed] = [row for row in journal.events("agent_failed") if row.get("detail") == "stream"]
     assert failed["request_id"] == "t1:1"
     assert journal.events("agent_finished") != []
     assert len(agent.ainvoke_calls) == 1
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
@@ -546,25 +555,25 @@ async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
-    loop.raise_if_failed()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    loop.lifecycle.raise_if_failed()
     assert audio.spoken.count("First done.") == 1
     assert len(audio.spoken) == 2
     assert journal.events("agent_finished") == []
     assert agent.ainvoke_calls == []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_speak_tags_each_sentence_with_its_index(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.indices == [0, 1]
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
@@ -582,11 +591,11 @@ async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "first"))
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.handle_transcript(event("t2", "second"))
+    await loop.ingress.receive_final(event("t2", "second"))
     release.set()
-    await loop.wait_idle()
+    await loop.lifecycle.wait_idle()
     [dropped] = journal.events("sentence_dropped")
     assert dropped["request_id"] == "t1:1"
     cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
@@ -594,7 +603,7 @@ async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: Recordin
     assert "duration_ms" in cancelled[0]
     finished = [row for row in journal.events("agent_finished") if row["request_id"] == "t1:1"]
     assert finished == []
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
@@ -609,17 +618,17 @@ async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: Record
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, barge_in=True)
-    await loop.handle_transcript(event("t1", "first"))
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.handle_interim("wait just a moment")
+    await loop.ingress.handle_interim("wait just a moment")
     release.set()
-    await loop.wait_idle()
+    await loop.lifecycle.wait_idle()
     [dropped] = journal.events("sentence_dropped")
     assert dropped["detail"] == "stopped"
     cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert len(cancelled) == 1
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 def test_sentence_streaming_default_follows_settings_flag() -> None:
@@ -627,8 +636,8 @@ def test_sentence_streaming_default_follows_settings_flag() -> None:
 
     from fakeyou.config.settings import DEFAULTS
 
-    assert DEFAULTS.conversation.sentence_streaming is False
-    params = inspect.signature(LoopGeneration).parameters
+    assert DEFAULTS.conversation.sentence_streaming is True
+    params = inspect.signature(TurnGeneration).parameters
     assert params["sentence_streaming"].default == DEFAULTS.conversation.sentence_streaming
 
 
@@ -642,11 +651,11 @@ async def test_streamed_speak_passes_transcript_id_to_session(journal: Recording
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.handle_transcript(event("t1", "hello"))
-    await loop.wait_idle()
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.transcripts == ["t1", "t1"]
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
@@ -660,7 +669,7 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
             ]
         }
     )
-    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
 
     seen: list[str] = []
 
@@ -686,7 +695,7 @@ async def test_stream_error_before_first_sentence_skips_recovery_for_domain_erro
     agent = ScriptedAgent(
         {"t1": [("error", FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED))]}
     )
-    responder = StreamingLangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
 
     with pytest.raises(
         FakeYouError,
@@ -716,16 +725,149 @@ async def test_speaking_time_does_not_count_against_the_response_budget() -> Non
 
     responder = StreamingResponder(["First sentence.", "Second sentence."])
     audio = SlowReplyAudio()
-    loop = ConversationLoop(
+    loop = build_meeting_turns(
         responder,
-        timing=LoopTiming(response_timeout_seconds=0.1),
-        generation=LoopGeneration(sentence_streaming=True),
+        timing=TurnTiming(response_timeout_seconds=0.1),
+        generation=TurnGeneration(sentence_streaming=True),
     )
-    loop.bind(audio)
+    loop.lifecycle.bind(audio)
 
-    await loop.handle_transcript(event("t1", "question"))
-    await asyncio.wait_for(loop.wait_idle(), 3)
+    await loop.ingress.receive_final(event("t1", "question"))
+    await asyncio.wait_for(loop.lifecycle.wait_idle(), 3)
 
     assert audio.spoken == ["First sentence.", "Second sentence."]
-    loop.raise_if_failed()
-    await loop.close()
+    loop.lifecycle.raise_if_failed()
+    await loop.lifecycle.close()
+
+
+class SlowTokenStream:
+    def __init__(self, pieces: list[str], delay: float) -> None:
+        self._pieces = list(pieces)
+        self._delay = delay
+        self._first = True
+
+    def __aiter__(self) -> "SlowTokenStream":
+        return self
+
+    async def __anext__(self) -> tuple[AIMessageChunk, dict[str, str]]:
+        if not self._pieces:
+            raise StopAsyncIteration
+        if not self._first:
+            await asyncio.sleep(self._delay)
+        self._first = False
+        return AIMessageChunk(content=self._pieces.pop(0)), {"langgraph_node": "model"}
+
+
+class SlowTokenAgent:
+    def __init__(self, pieces: list[str], delay: float) -> None:
+        self.pieces = pieces
+        self.delay = delay
+
+    def astream(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> SlowTokenStream:
+        del payload, config, kwargs
+        return SlowTokenStream(self.pieces, self.delay)
+
+    async def ainvoke(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        del payload, config, kwargs
+        await asyncio.sleep(self.delay * (len(self.pieces) - 1))
+        return {"messages": [AIMessage(content="".join(self.pieces))]}
+
+
+class ToolInterleavedStream:
+    def __init__(self, callbacks: Iterable[Any]) -> None:
+        self._callbacks = list(callbacks)
+        self._steps = ["tool_start", "during", "tool_end", "after"]
+        self._run_id = uuid.uuid4()
+
+    def __aiter__(self) -> "ToolInterleavedStream":
+        return self
+
+    async def __anext__(self) -> tuple[AIMessageChunk, dict[str, str]]:
+        while self._steps:
+            step = self._steps.pop(0)
+            if step == "tool_start":
+                for callback in self._callbacks:
+                    await callback.on_tool_start({"name": "lookup"}, "", run_id=self._run_id)
+            elif step == "tool_end":
+                outcome = ToolMessage(content="found", tool_call_id="call-1")
+                for callback in self._callbacks:
+                    await callback.on_tool_end(outcome, run_id=self._run_id)
+            elif step == "during":
+                return AIMessageChunk(content="Still looking it up. "), {"langgraph_node": "model"}
+            else:
+                return AIMessageChunk(content="I have checked it."), {"langgraph_node": "model"}
+        raise StopAsyncIteration
+
+
+class ToolInterleavedAgent:
+    def astream(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> ToolInterleavedStream:
+        del payload, kwargs
+        return ToolInterleavedStream((config or {}).get("callbacks", ()))
+
+
+def stream_config() -> RunnableConfig:
+    return {"configurable": {"thread_id": "thread"}, "recursion_limit": 30}
+
+
+async def test_first_sentence_arrives_before_stream_ends() -> None:
+    agent = SlowTokenAgent(["First sentence. ", "Second sentence."], delay=0.30)
+    stream = stream_sentences(
+        cast(AgentT, agent), [HumanMessage("hello")], stream_config(), max_sentences=6
+    )
+    start = time.perf_counter()
+    first = await anext(stream)
+    assert first == "First sentence."
+    assert time.perf_counter() - start < 0.30
+    assert [first] + [s async for s in stream] == ["First sentence.", "Second sentence."]
+
+
+async def test_streamed_sentences_match_non_streaming_answer() -> None:
+    agent = SlowTokenAgent(["First sentence. ", "Second sentence. ", "Third one."], delay=0.0)
+    streamed = [
+        s
+        async for s in stream_sentences(
+            cast(AgentT, agent), [HumanMessage("hello")], stream_config(), max_sentences=2
+        )
+    ]
+    whole = await LangGraphResponder(cast(AgentT, agent), "thread").respond(
+        [event("t1", "hello")], lambda: None
+    )
+    assert streamed == ["First sentence.", "Second sentence."]
+    assert " ".join(streamed) == cap_spoken_reply(whole, 2)
+
+
+async def test_text_during_tool_run_is_not_spoken() -> None:
+    spoken = [
+        s
+        async for s in stream_sentences(
+            cast(AgentT, ToolInterleavedAgent()),
+            [HumanMessage("check it")],
+            stream_config(),
+            max_sentences=6,
+        )
+    ]
+    assert spoken == ["I have checked it."]
+
+
+async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
+    agent = SlowTokenAgent(["First sentence. ", "Second sentence. ", "Third one."], delay=0.10)
+    start = time.perf_counter()
+    whole = await LangGraphResponder(cast(AgentT, agent), "thread").respond(
+        [event("t1", "hello")], lambda: None
+    )
+    whole_first_ms = (time.perf_counter() - start) * 1000
+    stream = stream_sentences(
+        cast(AgentT, agent), [HumanMessage("hello")], stream_config(), max_sentences=6
+    )
+    start = time.perf_counter()
+    first = await anext(stream)
+    streamed_first_ms = (time.perf_counter() - start) * 1000
+    rest = [s async for s in stream]
+    assert " ".join([first, *rest]) == cap_spoken_reply(whole, 6)
+    assert streamed_first_ms < whole_first_ms

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import json
 from pathlib import Path
 from typing import Any, override
 
@@ -11,7 +12,6 @@ from pydantic import PrivateAttr, SecretStr
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import GoogleReply, OpenAIReply, Settings, VisualSettings
-from fakeyou.conversation.agent import create_visual_tools
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.orchestration import providers
 from fakeyou.orchestration.providers import create_visual_chat_model
@@ -24,6 +24,7 @@ from fakeyou.visual.visual_caption import (
     frame_ref,
 )
 from fakeyou.visual.visual_store import VisualFrame, VisualStore, append_visual
+from fakeyou.visual.visual_tools import create_visual_tools
 from tests._error_support import message_pattern
 from tests._fakes_common import FakeClock
 from tests._persistence_fakes import RecordingJournal
@@ -104,7 +105,8 @@ async def test_describe_frame_returns_caption_plus_ref(tmp_path: Path) -> None:
     output = await describe.ainvoke({"frame_id": frame.frame_id})
     assert "A bar chart." in output
     assert frame_ref(frame) in output
-    assert output.endswith(f"frame:{frame.sha256[:8]}@{frame.captured_at}")
+    assert json.loads(output)["code"] == "ok"
+    assert json.loads(output)["message"].endswith(f"frame:{frame.sha256[:8]}@{frame.captured_at}")
 
 
 async def test_budget_stops_calls(tmp_path: Path) -> None:

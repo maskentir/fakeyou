@@ -10,15 +10,17 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
 from langgraph.checkpoint.memory import InMemorySaver
+from psycopg import OperationalError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.conversation.session import ConversationError
+from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.lifecycle import (
-    MeetingLifecycle,
-    create_lifecycle_graph,
+    LifecycleThread,
+    build_lifecycle_graph,
     initial_lifecycle_state,
+    initialize_lifecycle,
 )
 from fakeyou.orchestration.runtime import (
     SessionWiring,
@@ -44,7 +46,12 @@ from tests._meet_browser_fakes import (
     meet_page,
 )
 from tests._persistence_fakes import FakeSaverSession, RecordingJournal
-from tests._runtime_support import run_session, session_config
+from tests._runtime_support import pin_join_jitter, run_session, session_config
+
+
+@pytest.fixture(autouse=True)
+def instant_join_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    pin_join_jitter(monkeypatch)
 
 
 class _BlockingTerminalSaver(InMemorySaver):
@@ -303,7 +310,7 @@ async def test_run_meeting_session_records_bounded_traceback_on_conversation_fai
         ),
     )
 
-    assert result.phase == "ended"
+    assert result.phase == "failed"
     assert result.terminal_reason == "conversation_failure"
     assert result.detail == "conversation failed (ConversationError)"
     rows = [json.loads(line) for line in events]
@@ -366,13 +373,11 @@ async def test_run_meeting_session_returns_ended_result_without_reopening_browse
 
 async def test_run_meeting_session_rejects_resume_of_interrupted_session() -> None:
     saver = FakeSaverSession()
-    graph = create_lifecycle_graph(checkpointer=saver.saver)
-    graph.invoke(
-        {
-            **initial_lifecycle_state("owner-1", "twin-1", "meeting-1"),
-            "event": {"kind": "join_requested", "attribution": "owner_action", "detail": "t"},
-        },
+    graph = build_lifecycle_graph(checkpointer=saver.saver)
+    await graph.aupdate_state(
         {"configurable": {"thread_id": "twin-1:meeting-1"}},
+        {**initial_lifecycle_state("owner-1", "twin-1", "meeting-1"), "phase": "lobby"},
+        as_node="join",
     )
     browser = FakePageSession(meet_page([LOBBY]))
 
@@ -397,7 +402,7 @@ async def test_browser_startup_failure_is_persisted_as_terminal() -> None:
     )
 
     assert result.terminal_reason == "browser_failure"
-    state = await create_lifecycle_graph(saver.saver).aget_state(
+    state = await build_lifecycle_graph(saver.saver).aget_state(
         {"configurable": {"thread_id": "twin-1:meeting-1"}}
     )
     assert state.values["phase"] == "ended"
@@ -528,7 +533,7 @@ async def test_repeated_cancellation_preserves_terminal_checkpoint() -> None:
             running.cancel()
         await asyncio.gather(running, return_exceptions=True)
 
-    state = await create_lifecycle_graph(saver).aget_state(
+    state = await build_lifecycle_graph(saver).aget_state(
         {"configurable": {"thread_id": "twin-1:meeting-1"}}
     )
     assert state.values["phase"] == "ended"
@@ -550,9 +555,13 @@ async def test_drive_session_cancel_preserved_when_cancel_record_send_fails(
         raise ValueError("poison head")
 
     monkeypatch.setattr("fakeyou.orchestration.runtime.startup_session", cancelled)
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
-    monkeypatch.setattr(lifecycle, "send", failing_send)
+    lifecycle = LifecycleThread(
+        build_lifecycle_graph(InMemorySaver()),
+        "twin-1:meeting-1",
+        initial_lifecycle_state("owner-1", "twin-1", "meeting-1"),
+    )
+    await initialize_lifecycle(lifecycle, resume=False)
+    monkeypatch.setattr(LifecycleThread, "send", failing_send)
     journal = Journal("meeting-1", emit=lambda _line: None, echo=False)
     with pytest.raises(asyncio.CancelledError):
         await drive_session(
@@ -593,12 +602,11 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
 
-    saved = await create_lifecycle_graph(saver.saver).aget_state(
+    saved = await build_lifecycle_graph(saver.saver).aget_state(
         {"configurable": {"thread_id": "twin-1:meeting-1"}}
     )
     assert saved.values["phase"] == "ended"
     assert saved.values["terminal_reason"] == "stopped_by_owner"
-    assert saved.values["evidence"][-1]["event"] == "cancelled"
     assert page.clicked.count(LEAVE_SELECTOR) == 1
     assert browser.closed == 1
 
@@ -717,10 +725,14 @@ async def test_lobby_timeout_retries_twice_before_terminal(journal: RecordingJou
     assert result.phase == "ended"
     assert result.terminal_reason == "lobby_timeout_reached"
     rows = journal.events()
-    assert len([row for row in rows if row["event"] == "join_retried"]) == 2
+    attempts = [
+        (row["attempt"], row["outcome"]) for row in rows if row["event"] == "join_attempt_finished"
+    ]
+    assert attempts == [(1, "retry"), (2, "retry"), (3, "failed")]
     finished = [row for row in rows if row["event"] == "join_finished"]
     assert len(finished) == 1
     assert finished[0]["attempts"] == 3
+    assert [row["event"] for row in rows].count("join_requested") == 1
 
 
 async def test_run_meeting_session_journals_why_the_join_failed() -> None:
@@ -757,3 +769,74 @@ async def test_session_resources_drain_callbacks_without_raising() -> None:
         resources.push_async_callback(succeed)
 
     assert ran == ["succeed", "fail"]
+
+
+class _FailingWritesSaver(InMemorySaver):
+    def __init__(self, failing_phases: set[str]) -> None:
+        super().__init__()
+        self.failing = set(failing_phases)
+        self.written: list[str] = []
+
+    @override
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        phase = str(checkpoint["channel_values"].get("phase"))
+        if phase in self.failing:
+            self.failing.discard(phase)
+            raise OperationalError("connection reset by peer")
+        result = await super().aput(config, checkpoint, metadata, new_versions)
+        self.written.append(phase)
+        return result
+
+
+async def _duration_session(
+    failing: set[str],
+) -> tuple[SessionResult, RecordingJournal, _FailingWritesSaver]:
+    clock = FakeClock()
+    journal = RecordingJournal("meeting-1")
+    saver = _FailingWritesSaver(failing)
+    browser = FakePageSession(meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL, IN_CALL, ENDED]))
+
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[InMemorySaver]:
+        yield saver
+
+    result = await run_meeting_session(
+        session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
+        SessionWiring(
+            open_page=browser.open,
+            saver_factory=factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+    return result, journal, saver
+
+
+async def test_checkpoint_failures_while_admitted_and_active_degrade_and_replay_in_order() -> None:
+    clean_result, _clean_journal, clean = await _duration_session(set())
+    degraded_result, journal, degraded = await _duration_session({"active", "leaving"})
+
+    assert clean_result.phase == "ended"
+    assert clean_result.terminal_reason == "duration_limit_reached"
+    queued = journal.events("lifecycle_persist_queued")
+    assert len(queued) == 2
+    assert all(row["error_type"] == "OperationalError" for row in queued)
+    assert degraded_result.phase == clean_result.phase
+    assert degraded_result.terminal_reason == clean_result.terminal_reason
+    assert degraded.written == clean.written
+    final_clean = await clean.aget_tuple({"configurable": {"thread_id": "twin-1:meeting-1"}})
+    final_degraded = await degraded.aget_tuple({"configurable": {"thread_id": "twin-1:meeting-1"}})
+    assert final_clean is not None
+    assert final_degraded is not None
+    for key in ("phase", "terminal_reason", "external_effects"):
+        assert (
+            final_degraded.checkpoint["channel_values"][key]
+            == (final_clean.checkpoint["channel_values"][key])
+        )

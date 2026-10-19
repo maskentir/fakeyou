@@ -10,8 +10,8 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import VISUAL_GUIDANCE
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.memory.persona import PersonaProfile
-from fakeyou.orchestration.assembly import AgentWiring, LoopBehavior
+from fakeyou.memory.persona import PersonaProfile, PersonaTool
+from fakeyou.orchestration.assembly import AgentWiring, TurnBehavior
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -24,13 +24,13 @@ def _wired_settings(settings: Settings) -> Settings:
     )
 
 
-def _profile(settings: Settings) -> PersonaProfile:
+def _profile(settings: Settings, *, tools: frozenset[PersonaTool] | None = None) -> PersonaProfile:
     return PersonaProfile(
         owner_id=settings.identity.owner_id,
         twin_id=settings.identity.twin_id,
         display_name="Visual Twin",
         role="Project coordinator",
-        allowed_tools=frozenset({"recall_meeting_context"}),
+        allowed_tools=tools or frozenset({"recall_meeting_context", "describe_frame"}),
     )
 
 
@@ -75,7 +75,7 @@ async def test_assembly_registers_describe_frame_when_visual_wired(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
@@ -84,24 +84,30 @@ async def test_assembly_registers_describe_frame_when_visual_wired(
     assert VISUAL_GUIDANCE in created["persona"]
 
 
-async def test_assembly_registers_describe_frame_without_profile(
+async def test_assembly_registers_describe_frame_only_when_the_persona_allows_it(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     created: dict[str, Any] = {}
     monkeypatch.setattr(assembly_module, "create_meeting_agent", _capture(created))
     wired = _wired_settings(settings)
+    profile = _profile(settings, tools=frozenset({"recall_meeting_context"}))
     store = VisualStore(tmp_path / "visual")
     captioner = VisualCaptioner(ToolCallingFakeModel(responses=[], seen=[]))
 
     async with assembly_module.open_conversation(
         wired,
-        _config(_profile(settings)),
-        agent=AgentWiring(visual_store=store, visual_captioner=captioner),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        _config(profile),
+        agent=AgentWiring(
+            profile=profile,
+            graphiti=make_graphiti(),
+            visual_store=store,
+            visual_captioner=captioner,
+        ),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
 
-    assert created["tools"] == ["describe_frame"]
+    assert "describe_frame" not in created["tools"]
     assert "VisualHydrateMiddleware" in created["middleware"]
     assert VISUAL_GUIDANCE in created["persona"]
 
@@ -127,7 +133,7 @@ async def test_assembly_omits_visual_tooling_when_flag_off(
             visual_store=store,
             visual_captioner=captioner,
         ),
-        behavior=LoopBehavior(on_transition=lambda *_args: None),
+        behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
 

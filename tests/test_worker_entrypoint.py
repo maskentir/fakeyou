@@ -141,9 +141,20 @@ def test_wrong_topology_exits_infra_failure_and_cleans_up(tmp_path: Path) -> Non
         assert _kills(case) == 1
 
 
+def _default_signal_dispositions() -> None:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
 def _start_and_signal(script: Path, env: dict[str, str], case: Path, sig: int) -> int:
     marker = case / "log/child_started"
-    proc = subprocess.Popen([str(script)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(
+        [str(script)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=_default_signal_dispositions,
+    )
     try:
         deadline = time.monotonic() + 10
         while not marker.exists() and time.monotonic() < deadline:

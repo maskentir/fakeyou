@@ -211,8 +211,9 @@ async def test_ingest_corrections_second_run_ingests_zero_episodes(tmp_path: Pat
 async def test_ingest_corrections_rejects_stale_sidecar(tmp_path: Path) -> None:
     record_path = correction_record(tmp_path)
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
-    with record_path.open("a", encoding="utf-8") as handle:
-        handle.write(said(200, "Late arrival.").model_dump_json() + "\n")
+    lines = record_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines[0] = said(0, "Rewritten inside the corrected prefix.").model_dump_json() + "\n"
+    record_path.write_text("".join(lines), encoding="utf-8")
 
     with pytest.raises(DiarizeError, match=message_pattern(ErrorCode.DIARIZE_STALE)) as error:
         await ingest_corrections(
@@ -224,6 +225,22 @@ async def test_ingest_corrections_rejects_stale_sidecar(tmp_path: Path) -> None:
     assert error.value.code is ErrorCode.DIARIZE_STALE
     assert memory.added == []
     assert not status_path(record_path).exists()
+
+
+async def test_ingest_corrections_accepts_record_growth_after_correction(tmp_path: Path) -> None:
+    record_path = correction_record(tmp_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    with record_path.open("a", encoding="utf-8") as handle:
+        handle.write(said(200, "Late arrival.").model_dump_json() + "\n")
+
+    result = await ingest_corrections(
+        memory,
+        record_path,
+        MeetingScope("twin_group", "meeting-1"),
+    )
+
+    assert result.episodes == ("uuid-meeting-1:w00001:corrected",)
+    assert result.completed is True
 
 
 async def test_ingest_corrections_without_sidecar_ingests_nothing(tmp_path: Path) -> None:
@@ -720,3 +737,20 @@ async def test_ingest_corrections_completion_unions_prior_attempt_episodes(
     assert status is not None
     assert sorted(status.correction_episodes) == sorted(status.correction_windows.values())
     assert len(status.correction_episodes) == 3
+
+
+async def test_correction_adoption_issues_one_bounded_saga_retrieval(tmp_path: Path) -> None:
+    record_path = correction_record(tmp_path)
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    await ingest_meeting(
+        memory,
+        load_meeting_record(record_path),
+        IngestScope(group_id="twin_group", meeting_id="meeting-1", twin_name="Rani Twin"),
+    )
+    memory.retrieved.clear()
+
+    result = await ingest_corrections(memory, record_path, MeetingScope("twin_group", "meeting-1"))
+
+    assert result.completed is True
+    saga_retrievals = [call for call in memory.retrieved if call["last_n"] > 1]
+    assert [call["last_n"] for call in saga_retrievals] == [2 * 3]

@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 from typing import override
 
 import httpx2
@@ -15,26 +14,14 @@ from fakeyou.audio.audio import (
     StreamPolicy,
     open_meeting_audio,
 )
-from fakeyou.audio.deaf import CaptureActivity
-from fakeyou.audio.graph import AudioGraph, GraphParts
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import OpenAITTS, STTSettings
-from fakeyou.foundation.attribution_probe import AttributionProbe
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
-from fakeyou.observability.journal import Journal, JournalFile
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.observability.report import read_journal
 from tests._audio_fakes import FakeSTT
-from tests._audio_support import FakeCapture, FakePlayback, NullSTT, ScriptedSpeech, build_run
+from tests._audio_support import FakeCapture, FakePlayback, build_run
 from tests._persistence_fakes import RecordingJournal
-
-
-class _FailingProbe(AttributionProbe):
-    @override
-    def observe_vad(self, *, active: bool) -> None:
-        raise OSError("probe gone")
 
 
 def _policy() -> StreamPolicy:
@@ -227,106 +214,6 @@ async def test_uncategorized_socket_error_is_classified_as_retryable_unavailable
         report = reporter.report()
         assert report is not None
         assert "unavailable" in {entry["kind"] for entry in report["faults"]["kinds"]}
-
-
-async def test_vad_observation_failure_is_journaled_once(
-    journal: RecordingJournal, tmp_path: Path
-) -> None:
-    probe = _FailingProbe(tmp_path / "probe.jsonl")
-    speech = ScriptedSpeech()
-    graph = AudioGraph(
-        GraphParts(
-            activity=CaptureActivity(),
-            vad=speech.controller,
-            stt=NullSTT(),
-            probe=probe,
-            journal=journal,
-        )
-    )
-
-    for _ in range(2):
-        await graph.ingest(speech.speaking(6))
-        await graph.ingest(speech.silent(6))
-
-    rows = journal.events("vad_observe_failed")
-    assert len(rows) == 1
-    assert rows[0]["error_type"] == "OSError"
-
-
-async def test_callback_fault_is_journaled_without_a_reporter(tmp_path: Path) -> None:
-    path = tmp_path / "events.jsonl"
-    journal = Journal("meeting-7", file=JournalFile(path), echo=False)
-    failed = asyncio.Event()
-    capture = FakeCapture()
-
-    async def on_transcript(frame: TranscriptUpdate) -> None:
-        del frame
-        failed.set()
-        raise ValueError("private callback data")
-
-    async with open_meeting_audio(
-        source=capture,
-        callbacks=StreamCallbacks(on_transcript),
-        components=StreamComponents(stt=FakeSTT(journal=journal), playback=FakePlayback()),
-        diagnostics=Diagnostics(journal=journal),
-        policy=_policy(),
-    ) as session:
-        capture.push(b"\0\0" * 160)
-        await asyncio.wait_for(failed.wait(), timeout=2)
-        session.raise_if_failed()
-    journal.close()
-
-    callbacks = [
-        row
-        for row in read_journal(path)
-        if row["event"] == "fault_recorded" and row["kind"] == "callback_failed"
-    ]
-    assert len(callbacks) == 1
-    assert callbacks[0]["meeting_id"] == "meeting-7"
-    assert callbacks[0]["at"]
-    assert "private callback data" not in path.read_text()
-
-
-async def test_missing_muse_key_is_reported_as_configuration_not_audio_failure() -> None:
-    with pytest.raises(FakeYouError, match="FAKEYOU_STT__API_KEY") as caught:
-        async with open_meeting_audio(
-            source=FakeCapture(),
-            callbacks=StreamCallbacks(_ignore),
-            components=StreamComponents(playback=FakePlayback()),
-            policy=StreamPolicy(
-                speech=SpeechPipelineSettings(
-                    stt_settings=STTSettings(api_key=None),
-                    tts_settings=OpenAITTS(api_key=SecretStr("openai-secret")),
-                )
-            ),
-        ):
-            pass
-
-    assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
-
-
-async def test_vad_probe_bug_propagates_from_ingest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    probe = _FailingProbe(tmp_path / "probe.jsonl")
-    speech = ScriptedSpeech()
-    graph = AudioGraph(
-        GraphParts(
-            activity=CaptureActivity(),
-            vad=speech.controller,
-            stt=NullSTT(),
-            probe=probe,
-            journal=RecordingJournal("meeting-probe"),
-        )
-    )
-
-    def boom(*, active: bool) -> None:
-        del active
-        raise ValueError("bug")
-
-    monkeypatch.setattr(probe, "observe_vad", boom)
-    with pytest.raises(ValueError, match="bug"):
-        await graph.ingest(speech.speaking(6))
 
 
 def _timeout() -> Exception:

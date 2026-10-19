@@ -247,3 +247,23 @@ async def test_browser_audio_reaches_muse_and_twin_speech_reaches_browser() -> N
         assert max(browser_levels) > 0.02
         assert len(finals) == final_count
         session.raise_if_failed()
+
+
+def test_pulse_policy_keeps_mute_audio_without_meeting_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cloakbrowser import config as cloakbrowser_config
+
+    from fakeyou.foundation.invariants import AGENT_SINK_NAME, MEETING_MONITOR_SOURCE_NAME
+    from fakeyou.meet.browser import apply_browser_audio_policy
+
+    monkeypatch.setattr(cloakbrowser_config, "IGNORE_DEFAULT_ARGS", [])
+    monkeypatch.setenv("PULSE_SOURCE", "other-source")
+    monkeypatch.setenv("PULSE_SINK", "other-sink")
+    assert apply_browser_audio_policy() is False
+    assert "--mute-audio" not in cloakbrowser_config.IGNORE_DEFAULT_ARGS
+
+    monkeypatch.setenv("PULSE_SOURCE", MEETING_MONITOR_SOURCE_NAME)
+    monkeypatch.setenv("PULSE_SINK", AGENT_SINK_NAME)
+    assert apply_browser_audio_policy() is True
+    assert "--mute-audio" in cloakbrowser_config.IGNORE_DEFAULT_ARGS

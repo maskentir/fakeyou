@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-import fakeyou.cli.join as cli_join
-import fakeyou.cli.memory as cli_memory
+import tests._join_runner as cli_join
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.journal import journal_path
+from fakeyou.persistence.ingestion_status import finalized_prefix
 from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 from tests._cli_support import (
     MEET_LINK,
@@ -28,6 +28,7 @@ from tests._cli_support import (
 )
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._error_support import message_pattern
+from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 
 
@@ -63,7 +64,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     assert status.record_sha256 is not None
 
     fake_persona_memory(monkeypatch, graphiti)
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(write_persona(tmp_path, ingest_transcripts=True), None, None),
         twin_name=None,
@@ -184,7 +185,6 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import hashlib
 
     from fakeyou.persistence.ingestion_status import lock_path, read_status, status_path
 
@@ -211,16 +211,16 @@ async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(
     assert status.status == "pending"
     assert status.group_id == profile.memory_group
     assert status.meeting_id == "meeting-9"
-    assert status.record_sha256 == hashlib.sha256(record_path.read_bytes()).hexdigest()
+    digest, byte_count = finalized_prefix(record_path)
+    assert status.record_sha256 == digest
+    assert status.record_bytes == byte_count
     assert status.windows == 1
     assert not lock_path(record_path).exists()
     printed = printed_join_summary(capsys)
     assert printed["session_outcome"] == "completed"
     assert printed["ingestion_outcome"] == "pending"
     assert printed["record_error"] is None
-    assert "memory-ingest --meeting-id meeting-9 --persona" in printed["resume_command"]
-    assert "persona.json" in printed["resume_command"]
-    assert "--owner-id settings-owner --twin-id settings-twin" in printed["resume_command"]
+    assert printed["resume_command"] == "fakeyou memory-ingest --meeting-id meeting-9"
 
 
 async def test_join_with_hanging_graphiti_leaves_without_ingesting(

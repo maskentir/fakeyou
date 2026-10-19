@@ -17,12 +17,14 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import RecallSettings, RecallStrategy
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.memory.memory import (
+from fakeyou.memory.evidence import (
     CURRENT_FACTS_FILTER,
     PREFETCH_EMPTY_EVIDENCE,
+    PREFETCH_UNAVAILABLE_EVIDENCE,
+)
+from fakeyou.memory.memory import (
     PREFETCH_EVIDENCE_PREFIX,
     PREFETCH_RETAINED_MAX_CHARS,
-    PREFETCH_UNAVAILABLE_EVIDENCE,
     create_memory_prefetch_middleware,
     create_memory_tools,
 )
@@ -141,7 +143,7 @@ async def test_prefetch_puts_shared_recall_evidence_after_the_speech_in_one_mode
     evidence = sent[position + 2]
     assert isinstance(call, AIMessage)
     assert call.tool_calls[0]["id"] == evidence.tool_call_id
-    expected = await create_memory_tools(memory, group_id=GROUP)[1].ainvoke(
+    expected = await create_memory_tools(memory, group_id=GROUP)[0].ainvoke(
         {"query": "When is the Orchid demo?"}
     )
     assert evidence.content.startswith(PREFETCH_EVIDENCE_PREFIX)
@@ -512,7 +514,7 @@ async def opened_agent(
         settings,
         config,
         agent=assembly.AgentWiring(profile=profile, **options),
-        behavior=assembly.LoopBehavior(on_transition=lambda *_args: None),
+        behavior=assembly.TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
     return created

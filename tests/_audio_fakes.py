@@ -5,7 +5,7 @@ import math
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from functools import partial
-from typing import TypedDict, Unpack, cast, override
+from typing import Any, TypedDict, Unpack, cast, override
 
 import httpx2
 
@@ -13,7 +13,7 @@ from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_consumer
 from fakeyou.observability.journal import Journal
-from fakeyou.transcription.contract import SpeechSinks, TranscriptionError
+from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
 
 
 class FakeAudio:
@@ -162,6 +162,42 @@ class FakeReconnectableSTT(FakeSTT):
         self.calls += 1
 
 
+class ScriptedSTT:
+    def __init__(self) -> None:
+        self.sinks: SpeechSinks | None = None
+        self.socket_dead = False
+        self.reconnects = 0
+        self.replay: list[TranscriptUpdate] = []
+
+    def __call__(self, sinks: SpeechSinks) -> ScriptedSTT:
+        self.sinks = sinks
+        return self
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    def send_audio(self, pcm: bytes) -> None:
+        del pcm
+
+    async def final(self, update: TranscriptUpdate) -> None:
+        assert self.sinks is not None
+        await self.sinks.on_update(update)
+
+    def drop_socket(self) -> None:
+        assert self.sinks is not None
+        self.socket_dead = True
+        self.sinks.on_lost(SttConnectionLost("socket gone"))
+
+    async def reconnect_when_idle(self) -> None:
+        self.reconnects += 1
+        self.socket_dead = False
+        for update in self.replay:
+            await self.final(update)
+
+
 class RawReconnectOnlySTT:
     async def _reconnect(self) -> None:
         pass
@@ -203,3 +239,19 @@ class FakeReplyAudio(FakeAudio):
     @override
     async def stop_playback(self) -> None:
         self.stops += 1
+
+
+class SilentSpeaker:
+    @property
+    def is_speaking(self) -> bool:
+        return False
+
+    async def speak(self, utterance: str, **_: Any) -> None:
+        del utterance
+
+    async def stop_playback(self) -> None:
+        return None
+
+
+async def wait_until(event: asyncio.Event) -> None:
+    await event.wait()

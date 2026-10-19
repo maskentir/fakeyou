@@ -6,12 +6,12 @@ from typing import Any, NoReturn
 
 import pytest
 
-import fakeyou.cli.memory as cli_memory
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.memory import ingest_service
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
+from fakeyou.persistence.ingestion_status import finalized_prefix
 from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import (
     PERSONA_DATA,
@@ -21,6 +21,7 @@ from tests._cli_support import (
     write_record,
 )
 from tests._error_support import message_pattern
+from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 
 
@@ -37,7 +38,7 @@ async def test_memory_ingest_command_exits_1_when_ingestion_is_incomplete(
     fake_persona_memory(monkeypatch, graphiti)
 
     with pytest.raises(SystemExit) as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
@@ -52,7 +53,7 @@ async def test_memory_ingest_command_requires_a_record(
     opened = fake_persona_memory(monkeypatch, make_graphiti())
 
     with pytest.raises(FakeYouError, match="no meeting record") as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
@@ -68,7 +69,6 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    import hashlib
 
     from fakeyou.persistence.ingestion_status import (
         IngestionStatus,
@@ -100,7 +100,7 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
         ),
     )
 
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
@@ -111,7 +111,9 @@ async def test_memory_ingest_recovers_pending_without_hash_after_crash(
     status = read_status(path)
     assert status is not None
     assert status.status == "completed"
-    assert status.record_sha256 == hashlib.sha256(record_path.read_bytes()).hexdigest()
+    digest, byte_count = finalized_prefix(record_path)
+    assert status.record_sha256 == digest
+    assert status.record_bytes == byte_count
     summary = json.loads(capsys.readouterr().out)
     assert (summary["ingested"], summary["completed"]) == (1, True)
 
@@ -136,14 +138,14 @@ async def test_memory_ingest_failure_then_resumes_from_native_progress(
     }
 
     with pytest.raises(SystemExit) as first:
-        await cli_memory.ingest_recorded_meeting(**arguments)
+        await ingest_recorded_meeting(**arguments)
     assert first.value.code == 1
     path = status_path(meeting_record_path(settings.paths.record_dir, SessionId("meeting-9")))
     failed = read_status(path)
     assert failed is not None
     assert failed.status == "failed"
 
-    await cli_memory.ingest_recorded_meeting(**arguments)
+    await ingest_recorded_meeting(**arguments)
 
     assert [episode["name"] for episode in graphiti.added] == [
         "meeting-9:w00000",
@@ -182,8 +184,8 @@ async def test_memory_ingest_repeat_after_completed_adds_no_episodes(
         "settings": settings,
     }
 
-    await cli_memory.ingest_recorded_meeting(**arguments)
-    await cli_memory.ingest_recorded_meeting(**arguments)
+    await ingest_recorded_meeting(**arguments)
+    await ingest_recorded_meeting(**arguments)
 
     assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
 
@@ -197,7 +199,7 @@ async def test_memory_ingest_persists_window_episode_uuids(
     graphiti = make_graphiti(episode_prefix="uuid-")
     fake_persona_memory(monkeypatch, graphiti)
 
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
@@ -232,7 +234,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
     }
 
     with pytest.raises(SystemExit) as first:
-        await cli_memory.ingest_recorded_meeting(**arguments)
+        await ingest_recorded_meeting(**arguments)
     assert first.value.code == 1
     path = status_path(meeting_record_path(settings.paths.record_dir, SessionId("meeting-9")))
     failed = read_status(path)
@@ -248,7 +250,7 @@ async def test_memory_ingest_merges_uuids_and_preserves_corrections_across_reing
         ),
     )
 
-    await cli_memory.ingest_recorded_meeting(**arguments)
+    await ingest_recorded_meeting(**arguments)
 
     resumed = read_status(path)
     assert resumed is not None
@@ -272,7 +274,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
 
     with record_lock(record_path, purpose="meeting"):
         with pytest.raises(FakeYouError, match="locked") as caught:
-            await cli_memory.ingest_recorded_meeting(
+            await ingest_recorded_meeting(
                 meeting_id=SessionId("meeting-9"),
                 identity=OperatorIdentity(write_persona(tmp_path), None, None),
                 twin_name=None,
@@ -283,7 +285,7 @@ async def test_memory_ingest_refuses_an_active_writer_lock(
     assert record_path.exists()
 
 
-async def test_memory_ingest_rejects_a_changed_record_hash(
+async def test_memory_ingest_accepts_growth_but_rejects_a_changed_prefix(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fakeyou.foundation.transcript import TranscriptEvent
@@ -299,7 +301,7 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
         "twin_name": None,
         "settings": settings,
     }
-    await cli_memory.ingest_recorded_meeting(**arguments)
+    await ingest_recorded_meeting(**arguments)
 
     record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     record = MeetingRecord(record_path)
@@ -316,13 +318,20 @@ async def test_memory_ingest_rejects_a_changed_record_hash(
     )
     record.close()
 
+    await ingest_recorded_meeting(**arguments)
+    grown = read_status(status_path(record_path))
+    assert grown is not None
+    assert (grown.status, grown.reason) == ("completed", None)
+    assert grown.record_bytes == record_path.stat().st_size
+    record_path.write_bytes(record_path.read_bytes().replace(b"Tuesday", b"Tuesdaz", 1))
+
     with pytest.raises(SystemExit) as caught:
-        await cli_memory.ingest_recorded_meeting(**arguments)
+        await ingest_recorded_meeting(**arguments)
     assert caught.value.code == 1
     assert len(graphiti.added) == 1
     status = read_status(status_path(record_path))
     assert status is not None
-    assert status.status == "failed"
+    assert (status.status, status.reason) == ("failed", "record_changed")
 
 
 async def test_memory_ingest_rejects_a_foreign_group_status(
@@ -356,7 +365,7 @@ async def test_memory_ingest_rejects_a_foreign_group_status(
     )
 
     with pytest.raises(FakeYouError, match="group") as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
@@ -384,7 +393,7 @@ async def test_memory_ingest_refuses_a_corrupt_status_until_it_is_inspected(
     with pytest.raises(
         FakeYouError, match=message_pattern(ErrorCode.INGESTION_STATUS_CORRUPT)
     ) as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
@@ -413,7 +422,7 @@ async def test_memory_ingest_partial_record_is_not_completed(
         handle.write("{partial\n")
 
     with pytest.raises(SystemExit) as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,
@@ -439,7 +448,7 @@ async def test_memory_ingest_empty_record_reports_zero_windows(
     MeetingRecord(record_path).close()
     fake_persona_memory(monkeypatch, make_graphiti())
 
-    await cli_memory.ingest_recorded_meeting(
+    await ingest_recorded_meeting(
         meeting_id=SessionId("meeting-9"),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
         twin_name=None,
@@ -473,7 +482,7 @@ async def test_memory_ingest_stop_reports_interrupted_and_exits_1(
     monkeypatch.setattr(ingest_service, "ingest_until_stopped", stop_first)
 
     with pytest.raises(SystemExit) as caught:
-        await cli_memory.ingest_recorded_meeting(
+        await ingest_recorded_meeting(
             meeting_id=SessionId("meeting-9"),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
             twin_name=None,

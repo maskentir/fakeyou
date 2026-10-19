@@ -34,7 +34,14 @@ async def test_contract_replay_captures_87_rated_pairs_and_writes_artifacts(
     fixture = load_trust_fixture()
     raw_target = os.environ.get("TRUST_ARTIFACT_DIR", "")
     target = Path(raw_target) if raw_target else tmp_path
-    settings = strategy_settings("tool")
+    _base_settings = strategy_settings("tool")
+    settings = _base_settings.model_copy(
+        update={
+            "conversation": _base_settings.conversation.model_copy(
+                update={"sentence_streaming": False}
+            )
+        }
+    )
     score = await replay_trust(
         contract_model, fixture, TRUST_RUNS, options=ReplayOptions(settings=settings)
     )

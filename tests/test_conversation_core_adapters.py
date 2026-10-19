@@ -9,11 +9,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    ConversationLoop,
     LangGraphResponder,
-    LoopGeneration,
     conversation_thread_id,
 )
+from fakeyou.conversation.meeting_turns import TurnGeneration, build_meeting_turns
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,
@@ -168,14 +167,14 @@ class _StreamOnlyResponder:
 
 def test_stream_only_responder_is_rejected_when_sentence_streaming_is_off() -> None:
     with pytest.raises(TypeError, match="cannot answer without sentence streaming"):
-        ConversationLoop(
-            _StreamOnlyResponder(), generation=LoopGeneration(sentence_streaming=False)
+        build_meeting_turns(
+            _StreamOnlyResponder(), generation=TurnGeneration(sentence_streaming=False)
         )
 
 
 def test_stream_only_responder_is_accepted_when_sentence_streaming_is_on() -> None:
-    loop = ConversationLoop(
-        _StreamOnlyResponder(), generation=LoopGeneration(sentence_streaming=True)
+    loop = build_meeting_turns(
+        _StreamOnlyResponder(), generation=TurnGeneration(sentence_streaming=True)
     )
 
-    assert loop.phase == "listening"
+    assert loop.lifecycle.phase == "listening"

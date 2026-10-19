@@ -10,7 +10,7 @@ from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
-from fakeyou.orchestration.lifecycle import create_lifecycle_graph
+from fakeyou.orchestration.lifecycle import build_lifecycle_graph
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests._fakes_common import DATABASE_URL
 
@@ -59,16 +59,14 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
     assert result.terminal_reason == "duration_limit_reached"
     assert pages[0].is_closed()
     async with open_checkpointer(DATABASE_URL) as saver:
-        state = await create_lifecycle_graph(saver).aget_state(
+        state = await build_lifecycle_graph(saver).aget_state(
             {"configurable": {"thread_id": "fixture-twin:fixture-meeting"}}
         )
-    assert state.values["external_effects"] == ["join_requested", "leave_requested"]
-    assert [item["to_phase"] for item in state.values["evidence"]] == [
-        "lobby",
-        "admitted",
-        "leaving",
-        "ended",
+    assert state.values["external_effects"] == [
+        {"effect": "join_requested"},
+        {"effect": "leave_requested"},
     ]
+    assert state.values["phase"] == "ended"
 
 
 @pytest.mark.browser

@@ -437,6 +437,7 @@ async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_ad
         "audio_opened",
         "join_requested",
         "join_finished",
+        "join_attempt_finished",
         "microphone_enabled",
         "conversation_bound",
     ]

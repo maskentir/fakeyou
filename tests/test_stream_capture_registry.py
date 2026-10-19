@@ -147,7 +147,7 @@ def test_stream_ids_change_transcript_identity() -> None:
 
 
 def test_request_messages_carry_stream_id() -> None:
-    from fakeyou.conversation.conversation import request_messages
+    from fakeyou.conversation.meeting_messages import request_messages
     from fakeyou.foundation.transcript import CaptureContext, transcript_event
 
     event = transcript_event(
@@ -281,7 +281,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         def __init__(self) -> None:
             self.events: list[TranscriptEvent] = []
 
-        async def handle_transcript(self, event: TranscriptEvent) -> None:
+        async def receive_final(self, event: TranscriptEvent) -> None:
             self.events.append(event)
 
     async def run(
@@ -307,7 +307,11 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         rows = [
             row for line in lines if (row := json.loads(line))["event"] == "transcript_finalized"
         ]
-        entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        entries = [
+            row
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if (row := json.loads(line))["kind"] != "header"
+        ]
         return rows, entries, conversation.events
 
     mixed_rows, mixed_entries, mixed_events = await run(per_stream=False, tag="mixed-9")
@@ -392,7 +396,7 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     seen: list[TranscriptEvent] = []
 
     class _Conversation:
-        async def handle_transcript(self, event: TranscriptEvent) -> None:
+        async def receive_final(self, event: TranscriptEvent) -> None:
             seen.append(event)
 
     journal = Journal("meeting-9", emit=lambda _line: None, now=lambda: now, echo=False)
@@ -411,7 +415,11 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     assert [event.participant_id for event in seen] == ["speaker-a", "speaker-b"]
     assert [event.speaker_evidence_id for event in seen] == ["stream-0", "stream-1"]
     assert [event.stream_id for event in seen] == ["slot-0", "slot-1"]
-    entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    entries = [
+        row
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (row := json.loads(line))["kind"] != "header"
+    ]
     assert [entry["participant_id"] for entry in entries] == ["speaker-a", "speaker-b"]
     assert [entry["stream_id"] for entry in entries] == ["slot-0", "slot-1"]
 

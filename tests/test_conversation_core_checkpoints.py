@@ -9,10 +9,8 @@ from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import (
-    ConversationLoop,
-    LangGraphResponder,
-)
+from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.meeting_turns import build_meeting_turns
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -60,13 +58,13 @@ async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(
     )
     responder = LangGraphResponder(agent, "checkpoint-cancel-thread", journal=journal)
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
-    loop.bind(audio)
-    await loop.handle_transcript(event("t1", "first question"))
+    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("t1", "first question"))
     assert await asyncio.wait_for(hanging_begun.wait(), 2)
     assert fast_calls == ["demo"]
-    await loop.handle_transcript(event("t2", "second question"))
-    await asyncio.wait_for(loop.wait_idle(), 2)
+    await loop.ingress.receive_final(event("t2", "second question"))
+    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
     assert audio.spoken == ["second turn answer"]
     assert fast_calls == ["demo"]
     assert hanging_calls == ["demo"]
@@ -90,7 +88,7 @@ async def test_cancel_between_tool_call_and_result_keeps_usable_checkpoint(
     assert journal.events("agent_failed") == []
     [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert cancelled["reason"] == "new_final"
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJournal) -> None:
@@ -134,18 +132,18 @@ async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJ
     )
     responder = LangGraphResponder(agent, "fallback-cancel-thread", journal=journal)
     audio = FakeReplyAudio()
-    loop = ConversationLoop(responder, diagnostics=Diagnostics(journal=journal))
-    loop.bind(audio)
-    await loop.handle_transcript(event("t1", "first"))
+    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
+    loop.lifecycle.bind(audio)
+    await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(entered.wait(), 2)
-    await loop.handle_transcript(event("t2", "second"))
-    await asyncio.wait_for(loop.wait_idle(), 2)
+    await loop.ingress.receive_final(event("t2", "second"))
+    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
     assert audio.spoken == ["primary answer"]
     assert fallback_calls == []
     assert journal.events("agent_failed") == []
     [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert cancelled["reason"] == "new_final"
-    await loop.close()
+    await loop.lifecycle.close()
 
 
 class _CheckpointAgent:

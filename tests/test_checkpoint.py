@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -8,16 +9,18 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.event_hooks import SerdeEvent, register_serde_event_listener
 from psycopg_pool import AsyncConnectionPool
 from pydantic import SecretStr
 
 import fakeyou.db.checkpoint as checkpoint_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.diagnostics import check_setup
 from fakeyou.config.settings import Settings
+from fakeyou.conversation.participation_decider import ParticipationDecision
 from fakeyou.db.checkpoint import checkpoint_conninfo, open_checkpointer
+from tests._check_support import print_admin_check as check_setup
 from tests._error_support import message_pattern
-from tests._fakes_common import env_file_opt
+from tests._fakes_common import DATABASE_URL, env_file_opt
 
 
 def _query_params(conninfo: str) -> dict[str, str]:
@@ -109,8 +112,8 @@ class _CapturingPool:
 
 
 class _SetupOnlySaver:
-    def __init__(self, pool: object) -> None:
-        del pool
+    def __init__(self, pool: object, *, serde: object = None) -> None:
+        del pool, serde
 
     async def setup(self) -> None:
         return None
@@ -201,6 +204,26 @@ async def test_open_checkpointer_maps_driver_errors_to_unreachable(
     assert raised.value.code is ErrorCode.DATABASE_UNREACHABLE
 
 
+async def test_checkpointer_restores_a_participation_decision_as_a_registered_type() -> None:
+    decision = ParticipationDecision(decision="speak", confidence=0.9, reason_code="addressed")
+    config: RunnableConfig = {"configurable": {"thread_id": "participation", "checkpoint_ns": ""}}
+    checkpoint = empty_checkpoint()
+    checkpoint["channel_values"] = {"last_participation": decision}
+    checkpoint["channel_versions"] = {"last_participation": 1}
+    events: list[SerdeEvent] = []
+    unregister = register_serde_event_listener(events.append)
+    try:
+        async with open_checkpointer(DATABASE_URL) as saver:
+            await saver.aput(config, checkpoint, {"step": 1}, {"last_participation": 1})
+            stored = await saver.aget_tuple(config)
+    finally:
+        unregister()
+
+    assert stored is not None
+    assert stored.checkpoint["channel_values"]["last_participation"] == decision
+    assert events == []
+
+
 def test_check_masks_the_database_url(
     settings: Settings, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -214,6 +237,9 @@ def test_check_masks_the_database_url(
 
 
 def test_database_url_loads_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in list(os.environ):
+        if key.upper().startswith("FAKEYOU_"):
+            monkeypatch.delenv(key)
     monkeypatch.setenv("FAKEYOU_DATABASE__URL", "postgresql://fakeyou:x@localhost/fakeyou")
 
     url = Settings(**env_file_opt(None)).database.url
@@ -241,3 +267,32 @@ async def test_checkpointer_recovers_after_its_connection_is_terminated(
 
     assert stored is not None
     assert stored.metadata == {"step": 1}
+
+
+@pytest.mark.postgres
+async def test_checkpointer_state_survives_a_fresh_pool(migrated_database_url: str) -> None:
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "reopen-fresh-pool", "checkpoint_ns": ""}
+    }
+    async with open_checkpointer(migrated_database_url) as saver:
+        await saver.aput(config, empty_checkpoint(), {"step": 7}, {})
+
+    async with open_checkpointer(migrated_database_url) as reopened:
+        stored = await reopened.aget_tuple(config)
+
+    assert stored is not None
+    assert stored.metadata == {"step": 7}
+
+
+@pytest.mark.container
+async def test_checkpointer_fails_when_the_named_server_is_dead() -> None:
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.DATABASE_UNREACHABLE)
+    ) as caught:
+        async with open_checkpointer(
+            "postgresql://fakeyou:harness-only@127.0.0.1:9/fakeyou",
+            connect_timeout_seconds=1.0,
+        ):
+            pass
+
+    assert caught.value.code is ErrorCode.DATABASE_UNREACHABLE

@@ -1,6 +1,5 @@
 import json
 import struct
-import sys
 import wave
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,11 +8,9 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-import fakeyou.cli.main as cli_main
-import fakeyou.cli.memory as cli_memory
+import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli.memory import ingest_recorded_meeting
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
@@ -33,11 +30,10 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.record import MeetingRecord, meeting_record_path
-from fakeyou.worker.worker_backend import DockerWorkerBackend
 from tests._error_support import message_pattern
+from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
-from tests._persistence_fakes import FINISHED_ROWS, RecordingJournal, write_journal
-from tests._runtime_fakes import FakeRunner
+from tests._persistence_fakes import RecordingJournal
 
 PERSONA_DATA = {
     "owner_id": "settings-owner",
@@ -96,9 +92,9 @@ def _write_audio_slots(settings: Settings, meeting_id: str) -> Path:
 
 
 def _stub_transcribe(monkeypatch: pytest.MonkeyPatch, turns: list[tuple[int, int, str]]) -> None:
-    def fake(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+    def fake(chunk: bytes, settings: Any, transport: Any = None) -> list[DiarizedTurn]:
         del chunk
-        del opener
+        del transport
         del settings
         return [
             DiarizedTurn(start_ms=start, end_ms=end, speaker=name) for start, end, name in turns
@@ -112,7 +108,7 @@ def _fake_memory(monkeypatch: pytest.MonkeyPatch, memory: Any) -> None:
     async def open_memory(_settings: Settings) -> Any:
         yield memory
 
-    monkeypatch.setattr(cli_memory, "open_persona_memory", open_memory)
+    monkeypatch.setattr(providers, "open_persona_memory", open_memory)
 
 
 def _journal_rows(settings: Settings, meeting_id: str) -> list[dict[str, Any]]:
@@ -208,9 +204,9 @@ async def test_ingest_no_correct_skips_diarization_entirely(
     _write_record(settings, "meeting-9")
     _write_audio_slots(settings, "meeting-9")
 
-    def exploding(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+    def exploding(chunk: bytes, settings: Any, transport: Any = None) -> list[DiarizedTurn]:
         del chunk
-        del opener
+        del transport
         del settings
         raise AssertionError("diarization must not run")
 
@@ -230,30 +226,6 @@ async def test_ingest_no_correct_skips_diarization_entirely(
     assert [episode["name"] for episode in graphiti.added] == ["meeting-9:w00000"]
 
 
-@pytest.mark.parametrize(("argv", "expected"), [(["--no-correct"], True), ([], False)])
-def test_memory_ingest_dispatch_passes_no_correct(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], *, expected: bool
-) -> None:
-    calls: list[dict[str, Any]] = []
-
-    async def fake_ingest(*args: Any, **kwargs: Any) -> None:
-        assert args == ()
-        calls.append(kwargs)
-
-    monkeypatch.setattr(cli_main, "ingest_recorded_meeting", fake_ingest)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["fakeyou", "memory-ingest", "--meeting-id", "m1", "--persona", "p.json", *argv],
-    )
-    with pytest.raises(SystemExit) as exited:
-        cli_main.main()
-
-    assert exited.value.code == 0
-    [call] = calls
-    assert call["no_correct"] is expected
-
-
 async def test_ingest_stt_failure_still_ingests_live_transcript(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -261,9 +233,9 @@ async def test_ingest_stt_failure_still_ingests_live_transcript(
     _write_record(settings, "meeting-9")
     _write_audio_slots(settings, "meeting-9")
 
-    def failing(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+    def failing(chunk: bytes, settings: Any, transport: Any = None) -> list[DiarizedTurn]:
         del chunk
-        del opener
+        del transport
         del settings
         raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason="timeout")
 
@@ -340,9 +312,9 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
     _write_audio_slots(settings, "meeting-9")
     _write_record(settings, "meeting-10")
 
-    def exploding(chunk: bytes, settings: Any, opener: Any = None) -> list[DiarizedTurn]:
+    def exploding(chunk: bytes, settings: Any, transport: Any = None) -> list[DiarizedTurn]:
         del chunk
-        del opener
+        del transport
         del settings
         raise AssertionError("diarization must not run")
 
@@ -377,38 +349,6 @@ async def test_ingest_silently_skips_correction_without_key_or_audio(
             if row.get("event") == "fault_recorded"
         ]
         assert faults == []
-
-
-def test_worker_ingest_routes_through_memory_ingest_without_skip(tmp_path: Path) -> None:
-    runner = FakeRunner()
-    runner.expect(" run ", "abc123\n")
-    backend = DockerWorkerBackend(
-        runner=runner,
-        journal_dir=tmp_path / "journals",
-        record_dir=Path(".runtime/meetings"),
-        project_dir=tmp_path,
-    )
-    write_journal(tmp_path / "journals" / "meeting-9.jsonl", FINISHED_ROWS)
-    meetings = tmp_path / ".runtime" / "audio" / "meetings"
-    record = meeting_record_path(meetings, SessionId("meeting-9"))
-    path = status_path(record)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_status(
-        path,
-        IngestionStatus(meeting_id="meeting-9", group_id="group-1", status="completed"),
-    )
-    runtime = tmp_path / ".runtime" / "audio"
-    runtime.mkdir(parents=True, exist_ok=True)
-    persona = runtime / "persona.json"
-    persona.write_text("{}", encoding="utf-8")
-
-    ingested = backend.ingest("meeting-9", persona_path=persona)
-
-    assert ingested.status == "completed"
-    run = next(command for command in runner.commands if "run" in command)
-    tail = run[run.index("fakeyou") + 1 :]
-    assert tail[0] == "memory-ingest"
-    assert "--no-correct" not in tail
 
 
 async def test_ingest_episode_name_error_keeps_hint_on_stderr(

@@ -7,7 +7,13 @@ from pydantic import ValidationError
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.conversation.conversation import conversation_thread_id
-from fakeyou.memory.persona import PersonaProfile, load_persona, persona_digest
+from fakeyou.memory.persona import (
+    PersonaProfile,
+    load_persona,
+    memory_group_for,
+    persona_digest,
+    require_persona_group,
+)
 from tests._persona_support import EXAMPLES, profile, profile_data
 
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
@@ -160,6 +166,28 @@ def test_memory_group_isolates_owners_and_twins() -> None:
     }
 
     assert len(groups) == 7
+
+
+def test_memory_group_for_is_deterministic_scoped_and_matches_profile() -> None:
+    group = memory_group_for("owner-a", "twin-a")
+
+    assert group == memory_group_for("owner-a", "twin-a")
+    assert group != memory_group_for("owner-a", "twin-b")
+    assert group.startswith("twin_")
+    assert group == profile(owner_id="owner-a", twin_id="twin-a").memory_group
+
+
+def test_every_surface_derives_the_same_persona_group() -> None:
+    built = profile(owner_id="owner-1", twin_id="twin-1")
+
+    assert built.memory_group == memory_group_for("owner-1", "twin-1")
+    assert (
+        require_persona_group(built.memory_group, owner_id="owner-1", twin_id="twin-1")
+        == built.memory_group
+    )
+    with pytest.raises(FakeYouError, match="does not match the ingestion status") as caught:
+        require_persona_group("local_twin", owner_id="owner-1", twin_id="twin-1")
+    assert caught.value.code is ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH
 
 
 def test_persona_digest_of_the_example_profile_is_pinned() -> None:

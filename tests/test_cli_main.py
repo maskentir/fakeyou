@@ -33,7 +33,7 @@ def test_invalid_configuration_reports_config_invalid_with_exit_two(
     (tmp_path / ".env").write_text("FAKEYOU_MEMORY__RECALL__STRATEGY=hybrid\n")
     monkeypatch.chdir(tmp_path)
     _scrub_process_configuration(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "check"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "db", "status"])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == ExitCode.INPUT_REJECTED
@@ -47,7 +47,7 @@ def test_unknown_configuration_key_reports_through_main(
     (tmp_path / ".env").write_text("FAKEYOU_NOPE__NOPE=1\n")
     monkeypatch.chdir(tmp_path)
     _scrub_process_configuration(monkeypatch)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "check"])
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "db", "status"])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == ExitCode.INPUT_REJECTED

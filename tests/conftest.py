@@ -1,23 +1,30 @@
 import os
-from collections.abc import AsyncIterator, Callable, Iterator
+import subprocess
+from collections.abc import AsyncIterator, Callable, Iterator, MutableMapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import httpx2
 import pytest
+from graphiti_core import Graphiti
 from graphiti_core.embedder.client import EMBEDDING_DIM
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.base import SerializerProtocol
+from neo4j import GraphDatabase
+from neo4j.exceptions import DriverError, Neo4jError
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
-import fakeyou.cli.join as cli_join
 import fakeyou.db.checkpoint as checkpoint_module
+import tests._join_runner as cli_join
+from conftest import HARNESS_POSTGRES_MODE
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import (
     BrowserSettings,
@@ -28,6 +35,7 @@ from fakeyou.config.settings import (
     OpenAIMemoryLLM,
     OpenAIReply,
     OpenAITTS,
+    ParticipationDeciderSettings,
     PathSettings,
     Settings,
     StoreSettings,
@@ -37,13 +45,50 @@ from fakeyou.db.schema import upgrade
 from fakeyou.memory.persona import OperatorIdentity
 from tests._audio_fakes import FakeAudio, PCMStream
 from tests._cli_support import AudioJoin, join_with_audio
+from tests._container_harness import (
+    NEO4J_IMAGE,
+    POSTGRES_IMAGE,
+    REDIS_IMAGE,
+    require_docker,
+    service_endpoint,
+    start_service,
+    stop_service,
+    wait_ready,
+)
 from tests._fakes_common import DATABASE_URL
-from tests._memory_fakes import make_graphiti
+from tests._memory_fakes import make_graphiti, make_real_graphiti
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_fakes import SessionRun
 
 TEST_DATABASE_ENV = "TEST_DATABASE_URL"
 REAL_DATABASE_FIXTURE = "blank_database_url"
+PRESERVE_OPERATOR_ENV = "FAKEYOU_PRESERVE_OPERATOR_ENV"
+
+
+def purge_operator_environment(
+    environ: MutableMapping[str, str], *, preserve: bool = False
+) -> None:
+    if preserve:
+        return
+    for name in [name for name in environ if name.upper().startswith("FAKEYOU_")]:
+        del environ[name]
+
+
+PRESERVE_OPERATOR_ENVIRONMENT = bool(os.environ.get(PRESERVE_OPERATOR_ENV))
+purge_operator_environment(os.environ, preserve=PRESERVE_OPERATOR_ENVIRONMENT)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_operator_environment() -> Iterator[None]:
+    saved = {
+        name: value for name, value in os.environ.items() if name.upper().startswith("FAKEYOU_")
+    }
+    purge_operator_environment(os.environ, preserve=PRESERVE_OPERATOR_ENVIRONMENT)
+    try:
+        yield
+    finally:
+        purge_operator_environment(os.environ, preserve=PRESERVE_OPERATOR_ENVIRONMENT)
+        os.environ.update(saved)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -82,8 +127,10 @@ def postgres_checkpoints(
         async def check_connection(_connection: object) -> None:
             return None
 
-    def fake_saver(pool: FakeConnectionPool) -> MemoryPostgresSaver:
-        return savers.setdefault(pool.conninfo, MemoryPostgresSaver())
+    def fake_saver(
+        pool: FakeConnectionPool, *, serde: SerializerProtocol | None = None
+    ) -> MemoryPostgresSaver:
+        return savers.setdefault(pool.conninfo, MemoryPostgresSaver(serde=serde))
 
     monkeypatch.setattr(checkpoint_module, "AsyncConnectionPool", FakeConnectionPool)
     monkeypatch.setattr(checkpoint_module, "AsyncPostgresSaver", fake_saver)
@@ -118,8 +165,9 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
             twin_name="Settings Twin",
         ),
         browser=BrowserSettings(headless=True),
+        participation_decider=ParticipationDeciderSettings(enabled=False),
         memory=MemorySettings(
-            store=StoreSettings(group="test-group", password=SecretStr("password")),
+            store=StoreSettings(password=SecretStr("password")),
             llm=OpenAIMemoryLLM(
                 model="memory-model", small_model="memory-small", api_key=SecretStr("memory-key")
             ),
@@ -130,9 +178,116 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     )
 
 
+@pytest.fixture(scope="session")
+def harness_postgres_url() -> Iterator[str | None]:
+    external = os.environ.get(TEST_DATABASE_ENV)
+    if external:
+        yield external
+        return
+    if HARNESS_POSTGRES_MODE != "container":
+        yield None
+        return
+    require_docker()
+    name = f"fakeyou-harness-postgres-{uuid4().hex[:12]}"
+    container = start_service(
+        POSTGRES_IMAGE,
+        name=name,
+        env={
+            "POSTGRES_DB": "fakeyou",
+            "POSTGRES_USER": "fakeyou",
+            "POSTGRES_PASSWORD": "harness-only",
+        },
+        container_port=5432,
+    )
+    try:
+        endpoint = service_endpoint(container, 5432)
+        url = f"postgresql://fakeyou:harness-only@{endpoint.host}:{endpoint.port}/fakeyou"
+
+        def ready() -> bool:
+            engine = create_engine(make_url(url).set(drivername="postgresql+psycopg"))
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+            except SQLAlchemyError:
+                return False
+            else:
+                return True
+            finally:
+                engine.dispose()
+
+        wait_ready(ready, description="harness postgres")
+        yield url
+    finally:
+        stop_service(container)
+
+
+@pytest.fixture(scope="session")
+def neo4j_endpoint() -> Iterator[str]:
+    require_docker()
+    name = f"fakeyou-harness-neo4j-{uuid4().hex[:12]}"
+    container = start_service(
+        NEO4J_IMAGE,
+        name=name,
+        env={"NEO4J_AUTH": "neo4j/harness-only"},
+        container_port=7687,
+    )
+    try:
+        endpoint = service_endpoint(container, 7687)
+        uri = f"bolt://{endpoint.host}:{endpoint.port}"
+
+        def ready() -> bool:
+            driver = GraphDatabase.driver(uri, auth=("neo4j", "harness-only"))
+            try:
+                driver.verify_connectivity()
+            except (Neo4jError, DriverError, OSError):
+                return False
+            else:
+                return True
+            finally:
+                driver.close()
+
+        wait_ready(ready, description="harness neo4j", timeout_seconds=180.0)
+        yield uri
+    finally:
+        stop_service(container)
+
+
+@pytest.fixture(scope="session")
+def redis_endpoint() -> Iterator[str]:
+    require_docker()
+    name = f"fakeyou-harness-redis-{uuid4().hex[:12]}"
+    container = start_service(REDIS_IMAGE, name=name, env={}, container_port=6379)
+    try:
+        endpoint = service_endpoint(container, 6379)
+
+        def ready() -> bool:
+            probe = subprocess.run(
+                ["docker", "exec", container, "redis-cli", "ping"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return probe.stdout.strip() == "PONG"
+
+        wait_ready(ready, description="harness redis", timeout_seconds=60.0)
+        yield f"redis://{endpoint.host}:{endpoint.port}/0"
+    finally:
+        stop_service(container)
+
+
 @pytest.fixture
-def blank_database_url() -> Iterator[str]:
-    base_url = os.environ.get(TEST_DATABASE_ENV)
+async def real_graphiti(neo4j_endpoint: str) -> AsyncIterator[Graphiti]:
+    memory = make_real_graphiti(neo4j_endpoint, password="harness-only")
+    await memory.build_indices_and_constraints()
+    try:
+        yield memory
+    finally:
+        await cast(Any, memory).close()
+
+
+@pytest.fixture
+def blank_database_url(harness_postgres_url: str | None) -> Iterator[str]:
+    base_url = harness_postgres_url
     if not base_url:
         pytest.skip(f"set {TEST_DATABASE_ENV} to run tests against a real PostgreSQL")
     name = f"fakeyou_test_{uuid4().hex}"
@@ -234,7 +389,9 @@ def join(settings: Settings) -> Callable[..., Any]:
             resume=options.pop("resume", False),
         )
         assert not options, f"unknown join kwargs: {sorted(options)}"
-        return await cli_join.join_meeting(link, *args, options=bundled, settings=request_settings)
+        return await cli_join.join_in_process(
+            link, *args, options=bundled, settings=request_settings
+        )
 
     return go
 

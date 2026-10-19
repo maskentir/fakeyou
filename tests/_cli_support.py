@@ -16,12 +16,11 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
-import fakeyou.cli.join as cli_join
-import fakeyou.cli.memory as cli_memory
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.join_preflight as join_preflight
 import fakeyou.orchestration.providers as providers
+import tests._join_runner as cli_join
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import (
     CompatibleReply,
@@ -293,9 +292,10 @@ async def join_persona_conversation(
             )
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(update)
         await asyncio.wait_for(
-            loop.wait_idle() if settle is None else settle(), timeout=SETTLE_TIMEOUT_SECONDS
+            loop.lifecycle.wait_idle() if settle is None else settle(),
+            timeout=SETTLE_TIMEOUT_SECONDS,
         )
-        outcome["phase"] = loop.phase
+        outcome["phase"] = loop.lifecycle.phase
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     monkeypatch.setattr(cli_join, "run_meeting_session", run)
@@ -315,8 +315,8 @@ def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list
         yield memory
         opened.append("close")
 
-    for module in (cli_join, cli_memory):
-        monkeypatch.setattr(module, "open_persona_memory", open_memory)
+    monkeypatch.setattr(cli_join, "open_persona_memory", open_memory)
+    monkeypatch.setattr(providers, "open_persona_memory", open_memory)
     return opened
 
 

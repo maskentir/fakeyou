@@ -41,7 +41,7 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param(
             (
-                ["debrief", "--meeting-id", "../../x", "--persona", PERSONA],
+                ["debrief", "--meeting-id", "../../x"],
                 "--meeting-id",
                 "../../x",
             ),
@@ -49,7 +49,7 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param(
             (
-                ["memory-ingest", "--meeting-id", "../../x", "--persona", PERSONA],
+                ["memory-ingest", "--meeting-id", "../../x"],
                 "--meeting-id",
                 "../../x",
             ),
@@ -72,14 +72,6 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param(
             (
-                ["memory-add", "note", "--persona", PERSONA, "--owner-id", "a/b"],
-                "--owner-id",
-                "a/b",
-            ),
-            id="memory-add-owner",
-        ),
-        pytest.param(
-            (
                 ["memory-add", "note", "--persona", PERSONA, "--twin-id", "../x"],
                 "--twin-id",
                 "../x",
@@ -95,7 +87,7 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param((["worker", "stop", "../../x"], "meeting_id", "../../x"), id="worker-stop"),
         pytest.param(
-            (["worker", "ingest", "../../x", "--persona", PERSONA], "meeting_id", "../../x"),
+            (["worker", "ingest", "../../x"], "meeting_id", "../../x"),
             id="worker-ingest",
         ),
     ],

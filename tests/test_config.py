@@ -1,6 +1,8 @@
+import json
 import re
+from collections import Counter
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any, NamedTuple, get_args
 
 import pytest
 from pydantic import BaseModel
@@ -10,6 +12,9 @@ from fakeyou.catalog.config import (
     COMPOSE_ONLY_KEYS,
     ENV_PREFIX,
     NESTED_DELIMITER,
+    PROVIDER_ROLES,
+    ROLE_ATTRIBUTE_PATH,
+    ROLE_HEADER_SUFFIX,
     ConfigKey,
 )
 from fakeyou.config.settings import Settings
@@ -51,6 +56,35 @@ def test_compose_only_keys_do_not_map_to_settings(key: ConfigKey) -> None:
     assert not _resolves(_env_path(key))
 
 
+def test_compose_only_keys_are_only_true_compose_settings() -> None:
+    assert {key.value for key in COMPOSE_ONLY_KEYS} == {
+        "FAKEYOU_COMPOSE_WORKER_SESSIONS_MEM_LIMIT",
+        "FAKEYOU_COMPOSE_WORKER_SESSIONS_CPUS",
+        "FAKEYOU_COMPOSE_WORKER_INGESTION_MEM_LIMIT",
+        "FAKEYOU_COMPOSE_WORKER_INGESTION_CPUS",
+        "FAKEYOU_COMPOSE_WORKER_DEBRIEF_MEM_LIMIT",
+        "FAKEYOU_COMPOSE_WORKER_DEBRIEF_CPUS",
+        "FAKEYOU_COMPOSE_WORKER_REEMBED_MEM_LIMIT",
+        "FAKEYOU_COMPOSE_WORKER_REEMBED_CPUS",
+        "FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE",
+        "FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID",
+        "FAKEYOU_COMPOSE_EMBEDDINGS_REVISION",
+        "FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL",
+        "FAKEYOU_COMPOSE_NEO4J_URI",
+    }
+    assert not hasattr(ConfigKey, "COMPOSE_WORKER_DATABASE_URL")
+    assert not hasattr(ConfigKey, "COMPOSE_WORKER_NEO4J_URI")
+    assert not hasattr(ConfigKey, "COMPOSE_WORKER_EMBEDDING_BASE_URL")
+
+
+def test_env_example_does_not_document_retired_compose_aliases() -> None:
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
+
+    assert "FAKEYOU_COMPOSE_WORKER_DATABASE_URL" not in example
+    assert "FAKEYOU_COMPOSE_WORKER_NEO4J_URI" not in example
+    assert "FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL" not in example
+
+
 @pytest.mark.parametrize("key", list(ConfigKey), ids=lambda key: key.value)
 def test_config_keys_are_upper_snake_case_with_the_prefix(key: ConfigKey) -> None:
     assert key.value.startswith(ENV_PREFIX)
@@ -63,7 +97,7 @@ def test_config_keys_are_upper_snake_case_with_the_prefix(key: ConfigKey) -> Non
 )
 def test_api_key_roles_resolve_to_their_settings_section(role: str, key: ConfigKey) -> None:
     del key
-    assert _resolves((*role.split("."), "api_key"))
+    assert _resolves((*ROLE_ATTRIBUTE_PATH[role].split("."), "api_key"))
 
 
 @pytest.mark.parametrize(
@@ -73,10 +107,52 @@ def test_api_key_roles_match_the_environment_name_settings_derives(
     role: str, key: ConfigKey
 ) -> None:
     derived = (
-        ENV_PREFIX + role.replace(".", NESTED_DELIMITER).upper() + NESTED_DELIMITER + "API_KEY"
+        ENV_PREFIX
+        + ROLE_ATTRIBUTE_PATH[role].replace(".", NESTED_DELIMITER).upper()
+        + NESTED_DELIMITER
+        + "API_KEY"
     )
 
     assert key.value == derived
+
+
+def test_provider_roles_match_the_frozen_contract_list() -> None:
+    assert PROVIDER_ROLES == (
+        "reply",
+        "reply_fallback",
+        "debrief",
+        "stt",
+        "tts",
+        "memory_llm",
+        "memory_embedder",
+        "participation_decider",
+        "visual",
+    )
+    assert set(API_KEY_OF_ROLE) == set(PROVIDER_ROLES)
+    assert set(ROLE_ATTRIBUTE_PATH) == set(PROVIDER_ROLES)
+    assert set(ROLE_HEADER_SUFFIX) == set(PROVIDER_ROLES)
+
+
+def test_participation_decider_has_named_config_keys() -> None:
+    assert ConfigKey.PARTICIPATION_DECIDER_API_KEY.value == (
+        "FAKEYOU_PARTICIPATION_DECIDER__API_KEY"
+    )
+    assert API_KEY_OF_ROLE["participation_decider"] is (ConfigKey.PARTICIPATION_DECIDER_API_KEY)
+    assert ROLE_HEADER_SUFFIX["participation_decider"] == "Participation-Decider"
+
+
+def test_role_header_suffix_matches_the_frozen_map() -> None:
+    assert ROLE_HEADER_SUFFIX == {
+        "reply": "Reply",
+        "reply_fallback": "Reply-Fallback",
+        "debrief": "Debrief",
+        "stt": "Stt",
+        "tts": "Tts",
+        "memory_llm": "Memory-Llm",
+        "memory_embedder": "Memory-Embedder",
+        "participation_decider": "Participation-Decider",
+        "visual": "Visual",
+    }
 
 
 def _setting_env_keys(model: type[BaseModel], prefix: str = ENV_PREFIX) -> set[str]:
@@ -96,6 +172,85 @@ def test_env_example_documents_every_setting() -> None:
     documented = set(re.findall(r"^#?\s*(FAKEYOU_[A-Z0-9_]+)=", example, re.MULTILINE))
 
     assert _setting_env_keys(Settings) - documented == set()
+
+
+def test_env_example_documents_every_compose_only_key() -> None:
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
+    documented = set(re.findall(r"^#?\s*(FAKEYOU_[A-Z0-9_]+)=", example, re.MULTILINE))
+
+    assert {key.value for key in COMPOSE_ONLY_KEYS} - documented == set()
+
+
+def test_settings_leaf_count_matches_the_frozen_map() -> None:
+    assert len(_setting_env_keys(Settings)) == 154
+
+
+class _MigrationMap(NamedTuple):
+    settings: dict[str, str]
+    compose_only: dict[str, str]
+    new_keys: tuple[str, ...]
+
+
+EXPECTED_SETTINGS_COUNTS = {"keep": 154}
+EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
+EXPECTED_NEW_COUNT = 0
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _value in pairs]
+
+    assert sorted(keys) == sorted(set(keys))
+
+    return dict(pairs)
+
+
+def _load_migration_map() -> _MigrationMap:
+    path = Path(__file__).resolve().parent / "fixtures" / "env_migration_d9.json"
+    loaded: dict[str, Any] = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys
+    )
+
+    assert set(loaded) == {"settings", "compose_only", "new"}
+    settings: dict[str, str] = loaded["settings"]
+    compose_only: dict[str, str] = loaded["compose_only"]
+    new_keys: tuple[str, ...] = tuple(loaded["new"])
+
+    return _MigrationMap(settings=settings, compose_only=compose_only, new_keys=new_keys)
+
+
+def _assert_migration_map_matches_settings(migration_map: _MigrationMap) -> None:
+    live = _setting_env_keys(Settings)
+    new_keys = set(migration_map.new_keys)
+
+    assert set(migration_map.settings) & set(migration_map.compose_only) == set()
+    assert live - set(migration_map.settings) == set()
+    assert set(migration_map.settings) - live == set()
+    assert sorted(migration_map.new_keys) == sorted(new_keys)
+    assert new_keys & set(migration_map.settings) == set()
+    assert new_keys & set(migration_map.compose_only) == set()
+    assert len(migration_map.settings) == sum(EXPECTED_SETTINGS_COUNTS.values())
+    assert dict(Counter(migration_map.settings.values())) == EXPECTED_SETTINGS_COUNTS
+    assert len(migration_map.new_keys) == EXPECTED_NEW_COUNT
+
+
+def _assert_migration_map_matches_compose_only(migration_map: _MigrationMap) -> None:
+    live_compose = {key.value for key in COMPOSE_ONLY_KEYS}
+    kept = {key for key, decision in migration_map.compose_only.items() if decision == "keep"}
+    deleted = {key for key, decision in migration_map.compose_only.items() if decision == "delete"}
+
+    assert kept | deleted == set(migration_map.compose_only)
+    assert live_compose == kept
+    assert deleted & live_compose == set()
+    assert len(migration_map.compose_only) == sum(EXPECTED_COMPOSE_COUNTS.values())
+    assert dict(Counter(migration_map.compose_only.values())) == EXPECTED_COMPOSE_COUNTS
+
+
+def test_migration_map_covers_every_current_setting_once() -> None:
+    _assert_migration_map_matches_settings(_load_migration_map())
+
+
+def test_migration_map_covers_every_compose_only_key() -> None:
+    _assert_migration_map_matches_compose_only(_load_migration_map())
 
 
 def test_compose_only_keys_cover_every_compose_variable() -> None:

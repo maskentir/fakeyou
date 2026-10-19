@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -15,7 +14,6 @@ from fakeyou.config.settings import Settings, VisualSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.visual_retention import PurgeReport
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.orchestration.lifecycle import MeetingLifecycle
 from fakeyou.orchestration.runtime import MeetingWorker
 from fakeyou.visual.visual_store import VisualStore
 from tests._error_support import message_pattern
@@ -116,8 +114,6 @@ async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) 
     assert assembly_module.create_visual_captioner(settings) is None
 
     store = VisualStore(tmp_path / "visual", journal=RecordingJournal())
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     clock = FakeClock()
     worker = MeetingWorker(
         SessionConfig(
@@ -127,7 +123,6 @@ async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) 
             link="https://meet.example.com/abc-defg-hij",
             twin_name="Twin",
         ),
-        lifecycle,
         FakePage(),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
@@ -140,8 +135,6 @@ async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) 
 
 
 async def test_flag_on_starts_observer(tmp_path: Path) -> None:
-    lifecycle = MeetingLifecycle("owner-1", "twin-1", "meeting-1", InMemorySaver())
-    await lifecycle.initialize()
     clock = FakeClock()
     worker = MeetingWorker(
         SessionConfig(
@@ -152,7 +145,6 @@ async def test_flag_on_starts_observer(tmp_path: Path) -> None:
             twin_name="Twin",
             visual_enabled=True,
         ),
-        lifecycle,
         FakePage(),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,

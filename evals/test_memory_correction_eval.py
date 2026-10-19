@@ -17,8 +17,9 @@ from evals._correction import (
 from evals._shared import token_present
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
+from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.ingestion import IngestScope, MeetingScope, ingest_corrections, ingest_meeting
-from fakeyou.memory.memory import RECALL_EMPTY_RESULT, open_graphiti_memory
+from fakeyou.memory.memory import open_graphiti_memory
 from fakeyou.orchestration.providers import memory_config
 from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.persistence.record import load_meeting_record

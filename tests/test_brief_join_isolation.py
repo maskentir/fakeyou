@@ -122,7 +122,7 @@ async def test_join_brief_stop_before_pcm_cancels_the_model_turn(
     )
 
     assert audio.spoken == []
-    assert outcome["conversation"].phase == "closed"
+    assert outcome["conversation"].lifecycle.phase == "closed"
     rows = journal_rows(settings)
     assert [row["reason"] for row in rows if row["event"] == "agent_cancelled"] == ["close"]
     assert not [row for row in rows if row["event"] == "playback_finished"]
@@ -166,7 +166,7 @@ async def test_join_brief_stop_during_playback_records_no_twin_speech(
 
     assert audio is blocking
     assert audio.spoken == []
-    assert outcome["conversation"].phase == "closed"
+    assert outcome["conversation"].lifecycle.phase == "closed"
     playback = [row["event"] for row in journal_rows(settings) if row["source"] == "playback"]
     assert playback == ["playback_started"]
     entries = load_meeting_record(
