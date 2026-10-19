@@ -15,7 +15,7 @@ dependencies = [
     "httpx2==2.13.1",
     "langchain==1.4.2",
     "langchain-anthropic>=1,<2",
-    "langchain-core>=1.6,<2",
+    "langchain-core>=1.6.11,<2",
     "langchain-google-genai>=4,<5",
     "langchain-mcp-adapters>=0.2,<0.3",
     "langchain-openai>=1,<2",
