@@ -1,0 +1,39 @@
+{
+  "title": "Katalog error dan exit code",
+  "intro": "Halaman ini dihasilkan dari katalog di `src/fakeyou/catalog/errors.py` oleh `fakeyou.catalog.error_catalog`. Jangan mengedit halaman ini secara manual. Regenerasi dengan `uv run python -m fakeyou.catalog.error_catalog > docs/reference/error-catalog.md`. `tests/test_error_catalog.py` gagal jika halaman ini berbeda dari hasil generator, jadi perubahan katalog harus ikut diregenerasi.",
+  "rules_heading": "Aturan",
+  "rules": [
+    "Setiap error yang sampai ke pengguna berupa `FakeYouError` dengan kode dari `ErrorCode`. Pesan dirender dari template di katalog, dan exit code diambil dari spesifikasi kode yang sama.",
+    "Kode berbentuk `domain.nama` dan dianggap bagian dari kontrak. Mengubah kode atau template adalah breaking change dan harus dicatat. Nama anggota enum mengikuti nilainya, misalnya `config.unknown_key` menjadi `CONFIG_UNKNOWN_KEY`.",
+    "Pesan tidak menampilkan nilai secret, isi brief, atau data biometrik. Placeholder `{...}` hanya berisi identitas sesi, path, nama field, atau alasan teknis yang sudah disanitasi.",
+    "`ValueError` dan `TypeError` yang tersisa adalah pelanggaran kontrak pemanggilan internal, atau validasi yang diwajibkan framework (pydantic dan typer). Pelanggaran internal tidak dipetakan ke kode katalog dan tampil sebagai traceback. `ValidationError` dari konfigurasi dipetakan ke `CONFIG_INVALID`, dan `ValidationError` dari argumen perintah dipetakan ke `INPUT_INVALID`."
+  ],
+  "exit_heading": "Exit code",
+  "exit_columns": [
+    "Nilai",
+    "Nama",
+    "Arti"
+  ],
+  "exit_meaning": {
+    "SUCCESS": "Berhasil.",
+    "FAILURE": "Gagal umum. Dipakai jika kode tidak menyebut exit lain.",
+    "INPUT_REJECTED": "Input pengguna ditolak sebelum operasi dimulai: flag, argumen, atau file.",
+    "INFRA_FAILURE": "Infrastruktur atau provider tidak tersedia.",
+    "EVAL_GATE_FAILED": "Gate evaluasi tidak lulus.",
+    "CALIBRATION_REJECTED": "Artefak kalibrasi ditolak oleh gate dev."
+  },
+  "terminal_heading": "Alasan berhenti meeting",
+  "terminal_intro": "Setiap alasan terminal meeting dipetakan ke exit code berikut. `join` memakai tabel ini untuk menentukan exit code hasil akhirnya.",
+  "terminal_columns": [
+    "Alasan terminal",
+    "Exit"
+  ],
+  "codes_heading": "Daftar kode",
+  "codes_intro": "Kolom Exit menunjukkan exit code saat error ini menghentikan CLI.",
+  "codes_columns": [
+    "Kode",
+    "Anggota",
+    "Exit",
+    "Pesan"
+  ]
+}

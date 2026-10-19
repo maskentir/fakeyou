@@ -1,0 +1,233 @@
+[project]
+name = "fakeyou"
+version = "0.1.0"
+description = "Library-first foundation for a Google Meet digital twin"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20,<2",
+    "anthropic>=1.9,<2",
+    "cloakbrowser==0.5.11",
+    "fastapi[standard]>=0.115,<0.200",
+    "uvicorn>=0.30,<1",
+    "starlette>=1.7,<2",
+    "graphiti-core==0.30.2",
+    "httpx2==2.13.1",
+    "langchain==1.4.2",
+    "langchain-anthropic>=1,<2",
+    "langchain-core>=1.6,<2",
+    "langchain-google-genai>=4,<5",
+    "langchain-mcp-adapters>=0.2,<0.3",
+    "langchain-openai>=1,<2",
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-postgres>=3,<4",
+    "mcp>=1.26,<2",
+    "neo4j>=6.3,<7",
+    "numpy>=2.5,<3",
+    "openai==3.19.2",
+    "pillow>=12.3,<13",
+    "loudness>=0.2,<1",
+    "onnxruntime~=1.24.3",
+    "sentencex==1.0.31",
+    "websockets>=16,<17",
+    "playwright>=1.63,<2",
+    "psycopg[binary,pool]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.10,<3",
+    "python-dotenv>=1.2,<2",
+    "redis>=6.2,<7",
+    "sqlalchemy>=2.0,<3",
+    "typer>=0.27,<1",
+]
+
+[project.optional-dependencies]
+# Pinned to the last sherpa built against onnxruntime 1.24.x (the same pin as the dependencies);
+# newer sherpa needs ORT >= 1.28 and breaks the resolver.
+# The macOS sherpa wheel is a thin wrapper that loads the onnxruntime dylib shipped by sherpa-onnx-core;
+# uv's universal lock does not carry that requirement, so it is declared here for darwin only.
+voiceprint = ["sherpa-onnx==1.12.38", "sherpa-onnx-core==1.12.38; sys_platform == 'darwin'"]
+
+[tool.uv]
+constraint-dependencies = [
+    "aiohttp>=3.14.4",
+]
+
+[dependency-groups]
+dev = [
+    "deepeval==4.2.6",
+    "deptry>=0.25,<1",
+    "import-linter>=2.15,<3",
+    "mypy>=1.18,<2",
+    "pytest>=8,<10",
+    "pytest-asyncio>=1,<2",
+    "pytest-xdist>=3,<4",
+    "ruff>=0.14,<1",
+]
+
+[project.scripts]
+fakeyou = "fakeyou.cli.entry:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "ASYNC",
+    "T20",
+    "RUF021",
+    "FURB110",
+    "PLC0207",
+    "SIM114",
+    "FBT",
+    "ARG",
+    "SLF",
+    "C901",
+    "PLR0913",
+    "PT",
+    "TRY002",
+    "TRY004",
+    "TRY201",
+    "TRY203",
+    "TRY300",
+    "TRY400",
+    "TRY401",
+    "S110",
+    "S112",
+    "RUF006",
+    "BLE001",
+]
+
+[tool.ruff.lint.flake8-pytest-style]
+raises-require-match-for = [
+    "BaseException",
+    "Exception",
+    "ValueError",
+    "OSError",
+    "IOError",
+    "EnvironmentError",
+    "socket.error",
+    "fakeyou.catalog.errors.FakeYouError",
+    "fakeyou.debrief.debrief_schema.DebriefValidationError",
+    "fakeyou.worker.worker_backend.WorkerError",
+    "fakeyou.diarization.diarize_client.DiarizeError",
+    "fakeyou.diarization.diarize_correction.StaleDiarizationError",
+    "fakeyou.persistence.ingestion_status.RecordLockError",
+    "fakeyou.persistence.ingestion_status.LeaseError",
+    "fakeyou.memory.owner_notes.NoteConflictError",
+    "fakeyou.meet.meet_action_ledger.LedgerError",
+    "fakeyou.meet.browser.ProfileInUseError",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/fakeyou/cli/output.py" = ["T201"]
+# H4e: broad catches live only in the observability containers by design.
+"src/fakeyou/observability/cleanup.py" = ["BLE001"]
+"src/fakeyou/observability/faults.py" = ["BLE001"]
+"src/fakeyou/observability/journal.py" = ["T201", "BLE001"]
+# D4 typer cut-over: command signatures mirror the CLI surface (framework-imposed).
+"src/fakeyou/cli/main.py" = ["PLR0913"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "evals"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not browser and not live and not container"]
+markers = [
+    "browser: launches a real CloakBrowser and local Playwright MCP process",
+    "live: uses external model APIs or a running graph database",
+    "container: runs the built meeting worker image through Docker Compose",
+    "postgres: uses the real Postgres named by TEST_DATABASE_URL",
+]
+
+[tool.deptry]
+extend_exclude = ["evals"]
+known_first_party = ["fakeyou"]
+package_module_name_map = {"sherpa-onnx-core" = ["sherpa_onnx"]}
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["fastapi", "langchain-anthropic", "langchain-google-genai", "langchain-openai", "redis"]
+
+[tool.mypy]
+python_version = "3.12"
+platform = "linux"
+strict = true
+enable_error_code = ["explicit-override"]
+untyped_calls_exclude = ["deepeval.models.base_model.DeepEvalBaseLLM"]
+files = ["src/fakeyou", "tests", "evals"]
+mypy_path = "typings"
+
+[tool.importlinter]
+root_package = "fakeyou"
+
+[[tool.importlinter.contracts]]
+name = "catalog never imports cli or db"
+type = "forbidden"
+source_modules = ["fakeyou.catalog"]
+forbidden_modules = ["fakeyou.cli", "fakeyou.db"]
+
+[[tool.importlinter.contracts]]
+name = "db never imports cli"
+type = "forbidden"
+source_modules = ["fakeyou.db"]
+forbidden_modules = ["fakeyou.cli"]
+
+[[tool.importlinter.contracts]]
+name = "transport never imports api or cli"
+type = "forbidden"
+source_modules = ["fakeyou.transport"]
+forbidden_modules = ["fakeyou.api", "fakeyou.cli"]
+
+[[tool.importlinter.contracts]]
+name = "cli commands are independent of each other"
+type = "independence"
+modules = [
+    "fakeyou.cli.audio",
+    "fakeyou.cli.calibrate",
+    "fakeyou.cli.chat",
+    "fakeyou.cli.db",
+    "fakeyou.cli.debrief",
+    "fakeyou.cli.diagnostics",
+    "fakeyou.cli.diarize",
+    "fakeyou.cli.memory",
+    "fakeyou.cli.sessions",
+    "fakeyou.cli.voiceprint",
+]
+
+[[tool.importlinter.contracts]]
+name = "domain packages respect the layer order"
+type = "layers"
+layers = [
+    "fakeyou.api",
+    "fakeyou.cli",
+    "fakeyou.worker",
+    "fakeyou.transport",
+    "fakeyou.orchestration",
+    "fakeyou.memory",
+    "fakeyou.debrief",
+    "fakeyou.conversation",
+    "fakeyou.visual",
+    "fakeyou.diarization",
+    "fakeyou.audio",
+    "fakeyou.speech",
+    "fakeyou.transcription",
+    "fakeyou.identity",
+    "fakeyou.meet",
+    "fakeyou.persistence",
+    "fakeyou.db",
+    "fakeyou.observability",
+    "fakeyou.config",
+    "fakeyou.catalog",
+    "fakeyou.foundation",
+]
