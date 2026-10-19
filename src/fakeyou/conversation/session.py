@@ -8,8 +8,9 @@ from pydantic.dataclasses import dataclass
 
 from fakeyou.config.identifiers import SessionIdField
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.state import PublicPhase
 from fakeyou.foundation.invariants import PositiveSeconds, TwinName
-from fakeyou.foundation.taxonomy import MeetingPhase, TerminalReason
+from fakeyou.foundation.taxonomy import TerminalReason
 
 
 class MeetingAudio(Protocol):
@@ -104,7 +105,6 @@ class SessionConfig:
     license_key: str | None = field(default=None, repr=False)
     participant_policy_enabled: bool = False
     participant_evidence_path: Path | None = None
-    attribution_probe_path: Path | None = None
     per_stream_enabled: bool = False
     meet_actions_enabled: bool = False
     visual_enabled: bool = False
@@ -113,7 +113,7 @@ class SessionConfig:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SessionResult:
-    phase: MeetingPhase
+    phase: PublicPhase
     terminal_reason: TerminalReason | None
     detail: str
     faults: dict[str, Any] | None = None

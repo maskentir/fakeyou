@@ -1,0 +1,1335 @@
+import asyncio
+import time
+from collections.abc import (
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Hashable,
+    Mapping,
+    Sequence,
+)
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from functools import partial
+from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.runtime import Runtime
+
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.jev_refresh import JevKick, JevState, kick_jev_refresh, turn_jev_key
+from fakeyou.conversation.memory_prefetch import (
+    MemoryPrefetch,
+    prefetch_memory_evidence,
+    retain_evidence,
+)
+from fakeyou.conversation.participation_decider import (
+    Decider,
+    DeciderTurn,
+    ParticipationDecision,
+)
+from fakeyou.conversation.participation_graph import (
+    DecisionSource,
+    JevKey,
+    ParticipationRuntime,
+    ParticipationState,
+    build_participation_subgraph,
+)
+from fakeyou.conversation.sentence_stream import cap_reply, shape_sentences
+from fakeyou.conversation.turn_events import JournalSink, TurnEvent
+from fakeyou.conversation.turn_queue import AdmittedFinals, PendingFinals
+from fakeyou.conversation.turn_recovery import (
+    TurnRecovery,
+    TurnScope,
+    record_agent_failed,
+    record_agent_finished,
+    record_agent_started,
+    record_drop,
+    record_sentence_dropped,
+    turn_request_id,
+    within_sentence_budget,
+)
+from fakeyou.foundation.participation import ParticipationContext
+from fakeyou.foundation.protocols import SupportsAclose
+from fakeyou.foundation.provenance import MemoryEvidence
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.observability.cleanup import close_safely
+from fakeyou.observability.faults import FaultReporter, capture_error
+
+
+class Speaker(Protocol):
+    @property
+    def is_speaking(self) -> bool: ...
+
+    async def speak(
+        self,
+        utterance: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None: ...
+
+    async def stop_playback(self) -> None: ...
+
+
+BargeTrigger = Literal["final", "interim"]
+ConversationPhase = Literal[
+    "listening", "weighing", "queued", "interrupted", "waiting", "acting", "failed", "closed"
+]
+
+
+@dataclass(slots=True)
+class ActiveSpeech:
+    task: asyncio.Task[None]
+    generation: int
+    started: float
+    transcript_id: str | None
+    request_id: str | None = None
+
+
+class SpeechFloor:
+    def __init__(self, generation: int = 0, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self.generation = generation
+        self.last_reason = ""
+        self._clock = clock
+        self._active: ActiveSpeech | None = None
+
+    @property
+    def busy(self) -> bool:
+        return self._active is not None
+
+    @property
+    def active(self) -> ActiveSpeech | None:
+        return self._active
+
+    def now(self) -> float:
+        return self._clock()
+
+    def admits(self, generation: int) -> bool:
+        return generation == self.generation
+
+    def advance(self) -> int:
+        self.generation += 1
+        return self.generation
+
+    async def hold(
+        self,
+        work: Coroutine[Any, Any, None],
+        *,
+        transcript_id: str | None = None,
+        request_id: str | None = None,
+        generation: int | None = None,
+    ) -> bool:
+        task = asyncio.ensure_future(work)
+        active = ActiveSpeech(
+            task=task,
+            generation=self.generation if generation is None else generation,
+            started=self.now(),
+            transcript_id=transcript_id,
+            request_id=request_id,
+        )
+        self._active = active
+        try:
+            await task
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling() > 0:
+                raise
+            return False
+        finally:
+            if self._active is active:
+                self._active = None
+        return True
+
+    async def interrupt(self, reason: str = "") -> int:
+        self.advance()
+        self.last_reason = reason
+        active = self._active
+        if active is not None and not active.task.done():
+            active.task.cancel()
+            await asyncio.gather(active.task, return_exceptions=True)
+        return self.generation
+
+
+async def interrupt_speech(floor: SpeechFloor | None, generation: int) -> int:
+    if floor is None:
+        return generation + 1
+    return await floor.interrupt()
+
+
+def record_barge_in(journal: JournalSink, trigger: BargeTrigger, words: int) -> None:
+    journal.record("barge_in_detected", source="agent", trigger=trigger, words=words)
+
+
+def _cancel_request_id(active: ActiveSpeech) -> str | None:
+    if active.request_id is not None:
+        return active.request_id
+    if active.transcript_id is None:
+        return None
+    return turn_request_id(active.transcript_id, active.generation)
+
+
+def _cancel_fields(floor: SpeechFloor, active: ActiveSpeech, reason: str) -> dict[str, Any]:
+    transcript_id = active.transcript_id
+    return {
+        "request_id": _cancel_request_id(active),
+        "transcript_id": transcript_id,
+        "generation": active.generation,
+        "reason": reason,
+        "duration_ms": (floor.now() - active.started) * 1000,
+    }
+
+
+async def cancel_speech(floor: SpeechFloor, journal: JournalSink, *, reason: str) -> None:
+    active = floor.active
+    if active is None or active.task.done():
+        return
+    journal.record(
+        "agent_cancel_requested", source="agent", **_cancel_fields(floor, active, reason)
+    )
+    await floor.interrupt(reason)
+    journal.record("agent_cancelled", source="agent", **_cancel_fields(floor, active, reason))
+
+
+class PhaseSink(Protocol):
+    def move(self, phase: ConversationPhase, detail: str) -> None: ...
+
+
+class Responder(Protocol):
+    def stream_reply(self, transcript: str) -> AsyncIterator[str]: ...
+
+
+class WholeResponder(Protocol):
+    async def respond(self, transcript: str) -> str: ...
+
+
+ToolStartHook = Callable[[], None]
+WholeTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook], WholeResponder]
+StreamTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook, str], Responder]
+
+
+@dataclass(frozen=True, slots=True)
+class SentenceLimits:
+    max_sentences: int
+    language: str
+
+
+@dataclass(slots=True)
+class BargeLatch:
+    interrupted: bool = False
+    last_interim: str | None = None
+    stream_stops: int = 0
+
+    def rearm(self) -> None:
+        self.interrupted = False
+        self.last_interim = None
+
+
+class TurnScheduler(Protocol):
+    @property
+    def is_busy(self) -> bool: ...
+
+    def request_pending(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TurnRuntime:
+    speaker: Speaker
+    journal: JournalSink
+    responder: Responder | None = None
+    floor: SpeechFloor | None = None
+    jev: JevState | None = None
+    phase: PhaseSink | None = None
+    queue: PendingFinals | None = None
+    recovery: TurnRecovery | None = None
+    on_fail: Callable[[Exception], None] | None = None
+    response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
+    sentences: SentenceLimits | None = None
+    whole: WholeResponder | None = None
+    whole_turn: WholeTurnFactory | None = None
+    stream_turn: StreamTurnFactory | None = None
+    admitted: AdmittedFinals | None = None
+    closed: Callable[[], bool] | None = None
+    paused: Callable[[], bool] | None = None
+    barge_in: bool = True
+    raise_if_failed: Callable[[], None] | None = None
+    scheduler: TurnScheduler | None = None
+    bound: Callable[[], bool] | None = None
+    barge: BargeLatch | None = None
+    note_spoken: Callable[[str], None] | None = None
+    shadow: bool = False
+    faults: FaultReporter | None = None
+
+
+def _closed(runtime: TurnRuntime) -> bool:
+    return runtime.closed is not None and runtime.closed()
+
+
+def _paused(runtime: TurnRuntime) -> bool:
+    return runtime.paused is not None and runtime.paused()
+
+
+def _bound(runtime: TurnRuntime) -> bool:
+    return runtime.bound is None or runtime.bound()
+
+
+def _raise_if_failed(runtime: TurnRuntime) -> None:
+    if runtime.raise_if_failed is not None:
+        runtime.raise_if_failed()
+
+
+def _busy(runtime: TurnRuntime) -> bool:
+    if runtime.scheduler is not None:
+        return runtime.scheduler.is_busy
+    return runtime.floor is not None and runtime.floor.busy
+
+
+def _admitted_count(runtime: TurnRuntime) -> int:
+    if runtime.admitted is not None:
+        return runtime.admitted.count
+    return 0 if runtime.floor is None else runtime.floor.generation
+
+
+def _advance_admitted(runtime: TurnRuntime) -> int:
+    if runtime.admitted is not None:
+        return runtime.admitted.advance()
+    return _admitted_count(runtime)
+
+
+def _floor_generation(runtime: TurnRuntime) -> int:
+    return 0 if runtime.floor is None else runtime.floor.generation
+
+
+def _fail(runtime: TurnRuntime, cause: Exception) -> None:
+    if runtime.on_fail is not None:
+        runtime.on_fail(cause)
+
+
+def _move_phase(runtime: TurnRuntime, phase: ConversationPhase, detail: str) -> None:
+    if runtime.phase is not None:
+        runtime.phase.move(phase, detail)
+
+
+def _turn_current(runtime: TurnRuntime, generation: int, floor_generation: int) -> bool:
+    if _closed(runtime):
+        return False
+    if runtime.admitted is not None and runtime.admitted.count != generation:
+        return False
+    return runtime.floor is None or runtime.floor.admits(floor_generation)
+
+
+def _drop_outcome(floor: SpeechFloor) -> tuple[str, str]:
+    if floor.last_reason == "close":
+        return "closed", "close"
+    if floor.last_reason == "interim":
+        return "stopped", "interim"
+    return "stale_generation", "new_final"
+
+
+def turn_drop_outcome(runtime: TurnRuntime, generation: int) -> tuple[str, str]:
+    if _closed(runtime):
+        return "closed", "close"
+    if runtime.admitted is not None:
+        if runtime.admitted.count != generation:
+            return "stale_generation", "new_final"
+        return "stopped", "interim"
+    if runtime.floor is not None:
+        return _drop_outcome(runtime.floor)
+    return "stale_generation", "new_final"
+
+
+def tool_start_hook(
+    runtime: TurnRuntime, generation: int, floor_generation: int, detail: str
+) -> ToolStartHook:
+    def on_tool_start() -> None:
+        if _turn_current(runtime, generation, floor_generation):
+            _move_phase(runtime, "acting", detail)
+            _raise_if_failed(runtime)
+
+    return on_tool_start
+
+
+async def take_floor_for_final(runtime: TurnRuntime, transcript_text: str) -> None:
+    floor = runtime.floor
+    if floor is not None:
+        await cancel_speech(floor, runtime.journal, reason="new_final")
+    if not _bound(runtime):
+        return
+    speaker = runtime.speaker
+    if runtime.barge_in and speaker.is_speaking:
+        record_barge_in(runtime.journal, "final", len(transcript_text.split()))
+    if (runtime.barge_in and speaker.is_speaking) or (_busy(runtime) and not speaker.is_speaking):
+        await speaker.stop_playback()
+
+
+Admission = Literal["rules", "admit"]
+
+
+class TurnInput(TypedDict):
+    event: TurnEvent
+    turns: list[DeciderTurn]
+    context: ParticipationContext
+    speaking_generation: int
+    transcript_event: NotRequired[TranscriptEvent | None]
+    history: NotRequired[list[TranscriptEvent]]
+    addressing_names: NotRequired[tuple[str, ...]]
+    pending: NotRequired[bool]
+    admission: NotRequired[Admission]
+
+
+class TurnGraphState(TypedDict):
+    event: TurnEvent
+    turns: list[DeciderTurn]
+    context: ParticipationContext
+    speaking_generation: int
+    transcript_text: str
+    participation: ParticipationDecision | None
+    failure: str | None
+    transcript_event: NotRequired[TranscriptEvent | None]
+    history: NotRequired[list[TranscriptEvent]]
+    addressing_names: NotRequired[tuple[str, ...]]
+    pending: NotRequired[bool]
+    decision_source: NotRequired[DecisionSource | None]
+    admission: NotRequired[Admission]
+    delivered: NotRequired[tuple[str, ...]]
+    memory_evidence: Annotated[list[MemoryEvidence], retain_evidence]
+
+
+TurnRoute = Literal["speak", "end", "failed"]
+IngestRoute = Literal["speak", "participation", "prefetch_memory", "refresh"]
+FINAL_BRANCHES: tuple[IngestRoute, ...] = ("participation", "prefetch_memory")
+ParticipationGraph = CompiledStateGraph[
+    ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
+]
+_ADMITTED: frozenset[str] = frozenset({"speak", "clarify"})
+
+
+def route_after_ingest(state: TurnGraphState) -> IngestRoute:
+    kind = state["event"].kind
+    if kind == "stop":
+        return "speak"
+    if kind == "interim":
+        return "refresh"
+    if state.get("admission") == "admit":
+        return "speak"
+    return "participation"
+
+
+def route_with_prefetch(state: TurnGraphState) -> IngestRoute | Sequence[IngestRoute]:
+    route = route_after_ingest(state)
+    if state["event"].kind == "final":
+        return FINAL_BRANCHES
+    return route
+
+
+def route_after_participation(state: TurnGraphState) -> TurnRoute:
+    if state["failure"] is not None:
+        return "failed"
+    decision = state["participation"]
+    if decision is not None and decision.decision in _ADMITTED:
+        return "speak"
+    return "end"
+
+
+def _participation_key(state: TurnGraphState, window_turns: int) -> JevKey:
+    history = state.get("history", [])
+    prior = tuple(event.id for event in history[:-1])
+    context = state["context"]
+    return turn_jev_key(prior, context.turn_cue, mine=context.turn_mine, window_turns=window_turns)
+
+
+def _refresh_jev(
+    state: TurnGraphState, runtime: TurnRuntime, decider: Decider | None, window_turns: int
+) -> None:
+    jev = runtime.jev
+    if decider is None or jev is None:
+        return
+    kick_jev_refresh(
+        jev,
+        decider,
+        JevKick(
+            text=state["transcript_text"],
+            events=tuple(state.get("history", [])),
+            twin_names=state.get("addressing_names", ()),
+            window_turns=window_turns,
+        ),
+        busy=_busy(runtime) or runtime.speaker.is_speaking,
+        pending=state.get("pending", False),
+    )
+
+
+async def _participate(
+    state: TurnGraphState,
+    runtime: TurnRuntime,
+    participation_graph: ParticipationGraph,
+    window_turns: int,
+) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
+    if state.get("admission") == "admit":
+        return {"failure": None}
+    result = await participation_graph.ainvoke(
+        ParticipationState(
+            turns=state["turns"],
+            context=state["context"],
+            rule_decision=None,
+            model_decision=None,
+            last_participation=None,
+            transcript_id=state["event"].event_id,
+            jev_key=_participation_key(state, window_turns),
+            decision_source=None,
+        ),
+        context=ParticipationRuntime(journal=runtime.journal, jev=runtime.jev),
+    )
+    return {
+        "participation": result["last_participation"],
+        "decision_source": result["decision_source"],
+        "failure": None,
+    }
+
+
+class SentenceSink(Protocol):
+    async def say(self, sentence: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechRuntime:
+    responder: Responder | None
+    sink: SentenceSink
+    journal: JournalSink
+    floor: SpeechFloor | None = None
+    sentences: SentenceLimits | None = None
+    transcript_id: str | None = None
+    scope: TurnScope | None = None
+    response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
+    whole: WholeResponder | None = None
+    paused: Callable[[], bool] | None = None
+    held: bool = False
+    current: Callable[[], bool] | None = None
+    raise_if_failed: Callable[[], None] | None = None
+    bound: Callable[[], bool] | None = None
+    faults: FaultReporter | None = None
+    drop_detail: Callable[[], str] | None = None
+
+
+class SpeechInput(TypedDict):
+    transcript: str
+    speaking_generation: int
+    transcript_event: NotRequired[TranscriptEvent | None]
+
+
+class SpeechState(TypedDict):
+    transcript: str
+    speaking_generation: int
+    reply: AsyncIterator[str] | None
+    failure: str | None
+    transcript_event: NotRequired[TranscriptEvent | None]
+    delivered: NotRequired[tuple[str, ...]]
+    completed: NotRequired[bool]
+    error: NotRequired[Exception | None]
+    settled: NotRequired[bool]
+    silent: NotRequired[bool]
+    agent_journaled: NotRequired[bool]
+    source: NotRequired[AsyncIterator[str] | None]
+
+
+type SpeechGraph = CompiledStateGraph[SpeechState, SpeechRuntime, SpeechInput, SpeechState]
+
+
+class TurnDropped(Exception):
+    pass
+
+
+class _TurnSink:
+    def __init__(
+        self,
+        runtime: TurnRuntime,
+        scope: TurnScope | None,
+        transcript_id: str,
+        generations: tuple[int, int],
+        *,
+        streamed: bool,
+    ) -> None:
+        self._runtime = runtime
+        self._scope = scope
+        self._transcript_id = transcript_id
+        self._generation, self._floor_generation = generations
+        self._streamed = streamed
+        self._stop_mark = 0 if runtime.barge is None else runtime.barge.stream_stops
+        self._spoken = 0
+
+    async def say(self, sentence: str) -> None:
+        runtime = self._runtime
+        index = self._spoken
+        if self._streamed:
+            self._check_live(index)
+        if index == 0:
+            _move_phase(runtime, "queued", self._transcript_id)
+        _raise_if_failed(runtime)
+        if runtime.barge is not None:
+            runtime.barge.rearm()
+        if runtime.note_spoken is not None:
+            runtime.note_spoken(sentence)
+        if self._streamed:
+            await runtime.speaker.speak(
+                sentence, sentence_index=index, transcript_id=self._transcript_id
+            )
+        else:
+            await runtime.speaker.speak(sentence)
+        self._spoken += 1
+
+    def _check_live(self, index: int) -> None:
+        outcome = self._drop_outcome()
+        if outcome is None:
+            return
+        detail, reason = outcome
+        record_drop(
+            self._runtime.journal, self._scope, sentence_index=index, detail=detail, reason=reason
+        )
+        raise TurnDropped(detail)
+
+    def _drop_outcome(self) -> tuple[str, str] | None:
+        runtime = self._runtime
+        if _paused(runtime):
+            return "paused", "paused"
+        stopped = runtime.barge is not None and runtime.barge.stream_stops != self._stop_mark
+        if stopped or not _turn_current(runtime, self._generation, self._floor_generation):
+            return turn_drop_outcome(runtime, self._generation)
+        if not _bound(runtime):
+            return "closed", "close"
+        return None
+
+
+def _turn_scope(runtime: TurnRuntime, transcript_id: str, generation: int) -> TurnScope | None:
+    floor = runtime.floor
+    if floor is None:
+        return None
+    return TurnScope(
+        request_id=turn_request_id(transcript_id, generation),
+        transcript_id=transcript_id,
+        generation=generation,
+        started=floor.now(),
+        clock=floor.now,
+        response_timeout_seconds=runtime.response_timeout_seconds,
+    )
+
+
+def _turn_whole(
+    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook
+) -> WholeResponder | None:
+    factory = runtime.whole_turn
+    if factory is None:
+        return runtime.whole
+    return factory(batch, hook)
+
+
+def _turn_responder(
+    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
+) -> Responder | None:
+    factory = runtime.stream_turn
+    if factory is None:
+        return runtime.responder
+    return factory(batch, hook, request_id)
+
+
+def _speech_context(
+    runtime: TurnRuntime,
+    sink: SentenceSink,
+    scope: TurnScope | None,
+    generations: tuple[int, int],
+    transcript_id: str,
+) -> "SpeechRuntime":
+    generation, floor_generation = generations
+    return SpeechRuntime(
+        responder=runtime.responder,
+        sink=sink,
+        journal=runtime.journal,
+        floor=runtime.floor,
+        transcript_id=transcript_id,
+        scope=scope,
+        response_timeout_seconds=runtime.response_timeout_seconds,
+        paused=runtime.paused,
+        held=True,
+        current=partial(_turn_current, runtime, generation, floor_generation),
+        raise_if_failed=runtime.raise_if_failed,
+        bound=runtime.bound,
+        faults=runtime.faults,
+        drop_detail=partial(_drop_detail, runtime, generation),
+    )
+
+
+def _drop_detail(runtime: TurnRuntime, generation: int) -> str:
+    return turn_drop_outcome(runtime, generation)[0]
+
+
+def _raise_reply_failure(output: Mapping[str, object]) -> None:
+    error = output.get("error")
+    if output.get("failure") == "reply_failed" and isinstance(error, Exception):
+        raise error
+
+
+def _finish_turn(
+    runtime: TurnRuntime,
+    output: Mapping[str, object],
+    transcript_id: str,
+    generations: tuple[int, int],
+    *,
+    streamed: bool,
+) -> None:
+    if streamed:
+        _raise_if_failed(runtime)
+    generation, _floor_generation = generations
+    if _closed(runtime) or (runtime.admitted is not None and runtime.admitted.count != generation):
+        return
+    if output.get("completed"):
+        _move_phase(runtime, "listening" if output.get("delivered") else "waiting", transcript_id)
+    elif output.get("silent"):
+        _move_phase(runtime, "waiting", transcript_id)
+
+
+async def _run_turn(
+    runtime: TurnRuntime,
+    speech: SpeechGraph,
+    batch: tuple[TranscriptEvent, ...],
+    scope: TurnScope | None,
+    generation: int,
+) -> None:
+    final = batch[-1]
+    floor_generation = _floor_generation(runtime)
+    generations = (generation, floor_generation)
+    hook = tool_start_hook(runtime, generation, floor_generation, final.id)
+    request_id = turn_request_id(final.id, generation)
+    whole = _turn_whole(runtime, batch, hook)
+    streamed = whole is None
+    sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
+    context = replace(
+        _speech_context(runtime, sink, scope, generations, final.id),
+        responder=_turn_responder(runtime, batch, hook, request_id) if streamed else None,
+        whole=whole,
+        sentences=runtime.sentences,
+    )
+    output = await speech.ainvoke(
+        SpeechInput(
+            transcript=final.text,
+            speaking_generation=floor_generation,
+            transcript_event=final,
+        ),
+        context=context,
+    )
+    _raise_reply_failure(output)
+    _finish_turn(runtime, output, final.id, generations, streamed=streamed)
+
+
+async def _held(
+    runtime: TurnRuntime, work: Coroutine[Any, Any, None], scope: TurnScope | None
+) -> bool:
+    floor = runtime.floor
+    if floor is None or scope is None:
+        await work
+        return True
+    return await floor.hold(
+        work,
+        transcript_id=scope.transcript_id,
+        request_id=scope.request_id,
+        generation=scope.generation,
+    )
+
+
+def _turn_dropped(runtime: TurnRuntime) -> None:
+    if _closed(runtime):
+        raise asyncio.CancelledError
+    _raise_if_failed(runtime)
+
+
+async def recover_turn(
+    runtime: TurnRuntime, error: Exception, generation: int, transcript_id: str
+) -> None:
+    recovery = runtime.recovery
+    if recovery is None:
+        return
+    if recovery.record_failure(error, transcript_id):
+        _fail(runtime, error)
+        return
+    _move_phase(runtime, "waiting", transcript_id)
+    if not _bound(runtime) or _admitted_count(runtime) != generation:
+        return
+    speaker = runtime.speaker
+    _, speech_error = await capture_error(lambda: speaker.speak(recovery.failed_line))
+    if speech_error is not None:
+        _fail(runtime, speech_error)
+
+
+async def _settle_outcome(
+    runtime: TurnRuntime,
+    outcome: tuple[bool | None, Exception | None],
+    generation: int,
+    transcript_id: str,
+) -> None:
+    completed, error = outcome
+    if error is not None:
+        await recover_turn(runtime, error, generation, transcript_id)
+    elif completed:
+        if runtime.recovery is not None:
+            runtime.recovery.record_success()
+    else:
+        _turn_dropped(runtime)
+
+
+async def _drain_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
+    while queue.pending and not _closed(runtime):
+        batch = queue.take()
+        generation = _admitted_count(runtime)
+        transcript_id = batch[-1].id
+        _move_phase(runtime, "weighing", transcript_id)
+        _raise_if_failed(runtime)
+        scope = _turn_scope(runtime, transcript_id, generation)
+        if scope is not None:
+            record_agent_started(runtime.journal, scope)
+        if runtime.barge is not None:
+            runtime.barge.interrupted = False
+        work = _run_turn(runtime, speech, batch, scope, generation)
+        outcome = await capture_error(partial(_held, runtime, work, scope))
+        await _settle_outcome(runtime, outcome, generation, transcript_id)
+
+
+async def drain_turns(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
+    _, error = await capture_error(partial(_drain_pending, runtime, speech, queue))
+    if error is not None:
+        _fail(runtime, error)
+
+
+def _final_of(state: TurnGraphState) -> TranscriptEvent:
+    event = state.get("transcript_event")
+    if event is not None:
+        return event
+    turn = state["event"]
+    return TranscriptEvent(
+        id=turn.event_id,
+        timestamp=datetime.fromtimestamp(turn.at, UTC).isoformat(),
+        source="meeting_audio",
+        text=turn.payload,
+        finalized=True,
+        participant_id="unknown",
+        speaker_evidence_id=None,
+    )
+
+
+async def _start_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
+    scheduler = runtime.scheduler
+    if scheduler is not None:
+        scheduler.request_pending()
+        return
+    await drain_turns(runtime, speech, queue)
+
+
+def _speaking_generation(runtime: TurnRuntime, state: TurnGraphState) -> int:
+    floor = runtime.floor
+    return state["speaking_generation"] if floor is None else floor.generation
+
+
+async def _admit_final(
+    state: TurnGraphState, runtime: TurnRuntime, speech: SpeechGraph
+) -> dict[str, int | str | None | tuple[str, ...]]:
+    final = _final_of(state)
+    if runtime.shadow:
+        runtime.journal.record(
+            "transcript_suppressed", source="agent", transcript_id=final.id, reason="shadow"
+        )
+        return {"speaking_generation": state["speaking_generation"]}
+    queue = runtime.queue if runtime.queue is not None else PendingFinals()
+    queue.admit(final)
+    _advance_admitted(runtime)
+    if _busy(runtime):
+        _move_phase(runtime, "interrupted", final.id)
+    await take_floor_for_final(runtime, final.text)
+    await _start_pending(runtime, speech, queue)
+    return {"speaking_generation": _speaking_generation(runtime, state)}
+
+
+async def ingest_turn(state: TurnGraphState) -> dict[str, str | ParticipationDecision]:
+    event = state["event"]
+    if event.kind not in ("final", "stop", "interim"):
+        raise ValueError(f"turn graph takes final, interim or stop events, got {event.kind}")
+    update: dict[str, str | ParticipationDecision] = {"transcript_text": event.payload}
+    if event.kind == "final" and state.get("admission") == "admit":
+        update["participation"] = ParticipationDecision(
+            decision="speak", confidence=1.0, reason_code="unaddressed_admitted"
+        )
+    return update
+
+
+async def gather_branches(state: TurnGraphState) -> dict[str, Any]:
+    del state
+    return {}
+
+
+async def record_turn_failure(state: TurnGraphState, runtime: Runtime[TurnRuntime]) -> None:
+    runtime.context.journal.record("turn_failed", source="agent", code=state["failure"])
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnNodes:
+    decider: Decider | None
+    window_turns: int
+    prefetch: MemoryPrefetch | None
+    participation_graph: ParticipationGraph
+    speech_graph: SpeechGraph
+
+    async def refresh(self, state: TurnGraphState, runtime: Runtime[TurnRuntime]) -> None:
+        _refresh_jev(state, runtime.context, self.decider, self.window_turns)
+
+    async def participate(
+        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
+    ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
+        return await _participate(
+            state, runtime.context, self.participation_graph, self.window_turns
+        )
+
+    async def prefetch_memory(
+        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
+    ) -> dict[str, list[MemoryEvidence]]:
+        if self.prefetch is None:
+            return {}
+        context = runtime.context
+        evidence = await prefetch_memory_evidence(
+            self.prefetch,
+            state["transcript_text"],
+            journal=context.journal,
+            transcript_id=state["event"].event_id,
+            faults=context.faults,
+        )
+        return {"memory_evidence": [evidence]}
+
+    async def speak(
+        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
+    ) -> dict[str, int | str | None | tuple[str, ...]]:
+        if state["event"].kind == "stop":
+            return {
+                "speaking_generation": await interrupt_speech(
+                    runtime.context.floor, state["speaking_generation"]
+                )
+            }
+        return await _admit_final(state, runtime.context, self.speech_graph)
+
+
+def build_turn_graph(
+    *,
+    decider: Decider | None,
+    window_turns: int,
+    memory_prefetch: MemoryPrefetch | None = None,
+    participation: ParticipationGraph | None = None,
+) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
+    nodes = _TurnNodes(
+        decider=decider,
+        window_turns=window_turns,
+        prefetch=memory_prefetch,
+        participation_graph=(
+            build_participation_subgraph() if participation is None else participation
+        ),
+        speech_graph=build_speech_graph(),
+    )
+    builder = StateGraph(TurnGraphState, input_schema=TurnInput, context_schema=TurnRuntime)
+    builder.add_node("ingest", ingest_turn)
+    builder.add_node("refresh", nodes.refresh)
+    builder.add_node("participation", nodes.participate)
+    builder.add_node("failed", record_turn_failure)
+    builder.add_node("speak", nodes.speak)
+    builder.add_edge(START, "ingest")
+    builder.add_edge("refresh", END)
+    builder.add_edge("failed", END)
+    builder.add_edge("speak", END)
+    if memory_prefetch is None:
+        _route_participation_directly(builder)
+    else:
+        _fan_out_prefetch(builder, nodes)
+    return builder.compile()
+
+
+type TurnGraphBuilder = StateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]
+_DECISION_ROUTES: dict[Hashable, str] = {"speak": "speak", "failed": "failed", "end": END}
+
+
+def _route_participation_directly(builder: TurnGraphBuilder) -> None:
+    builder.add_conditional_edges(
+        "ingest",
+        route_after_ingest,
+        {"speak": "speak", "participation": "participation", "refresh": "refresh"},
+    )
+    builder.add_conditional_edges("participation", route_after_participation, _DECISION_ROUTES)
+
+
+def _fan_out_prefetch(builder: TurnGraphBuilder, nodes: _TurnNodes) -> None:
+    builder.add_node("prefetch_memory", nodes.prefetch_memory)
+    builder.add_node("gather", gather_branches)
+    builder.add_conditional_edges(
+        "ingest",
+        route_with_prefetch,
+        {
+            "speak": "speak",
+            "participation": "participation",
+            "prefetch_memory": "prefetch_memory",
+            "refresh": "refresh",
+        },
+    )
+    builder.add_edge(list(FINAL_BRANCHES), "gather")
+    builder.add_conditional_edges("gather", route_after_participation, _DECISION_ROUTES)
+
+
+class _RecordingSink:
+    def __init__(self, inner: SentenceSink, delivered: list[str]) -> None:
+        self._inner = inner
+        self._delivered = delivered
+
+    async def say(self, sentence: str) -> None:
+        await self._inner.say(sentence)
+        self._delivered.append(sentence)
+
+
+class _SupersedableSink:
+    def __init__(
+        self,
+        inner: SentenceSink,
+        floor: SpeechFloor,
+        generation: int,
+        context: "SpeechRuntime",
+        delivered: list[str],
+    ) -> None:
+        self._inner = inner
+        self._floor = floor
+        self._generation = generation
+        self._context = context
+        self._delivered = delivered
+
+    async def say(self, sentence: str) -> None:
+        if self._floor.admits(self._generation):
+            await self._inner.say(sentence)
+            return
+        detail, reason = _drop_outcome(self._floor)
+        record_drop(
+            self._context.journal,
+            self._context.scope,
+            sentence_index=len(self._delivered),
+            detail=detail,
+            reason=reason,
+        )
+
+
+async def _close_stream(stream: object, faults: FaultReporter | None) -> None:
+    if isinstance(stream, SupportsAclose):
+        await close_safely(stream.aclose, source="agent", operation="close_stream", faults=faults)
+
+
+async def _replay(sentences: tuple[str, ...]) -> AsyncIterator[str]:
+    for sentence in sentences:
+        yield sentence
+
+
+async def _deliver(replies: AsyncIterator[str], sink: SentenceSink) -> None:
+    async for sentence in replies:
+        await sink.say(sentence)
+
+
+def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[str]:
+    responder = runtime.responder
+    if responder is None:
+        raise RuntimeError("a streamed reply needs a responder")
+    replies = responder.stream_reply(transcript)
+    limits = runtime.sentences
+    if limits is None:
+        return replies
+    return shape_sentences(replies, max_sentences=limits.max_sentences, language=limits.language)
+
+
+def _whole_update(
+    *,
+    reply: AsyncIterator[str] | None = None,
+    failure: str | None = None,
+    error: Exception | None = None,
+    settled: bool = False,
+    silent: bool = False,
+) -> dict[str, Any]:
+    return {
+        "reply": reply,
+        "failure": failure,
+        "error": error,
+        "completed": False,
+        "delivered": (),
+        "settled": settled,
+        "silent": silent,
+        "agent_journaled": reply is not None,
+    }
+
+
+def _advanced(floor: SpeechFloor | None, generation: int) -> int:
+    if floor is None:
+        return generation + 1
+    return floor.advance() if floor.admits(generation) else floor.generation
+
+
+def _suppressed(context: SpeechRuntime) -> bool:
+    return context.paused is not None and context.paused()
+
+
+def _still_current(context: SpeechRuntime, generation: int) -> bool:
+    if context.current is not None:
+        return context.current()
+    floor = context.floor
+    return floor is None or floor.admits(generation)
+
+
+def _speech_bound(context: SpeechRuntime) -> bool:
+    return context.bound is None or context.bound()
+
+
+async def _respond_within(whole: WholeResponder, transcript: str, seconds: float) -> str:
+    async with asyncio.timeout(seconds):
+        return await whole.respond(transcript)
+
+
+def _spoken_reply(context: SpeechRuntime, reply: str, request_id: str | None) -> str:
+    spoken = (
+        reply.strip()
+        if context.sentences is None
+        else cap_reply(reply, context.sentences.max_sentences, context.sentences.language)
+    )
+    if spoken != reply.strip():
+        context.journal.record(
+            "reply_capped",
+            source="agent",
+            request_id=request_id,
+            chars_in=len(reply),
+            chars_out=len(spoken),
+        )
+    return spoken
+
+
+async def _respond_whole(
+    context: SpeechRuntime, whole: WholeResponder, transcript: str, generation: int
+) -> dict[str, Any]:
+    scope = context.scope
+    if scope is not None and not context.held:
+        record_agent_started(context.journal, scope)
+    reply, error = await capture_error(
+        lambda: _respond_within(whole, transcript, context.response_timeout_seconds)
+    )
+    if error is not None:
+        if scope is not None:
+            record_agent_failed(context.journal, scope)
+        return {
+            **_whole_update(failure="reply_failed", error=error),
+            "speaking_generation": _advanced(context.floor, generation),
+        }
+    if reply is None:
+        return _whole_update(settled=True, silent=True)
+    if scope is not None:
+        record_agent_finished(context.journal, scope)
+    if context.raise_if_failed is not None:
+        context.raise_if_failed()
+    if not _still_current(context, generation):
+        return _whole_update(settled=True)
+    request_id = None if scope is None else scope.request_id
+    if _suppressed(context):
+        context.journal.record(
+            "turn_suppressed", source="agent", request_id=request_id, reason="paused"
+        )
+        return _whole_update(settled=True)
+    if not reply.strip() or not _speech_bound(context):
+        return _whole_update(settled=True, silent=True)
+    return _whole_update(reply=_replay((_spoken_reply(context, reply, request_id),)))
+
+
+def _open_reply(context: SpeechRuntime, transcript: str) -> AsyncIterator[str]:
+    try:
+        return _reply_stream(context, transcript)
+    except Exception:
+        if context.held and context.scope is not None:
+            record_agent_failed(context.journal, context.scope)
+        raise
+
+
+async def respond(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> dict[str, Any]:
+    context = runtime.context
+    if context.whole is not None:
+        return await _respond_whole(
+            context, context.whole, state["transcript"], state["speaking_generation"]
+        )
+    replies = _open_reply(context, state["transcript"])
+    scope = context.scope
+    if scope is None:
+        return {"reply": replies, "source": replies}
+    if not context.held:
+        record_agent_started(context.journal, scope)
+    return {
+        "reply": within_sentence_budget(replies, scope.response_timeout_seconds),
+        "source": replies,
+    }
+
+
+SpeakUpdate = dict[str, int | str | bool | tuple[str, ...] | Exception | None]
+
+
+def _speak_update(
+    generation: int, error: Exception | None, delivered: list[str], *, completed: bool
+) -> SpeakUpdate:
+    return {
+        "speaking_generation": generation,
+        "failure": "reply_failed" if error is not None else None,
+        "error": error,
+        "delivered": tuple(delivered),
+        "completed": completed,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class _SpeechEnd:
+    error: Exception | None
+    completed: bool
+    cancelled: bool
+    delivered: int
+
+
+def _journal_turn_end(context: SpeechRuntime, floor: SpeechFloor, end: _SpeechEnd) -> None:
+    scope = context.scope
+    if scope is not None and end.error is not None:
+        record_agent_failed(context.journal, scope)
+    elif scope is not None and end.completed:
+        record_agent_finished(context.journal, scope)
+    if end.cancelled and end.delivered:
+        detail, _reason = _drop_outcome(floor)
+        record_sentence_dropped(context.journal, scope, sentence_index=end.delivered, detail=detail)
+
+
+async def _deliver_held(
+    replies: AsyncIterator[str], sink: SentenceSink
+) -> tuple[bool, Exception | None]:
+    _, error = await capture_error(lambda: _deliver(replies, sink))
+    if isinstance(error, TurnDropped):
+        return True, None
+    return False, error
+
+
+def _journal_held_end(context: SpeechRuntime, error: Exception | None, *, completed: bool) -> None:
+    scope = context.scope
+    if scope is None:
+        return
+    if error is not None:
+        record_agent_failed(context.journal, scope)
+    elif completed:
+        record_agent_finished(context.journal, scope)
+
+
+def _held_generation(floor: SpeechFloor | None, generation: int, *, completed: bool) -> int:
+    if floor is None:
+        return generation + 1
+    if completed and floor.admits(generation):
+        return floor.advance()
+    return floor.generation
+
+
+async def _speak_held(
+    state: SpeechState, context: SpeechRuntime, reply: AsyncIterator[str]
+) -> SpeakUpdate:
+    delivered: list[str] = []
+    recorder = _RecordingSink(context.sink, delivered)
+    try:
+        dropped, error = await _deliver_held(reply, recorder)
+    except asyncio.CancelledError:
+        if delivered and context.drop_detail is not None:
+            record_sentence_dropped(
+                context.journal,
+                context.scope,
+                sentence_index=len(delivered),
+                detail=context.drop_detail(),
+            )
+        raise
+    finally:
+        await _close_stream(state.get("source"), context.faults)
+    completed = error is None and not dropped
+    if not state.get("agent_journaled"):
+        _journal_held_end(context, error, completed=completed)
+    generation = _held_generation(context.floor, state["speaking_generation"], completed=completed)
+    return _speak_update(generation, error, delivered, completed=completed)
+
+
+async def speak_reply(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> SpeakUpdate:
+    reply = state["reply"]
+    if reply is None:
+        raise RuntimeError("speak runs only after respond set a reply")
+    context = runtime.context
+    if context.held:
+        return await _speak_held(state, context, reply)
+    floor = context.floor
+    generation = state["speaking_generation"]
+    agent_journaled = bool(state.get("agent_journaled"))
+    delivered: list[str] = []
+    recorder = _RecordingSink(context.sink, delivered)
+    if floor is None:
+        _, error = await capture_error(lambda: _deliver(reply, recorder))
+        return _speak_update(generation + 1, error, delivered, completed=error is None)
+    if not floor.admits(generation):
+        return {
+            "speaking_generation": floor.generation,
+            "failure": None,
+            "delivered": (),
+            "completed": False,
+        }
+    sink = _SupersedableSink(recorder, floor, generation, context, delivered)
+    request_id = None if context.scope is None else context.scope.request_id
+    held, error = await capture_error(
+        lambda: floor.hold(
+            _deliver(reply, sink), transcript_id=context.transcript_id, request_id=request_id
+        )
+    )
+    admitted = floor.admits(generation)
+    completed = error is None and held is True and admitted
+    if not agent_journaled:
+        _journal_turn_end(
+            context,
+            floor,
+            _SpeechEnd(
+                error=error,
+                completed=completed,
+                cancelled=held is False,
+                delivered=len(delivered),
+            ),
+        )
+    return _speak_update(
+        floor.advance() if admitted else floor.generation,
+        error,
+        delivered,
+        completed=completed,
+    )
+
+
+def route_after_respond(state: SpeechState) -> Literal["speak", "failed", "end"]:
+    if state.get("failure") is not None:
+        return "failed"
+    if state.get("reply") is None:
+        return "end"
+    return "speak"
+
+
+async def speech_failed(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> None:
+    context = runtime.context
+    if context.scope is not None and state["failure"] == "reply_failed":
+        return
+    context.journal.record("turn_failed", source="agent", code=state["failure"])
+
+
+def route_after_speak(state: SpeechState) -> Literal["failed", "end"]:
+    return "failed" if state["failure"] is not None else "end"
+
+
+def build_speech_graph() -> CompiledStateGraph[
+    SpeechState, SpeechRuntime, SpeechInput, SpeechState
+]:
+    builder = StateGraph(SpeechState, input_schema=SpeechInput, context_schema=SpeechRuntime)
+    builder.add_node("respond", respond)
+    builder.add_node("speak", speak_reply)
+    builder.add_node("failed", speech_failed)
+    builder.add_edge(START, "respond")
+    builder.add_conditional_edges(
+        "respond", route_after_respond, {"speak": "speak", "failed": "failed", "end": END}
+    )
+    builder.add_conditional_edges("speak", route_after_speak, {"failed": "failed", "end": END})
+    builder.add_edge("failed", END)
+    return builder.compile()
