@@ -1,170 +1,189 @@
 import asyncio
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import httpx2
+from pydantic import ValidationError
+
+from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.cli.output import emit_error, emit_json, emit_progress, emit_text
-from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import Settings
-from fakeyou.memory.forget import ForgetRequest, ForgetSummary, run_forget
-from fakeyou.memory.ingest_service import IngestPorts, IngestRequest, run_recorded_ingest
-from fakeyou.memory.ingest_status import IngestSummary
-from fakeyou.memory.maintenance import initialize_indexes, run_reembed
-from fakeyou.memory.memory import open_graphiti_memory
-from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.memory.owner_note_service import NoteRequest, add_note, correct_note
-from fakeyou.memory.owner_notes import OwnerNoteResult
-from fakeyou.memory.persona import OperatorIdentity
-from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.assembly import stop_signal_handlers
-from fakeyou.orchestration.lifecycle import meeting_thread_id
-from fakeyou.orchestration.providers import memory_config, open_persona_memory
+from fakeyou.cli.client import ClientSettings, admin_client, api_failure, owner_client
+from fakeyou.cli.output import emit_json, emit_progress, emit_text
+from fakeyou.config.identifiers import parse_session_id
+from fakeyou.memory.persona import PersonaProfile
+
+JOB_POLL_INTERVAL_SECONDS = 2.0
+JOB_TIMEOUT_SECONDS = 1800.0
 
 
-@dataclass(frozen=True, slots=True)
-class CorrectionTarget:
-    episode_uuid: str
-    note_id: UUID | None = None
+def twin_id_for(persona_path: Path | None, twin_id: str | None) -> str:
+    if twin_id is not None:
+        return str(parse_session_id(twin_id, field="--twin-id"))
+    if persona_path is None:
+        raise api_failure(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason="persona path is missing")
+    try:
+        profile = PersonaProfile.model_validate_json(persona_path.read_text(encoding="utf-8"))
+    except (OSError, ValidationError) as error:
+        raise api_failure(
+            ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=type(error).__name__
+        ) from None
+    return str(profile.twin_id)
 
 
-def _access(identity: OperatorIdentity, settings: Settings) -> OperatorAccess:
-    return OperatorAccess(identity, settings, lambda: open_persona_memory(settings))
-
-
-async def initialize_memory(settings: Settings) -> None:
-    await initialize_indexes(lambda: open_graphiti_memory(memory_config(settings)))
+async def initialize_memory(
+    settings: ClientSettings, *, transport: httpx2.AsyncBaseTransport | None = None
+) -> None:
+    async with admin_client(settings, transport=transport) as client:
+        await client.memory_init()
     emit_text("Graphiti indexes initialized.")
 
 
-def _announce_note(operation: UUID) -> None:
-    emit_progress(f"fakeyou: note-id {operation}")
+def _operation_id(note_id: UUID | None) -> UUID:
+    if note_id is not None:
+        return note_id
+    generated = uuid4()
+    emit_progress(f"fakeyou: note-id {generated}")
+    return generated
 
 
-def _print_note_result(result: OwnerNoteResult) -> None:
-    emit_json(
-        {
-            "episode_uuid": result.episode_uuid,
-            "facts": list(result.facts),
-            "source_at": result.source_at.isoformat(),
-            "recorded_at": result.recorded_at.isoformat(),
-            "supersedes": result.supersedes,
-        }
-    )
+@dataclass(frozen=True, slots=True)
+class NoteDraft:
+    text: str
+    twin_id: str
+    source_at: datetime | None = None
+    note_id: UUID | None = None
 
 
 async def add_owner_note(
-    text: str,
+    draft: NoteDraft,
     *,
-    identity: OperatorIdentity,
-    settings: Settings,
-    source_at: datetime | None = None,
-    note_id: UUID | None = None,
+    settings: ClientSettings,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
-    result = await add_note(
-        NoteRequest(text, source_at, note_id),
-        access=_access(identity, settings),
-        announce=_announce_note,
-    )
-    _print_note_result(result)
+    operation = _operation_id(draft.note_id)
+    async with owner_client(settings, transport=transport) as client:
+        view = await client.add_note(
+            draft.twin_id,
+            note_id=str(operation),
+            text=draft.text,
+            source_at=draft.source_at.isoformat() if draft.source_at is not None else None,
+        )
+    emit_json(view)
 
 
 async def correct_owner_note(
-    text: str,
+    draft: NoteDraft,
     *,
-    target: CorrectionTarget,
-    source_at: datetime,
-    identity: OperatorIdentity,
-    settings: Settings,
+    episode_uuid: str,
+    settings: ClientSettings,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
-    result = await correct_note(
-        NoteRequest(text, source_at, target.note_id),
-        supersedes=target.episode_uuid,
-        access=_access(identity, settings),
-        announce=_announce_note,
-    )
-    _print_note_result(result)
-
-
-@contextmanager
-def _bind_stop_signals(stop: asyncio.Event, journal: Journal) -> Iterator[None]:
-    with stop_signal_handlers(stop) as handlers:
-        journal.record(
-            "signal_handlers_bound",
-            source="cli",
-            signals=list(handlers.installed),
-            unavailable=list(handlers.unavailable),
+    if draft.source_at is None:
+        raise api_failure(ErrorCode.MEMORY_SOURCE_AT_INVALID, value="missing")
+    operation = _operation_id(draft.note_id)
+    async with owner_client(settings, transport=transport) as client:
+        view = await client.correct_note(
+            draft.twin_id,
+            episode_uuid,
+            note_id=str(operation),
+            text=draft.text,
+            source_at=draft.source_at.isoformat(),
         )
-        yield
+    emit_json(view)
 
 
-def _print_ingest_summary(summary: IngestSummary) -> None:
-    emit_json(
-        {
-            "meeting_id": summary.meeting_id,
-            "windows": summary.windows,
-            "resumed_from": summary.resumed_from,
-            "ingested": summary.ingested,
-            "facts": summary.facts,
-            "completed": summary.completed,
-            "status": summary.state,
-        }
-    )
+async def forget_episode_memory(
+    *,
+    twin_id: str,
+    episode_uuid: str,
+    settings: ClientSettings,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> None:
+    async with owner_client(settings, transport=transport) as client:
+        await client.forget_episode(twin_id, episode_uuid)
+    emit_json({"removed_episodes": 1})
+
+
+async def forget_meeting_memory(
+    *,
+    meeting_id: str,
+    settings: ClientSettings,
+    keep_record: bool = False,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> None:
+    async with owner_client(settings, transport=transport) as client:
+        document = await client.forget_meeting(meeting_id, keep_record=keep_record)
+    emit_json(document)
+    if not document["complete"]:
+        failed = [stage for stage in document["stages"] if stage["status"] == "failed"]
+        detail = failed[0]["detail"] if failed else "a forget stage did not settle"
+        raise api_failure(ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE, path=meeting_id, reason=detail)
+
+
+async def _wait_for_job(
+    fetch: Callable[[], Awaitable[dict[str, Any]]],
+    *,
+    kind: str,
+    job_id: str,
+    interval: float,
+    limit_seconds: float,
+) -> dict[str, Any]:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit_seconds
+    while True:
+        view = await fetch()
+        if view["completed"]:
+            if not view["succeeded"]:
+                raise api_failure(ErrorCode.API_JOB_FAILED, kind=kind, job_id=job_id)
+            return view
+        if loop.time() >= deadline:
+            raise api_failure(
+                ErrorCode.API_JOB_TIMEOUT, kind=kind, job_id=job_id, seconds=int(limit_seconds)
+            )
+        await asyncio.sleep(interval)
+
+
+async def reembed_memory(
+    *,
+    twin_id: str,
+    settings: ClientSettings,
+    interval: float = JOB_POLL_INTERVAL_SECONDS,
+    limit_seconds: float = JOB_TIMEOUT_SECONDS,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> None:
+    async with owner_client(settings, transport=transport) as client:
+        job_id = (await client.submit_reembed(twin_id))["job_id"]
+        view = await _wait_for_job(
+            lambda: client.get_job(job_id),
+            kind="reembed",
+            job_id=job_id,
+            interval=interval,
+            limit_seconds=limit_seconds,
+        )
+    emit_json(view)
 
 
 async def ingest_recorded_meeting(
     *,
-    meeting_id: SessionId,
-    identity: OperatorIdentity,
-    twin_name: str | None,
-    settings: Settings,
-    no_correct: bool = False,
+    meeting_id: str,
+    settings: ClientSettings,
+    interval: float = JOB_POLL_INTERVAL_SECONDS,
+    limit_seconds: float = JOB_TIMEOUT_SECONDS,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
-    succeeded = await run_recorded_ingest(
-        IngestRequest(meeting_id, twin_name, no_correct),
-        access=_access(identity, settings),
-        ports=IngestPorts(
-            stop_signals=_bind_stop_signals,
-            publish=_print_ingest_summary,
-            report=emit_error,
-        ),
-    )
-    if not succeeded:
+    async with owner_client(settings, transport=transport) as client:
+        job_id = (await client.submit_ingestion(meeting_id, kind="ingest"))["job_id"]
+        view = await _wait_for_job(
+            lambda: client.ingestion_status(meeting_id),
+            kind="ingest",
+            job_id=job_id,
+            interval=interval,
+            limit_seconds=limit_seconds,
+        )
+    emit_json(view)
+    if not view["succeeded"]:
         raise SystemExit(ExitCode.FAILURE) from None
-
-
-def _forget_document(summary: ForgetSummary) -> dict[str, Any]:
-    document: dict[str, Any] = {"removed_episodes": summary.removed_episodes}
-    if summary.files is not None:
-        document |= asdict(summary.files)
-    return document
-
-
-async def forget_memory(
-    *,
-    identity: OperatorIdentity,
-    meeting_id: SessionId | None,
-    episode_uuid: str | None,
-    settings: Settings,
-    keep_record: bool = False,
-) -> None:
-    summary = await run_forget(
-        ForgetRequest(meeting_id, episode_uuid, keep_record),
-        access=_access(identity, settings),
-        lifecycle_thread_id=meeting_thread_id,
-    )
-    emit_json(_forget_document(summary))
-
-
-async def reembed_memory(*, identity: OperatorIdentity, settings: Settings) -> None:
-    result = await run_reembed(_access(identity, settings))
-    emit_json(
-        {
-            "embedding_model": settings.memory.embedder.model,
-            "embedding_dim": settings.memory.embedder.dim,
-            **asdict(result),
-        }
-    )

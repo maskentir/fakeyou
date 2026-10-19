@@ -1,41 +1,59 @@
-from functools import partial
+import asyncio
+from typing import Any
 
+import httpx2
+
+from fakeyou.catalog.errors import ErrorCode
+from fakeyou.cli.client import ClientSettings, api_failure, owner_client
 from fakeyou.cli.output import emit_json
-from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import Settings
-from fakeyou.debrief.debrief import DebriefModels
-from fakeyou.debrief.debrief_service import DebriefRequest, DebriefWiring, run_debrief
-from fakeyou.memory.persona import OperatorIdentity, load_operator_persona
-from fakeyou.orchestration.assembly import stop_signal_handlers
-from fakeyou.orchestration.providers import create_debrief_chat_model, create_fallback_chat_model
+
+DEBRIEF_POLL_INTERVAL_SECONDS = 2.0
+DEBRIEF_TIMEOUT_SECONDS = 1800.0
 
 
 async def debrief_meeting(
-    meeting_id: SessionId,
-    identity: OperatorIdentity,
     *,
+    meeting_id: str,
     force: bool,
-    settings: Settings,
+    settings: ClientSettings,
+    limit_seconds: float = DEBRIEF_TIMEOUT_SECONDS,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
-    operator = await load_operator_persona(identity, settings)
-    outcome = await run_debrief(
-        DebriefRequest(meeting_id=meeting_id, operator=operator, settings=settings, force=force),
-        DebriefWiring(
-            models=partial(_debrief_models, settings),
-            stop_signals=stop_signal_handlers,
-        ),
-    )
+    async with owner_client(settings, transport=transport) as client:
+        await client.submit_debrief(meeting_id, force=force)
+        view = await _wait_for_available(
+            lambda: client.get_debrief(meeting_id),
+            meeting_id=meeting_id,
+            limit_seconds=limit_seconds,
+        )
     emit_json(
         {
-            "meeting_id": outcome.meeting_id,
+            "meeting_id": meeting_id,
             "status": "completed",
-            "review_status": "unreviewed",
-            "cached": outcome.cached,
-            "json_path": str(outcome.json_path),
-            "markdown_path": str(outcome.markdown_path),
+            "review_status": view["review_status"],
+            "cached": view["cached"],
         }
     )
 
 
-def _debrief_models(settings: Settings) -> DebriefModels:
-    return DebriefModels(create_debrief_chat_model(settings), create_fallback_chat_model(settings))
+async def _wait_for_available(
+    fetch: Any,
+    *,
+    meeting_id: str,
+    limit_seconds: float,
+) -> dict[str, Any]:
+    interval = DEBRIEF_POLL_INTERVAL_SECONDS
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit_seconds
+    while True:
+        view: dict[str, Any] = await fetch()
+        if view["status"] == "available":
+            return view
+        if loop.time() >= deadline:
+            raise api_failure(
+                ErrorCode.API_JOB_TIMEOUT,
+                kind="debrief",
+                job_id=meeting_id,
+                seconds=int(limit_seconds),
+            )
+        await asyncio.sleep(interval)

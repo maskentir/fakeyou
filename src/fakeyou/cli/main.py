@@ -12,22 +12,31 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.cli.audio import audio_purge_expired, visual_purge_expired
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
-from fakeyou.cli.chat import chat
+from fakeyou.cli.chat import chat_via_api
+from fakeyou.cli.client import ApiFailure, api_failure, client_settings_from_env
 from fakeyou.cli.db import db_stamp, db_status, db_upgrade
 from fakeyou.cli.debrief import debrief_meeting
-from fakeyou.cli.diagnostics import check_setup, show_browser_tools, show_session_report
+from fakeyou.cli.diagnostics import check_api, show_browser_tools, show_session_report
 from fakeyou.cli.diarize import diarize_show
-from fakeyou.cli.join import JoinOptions, join_meeting
 from fakeyou.cli.memory import (
-    CorrectionTarget,
+    NoteDraft,
     add_owner_note,
     correct_owner_note,
-    forget_memory,
+    forget_episode_memory,
+    forget_meeting_memory,
     ingest_recorded_meeting,
     initialize_memory,
     reembed_memory,
+    twin_id_for,
 )
 from fakeyou.cli.output import emit_error
+from fakeyou.cli.sessions import (
+    SessionOptions,
+    resume_session,
+    run_session,
+    worker_status,
+    worker_stop,
+)
 from fakeyou.cli.voiceprint import (
     voiceprint_challenge,
     voiceprint_delete,
@@ -36,7 +45,6 @@ from fakeyou.cli.voiceprint import (
     voiceprint_purge_expired,
     voiceprint_verify,
 )
-from fakeyou.cli.worker import worker_ingest, worker_start, worker_status, worker_stop
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import is_database_error
@@ -44,7 +52,6 @@ from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.worker.worker_backend import WorkerStartRequest
 
 _SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 
@@ -161,7 +168,7 @@ app.add_typer(diarize_app, name="diarize")
 @app.command("check", help="Inspect installed packages and credential presence")
 @_guard_interrupts
 def check_command() -> None:
-    check_setup(settings=_load_settings())
+    asyncio.run(check_api(client_settings_from_env()))
 
 
 @app.command("browser-tools", help="Launch CloakBrowser and list its native MCP tools")
@@ -173,27 +180,28 @@ def browser_tools_command() -> None:
 @app.command("memory-init", help="Create the official Graphiti database indexes")
 @_guard_interrupts
 def memory_init_command() -> None:
-    asyncio.run(initialize_memory(settings=_load_settings()))
+    asyncio.run(initialize_memory(client_settings_from_env()))
 
 
-@app.command("memory-add", help="Store an owner note in the persona's memory")
+@app.command("memory-add", help="Store an owner note in the persona's memory through the api")
 @_guard_interrupts
 def memory_add_command(
     text: Annotated[str, typer.Argument()],
     *,
     source_at: Annotated[str | None, typer.Option("--source-at")] = None,
     note_id: Annotated[str | None, typer.Option("--note-id")] = None,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
+    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
     twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
     asyncio.run(
         add_owner_note(
-            text=text,
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            settings=_load_settings(),
-            source_at=_source_at_value(source_at) if source_at is not None else None,
-            note_id=_note_id_value(note_id) if note_id is not None else None,
+            draft=NoteDraft(
+                text=text,
+                twin_id=twin_id_for(persona_path, twin_id),
+                source_at=_source_at_value(source_at) if source_at is not None else None,
+                note_id=_note_id_value(note_id) if note_id is not None else None,
+            ),
+            settings=client_settings_from_env(),
         )
     )
 
@@ -208,19 +216,19 @@ def memory_correct_command(
     episode_uuid: Annotated[str, typer.Option("--episode")],
     source_at: Annotated[str, typer.Option("--source-at")],
     note_id: Annotated[str | None, typer.Option("--note-id")] = None,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
+    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
     twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
     asyncio.run(
         correct_owner_note(
-            text=text,
-            target=CorrectionTarget(
-                episode_uuid, _note_id_value(note_id) if note_id is not None else None
+            draft=NoteDraft(
+                text=text,
+                twin_id=twin_id_for(persona_path, twin_id),
+                source_at=_source_at_value(source_at),
+                note_id=_note_id_value(note_id) if note_id is not None else None,
             ),
-            source_at=_source_at_value(source_at),
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            settings=_load_settings(),
+            episode_uuid=episode_uuid,
+            settings=client_settings_from_env(),
         )
     )
 
@@ -239,18 +247,26 @@ def memory_forget_command(
             "so the meeting can be ingested again",
         ),
     ] = False,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
+    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
     twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
+    if (meeting_id is None) == (episode_uuid is None):
+        raise api_failure(ErrorCode.MEMORY_FORGET_TARGET_REQUIRED)
+    if episode_uuid is not None:
+        if keep_record:
+            raise api_failure(ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING)
+        asyncio.run(
+            forget_episode_memory(
+                twin_id=twin_id_for(persona_path, twin_id),
+                episode_uuid=episode_uuid,
+                settings=client_settings_from_env(),
+            )
+        )
+        return
     asyncio.run(
-        forget_memory(
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            meeting_id=parse_session_id(meeting_id, field="--meeting-id")
-            if meeting_id is not None
-            else None,
-            episode_uuid=episode_uuid,
-            settings=_load_settings(),
+        forget_meeting_memory(
+            meeting_id=str(parse_session_id(meeting_id or "", field="--meeting-id")),
+            settings=client_settings_from_env(),
             keep_record=keep_record,
         )
     )
@@ -261,25 +277,11 @@ def memory_forget_command(
 def memory_ingest_command(
     *,
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
-    twin_name: Annotated[str | None, typer.Option("--twin-name")] = None,
-    no_correct: Annotated[
-        bool,
-        typer.Option(
-            "--no-correct",
-            help="Skip automatic diarization before ingesting the live transcript",
-        ),
-    ] = False,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
     asyncio.run(
         ingest_recorded_meeting(
-            meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            twin_name=twin_name,
-            settings=_load_settings(),
-            no_correct=no_correct,
+            meeting_id=str(parse_session_id(meeting_id, field="--meeting-id")),
+            settings=client_settings_from_env(),
         )
     )
 
@@ -291,14 +293,13 @@ def memory_ingest_command(
 @_guard_interrupts
 def memory_reembed_command(
     *,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
+    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
     twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
     asyncio.run(
         reembed_memory(
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            settings=_load_settings(),
+            twin_id=twin_id_for(persona_path, twin_id),
+            settings=client_settings_from_env(),
         )
     )
 
@@ -310,36 +311,34 @@ def memory_reembed_command(
 def report_command(
     *,
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
-    journal_dir: Annotated[Path | None, typer.Option("--journal-dir")] = None,
-) -> None:
-    show_session_report(
-        meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
-        journal_dir=journal_dir,
-        settings=_load_settings(),
-    )
-
-
-@app.command("debrief", help="Generate a source-backed meeting debrief for operator review")
-@_guard_interrupts
-def debrief_command(
-    *,
-    meeting_id: Annotated[str, typer.Option("--meeting-id")],
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
-    force: Annotated[bool, typer.Option("--force")] = False,
 ) -> None:
     asyncio.run(
-        debrief_meeting(
-            meeting_id=parse_session_id(meeting_id, field="--meeting-id"),
-            identity=_operator_identity(persona_path, owner_id, twin_id),
-            force=force,
-            settings=_load_settings(),
+        show_session_report(
+            meeting_id=str(parse_session_id(meeting_id, field="--meeting-id")),
+            settings=client_settings_from_env(),
         )
     )
 
 
-@app.command("join", help="Join a Google Meet link as a guest twin")
+@app.command(
+    "debrief", help="Generate a source-backed meeting debrief for operator review through the api"
+)
+@_guard_interrupts
+def debrief_command(
+    *,
+    meeting_id: Annotated[str, typer.Option("--meeting-id")],
+    force: Annotated[bool, typer.Option("--force")] = False,
+) -> None:
+    asyncio.run(
+        debrief_meeting(
+            meeting_id=str(parse_session_id(meeting_id, field="--meeting-id")),
+            force=force,
+            settings=client_settings_from_env(),
+        )
+    )
+
+
+@app.command("join", help="Join a Google Meet link as a guest twin through the api")
 @_guard_interrupts
 def join_command(
     link: Annotated[str, typer.Argument()],
@@ -350,7 +349,6 @@ def join_command(
     meeting_id: Annotated[str | None, typer.Option("--meeting-id")] = None,
     lobby_timeout: Annotated[float | None, typer.Option("--lobby-timeout")] = None,
     duration: Annotated[float | None, typer.Option("--duration")] = None,
-    profile_dir: Annotated[str | None, typer.Option("--profile-dir")] = None,
     headless: Annotated[bool | None, typer.Option("--headless")] = None,
     audio_enabled: Annotated[
         bool, typer.Option("--audio", help="Enable Linux virtual audio and Muse transcription")
@@ -399,60 +397,60 @@ def join_command(
             help="Let new speech interrupt playback; defaults on with --converse",
         ),
     ] = None,
+    detach: Annotated[
+        bool, typer.Option("--detach", help="Stop after the session is accepted; do not follow")
+    ] = False,
     resume: Annotated[
         bool, typer.Option("--resume", help="Resume an unfinished session for the same meeting ID")
     ] = False,
 ) -> None:
-    asyncio.run(
-        join_meeting(
-            link=link,
-            options=JoinOptions(
-                identity=_operator_identity(persona_path, owner_id, twin_id),
-                twin_name=twin_name,
-                meeting_id=meeting_id,
-                lobby_timeout=lobby_timeout,
-                duration=duration,
-                profile_dir=profile_dir,
-                audio_enabled=audio_enabled,
-                initial_speech=initial_speech,
-                headless=headless,
-                memory=memory,
-                conversation_enabled=conversation_enabled,
-                wake_phrase=wake_phrase,
-                barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
-                brief_path=brief_path,
-                resume=resume,
-            ),
-            settings=_load_settings(),
-        )
+    options = SessionOptions(
+        link=link,
+        meeting_id=meeting_id,
+        persona_path=persona_path,
+        brief_path=brief_path,
+        owner_id=owner_id,
+        twin_id=twin_id,
+        twin_name=twin_name,
+        lobby_timeout=lobby_timeout,
+        duration=duration,
+        headless=headless,
+        audio=audio_enabled,
+        initial_speech=initial_speech,
+        conversation=conversation_enabled,
+        memory=memory,
+        wake_phrase=wake_phrase,
+        barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
     )
+    if resume:
+        if meeting_id is None:
+            raise api_failure(ErrorCode.INPUT_INVALID, reason="--resume requires --meeting-id")
+        asyncio.run(resume_session(meeting_id, detach=detach, settings=client_settings_from_env()))
+        return
+    asyncio.run(run_session(options, detach=detach, settings=client_settings_from_env()))
 
 
-@app.command("chat", help="Run one agent turn with a persistent checkpoint")
+@app.command("chat", help="Run one admin debug turn on the API with a persistent checkpoint")
 @_guard_interrupts
 def chat_command(
     message: Annotated[str, typer.Argument()],
     *,
     thread: Annotated[str, typer.Option("--thread")],
-    use_browser: Annotated[
-        bool, typer.Option("--browser", help="Enable real browser actions")
-    ] = False,
     use_memory: Annotated[
         bool, typer.Option("--memory", help="Enable Graphiti recall and writes")
     ] = False,
 ) -> None:
     asyncio.run(
-        chat(
+        chat_via_api(
             message=message,
             thread=thread,
-            use_browser=use_browser,
-            use_memory=use_memory,
-            settings=_load_settings(),
+            memory=use_memory,
+            settings=client_settings_from_env(),
         )
     )
 
 
-@worker_app.command("start", help="Start a meeting worker in the background")
+@worker_app.command("start", help="Start a meeting worker through the api, detached")
 @_guard_interrupts
 def worker_start_command(
     link: Annotated[str, typer.Argument()],
@@ -463,7 +461,6 @@ def worker_start_command(
     meeting_id: Annotated[str, typer.Option("--meeting-id")],
     lobby_timeout: Annotated[float | None, typer.Option("--lobby-timeout")] = None,
     duration: Annotated[float | None, typer.Option("--duration")] = None,
-    profile_dir: Annotated[str | None, typer.Option("--profile-dir")] = None,
     headless: Annotated[bool | None, typer.Option("--headless")] = None,
     audio_enabled: Annotated[bool, typer.Option("--audio")] = False,
     initial_speech: Annotated[str | None, typer.Option("--speak")] = None,
@@ -480,29 +477,25 @@ def worker_start_command(
         ),
     ] = None,
 ) -> None:
-    identity = _operator_identity(persona_path, owner_id, twin_id)
-    worker_start(
-        request=WorkerStartRequest(
-            link=link,
-            meeting_id=meeting_id,
-            owner_id=identity.owner_id,
-            twin_id=identity.twin_id,
-            twin_name=twin_name,
-            lobby_timeout=lobby_timeout,
-            duration=duration,
-            profile_dir=profile_dir,
-            headless=headless,
-            audio=audio_enabled,
-            initial_speech=initial_speech,
-            conversation=conversation_enabled,
-            persona_path=identity.persona_path,
-            brief_path=brief_path,
-            memory=memory,
-            wake_phrase=wake_phrase,
-            barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
-        ),
-        settings=_load_settings(),
+    options = SessionOptions(
+        link=link,
+        meeting_id=meeting_id,
+        persona_path=persona_path,
+        brief_path=brief_path,
+        owner_id=owner_id,
+        twin_id=twin_id,
+        twin_name=twin_name,
+        lobby_timeout=lobby_timeout,
+        duration=duration,
+        headless=headless,
+        audio=audio_enabled,
+        initial_speech=initial_speech,
+        conversation=conversation_enabled,
+        memory=memory,
+        wake_phrase=wake_phrase,
+        barge_in=_resolve_barge_in(barge_in=barge_in, conversation=conversation_enabled),
     )
+    asyncio.run(run_session(options, detach=True, settings=client_settings_from_env()))
 
 
 @worker_app.command("status", help="Show worker status for one meeting or all")
@@ -510,7 +503,14 @@ def worker_start_command(
 def worker_status_command(
     meeting_id: Annotated[str | None, typer.Argument()] = None,
 ) -> None:
-    worker_status(meeting_id=meeting_id, settings=_load_settings())
+    asyncio.run(
+        worker_status(
+            meeting_id=None
+            if meeting_id is None
+            else str(parse_session_id(meeting_id, field="meeting_id")),
+            settings=client_settings_from_env(),
+        )
+    )
 
 
 @worker_app.command("stop", help="Stop a meeting worker gracefully")
@@ -520,22 +520,25 @@ def worker_stop_command(
     *,
     timeout: Annotated[float, typer.Option("--timeout")] = 60.0,
 ) -> None:
-    worker_stop(meeting_id=meeting_id, timeout=timeout, settings=_load_settings())
+    asyncio.run(
+        worker_stop(
+            meeting_id=str(parse_session_id(meeting_id, field="meeting_id")),
+            limit_seconds=timeout,
+            settings=client_settings_from_env(),
+        )
+    )
 
 
-@worker_app.command("ingest", help="Ingest a finished meeting in a separate container")
+@worker_app.command("ingest", help="Ingest a finished meeting through the api worker")
 @_guard_interrupts
 def worker_ingest_command(
     meeting_id: Annotated[str, typer.Argument()],
-    *,
-    persona_path: Annotated[Path, typer.Option("--persona")],
-    owner_id: Annotated[str | None, typer.Option("--owner-id")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
-    worker_ingest(
-        meeting_id=meeting_id,
-        identity=_operator_identity(persona_path, owner_id, twin_id),
-        settings=_load_settings(),
+    asyncio.run(
+        ingest_recorded_meeting(
+            meeting_id=str(parse_session_id(meeting_id, field="meeting_id")),
+            settings=client_settings_from_env(),
+        )
     )
 
 
@@ -694,7 +697,7 @@ def main() -> None:
         app()
     except (asyncio.CancelledError, KeyboardInterrupt):
         _report(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
-    except FakeYouError as error:
+    except (FakeYouError, ApiFailure) as error:
         _report(error)
     except ValidationError as error:
         _report(FakeYouError(ErrorCode.INPUT_INVALID, reason=_describe(error)))
@@ -706,7 +709,7 @@ def main() -> None:
         _report(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
 
 
-def _report(error: FakeYouError) -> NoReturn:
+def _report(error: FakeYouError | ApiFailure) -> NoReturn:
     emit_error(error)
     raise SystemExit(error.exit_code) from None
 
