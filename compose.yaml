@@ -6,59 +6,133 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-worker-runtime: &worker-runtime
+  restart: unless-stopped
+  build:
+    context: .
+    dockerfile: docker/audio/Dockerfile
+    target: runtime
+  image: fakeyou-meeting-worker:local
+  init: true
+  logging: *default-logging
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=512m
+    - /tmp/.X11-unix:rw,noexec,nosuid,nodev,size=1m,mode=1777
+    - /home/twin/.cache:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700
+    - /home/twin/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 1024
+  shm_size: 1gb
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+  env_file: .env
+  environment:
+    FAKEYOU_BROWSER__HEADLESS: "false"
+    CLOAKBROWSER_AUTO_UPDATE: "false"
+    PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
+    PULSE_SINK: ${PULSE_SINK:-agent_output}
+    FAKEYOU_TRANSPORT__REDIS__URL: redis://redis:6379/0
+    FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
+    FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
+    FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
+  volumes:
+    - ./.runtime/audio:/workspace/.runtime
+    - ./examples:/workspace/examples:ro
+  stop_grace_period: 136s
+
 services:
-  meeting-worker:
-    profiles: ["audio"]
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    logging: *default-logging
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "127.0.0.1:6379:6379"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
     build:
       context: .
       dockerfile: docker/audio/Dockerfile
       target: runtime
     image: fakeyou-meeting-worker:local
+    entrypoint: ["python", "-m", "fakeyou.api"]
+    command: []
     init: true
     logging: *default-logging
-    # Runs as the unprivileged twin user with no Linux capabilities and a read-only root
-    # filesystem. Writable paths are tmpfs mounts or the .runtime bind mount only.
     read_only: true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=512m
-      - /tmp/.X11-unix:rw,noexec,nosuid,nodev,size=1m,mode=1777
-      - /home/twin/.cache:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700
-      - /home/twin/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 1024
-    mem_limit: ${FAKEYOU_COMPOSE_WORKER_MEM_LIMIT:-4g}
-    cpus: ${FAKEYOU_COMPOSE_WORKER_CPUS:-2}
-    shm_size: 1gb
-    # Bypass the Docker Desktop embedded DNS forwarder; it stopped resolving
-    # mid-call during live runs (EAI_NONAME killed STT reconnects and wedged TTS).
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
+    pids_limit: 512
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
     env_file: .env
     environment:
-      FAKEYOU_DATABASE__URL: ${FAKEYOU_COMPOSE_WORKER_DATABASE_URL:-}
-      FAKEYOU_BROWSER__HEADLESS: "false"
-      # cloakbrowser always passes --no-sandbox (its stealth args cannot be disabled per launch),
-      # so Chromium runs without its sandbox here and in every environment. The container
-      # hardening above (cap_drop, no-new-privileges, read_only) is the isolation layer.
-      # The browser binary is baked into the image; no runtime update check or download.
-      CLOAKBROWSER_AUTO_UPDATE: "false"
-      # PULSE defaults follow src/fakeyou/foundation/invariants.py as source of truth; override via env.
-      PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
-      PULSE_SINK: ${PULSE_SINK:-agent_output}
-      FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_WORKER_NEO4J_URI:-bolt://neo4j:7687}
-      FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_WORKER_EMBEDDING_BASE_URL:-${FAKEYOU_MEMORY__EMBEDDER__BASE_URL:-}}
+      FAKEYOU_API__HOST: "0.0.0.0"
+      FAKEYOU_TRANSPORT__REDIS__URL: redis://redis:6379/0
+      FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
+      FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
+      FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
     volumes:
       - ./.runtime/audio:/workspace/.runtime
-      - ./examples:/workspace/examples:ro
-    # Must cover the worker's teardown budget: docker stop waits this long before SIGKILL.
-    stop_grace_period: 136s
+
+  worker-sessions:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "sessions"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_SESSIONS_MEM_LIMIT:-4g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_SESSIONS_CPUS:-2}
+
+  worker-ingestion:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "ingestion"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_INGESTION_MEM_LIMIT:-2g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_INGESTION_CPUS:-2}
+
+  worker-debrief:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "debrief"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_DEBRIEF_MEM_LIMIT:-1g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_DEBRIEF_CPUS:-1}
+
+  worker-reembed:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "reembed"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_REEMBED_MEM_LIMIT:-2g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_REEMBED_CPUS:-1}
 
   neo4j:
     image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069

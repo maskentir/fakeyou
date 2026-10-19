@@ -2,6 +2,7 @@
 set -eu
 
 child=0
+stopping=0
 cleanup() {
   status=$?
   trap - EXIT
@@ -52,6 +53,7 @@ check_sink meeting_audio "16000Hz"
 check_sink agent_output "24000Hz"
 
 stop() {
+  stopping=1
   if [ "$child" -ne 0 ]; then
     kill -TERM "$child" 2>/dev/null || true
   fi
@@ -60,6 +62,9 @@ trap stop TERM INT
 umask 077
 /entrypoint.sh "$@" &
 child=$!
+if [ "$stopping" -eq 1 ]; then
+  kill -TERM "$child" 2>/dev/null || true
+fi
 while :; do
   status=0
   wait "$child" || status=$?
