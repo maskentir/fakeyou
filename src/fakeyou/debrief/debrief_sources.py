@@ -1,6 +1,6 @@
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +17,13 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
-from fakeyou.persistence.record import RecordEntry, TranscriptEntry, TwinSpeechEntry, VisualEntry
+from fakeyou.persistence.record import (
+    RecordEntry,
+    TranscriptEntry,
+    TwinSpeechEntry,
+    VisualEntry,
+    record_header_of,
+)
 
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 
@@ -66,6 +72,26 @@ def _corrected_speakers(
         for entry in entries
         if isinstance(entry, TranscriptEntry) and (uuid := entry.corrected_speaker_uuid) is not None
     }
+
+
+def _is_record_header(line: bytes, line_number: int) -> bool:
+    try:
+        return record_header_of(line) is not None
+    except ValidationError:
+        raise DebriefValidationError(
+            ErrorCode.DEBRIEF_RECORD_INVALID_LINE, line=line_number
+        ) from None
+
+
+def _entry_lines(raw: bytes) -> Iterator[tuple[int, bytes]]:
+    numbered = [
+        (line_number, line)
+        for line_number, line in enumerate(raw.splitlines(), start=1)
+        if line.strip()
+    ]
+    if numbered and _is_record_header(numbered[0][1], numbered[0][0]):
+        numbered = numbered[1:]
+    return iter(numbered)
 
 
 def _parse_record_entry(line: bytes, line_number: int) -> RecordEntry:
@@ -150,9 +176,7 @@ def load_record_snapshot(
     sources: list[SourceEntry] = []
     transcripts: dict[str, TranscriptEntry] = {}
     visuals: dict[str, VisualEntry] = {}
-    for line_number, line in enumerate(raw.splitlines(), start=1):
-        if not line.strip():
-            continue
+    for line_number, line in _entry_lines(raw):
         entry = _parse_record_entry(line, line_number)
         if isinstance(entry, TranscriptEntry):
             _append_transcript(sources, transcripts, entry)
