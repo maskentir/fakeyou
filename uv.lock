@@ -483,7 +483,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20,<2" },
     { name = "anthropic", specifier = ">=1.9,<2" },
     { name = "cloakbrowser", specifier = "==0.5.11" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.115,<0.200" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.143.3,<0.200" },
     { name = "graphiti-core", specifier = "==0.30.2" },
     { name = "httpx2", specifier = "==2.13.1" },
     { name = "langchain", specifier = "==1.4.2" },

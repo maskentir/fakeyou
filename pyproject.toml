@@ -8,7 +8,7 @@ dependencies = [
     "alembic>=1.20,<2",
     "anthropic>=1.9,<2",
     "cloakbrowser==0.5.11",
-    "fastapi[standard]>=0.115,<0.200",
+    "fastapi[standard]>=0.143.3,<0.200",
     "uvicorn>=0.30,<1",
     "starlette>=1.7,<2",
     "graphiti-core==0.30.2",
