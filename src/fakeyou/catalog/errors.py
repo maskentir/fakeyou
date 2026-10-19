@@ -211,6 +211,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_SOURCE_HASH_CHANGED = "debrief.source_hash_changed"
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
     PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
+    PERCEPTION_READING_UNPARSED = "perception.reading_unparsed"
     API_UNAUTHORIZED = "api.unauthorized"
     API_FORBIDDEN = "api.forbidden"
     API_NOT_FOUND = "api.not_found"
@@ -753,6 +754,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.PERCEPTION_PROVIDER_UNSUPPORTED: ErrorSpec(
         "unsupported perception provider: {provider}", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.PERCEPTION_READING_UNPARSED: ErrorSpec(
+        "the perception model returned no screen reading"
     ),
     ErrorCode.API_UNAUTHORIZED: ErrorSpec(
         "missing or invalid API credentials", ExitCode.INPUT_REJECTED

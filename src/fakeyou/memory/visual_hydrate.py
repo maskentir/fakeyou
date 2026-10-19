@@ -9,7 +9,8 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from fakeyou.foundation.transcript import visual_refs_of
-from fakeyou.memory.memory import VisualCaptionResolver, current_speech
+from fakeyou.foundation.triggers import current_trigger
+from fakeyou.memory.memory import VisualCaptionResolver
 from fakeyou.observability.journal import Journal
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
@@ -68,7 +69,7 @@ class VisualHydrateMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
-        _, speech = current_speech(request.messages)
+        _, speech = current_trigger(request.messages)
         frames = self._resolve(visual_refs_of(speech[-1])) if speech else []
         if not frames:
             return self._strip_response(await handler(request))

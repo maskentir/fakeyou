@@ -15,6 +15,7 @@ Subsystem = Literal[
     "preflight",
     "cli",
     "transport",
+    "perception",
 ]
 EventVerb = Literal[
     "accepted",

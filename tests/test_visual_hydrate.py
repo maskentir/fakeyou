@@ -21,7 +21,8 @@ from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.memory import create_memory_prefetch_middleware, current_speech
+from fakeyou.foundation.triggers import current_trigger
+from fakeyou.memory.memory import create_memory_prefetch_middleware
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.memory.visual_hydrate import (
     VISUAL_CLARIFY_AMBIGUOUS,
@@ -374,7 +375,7 @@ async def test_prefetch_appends_latest_caption() -> None:
             additional_kwargs={"meeting_event": {"kind": "visual"}},
         ),
     )
-    end, speech = current_speech(captioned)
+    end, speech = current_trigger(captioned)
     assert [message.id for message in speech] == ["c1"]
     assert end == index + 1
     await turn(agent, participant("Anything else?", "c2"), "caption-empty")

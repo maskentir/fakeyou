@@ -217,7 +217,7 @@ layers = [
     "fakeyou.memory",
     "fakeyou.debrief",
     "fakeyou.conversation",
-    "fakeyou.visual",
+    "fakeyou.perception | fakeyou.visual",
     "fakeyou.diarization",
     "fakeyou.audio",
     "fakeyou.speech",

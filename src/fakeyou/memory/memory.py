@@ -56,6 +56,7 @@ from fakeyou.config.settings import (
 )
 from fakeyou.foundation.provenance import render_evidence
 from fakeyou.foundation.transcript import visual_refs_of
+from fakeyou.foundation.triggers import current_trigger
 from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED as MEET_ACTION_QUEUED
 from fakeyou.meet.meet_tools import create_meet_action_tools as create_meet_action_tools
 from fakeyou.memory.evidence import (
@@ -328,21 +329,6 @@ async def search_memory_evidence_pair(
     return slim, full
 
 
-def current_speech(messages: Sequence[AnyMessage]) -> tuple[int, list[HumanMessage]]:
-    speech: list[HumanMessage] = []
-    end = 0
-    for index, message in enumerate(messages):
-        if isinstance(message, HumanMessage) and "meeting_event" in message.additional_kwargs:
-            event = message.additional_kwargs["meeting_event"]
-            if isinstance(event, dict) and event.get("kind") == "visual":
-                continue
-            if end != index:
-                speech = []
-            speech.append(message)
-            end = index + 1
-    return end, speech
-
-
 def _trim_retained_evidence(evidence: ToolMessage) -> ToolMessage:
     content = evidence.text if isinstance(evidence.content, str) else ""
     if len(content) <= PREFETCH_RETAINED_MAX_CHARS or not content.startswith(
@@ -427,7 +413,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
-        position, speech = current_speech(request.messages)
+        position, speech = current_trigger(request.messages)
         if not speech:
             return await handler(request)
         key = speech[-1].id
