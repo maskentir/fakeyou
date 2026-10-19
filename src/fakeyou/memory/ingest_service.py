@@ -17,15 +17,26 @@ from fakeyou.memory.ingest_status import (
     ingest_state,
     terminal_outcome,
 )
-from fakeyou.memory.ingestion import IngestControl, IngestResult, IngestScope, ingest_meeting
+from fakeyou.memory.ingestion import (
+    IngestControl,
+    IngestResult,
+    IngestScope,
+    MeetingScope,
+    correction_stamp,
+    ingest_corrections,
+    ingest_meeting,
+)
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.memory.persona import PersonaProfile, load_operator_persona
+from fakeyou.memory.persona import PersonaProfile, load_operator_persona, require_persona_group
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    finalized_prefix,
     hash_meeting_record,
+    hash_record_prefix,
     read_status,
     record_lock,
     status_path,
@@ -54,6 +65,12 @@ class IngestJob:
     profile: PersonaProfile
     meeting_id: str
     twin_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecordPrefix:
+    sha256: str
+    byte_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,23 +121,89 @@ async def ingest_until_stopped(
     )
 
 
-async def run_recorded_ingest(
-    request: IngestRequest, *, access: OperatorAccess, ports: IngestPorts
-) -> bool:
-    settings = access.settings
+def _existing_record(request: IngestRequest, settings: Settings) -> Path:
     record_path = meeting_record_path(settings.paths.record_dir, request.meeting_id)
     if not record_path.exists():
         raise FakeYouError(
             ErrorCode.MEMORY_RECORD_MISSING, meeting_id=request.meeting_id, path=record_path
         )
-    journal = Journal(
+    return record_path
+
+
+def _meeting_journal(request: IngestRequest, settings: Settings) -> Journal:
+    return Journal(
         request.meeting_id,
         file=JournalFile(journal_path(settings.paths.journal_dir, request.meeting_id)),
     )
+
+
+async def _locked_scope(
+    record_path: Path, journal: Journal, access: OperatorAccess
+) -> tuple[PersonaProfile, IngestionStatus | None]:
+    profile = await load_operator_persona(access.identity, access.settings)
+    existing = read_status(status_path(record_path), journal=journal)
+    if existing is not None:
+        require_persona_group(existing.group_id, owner_id=profile.owner_id, twin_id=profile.twin_id)
+    return profile, existing
+
+
+async def run_recorded_ingest(
+    request: IngestRequest, *, access: OperatorAccess, ports: IngestPorts
+) -> bool:
+    record_path = _existing_record(request, access.settings)
+    journal = _meeting_journal(request, access.settings)
     try:
         return await _ingest_locked(request, record_path, journal, access=access, ports=ports)
     finally:
         journal.close()
+
+
+async def run_recorded_correction(
+    request: IngestRequest, *, access: OperatorAccess, ports: IngestPorts
+) -> bool:
+    record_path = _existing_record(request, access.settings)
+    journal = _meeting_journal(request, access.settings)
+    try:
+        with record_lock(record_path, purpose="ingestion"):
+            profile, _existing = await _locked_scope(record_path, journal, access)
+            summary = await _correct_recorded(request, record_path, profile, journal, access)
+    finally:
+        journal.close()
+    ports.publish(summary)
+    return summary.stored
+
+
+async def _correct_recorded(
+    request: IngestRequest,
+    record_path: Path,
+    profile: PersonaProfile,
+    journal: Journal,
+    access: OperatorAccess,
+) -> IngestSummary:
+    stamp = correction_stamp(record_path)
+    async with access.open_memory() as memory:
+        result = await ingest_corrections(
+            memory,
+            record_path,
+            MeetingScope(profile.memory_group, request.meeting_id),
+            IngestControl(access.settings.memory.ingestion),
+            Diagnostics(faults=FaultReporter(journal=journal), journal=journal),
+        )
+    status = read_status(status_path(record_path), journal=journal)
+    recorded = (stamp is not None and status is not None and status.corrected_at == stamp) or (
+        result.changed_windows == 0 and result.completed
+    )
+    return IngestSummary(
+        meeting_id=request.meeting_id,
+        state=status.status if status is not None else "pending",
+        windows=result.changed_windows,
+        resumed_from=0,
+        ingested=len(result.episodes),
+        facts=0,
+        completed=result.completed,
+        succeeded=result.completed and recorded,
+        stored=recorded,
+    )
 
 
 async def _ingest_locked(
@@ -132,7 +215,8 @@ async def _ingest_locked(
     ports: IngestPorts,
 ) -> bool:
     faults = FaultReporter(journal=journal)
-    _maybe_diarize(
+    await asyncio.to_thread(
+        _maybe_diarize,
         request.meeting_id,
         access.settings,
         record_path,
@@ -141,50 +225,62 @@ async def _ingest_locked(
     )
     with record_lock(record_path, purpose="ingestion"):
         status_file = status_path(record_path)
-        profile = await load_operator_persona(access.identity, access.settings)
-        existing = read_status(status_file, journal=journal)
-        if existing is not None and existing.group_id != profile.memory_group:
-            raise FakeYouError(ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH)
+        profile, existing = await _locked_scope(record_path, journal, access)
         attempt = _Attempt(
             request, record_path, status_file, profile, journal, faults, access, ports
         )
-        current_hash = _record_hash(record_path, faults)
-        if current_hash is None:
+        prefix = _record_prefix(record_path, faults)
+        if prefix is None:
             return attempt.settle(terminal_outcome("failed", "record_unreadable", None, existing))
-        if (
-            existing is not None
-            and existing.record_sha256 is not None
-            and existing.record_sha256 != current_hash
-        ):
+        if existing is not None and _stored_prefix_changed(record_path, existing):
             return attempt.settle(
                 terminal_outcome("failed", "record_changed", existing.record_sha256, existing)
             )
-        return await _ingest_with_memory(attempt, current_hash)
+        return await _ingest_with_memory(attempt, prefix)
 
 
-def _record_hash(record_path: Path, faults: FaultReporter) -> str | None:
+def _record_prefix(record_path: Path, faults: FaultReporter) -> RecordPrefix | None:
     try:
-        current = hash_meeting_record(record_path)
+        digest, byte_count = finalized_prefix(record_path)
         load_meeting_record(record_path)
     except (OSError, ValueError) as error:
         faults.record(classify_exception("memory_ingest", error))
         return None
-    return current
+    return RecordPrefix(digest, byte_count)
 
 
-async def _ingest_with_memory(attempt: _Attempt, current_hash: str) -> bool:
+def _stored_prefix_changed(record_path: Path, existing: IngestionStatus) -> bool:
+    if existing.record_sha256 is None:
+        return False
+    if existing.record_bytes is None:
+        return existing.record_sha256 != hash_meeting_record(record_path)
+    try:
+        return existing.record_sha256 != hash_record_prefix(record_path, existing.record_bytes)
+    except ValueError:
+        return True
+
+
+async def _ingest_with_memory(attempt: _Attempt, prefix: RecordPrefix) -> bool:
     stop = asyncio.Event()
     try:
         async with attempt.access.open_memory() as memory:
             try:
                 result = await _ingest_records(attempt, memory, stop)
             except ValueError as error:
-                return _episode_rejected(attempt, error, current_hash)
+                return _episode_rejected(attempt, error, prefix)
     except ProviderFault as error:
         attempt.faults.record(error)
-        return attempt.settle(terminal_outcome("failed", f"provider_{error.kind}", current_hash))
+        return attempt.settle(
+            terminal_outcome(
+                "failed", f"provider_{error.kind}", prefix.sha256, fallback_bytes=prefix.byte_count
+            )
+        )
     except asyncio.CancelledError:
-        attempt.settle(terminal_outcome("interrupted", "stop_requested", current_hash))
+        attempt.settle(
+            terminal_outcome(
+                "interrupted", "stop_requested", prefix.sha256, fallback_bytes=prefix.byte_count
+            )
+        )
         raise
     state, reason = ingest_state(result, stop)
     return attempt.settle(
@@ -195,9 +291,10 @@ async def _ingest_with_memory(attempt: _Attempt, current_hash: str) -> bool:
             ingested=result.ingested,
             facts=result.facts,
             completed=result.completed,
-            record_sha256=current_hash,
+            record_sha256=prefix.sha256,
             reason=reason,
             episode_uuids=result.episode_uuids,
+            record_bytes=prefix.byte_count,
         )
     )
 
@@ -220,11 +317,15 @@ async def _ingest_records(attempt: _Attempt, memory: Graphiti, stop: asyncio.Eve
         )
 
 
-def _episode_rejected(attempt: _Attempt, error: ValueError, current_hash: str) -> bool:
+def _episode_rejected(attempt: _Attempt, error: ValueError, prefix: RecordPrefix) -> bool:
     attempt.faults.record(classify_exception("memory_ingest", error))
     if isinstance(error, FakeYouError):
         attempt.ports.report(error)
-    return attempt.settle(terminal_outcome("failed", "episode_name_invalid", current_hash))
+    return attempt.settle(
+        terminal_outcome(
+            "failed", "episode_name_invalid", prefix.sha256, fallback_bytes=prefix.byte_count
+        )
+    )
 
 
 def _maybe_diarize(

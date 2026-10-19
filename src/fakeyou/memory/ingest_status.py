@@ -26,6 +26,7 @@ class IngestOutcome:
     record_sha256: str | None
     reason: str | None
     episode_uuids: Mapping[int, str] | None = None
+    record_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class IngestSummary:
     facts: int
     completed: bool
     succeeded: bool
+    stored: bool
 
 
 def terminal_outcome(
@@ -45,6 +47,8 @@ def terminal_outcome(
     reason: str,
     fallback_sha256: str | None,
     existing: IngestionStatus | None = None,
+    *,
+    fallback_bytes: int | None = None,
 ) -> IngestOutcome:
     return IngestOutcome(
         state=state,
@@ -55,6 +59,7 @@ def terminal_outcome(
         completed=False,
         record_sha256=existing.record_sha256 if existing is not None else fallback_sha256,
         reason=reason,
+        record_bytes=existing.record_bytes if existing is not None else fallback_bytes,
     )
 
 
@@ -93,6 +98,7 @@ def finish_ingest(
         facts=outcome.facts,
         completed=outcome.completed,
         succeeded=outcome.completed and stored,
+        stored=stored,
     )
 
 
@@ -114,6 +120,7 @@ def _next_status(
         resumed_from=outcome.resumed_from,
         ingested=outcome.ingested,
         record_sha256=outcome.record_sha256,
+        record_bytes=outcome.record_bytes,
         updated_at=datetime.now(UTC),
         reason=outcome.reason,
         episode_uuids=episode_uuids,
