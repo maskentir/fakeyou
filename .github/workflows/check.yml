@@ -92,4 +92,4 @@ jobs:
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
       - name: Scan git history for secrets
         run: |
-          "$RUNNER_TEMP/gitleaks" git --log-opts="--all" --redact --no-banner --exit-code 1
+          "$RUNNER_TEMP/gitleaks" git --log-opts="--all" --config .gitleaks.toml --redact --no-banner --exit-code 1

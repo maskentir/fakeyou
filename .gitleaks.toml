@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixtures that ship a self-signed localhost key and a placeholder endpoint, verified by hand."
+paths = [
+  '''tests/fixtures/preflight-localhost-key\.pem''',
+  '''tests/fixtures/preflight-localhost\.pem''',
+]
