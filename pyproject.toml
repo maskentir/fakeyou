@@ -27,7 +27,7 @@ dependencies = [
     "openai==3.19.2",
     "pillow>=12.3,<13",
     "loudness>=0.2,<1",
-    "onnxruntime~=1.24.3",
+    "onnxruntime~=1.31.0",
     "sentencex==1.0.31",
     "websockets>=16,<17",
     "playwright>=1.63,<2",
