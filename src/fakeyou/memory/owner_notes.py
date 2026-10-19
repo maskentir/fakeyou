@@ -95,6 +95,18 @@ class NoteConflictError(FakeYouError):
     pass
 
 
+NOTE_CONFLICT_CODES: frozenset[ErrorCode] = frozenset(
+    {
+        ErrorCode.NOTE_PAYLOAD_MISMATCH,
+        ErrorCode.NOTE_ID_IN_USE,
+        ErrorCode.NOTE_ALREADY_SUPERSEDED,
+        ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE,
+        ErrorCode.NOTE_NOT_PENDING,
+        ErrorCode.NOTE_CORRECTION_CONCURRENT,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _StoredNote:
     uuid: str

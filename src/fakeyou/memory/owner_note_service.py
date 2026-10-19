@@ -3,9 +3,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from graphiti_core import Graphiti
+
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.memory.operator_access import OperatorAccess, open_operator_memory
-from fakeyou.memory.owner_notes import NoteIdentity, OwnerNoteResult, remember_owner_note
+from fakeyou.memory.owner_notes import (
+    NoteConflictError,
+    NoteIdentity,
+    OwnerNoteResult,
+    forget_owner_note,
+    remember_owner_note,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +21,53 @@ class NoteRequest:
     text: str
     source_at: datetime | None
     note_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NoteCommand:
+    text: str
+    source_at: datetime | None
+    note_id: UUID
+    supersedes: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NoteConflict:
+    code: str
+    episode_uuid: str
+    retryable: bool
+
+
+def note_conflict(error: NoteConflictError, *, episode_uuid: str) -> NoteConflict:
+    return NoteConflict(
+        code=error.code.value,
+        episode_uuid=episode_uuid,
+        retryable=error.code is ErrorCode.NOTE_CORRECTION_CONCURRENT,
+    )
+
+
+async def apply_note(memory: Graphiti, *, group_id: str, command: NoteCommand) -> OwnerNoteResult:
+    _require_text(command.text)
+    _require_usable_source(command.source_at)
+    return await remember_owner_note(
+        memory,
+        group_id=group_id,
+        text=command.text,
+        source_at=command.source_at,
+        identity=NoteIdentity(command.note_id, command.supersedes),
+    )
+
+
+async def apply_note_for(access: OperatorAccess, command: NoteCommand) -> OwnerNoteResult:
+    _require_text(command.text)
+    _require_usable_source(command.source_at)
+    async with open_operator_memory(access) as (profile, memory):
+        return await apply_note(memory, group_id=profile.memory_group, command=command)
+
+
+async def forget_note_for(access: OperatorAccess, episode_uuid: str) -> None:
+    async with open_operator_memory(access) as (profile, memory):
+        await forget_owner_note(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
 
 
 async def add_note(
@@ -53,12 +108,10 @@ async def _remember(
         operation = request.note_id if request.note_id is not None else uuid4()
         if request.note_id is None:
             announce(operation)
-        return await remember_owner_note(
+        return await apply_note(
             memory,
             group_id=profile.memory_group,
-            text=request.text,
-            source_at=request.source_at,
-            identity=NoteIdentity(operation, supersedes),
+            command=NoteCommand(request.text, request.source_at, operation, supersedes),
         )
 
 
