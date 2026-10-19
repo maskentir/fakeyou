@@ -1,0 +1,527 @@
+import asyncio
+import json
+import time
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
+from typing import Any, Protocol, override, runtime_checkable
+from uuid import NAMESPACE_URL, UUID, uuid5
+
+from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackManager
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.outputs import LLMResult
+from langchain_core.runnables import Runnable, RunnableConfig
+
+from fakeyou.catalog.errors import FakeYouError
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.meeting_messages import request_messages
+from fakeyou.conversation.middleware import reconcile_cancelled_tools
+from fakeyou.foundation.protocols import SupportsAclose
+from fakeyou.foundation.sentences import sentence_end
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.observability.faults import ConsumerSink, guard_consumer
+from fakeyou.observability.journal import Journal, JournalTiming
+from fakeyou.observability.provider_faults import classify_exception
+
+
+def conversation_thread_id(owner_id: str, twin_id: str, meeting_id: str) -> str:
+    identity = json.dumps([owner_id, twin_id, meeting_id])
+    return f"meeting:{uuid5(NAMESPACE_URL, identity)}"
+
+
+@runtime_checkable
+class ConversationResponder(Protocol):
+    async def respond(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> str: ...
+
+
+@runtime_checkable
+class StreamingConversationResponder(Protocol):
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]: ...
+
+
+ToolResultCallback = Callable[[str, str, float], None]
+MeetingAgent = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
+
+
+class _ToolActivity(AsyncCallbackHandler):
+    raise_error = True
+
+    def __init__(
+        self,
+        on_start: Callable[[], None],
+        journal: Journal | None,
+        on_result: ToolResultCallback | None = None,
+        *,
+        transcript_id: str | None = None,
+    ) -> None:
+        self._on_start = on_start
+        self._journal = journal
+        self._on_result = on_result
+        self._transcript_id = transcript_id
+        self._running: dict[
+            UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
+        ] = {}
+
+    @override
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: UUID,
+        **kwargs: Any,
+    ) -> None:
+        if self._journal is not None:
+            self._journal.request_started(
+                str(run_id), source="llm", operation="chat", transcript_id=self._transcript_id
+            )
+
+    @override
+    async def on_llm_end(self, response: LLMResult, *, run_id: UUID, **kwargs: Any) -> None:
+        if self._journal is not None:
+            self._journal.request_finished(
+                str(run_id), source="llm", transcript_id=self._transcript_id
+            )
+
+    @override
+    async def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        if self._journal is not None:
+            self._journal.request_failed(
+                str(run_id),
+                source="llm",
+                transcript_id=self._transcript_id,
+                error=type(error).__name__,
+            )
+
+    @override
+    async def on_tool_start(
+        self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
+    ) -> None:
+        name = (serialized or {}).get("name") or kwargs.get("name") or "tool"
+        journal = self._journal or Journal("", echo=False)
+        context = journal.timed(
+            started="tool_started",
+            finished="tool_finished",
+            failed="tool_failed",
+            source="agent",
+            tool=str(name),
+            transcript_id=self._transcript_id,
+        )
+        self._running[run_id] = (str(name), context, context.__enter__())
+        self._on_start()
+
+    @override
+    async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        text = output.text if isinstance(output, BaseMessage) else str(output)
+        name, context, timing = self._running.pop(run_id)
+        timing.fields["output_lines"] = len(text.splitlines())
+        context.__exit__(None, None, None)
+        if self._on_result is not None:
+            self._on_result(name, text, timing.fields["duration_ms"])
+
+    @override
+    async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        _, context, _ = self._running.pop(run_id)
+        context.__exit__(type(error), error, error.__traceback__)
+
+
+class _StreamPhase(_ToolActivity):
+    def __init__(
+        self,
+        on_start: Callable[[], None],
+        journal: Journal | None,
+        on_result: ToolResultCallback | None = None,
+        *,
+        transcript_id: str | None = None,
+    ) -> None:
+        super().__init__(on_start, journal, on_result, transcript_id=transcript_id)
+        self.pending = 0
+        self.boundary = 0
+        self._counted: set[UUID] = set()
+
+    @override
+    async def on_tool_start(
+        self, serialized: dict[str, Any] | None, input_str: str, *, run_id: UUID, **kwargs: Any
+    ) -> None:
+        await super().on_tool_start(serialized, input_str, run_id=run_id, **kwargs)
+        self.pending += 1
+        self.boundary += 1
+        self._counted.add(run_id)
+
+    @override
+    async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        try:
+            await super().on_tool_end(output, run_id=run_id, **kwargs)
+        finally:
+            if run_id in self._counted:
+                self._counted.discard(run_id)
+                self.pending -= 1
+            self.boundary += 1
+
+    @override
+    async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        try:
+            await super().on_tool_error(error, run_id=run_id, **kwargs)
+        finally:
+            if run_id in self._counted:
+                self._counted.discard(run_id)
+                self.pending -= 1
+            self.boundary += 1
+
+
+@dataclass(slots=True)
+class _SentenceStream:
+    request_id: str
+    transcript_id: str | None
+    max_sentences: int
+    language: str
+    journal: Journal | None
+    buffer: str = ""
+    yielded: int = 0
+    spoken_chars: int = 0
+    observed_chars: int = 0
+    first_text: bool = False
+    capped: bool = False
+
+    def note_text(self, piece: str) -> None:
+        self.observed_chars += len(piece)
+        if not self.first_text and (self.buffer + piece).strip():
+            self.first_text = True
+            if self.journal is not None:
+                self.journal.record(
+                    "answer_text_emitted",
+                    source="llm",
+                    request_id=self.request_id,
+                    transcript_id=self.transcript_id,
+                )
+
+    def record_sentence(self, sentence: str) -> None:
+        if self.journal is not None:
+            self.journal.record(
+                "answer_sentence_emitted",
+                source="agent",
+                request_id=self.request_id,
+                transcript_id=self.transcript_id,
+                sentence_index=self.yielded,
+                chars=len(sentence),
+            )
+
+    def drain(self) -> Iterator[str]:
+        while self.yielded < self.max_sentences:
+            boundary = sentence_end(self.buffer, language=self.language)
+            if not boundary:
+                break
+            sentence, self.buffer = (
+                self.buffer[:boundary].strip(),
+                self.buffer[boundary:].lstrip(),
+            )
+            if not sentence:
+                continue
+            self.record_sentence(sentence)
+            self.yielded += 1
+            self.spoken_chars += len(sentence) + (1 if self.spoken_chars else 0)
+            yield sentence
+
+    def check_cap(self) -> bool:
+        if self.yielded >= self.max_sentences and self.buffer.strip():
+            if self.journal is not None:
+                self.journal.record(
+                    "reply_capped",
+                    source="agent",
+                    request_id=self.request_id,
+                    chars_in=self.observed_chars,
+                    chars_out=self.spoken_chars,
+                )
+            self.capped = True
+            return True
+        return False
+
+    def flush(self) -> str | None:
+        if not self.capped and self.yielded < self.max_sentences and self.buffer.strip():
+            return self.buffer.strip()
+        return None
+
+
+def _filter_piece(
+    message: Any,
+    metadata: Any,
+    state: _SentenceStream,
+    phase: _StreamPhase,
+    snapshot: int,
+) -> tuple[str, int, bool]:
+    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model":
+        return "", snapshot, False
+    if phase.boundary != snapshot:
+        snapshot = phase.boundary
+        state.buffer = ""
+    if phase.pending:
+        return "", snapshot, False
+    piece = message.text if isinstance(message, BaseMessage) else ""
+    if not piece:
+        return "", snapshot, False
+    return piece, snapshot, True
+
+
+async def _close_stream_optional(stream: AsyncIterator[Any], journal: Journal | None) -> None:
+    if isinstance(stream, SupportsAclose):
+        await guard_consumer(
+            stream.aclose, sink=ConsumerSink(journal=journal), source="agent", detail="close_stream"
+        )
+
+
+def _ignore_tool_start() -> None:
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class StreamTrace:
+    language: str = DEFAULTS.speech.language
+    journal: Journal | None = None
+    request_id: str = ""
+    transcript_id: str | None = None
+    on_tool_start: Callable[[], None] = _ignore_tool_start
+    on_tool_result: ToolResultCallback | None = None
+
+
+DEFAULT_STREAM_TRACE = StreamTrace()
+
+
+def _with_callback(config: RunnableConfig, callback: AsyncCallbackHandler) -> RunnableConfig:
+    callbacks = config.get("callbacks")
+    if isinstance(callbacks, BaseCallbackManager):
+        manager = callbacks.copy()
+        manager.add_handler(callback)
+        return {**config, "callbacks": manager}
+    return {**config, "callbacks": [*(callbacks or ()), callback]}
+
+
+async def invoke_reply(
+    agent: MeetingAgent,
+    messages: Sequence[HumanMessage],
+    config: RunnableConfig,
+    *,
+    trace: StreamTrace = DEFAULT_STREAM_TRACE,
+) -> str:
+    activity = _ToolActivity(
+        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
+    )
+    try:
+        result = await agent.ainvoke(
+            {"messages": list(messages)}, config=_with_callback(config, activity)
+        )
+    except asyncio.CancelledError:
+        await reconcile_cancelled_tools(agent, config)
+        raise
+    except Exception as error:
+        fault = classify_exception("agent", error)
+        raise fault from error
+    output = result.get("messages", [])
+    if not output or not isinstance(output[-1], AIMessage) or output[-1].tool_calls:
+        return ""
+    return output[-1].text.strip()
+
+
+async def _pump_stream(
+    stream: AsyncIterator[Any], state: _SentenceStream, phase: _StreamPhase
+) -> AsyncIterator[str]:
+    snapshot = phase.boundary
+    async for message, metadata in stream:
+        piece, snapshot, consumable = _filter_piece(message, metadata, state, phase, snapshot)
+        if not consumable:
+            continue
+        state.note_text(piece)
+        state.buffer += piece
+        for sentence in state.drain():
+            yield sentence
+        if state.check_cap():
+            return
+    tail = state.flush()
+    if tail is not None:
+        state.record_sentence(tail)
+        yield tail
+
+
+def _record_reply_text(state: _SentenceStream, reply: str) -> None:
+    if not state.first_text and reply.strip():
+        state.first_text = True
+        if state.journal is not None:
+            state.journal.record(
+                "answer_text_emitted",
+                source="llm",
+                request_id=state.request_id,
+                transcript_id=state.transcript_id,
+            )
+
+
+def _record_reply_cap(state: _SentenceStream, reply: str, capped_text: str) -> None:
+    if capped_text != reply.strip() and state.journal is not None:
+        state.journal.record(
+            "reply_capped",
+            source="agent",
+            request_id=state.request_id,
+            chars_in=len(reply),
+            chars_out=len(capped_text),
+        )
+
+
+def _record_stream_failure(state: _SentenceStream, started: float) -> None:
+    if state.journal is not None:
+        state.journal.record(
+            "agent_failed",
+            source="agent",
+            request_id=state.request_id,
+            duration_ms=(time.monotonic() - started) * 1000,
+            detail="stream",
+        )
+
+
+async def _fallback_sentences(
+    agent: MeetingAgent,
+    messages: Sequence[HumanMessage],
+    config: RunnableConfig,
+    state: _SentenceStream,
+    trace: StreamTrace,
+) -> AsyncIterator[str]:
+    reply = await invoke_reply(agent, messages, config, trace=trace)
+    _record_reply_text(state, reply)
+    capped_text = cap_spoken_reply(reply, state.max_sentences, state.language)
+    _record_reply_cap(state, reply, capped_text)
+    state.buffer = capped_text.strip()
+    for sentence in state.drain():
+        yield sentence
+    rest = state.buffer.strip()
+    if rest:
+        state.record_sentence(rest)
+        state.yielded += 1
+        yield rest
+
+
+async def stream_sentences(
+    agent: MeetingAgent,
+    messages: Sequence[HumanMessage],
+    config: RunnableConfig,
+    *,
+    max_sentences: int,
+    trace: StreamTrace = DEFAULT_STREAM_TRACE,
+) -> AsyncIterator[str]:
+    if max_sentences <= 0:
+        raise ValueError("max_sentences must be positive")
+    started = time.monotonic()
+    phase = _StreamPhase(
+        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
+    )
+    state = _SentenceStream(
+        trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
+    )
+    try:
+        stream: AsyncIterator[Any] = agent.astream(
+            {"messages": list(messages)},
+            config=_with_callback(config, phase),
+            stream_mode="messages",
+        )
+        try:
+            async for sentence in _pump_stream(stream, state, phase):
+                yield sentence
+        finally:
+            await _close_stream_optional(stream, trace.journal)
+    except (asyncio.CancelledError, GeneratorExit):
+        await reconcile_cancelled_tools(agent, config)
+        raise
+    except TimeoutError:
+        raise
+    except FakeYouError:
+        raise
+    except Exception as error:
+        if state.yielded:
+            raise classify_exception("agent", error) from error
+        _record_stream_failure(state, started)
+        async for sentence in _fallback_sentences(agent, messages, config, state, trace):
+            yield sentence
+
+
+@dataclass(frozen=True, slots=True)
+class LangGraphResponder:
+    agent: MeetingAgent
+    thread_id: str
+    journal: Journal | None = None
+    on_tool_result: ToolResultCallback | None = None
+    language: str = DEFAULTS.speech.language
+    max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
+
+    def __post_init__(self) -> None:
+        if self.max_sentences <= 0:
+            raise ValueError("max_sentences must be positive")
+
+    def thread_config(self, thread_id: str) -> RunnableConfig:
+        return {"configurable": {"thread_id": thread_id}, "recursion_limit": 30}
+
+    def _trace(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        request_id: str = "",
+    ) -> StreamTrace:
+        return StreamTrace(
+            language=self.language,
+            journal=self.journal,
+            request_id=request_id,
+            transcript_id=events[-1].id if events else None,
+            on_tool_start=on_tool_start,
+            on_tool_result=self.on_tool_result,
+        )
+
+    async def respond(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> str:
+        return await invoke_reply(
+            self.agent,
+            request_messages(events),
+            self.thread_config(self.thread_id),
+            trace=self._trace(events, on_tool_start),
+        )
+
+    def stream_sentences(
+        self,
+        events: Sequence[TranscriptEvent],
+        on_tool_start: Callable[[], None],
+        *,
+        request_id: str,
+    ) -> AsyncIterator[str]:
+        return stream_sentences(
+            self.agent,
+            request_messages(events),
+            self.thread_config(self.thread_id),
+            max_sentences=self.max_sentences,
+            trace=self._trace(events, on_tool_start, request_id),
+        )
+
+
+def cap_spoken_reply(
+    reply: str,
+    max_sentences: int = DEFAULTS.conversation.max_spoken_sentences,
+    language: str = DEFAULTS.speech.language,
+) -> str:
+    if max_sentences <= 0:
+        raise ValueError("max_sentences must be positive")
+    if not reply.strip():
+        return reply
+    remaining = reply.strip()
+    sentences: list[str] = []
+    for _ in range(max_sentences):
+        boundary = sentence_end(remaining, language=language)
+        if not boundary:
+            sentences.append(remaining)
+            break
+        sentences.append(remaining[:boundary].strip())
+        remaining = remaining[boundary:].strip()
+        if not remaining:
+            break
+    return " ".join(sentences)
