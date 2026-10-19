@@ -7,6 +7,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@playwright/mcp": "0.0.82"
+    "@playwright/mcp": "0.0.83"
   }
 }
