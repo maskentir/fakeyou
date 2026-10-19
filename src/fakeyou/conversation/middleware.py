@@ -1,5 +1,5 @@
-from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, override
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Any, cast, override
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import (
@@ -10,7 +10,11 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from fakeyou.db.checkpoint import is_checkpoint_error
+from fakeyou.foundation.protocols import SupportsAgentState
+
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
+CANCELLED_TOOL_RESULT = "Tool execution was cancelled."
 TOKENS_PER_MESSAGE = 2
 
 
@@ -33,21 +37,65 @@ def estimate_message_tokens(messages: Sequence[BaseMessage]) -> int:
     return sum(len(_message_text(message)) // 4 + TOKENS_PER_MESSAGE for message in messages)
 
 
-def patch_orphan_tool_calls(messages: list[AnyMessage]) -> list[AnyMessage]:
-    answered = {message.tool_call_id for message in messages if isinstance(message, ToolMessage)}
-    patched: list[AnyMessage] = []
-    changed = False
+def _answered_calls(messages: Sequence[BaseMessage]) -> set[str]:
+    return {message.tool_call_id for message in messages if isinstance(message, ToolMessage)}
+
+
+def unanswered_tool_calls(messages: Sequence[BaseMessage]) -> list[str]:
+    answered = _answered_calls(messages)
+    pending: list[str] = []
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            continue
+        for call in message.tool_calls:
+            call_id = call["id"]
+            if call_id is not None and call_id not in answered:
+                answered.add(call_id)
+                pending.append(call_id)
+    return pending
+
+
+def patch_orphan_tool_calls(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    pending = unanswered_tool_calls(messages)
+    patched: list[BaseMessage] = []
     for message in messages:
         patched.append(message)
-        if isinstance(message, AIMessage) and message.tool_calls:
-            for call in message.tool_calls:
-                call_id = call["id"]
-                if call_id is None or call_id in answered:
-                    continue
-                answered.add(call_id)
-                patched.append(ToolMessage(content=ORPHAN_TOOL_RESULT, tool_call_id=call_id))
-                changed = True
-    return patched if changed else messages
+        if not isinstance(message, AIMessage):
+            continue
+        for call in message.tool_calls:
+            if call["id"] in pending:
+                pending.remove(call["id"])
+                patched.append(ToolMessage(content=ORPHAN_TOOL_RESULT, tool_call_id=call["id"]))
+    return patched
+
+
+async def reconcile_cancelled_tools(agent: object, config: Mapping[str, Any]) -> None:
+    if not isinstance(agent, SupportsAgentState):
+        return
+    thread = {"configurable": dict(config.get("configurable") or {})}
+    try:
+        state = await agent.aget_state(thread)
+    except Exception as error:
+        if not is_checkpoint_error(error):
+            raise
+        return
+    pending = unanswered_tool_calls(state.values.get("messages", []))
+    if not pending:
+        return
+    try:
+        await agent.aupdate_state(
+            thread,
+            {
+                "messages": [
+                    ToolMessage(content=CANCELLED_TOOL_RESULT, tool_call_id=call_id)
+                    for call_id in pending
+                ]
+            },
+            as_node="tools",
+        )
+    except Exception as error:
+        if not is_checkpoint_error(error):
+            raise
 
 
 def _drop_dangling_answers(messages: list[AnyMessage]) -> list[AnyMessage]:
@@ -81,7 +129,7 @@ def trim_messages_to_budget(messages: list[AnyMessage], *, max_tokens: int) -> l
         kept_reversed.append(message)
         total += cost
     kept = system + list(reversed(kept_reversed))
-    return patch_orphan_tool_calls(_drop_dangling_answers(kept))
+    return cast(list[AnyMessage], patch_orphan_tool_calls(_drop_dangling_answers(kept)))
 
 
 class OrphanToolCallMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -93,9 +141,9 @@ class OrphanToolCallMiddleware(AgentMiddleware[Any, Any, Any]):
     ) -> ModelResponse[Any]:
         messages = list(request.messages)
         patched = patch_orphan_tool_calls(messages)
-        if patched is messages:
+        if len(patched) == len(messages):
             return await handler(request)
-        return await handler(request.override(messages=patched))
+        return await handler(request.override(messages=cast(list[AnyMessage], patched)))
 
 
 class HistoryTrimMiddleware(AgentMiddleware[Any, Any, Any]):
