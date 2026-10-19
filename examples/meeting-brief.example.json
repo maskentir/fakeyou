@@ -1,0 +1,13 @@
+{
+  "schema_version": "meeting_brief/v2",
+  "owner_id": "demo_owner",
+  "twin_id": "demo_twin",
+  "meeting_id": "brief-demo-1003",
+  "agenda": ["Kickoff Orchid dan kebutuhan vendor"],
+  "roster_hint": ["Ayu", "Harun"],
+  "objectives": [{"id": "blockers", "text": "Cari tahu blocker kickoff."}],
+  "approved_facts": [{"id": "demo-date", "text": "Demo Orchid sudah dijadwalkan Jumat."}],
+  "questions": [{"id": "vendor-needs", "text": "Apa yang masih dibutuhkan vendor?"}],
+  "permissions": ["explain_facts", "discuss_options", "ask_brief_questions"],
+  "knowledge_scope": "brief_only"
+}

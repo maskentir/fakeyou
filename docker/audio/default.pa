@@ -1,0 +1,8 @@
+# Source of truth for sink/source names and rates: src/fakeyou/audio.py.
+.fail
+load-module module-native-protocol-unix
+load-module module-null-sink sink_name=meeting_audio rate=16000 channels=1 format=s16le sink_properties=device.description=Meeting_Audio
+load-module module-null-sink sink_name=agent_output rate=24000 channels=1 format=s16le sink_properties=device.description=Agent_Output
+load-module module-remap-source source_name=agent_mic master=agent_output.monitor source_properties=device.description=Agent_Microphone
+set-default-sink meeting_audio
+set-default-source agent_mic

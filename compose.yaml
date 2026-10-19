@@ -1,0 +1,196 @@
+name: fakeyou
+
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-worker-runtime: &worker-runtime
+  restart: unless-stopped
+  build:
+    context: .
+    dockerfile: docker/audio/Dockerfile
+    target: runtime
+  image: fakeyou-meeting-worker:local
+  init: true
+  logging: *default-logging
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=512m
+    - /tmp/.X11-unix:rw,noexec,nosuid,nodev,size=1m,mode=1777
+    - /home/twin/.cache:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700
+    - /home/twin/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 1024
+  shm_size: 1gb
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+  env_file: .env
+  environment:
+    FAKEYOU_BROWSER__HEADLESS: "false"
+    CLOAKBROWSER_AUTO_UPDATE: "false"
+    PULSE_SOURCE: ${PULSE_SOURCE:-meeting_audio.monitor}
+    PULSE_SINK: ${PULSE_SINK:-agent_output}
+    FAKEYOU_TRANSPORT__REDIS__URL: redis://redis:6379/0
+    FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
+    FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
+    FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
+  volumes:
+    - ./.runtime/audio:/workspace/.runtime
+    - ./examples:/workspace/examples:ro
+  stop_grace_period: 136s
+
+services:
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    logging: *default-logging
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "127.0.0.1:6379:6379"
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/audio/Dockerfile
+      target: runtime
+    image: fakeyou-meeting-worker:local
+    entrypoint: ["python", "-m", "fakeyou.api"]
+    command: []
+    init: true
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      FAKEYOU_API__HOST: "0.0.0.0"
+      FAKEYOU_TRANSPORT__REDIS__URL: redis://redis:6379/0
+      FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
+      FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
+      FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
+    volumes:
+      - ./.runtime/audio:/workspace/.runtime
+
+  worker-sessions:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "sessions"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_SESSIONS_MEM_LIMIT:-4g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_SESSIONS_CPUS:-2}
+
+  worker-ingestion:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "ingestion"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_INGESTION_MEM_LIMIT:-2g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_INGESTION_CPUS:-2}
+
+  worker-debrief:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "debrief"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_DEBRIEF_MEM_LIMIT:-1g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_DEBRIEF_CPUS:-1}
+
+  worker-reembed:
+    <<: *worker-runtime
+    command: ["python", "-m", "fakeyou.worker", "reembed"]
+    mem_limit: ${FAKEYOU_COMPOSE_WORKER_REEMBED_MEM_LIMIT:-2g}
+    cpus: ${FAKEYOU_COMPOSE_WORKER_REEMBED_CPUS:-1}
+
+  neo4j:
+    image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
+    logging: *default-logging
+    environment:
+      NEO4J_AUTH: neo4j/${FAKEYOU_MEMORY__STORE__PASSWORD:?Set FAKEYOU_MEMORY__STORE__PASSWORD in .env before starting neo4j}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "NEO4J_USERNAME=neo4j NEO4J_PASSWORD=\"$${NEO4J_AUTH#*/}\" cypher-shell 'RETURN 1' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  embeddings:
+    image: ${FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9@sha256:798cd7615e060a72ccbdf19aa0ada52289c6a0147490195bafaece6ce04d70f1}
+    profiles: ["embeddings"]
+    logging: *default-logging
+    command:
+      - --model-id
+      - ${FAKEYOU_COMPOSE_EMBEDDINGS_MODEL_ID:-ibm-granite/granite-embedding-97m-multilingual-r2}
+      - --revision
+      - ${FAKEYOU_COMPOSE_EMBEDDINGS_REVISION:-835ad14087e140460703cf0fae09f97d469d65c2}
+      - --max-batch-tokens
+      - "2048"
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - tei_models:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  postgres:
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: fakeyou
+      POSTGRES_USER: fakeyou
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env before starting postgres}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fakeyou -d fakeyou"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  neo4j_data:
+  postgres_data:
+  tei_models:

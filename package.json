@@ -1,0 +1,12 @@
+{
+  "name": "fakeyou-browser-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Official Playwright MCP server for the Python digital twin",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@playwright/mcp": "0.0.82"
+  }
+}

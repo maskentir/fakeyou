@@ -1,0 +1,10 @@
+# Reviewed findings. Each entry was checked by hand; none is a live credential.
+
+# docs/refactor-plan.md (deleted from HEAD): config placeholders and model names in backticks.
+# Each assigned value also occurs in tracked code or docs.
+f0e11fae9ac46073cce8ae5876bb4e4ba1b91b18:docs/refactor-plan.md:generic-api-key:73
+89111d6ac577f84f1747bce2bf5cfafb66e2258f:docs/refactor-plan.md:generic-api-key:73
+
+# tests/fixtures/preflight-localhost-key.pem: self-signed key for CN=localhost, test-only
+# (see tests/fixtures/README.md, used by tests/test_preflight.py).
+1f365d3356bca5f857b91a00c2c6aa0d9de7f555:tests/fixtures/preflight-localhost-key.pem:private-key:1
