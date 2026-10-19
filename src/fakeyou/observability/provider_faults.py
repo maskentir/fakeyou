@@ -40,7 +40,7 @@ def safe_endpoint(endpoint: Any) -> str:
     try:
         parsed = urlsplit(endpoint)
         if parsed.hostname is None:
-            return endpoint
+            return "<invalid endpoint>"
         host = parsed.hostname
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
@@ -49,7 +49,7 @@ def safe_endpoint(endpoint: Any) -> str:
             netloc = f"{netloc}:{parsed.port}"
         return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
     except (ValueError, UnicodeError):
-        return endpoint
+        return "<invalid endpoint>"
 
 
 @dataclass(frozen=True, slots=True)

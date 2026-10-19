@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
@@ -30,6 +30,18 @@ class Fault:
 class ConsumerSink:
     faults: "FaultReporter | None" = None
     journal: Journal | None = None
+
+
+async def until_stopped[T](operation: Coroutine[Any, Any, T], stop: asyncio.Event) -> T | None:
+    running = asyncio.create_task(operation)
+    stopping = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait((running, stopping), return_when=asyncio.FIRST_COMPLETED)
+        return running.result() if running.done() else None
+    finally:
+        running.cancel()
+        stopping.cancel()
+        await asyncio.gather(running, stopping, return_exceptions=True)
 
 
 def record_consumer_fault(
