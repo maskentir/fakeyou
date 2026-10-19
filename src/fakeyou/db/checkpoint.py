@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import psycopg
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -16,6 +17,13 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS
 
 CHECKPOINT_POOL_MAX_SIZE = 4
+CHECKPOINT_MSGPACK_TYPES = frozenset(
+    {("fakeyou.conversation.participation_decider", "ParticipationDecision")}
+)
+
+
+def checkpoint_serializer() -> JsonPlusSerializer:
+    return JsonPlusSerializer(allowed_msgpack_modules=CHECKPOINT_MSGPACK_TYPES)
 
 
 def is_checkpoint_error(error: BaseException) -> bool:
@@ -69,7 +77,7 @@ async def open_checkpointer(
             timeout=connect_timeout_seconds,
         )
         async with pool:
-            saver = AsyncPostgresSaver(pool)
+            saver = AsyncPostgresSaver(pool, serde=checkpoint_serializer())
             await saver.setup()
             yield saver
     except psycopg.Error as error:
