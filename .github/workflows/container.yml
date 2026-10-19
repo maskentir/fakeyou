@@ -1,0 +1,37 @@
+name: Real-service harness
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEEPEVAL_TELEMETRY_OPT_OUT: "YES"
+      LANGSMITH_TRACING: "false"
+      GRAPHITI_TELEMETRY_ENABLED: "false"
+      FAKEYOU_TEST_POSTGRES: container
+      POSTGRES_PASSWORD: ci-only
+      FAKEYOU_MEMORY__STORE__PASSWORD: ci-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.7"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - name: Provide a harness env file for Compose
+        run: cp .env.example .env
+      - name: Build the meeting worker image
+        run: docker compose --profile audio build meeting-worker
+      - name: Run the real-service suites
+        run: uv run --no-sync pytest -m "container or postgres" -q
