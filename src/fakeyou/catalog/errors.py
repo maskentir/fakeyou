@@ -212,6 +212,7 @@ class ErrorCode(StrEnum):
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
     PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
     PERCEPTION_READING_UNPARSED = "perception.reading_unparsed"
+    PERCEPTION_PROTOCOL_UNREADABLE = "perception.protocol_unreadable"
     API_UNAUTHORIZED = "api.unauthorized"
     API_FORBIDDEN = "api.forbidden"
     API_NOT_FOUND = "api.not_found"
@@ -757,6 +758,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.PERCEPTION_READING_UNPARSED: ErrorSpec(
         "the perception model returned no screen reading"
+    ),
+    ErrorCode.PERCEPTION_PROTOCOL_UNREADABLE: ErrorSpec(
+        "a Meet protocol message could not be decoded: {reason}"
     ),
     ErrorCode.API_UNAUTHORIZED: ErrorSpec(
         "missing or invalid API credentials", ExitCode.INPUT_REJECTED

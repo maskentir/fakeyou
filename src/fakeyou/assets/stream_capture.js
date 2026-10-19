@@ -1,5 +1,7 @@
 (() => {
   if (window.__fakeyouStreamCapture) return;
+  const bridge = window.__fakeyouRtc;
+  if (!bridge) return;
   const TARGET_RATE = 16000;
   const WINDOW_MS = 50;
   const WINDOW_SAMPLES = (TARGET_RATE * WINDOW_MS) / 1000;
@@ -14,7 +16,7 @@
   const OPUS_CHANNELS = 1;
   const OPUS_FRAME_US = 20000;
   const slots = new Map();
-  const peers = [];
+  const peers = bridge.peers;
   const windows = [];
   const pendingSamples = new Map();
   const receiversBySlot = new Map();
@@ -42,11 +44,7 @@
   window.__fakeyouStreamCaptureNodes = keeps;
 
   function pageNow() {
-    try {
-      return window.performance.timeOrigin + window.performance.now();
-    } catch {
-      return Date.now();
-    }
+    return bridge.pageNow();
   }
 
   function slotFor(trackId) {
@@ -398,18 +396,17 @@
     }
   }
 
-  function onTrack(event) {
+  function onTrack(entry) {
     try {
-      const pc = event ? event.target || event.currentTarget : null;
-      if (pc && testReceivers.has(pc)) return;
-      if (event && event.receiver) {
-        attachReceiver(event.receiver);
+      if (entry.peer && testReceivers.has(entry.peer)) return;
+      if (entry.receiver) {
+        attachReceiver(entry.receiver);
         return;
       }
-      const track = event ? event.track : null;
-      if (pc && track && typeof pc.getReceivers === "function") {
-        for (const receiver of pc.getReceivers()) {
-          if (receiver && receiver.track && receiver.track.id === track.id) {
+      const peer = entry.peer;
+      if (peer && typeof peer.getReceivers === "function") {
+        for (const receiver of peer.getReceivers()) {
+          if (receiver && receiver.track && receiver.track.id === entry.track.id) {
             attachReceiver(receiver);
             return;
           }
@@ -417,29 +414,6 @@
       }
     } catch {
       /* tapping must never break the page */
-    }
-  }
-
-  function wrapPeerConnection() {
-    const Original = window.RTCPeerConnection;
-    if (typeof Original !== "function" || Original.__fakeyouCaptureWrapped) return;
-    function Wrapped(...args) {
-      const pc = new Original(...args);
-      peers.push(pc);
-      try {
-        pc.addEventListener("track", onTrack);
-      } catch {
-        /* page locked the peer */
-      }
-      return pc;
-    }
-    Wrapped.prototype = Original.prototype;
-    Object.setPrototypeOf(Wrapped, Original);
-    Wrapped.__fakeyouCaptureWrapped = true;
-    try {
-      window.RTCPeerConnection = Wrapped;
-    } catch {
-      /* page locked the constructor */
     }
   }
 
@@ -804,7 +778,7 @@
     return windows.length;
   }
 
-  wrapPeerConnection();
+  bridge.onTrack(onTrack);
   wrapEncodedStreams();
 
   window.__fakeyouStreamCapture = {

@@ -30,7 +30,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import real_number
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop
-from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.resources import load_bridged_script
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import (
     ConsumerSink,
@@ -71,7 +71,7 @@ DEFAULT_DRAIN_POLLING = DrainPolling()
 
 
 def load_capture_script() -> str:
-    return read_package_text("assets", "stream_capture.js")
+    return load_bridged_script("stream_capture.js")
 
 
 @dataclass(frozen=True)
