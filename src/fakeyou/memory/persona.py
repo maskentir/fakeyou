@@ -19,7 +19,11 @@ from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 
 PersonaTool = Literal[
-    "recall_meeting_context", "meet_raise_hand", "meet_lower_hand", "meet_send_chat"
+    "recall_meeting_context",
+    "describe_frame",
+    "meet_raise_hand",
+    "meet_lower_hand",
+    "meet_send_chat",
 ]
 MEET_HAND_TOOLS = frozenset({"meet_raise_hand", "meet_lower_hand"})
 MEET_CHAT_TOOLS = frozenset({"meet_send_chat"})
@@ -209,6 +213,16 @@ RECALL_RULES: dict[RecallStrategy, str] = {
 }
 
 
+def memory_group_for(owner_id: str, twin_id: str) -> str:
+    return f"twin_{uuid5(NAMESPACE_URL, json.dumps([owner_id, twin_id]))}"
+
+
+def require_persona_group(group_id: str, *, owner_id: str, twin_id: str) -> str:
+    if group_id != memory_group_for(owner_id, twin_id):
+        raise FakeYouError(ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH)
+    return group_id
+
+
 class PersonaProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -229,7 +243,7 @@ class PersonaProfile(BaseModel):
 
     @property
     def memory_group(self) -> str:
-        return f"twin_{uuid5(NAMESPACE_URL, json.dumps([self.owner_id, self.twin_id]))}"
+        return memory_group_for(self.owner_id, self.twin_id)
 
 
 async def load_persona(path: Path, *, owner_id: str, twin_id: str) -> PersonaProfile:
