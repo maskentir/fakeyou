@@ -259,16 +259,31 @@ class IngestControl:
 DEFAULT_INGEST_CONTROL = IngestControl()
 
 
-async def _resumed_visuals(
-    memory: Graphiti, scope: IngestScope, visuals: list[list[VisualEntry]]
-) -> set[int]:
+@dataclass(slots=True)
+class _SagaView:
+    memory: Graphiti
+    group_id: str
+    meeting_id: str
+    expected_max: int
+    fetched: list[EpisodicNode] | None = None
+
+    async def episodes(self) -> list[EpisodicNode]:
+        if self.fetched is None:
+            self.fetched = await _saga_episodes(
+                self.memory,
+                group_id=self.group_id,
+                meeting_id=self.meeting_id,
+                expected_max=self.expected_max,
+            )
+        return self.fetched
+
+
+async def _resumed_visuals(saga: _SagaView, visuals: list[list[VisualEntry]]) -> set[int]:
     done: set[int] = set()
     if not visuals:
         return done
-    for episode in await _saga_episodes(
-        memory, group_id=scope.group_id, meeting_id=scope.meeting_id
-    ):
-        index = _visual_index(episode.name, scope.meeting_id)
+    for episode in await saga.episodes():
+        index = _visual_index(episode.name, saga.meeting_id)
         if index is not None:
             done.add(index)
     return done
@@ -427,9 +442,9 @@ async def ingest_meeting(
         window_utterances=control.ingestion.window_utterances,
         window_seconds=control.ingestion.window_seconds,
     )
-    resumed_from, previous_uuid = await _resume_point(
-        memory, group_id=scope.group_id, meeting_id=scope.meeting_id
-    )
+    visuals = visual_windows(entries)
+    saga = _SagaView(memory, scope.group_id, scope.meeting_id, 2 * len(windows) + len(visuals))
+    resumed_from, previous_uuid = await _resume_point(memory, saga)
     instructions = extraction_instructions(
         scope.twin_name,
         scope.vocabulary,
@@ -439,8 +454,7 @@ async def ingest_meeting(
         ),
     )
     ingestor = _MeetingIngestor(memory, scope, control, diagnostics, instructions)
-    visuals = visual_windows(entries)
-    visual_done = await _resumed_visuals(memory, scope, visuals)
+    visual_done = await _resumed_visuals(saga, visuals)
     completed, previous_uuid, uuids, ingested, facts = await ingestor.drive_windows(
         windows, resumed_from, previous_uuid
     )
@@ -493,6 +507,11 @@ def _correction_payload(record_path: Path) -> tuple[dict[str, Any], str] | None:
     return payload, corrected_at
 
 
+def correction_stamp(record_path: Path) -> str | None:
+    loaded = _correction_payload(record_path)
+    return None if loaded is None else loaded[1]
+
+
 def _read_correction_labels(record_path: Path, payload: dict[str, Any]) -> dict[str, str]:
     stored = read_correction_labels(record_path)
     labeled = correction_labels_valid(record_path)
@@ -512,8 +531,7 @@ def _read_correction_labels(record_path: Path, payload: dict[str, Any]) -> dict[
 
 
 async def _correction_window_map(
-    memory: Graphiti,
-    scope: MeetingScope,
+    saga: _SagaView,
     existing: IngestionStatus | None,
     changed: list[int],
     corrected_at: str,
@@ -522,9 +540,7 @@ async def _correction_window_map(
     if existing is not None and existing.correction_run == corrected_at:
         window_map = dict(existing.correction_windows)
     if changed and (existing is None or existing.correction_run in (None, corrected_at)):
-        adopted = await _orphaned_corrections(
-            memory, group_id=scope.group_id, meeting_id=scope.meeting_id, changed=changed
-        )
+        adopted = await _orphaned_corrections(saga, changed=changed)
         prior: set[str] = set()
         if existing is not None:
             prior.update(existing.correction_episodes)
@@ -734,7 +750,13 @@ async def ingest_corrections(
             meeting_id=scope.meeting_id, group_id=scope.group_id, status="not_requested"
         )
     )
-    window_map = await _correction_window_map(memory, scope, existing, changed, corrected_at)
+    saga = _SagaView(
+        memory,
+        scope.group_id,
+        scope.meeting_id,
+        2 * len(live_windows) + len(visual_windows(live)),
+    )
+    window_map = await _correction_window_map(saga, existing, changed, corrected_at)
     last = await meeting_episodes(
         memory, group_id=scope.group_id, meeting_id=scope.meeting_id, last_n=1
     )
@@ -772,41 +794,33 @@ def _transcript_window(name: str, meeting_id: str) -> bool:
     return _correction_index(name, meeting_id) is None and _visual_index(name, meeting_id) is None
 
 
-async def _saga_episodes(memory: Graphiti, *, group_id: str, meeting_id: str) -> list[EpisodicNode]:
-    batch = 10
-    while True:
-        episodes = await meeting_episodes(
-            memory, group_id=group_id, meeting_id=meeting_id, last_n=batch
-        )
-        if len(episodes) < batch:
-            return episodes
-        batch *= 2
+async def _saga_episodes(
+    memory: Graphiti, *, group_id: str, meeting_id: str, expected_max: int
+) -> list[EpisodicNode]:
+    return await meeting_episodes(
+        memory, group_id=group_id, meeting_id=meeting_id, last_n=max(expected_max, 1)
+    )
 
 
-async def _orphaned_corrections(
-    memory: Graphiti, *, group_id: str, meeting_id: str, changed: Sequence[int]
-) -> dict[int, list[str]]:
-    wanted = {correction_episode_name(meeting_id, index): index for index in changed}
+async def _orphaned_corrections(saga: _SagaView, *, changed: Sequence[int]) -> dict[int, list[str]]:
+    wanted = {correction_episode_name(saga.meeting_id, index): index for index in changed}
     found: dict[int, list[str]] = {}
-    episodes = await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id)
-    for episode in episodes:
+    for episode in await saga.episodes():
         index = wanted.get(episode.name)
         if index is not None:
             found.setdefault(index, []).append(episode.uuid)
     return found
 
 
-async def _resume_point(
-    memory: Graphiti, *, group_id: str, meeting_id: str
-) -> tuple[int, str | None]:
-    last = await meeting_episodes(memory, group_id=group_id, meeting_id=meeting_id, last_n=1)
+async def _resume_point(memory: Graphiti, saga: _SagaView) -> tuple[int, str | None]:
+    meeting_id = saga.meeting_id
+    last = await meeting_episodes(memory, group_id=saga.group_id, meeting_id=meeting_id, last_n=1)
     if not last:
         return 0, None
     head = last[-1]
     if _transcript_window(head.name, meeting_id):
         return _next_window(head.name, meeting_id), head.uuid
-    episodes = await _saga_episodes(memory, group_id=group_id, meeting_id=meeting_id)
-    for episode in reversed(episodes):
+    for episode in reversed(await saga.episodes()):
         if _transcript_window(episode.name, meeting_id):
             return _next_window(episode.name, meeting_id), head.uuid
     return 0, head.uuid
