@@ -1,0 +1,196 @@
+import asyncio
+import ipaddress
+import ssl
+import time
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from functools import partial
+from typing import Any
+from urllib.parse import urlparse
+
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.observability.provider_faults import safe_endpoint, trim_detail
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResult:
+    host: str
+    ok: bool
+    latency_ms: float
+    detail: str
+
+
+def _endpoint_parts(endpoint: str) -> tuple[str, int, bool, bool] | None:
+    try:
+        parsed = urlparse(endpoint)
+        host = parsed.hostname
+        if not host:
+            return None
+        scheme = parsed.scheme.lower()
+        if scheme not in {
+            "http",
+            "https",
+            "ws",
+            "wss",
+            "bolt",
+            "neo4j",
+            "bolt+s",
+            "neo4j+s",
+            "bolt+ssc",
+            "neo4j+ssc",
+        }:
+            return None
+        secure = scheme in {"https", "wss", "bolt+s", "neo4j+s", "bolt+ssc", "neo4j+ssc"}
+        return (
+            host,
+            parsed.port
+            or (7687 if scheme.startswith(("bolt", "neo4j")) else 443 if secure else 80),
+            secure,
+            scheme not in {"bolt+ssc", "neo4j+ssc"},
+        )
+    except (ValueError, UnicodeError):
+        return None
+
+
+async def probe_endpoint(
+    endpoint: str,
+    *,
+    timeout_seconds: float | None = DEFAULTS.preflight.budget_seconds,
+    ssl_context: ssl.SSLContext | None = None,
+) -> ProbeResult:
+    started = time.monotonic()
+    parts = _endpoint_parts(endpoint)
+    if parts is None:
+        return ProbeResult(
+            host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+            ok=False,
+            latency_ms=0.0,
+            detail="invalid endpoint",
+        )
+    host, port, secure, verify_certificate = parts
+    try:
+        context = ssl_context if secure else None
+        if secure and context is None:
+            context = ssl.create_default_context()
+            if not verify_certificate:
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+        server_name = host if secure and _is_dns_name(host) else None
+        operation = connect_and_close(host, port, context, server_name)
+        if timeout_seconds is None:
+            await operation
+        else:
+            async with asyncio.timeout(timeout_seconds):
+                await operation
+    except asyncio.CancelledError:
+        raise
+    except (OSError, TimeoutError) as error:
+        detail = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
+        return ProbeResult(
+            host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+            ok=False,
+            latency_ms=_elapsed(started),
+            detail=detail,
+        )
+    detail = "tls handshake ok" if secure else "tcp connect ok"
+    return ProbeResult(
+        host=trim_detail(safe_endpoint(endpoint)) or "<invalid endpoint>",
+        ok=True,
+        latency_ms=_elapsed(started),
+        detail=detail,
+    )
+
+
+async def connect_and_close(
+    host: str, port: int, context: ssl.SSLContext | None, server_name: str | None
+) -> None:
+    reader, writer = await asyncio.open_connection(
+        host, port, ssl=context, server_hostname=server_name
+    )
+    del reader
+    writer.close()
+    with suppress(OSError):
+        await writer.wait_closed()
+
+
+def _is_dns_name(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return False
+
+
+def _elapsed(started: float) -> float:
+    return (time.monotonic() - started) * 1000
+
+
+def _trim(detail: str, limit: int = 300) -> str:
+    return (trim_detail(detail) or "")[:limit]
+
+
+def _collect_results(
+    endpoints: tuple[str, ...], outcomes: list[Any], budget_seconds: float
+) -> list[ProbeResult]:
+    results: list[ProbeResult] = []
+    for endpoint, outcome in zip(endpoints, outcomes, strict=True):
+        if isinstance(outcome, ProbeResult):
+            results.append(outcome)
+        elif isinstance(outcome, asyncio.CancelledError):
+            results.append(
+                ProbeResult(
+                    host=endpoint,
+                    ok=False,
+                    latency_ms=budget_seconds * 1000,
+                    detail="budget exceeded",
+                )
+            )
+        elif isinstance(outcome, BaseException):
+            detail = _trim(f"{type(outcome).__name__}: {outcome}")
+            results.append(ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail=detail))
+        else:
+            results.append(
+                ProbeResult(host=endpoint, ok=False, latency_ms=0.0, detail="invalid probe result")
+            )
+    return results
+
+
+async def run_preflight(
+    hosts: tuple[str, ...] | list[str],
+    *,
+    budget_seconds: float = DEFAULTS.preflight.budget_seconds,
+    probe: Callable[[str], Awaitable[ProbeResult]] | None = None,
+) -> list[ProbeResult]:
+    endpoints = tuple(dict.fromkeys(hosts))
+    check = probe or partial(probe_endpoint, timeout_seconds=None)
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def bounded(endpoint: str) -> ProbeResult:
+        async with semaphore:
+            return await check(endpoint)
+
+    tasks: list[asyncio.Task[ProbeResult]] = [
+        asyncio.create_task(bounded(endpoint)) for endpoint in endpoints
+    ]
+    try:
+        try:
+            outcomes = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), budget_seconds
+            )
+        except TimeoutError:
+            for task in tasks:
+                task.cancel()
+            outcomes = list(await asyncio.gather(*tasks, return_exceptions=True))
+        except asyncio.CancelledError:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return _collect_results(endpoints, list(outcomes), budget_seconds)
