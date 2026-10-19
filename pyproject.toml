@@ -55,7 +55,7 @@ constraint-dependencies = [
 
 [dependency-groups]
 dev = [
-    "deepeval==4.2.6",
+    "deepeval==4.3.0",
     "deptry>=0.25,<1",
     "import-linter>=2.15,<3",
     "mypy>=1.18,<2",
