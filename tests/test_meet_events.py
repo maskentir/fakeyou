@@ -17,7 +17,7 @@ def _final_transcript(*, finalized: bool = True) -> TranscriptEvent:
     return TranscriptEvent(
         id="utt-1",
         timestamp=AT,
-        source="muse",
+        source="meeting_audio",
         text="hello everyone",
         finalized=finalized,
         participant_id="speaker-a",

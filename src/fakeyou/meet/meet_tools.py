@@ -10,6 +10,7 @@ from fakeyou.meet.meet_action_ledger import MeetActionKind
 from fakeyou.observability.journal import Journal
 
 MEET_ACTION_QUEUED = "Request recorded for separate execution."
+MEET_SEND_CHAT = "meet_send_chat"
 
 MeetToolCode = Literal["queued", "refused", "failed", "duplicate", "rate_limited"]
 
@@ -90,7 +91,7 @@ def create_meet_action_tools(
             MeetActionRequest("lower_hand", tool_call_id),
         )
 
-    @tool(description="Send a short chat message to everyone in the meeting.")
+    @tool(MEET_SEND_CHAT, description="Send a short chat message to everyone in the meeting.")
     async def meet_send_chat(message: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         return _request_meet_action(
             dispatcher,

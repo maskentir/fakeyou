@@ -3,13 +3,21 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage
 
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import EventSource, TranscriptEvent
+from fakeyou.foundation.triggers import TriggerKind
+
+KIND_OF_SOURCE: dict[EventSource, TriggerKind] = {
+    "meeting_audio": "speech",
+    "meeting_chat": "chat",
+    "meeting_attention": "attention",
+}
 
 
 def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
     messages: list[HumanMessage] = []
     for event in events:
         meeting: dict[str, Any] = {
+            "kind": KIND_OF_SOURCE[event.source],
             "timestamp": event.timestamp,
             "source": event.source,
             "participant_id": event.participant_id,

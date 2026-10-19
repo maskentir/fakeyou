@@ -1,6 +1,14 @@
+import math
+import time
 from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Literal
 
 from fakeyou.foundation.transcript import TranscriptEvent
+
+ReplyChannel = Literal["voice", "chat"]
+DEFERRED_RETRIES = 1
 
 
 class PendingFinals:
@@ -37,3 +45,67 @@ class AdmittedFinals:
     def advance(self) -> int:
         self._count += 1
         return self._count
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredTurn:
+    event: TranscriptEvent
+    channel: ReplyChannel
+    expires_at: float
+    needs_quiet_floor: bool
+    attempts: int = 0
+
+
+class DeferredTurns:
+    def __init__(self) -> None:
+        self._turns: deque[DeferredTurn] = deque()
+
+    @property
+    def pending(self) -> bool:
+        return bool(self._turns)
+
+    def holds(self, event_id: str) -> bool:
+        return any(turn.event.id == event_id for turn in self._turns)
+
+    def add(self, turn: DeferredTurn) -> bool:
+        if self.holds(turn.event.id):
+            return False
+        self._turns.append(turn)
+        return True
+
+    def expire(self, now: float) -> list[DeferredTurn]:
+        expired = [turn for turn in self._turns if turn.expires_at <= now]
+        if expired:
+            self._turns = deque(turn for turn in self._turns if turn.expires_at > now)
+        return expired
+
+    def next_ready(self, ready: Callable[[DeferredTurn], bool]) -> DeferredTurn | None:
+        for turn in self._turns:
+            if ready(turn):
+                self._turns.remove(turn)
+                return turn
+        return None
+
+    def retry(self, turn: DeferredTurn) -> bool:
+        if turn.attempts >= DEFERRED_RETRIES:
+            return False
+        self._turns.appendleft(replace(turn, attempts=turn.attempts + 1))
+        return True
+
+    def earliest_expiry(self) -> float | None:
+        return min((turn.expires_at for turn in self._turns), default=None)
+
+    def clear(self) -> None:
+        self._turns.clear()
+
+
+class QuietFloor:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._last_activity = -math.inf
+
+    def note_activity(self) -> None:
+        self._last_activity = self._clock()
+
+    def quiet_for(self) -> float:
+        return self._clock() - self._last_activity

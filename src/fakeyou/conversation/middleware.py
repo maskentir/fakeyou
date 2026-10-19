@@ -12,6 +12,8 @@ from langchain_core.messages import (
 
 from fakeyou.db.checkpoint import is_checkpoint_error
 from fakeyou.foundation.protocols import SupportsAgentState
+from fakeyou.foundation.triggers import current_trigger, trigger_kind
+from fakeyou.meet.meet_tools import MEET_SEND_CHAT
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
 CANCELLED_TOOL_RESULT = "Tool execution was cancelled."
@@ -161,3 +163,27 @@ class HistoryTrimMiddleware(AgentMiddleware[Any, Any, Any]):
         if trimmed is messages:
             return await handler(request)
         return await handler(request.override(messages=trimmed))
+
+
+def _tool_name(tool: object) -> str | None:
+    if isinstance(tool, dict):
+        name = tool.get("name")
+        return name if isinstance(name, str) else None
+    name = getattr(tool, "name", None)
+    return name if isinstance(name, str) else None
+
+
+class ChatTurnToolsMiddleware(AgentMiddleware[Any, Any, Any]):
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        _, trigger = current_trigger(request.messages)
+        if not trigger or trigger_kind(trigger[-1]) != "chat":
+            return await handler(request)
+        tools = [tool for tool in request.tools if _tool_name(tool) != MEET_SEND_CHAT]
+        if len(tools) == len(request.tools):
+            return await handler(request)
+        return await handler(request.override(tools=tools))

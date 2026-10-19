@@ -5,6 +5,7 @@ from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.triggers import trigger_kind
 
 _VOCABULARY: dict[str, Any] = json.loads(read_package_text("greetings_vocabulary.json"))
 _OUTPUTS: dict[str, str] = _VOCABULARY["outputs"]
@@ -73,7 +74,7 @@ class _GreetingMiddleware(AgentMiddleware[Any, Any, Any]):
         if len(trailing) != 1:
             return None
         latest = trailing[0]
-        if "meeting_event" not in (latest.additional_kwargs or {}):
+        if trigger_kind(latest) != "speech":
             return None
         reply = neutral_greeting(latest.text, self._language)
         if reply is None:

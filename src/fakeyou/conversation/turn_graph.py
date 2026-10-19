@@ -38,7 +38,7 @@ from fakeyou.conversation.participation_graph import (
 )
 from fakeyou.conversation.sentence_stream import cap_reply, shape_sentences
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
-from fakeyou.conversation.turn_queue import AdmittedFinals, PendingFinals
+from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
 from fakeyou.conversation.turn_recovery import (
     TurnRecovery,
     TurnScope,
@@ -56,6 +56,8 @@ from fakeyou.foundation.provenance import MemoryEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
+from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.perception.scrub import scrub_internal_refs
 
 
 class Speaker(Protocol):
@@ -226,6 +228,10 @@ class BargeLatch:
         self.last_interim = None
 
 
+class ChatChannel(Protocol):
+    async def send(self, text: str, *, transcript_id: str) -> bool: ...
+
+
 class TurnScheduler(Protocol):
     @property
     def is_busy(self) -> bool: ...
@@ -260,6 +266,8 @@ class TurnRuntime:
     note_spoken: Callable[[str], None] | None = None
     shadow: bool = False
     faults: FaultReporter | None = None
+    chat: ChatChannel | None = None
+    chat_turn: WholeTurnFactory | None = None
 
 
 def _closed(runtime: TurnRuntime) -> bool:
@@ -559,6 +567,9 @@ class _TurnSink:
 
     async def say(self, sentence: str) -> None:
         runtime = self._runtime
+        sentence = scrub_internal_refs(sentence)
+        if not sentence:
+            return
         index = self._spoken
         if self._streamed:
             self._check_live(index)
@@ -795,6 +806,60 @@ async def drain_turns(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingF
     _, error = await capture_error(partial(_drain_pending, runtime, speech, queue))
     if error is not None:
         _fail(runtime, error)
+
+
+async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generation: int) -> None:
+    chat, factory = runtime.chat, runtime.chat_turn
+    if chat is None or factory is None:
+        runtime.journal.record(
+            "chat_reply_dropped", source="agent", transcript_id=event.id, reason="no_chat_channel"
+        )
+        return
+    floor_generation = _floor_generation(runtime)
+    hook = tool_start_hook(runtime, generation, floor_generation, event.id)
+    reply = await _respond_within(
+        factory((event,), hook), event.text, runtime.response_timeout_seconds
+    )
+    if not _turn_current(runtime, generation, floor_generation):
+        raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
+    text = scrub_internal_refs(reply)
+    if not text:
+        _move_phase(runtime, "waiting", event.id)
+        return
+    _move_phase(runtime, "acting", event.id)
+    sent = await chat.send(text, transcript_id=event.id)
+    runtime.journal.record(
+        "chat_reply_finished", source="agent", transcript_id=event.id, sent=sent, chars=len(text)
+    )
+    _move_phase(runtime, "listening", event.id)
+
+
+async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: DeferredTurn) -> bool:
+    event = turn.event
+    generation = _admitted_count(runtime)
+    _move_phase(runtime, "weighing", event.id)
+    scope = _turn_scope(runtime, event.id, generation)
+    if scope is not None:
+        record_agent_started(runtime.journal, scope)
+    if turn.channel == "chat":
+        work = _run_chat_turn(runtime, event, generation)
+    else:
+        work = _run_turn(runtime, speech, (event,), scope, generation)
+    completed, error = await capture_error(partial(_held, runtime, work, scope))
+    if isinstance(error, TurnDropped) or (error is None and not completed):
+        return False
+    if error is not None:
+        if runtime.faults is not None:
+            runtime.faults.record(classify_exception("agent", error, operation="deferred_turn"))
+        runtime.journal.record(
+            "deferred_turn_failed",
+            source="agent",
+            transcript_id=event.id,
+            channel=turn.channel,
+            error_type=type(error).__name__,
+        )
+        _move_phase(runtime, "waiting", event.id)
+    return True
 
 
 def _final_of(state: TurnGraphState) -> TranscriptEvent:

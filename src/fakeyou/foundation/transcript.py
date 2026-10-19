@@ -3,17 +3,20 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 from langchain_core.messages import BaseMessage
 
 from fakeyou.foundation.timeparse import assume_utc, parse_iso_datetime
+
+EventSource = Literal["meeting_audio", "meeting_chat", "meeting_attention"]
 
 
 @dataclass(frozen=True, slots=True)
 class TranscriptEvent:
     id: str
     timestamp: str
-    source: str
+    source: EventSource
     text: str
     finalized: bool
     participant_id: str
@@ -54,7 +57,7 @@ def transcript_event(
     speaker_evidence_id: str | None,
     capture: CaptureContext = DEFAULT_CAPTURE_CONTEXT,
 ) -> TranscriptEvent:
-    source = "meeting_audio"
+    source: EventSource = "meeting_audio"
     timestamp = update.timestamp or datetime.now(UTC).isoformat()
     ordinal = update.timestamp or f"{update.stream_id}:{update.capture_seq}"
     identity = json.dumps(

@@ -13,6 +13,7 @@ from fakeyou.conversation.model_responder import ReplierStreamResponder, Replier
 from fakeyou.conversation.participation_decider import Decider
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.turn_graph import (
+    ChatChannel,
     Responder,
     SentenceLimits,
     StreamTurnFactory,
@@ -28,6 +29,7 @@ from fakeyou.conversation.turn_ingress import (
     addressing_phrases,
 )
 from fakeyou.conversation.turn_lifecycle import (
+    DeferredOptions,
     ReplyOptions,
     TransitionObserver,
     TurnLifecycle,
@@ -55,12 +57,15 @@ class TurnInteraction:
     clarify_threshold: float = DEFAULTS.participation_decider.clarify_threshold
     window_turns: int = DEFAULTS.participation_decider.window_turns
     shadow: bool = False
+    chat: ChatChannel | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class TurnTiming:
     response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
     activation_seconds: float = DEFAULTS.conversation.activation_seconds
+    quiet_gap_seconds: float = DEFAULTS.perception.attention.floor_gap_seconds
+    deferred_ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
     clock: Callable[[], float] = time.monotonic
 
 
@@ -138,6 +143,19 @@ def _reply_options(replier: MeetingReplier, generation: TurnGeneration) -> Reply
     )
 
 
+def _deferred_options(
+    replier: MeetingReplier, interaction: TurnInteraction, timing: TurnTiming
+) -> DeferredOptions:
+    chat_turn = _whole_turn(replier) if isinstance(replier, ConversationResponder) else None
+    return DeferredOptions(
+        quiet_gap_seconds=timing.quiet_gap_seconds,
+        ttl_seconds=timing.deferred_ttl_seconds,
+        chat=interaction.chat,
+        chat_turn=chat_turn,
+        others_speaking=interaction.others_speaking,
+    )
+
+
 def _jev_state(interaction: TurnInteraction) -> JevState | None:
     if interaction.decider is None:
         return None
@@ -170,6 +188,7 @@ def build_meeting_turns(
         )
     )
     lifecycle.configure_reply(reply)
+    lifecycle.configure_deferred(_deferred_options(replier, interaction, timing))
     lifecycle.configure_barge_in(enabled=interaction.barge_in)
     lifecycle.configure_shadow(enabled=interaction.shadow)
     if interaction.on_transition is not None:

@@ -15,6 +15,7 @@ from fakeyou.conversation.turn_graph import (
     record_barge_in,
 )
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
+from fakeyou.conversation.turn_queue import ReplyChannel
 from fakeyou.foundation.acks import is_bare_ack, is_interjection
 from fakeyou.foundation.participation import (
     ParticipationContext,
@@ -111,6 +112,18 @@ class TurnIngress:
             await self._yield_floor(event.text, bare_ack=bare_ack)
         return decision
 
+    def receive_chat(self, event: TranscriptEvent) -> bool:
+        if not event.text.strip() or not self._mentioned(event.text):
+            return False
+        return self._lifecycle.defer(event, channel="chat", needs_quiet_floor=False)
+
+    def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
+        return self._lifecycle.defer(event, channel=channel, needs_quiet_floor=channel == "voice")
+
+    def _mentioned(self, text: str) -> bool:
+        names = self._addressing_names or self._wake_phrases
+        return any(mentions_whole_phrase(text, name) for name in names)
+
     async def handle_final(self, event: TranscriptEvent) -> ParticipationDecision | None:
         decision = await self.receive_final(event)
         await self._lifecycle.drained()
@@ -135,6 +148,7 @@ class TurnIngress:
             return None
         if not event.finalized or not event.text.strip():
             return None
+        lifecycle.note_activity()
         if lifecycle.is_paused:
             lifecycle.journal.record(
                 "transcript_suppressed", source="agent", transcript_id=event.id, reason="paused"
@@ -263,6 +277,8 @@ class TurnIngress:
 
     async def handle_interim(self, text: str) -> None:
         lifecycle = self._lifecycle
+        if text.strip():
+            lifecycle.note_activity()
         if lifecycle.runtime is not None and not lifecycle.is_closed and not lifecycle.is_failed:
             await self._kick_jev(text)
         session = lifecycle.session

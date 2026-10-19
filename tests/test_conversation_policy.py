@@ -590,6 +590,7 @@ def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
     )
     (known,) = request_messages([addressed])
     assert known.additional_kwargs["meeting_event"] == {
+        "kind": "speech",
         "timestamp": addressed.timestamp,
         "source": "meeting_audio",
         "participant_id": "spaces/x/devices/1",
