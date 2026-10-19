@@ -1,11 +1,12 @@
 import json
 import wave
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+
+import httpx2
 
 from fakeyou.audio.diarize_mix import mix_session_slots, split_chunks
 from fakeyou.catalog.config import ConfigKey
@@ -58,7 +59,7 @@ def _run_locked(
     record_path: Path,
     audio_dir: Path,
     settings: STTSettings,
-    opener: Callable[..., Any] | None,
+    transport: httpx2.BaseTransport | None,
 ) -> None:
     _check_slot_alignment(audio_dir)
     entries = load_meeting_record(record_path)
@@ -70,7 +71,7 @@ def _run_locked(
     turns: list[DiarizedTurn] = []
     offset = 0
     for chunk in chunks:
-        for turn in transcribe_chunk(chunk, settings, opener=opener):
+        for turn in transcribe_chunk(chunk, settings, transport=transport):
             turns.append(
                 DiarizedTurn(
                     start_ms=turn.start_ms + offset,
@@ -88,14 +89,14 @@ def diarize_run(
     meeting_id: SessionId,
     *,
     settings: Settings,
-    opener: Callable[..., Any] | None = None,
+    transport: httpx2.BaseTransport | None = None,
 ) -> ExitCode:
     require_secret(settings.stt.api_key, ConfigKey.STT_API_KEY)
     record_path = meeting_record_path(settings.paths.record_dir, meeting_id)
     audio_dir = MeetingDir(settings.paths.record_dir, meeting_id).audio_dir
     try:
         with record_lock(record_path, purpose="diarization"):
-            _run_locked(record_path, audio_dir, settings.stt, opener)
+            _run_locked(record_path, audio_dir, settings.stt, transport)
     except (OSError, ValueError, wave.Error) as error:
         reason = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
         raise FakeYouError(ErrorCode.DIARIZE_INPUT_UNREADABLE, reason=reason) from error

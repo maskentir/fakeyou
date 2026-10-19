@@ -12,8 +12,14 @@ from fakeyou.diarization.diarize_client import DiarizedTurn, DiarizeError
 from fakeyou.foundation.numbers import real_number
 from fakeyou.persistence.audio_persist import read_slot_anchors
 from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.ingestion_status import finalized_prefix, hash_record_prefix
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.persistence.record import RecordEntry, TranscriptEntry, load_meeting_record
+from fakeyou.persistence.record import (
+    RecordEntry,
+    TranscriptEntry,
+    load_meeting_record,
+    parse_meeting_record,
+)
 
 SCHEMA = "diarization_correction/v1"
 
@@ -65,10 +71,11 @@ def write_correction_bundle(
     audio_dir: Path, record_path: Path, turns: list[DiarizedTurn], *, clock: Callable[[], datetime]
 ) -> CorrectionBundle:
     _check_speaker_labels(turns)
-    record_bytes = record_path.read_bytes()
+    prefix_sha256, prefix_bytes = finalized_prefix(record_path)
     payload = {
         "schema": SCHEMA,
-        "record_sha256": sha256(record_bytes).hexdigest(),
+        "record_sha256": prefix_sha256,
+        "record_bytes": prefix_bytes,
         "corrected_at": clock().isoformat(),
         "turns": [
             {
@@ -147,7 +154,28 @@ def _parse_turn(turn: object, offset: float) -> CorrectionTurn:
     )
 
 
-def _sidecar_turns(record_path: Path) -> list[CorrectionTurn] | None:
+@dataclass(frozen=True, slots=True)
+class _Sidecar:
+    turns: list[CorrectionTurn]
+    record_bytes: int
+
+
+def _hashed_prefix_bytes(payload: dict[str, object]) -> int:
+    record_bytes = payload.get("record_bytes")
+    if not isinstance(record_bytes, int) or isinstance(record_bytes, bool) or record_bytes < 0:
+        raise DiarizeError(ErrorCode.DIARIZE_SIDECAR_INVALID)
+    return record_bytes
+
+
+def _prefix_matches(record_path: Path, payload: dict[str, object], record_bytes: int) -> bool:
+    try:
+        digest = hash_record_prefix(record_path, record_bytes)
+    except ValueError:
+        return False
+    return payload.get("record_sha256") == digest
+
+
+def _read_sidecar(record_path: Path) -> _Sidecar | None:
     sidecar = MeetingDir.from_record_path(record_path).diarization
     if not sidecar.exists():
         return None
@@ -157,34 +185,48 @@ def _sidecar_turns(record_path: Path) -> list[CorrectionTurn] | None:
         raise DiarizeError(ErrorCode.DIARIZE_SIDECAR_INVALID) from error
     if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
         raise DiarizeError(ErrorCode.DIARIZE_SCHEMA_UNSUPPORTED)
-    expected = sha256(record_path.read_bytes()).hexdigest()
-    if payload.get("record_sha256") != expected:
+    record_bytes = _hashed_prefix_bytes(payload)
+    if not _prefix_matches(record_path, payload, record_bytes):
         raise StaleDiarizationError(ErrorCode.DIARIZE_STALE)
     turns = payload.get("turns")
     if not isinstance(turns, list):
         raise DiarizeError(ErrorCode.DIARIZE_TURNS_INVALID)
     offset = _session_start_page_ms(record_path)
-    return [_parse_turn(turn, offset) for turn in turns]
+    return _Sidecar([_parse_turn(turn, offset) for turn in turns], record_bytes)
+
+
+def _prefix_transcript_ids(record_path: Path, record_bytes: int) -> frozenset[str]:
+    with record_path.open("rb") as handle:
+        prefix = handle.read(record_bytes).decode("utf-8")
+    return frozenset(
+        entry.id
+        for entry in parse_meeting_record(prefix, repair=False)
+        if isinstance(entry, TranscriptEntry)
+    )
 
 
 def load_correction_turns(record_path: Path) -> list[CorrectionTurn]:
-    return _sidecar_turns(record_path) or []
+    sidecar = _read_sidecar(record_path)
+    return sidecar.turns if sidecar is not None else []
 
 
 def load_corrected_record(record_path: Path, *, tolerance_ms: int = 2000) -> list[RecordEntry]:
     entries = load_meeting_record(record_path)
-    turns = _sidecar_turns(record_path)
-    if turns is None:
+    sidecar = _read_sidecar(record_path)
+    if sidecar is None:
         return entries
+    covered = _prefix_transcript_ids(record_path, sidecar.record_bytes)
     corrected: list[RecordEntry] = []
     for entry in entries:
-        if not isinstance(entry, TranscriptEntry):
+        if not isinstance(entry, TranscriptEntry) or entry.id not in covered:
             corrected.append(entry)
             continue
         corrected.append(
             entry.model_copy(
                 update={
-                    "corrected_speaker_uuid": _matching_uuid(turns, entry.capture_ms, tolerance_ms)
+                    "corrected_speaker_uuid": _matching_uuid(
+                        sidecar.turns, entry.capture_ms, tolerance_ms
+                    )
                 }
             )
         )

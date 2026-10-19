@@ -1,11 +1,10 @@
 import json
 import time
-import urllib.error
-import urllib.request
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+import httpx2
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -28,46 +27,46 @@ class DiarizeError(FakeYouError):
     pass
 
 
-def _encode_request(chunk: bytes) -> tuple[str, bytes]:
-    boundary = uuid.uuid4().hex
+def _request_fields(chunk: bytes) -> dict[str, Any]:
     payload = json.dumps({"model": _MODEL, "mode": _MODE, "audioEncoding": _ENCODING})
-    head = (
-        f'--{boundary}\r\nContent-Disposition: form-data; name="request"\r\n'
-        f"Content-Type: application/json\r\n\r\n{payload}\r\n"
-        f'--{boundary}\r\nContent-Disposition: form-data; name="audio"; '
-        f'filename="chunk.wav"\r\nContent-Type: audio/wav\r\n\r\n'
-    ).encode("ascii")
-    tail = f"\r\n--{boundary}--\r\n".encode("ascii")
-    return boundary, head + chunk + tail
+    return {
+        "request": (None, payload, "application/json"),
+        "audio": ("chunk.wav", chunk, "audio/wav"),
+    }
 
 
-def _retryable_http(error: OSError) -> bool:
-    if isinstance(error, urllib.error.HTTPError):
-        return error.code == 429 or error.code >= 500
-    return True
+def _retryable(status: int | None) -> bool:
+    return status is None or status == 429 or status >= 500
 
 
-def _post_chunk(
-    call: Callable[..., Any],
-    request: urllib.request.Request,
-    *,
-    timeout_seconds: float,
-    max_retries: int,
-    sleep: Callable[[float], None],
-) -> bytes:
+@dataclass(frozen=True)
+class _Post:
+    url: str
+    headers: dict[str, str]
+    files: dict[str, Any]
+    timeout_seconds: float
+    max_retries: int
+
+
+def _post_chunk(client: httpx2.Client, post: _Post, *, sleep: Callable[[float], None]) -> bytes:
     attempt = 0
     while True:
+        status: int | None = None
         try:
-            with call(request, timeout=timeout_seconds) as response:
-                payload: bytes = response.read()
-                return payload
-        except OSError as error:
-            if attempt >= max_retries or not _retryable_http(error):
-                raise DiarizeError(
-                    ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason=type(error).__name__
-                ) from error
-            sleep(2.0**attempt)
-            attempt += 1
+            response = client.post(
+                post.url, headers=post.headers, files=post.files, timeout=post.timeout_seconds
+            )
+        except httpx2.TransportError as error:
+            reason = type(error).__name__
+        else:
+            if response.status_code < 400:
+                return response.content
+            status = response.status_code
+            reason = "HTTPError"
+        if attempt >= post.max_retries or not _retryable(status):
+            raise DiarizeError(ErrorCode.DIARIZE_TRANSCRIPTION_FAILED, reason=reason)
+        sleep(2.0**attempt)
+        attempt += 1
 
 
 def transcribe_chunk(
@@ -75,28 +74,19 @@ def transcribe_chunk(
     settings: STTSettings,
     *,
     base_url: str = _BASE_URL,
-    opener: Callable[..., Any] | None = None,
+    transport: httpx2.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[DiarizedTurn]:
     api_key = require_secret(settings.api_key, ConfigKey.STT_API_KEY)
-    boundary, body = _encode_request(chunk)
-    call = urllib.request.urlopen if opener is None else opener
-    request = urllib.request.Request(
-        f"{base_url}/asr/transcribe",
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
-    )
-    raw = _post_chunk(
-        call,
-        request,
-        timeout_seconds=settings.diarize_timeout_seconds,
-        max_retries=settings.diarize_max_retries,
-        sleep=sleep,
-    )
+    with httpx2.Client(transport=transport) as client:
+        post = _Post(
+            url=f"{base_url}/asr/transcribe",
+            headers={"Authorization": f"Bearer {api_key}"},
+            files=_request_fields(chunk),
+            timeout_seconds=settings.diarize_timeout_seconds,
+            max_retries=settings.diarize_max_retries,
+        )
+        raw = _post_chunk(client, post, sleep=sleep)
     try:
         payload = json.loads(raw.decode("utf-8"))
         return [
