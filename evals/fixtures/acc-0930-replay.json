@@ -1,0 +1,32 @@
+{
+  "persona": "examples/persona.example.json",
+  "sessions": [
+    {
+      "meeting_id": "acc-0930-s1",
+      "memory": [
+        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang."
+      ],
+      "turns": [
+        {"say": "Rani Twin kapan beta launch or chill", "must_mention": ["14 oktober"]},
+        {"say": "demo customer old shield jadinya hari apa", "expects_recall": true, "must_mention": ["jumat"]},
+        {"say": "Berapa harga lisensi orchid per user?", "must_mention_any": ["belum", "cek", "tanya", "konfirmasi"], "must_not_mention": ["rp", "juta", "$"]},
+        {"say": "Siapa yang pegang checklist launch orchid?", "must_mention": ["rani"]},
+        {"say": "Terus keputusan kontraknya harus lewat dia juga.", "must_mention": ["rani"], "must_mention_any": ["tertulis", "persetujuan", "approval"]},
+        {"say": "Oke catat ya kick off vendor or chill kita putuskan hari Selasa jam sepuluh pagi PIC-nya Budi.", "must_mention": ["selasa"]}
+      ]
+    },
+    {
+      "meeting_id": "acc-0930-s2",
+      "memory": [
+        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant decided that kickoff vendor Orchid diputuskan hari Selasa jam 10 pagi.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant said that PIC kickoff vendor Orchid adalah Budi.",
+        "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Digital twin said that PIC kickoff vendor Orchid adalah Budi."
+      ],
+      "turns": [
+        {"say": "yang sebelumnya, kickoff vendor or kilt diputuskan kapan dan siapa PIC-nya?", "expects_recall": true, "must_mention": ["selasa", "budi"], "must_mention_any": ["meeting", "rapat", "dibahas"]},
+        {"say": "itu sudah disetujui Rani.", "must_mention_any": ["belum", "konfirmasi", "cek", "pastikan"]}
+      ]
+    }
+  ]
+}

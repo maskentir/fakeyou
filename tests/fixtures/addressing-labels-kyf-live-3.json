@@ -1,0 +1,15 @@
+{
+  "source": "Live Meet kyf-live-3 (twin Ugi), 2026-10-14. Standup script with the owner and one twin. Times are seconds from the first turn.",
+  "twin_names": ["Ugi"],
+  "barge_in": true,
+  "turns": [
+    {"at": 0.0, "speaker": "speaker-a", "text": "Ugi kita mulai stand up ya kemarin lo ngerjain apa", "answer": true, "reason": "addressed"},
+    {"at": 23.0, "speaker": "speaker-a", "text": "Oke hari ini prioritasnya apa", "answer": true, "reason": "followup_same_speaker"},
+    {"at": 45.0, "speaker": "speaker-a", "text": "Hmm nanti dulu deh gue mikir", "answer": false, "reason": "interjection"},
+    {"at": 55.0, "speaker": "speaker-a", "text": "Ugi bisa bantu", "answer": true, "reason": "addressed"},
+    {"at": 71.0, "speaker": "speaker-a", "text": "Ugi ringkas action item tadi", "answer": true, "reason": "addressed"},
+    {"at": 94.0, "speaker": "speaker-a", "text": "Eh tunggu bukan itu", "answer": false, "reason": "interjection"},
+    {"at": 107.0, "speaker": "speaker-a", "text": "makasih Ugi", "answer": true, "reason": "addressed"},
+    {"at": 115.0, "speaker": "speaker-a", "text": "Oke", "answer": false, "reason": "bare_ack"}
+  ]
+}

@@ -1,0 +1,1 @@
+{"allowed": ["Guest", "Host", "Twin"], "bind_first": "Host", "bind_later": "Guest", "duplicate": "Twin", "rejoin_after": "Guest", "rejoin_before": "Host", "render_shown": "Host"}

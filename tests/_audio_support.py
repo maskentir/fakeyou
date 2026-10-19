@@ -1,0 +1,209 @@
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any, TypedDict, Unpack, cast
+
+import numpy as np
+
+from fakeyou.audio.audio import SessionRun
+from fakeyou.audio.graph import AudioGraph, PcmQueue
+from fakeyou.audio.playback import (
+    PlaybackBackend,
+    PlaybackEngine,
+    PlaybackEvent,
+    PlaybackPort,
+    PlaybackTiming,
+    PlayStream,
+    SetMuted,
+)
+from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
+from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.observability.faults import FaultReporter
+from fakeyou.speech.contract import SpeechSynthesizer
+from tests._persistence_fakes import RecordingJournal
+
+SPEECH_WINDOW = b"\x00\x00" * 512
+SPEAKING = 0.99
+SILENT = 0.0
+
+
+class ScriptedSpeechModel:
+    def __init__(self) -> None:
+        self.probability = SILENT
+
+    def predict(self, window: np.ndarray) -> float:
+        del window
+        return self.probability
+
+    def reset(self) -> None:
+        return None
+
+
+class ScriptedSpeech:
+    def __init__(self) -> None:
+        self.model = ScriptedSpeechModel()
+        analyzer = VadAnalyzer(
+            VadParams(min_volume=0.0), model=self.model, model_reset_samples=None
+        )
+        self.controller = VadController(analyzer, audio_idle_timeout_seconds=0)
+
+    def speaking(self, windows: int = 8) -> bytes:
+        self.model.probability = SPEAKING
+        return SPEECH_WINDOW * windows
+
+    def silent(self, windows: int = 8) -> bytes:
+        self.model.probability = SILENT
+        return SPEECH_WINDOW * windows
+
+
+class NullSTT:
+    def __init__(self) -> None:
+        self.received = 0
+
+    def send_audio(self, pcm: bytes) -> None:
+        self.received += len(pcm)
+
+
+def build_run(engine: PlaybackPort, task: asyncio.Task[None]) -> SessionRun:
+    return SessionRun(
+        graph=cast(AudioGraph, object()),
+        task=task,
+        source=FakeCapture(),
+        engine=engine,
+    )
+
+
+async def wait_gate(gate: asyncio.Event) -> None:
+    await gate.wait()
+
+
+class FakeCapture:
+    def __init__(self) -> None:
+        self.queue = PcmQueue()
+        self.started = 0
+        self.terminated = 0
+        self.backend: Any = None
+
+    async def start(self) -> None:
+        self.started += 1
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        if self.backend is not None:
+            self.backend.terminate()
+
+    def push(self, pcm: bytes) -> None:
+        self.queue.put(pcm)
+
+
+class FakePlayback:
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+        self.indices: list[int | None] = []
+        self.transcripts: list[str | None] = []
+        self.stops = 0
+        self.closed = False
+        self.speaking = False
+
+    @property
+    def is_speaking(self) -> bool:
+        return self.speaking
+
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+    ) -> None:
+        self.spoken.append(text)
+        self.indices.append(sentence_index)
+        self.transcripts.append(transcript_id)
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeSynth:
+    def __init__(self, audio: bytes = b"\x00" * 480, error: Exception | None = None) -> None:
+        self.audio = audio
+        self.error = error
+        self.texts: list[str] = []
+        self.indices: list[int | None] = []
+        self.transcripts: list[str | None] = []
+        self.closed = False
+
+    async def stream(
+        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+    ) -> AsyncIterator[bytes]:
+        self.texts.append(text)
+        self.indices.append(sentence_index)
+        self.transcripts.append(transcript_id)
+        if self.error is not None:
+            raise self.error
+        yield self.audio
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class FakePlayer:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.played: list[bytes] = []
+        self.cancelled: list[bytes] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.release.set()
+
+    async def __call__(self, chunks: AsyncIterator[bytes]) -> None:
+        data = b"".join([chunk async for chunk in chunks])
+        self.played.append(data)
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(data)
+            raise
+        if self.error is not None:
+            raise self.error
+
+
+class FakeMuter:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[bool] = []
+
+    async def __call__(self, *, muted: bool) -> None:
+        self.calls.append(muted)
+        if self.error is not None:
+            raise self.error
+
+
+class EngineScript(TypedDict, total=False):
+    tail_seconds: float
+    stream_audio: PlayStream
+    journal: RecordingJournal
+    faults: FaultReporter
+    cleanup_timeout_seconds: float
+
+
+def build_engine(
+    synth: SpeechSynthesizer,
+    player: PlayStream,
+    muter: SetMuted,
+    events: list[PlaybackEvent],
+    **script: Unpack[EngineScript],
+) -> PlaybackEngine:
+    return PlaybackEngine(
+        synth,
+        PlaybackBackend(muter, script.get("stream_audio", player)),
+        on_event=events.append,
+        timing=PlaybackTiming(
+            tail_seconds=script.get("tail_seconds", 0.5),
+            cleanup_timeout_seconds=script.get("cleanup_timeout_seconds", 5.0),
+        ),
+        diagnostics=Diagnostics(faults=script.get("faults"), journal=script.get("journal")),
+    )
