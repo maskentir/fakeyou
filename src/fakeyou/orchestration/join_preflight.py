@@ -43,8 +43,6 @@ def preflight_join(request: JoinRequest) -> None:
             twin_id=request.identity.twin_id,
         )
     )
-    if settings.conversation.participant_policy_enabled and not (request.wake_phrase or "").strip():
-        raise FakeYouError(ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES)
     if request.conversation_enabled:
         settings.require_roles("reply", "reply_fallback")
     if request.memory:

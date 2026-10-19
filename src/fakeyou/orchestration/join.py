@@ -26,13 +26,12 @@ from fakeyou.audio.stream_capture import (
     open_stream_fleet,
 )
 from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker
-from fakeyou.catalog.commands import memory_ingest_args
+from fakeyou.catalog.commands import Command
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
-from fakeyou.conversation.conversation import ConversationLoop, ConversationPhase
+from fakeyou.conversation.meeting_turns import MeetingTurns
 from fakeyou.conversation.session import MeetingAudio, SessionResult
-from fakeyou.foundation.attribution_probe import AttributionProbe
-from fakeyou.foundation.transcript import TranscriptUpdate
+from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
 from fakeyou.memory.ingestion import meeting_windows
@@ -43,7 +42,7 @@ from fakeyou.observability.journal import Journal, JournalFile, journal_path
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.orchestration.assembly import (
     AgentWiring,
-    LoopBehavior,
+    TurnBehavior,
     VoiceprintLive,
     create_visual_captioner,
     open_conversation,
@@ -53,8 +52,9 @@ from fakeyou.orchestration.assembly import (
 from fakeyou.orchestration.join_context import PreparedJoin, guard_join, prepare_join
 from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
+from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.providers import preflight_hosts
-from fakeyou.orchestration.runtime import MeetActionDispatcher, SessionWiring
+from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.orchestration.transcript import (
     LiveScoring,
     TranscriptSinks,
@@ -65,7 +65,7 @@ from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
-    hash_meeting_record,
+    finalized_prefix,
     record_lock,
     status_path,
     write_status,
@@ -86,7 +86,7 @@ class _JoinRun:
     graphiti: Graphiti | None = None
     session_result: SessionResult | None = None
     pending_error: FakeYouError | None = None
-    conversation: ConversationLoop | None = None
+    conversation: MeetingTurns | None = None
     voiceprint_live: VoiceprintLive | None = None
     voice_activity: VoiceActivityTracker | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
@@ -199,12 +199,11 @@ def _build_join_layers(
         MeetActionDispatcher(
             prepared.record_path,
             meeting_id=prepared.config.meeting_id,
-            enabled=prepared.request.settings.conversation.meet_actions_enabled,
+            enabled=prepared.config.meet_actions_enabled,
             chat_per_minute=prepared.request.settings.conversation.meet_chat_per_minute,
             journal=run.journal,
         )
-        if prepared.request.settings.conversation.meet_actions_enabled
-        and prepared.request.conversation_enabled
+        if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled
         else None
     )
     run.visual_store = (
@@ -254,7 +253,7 @@ async def _open_join_conversation(
                 visual_store=run.visual_store,
                 visual_captioner=run.visual_captioner,
             ),
-            behavior=LoopBehavior(
+            behavior=TurnBehavior(
                 on_transition=log_transition,
                 wake_phrases=[
                     phrase.strip() for phrase in (prepared.request.wake_phrase or "").split(",")
@@ -294,7 +293,7 @@ def _build_audio_factory(
         sinks=TranscriptSinks(
             journal=run.journal,
             record=run.record,
-            conversation=run.conversation,
+            conversation=run.conversation.ingress if run.conversation is not None else None,
             faults=run.faults,
             visual_store=run.visual_store,
         ),
@@ -303,14 +302,6 @@ def _build_audio_factory(
         scoring=LiveScoring(run.voiceprint_live, registry),
         per_stream_enabled=prepared.request.settings.conversation.per_stream_enabled,
     )
-
-    async def interim(update: TranscriptUpdate) -> None:
-        if run.conversation is not None:
-            await run.conversation.handle_interim(update.text)
-
-    async def vad(*, active: bool) -> None:
-        if run.conversation is not None:
-            await run.conversation.note_vad(active=active)
 
     audio_recorder: SlotAudioWriter | None = None
     if (
@@ -323,15 +314,12 @@ def _build_audio_factory(
         resources.callback(audio_recorder.close)
     if not prepared.request.audio_enabled:
         return
-    audio_probe = (
-        AttributionProbe(prepared.config.attribution_probe_path)
-        if prepared.config.attribution_probe_path is not None
-        else None
-    )
     stt_keywords = (
         speech_keywords(prepared.profile, prepared.config.twin_name) if prepared.profile else None
     )
-    audio_callbacks = StreamCallbacks(transcript, interim, vad, log_playback)
+    audio_callbacks = StreamCallbacks(
+        transcript, transcript.on_interim, transcript.on_vad, log_playback
+    )
     audio_diagnostics = Diagnostics(faults=run.faults, journal=run.journal)
     audio_policy = StreamPolicy(
         timing=DeafTiming(
@@ -365,7 +353,6 @@ def _build_audio_factory(
             open_meeting_audio,
             callbacks=audio_callbacks,
             components=StreamComponents(
-                probe=audio_probe,
                 voice_activity=run.voice_activity,
                 turn_tap=(run.voiceprint_live.tap if run.voiceprint_live is not None else None),
             ),
@@ -406,6 +393,7 @@ async def _drive_join_session(
                 visual_store=run.visual_store,
                 visual_captioner=run.visual_captioner,
                 visual_on_caption=run.visual_on_caption,
+                on_phase=prepared.request.on_phase,
                 **preflight_kwargs,
             ),
         )
@@ -429,7 +417,7 @@ def _write_final_ingestion_status(prepared: PreparedJoin, run: _JoinRun) -> None
     ):
         return
     try:
-        digest = hash_meeting_record(prepared.record_path)
+        digest, byte_count = finalized_prefix(prepared.record_path)
         finalized = load_meeting_record(prepared.record_path)
         window_count = len(
             meeting_windows(
@@ -446,6 +434,7 @@ def _write_final_ingestion_status(prepared: PreparedJoin, run: _JoinRun) -> None
                 status="pending",
                 windows=window_count,
                 record_sha256=digest,
+                record_bytes=byte_count,
                 updated_at=datetime.now(UTC),
             ),
         )
@@ -518,14 +507,7 @@ def _resume_attempt(record_path: Path) -> int:
 def resume_command(resume: IngestResume | None) -> str | None:
     if resume is None:
         return None
-    return shlex.join(
-        memory_ingest_args(
-            meeting_id=resume.meeting_id,
-            persona=resume.persona,
-            owner_id=resume.owner_id,
-            twin_id=resume.twin_id,
-        )
-    )
+    return shlex.join([*shlex.split(Command.MEMORY_INGEST), "--meeting-id", resume.meeting_id])
 
 
 async def run_join_session(request: JoinRequest, ports: JoinPorts) -> JoinOutcome:

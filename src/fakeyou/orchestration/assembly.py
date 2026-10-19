@@ -17,36 +17,32 @@ from langchain_core.tools import BaseTool
 from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import (
+    ParticipationDeciderSettings,
     Settings,
 )
-from fakeyou.conversation.agent import (
-    ENDING_RULE,
-    MEETING_GUIDANCE,
-    SPOKEN_LANGUAGE_GUIDANCE,
-    VISUAL_GUIDANCE,
-    create_meeting_agent,
-    create_visual_tools,
-)
+from fakeyou.conversation.agent import create_meeting_agent, create_visual_tools
 from fakeyou.conversation.conversation import (
-    ConversationLoop,
-    ConversationPhase,
-    ConversationResponder,
     LangGraphResponder,
-    LoopGeneration,
-    LoopInteraction,
-    LoopTiming,
     MeetingAgent,
-    StreamingLangGraphResponder,
     ToolResultCallback,
     conversation_thread_id,
 )
+from fakeyou.conversation.meeting_turns import (
+    MeetingTurns,
+    TurnGeneration,
+    TurnInteraction,
+    TurnTiming,
+    build_meeting_turns,
+)
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
 from fakeyou.conversation.participation_decider import (
-    GeminiDecider,
-    JevDecider,
-    ParticipationDecider,
+    Decider,
+    StructuredGeminiDecider,
+    UnsupportedDeciderProvider,
 )
+from fakeyou.conversation.participation_graph import DeciderFailure
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, open_database, require_url
 from fakeyou.db.schema import require_current
@@ -65,7 +61,6 @@ from fakeyou.memory.memory import (
 from fakeyou.memory.persona import (
     PersonaProfile,
     PersonaTool,
-    build_system_prompt,
     meeting_tool_names,
     memory_wiring,
     refuse_meet_tool,
@@ -74,15 +69,18 @@ from fakeyou.memory.visual_hydrate import create_visual_hydrate_middleware, crea
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.meet_actions import MeetActionDispatcher
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
     create_chat_model,
+    create_decider_chat_model,
     create_fallback_chat_model,
     create_visual_chat_model,
 )
-from fakeyou.orchestration.runtime import MeetActionDispatcher
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.visual.visual_caption import VisualCaptioner
 from fakeyou.visual.visual_store import VisualStore
+from fakeyou.visual.visual_tools import visual_tool_allowed
 
 
 @dataclass(slots=True)
@@ -164,9 +162,7 @@ def _load_voiceprint_artifact(settings: Settings) -> CalibrationArtifact | None:
 
 
 def default_persona(settings: Settings) -> str:
-    return (
-        f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[settings.speech.language]}\n\n{ENDING_RULE}"
-    )
+    return build_persona_prompt(None, language=settings.speech.language)
 
 
 def create_visual_captioner(
@@ -229,7 +225,7 @@ DEFAULT_AGENT_WIRING = AgentWiring()
 
 
 @dataclass(frozen=True, slots=True)
-class LoopBehavior:
+class TurnBehavior:
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None]
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
@@ -247,28 +243,21 @@ def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
     )
 
 
-def _participation_decider(settings: Settings) -> ParticipationDecider | None:
-    config = settings.participation_decider
-    if not config.pre_generate_enabled:
-        return None
-    api_key = config.api_key.get_secret_value() if config.api_key is not None else ""
-    if not api_key:
-        return None
-    if config.provider == "gemini":
-        return GeminiDecider(
-            api_key=api_key,
-            model=config.model,
-            base_url=config.base_url or "https://generativelanguage.googleapis.com",
-            timeout_seconds=config.timeout_seconds,
+def build_decider(provider: str, settings: ParticipationDeciderSettings) -> Decider:
+    if provider != "gemini":
+        raise UnsupportedDeciderProvider(provider)
+    if settings.api_key is None:
+        raise DeciderFailure(
+            "decider_no_credentials", "participation decider enabled without API key"
         )
-    if not config.base_url:
+    return StructuredGeminiDecider(model=create_decider_chat_model(settings))
+
+
+def _participation_decider(settings: Settings) -> Decider | None:
+    config = settings.participation_decider
+    if not config.enabled:
         return None
-    return JevDecider(
-        api_key=api_key,
-        model=config.model,
-        base_url=config.base_url,
-        timeout_seconds=config.timeout_seconds,
-    )
+    return build_decider(config.provider, config)
 
 
 class _ConversationBuilder:
@@ -276,7 +265,7 @@ class _ConversationBuilder:
         self,
         settings: Settings,
         agent: AgentWiring,
-        behavior: LoopBehavior,
+        behavior: TurnBehavior,
         diagnostics: Diagnostics,
     ) -> None:
         self._settings = settings
@@ -290,21 +279,20 @@ class _ConversationBuilder:
 
     def build_persona(self) -> None:
         profile = self._agent.profile
-        if profile is None:
-            if self._agent.brief is not None:
-                raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE)
-            self._persona = default_persona(self._settings)
-        else:
+        if profile is None and self._agent.brief is not None:
+            raise FakeYouError(ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE)
+        if profile is not None:
             self._tool_names = meeting_tool_names(
                 profile, self._agent.brief, memory_requested=self._agent.graphiti is not None
             )
-            self._persona = build_system_prompt(
-                profile.model_copy(update={"allowed_tools": self._tool_names}),
-                brief=self._agent.brief,
-                recall_strategy=self._settings.memory.recall.strategy,
-            )
-        if _visual_wired(self._settings, self._agent):
-            self._persona = f"{self._persona}\n\n{VISUAL_GUIDANCE}"
+            profile = profile.model_copy(update={"allowed_tools": self._tool_names})
+        self._persona = build_persona_prompt(
+            profile,
+            brief=self._agent.brief,
+            recall_strategy=self._settings.memory.recall.strategy,
+            language=self._settings.speech.language,
+            visual=_visual_wired(self._settings, self._agent),
+        )
 
     def add_greeting(self) -> None:
         profile = self._agent.profile
@@ -370,7 +358,8 @@ class _ConversationBuilder:
                 journal=self._diagnostics.journal,
             )
         )
-        self._tools.extend(create_visual_tools(store, captioner))
+        if visual_tool_allowed(self._tool_names, visual_enabled=self._settings.visual.enabled):
+            self._tools.extend(create_visual_tools(store, captioner))
 
     def add_meet_tools(self) -> None:
         if self._agent.profile is None or self._behavior.meet_dispatcher is None:
@@ -396,50 +385,47 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
-    def build_responder(self, agent: MeetingAgent, thread_id: str) -> ConversationResponder:
-        if self._settings.conversation.sentence_streaming:
-            return StreamingLangGraphResponder(
-                agent,
-                thread_id,
-                journal=self._diagnostics.journal,
-                on_tool_result=self._behavior.on_tool_result,
-                language=self._settings.speech.language,
-                max_sentences=self._settings.conversation.max_spoken_sentences,
-            )
+    def build_responder(self, agent: MeetingAgent, thread_id: str) -> LangGraphResponder:
         return LangGraphResponder(
             agent,
             thread_id,
             journal=self._diagnostics.journal,
             on_tool_result=self._behavior.on_tool_result,
+            language=self._settings.speech.language,
+            max_sentences=self._settings.conversation.max_spoken_sentences,
         )
 
-    def build_loop(self, responder: ConversationResponder) -> ConversationLoop:
+    def build_turns(
+        self,
+        responder: LangGraphResponder,
+        *,
+        participant_policy_enabled: bool = False,
+    ) -> MeetingTurns:
         conversation_settings = self._settings.conversation
         decider_settings = self._settings.participation_decider
-        return ConversationLoop(
+        return build_meeting_turns(
             responder,
-            interaction=LoopInteraction(
+            interaction=TurnInteraction(
                 on_transition=self._behavior.on_transition,
                 wake_phrases=self._behavior.wake_phrases,
                 twin_names=self._behavior.twin_names,
                 barge_in=self._behavior.barge_in,
                 barge_in_min_words=conversation_settings.barge_in_min_words,
-                participant_policy_enabled=conversation_settings.participant_policy_enabled,
+                participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
-                jev_decider=_participation_decider(self._settings),
-                jev_speak_threshold=decider_settings.speak_threshold,
-                jev_clarify_threshold=decider_settings.clarify_threshold,
+                decider=_participation_decider(self._settings),
+                speak_threshold=decider_settings.speak_threshold,
+                clarify_threshold=decider_settings.clarify_threshold,
+                window_turns=decider_settings.window_turns,
             ),
-            timing=LoopTiming(
+            timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
                 activation_seconds=conversation_settings.activation_seconds,
             ),
-            generation=LoopGeneration(
+            generation=TurnGeneration(
                 max_spoken_sentences=conversation_settings.max_spoken_sentences,
                 language=self._settings.speech.language,
                 sentence_streaming=conversation_settings.sentence_streaming,
-                pre_generate_enabled=conversation_settings.pre_generate_enabled,
-                pregen_fuzzy_restart_enabled=conversation_settings.pregen_fuzzy_restart_enabled,
             ),
             diagnostics=Diagnostics(
                 faults=self._diagnostics.faults, journal=self._diagnostics.journal
@@ -453,9 +439,9 @@ async def open_conversation(
     config: SessionConfig,
     *,
     agent: AgentWiring = DEFAULT_AGENT_WIRING,
-    behavior: LoopBehavior,
+    behavior: TurnBehavior,
     diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
-) -> AsyncIterator[ConversationLoop]:
+) -> AsyncIterator[MeetingTurns]:
     builder = _ConversationBuilder(settings, agent, behavior, diagnostics)
     builder.build_persona()
     model = create_chat_model(settings)
@@ -474,7 +460,10 @@ async def open_conversation(
         builder.add_visual()
         builder.add_meet_tools()
         thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
-        responder = builder.build_responder(builder.build_agent(model, checkpointer), thread_id)
-        conversation = builder.build_loop(responder)
-        resources.push_async_callback(conversation.close)
-        yield conversation
+        meeting_agent = builder.build_agent(model, checkpointer)
+        responder = builder.build_responder(meeting_agent, thread_id)
+        turns = builder.build_turns(
+            responder, participant_policy_enabled=config.participant_policy_enabled
+        )
+        resources.push_async_callback(turns.lifecycle.close)
+        yield turns

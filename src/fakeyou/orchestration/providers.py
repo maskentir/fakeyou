@@ -15,6 +15,7 @@ from fakeyou.config.settings import (
     GoogleReply,
     MemorySettings,
     OpenAIReply,
+    ParticipationDeciderSettings,
     ReplySettings,
     Settings,
     require_secret,
@@ -109,11 +110,22 @@ def create_visual_chat_model(settings: Settings) -> BaseChatModel:
     return _init_chat_model(role, ConfigKey.VISUAL_API_KEY)
 
 
+def create_decider_chat_model(decider: ParticipationDeciderSettings) -> BaseChatModel:
+    values: dict[str, Any] = {
+        "model": decider.model,
+        "api_key": decider.api_key,
+        "timeout_seconds": decider.timeout_seconds,
+    }
+    if decider.base_url is not None:
+        values["base_url"] = decider.base_url
+    return _init_chat_model(GoogleReply(**values), ConfigKey.PARTICIPATION_DECIDER_API_KEY)
+
+
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
 
 
 def memory_config(settings: Settings) -> MemorySettings:
-    settings.require_roles("memory.llm", "memory.embedder")
+    settings.require_roles("memory_llm", "memory_embedder")
     require_secret(settings.memory.store.password, ConfigKey.MEMORY_STORE_PASSWORD)
     return settings.memory
 

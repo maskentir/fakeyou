@@ -35,6 +35,7 @@ class JoinRequest:
     barge_in: bool = False
     brief_path: Path | None = None
     resume: bool = False
+    on_phase: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

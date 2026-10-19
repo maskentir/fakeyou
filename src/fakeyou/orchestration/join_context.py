@@ -10,6 +10,7 @@ from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.conversation.state import TERMINAL_PHASES
 from fakeyou.db.engine import configured_url
 from fakeyou.memory.persona import (
     PersonaProfile,
@@ -164,14 +165,10 @@ async def _load_brief(path: Path, config: SessionConfig) -> MeetingBrief:
 def prepare_session_paths(config: SessionConfig, settings: Settings) -> tuple[SessionConfig, Path]:
     layout = MeetingDir(settings.paths.record_dir, config.meeting_id)
     record_path = layout.record
-    probe_path = layout.probe if settings.conversation.attribution_probe_enabled else None
     config = replace(
         config,
-        participant_policy_enabled=settings.conversation.participant_policy_enabled,
         participant_evidence_path=layout.participants,
-        attribution_probe_path=probe_path,
         per_stream_enabled=settings.conversation.per_stream_enabled,
-        meet_actions_enabled=settings.conversation.meet_actions_enabled,
         visual_enabled=settings.visual.enabled,
     )
     return config, record_path
@@ -273,4 +270,6 @@ async def _has_live_thread(config: SessionConfig, ports: JoinPorts) -> bool:
         raise FakeYouError(
             ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE, reason=reason
         ) from None
-    return saved is not None and saved.checkpoint["channel_values"].get("phase") != "ended"
+    if saved is None:
+        return False
+    return saved.checkpoint["channel_values"].get("phase") not in TERMINAL_PHASES
