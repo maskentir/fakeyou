@@ -90,4 +90,4 @@ HealthKind = Literal[
     "voiceprint_model_mismatch",
 ]
 FaultKind = ProviderFaultKind | HealthKind
-MeetingPhase = Literal["preparing", "lobby", "admitted", "disconnected", "leaving", "ended"]
+MeetingPhase = Literal["lobby", "admitted", "disconnected", "leaving", "ended"]

@@ -20,29 +20,29 @@ class ParticipationContext:
 
 
 @dataclass(frozen=True, slots=True)
-class ParticipationDecision:
+class RuleDecision:
     action: Literal["reply", "silent", "clarify"]
     reason: str
 
 
-def choose_participation(context: ParticipationContext) -> ParticipationDecision:
+def choose_participation(context: ParticipationContext) -> RuleDecision:
     if context.others_speaking:
-        return ParticipationDecision("silent", "floor_occupied")
+        return RuleDecision("silent", "floor_occupied")
     if context.addressed:
         if context.ambiguous:
-            return ParticipationDecision("clarify", "addressed_ambiguous")
-        return ParticipationDecision("reply", "addressed")
+            return RuleDecision("clarify", "addressed_ambiguous")
+        return RuleDecision("reply", "addressed")
     if not (context.followup and context.activation_valid and context.same_participant):
-        return ParticipationDecision("silent", "not_addressed")
+        return RuleDecision("silent", "not_addressed")
     if context.interjection:
-        return ParticipationDecision("silent", "interjection")
+        return RuleDecision("silent", "interjection")
     if context.bare_ack and not context.awaiting_reply:
-        return ParticipationDecision("silent", "bare_ack")
+        return RuleDecision("silent", "bare_ack")
     if context.ambiguous:
-        return ParticipationDecision("clarify", "followup_ambiguous")
+        return RuleDecision("clarify", "followup_ambiguous")
     if context.bare_ack:
-        return ParticipationDecision("reply", "followup_answers_question")
-    return ParticipationDecision("reply", "followup_same_speaker")
+        return RuleDecision("reply", "followup_answers_question")
+    return RuleDecision("reply", "followup_same_speaker")
 
 
 _VOCATIVE_BOUNDARY = frozenset({" ", ",", ".", "!", "?", ";", ":"})
