@@ -67,6 +67,7 @@ async def journaled_stream(
                     yield chunk
         except Exception as error:
             fault = classify_exception("tts", error)
+            timing.fields["provider_status"] = getattr(fault, "status", None)
             if fault is error:
                 raise
             raise fault from error

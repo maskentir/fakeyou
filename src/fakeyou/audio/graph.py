@@ -7,7 +7,6 @@ from typing import Protocol
 from fakeyou.audio.deaf import CaptureActivity, audio_duration_ms, rms_level
 from fakeyou.audio.vad import VadController, VadEvent, VadEventKind
 from fakeyou.audio.voice_activity import VoiceActivityTracker
-from fakeyou.foundation.attribution_probe import AttributionProbe
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE, PCM_CHANNELS
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 from fakeyou.identity.voiceprint_match import CLIP_GRID_MS, CLIP_PAD_MS, cut_turn_clip
@@ -109,7 +108,6 @@ class GraphParts:
     vad: VadController
     stt: SpeechToText
     turn_tap: TurnAudioTap | None = None
-    probe: AttributionProbe | None = None
     voice_activity: VoiceActivityTracker | None = None
     on_vad: OnVad | None = None
     journal: Journal | None = None
@@ -121,11 +119,9 @@ class AudioGraph:
         self._vad = parts.vad
         self._stt = parts.stt
         self._turn_tap = parts.turn_tap
-        self._probe = parts.probe
         self._voice_activity = parts.voice_activity
         self._on_vad = parts.on_vad
         self._journal = parts.journal
-        self._vad_probe_failed = False
 
     async def run(self, source: PcmQueue) -> None:
         while True:
@@ -136,13 +132,10 @@ class AudioGraph:
                 await self.ingest(pcm)
 
     async def ingest(self, pcm: bytes) -> None:
-        samples = len(pcm) // PCM16_SAMPLE_BYTES // PCM_CHANNELS
         self._activity.observe_audio(
             energy=rms_level(pcm, channels=PCM_CHANNELS),
             duration_ms=audio_duration_ms(len(pcm), CAPTURE_SAMPLE_RATE, PCM_CHANNELS),
         )
-        if self._probe is not None:
-            self._probe.observe_pcm(samples)
         if self._turn_tap is not None:
             self._turn_tap.feed(pcm)
         self._stt.send_audio(pcm)
@@ -180,16 +173,3 @@ class AudioGraph:
     def _observe_vad(self, *, active: bool) -> None:
         if self._voice_activity is not None:
             self._voice_activity.observe_vad(active=active)
-        if self._probe is None:
-            return
-        try:
-            self._probe.observe_vad(active=active)
-        except OSError as error:
-            if not self._vad_probe_failed:
-                self._vad_probe_failed = True
-                if self._journal is not None:
-                    self._journal.record(
-                        "vad_observe_failed",
-                        source="audio",
-                        error_type=type(error).__name__,
-                    )

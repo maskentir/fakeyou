@@ -20,8 +20,10 @@ from fakeyou.audio.deaf import (
     DeafMonitor,
     DeafTiming,
     DeafVerdict,
+    verdict_fault,
 )
 from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
+from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
     PlaybackBackend,
     PlaybackEngine,
@@ -37,7 +39,6 @@ from fakeyou.audio.voice_activity import VoiceActivityTracker
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS, STTSettings, TTSSettings, VADSettings, require_secret
-from fakeyou.foundation.attribution_probe import AttributionProbe
 from fakeyou.foundation.invariants import (
     AGENT_SINK_NAME,
     CAPTURE_SAMPLE_RATE,
@@ -184,13 +185,24 @@ class StreamSource:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionRuntime:
+    now: Callable[[], float] = time.monotonic
+    stream_id: str | None = None
+    stt_idle_reconnect_seconds: float = 0.0
+
+
+DEFAULT_SESSION_RUNTIME = SessionRuntime()
+
+
+@dataclass(frozen=True, slots=True)
 class StreamComponents:
     stt: SpeechSessionFactory | None = None
     playback: PlaybackPort | None = None
     turn_tap: TurnAudioTap | None = None
     activity: CaptureActivity | None = None
-    probe: AttributionProbe | None = None
     voice_activity: VoiceActivityTracker | None = None
+    own_speech: OwnSpeech | None = None
+    runtime: SessionRuntime | None = None
 
 
 DEFAULT_STREAM_COMPONENTS = StreamComponents()
@@ -208,19 +220,10 @@ class SessionRun:
 class SessionCapture:
     stt: object = None
     activity: CaptureActivity | None = None
+    gate: FinalGate | None = None
 
 
 DEFAULT_SESSION_CAPTURE = SessionCapture()
-
-
-@dataclass(frozen=True, slots=True)
-class SessionRuntime:
-    now: Callable[[], float] = time.monotonic
-    stream_id: str | None = None
-    stt_idle_reconnect_seconds: float = 0.0
-
-
-DEFAULT_SESSION_RUNTIME = SessionRuntime()
 
 
 class MeetingAudioSession:
@@ -238,6 +241,7 @@ class MeetingAudioSession:
         self._stream_id = runtime.stream_id
         self._stt_idle_reconnect_seconds = runtime.stt_idle_reconnect_seconds
         self._stt = capture.stt
+        self._gate = capture.gate or FinalGate(OwnSpeech(now=runtime.now))
         self._faults = diagnostics.faults
         self._journal = diagnostics.journal
         self._monitor = DeafMonitor(
@@ -305,6 +309,7 @@ class MeetingAudioSession:
 
     def stt_lost(self, fault: ProviderFault) -> None:
         if fault.retryable:
+            self._gate.arm_replay()
             self.request_stt_reconnect("provider_fault")
             return
         self.fail("meeting audio provider failed", cause=fault)
@@ -347,6 +352,9 @@ class MeetingAudioSession:
 
     def _apply_monitor_action(self, verdict: DeafVerdict, action: str | None) -> None:
         if action == "terminal":
+            fault = verdict_fault(verdict)
+            if self._faults is not None and fault is not None:
+                self._faults.record(fault)
             self.fail(f"persistent {verdict}")
             self.raise_if_failed()
         if action == "repair":
@@ -475,7 +483,13 @@ class MeetingAudioSession:
             extra["sentence_index"] = sentence_index
         if transcript_id is not None:
             extra["transcript_id"] = transcript_id
-        await self._engine.speak(text, **extra)
+        with self._gate.own_speech.speaking(text):
+            try:
+                await self._engine.speak(text, **extra)
+            except (PlaybackError, OSError) as error:
+                if self._faults is not None:
+                    self._faults.record(classify_exception("tts", error, operation="speak"))
+                raise
         self.raise_if_failed()
 
     async def stop_playback(self) -> None:
@@ -604,6 +618,7 @@ class SessionSetup:
     timing: DeafTiming
     runtime: SessionRuntime
     stream_id: str | None
+    gate: FinalGate
 
 
 def _resolve_engine(
@@ -677,6 +692,14 @@ def _observed(sink: TranscriptSink, activity: CaptureActivity) -> TranscriptSink
     return observed
 
 
+def _gated(gate: FinalGate, sink: TranscriptSink) -> TranscriptSink:
+    async def gated(update: TranscriptUpdate) -> None:
+        if gate.admit(update):
+            await sink(update)
+
+    return gated
+
+
 async def _silent(update: TranscriptUpdate) -> None:
     del update
 
@@ -729,7 +752,6 @@ async def _start_session(setup: SessionSetup) -> MeetingAudioSession:
             vad=VadController(VadAnalyzer(vad_params(setup.speech.vad_settings))),
             stt=stt,
             turn_tap=setup.components.turn_tap,
-            probe=setup.components.probe,
             voice_activity=setup.components.voice_activity,
             on_vad=setup.callbacks.on_vad,
             journal=setup.diagnostics.journal,
@@ -738,7 +760,7 @@ async def _start_session(setup: SessionSetup) -> MeetingAudioSession:
     task = asyncio.create_task(graph.run(source.queue))
     return MeetingAudioSession(
         SessionRun(graph, task, source, setup.engine),
-        capture=SessionCapture(stt, setup.activity),
+        capture=SessionCapture(stt, setup.activity, setup.gate),
         diagnostics=setup.diagnostics,
         timing=setup.timing,
         runtime=setup.runtime,
@@ -759,12 +781,18 @@ async def open_meeting_audio(
     engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
     capture: CaptureSource = source or ParecCapture(on_failure=partial(_on_capture_failed, slot))
     activity = components.activity or CaptureActivity()
+    runtime = components.runtime or DEFAULT_SESSION_RUNTIME
+    gate = FinalGate(
+        components.own_speech or OwnSpeech(now=runtime.now),
+        journal=diagnostics.journal,
+        tags={},
+    )
     stt: SpeechSession | None = None
     session: MeetingAudioSession | None = None
     try:
         try:
             sinks = SpeechSinks(
-                on_update=_observed(callbacks.on_transcript, activity),
+                on_update=_gated(gate, _observed(callbacks.on_transcript, activity)),
                 on_interim=_observed(callbacks.on_interim or _silent, activity),
                 on_lost=partial(_on_stt_lost, slot, diagnostics.faults),
             )
@@ -781,8 +809,9 @@ async def open_meeting_audio(
                     speech=speech,
                     engine=engine,
                     timing=policy.timing,
-                    runtime=SessionRuntime(),
+                    runtime=runtime,
                     stream_id=None,
+                    gate=gate,
                 )
             )
             _adopt(slot, session)
@@ -885,6 +914,11 @@ async def open_stream_audio(
     slot = _SessionSlot()
     engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
     activity = components.activity or CaptureActivity()
+    gate = FinalGate(
+        components.own_speech or OwnSpeech(),
+        journal=diagnostics.journal,
+        tags={"stream_id": stream_id},
+    )
     stt: SpeechSession | None = None
     session: MeetingAudioSession | None = None
     try:
@@ -894,7 +928,7 @@ async def open_stream_audio(
             )
             tagged_interim = _tagged_optional(stream_id, callbacks.on_interim, input) or _silent
             sinks = SpeechSinks(
-                on_update=_observed(tagged_final, activity),
+                on_update=_gated(gate, _observed(tagged_final, activity)),
                 on_interim=_observed(tagged_interim, activity),
                 on_lost=partial(_on_stt_lost, slot, diagnostics.faults),
             )
@@ -916,6 +950,7 @@ async def open_stream_audio(
                         stt_idle_reconnect_seconds=speech.stt_settings.idle_reconnect_seconds,
                     ),
                     stream_id=stream_id,
+                    gate=gate,
                 )
             )
             _adopt(slot, session)

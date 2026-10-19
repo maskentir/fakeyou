@@ -1,13 +1,13 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, cast
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import PCM_CHANNELS
 from fakeyou.foundation.numbers import rms
 from fakeyou.foundation.pcm import PCM16_FULL_SCALE, PCM16_SAMPLE_BYTES, decode_pcm16
-from fakeyou.foundation.taxonomy import Subsystem
+from fakeyou.foundation.taxonomy import FaultKind, Subsystem
 from fakeyou.observability.faults import Fault, FaultReporter
 from fakeyou.observability.journal import Journal
 
@@ -26,6 +26,13 @@ _VERDICT_SOURCES: dict[DeafVerdict, Subsystem] = {
     "no_audio_frames": "audio",
     "no_transcripts": "stt",
 }
+_FAULTED_VERDICTS: tuple[DeafVerdict, ...] = tuple(_VERDICT_SOURCES)
+
+
+def verdict_fault(verdict: DeafVerdict) -> Fault | None:
+    if verdict not in _FAULTED_VERDICTS:
+        return None
+    return Fault(source=_VERDICT_SOURCES[verdict], kind=cast(FaultKind, verdict))
 
 
 def rms_level(pcm: bytes, *, channels: int = PCM_CHANNELS) -> float:
@@ -217,8 +224,9 @@ class DeafMonitor:
         )
 
     def _report(self, verdict: DeafVerdict) -> None:
-        if self._faults is not None and verdict in ("no_audio_frames", "no_transcripts"):
-            self._faults.record(Fault(source=_VERDICT_SOURCES[verdict], kind=verdict))
+        fault = verdict_fault(verdict)
+        if self._faults is not None and fault is not None:
+            self._faults.record(fault)
         if self._journal is not None and verdict == "silent_capture":
             snapshot = self._activity.snapshot()
             self._journal.record(

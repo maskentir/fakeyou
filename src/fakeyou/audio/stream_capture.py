@@ -22,6 +22,7 @@ from fakeyou.audio.audio import (
 )
 from fakeyou.audio.deaf import DeafVerdict
 from fakeyou.audio.graph import TurnAudioTap
+from fakeyou.audio.own_speech import OwnSpeech
 from fakeyou.audio.playback import PlaybackPort
 from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
@@ -745,6 +746,7 @@ async def open_stream_fleet(
     registry = StreamRegistry(
         binder=topology.binder, journal=diagnostics.journal, recorder=topology.recorder
     )
+    own_speech = OwnSpeech()
     async with AsyncExitStack() as stack:
         sessions: list[MeetingAudioSession] = []
         for slot in range(topology.slots):
@@ -764,6 +766,7 @@ async def open_stream_fleet(
                             turn_tap=(
                                 factories.turn_tap(slot) if factories.turn_tap is not None else None
                             ),
+                            own_speech=own_speech,
                         ),
                         diagnostics=diagnostics,
                         policy=policy,
