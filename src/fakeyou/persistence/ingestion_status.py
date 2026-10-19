@@ -1,10 +1,11 @@
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -21,6 +22,7 @@ from fakeyou.persistence.lease import (
 )
 
 IngestionState = Literal["not_requested", "pending", "completed", "interrupted", "failed"]
+PREFIX_BLOCK_BYTES = 8192
 
 
 class RecordLockError(LeaseError):
@@ -37,6 +39,7 @@ class IngestionStatus(BaseModel):
     resumed_from: int = Field(default=0, ge=0)
     ingested: int = Field(default=0, ge=0)
     record_sha256: str | None = None
+    record_bytes: int | None = Field(default=None, ge=0)
     updated_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     reason: str | None = None
     episode_uuids: dict[int, str] = Field(default_factory=dict)
@@ -56,6 +59,47 @@ def lock_path(record_path: Path) -> Path:
 
 def hash_meeting_record(record_path: Path) -> str:
     return sha256(record_path.read_bytes()).hexdigest()
+
+
+def _hash_leading_bytes(handle: BinaryIO, byte_count: int) -> str:
+    digest = sha256()
+    handle.seek(0)
+    remaining = byte_count
+    while remaining > 0:
+        chunk = handle.read(min(PREFIX_BLOCK_BYTES, remaining))
+        if not chunk:
+            break
+        digest.update(chunk)
+        remaining -= len(chunk)
+    return digest.hexdigest()
+
+
+def _last_newline_end(handle: BinaryIO) -> int:
+    end = handle.seek(0, os.SEEK_END)
+    while end > 0:
+        start = max(0, end - PREFIX_BLOCK_BYTES)
+        handle.seek(start)
+        position = handle.read(end - start).rfind(b"\n")
+        if position != -1:
+            return start + position + 1
+        end = start
+    return 0
+
+
+def finalized_prefix(record_path: Path) -> tuple[str, int]:
+    with record_path.open("rb") as handle:
+        byte_count = _last_newline_end(handle)
+        return _hash_leading_bytes(handle, byte_count), byte_count
+
+
+def hash_record_prefix(record_path: Path, byte_count: int) -> str:
+    with record_path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        if size < byte_count:
+            raise ValueError(
+                f"record has {size} bytes, shorter than the hashed prefix of {byte_count} bytes"
+            )
+        return _hash_leading_bytes(handle, byte_count)
 
 
 def read_status(path: Path, *, journal: Journal | None = None) -> IngestionStatus | None:

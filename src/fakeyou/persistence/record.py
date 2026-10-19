@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.layout import MeetingDir
 
 RECORD_SYNC_INTERVAL = 20
+RECORD_VERSION = 2
 _TAIL_BLOCK_BYTES = 8192
 
 
@@ -22,6 +24,11 @@ class _Entry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     at: AwareDatetime
+
+
+class RecordHeader(_Entry):
+    kind: Literal["header"] = "header"
+    v: Literal[2] = 2
 
 
 class TranscriptEntry(_Entry):
@@ -36,6 +43,8 @@ class TranscriptEntry(_Entry):
     capture_ms: float = 0.0
     display_claim: str | None = None
     corrected_speaker_uuid: str | None = None
+    visual_refs: tuple[str, ...] = ()
+    voice_clusters: tuple[str, ...] = ()
 
 
 class TwinSpeechEntry(_Entry):
@@ -103,12 +112,37 @@ def repaired_order(entries: Sequence[RecordEntry]) -> list[RecordEntry]:
     return fixed
 
 
+def record_header_of(line: str | bytes) -> RecordHeader | None:
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(row, dict) or row.get("kind") != "header":
+        return None
+    return RecordHeader.model_validate(row)
+
+
+def read_record_header(path: Path) -> RecordHeader | None:
+    with path.open("rb") as handle:
+        for line in handle:
+            if line.strip():
+                return record_header_of(line)
+    return None
+
+
 def load_meeting_record(
     path: Path, *, repair: bool = True, journal: Journal | None = None
 ) -> list[RecordEntry]:
-    text = path.read_text(encoding="utf-8")
+    return parse_meeting_record(path.read_text(encoding="utf-8"), repair=repair, journal=journal)
+
+
+def parse_meeting_record(
+    text: str, *, repair: bool = True, journal: Journal | None = None
+) -> list[RecordEntry]:
     lines = [(index, line) for index, line in enumerate(text.splitlines()) if line.strip()]
     torn_tail = bool(text.rsplit("\n", 1)[-1].strip())
+    if lines and record_header_of(lines[0][1]) is not None:
+        lines = lines[1:]
     entries: list[RecordEntry] = []
     for index, line in lines:
         if torn_tail and index == lines[-1][0]:
@@ -166,6 +200,7 @@ class MeetingRecord:
         self._file = path.open("a", encoding="utf-8")
         self._faults = faults
         self._now = now
+        self._header_pending = self._file.tell() == 0
         self._unsynced = 0
         self._seen: set[str] = set()
         self._seen_visual: set[str] = set()
@@ -187,6 +222,8 @@ class MeetingRecord:
                 stream_id=event.stream_id,
                 capture_ms=event.capture_ms,
                 display_claim=event.display_claim,
+                visual_refs=event.visual_refs,
+                voice_clusters=event.voice_clusters,
             )
         )
 
@@ -234,9 +271,13 @@ class MeetingRecord:
             self._file.close()
 
     def _append(self, entry: RecordEntry) -> None:
+        line = entry.model_dump_json() + "\n"
+        if self._header_pending:
+            line = RecordHeader(at=entry.at).model_dump_json() + "\n" + line
         try:
-            self._file.write(entry.model_dump_json() + "\n")
+            self._file.write(line)
             self._file.flush()
+            self._header_pending = False
             self._unsynced += 1
             if self._unsynced >= RECORD_SYNC_INTERVAL:
                 os.fsync(self._file.fileno())
