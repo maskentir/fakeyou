@@ -28,6 +28,8 @@ from fakeyou.transcription.contract import (
 )
 
 MUSE_MAX_BACKLOG_SECONDS = 4
+OVERLOAD_MARKERS = ("slower than real-time", "backlog too large", "slower than realtime")
+
 KEEPALIVE_IDLE_SECONDS = 0.5
 KEEPALIVE_CHUNK_SECONDS = 0.1
 HANDSHAKE_TIMEOUT_SECONDS = 10.0
@@ -148,7 +150,11 @@ class MuseClient:
         self._socket: MuseSocket | None = None
         self._tasks: list[asyncio.Task[None]] = []
         self._turn: _Turn | None = None
+        self._sessions = 0
         self._last_audio_at: float | None = None
+        self._stream_started: float | None = None
+        self._sent_bytes = 0
+        self._keepalive_burst_bytes = self._bytes_per_second
         self._keepalive_active = False
         self._lost = False
         self._closed = False
@@ -182,6 +188,9 @@ class MuseClient:
         socket = await self._open_session()
         self._socket = socket
         self._lost = False
+        self._sessions += 1
+        self._stream_started = self._clock()
+        self._sent_bytes = 0
         if self._last_audio_at is None:
             self._last_audio_at = self._clock()
         self._session_ready.set()
@@ -263,8 +272,6 @@ class MuseClient:
 
     async def _send_loop(self) -> None:
         options = self._options
-        silence_bytes = options.sample_rate * PCM16_SAMPLE_BYTES * options.keepalive_chunk_seconds
-        silence = bytes(int(silence_bytes))
         while True:
             if self._outbox and self._socket_ready():
                 await self._send_next()
@@ -275,7 +282,7 @@ class MuseClient:
                 pass
             self._wake.clear()
             if self._socket_ready() and not self._outbox and self._keepalive_due():
-                await self._send_keepalive(silence)
+                await self._send_keepalive()
 
     async def _send_next(self) -> None:
         socket = self._socket
@@ -287,6 +294,8 @@ class MuseClient:
             await socket.send(chunk)
         except TranscriptionError as error:
             self._lose(error)
+            return
+        self._sent_bytes += len(chunk)
 
     def _keepalive_due(self) -> bool:
         if self._last_audio_at is None:
@@ -302,14 +311,22 @@ class MuseClient:
                 )
         return True
 
-    async def _send_keepalive(self, silence: bytes) -> None:
+    async def _send_keepalive(self) -> None:
         socket = self._socket
-        if socket is None:
+        if socket is None or self._stream_started is None:
             return
+        elapsed_bytes = int((self._clock() - self._stream_started) * self._bytes_per_second)
+        behind = elapsed_bytes - self._sent_bytes
+        behind -= behind % PCM16_SAMPLE_BYTES
+        if behind <= 0:
+            return
+        chunk = min(behind, self._keepalive_burst_bytes)
         try:
-            await socket.send(silence)
+            await socket.send(bytes(chunk))
         except TranscriptionError as error:
             self._lose(error)
+            return
+        self._sent_bytes += chunk
 
     async def _receive(self, socket: MuseSocket) -> None:
         try:
@@ -374,6 +391,8 @@ class MuseClient:
         elif kind == "speechComplete":
             await self._complete_turn(message)
         elif kind == "error":
+            if _is_overload(message.get("message", "unknown")):
+                raise SttConnectionLost(f"Muse error: {message.get('message', '')}")
             raise TranscriptionError(f"Muse error: {message.get('message', 'unknown')}")
         elif kind in ("speechEnd", "audioProgress"):
             return
@@ -417,7 +436,12 @@ class MuseClient:
         if not text:
             self._note("stt_turn_skipped")
             return
-        await self._emit_final(text, labels)
+        await self._emit_final(text, self._scoped(labels))
+
+    def _scoped(self, labels: tuple[str, ...]) -> tuple[str, ...]:
+        if self._sessions <= 1:
+            return labels
+        return tuple(f"{label}@{self._sessions}" for label in labels)
 
     def _record_turn(self, turn: _Turn) -> None:
         if self._journal is None:
@@ -455,6 +479,13 @@ class MuseClient:
     def _note(self, event: str, **fields: Any) -> None:
         if self._journal is not None:
             self._journal.record(event, source="stt", **fields)
+
+
+def _is_overload(message: object) -> bool:
+    if not isinstance(message, str):
+        return False
+    lowered = message.lower()
+    return any(marker in lowered for marker in OVERLOAD_MARKERS)
 
 
 def _now() -> str:
