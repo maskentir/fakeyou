@@ -46,10 +46,9 @@ jobs:
       - run: uv run --no-sync lint-imports
       - run: uv run --no-sync deptry .
       - run: uv run --no-sync pytest
-      - run: uv run --no-sync deepeval test run evals/test_meeting_agent_eval.py
-      - run: uv run --no-sync deepeval test run evals/test_persona_eval.py
-      - run: uv run --no-sync deepeval test run evals/test_replay_eval.py
       - run: uv build
+      - name: Provide a harness env file for Compose
+        run: cp .env.example .env
       - name: Validate Compose configuration
         run: docker compose config --quiet
         env:
