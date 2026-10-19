@@ -4,7 +4,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
 from fakeyou.memory.memory import create_memory_tools
@@ -58,7 +58,7 @@ def test_production_factories_expose_exactly_the_contract_tools(tmp_path: Path) 
     )
     visual_tools = create_visual_tools(
         VisualStore(tmp_path / "visual"),
-        VisualCaptioner(caption_model("A chart."), settings=VisualSettings(enabled=True)),
+        VisualCaptioner(caption_model("A chart."), settings=PerceptionSettings(enabled=True)),
     )
 
     exposed = {tool.name for tool in [*memory_tools, *meet_tools, *visual_tools]}

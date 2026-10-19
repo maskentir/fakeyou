@@ -665,7 +665,7 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
         {
             "t1": [
                 ("chunk", "First sentence here. ", "model"),
-                ("error", FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)),
+                ("error", FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED)),
             ]
         }
     )
@@ -681,11 +681,11 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
 
     with pytest.raises(
         FakeYouError,
-        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+        match=message_pattern(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED),
     ) as caught:
         await _drain()
 
-    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
+    assert caught.value.code is ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED
     assert seen == ["First sentence here."]
 
 
@@ -693,20 +693,20 @@ async def test_stream_error_before_first_sentence_skips_recovery_for_domain_erro
     journal: RecordingJournal,
 ) -> None:
     agent = ScriptedAgent(
-        {"t1": [("error", FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED))]}
+        {"t1": [("error", FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED))]}
     )
     responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
 
     with pytest.raises(
         FakeYouError,
-        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+        match=message_pattern(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED),
     ) as caught:
         async for _ in responder.stream_sentences(
             [event("t1", "hi")], lambda: None, request_id="req-1"
         ):
             pass
 
-    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
+    assert caught.value.code is ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED
     assert len(agent.streams) == 1
 
 

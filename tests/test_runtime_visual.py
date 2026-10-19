@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from playwright.async_api import Page
 
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
@@ -90,7 +90,7 @@ async def test_worker_wires_captioner_and_callback_into_observer(tmp_path: Path)
     page = FakeShotPage([PRESENT_SCAN, PRESENT_SCAN], boxes=[dict(CLIP_BOX)], shots=[shot_bytes()])
     store = VisualStore(tmp_path / "visual")
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     received: list[tuple[str, str]] = []
     clock = FakeClock()
     worker = MeetingWorker(

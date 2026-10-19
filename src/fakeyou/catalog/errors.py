@@ -17,7 +17,7 @@ class ErrorCode(StrEnum):
     DATABASE_SCHEMA_UNVERSIONED = "database.schema_unversioned"
     DATABASE_STAMP_REFUSED = "database.stamp_refused"
     CONFIG_SECRET_MISSING = "config.secret_missing"
-    CONFIG_VISUAL_BASE_URL_REQUIRED = "config.visual_base_url_required"
+    CONFIG_PERCEPTION_BASE_URL_REQUIRED = "config.perception_base_url_required"
     CONFIG_EMBEDDING_DIM_MISMATCH = "config.embedding_dim_mismatch"
     CONFIG_UNKNOWN_KEY = "config.unknown_key"
     CONFIG_INVALID = "config.invalid"
@@ -210,7 +210,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_CITED_METADATA_ABSENT = "debrief.cited_metadata_absent"
     DEBRIEF_SOURCE_HASH_CHANGED = "debrief.source_hash_changed"
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
-    VISUAL_PROVIDER_UNSUPPORTED = "visual.provider_unsupported"
+    PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
     API_UNAUTHORIZED = "api.unauthorized"
     API_FORBIDDEN = "api.forbidden"
     API_NOT_FOUND = "api.not_found"
@@ -265,8 +265,8 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.CONFIG_SECRET_MISSING: ErrorSpec(
         "Set {name} in .env before using this command.", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED: ErrorSpec(
-        "visual provider openai_compatible requires " + ConfigKey.VISUAL_BASE_URL,
+    ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED: ErrorSpec(
+        "perception provider openai_compatible requires " + ConfigKey.PERCEPTION_BASE_URL,
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH: ErrorSpec(
@@ -751,8 +751,8 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.PERSONA_IDENTITY_MISMATCH: ErrorSpec(
         "persona owner_id and twin_id must match the session identity", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.VISUAL_PROVIDER_UNSUPPORTED: ErrorSpec(
-        "unsupported visual provider: {provider}", ExitCode.INPUT_REJECTED
+    ErrorCode.PERCEPTION_PROVIDER_UNSUPPORTED: ErrorSpec(
+        "unsupported perception provider: {provider}", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.API_UNAUTHORIZED: ErrorSpec(
         "missing or invalid API credentials", ExitCode.INPUT_REJECTED

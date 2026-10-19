@@ -419,25 +419,51 @@ class WorkerSettings(Section):
     audio: bool = False
 
 
-class VisualSettings(Section):
-    enabled: bool = False
-    max_concurrent: int = Field(default=2, gt=0)
+class PerceptionInterpreterSettings(Section):
     provider: Literal["openai", "openai_compatible", "anthropic", "google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = None
     api_key: SecretStr | None = None
     timeout_seconds: PositiveSeconds = 30.0
     max_retries: int = Field(default=2, ge=0)
-    budget_usd: float = Field(default=0.5, ge=0)
-    max_calls: int = Field(default=120, ge=0)
-    max_images: int = Field(default=2, gt=0)
+    max_concurrent: int = Field(default=2, gt=0)
+
+
+class AttentionSettings(Section):
+    enabled: bool = True
+    max_interjections_per_10min: int = Field(default=2, ge=0)
+    floor_gap_seconds: PositiveSeconds = 1.2
+    ttl_seconds: PositiveSeconds = 30.0
+
+
+class PerceptionSettings(Section):
+    enabled: bool = False
+    screen: bool = True
+    chat: bool = True
+    signals: bool = True
+    cameras: bool = True
+    interpreter: PerceptionInterpreterSettings = Field(
+        default_factory=PerceptionInterpreterSettings
+    )
+    budget_usd: float = Field(default=1.0, ge=0)
+    max_calls: int = Field(default=240, ge=0)
+    view_max_chars: int = Field(default=6000, gt=0)
     retention_raw_days: int = Field(default=7, gt=0)
     retention_text_days: int = Field(default=30, gt=0)
+    attention: AttentionSettings = Field(default_factory=AttentionSettings)
 
     @model_validator(mode="after")
     def compatible_provider_needs_base_url(self) -> Self:
-        if self.enabled and self.provider == "openai_compatible" and self.base_url is None:
-            raise ValueError("visual provider openai_compatible requires FAKEYOU_VISUAL__BASE_URL")
+        interpreter = self.interpreter
+        if (
+            self.enabled
+            and interpreter.provider == "openai_compatible"
+            and interpreter.base_url is None
+        ):
+            raise ValueError(
+                "perception provider openai_compatible requires "
+                "FAKEYOU_PERCEPTION__INTERPRETER__BASE_URL"
+            )
         return self
 
 
@@ -482,7 +508,7 @@ class Configuration(Section):
     audio_health: AudioHealthSettings = Field(default_factory=AudioHealthSettings)
     preflight: PreflightSettings = Field(default_factory=PreflightSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
-    visual: VisualSettings = Field(default_factory=VisualSettings)
+    perception: PerceptionSettings = Field(default_factory=PerceptionSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     transport: TransportSettings = Field(default_factory=TransportSettings)
 
@@ -513,7 +539,7 @@ class Configuration(Section):
                 value = getattr(value, part)
             if value is None:
                 continue
-            if role == "visual" and not value.enabled:
+            if role == "perception" and not self.perception.enabled:
                 continue
             if role == "participation_decider" and not value.enabled:
                 continue

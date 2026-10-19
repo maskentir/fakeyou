@@ -14,7 +14,7 @@ from PIL import Image
 
 import fakeyou.orchestration.assembly as assembly_module
 from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import LangGraphResponder
 from fakeyou.conversation.meeting_messages import request_messages
@@ -82,7 +82,7 @@ def frame_bytes64(frame: VisualFrame) -> str:
 
 def captioner_for(texts: list[str]) -> tuple[VisualCaptioner, ToolCallingFakeModel]:
     model = ToolCallingFakeModel(responses=[AIMessage(content=text) for text in texts], seen=[])
-    return VisualCaptioner(model, settings=VisualSettings(enabled=True)), model
+    return VisualCaptioner(model, settings=PerceptionSettings(enabled=True)), model
 
 
 def participant(text: str, message_id: str, refs: tuple[str, ...] = ()) -> HumanMessage:
@@ -609,11 +609,11 @@ async def test_assembly_registers_hydrate_after_prefetch(
 
     monkeypatch.setattr(assembly_module, "create_meeting_agent", fake_agent)
     recall = settings.memory.recall.model_copy(update={"strategy": "prefetch"})
-    visual = settings.visual.model_copy(update={"enabled": True})
+    perception = settings.perception.model_copy(update={"enabled": True})
     wired = settings.model_copy(
         update={
             "memory": settings.memory.model_copy(update={"recall": recall}),
-            "visual": visual,
+            "perception": perception,
         }
     )
     profile = PersonaProfile(

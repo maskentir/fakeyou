@@ -10,7 +10,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import visual_purge_expired
 from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import Settings, VisualSettings
+from fakeyou.config.settings import PerceptionSettings, Settings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.visual_retention import PurgeReport
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
@@ -109,8 +109,8 @@ def test_purge_rejects_bad_input(settings: Settings, tmp_path: Path) -> None:
 
 
 async def test_flag_off_disables_everything(settings: Settings, tmp_path: Path) -> None:
-    assert settings.visual.enabled is False
-    assert VisualSettings().enabled is False
+    assert settings.perception.enabled is False
+    assert PerceptionSettings().enabled is False
     assert assembly_module.create_visual_captioner(settings) is None
 
     store = VisualStore(tmp_path / "visual", journal=RecordingJournal())

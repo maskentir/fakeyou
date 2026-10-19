@@ -83,18 +83,18 @@ def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
     return _init_chat_model(settings.reply_fallback, ConfigKey.REPLY_FALLBACK_API_KEY)
 
 
-def create_visual_chat_model(settings: Settings) -> BaseChatModel:
-    settings.require_roles("visual")
-    visual = settings.visual
+def create_perception_chat_model(settings: Settings) -> BaseChatModel:
+    settings.require_roles("perception")
+    interpreter = settings.perception.interpreter
     values: dict[str, Any] = {
-        "model": visual.model,
-        "api_key": visual.api_key,
-        "timeout_seconds": visual.timeout_seconds,
-        "max_retries": visual.max_retries,
+        "model": interpreter.model,
+        "api_key": interpreter.api_key,
+        "timeout_seconds": interpreter.timeout_seconds,
+        "max_retries": interpreter.max_retries,
     }
-    if visual.base_url is not None:
-        values["base_url"] = visual.base_url
-    provider = visual.provider
+    if interpreter.base_url is not None:
+        values["base_url"] = interpreter.base_url
+    provider = interpreter.provider
     if provider == "openai":
         role: ReplySettings = OpenAIReply(**values)
     elif provider == "anthropic":
@@ -102,12 +102,12 @@ def create_visual_chat_model(settings: Settings) -> BaseChatModel:
     elif provider == "google":
         role = GoogleReply(**values)
     elif provider == "openai_compatible":
-        if visual.base_url is None:
-            raise FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)
+        if interpreter.base_url is None:
+            raise FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED)
         role = CompatibleReply(**values)
     else:
-        raise FakeYouError(ErrorCode.VISUAL_PROVIDER_UNSUPPORTED, provider=provider)
-    return _init_chat_model(role, ConfigKey.VISUAL_API_KEY)
+        raise FakeYouError(ErrorCode.PERCEPTION_PROVIDER_UNSUPPORTED, provider=provider)
+    return _init_chat_model(role, ConfigKey.PERCEPTION_API_KEY)
 
 
 def create_decider_chat_model(decider: ParticipationDeciderSettings) -> BaseChatModel:

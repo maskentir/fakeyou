@@ -20,7 +20,7 @@ from tests._memory_fakes import make_graphiti
 
 def _wired_settings(settings: Settings) -> Settings:
     return settings.model_copy(
-        update={"visual": settings.visual.model_copy(update={"enabled": True})}
+        update={"perception": settings.perception.model_copy(update={"enabled": True})}
     )
 
 
@@ -117,7 +117,7 @@ async def test_assembly_omits_visual_tooling_when_flag_off(
 ) -> None:
     created: dict[str, Any] = {}
     monkeypatch.setattr(assembly_module, "create_meeting_agent", _capture(created))
-    assert settings.visual.enabled is False
+    assert settings.perception.enabled is False
     profile = _profile(settings)
     store = VisualStore(tmp_path / "visual")
     captioner = VisualCaptioner(
@@ -143,7 +143,7 @@ async def test_assembly_omits_visual_tooling_when_flag_off(
 
 
 def test_create_visual_captioner_returns_none_when_flag_off(settings: Settings) -> None:
-    assert settings.visual.enabled is False
+    assert settings.perception.enabled is False
     assert assembly_module.create_visual_captioner(settings) is None
 
 
@@ -157,7 +157,7 @@ def test_create_visual_captioner_uses_visual_chat_model(
         seen.append(active)
         return sentinel
 
-    monkeypatch.setattr(assembly_module, "create_visual_chat_model", fake_factory)
+    monkeypatch.setattr(assembly_module, "create_perception_chat_model", fake_factory)
     wired = _wired_settings(settings)
 
     captioner = assembly_module.create_visual_captioner(wired)

@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from PIL import Image
 
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.visual.visual_caption import VisualCaptioner, frame_ref
 from fakeyou.visual.visual_store import VisualFrame, VisualStore
 from tests._persona_support import profile
@@ -43,7 +43,7 @@ class _ExhaustedCaptioner:
 
 
 def _captioner(text: str) -> VisualCaptioner:
-    return VisualCaptioner(caption_model(text), settings=VisualSettings(enabled=True))
+    return VisualCaptioner(caption_model(text), settings=PerceptionSettings(enabled=True))
 
 
 def test_visual_tool_needs_persona_and_visual_enabled() -> None:

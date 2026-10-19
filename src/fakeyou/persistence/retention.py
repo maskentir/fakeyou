@@ -38,7 +38,7 @@ def purge_audio_expired(*, root: Path | None, days: int | None, settings: Settin
 
 
 def purge_visual_expired(*, root: Path | None, days: int | None, settings: Settings) -> PurgeReport:
-    raw_days = settings.visual.retention_raw_days if days is None else days
+    raw_days = settings.perception.retention_raw_days if days is None else days
     if raw_days <= 0:
         raise FakeYouError(ErrorCode.VISUAL_RETENTION_DAYS_NOT_POSITIVE)
     resolved_root = _record_root(root, settings)
@@ -46,7 +46,7 @@ def purge_visual_expired(*, root: Path | None, days: int | None, settings: Setti
         raise FakeYouError(ErrorCode.VISUAL_ROOT_MISSING, path=resolved_root)
     now = time.time()
     raw_cutoff = now - raw_days * DAY_SECONDS
-    text_cutoff = now - settings.visual.retention_text_days * DAY_SECONDS
+    text_cutoff = now - settings.perception.retention_text_days * DAY_SECONDS
     total = PurgeReport()
     try:
         for meeting, visual_dir in _meeting_subdirectories(resolved_root, VISUAL_DIR_NAME):

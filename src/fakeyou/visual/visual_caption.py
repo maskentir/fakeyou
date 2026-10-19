@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 from PIL import Image
 
 from fakeyou.catalog.errors import FakeYouError
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.visual.visual_store import VisualFrame
@@ -70,19 +70,19 @@ class VisualCaptioner:
         self,
         model: BaseChatModel,
         *,
-        settings: VisualSettings | None = None,
+        settings: PerceptionSettings | None = None,
         journal: Journal | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._model = model
-        self._settings = settings if settings is not None else VisualSettings()
+        self._settings = settings if settings is not None else PerceptionSettings()
         self._journal = journal
         self._monotonic = monotonic
         self._cache: dict[str, tuple[VisualCaption, float]] = {}
         self._spent_usd = 0.0
         self._calls = 0
         self._reserved_usd = 0.0
-        self._semaphore = asyncio.Semaphore(self._settings.max_concurrent)
+        self._semaphore = asyncio.Semaphore(self._settings.interpreter.max_concurrent)
 
     @property
     def spent_usd(self) -> float:

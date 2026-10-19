@@ -17,13 +17,14 @@ from fakeyou.config.settings import (
     MemorySettings,
     OpenAIMemoryLLM,
     OpenAIReply,
+    PerceptionInterpreterSettings,
+    PerceptionSettings,
     ReplySettings,
     Settings,
     StoreSettings,
     STTSettings,
     TTSSettings,
     VADSettings,
-    VisualSettings,
 )
 from tests._error_support import message_pattern
 from tests._fakes_common import env_file_opt
@@ -283,7 +284,7 @@ def test_require_roles_rejects_unknown_role_by_name() -> None:
         "memory_llm",
         "memory_embedder",
         "participation_decider",
-        "visual",
+        "perception",
     ],
 )
 def test_every_active_role_requires_its_own_key(role: str) -> None:
@@ -293,7 +294,7 @@ def test_every_active_role_requires_its_own_key(role: str) -> None:
         reply_fallback=OpenAIReply(max_retries=0),
         debrief=OpenAIReply(max_retries=0),
     )
-    settings.visual.enabled = True
+    settings.perception.enabled = True
     with pytest.raises(FakeYouError, match="API_KEY") as caught:
         settings.require_roles(role)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
@@ -302,7 +303,7 @@ def test_every_active_role_requires_its_own_key(role: str) -> None:
 def test_disabled_roles_do_not_require_keys() -> None:
     settings = Settings(**env_file_opt(None))
     settings.participation_decider.enabled = False
-    settings.require_roles("visual", "participation_decider", "reply_fallback")
+    settings.require_roles("perception", "participation_decider", "reply_fallback")
     with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__API_KEY"):
         Settings(**env_file_opt(None)).require_roles("participation_decider")
 
@@ -320,10 +321,11 @@ def test_unknown_role_is_a_named_config_error() -> None:
         Settings(**env_file_opt(None)).require_roles("memory.llm")
 
 
-def test_enabled_compatible_visual_requires_a_base_url() -> None:
-    with pytest.raises(ValueError, match="FAKEYOU_VISUAL__BASE_URL"):
-        VisualSettings(enabled=True, provider="openai_compatible")
-    assert VisualSettings(provider="openai_compatible").base_url is None
+def test_enabled_compatible_perception_requires_a_base_url() -> None:
+    compatible = PerceptionInterpreterSettings(provider="openai_compatible")
+    with pytest.raises(ValueError, match="FAKEYOU_PERCEPTION__INTERPRETER__BASE_URL"):
+        PerceptionSettings(enabled=True, interpreter=compatible)
+    assert PerceptionSettings(interpreter=compatible).interpreter.base_url is None
 
 
 def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[str]) -> None:
@@ -899,7 +901,9 @@ def test_memory_close_budgets_default_and_read_env(monkeypatch: pytest.MonkeyPat
     assert memory.close_hard_seconds == 2.5
 
 
-def test_visual_max_concurrent_defaults_and_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings(**env_file_opt(None)).visual.max_concurrent == 2
-    monkeypatch.setenv("FAKEYOU_VISUAL__MAX_CONCURRENT", "4")
-    assert Settings(**env_file_opt(None)).visual.max_concurrent == 4
+def test_perception_max_concurrent_defaults_and_reads_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(**env_file_opt(None)).perception.interpreter.max_concurrent == 2
+    monkeypatch.setenv("FAKEYOU_PERCEPTION__INTERPRETER__MAX_CONCURRENT", "4")
+    assert Settings(**env_file_opt(None)).perception.interpreter.max_concurrent == 4

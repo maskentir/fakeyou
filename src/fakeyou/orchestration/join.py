@@ -210,7 +210,7 @@ def _build_join_layers(
         VisualStore(
             MeetingDir.from_record_path(prepared.record_path).visual_dir, journal=run.journal
         )
-        if prepared.request.settings.visual.enabled
+        if prepared.request.settings.perception.enabled
         else None
     )
     run.visual_captioner = (

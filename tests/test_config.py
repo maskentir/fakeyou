@@ -126,7 +126,7 @@ def test_provider_roles_match_the_frozen_contract_list() -> None:
         "memory_llm",
         "memory_embedder",
         "participation_decider",
-        "visual",
+        "perception",
     )
     assert set(API_KEY_OF_ROLE) == set(PROVIDER_ROLES)
     assert set(ROLE_ATTRIBUTE_PATH) == set(PROVIDER_ROLES)
@@ -151,7 +151,7 @@ def test_role_header_suffix_matches_the_frozen_map() -> None:
         "memory_llm": "Memory-Llm",
         "memory_embedder": "Memory-Embedder",
         "participation_decider": "Participation-Decider",
-        "visual": "Visual",
+        "perception": "Perception",
     }
 
 
@@ -182,7 +182,7 @@ def test_env_example_documents_every_compose_only_key() -> None:
 
 
 def test_settings_leaf_count_matches_the_frozen_map() -> None:
-    assert len(_setting_env_keys(Settings)) == 154
+    assert len(_setting_env_keys(Settings)) == 162
 
 
 class _MigrationMap(NamedTuple):
@@ -191,7 +191,7 @@ class _MigrationMap(NamedTuple):
     new_keys: tuple[str, ...]
 
 
-EXPECTED_SETTINGS_COUNTS = {"keep": 154}
+EXPECTED_SETTINGS_COUNTS = {"keep": 162}
 EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
 EXPECTED_NEW_COUNT = 0
 

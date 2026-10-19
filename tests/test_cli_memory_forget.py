@@ -356,19 +356,19 @@ async def test_open_persona_memory_passes_domain_error_through(
         yield object()
 
     async def boom(_memory: object) -> None:
-        raise FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)
+        raise FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED)
 
     monkeypatch.setattr(providers, "open_graphiti_memory", fake_open)
     monkeypatch.setattr(providers, "verify_memory_connection", boom)
 
     with pytest.raises(
         FakeYouError,
-        match=message_pattern(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED),
+        match=message_pattern(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED),
     ) as caught:
         async with providers.open_persona_memory(settings):
             pass
 
-    assert caught.value.code is ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED
+    assert caught.value.code is ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED
 
 
 async def test_run_forget_refuses_an_ambiguous_target_before_opening_memory(

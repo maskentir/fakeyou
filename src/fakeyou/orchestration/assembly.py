@@ -65,7 +65,11 @@ from fakeyou.memory.persona import (
     memory_wiring,
     refuse_meet_tool,
 )
-from fakeyou.memory.visual_hydrate import create_visual_hydrate_middleware, create_visual_resolver
+from fakeyou.memory.visual_hydrate import (
+    VISUAL_HYDRATE_MAX_IMAGES,
+    create_visual_hydrate_middleware,
+    create_visual_resolver,
+)
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.journal import Journal
@@ -75,7 +79,7 @@ from fakeyou.orchestration.providers import (
     create_chat_model,
     create_decider_chat_model,
     create_fallback_chat_model,
-    create_visual_chat_model,
+    create_perception_chat_model,
 )
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.visual.visual_caption import VisualCaptioner
@@ -168,10 +172,10 @@ def default_persona(settings: Settings) -> str:
 def create_visual_captioner(
     settings: Settings, journal: Journal | None = None
 ) -> VisualCaptioner | None:
-    if not settings.visual.enabled:
+    if not settings.perception.enabled:
         return None
     return VisualCaptioner(
-        create_visual_chat_model(settings), settings=settings.visual, journal=journal
+        create_perception_chat_model(settings), settings=settings.perception, journal=journal
     )
 
 
@@ -237,7 +241,7 @@ class TurnBehavior:
 
 def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
     return (
-        settings.visual.enabled
+        settings.perception.enabled
         and agent.visual_store is not None
         and agent.visual_captioner is not None
     )
@@ -354,11 +358,11 @@ class _ConversationBuilder:
             create_visual_hydrate_middleware(
                 store,
                 captioner,
-                max_images=self._settings.visual.max_images,
+                max_images=VISUAL_HYDRATE_MAX_IMAGES,
                 journal=self._diagnostics.journal,
             )
         )
-        if visual_tool_allowed(self._tool_names, visual_enabled=self._settings.visual.enabled):
+        if visual_tool_allowed(self._tool_names, visual_enabled=self._settings.perception.enabled):
             self._tools.extend(create_visual_tools(store, captioner))
 
     def add_meet_tools(self) -> None:

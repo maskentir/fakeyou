@@ -169,7 +169,7 @@ def prepare_session_paths(config: SessionConfig, settings: Settings) -> tuple[Se
         config,
         participant_evidence_path=layout.participants,
         per_stream_enabled=settings.conversation.per_stream_enabled,
-        visual_enabled=settings.visual.enabled,
+        visual_enabled=settings.perception.enabled,
     )
     return config, record_path
 

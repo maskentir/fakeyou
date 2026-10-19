@@ -14,7 +14,7 @@ import pytest
 from PIL import Image
 from playwright.async_api import Error as PlaywrightError
 
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.foundation.polling import PollSchedule
 from fakeyou.observability.faults import ConsumerSink
 from fakeyou.visual.visual_caption import VisualCaptioner
@@ -200,7 +200,7 @@ async def test_capture_schedules_eager_caption(tmp_path: Path) -> None:
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     received: list[tuple[str, str]] = []
     observer = VisualObserver(
         page,
@@ -229,7 +229,7 @@ async def test_caption_failure_is_journaled_and_counted(
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     observer = VisualObserver(
         page, store, sinks=ConsumerSink(journal=journal), captions=CaptionSink(captioner)
     )
@@ -256,7 +256,7 @@ async def test_caption_emit_failure_is_journaled_and_counted(tmp_path: Path) -> 
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
 
     def failing_emit(_frame: object, _caption: object) -> None:
         raise RuntimeError("record gone")
@@ -286,7 +286,7 @@ async def test_duplicate_capture_skips_eager_caption(tmp_path: Path) -> None:
     )
     store = VisualStore(tmp_path)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     received: list[tuple[str, str]] = []
     observer = VisualObserver(
         page,
@@ -616,7 +616,7 @@ async def test_emit_bug_propagates_to_the_eager_boundary(tmp_path: Path) -> None
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
 
     def buggy_emit(_frame: object, _caption: object) -> None:
         raise ValueError("bug")
@@ -645,7 +645,7 @@ async def test_unexpected_caption_failure_is_retrieved_at_eager_boundary(
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     observer = VisualObserver(
         page, store, sinks=ConsumerSink(journal=journal), captions=CaptionSink(captioner)
     )
@@ -674,7 +674,7 @@ async def test_provider_fault_caption_is_counted_not_propagated(
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     observer = VisualObserver(
         page, store, sinks=ConsumerSink(journal=journal), captions=CaptionSink(captioner)
     )
@@ -704,13 +704,13 @@ async def test_fakeyou_caption_error_is_counted_not_propagated(
     journal = RecordingJournal()
     store = VisualStore(tmp_path, journal=journal)
     model = caption_model("A launch timeline.")
-    captioner = VisualCaptioner(model, settings=VisualSettings(enabled=True))
+    captioner = VisualCaptioner(model, settings=PerceptionSettings(enabled=True))
     observer = VisualObserver(
         page, store, sinks=ConsumerSink(journal=journal), captions=CaptionSink(captioner)
     )
 
     async def faulting(_frame: object) -> object:
-        raise FakeYouError(ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED)
+        raise FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED)
 
     monkeypatch.setattr(captioner, "caption_frame", faulting)
     assert await observer.poll() is None

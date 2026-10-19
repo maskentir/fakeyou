@@ -25,8 +25,8 @@ class ConfigKey(StrEnum):
     DEBRIEF_API_KEY = "FAKEYOU_DEBRIEF__API_KEY"
     STT_API_KEY = "FAKEYOU_STT__API_KEY"
     TTS_API_KEY = "FAKEYOU_TTS__API_KEY"
-    VISUAL_BASE_URL = "FAKEYOU_VISUAL__BASE_URL"
-    VISUAL_API_KEY = "FAKEYOU_VISUAL__API_KEY"
+    PERCEPTION_BASE_URL = "FAKEYOU_PERCEPTION__INTERPRETER__BASE_URL"
+    PERCEPTION_API_KEY = "FAKEYOU_PERCEPTION__INTERPRETER__API_KEY"
     MEMORY_STORE_PASSWORD = "FAKEYOU_MEMORY__STORE__PASSWORD"
     MEMORY_LLM_API_KEY = "FAKEYOU_MEMORY__LLM__API_KEY"
     MEMORY_EMBEDDER_API_KEY = "FAKEYOU_MEMORY__EMBEDDER__API_KEY"
@@ -67,7 +67,7 @@ PROVIDER_ROLES: tuple[str, ...] = (
     "memory_llm",
     "memory_embedder",
     "participation_decider",
-    "visual",
+    "perception",
 )
 
 ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
@@ -79,7 +79,7 @@ ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
     "memory_llm": "memory.llm",
     "memory_embedder": "memory.embedder",
     "participation_decider": "participation_decider",
-    "visual": "visual",
+    "perception": "perception.interpreter",
 }
 
 API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
@@ -91,7 +91,7 @@ API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
     "memory_llm": ConfigKey.MEMORY_LLM_API_KEY,
     "memory_embedder": ConfigKey.MEMORY_EMBEDDER_API_KEY,
     "participation_decider": ConfigKey.PARTICIPATION_DECIDER_API_KEY,
-    "visual": ConfigKey.VISUAL_API_KEY,
+    "perception": ConfigKey.PERCEPTION_API_KEY,
 }
 
 ROLE_HEADER_SUFFIX: Mapping[str, str] = {
@@ -103,5 +103,5 @@ ROLE_HEADER_SUFFIX: Mapping[str, str] = {
     "memory_llm": "Memory-Llm",
     "memory_embedder": "Memory-Embedder",
     "participation_decider": "Participation-Decider",
-    "visual": "Visual",
+    "perception": "Perception",
 }

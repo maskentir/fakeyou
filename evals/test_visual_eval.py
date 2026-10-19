@@ -9,7 +9,7 @@ from PIL import Image
 
 import fakeyou.debrief.debrief as debrief_module
 from evals._budgets import VISUAL_BUDGET_MAX, VISUAL_BUDGET_P95, VISUAL_STABILITY_MIN
-from fakeyou.config.settings import VisualSettings
+from fakeyou.config.settings import PerceptionSettings
 from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefItem, DebriefReport, EvidenceSource
 from fakeyou.debrief.debrief_sources import load_record_snapshot, validate_draft
 from fakeyou.memory.visual_hydrate import visual_clarification
@@ -113,7 +113,7 @@ def store_for(
 
 
 def captioner_for(
-    captions: list[str], settings: VisualSettings, journal: RecordingJournal
+    captions: list[str], settings: PerceptionSettings, journal: RecordingJournal
 ) -> VisualCaptioner:
     responses: list[BaseMessage] = [
         AIMessage(
@@ -142,7 +142,7 @@ async def test_answer_cites_frame_matching_utterance_window(tmp_path: Path) -> N
     tolerance_ms = fixture["tolerance_ms"]
     utterance = scenario["utterance"]
     journal = RecordingJournal("visual-eval")
-    settings = VisualSettings(enabled=True)
+    settings = PerceptionSettings(enabled=True)
     store = store_for(tmp_path / "answer", fixture["frames"], journal)
     candidates = frames_in_window(
         store.frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=tolerance_ms
@@ -171,7 +171,7 @@ async def test_static_slide_asked_late_still_cites(tmp_path: Path) -> None:
     tolerance_ms = fixture["tolerance_ms"]
     utterance = scenario["utterance"]
     journal = RecordingJournal("visual-eval")
-    settings = VisualSettings(enabled=True)
+    settings = PerceptionSettings(enabled=True)
     store = store_for(tmp_path / "late", fixture["frames"], journal)
     candidates = frames_in_window(
         store.frames, utterance["from_ms"], utterance["to_ms"], tolerance_ms=tolerance_ms
@@ -299,7 +299,7 @@ async def test_budget_caps_hold_on_replay(tmp_path: Path) -> None:
     fixture = load_visual_fixture()
     scenario = scenario_by_id(fixture, "budget_caps_hold")
     journal = RecordingJournal("visual-eval")
-    settings = VisualSettings(enabled=True)
+    settings = PerceptionSettings(enabled=True)
     store = store_for(tmp_path / "budget", fixture["frames"], journal)
     captions = [frame_by_id(fixture, frame_id)["caption"] for frame_id in scenario["replay_frames"]]
     captioner = captioner_for(captions, settings, journal)

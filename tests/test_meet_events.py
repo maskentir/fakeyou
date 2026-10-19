@@ -170,7 +170,7 @@ RETIRED_FLAGS = frozenset(
         "identity.voiceprint_enabled",
         "conversation.participant_policy_enabled",
         "audio.persist_enabled",
-        "visual.enabled",
+        "perception.enabled",
         "stt.idle_reconnect_seconds",
     }
 )
@@ -187,11 +187,11 @@ def test_retired_flags_are_decided_and_voiceprint_is_still_off() -> None:
         "identity.voiceprint_enabled",
         "conversation.participant_policy_enabled",
         "audio.persist_enabled",
-        "visual.enabled",
+        "perception.enabled",
         "stt.idle_reconnect_seconds",
     }
     assert Settings().identity.voiceprint_enabled is False
-    assert Settings().visual.enabled is False
+    assert Settings().perception.enabled is False
     assert Settings().conversation.sentence_streaming is True
     assert leaf_names
 
