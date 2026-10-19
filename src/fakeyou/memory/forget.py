@@ -2,6 +2,7 @@ import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
@@ -11,13 +12,18 @@ from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url
 from fakeyou.memory.memory import forget_episode, forget_meeting
 from fakeyou.memory.operator_access import OperatorAccess, open_operator_memory
-from fakeyou.memory.persona import PersonaProfile
+from fakeyou.memory.persona import PersonaProfile, load_operator_persona
+from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import journal_files
 from fakeyou.persistence.ingestion_status import record_lock
 from fakeyou.persistence.layout import meeting_profile_dir
 from fakeyou.persistence.record import meeting_record_path
 
 LifecycleThreadId = Callable[[str, str], str]
+ForgetStage = Literal["graph", "record", "journal", "browser_profile", "checkpoint"]
+ForgetStageStatus = Literal["removed", "absent", "failed", "kept"]
+FILE_STAGES: tuple[ForgetStage, ...] = ("record", "journal", "browser_profile", "checkpoint")
+STILL_PRESENT = "still_present"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +42,39 @@ class ForgottenFiles:
 
 
 @dataclass(frozen=True, slots=True)
+class ForgetStageResult:
+    stage: ForgetStage
+    status: ForgetStageStatus
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForgetFilesOutcome:
+    files: ForgottenFiles
+    stages: tuple[ForgetStageResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ForgetSummary:
     removed_episodes: int
     files: ForgottenFiles | None = None
+    stages: tuple[ForgetStageResult, ...] = ()
+    complete: bool = True
+
+
+def _complete(stages: tuple[ForgetStageResult, ...]) -> bool:
+    return all(stage.status != "failed" for stage in stages)
+
+
+def require_complete(summary: ForgetSummary) -> ForgetSummary:
+    failed = next((stage for stage in summary.stages if stage.status == "failed"), None)
+    if failed is not None:
+        raise FakeYouError(
+            ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE,
+            path=failed.stage,
+            reason=failed.detail or "failed",
+        )
+    return summary
 
 
 async def run_forget(
@@ -63,6 +99,21 @@ async def run_forget(
     )
 
 
+async def _forget_graph(
+    access: OperatorAccess, profile: PersonaProfile, meeting_id: SessionId
+) -> tuple[int, ForgetStageResult]:
+    async def sweep() -> int:
+        async with access.open_memory() as memory:
+            return await forget_meeting(
+                memory, group_id=profile.memory_group, meeting_id=meeting_id
+            )
+
+    removed, error = await capture_error(sweep)
+    if error is not None or removed is None:
+        return 0, ForgetStageResult("graph", "failed", type(error).__name__)
+    return removed, ForgetStageResult("graph", "removed" if removed else "absent")
+
+
 async def _forget_meeting(
     meeting_id: SessionId,
     *,
@@ -73,24 +124,25 @@ async def _forget_meeting(
     with record_lock(
         meeting_record_path(access.settings.paths.record_dir, meeting_id), purpose="forget"
     ):
-        async with open_operator_memory(access) as (profile, memory):
-            removed = await forget_meeting(
-                memory, group_id=profile.memory_group, meeting_id=meeting_id
-            )
-        files = (
-            None
-            if keep_record
-            else await forget_meeting_files(
-                access.settings, profile, meeting_id, lifecycle_thread_id
-            )
+        profile = await load_operator_persona(access.identity, access.settings)
+        removed, graph = await _forget_graph(access, profile, meeting_id)
+        if keep_record:
+            kept = tuple(ForgetStageResult(stage, "kept") for stage in FILE_STAGES)
+            return ForgetSummary(removed, None, (graph, *kept), _complete((graph, *kept)))
+        outcome = await forget_meeting_files(
+            access.settings, profile, meeting_id, lifecycle_thread_id
         )
-    return ForgetSummary(removed_episodes=removed, files=files)
+    stages = (graph, *outcome.stages)
+    return ForgetSummary(removed, outcome.files, stages, _complete(stages))
 
 
 async def _forget_episode(episode_uuid: str, *, access: OperatorAccess) -> ForgetSummary:
     async with open_operator_memory(access) as (profile, memory):
-        await forget_episode(memory, group_id=profile.memory_group, episode_uuid=episode_uuid)
-    return ForgetSummary(removed_episodes=1)
+        removed = await forget_episode(
+            memory, group_id=profile.memory_group, episode_uuid=episode_uuid
+        )
+    graph = ForgetStageResult("graph", "removed" if removed else "absent")
+    return ForgetSummary(removed_episodes=1 if removed else 0, stages=(graph,), complete=True)
 
 
 async def forget_meeting_files(
@@ -98,60 +150,85 @@ async def forget_meeting_files(
     profile: PersonaProfile,
     meeting_id: SessionId,
     lifecycle_thread_id: LifecycleThreadId,
-) -> ForgottenFiles:
-    record_removed = _remove_tree(meeting_record_path(settings.paths.record_dir, meeting_id).parent)
-    removed_journals = [
-        path for path in journal_files(settings.paths.journal_dir, meeting_id) if path.exists()
-    ]
-    for path in removed_journals:
-        _remove_file(path)
-    profile_removed = _remove_tree(
+) -> ForgetFilesOutcome:
+    record = _remove_tree(
+        "record", meeting_record_path(settings.paths.record_dir, meeting_id).parent
+    )
+    journal, journals_removed = _remove_journals(settings, meeting_id)
+    browser = _remove_tree(
+        "browser_profile",
         meeting_profile_dir(
             settings.paths.browser_profile_dir, twin_id=profile.twin_id, meeting_id=meeting_id
-        )
+        ),
     )
+    checkpoint = await _remove_threads(
+        settings,
+        (
+            conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id),
+            lifecycle_thread_id(profile.twin_id, meeting_id),
+        ),
+    )
+    return ForgetFilesOutcome(
+        files=ForgottenFiles(
+            record_removed=record.status == "removed",
+            journal_files_removed=journals_removed,
+            conversation_thread_removed=checkpoint.status == "removed",
+            browser_profile_removed=browser.status == "removed",
+        ),
+        stages=(record, journal, browser, checkpoint),
+    )
+
+
+def _remove_tree(stage: ForgetStage, path: Path) -> ForgetStageResult:
+    if not path.exists():
+        return ForgetStageResult(stage, "absent")
+    try:
+        shutil.rmtree(path)
+    except OSError as error:
+        return ForgetStageResult(stage, "failed", type(error).__name__)
+    if path.exists():
+        return ForgetStageResult(stage, "failed", STILL_PRESENT)
+    return ForgetStageResult(stage, "removed")
+
+
+def _remove_journals(settings: Settings, meeting_id: SessionId) -> tuple[ForgetStageResult, int]:
+    present = [
+        path for path in journal_files(settings.paths.journal_dir, meeting_id) if path.exists()
+    ]
+    removed = 0
+    failure: str | None = None
+    for path in present:
+        try:
+            path.unlink()
+        except OSError as error:
+            failure = failure or type(error).__name__
+            continue
+        removed += 1
+    if failure is not None:
+        return ForgetStageResult("journal", "failed", failure), removed
+    return ForgetStageResult("journal", "removed" if removed else "absent"), removed
+
+
+async def _remove_threads(settings: Settings, thread_ids: tuple[str, ...]) -> ForgetStageResult:
     url = configured_url(settings)
-    thread_removed = False
-    if url is not None:
+    if url is None:
+        return ForgetStageResult("checkpoint", "absent")
+
+    async def delete_threads() -> bool:
+        existed = False
         async with open_checkpointer(
             url,
             connect_timeout_seconds=settings.database.connect_timeout_seconds,
             statement_timeout_seconds=settings.database.statement_timeout_seconds,
             keepalive_idle_seconds=settings.database.keepalive_idle_seconds,
         ) as saver:
-            for thread_id in (
-                conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id),
-                lifecycle_thread_id(profile.twin_id, meeting_id),
-            ):
+            for thread_id in thread_ids:
                 if await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None:
-                    thread_removed = True
+                    existed = True
                 await saver.adelete_thread(thread_id)
-    return ForgottenFiles(
-        record_removed=record_removed,
-        journal_files_removed=len(removed_journals),
-        conversation_thread_removed=thread_removed,
-        browser_profile_removed=profile_removed,
-    )
+        return existed
 
-
-def _remove_tree(path: Path) -> bool:
-    if not path.exists():
-        return False
-    try:
-        shutil.rmtree(path)
-    except OSError as error:
-        raise _files_incomplete(path, type(error).__name__) from error
-    if path.exists():
-        raise _files_incomplete(path, "still present after removal")
-    return True
-
-
-def _remove_file(path: Path) -> None:
-    try:
-        path.unlink()
-    except OSError as error:
-        raise _files_incomplete(path, type(error).__name__) from error
-
-
-def _files_incomplete(path: Path, reason: str) -> FakeYouError:
-    return FakeYouError(ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE, path=path.name, reason=reason)
+    existed, error = await capture_error(delete_threads)
+    if error is not None:
+        return ForgetStageResult("checkpoint", "failed", type(error).__name__)
+    return ForgetStageResult("checkpoint", "removed" if existed else "absent")
