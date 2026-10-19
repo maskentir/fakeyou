@@ -8,6 +8,9 @@ dependencies = [
     "alembic>=1.20,<2",
     "anthropic>=1.9,<2",
     "cloakbrowser==0.5.11",
+    "fastapi[standard]>=0.115,<0.200",
+    "uvicorn>=0.30,<1",
+    "starlette>=1.7,<2",
     "graphiti-core==0.30.2",
     "httpx2==2.13.1",
     "langchain==1.4.2",
@@ -33,6 +36,7 @@ dependencies = [
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.10,<3",
     "python-dotenv>=1.2,<2",
+    "redis>=6.2,<7",
     "sqlalchemy>=2.0,<3",
     "typer>=0.27,<1",
 ]
@@ -44,6 +48,11 @@ dependencies = [
 # uv's universal lock does not carry that requirement, so it is declared here for darwin only.
 voiceprint = ["sherpa-onnx==1.12.38", "sherpa-onnx-core==1.12.38; sys_platform == 'darwin'"]
 
+[tool.uv]
+constraint-dependencies = [
+    "aiohttp>=3.14.4",
+]
+
 [dependency-groups]
 dev = [
     "deepeval==4.2.6",
@@ -52,6 +61,7 @@ dev = [
     "mypy>=1.18,<2",
     "pytest>=8,<10",
     "pytest-asyncio>=1,<2",
+    "pytest-xdist>=3,<4",
     "ruff>=0.14,<1",
 ]
 
@@ -147,7 +157,7 @@ known_first_party = ["fakeyou"]
 package_module_name_map = {"sherpa-onnx-core" = ["sherpa_onnx"]}
 
 [tool.deptry.per_rule_ignores]
-DEP002 = ["langchain-anthropic", "langchain-google-genai", "langchain-openai"]
+DEP002 = ["fastapi", "langchain-anthropic", "langchain-google-genai", "langchain-openai", "redis"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -174,6 +184,12 @@ source_modules = ["fakeyou.db"]
 forbidden_modules = ["fakeyou.cli"]
 
 [[tool.importlinter.contracts]]
+name = "transport never imports api or cli"
+type = "forbidden"
+source_modules = ["fakeyou.transport"]
+forbidden_modules = ["fakeyou.api", "fakeyou.cli"]
+
+[[tool.importlinter.contracts]]
 name = "cli commands are independent of each other"
 type = "independence"
 modules = [
@@ -184,18 +200,19 @@ modules = [
     "fakeyou.cli.debrief",
     "fakeyou.cli.diagnostics",
     "fakeyou.cli.diarize",
-    "fakeyou.cli.join",
     "fakeyou.cli.memory",
+    "fakeyou.cli.sessions",
     "fakeyou.cli.voiceprint",
-    "fakeyou.cli.worker",
 ]
 
 [[tool.importlinter.contracts]]
 name = "domain packages respect the layer order"
 type = "layers"
 layers = [
+    "fakeyou.api",
     "fakeyou.cli",
     "fakeyou.worker",
+    "fakeyou.transport",
     "fakeyou.orchestration",
     "fakeyou.memory",
     "fakeyou.debrief",

@@ -17,7 +17,12 @@ from pydantic import (
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import EnvSettingsSource
 
-from fakeyou.catalog.config import API_KEY_OF_ROLE, ConfigKey
+from fakeyou.catalog.config import (
+    API_KEY_OF_ROLE,
+    COMPOSE_ONLY_KEYS,
+    ROLE_ATTRIBUTE_PATH,
+    ConfigKey,
+)
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, TwinName
@@ -279,7 +284,6 @@ class StoreSettings(Section):
     user: str = "neo4j"
     password: SecretStr | None = None
     database: str = "neo4j"
-    group: str = "local_twin"
 
 
 class MemoryLLMBase(EndpointSettings):
@@ -338,6 +342,7 @@ class IngestionSettings(Section):
     window_utterances: int = Field(default=20, gt=0)
     window_seconds: PositiveSeconds = 60.0
     episode_timeout_seconds: PositiveSeconds = 120.0
+    extraction_concurrency: int = Field(default=20, gt=0)
 
 
 class MemorySettings(Section):
@@ -355,29 +360,24 @@ class ConversationSettings(Section):
     barge_in_min_words: int = Field(default=3, gt=0)
     max_spoken_sentences: int = Field(default=2, gt=0)
     activation_seconds: PositiveSeconds = 30.0
-    sentence_streaming: bool = False
-    participant_policy_enabled: bool = False
+    sentence_streaming: bool = True
     participant_evidence_max_bytes: int = Field(default=8388608, gt=0)
-    attribution_probe_enabled: bool = False
     voice_labels_enabled: bool = False
-    meet_actions_enabled: bool = False
     meet_chat_per_minute: int = Field(default=3, gt=0)
     per_stream_enabled: bool = False
-    pre_generate_enabled: bool = False
-    pregen_fuzzy_restart_enabled: bool = False
     history_max_tokens: int = Field(default=32000, gt=0)
 
 
 class ParticipationDeciderSettings(Section):
-    model: str = "jev-latest"
-    provider: Literal["jev", "gemini"] = "jev"
+    model: str = "gemini-3.8-flash"
+    provider: Literal["jev", "gemini"] = "gemini"
     base_url: OptionalURL = None
     api_key: SecretStr | None = None
     timeout_seconds: PositiveSeconds = 15.0
     window_turns: int = Field(default=6, gt=0, le=20)
     speak_threshold: float = Field(default=0.70, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
-    pre_generate_enabled: bool = True
+    enabled: bool = True
 
 
 class MeetingSettings(Section):
@@ -417,8 +417,6 @@ class PreflightSettings(Section):
 
 class WorkerSettings(Section):
     audio: bool = False
-    docker_timeout_seconds: PositiveSeconds = 30.0
-    start_timeout_seconds: PositiveSeconds = 600.0
 
 
 class VisualSettings(Section):
@@ -435,6 +433,31 @@ class VisualSettings(Section):
     max_images: int = Field(default=2, gt=0)
     retention_raw_days: int = Field(default=7, gt=0)
     retention_text_days: int = Field(default=30, gt=0)
+
+    @model_validator(mode="after")
+    def compatible_provider_needs_base_url(self) -> Self:
+        if self.enabled and self.provider == "openai_compatible" and self.base_url is None:
+            raise ValueError("visual provider openai_compatible requires FAKEYOU_VISUAL__BASE_URL")
+        return self
+
+
+class ApiSettings(Section):
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=1, le=65535)
+    admin_token: SecretStr | None = None
+    owner_token: SecretStr | None = None
+    rate_limit_per_minute: int = Field(default=120, gt=0)
+
+
+class RedisSettings(Section):
+    url: SecretStr | None = None
+    stream_max_len: int = Field(default=10000, gt=0)
+    lease_seconds: PositiveSeconds = 30.0
+    connect_timeout_seconds: PositiveSeconds = 5.0
+
+
+class TransportSettings(Section):
+    redis: RedisSettings = Field(default_factory=RedisSettings)
 
 
 class Configuration(Section):
@@ -460,6 +483,8 @@ class Configuration(Section):
     preflight: PreflightSettings = Field(default_factory=PreflightSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     visual: VisualSettings = Field(default_factory=VisualSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
+    transport: TransportSettings = Field(default_factory=TransportSettings)
 
     @model_validator(mode="after")
     def response_budget(self) -> Self:
@@ -478,11 +503,29 @@ class Configuration(Section):
 
     def require_roles(self, *roles: str) -> None:
         for role in roles:
+            path = ROLE_ATTRIBUTE_PATH.get(role)
+            if path is None:
+                raise FakeYouError(
+                    ErrorCode.CONFIG_INVALID, reason=f"unknown provider role: {role}"
+                )
             value: Any = self
-            for part in role.split("."):
+            for part in path.split("."):
                 value = getattr(value, part)
-            if value is not None:
-                require_secret(value.api_key, API_KEY_OF_ROLE[role])
+            if value is None:
+                continue
+            if role == "visual" and not value.enabled:
+                continue
+            if role == "participation_decider" and not value.enabled:
+                continue
+            require_secret(value.api_key, API_KEY_OF_ROLE[role])
+            if role == "participation_decider" and value.provider == "jev" and not value.base_url:
+                raise FakeYouError(
+                    ErrorCode.CONFIG_INVALID,
+                    reason=(
+                        "Set FAKEYOU_PARTICIPATION_DECIDER__BASE_URL in .env "
+                        "before using this command."
+                    ),
+                )
 
 
 DEFAULTS = Configuration()
@@ -499,6 +542,9 @@ def _known_env_path(annotation: Any, parts: list[str]) -> bool:
         field = annotation.model_fields.get(parts[0])
         return field is not None and _known_env_path(field.annotation, parts[1:])
     return any(_known_env_path(option, parts) for option in get_args(annotation))
+
+
+_COMPOSE_ONLY_NAMES = frozenset(key.value for key in COMPOSE_ONLY_KEYS)
 
 
 class Settings(Configuration, BaseSettings):
@@ -534,7 +580,7 @@ class Settings(Configuration, BaseSettings):
             if isinstance(source, EnvSettingsSource):
                 for key in list(source.env_vars):
                     upper = key.upper()
-                    if upper.startswith("FAKEYOU_COMPOSE_"):
+                    if upper in _COMPOSE_ONLY_NAMES:
                         source.env_vars = {
                             name: value for name, value in source.env_vars.items() if name != key
                         }

@@ -18,7 +18,6 @@ class ErrorCode(StrEnum):
     DATABASE_STAMP_REFUSED = "database.stamp_refused"
     CONFIG_SECRET_MISSING = "config.secret_missing"
     CONFIG_VISUAL_BASE_URL_REQUIRED = "config.visual_base_url_required"
-    CONFIG_WORKER_DATABASE_URL_MISSING = "config.worker_database_url_missing"
     CONFIG_EMBEDDING_DIM_MISMATCH = "config.embedding_dim_mismatch"
     CONFIG_UNKNOWN_KEY = "config.unknown_key"
     CONFIG_INVALID = "config.invalid"
@@ -51,7 +50,6 @@ class ErrorCode(StrEnum):
     MEETING_BRIEF_REQUIRES_MEETING_ID = "meeting.brief_requires_meeting_id"
     MEETING_WAKE_PHRASE_REQUIRES_CONVERSE = "meeting.wake_phrase_requires_converse"
     MEETING_BARGE_IN_REQUIRES_CONVERSE = "meeting.barge_in_requires_converse"
-    MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES = "meeting.participant_policy_requires_aliases"
     MEETING_PERSONA_LANGUAGE_MISMATCH = "meeting.persona_language_mismatch"
     MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST = "meeting.memory_requires_recall_or_ingest"
     MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY = "meeting.memory_not_allowed_brief_only"
@@ -137,20 +135,9 @@ class ErrorCode(StrEnum):
     DIARIZE_SCHEMA_UNSUPPORTED = "diarize.schema_unsupported"
     DIARIZE_TURNS_INVALID = "diarize.turns_invalid"
     DIARIZE_STALE = "diarize.stale"
-    WORKER_ALREADY_RUNNING = "worker.already_running"
-    WORKER_STILL_RUNNING = "worker.still_running"
-    WORKER_INGEST_ALREADY_RUNNING = "worker.ingest_already_running"
-    WORKER_START_FAILED = "worker.start_failed"
-    WORKER_START_NO_CONTAINER = "worker.start_no_container"
-    WORKER_TIMEOUT_NEGATIVE = "worker.timeout_negative"
-    WORKER_NOT_RUNNING = "worker.not_running"
-    WORKER_INGEST_NO_FINISHED_SESSION = "worker.ingest_no_finished_session"
-    WORKER_INGEST_INTERRUPTED = "worker.ingest_interrupted"
-    WORKER_FILE_MISSING = "worker.file_missing"
-    WORKER_FILE_NOT_VISIBLE = "worker.file_not_visible"
-    DOCKER_PS_FAILED = "docker.ps_failed"
     DOCKER_UNAVAILABLE = "docker.unavailable"
     OPERATION_INTERRUPTED = "operation.interrupted"
+    INTERNAL_FAILURE = "internal.failure"
     PROVIDER_UNAVAILABLE = "provider.unavailable"
     MEMORY_UNAVAILABLE = "memory.unavailable"
     DIARIZE_SLOT_METADATA_INVALID = "diarize.slot_metadata_invalid"
@@ -224,6 +211,16 @@ class ErrorCode(StrEnum):
     DEBRIEF_SOURCE_HASH_CHANGED = "debrief.source_hash_changed"
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
     VISUAL_PROVIDER_UNSUPPORTED = "visual.provider_unsupported"
+    API_UNAUTHORIZED = "api.unauthorized"
+    API_FORBIDDEN = "api.forbidden"
+    API_NOT_FOUND = "api.not_found"
+    API_RATE_LIMITED = "api.rate_limited"
+    API_UNREACHABLE = "api.unreachable"
+    API_TOKEN_MISSING = "api.token_missing"
+    API_JOB_FAILED = "api.job_failed"
+    WORKER_JOB_KEYS_MISSING = "worker.job_keys_missing"
+    API_JOB_TIMEOUT = "api.job_timeout"
+    API_STREAM_CLOSED = "api.stream_closed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,11 +267,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.CONFIG_VISUAL_BASE_URL_REQUIRED: ErrorSpec(
         "visual provider openai_compatible requires " + ConfigKey.VISUAL_BASE_URL,
-        ExitCode.INPUT_REJECTED,
-    ),
-    ErrorCode.CONFIG_WORKER_DATABASE_URL_MISSING: ErrorSpec(
-        f"Set {ConfigKey.COMPOSE_WORKER_DATABASE_URL} in .env; "
-        "worker containers keep checkpoints in Postgres.",
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.CONFIG_EMBEDDING_DIM_MISMATCH: ErrorSpec(
@@ -379,9 +371,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEETING_BARGE_IN_REQUIRES_CONVERSE: ErrorSpec(
         "--barge-in requires --converse", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.MEETING_PARTICIPANT_POLICY_REQUIRES_ALIASES: ErrorSpec(
-        "participant policy requires --wake-phrase aliases", ExitCode.INPUT_REJECTED
-    ),
     ErrorCode.MEETING_PERSONA_LANGUAGE_MISMATCH: ErrorSpec(
         "persona language must match speech.language", ExitCode.INPUT_REJECTED
     ),
@@ -393,7 +382,7 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "--memory is not allowed with a brief_only meeting brief", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEETING_AUDIO_REQUIRES_WORKER: ErrorSpec(
-        "--audio requires the Linux audio worker; use " + Command.COMPOSE_RUN_WORKER,
+        "--audio requires the Linux audio worker; use " + Command.COMPOSE_WORKER_SESSIONS,
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.MEETING_BRIEF_UNREADABLE: ErrorSpec(
@@ -605,34 +594,11 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "diarization sidecar is stale: record changed since correction",
         ExitCode.INPUT_REJECTED,
     ),
-    ErrorCode.WORKER_ALREADY_RUNNING: ErrorSpec(
-        "worker for meeting {meeting_id} is already running"
-    ),
-    ErrorCode.WORKER_STILL_RUNNING: ErrorSpec("worker for meeting {meeting_id} is still running"),
-    ErrorCode.WORKER_INGEST_ALREADY_RUNNING: ErrorSpec(
-        "ingest job for meeting {meeting_id} is already running"
-    ),
-    ErrorCode.WORKER_START_FAILED: ErrorSpec("worker start failed: {stderr}"),
-    ErrorCode.WORKER_START_NO_CONTAINER: ErrorSpec("worker start produced no container id"),
-    ErrorCode.WORKER_TIMEOUT_NEGATIVE: ErrorSpec(
-        "--timeout must not be negative", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.WORKER_NOT_RUNNING: ErrorSpec(
-        "no running worker for meeting {meeting_id}", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.WORKER_INGEST_NO_FINISHED_SESSION: ErrorSpec(
-        "meeting {meeting_id} has no finished session to ingest", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.WORKER_INGEST_INTERRUPTED: ErrorSpec("ingest interrupted for meeting {meeting_id}"),
-    ErrorCode.WORKER_FILE_MISSING: ErrorSpec("file not found: {path}", ExitCode.INPUT_REJECTED),
-    ErrorCode.WORKER_FILE_NOT_VISIBLE: ErrorSpec(
-        "file is not visible inside the worker container: {path}", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.DOCKER_PS_FAILED: ErrorSpec("docker ps failed: {stderr}", ExitCode.INFRA_FAILURE),
     ErrorCode.DOCKER_UNAVAILABLE: ErrorSpec(
         "docker is not available: {reason}", ExitCode.INFRA_FAILURE
     ),
     ErrorCode.OPERATION_INTERRUPTED: ErrorSpec("operation interrupted"),
+    ErrorCode.INTERNAL_FAILURE: ErrorSpec("internal failure", ExitCode.FAILURE),
     ErrorCode.PROVIDER_UNAVAILABLE: ErrorSpec(
         "provider unavailable: {reason}", ExitCode.INFRA_FAILURE
     ),
@@ -787,6 +753,34 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.VISUAL_PROVIDER_UNSUPPORTED: ErrorSpec(
         "unsupported visual provider: {provider}", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.API_UNAUTHORIZED: ErrorSpec(
+        "missing or invalid API credentials", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.API_FORBIDDEN: ErrorSpec(
+        "API credentials cannot access this operation", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.API_NOT_FOUND: ErrorSpec("resource not found", ExitCode.INPUT_REJECTED),
+    ErrorCode.API_RATE_LIMITED: ErrorSpec(
+        "too many requests; retry after the rate limit window", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.API_UNREACHABLE: ErrorSpec(
+        "api unreachable at {url}: {reason}", ExitCode.INFRA_FAILURE
+    ),
+    ErrorCode.API_JOB_FAILED: ErrorSpec("{kind} job {job_id} did not succeed", ExitCode.FAILURE),
+    ErrorCode.WORKER_JOB_KEYS_MISSING: ErrorSpec(
+        "{scope} was started with model keys in its request; resubmit the job with the same "
+        "X-Fakeyou-Key-* headers",
+        ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.API_JOB_TIMEOUT: ErrorSpec(
+        "{kind} job {job_id} did not finish within {seconds} seconds", ExitCode.INFRA_FAILURE
+    ),
+    ErrorCode.API_STREAM_CLOSED: ErrorSpec(
+        "event stream for {meeting_id} closed before the session ended", ExitCode.INFRA_FAILURE
+    ),
+    ErrorCode.API_TOKEN_MISSING: ErrorSpec(
+        "{variable} is not set; the command needs that API credential", ExitCode.INPUT_REJECTED
     ),
 }
 
