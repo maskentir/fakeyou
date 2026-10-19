@@ -1,9 +1,44 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict
 
 EVIDENCE_SCHEMA = "memory_evidence/v1"
+EvidenceOutcome = Literal["found", "empty", "unavailable"]
+SourceKind = Literal["owner_note", "meeting_transcript", "meeting_visual", "other"]
+TimeGranularity = Literal["document", "episode_window", "frame"]
+
+
+class SourceDict(TypedDict):
+    episode_id: str
+    kind: SourceKind
+    label: str
+    source_at: str
+    recorded_at: str
+    time_granularity: TimeGranularity
+    speaker_verified: bool
+    speaker_identity: str
+    frame_ref: NotRequired[str]
+
+
+class FactDict(TypedDict):
+    fact_ids: list[str]
+    text: str
+    sources: list[SourceDict]
+
+
+class ExcludedDict(TypedDict):
+    pending: int
+    superseded: int
+    missing_source: int
+
+
+class MemoryEvidence(TypedDict):
+    outcome: EvidenceOutcome
+    facts: list[FactDict]
+    excluded: ExcludedDict
+
+
 EVIDENCE_SCHEMA_V2 = "memory_evidence/v2"
 OWNER_SPEAKER_IDENTITY = "owner"
 UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
