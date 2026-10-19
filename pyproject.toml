@@ -46,7 +46,7 @@ dependencies = [
 # newer sherpa needs ORT >= 1.28 and breaks the resolver.
 # The macOS sherpa wheel is a thin wrapper that loads the onnxruntime dylib shipped by sherpa-onnx-core;
 # uv's universal lock does not carry that requirement, so it is declared here for darwin only.
-voiceprint = ["sherpa-onnx==1.12.38", "sherpa-onnx-core==1.12.38; sys_platform == 'darwin'"]
+voiceprint = ["sherpa-onnx==1.12.38", "sherpa-onnx-core==1.13.8; sys_platform == 'darwin'"]
 
 [tool.uv]
 constraint-dependencies = [
