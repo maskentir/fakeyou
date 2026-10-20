@@ -44,7 +44,6 @@ from fakeyou.orchestration.assembly import (
     AgentWiring,
     TurnBehavior,
     VoiceprintLive,
-    create_visual_captioner,
     open_conversation,
     open_voiceprint,
     stop_signal_handlers,
@@ -53,13 +52,13 @@ from fakeyou.orchestration.join_context import PreparedJoin, guard_join, prepare
 from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
+from fakeyou.orchestration.perception import PerceptionStack, create_perception_stack
 from fakeyou.orchestration.providers import preflight_hosts
 from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.orchestration.transcript import (
     LiveScoring,
     TranscriptSinks,
     build_transcript_callback,
-    record_visual_caption,
 )
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
@@ -72,8 +71,6 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.record import MeetingRecord, ResumeEntry, load_meeting_record
-from fakeyou.visual.visual_caption import VisualCaption, VisualCaptioner
-from fakeyou.visual.visual_store import VisualFrame, VisualStore
 
 
 @dataclass(slots=True)
@@ -90,9 +87,7 @@ class _JoinRun:
     voiceprint_live: VoiceprintLive | None = None
     voice_activity: VoiceActivityTracker | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
-    visual_store: VisualStore | None = None
-    visual_captioner: VisualCaptioner | None = None
-    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
+    perception: PerceptionStack | None = None
     audio_factory: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
     ingest_requested: bool = False
     ingestion_outcome: str = "not_requested"
@@ -206,22 +201,11 @@ def _build_join_layers(
         if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled
         else None
     )
-    run.visual_store = (
-        VisualStore(
-            MeetingDir.from_record_path(prepared.record_path).visual_dir, journal=run.journal
-        )
-        if prepared.request.settings.perception.enabled
-        else None
-    )
-    run.visual_captioner = (
-        create_visual_captioner(prepared.request.settings, journal=run.journal)
-        if run.visual_store is not None and prepared.request.conversation_enabled
-        else None
-    )
-    run.visual_on_caption = (
-        partial(record_visual_caption, run.record, journal=run.journal)
-        if run.visual_store is not None and run.visual_captioner is not None
-        else None
+    run.perception = create_perception_stack(
+        prepared.request.settings,
+        journal=run.journal,
+        record=run.record,
+        screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
     )
     return registry
 
@@ -250,8 +234,7 @@ async def _open_join_conversation(
                 profile=prepared.profile,
                 brief=prepared.brief,
                 graphiti=run.graphiti,
-                visual_store=run.visual_store,
-                visual_captioner=run.visual_captioner,
+                perception=run.perception.context if run.perception is not None else None,
             ),
             behavior=TurnBehavior(
                 on_transition=log_transition,
@@ -295,7 +278,6 @@ def _build_audio_factory(
             record=run.record,
             conversation=run.conversation.ingress if run.conversation is not None else None,
             faults=run.faults,
-            visual_store=run.visual_store,
         ),
         binder=stream_binder,
         voice_activity=run.voice_activity,
@@ -390,9 +372,7 @@ async def _drive_join_session(
                 journal=run.journal,
                 voice_activity=run.voice_activity,
                 meet_dispatcher=run.meet_dispatcher,
-                visual_store=run.visual_store,
-                visual_captioner=run.visual_captioner,
-                visual_on_caption=run.visual_on_caption,
+                perception=run.perception,
                 on_phase=prepared.request.on_phase,
                 **preflight_kwargs,
             ),

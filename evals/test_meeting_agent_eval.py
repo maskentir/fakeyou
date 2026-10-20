@@ -1,24 +1,22 @@
 import json
-from pathlib import Path
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.config.settings import PerceptionSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
 from fakeyou.memory.memory import create_memory_tools
 from fakeyou.memory.persona import refuse_meet_tool
-from fakeyou.visual.visual_caption import VisualCaptioner
-from fakeyou.visual.visual_store import VisualStore
-from fakeyou.visual.visual_tools import create_visual_tools
+from fakeyou.perception.context import PerceptionContext, create_perception_tools
+from fakeyou.perception.timeline import MeetingTimeline
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._memory_fakes import make_graphiti
-from tests._visual_fakes import caption_model
 
 CONTRACT_TOOLS = {
     "recall_meeting_context",
-    "describe_frame",
+    "observe_meeting",
+    "look_at_screen",
+    "look_at_participant",
     "meet_raise_hand",
     "meet_lower_hand",
     "meet_send_chat",
@@ -51,17 +49,16 @@ def _tool_calls(messages: list[object]) -> list[tuple[str, dict[str, object]]]:
     ]
 
 
-def test_production_factories_expose_exactly_the_contract_tools(tmp_path: Path) -> None:
+def test_production_factories_expose_exactly_the_contract_tools() -> None:
     memory_tools = create_memory_tools(make_graphiti(), group_id="team_alpha")
     meet_tools = create_meet_action_tools(
         RecordingDispatcher(), refuse=refuse_meet_tool, journal=None
     )
-    visual_tools = create_visual_tools(
-        VisualStore(tmp_path / "visual"),
-        VisualCaptioner(caption_model("A chart."), settings=PerceptionSettings(enabled=True)),
+    perception_tools = create_perception_tools(
+        PerceptionContext(MeetingTimeline(), None, max_chars=6000)
     )
 
-    exposed = {tool.name for tool in [*memory_tools, *meet_tools, *visual_tools]}
+    exposed = {tool.name for tool in [*memory_tools, *meet_tools, *perception_tools]}
 
     assert exposed == CONTRACT_TOOLS
 

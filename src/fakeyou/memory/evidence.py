@@ -19,7 +19,6 @@ from pydantic import TypeAdapter
 from fakeyou.config.settings import RecallSettings
 from fakeyou.foundation.provenance import (
     EVIDENCE_SCHEMA,
-    EVIDENCE_SCHEMA_V2,
     OWNER_SPEAKER_IDENTITY,
     UNVERIFIED_SPEAKER_IDENTITY,
     EvidenceOutcome,
@@ -28,11 +27,16 @@ from fakeyou.foundation.provenance import (
     FactEvidence,
     MemoryEvidence,
     SourceEvidence,
+    SourceKind,
     render_evidence,
 )
 from fakeyou.memory.owner_notes import OWNER_NOTE_SOURCE, NoteStatus, read_note_states
 from fakeyou.memory.persona import memory_group_for
 from fakeyou.observability.faults import capture_error
+
+TRANSCRIPT_SOURCE_SUFFIX = "transcript"
+SCREEN_SOURCE_SUFFIX = "shared screen"
+CHAT_SOURCE_SUFFIX = "chat"
 
 RECALL_EMPTY_RESULT = "No relevant meeting memory found."
 PREFETCH_EMPTY_EVIDENCE = (
@@ -148,11 +152,15 @@ async def search_edges(
     ]
 
 
-def _evidence_kind(source_description: str) -> Literal["owner_note", "meeting_transcript", "other"]:
+def _evidence_kind(source_description: str) -> SourceKind:
     if source_description == OWNER_NOTE_SOURCE:
         return "owner_note"
-    if source_description.endswith("transcript"):
+    if source_description.endswith(TRANSCRIPT_SOURCE_SUFFIX):
         return "meeting_transcript"
+    if source_description.endswith(SCREEN_SOURCE_SUFFIX):
+        return "meeting_screen"
+    if source_description.endswith(CHAT_SOURCE_SUFFIX):
+        return "meeting_chat"
     return "other"
 
 
@@ -164,7 +172,7 @@ def _source_evidence(episode: EpisodicNode) -> SourceEvidence:
         label=episode.source_description,
         source_at=episode.valid_at,
         recorded_at=episode.created_at,
-        time_granularity="episode_window" if kind == "meeting_transcript" else "document",
+        time_granularity="document" if kind in ("owner_note", "other") else "episode_window",
         speaker_identity=OWNER_SPEAKER_IDENTITY
         if kind == "owner_note"
         else UNVERIFIED_SPEAKER_IDENTITY,
@@ -286,14 +294,9 @@ def create_memory_search(memory: Graphiti, *, recall: RecallSettings) -> MemoryS
     return search
 
 
-def _schema(facts: Sequence[FactDict]) -> str:
-    visual = any(source["kind"] == "meeting_visual" for fact in facts for source in fact["sources"])
-    return EVIDENCE_SCHEMA_V2 if visual else EVIDENCE_SCHEMA
-
-
 def _found_line(evidence: MemoryEvidence, facts: Sequence[FactDict]) -> str:
     return json.dumps(
-        {"schema": _schema(facts), "facts": list(facts), "excluded": evidence["excluded"]},
+        {"schema": EVIDENCE_SCHEMA, "facts": list(facts), "excluded": evidence["excluded"]},
         ensure_ascii=False,
     )
 

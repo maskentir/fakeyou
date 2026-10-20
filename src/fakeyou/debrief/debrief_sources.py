@@ -18,10 +18,11 @@ from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
 from fakeyou.persistence.record import (
+    ChatEntry,
     RecordEntry,
+    ScreenEntry,
     TranscriptEntry,
     TwinSpeechEntry,
-    VisualEntry,
     record_header_of,
 )
 
@@ -32,7 +33,7 @@ _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
 class SourceEntry:
     id: str
     text: str
-    kind: Literal["participant", "twin", "visual"]
+    kind: Literal["participant", "twin", "screen", "chat"]
     participant_id: str
     at: datetime
     display_claim: str | None = None
@@ -143,27 +144,52 @@ def _append_twin(sources: list[SourceEntry], entry: TwinSpeechEntry, line_number
     )
 
 
-def _append_visual(
-    sources: list[SourceEntry], visuals: dict[str, VisualEntry], entry: VisualEntry
-) -> None:
-    if not entry.frame_ref.strip():
-        raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_ID_BLANK) from None
-    previous = visuals.get(entry.frame_ref)
+SCREEN_SOURCE_MAX_CHARS = 2000
+SHARED_SCREEN = "shared_screen"
+
+
+def screen_source_text(entry: ScreenEntry) -> str:
+    parts = [entry.title, *entry.key_points, *entry.figures, *entry.visuals, entry.text]
+    text = "\n".join(part for part in parts if part.strip())
+    return text[:SCREEN_SOURCE_MAX_CHARS]
+
+
+def _append_screen(sources: list[SourceEntry], screens: dict[str, int], entry: ScreenEntry) -> None:
+    if not entry.ref.strip():
+        raise DebriefValidationError(ErrorCode.DEBRIEF_SCREEN_REF_BLANK) from None
+    source = SourceEntry(
+        id=f"screen:{entry.ref}",
+        text=screen_source_text(entry),
+        kind="screen",
+        participant_id=entry.presenter_id or SHARED_SCREEN,
+        at=entry.shown_at,
+        display_claim=entry.presenter,
+    )
+    position = screens.get(entry.ref)
+    if position is None:
+        screens[entry.ref] = len(sources)
+        sources.append(source)
+    else:
+        sources[position] = source
+
+
+def _append_chat(sources: list[SourceEntry], chats: dict[str, ChatEntry], entry: ChatEntry) -> None:
+    previous = chats.get(entry.message_id)
     if previous is not None:
-        if previous != entry:
-            raise DebriefValidationError(ErrorCode.DEBRIEF_VISUAL_CONTRADICTORY) from None
+        if previous.text != entry.text or previous.sender_id != entry.sender_id:
+            raise DebriefValidationError(ErrorCode.DEBRIEF_CHAT_CONTRADICTORY) from None
         return
-    visuals[entry.frame_ref] = entry
-    if entry.caption.strip():
-        sources.append(
-            SourceEntry(
-                id=entry.frame_ref,
-                text=entry.caption,
-                kind="visual",
-                participant_id="shared_screen",
-                at=entry.captured_at,
-            )
+    chats[entry.message_id] = entry
+    sources.append(
+        SourceEntry(
+            id=f"chat:{entry.ref}",
+            text=entry.text,
+            kind="twin" if entry.own else "chat",
+            participant_id="twin" if entry.own else entry.sender_id,
+            at=entry.sent_at,
+            display_claim=None if entry.own else entry.sender,
         )
+    )
 
 
 def load_record_snapshot(
@@ -175,15 +201,18 @@ def load_record_snapshot(
         raise DebriefValidationError(ErrorCode.DEBRIEF_RECORD_UNREADABLE) from None
     sources: list[SourceEntry] = []
     transcripts: dict[str, TranscriptEntry] = {}
-    visuals: dict[str, VisualEntry] = {}
+    screens: dict[str, int] = {}
+    chats: dict[str, ChatEntry] = {}
     for line_number, line in _entry_lines(raw):
         entry = _parse_record_entry(line, line_number)
         if isinstance(entry, TranscriptEntry):
             _append_transcript(sources, transcripts, entry)
         elif isinstance(entry, TwinSpeechEntry):
             _append_twin(sources, entry, line_number)
-        elif isinstance(entry, VisualEntry):
-            _append_visual(sources, visuals, entry)
+        elif isinstance(entry, ScreenEntry):
+            _append_screen(sources, screens, entry)
+        elif isinstance(entry, ChatEntry):
+            _append_chat(sources, chats, entry)
     if not sources:
         raise DebriefValidationError(ErrorCode.DEBRIEF_NO_SPEECH_SOURCES) from None
     corrected = _corrected_speakers(path, faults, journal)

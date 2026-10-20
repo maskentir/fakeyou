@@ -26,6 +26,7 @@ from fakeyou.foundation.speakers import (
     VOICE_SPEAKER_SUFFIX,
 )
 from fakeyou.foundation.timeparse import is_aware, parse_iso_datetime
+from fakeyou.memory.evidence import SCREEN_SOURCE_SUFFIX, TRANSCRIPT_SOURCE_SUFFIX
 from fakeyou.memory.memory import meeting_episodes, meeting_saga
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import FaultReporter, capture_error
@@ -40,9 +41,9 @@ from fakeyou.persistence.ingestion_status import (
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.record import (
     RecordEntry,
+    ScreenEntry,
     TranscriptEntry,
     TwinSpeechEntry,
-    VisualEntry,
     load_meeting_record,
 )
 
@@ -81,8 +82,8 @@ class IngestResult:
     facts: int
     completed: bool
     episode_uuids: dict[int, str] = field(default_factory=dict)
-    visual_windows: int = 0
-    visual_uuids: dict[int, str] = field(default_factory=dict)
+    screen_windows: int = 0
+    screen_uuids: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,19 +134,27 @@ def correction_episode_name(meeting_id: str, index: int) -> str:
     return f"{meeting_id}:w{index:05d}:corrected"
 
 
-def visual_episode_name(meeting_id: str, index: int) -> str:
-    return f"{meeting_id}:v{index:05d}"
+def screen_episode_name(meeting_id: str, index: int) -> str:
+    return f"{meeting_id}:s{index:05d}"
 
 
-def visual_windows(entries: Sequence[RecordEntry]) -> list[list[VisualEntry]]:
-    seen: set[str] = set()
-    windows: list[list[VisualEntry]] = []
+def screen_windows(entries: Sequence[RecordEntry]) -> list[ScreenEntry]:
+    latest: dict[str, ScreenEntry] = {}
     for entry in entries:
-        if not isinstance(entry, VisualEntry) or entry.visual_id in seen:
-            continue
-        seen.add(entry.visual_id)
-        windows.append([entry])
-    return windows
+        if isinstance(entry, ScreenEntry) and entry.ref.strip():
+            latest[entry.ref] = entry
+    return list(latest.values())
+
+
+def screen_episode_body(entry: ScreenEntry) -> str:
+    shown_by = f" shown by {entry.presenter}" if entry.presenter else ""
+    lines = [f"Shared screen titled {entry.title!r}{shown_by} ({entry.content})."]
+    lines += [f"Key point: {point}" for point in entry.key_points]
+    lines += [f"Figure: {figure}" for figure in entry.figures]
+    lines += [f"Visual: {visual}" for visual in entry.visuals]
+    if entry.text.strip():
+        lines.append(f"Screen text: {entry.text}")
+    return "\n".join(lines)
 
 
 def _speaker(participant_id: str) -> str:
@@ -278,12 +287,12 @@ class _SagaView:
         return self.fetched
 
 
-async def _resumed_visuals(saga: _SagaView, visuals: list[list[VisualEntry]]) -> set[int]:
+async def _resumed_screens(saga: _SagaView, screens: list[ScreenEntry]) -> set[int]:
     done: set[int] = set()
-    if not visuals:
+    if not screens:
         return done
     for episode in await saga.episodes():
-        index = _visual_index(episode.name, saga.meeting_id)
+        index = _screen_index(episode.name, saga.meeting_id)
         if index is not None:
             done.add(index)
     return done
@@ -363,7 +372,7 @@ class _MeetingIngestor:
             _EpisodeSpec(
                 episode_name(self._scope.meeting_id, index),
                 "\n".join(f"{u.speaker}: {u.text}" for u in window),
-                f"Google Meet {self._scope.meeting_id} transcript",
+                f"Google Meet {self._scope.meeting_id} {TRANSCRIPT_SOURCE_SUFFIX}",
                 window[0].source_at,
                 index,
                 len(window),
@@ -373,19 +382,19 @@ class _MeetingIngestor:
             previous_uuid,
         )
 
-    async def add_visual(
-        self, index: int, entry: VisualEntry, previous_uuid: str | None
+    async def add_screen(
+        self, index: int, entry: ScreenEntry, previous_uuid: str | None
     ) -> tuple[str, int] | None:
         return await self._add_episode(
             _EpisodeSpec(
-                visual_episode_name(self._scope.meeting_id, index),
-                f"Shared screen {entry.frame_ref}: {entry.caption}",
-                f"Google Meet {self._scope.meeting_id} visual",
-                entry.captured_at,
+                screen_episode_name(self._scope.meeting_id, index),
+                screen_episode_body(entry),
+                f"Google Meet {self._scope.meeting_id} {SCREEN_SOURCE_SUFFIX}",
+                entry.shown_at,
                 index,
                 1,
-                "memory_visual_ingested",
-                "memory_visual_failed",
+                "memory_screen_ingested",
+                "memory_screen_failed",
             ),
             previous_uuid,
         )
@@ -407,20 +416,19 @@ class _MeetingIngestor:
             facts += count
         return True, previous_uuid, uuids, ingested, facts
 
-    async def drive_visuals(
-        self, visuals: list[list[VisualEntry]], visual_done: set[int], previous_uuid: str | None
+    async def drive_screens(
+        self, screens: list[ScreenEntry], screen_done: set[int], previous_uuid: str | None
     ) -> tuple[bool, str | None, dict[int, str], int, int]:
         ingested = facts = 0
         uuids: dict[int, str] = {}
-        for index, frame in enumerate(visuals):
-            if index in visual_done:
+        for index, entry in enumerate(screens):
+            if index in screen_done:
                 continue
             if self.stopped():
                 return False, previous_uuid, uuids, ingested, facts
-            entry = frame[0]
-            if not entry.caption.strip() or not entry.frame_ref.strip():
+            if not entry.title.strip() and not entry.text.strip():
                 continue
-            added = await self.add_visual(index, entry, previous_uuid)
+            added = await self.add_screen(index, entry, previous_uuid)
             if added is None:
                 return False, previous_uuid, uuids, ingested, facts
             previous_uuid, count = added
@@ -442,8 +450,8 @@ async def ingest_meeting(
         window_utterances=control.ingestion.window_utterances,
         window_seconds=control.ingestion.window_seconds,
     )
-    visuals = visual_windows(entries)
-    saga = _SagaView(memory, scope.group_id, scope.meeting_id, 2 * len(windows) + len(visuals))
+    screens = screen_windows(entries)
+    saga = _SagaView(memory, scope.group_id, scope.meeting_id, 2 * len(windows) + len(screens))
     resumed_from, previous_uuid = await _resume_point(memory, saga)
     instructions = extraction_instructions(
         scope.twin_name,
@@ -454,16 +462,16 @@ async def ingest_meeting(
         ),
     )
     ingestor = _MeetingIngestor(memory, scope, control, diagnostics, instructions)
-    visual_done = await _resumed_visuals(saga, visuals)
+    screen_done = await _resumed_screens(saga, screens)
     completed, previous_uuid, uuids, ingested, facts = await ingestor.drive_windows(
         windows, resumed_from, previous_uuid
     )
-    visual_completed, _, visual_uuids, visual_ingested, visual_facts = await ingestor.drive_visuals(
-        visuals, visual_done, previous_uuid
+    screen_completed, _, screen_uuids, screen_ingested, screen_facts = await ingestor.drive_screens(
+        screens, screen_done, previous_uuid
     )
-    ingested += visual_ingested
-    facts += visual_facts
-    completed = completed and visual_completed
+    ingested += screen_ingested
+    facts += screen_facts
+    completed = completed and screen_completed
     if diagnostics.journal is not None:
         diagnostics.journal.record(
             "memory_ingest_finished",
@@ -473,11 +481,11 @@ async def ingest_meeting(
             ingested=ingested,
             facts=facts,
             completed=completed,
-            visual_windows=len(visuals),
-            visual_ingested=visual_ingested,
+            screen_windows=len(screens),
+            screen_ingested=screen_ingested,
         )
     return IngestResult(
-        len(windows), resumed_from, ingested, facts, completed, uuids, len(visuals), visual_uuids
+        len(windows), resumed_from, ingested, facts, completed, uuids, len(screens), screen_uuids
     )
 
 
@@ -754,7 +762,7 @@ async def ingest_corrections(
         memory,
         scope.group_id,
         scope.meeting_id,
-        2 * len(live_windows) + len(visual_windows(live)),
+        2 * len(live_windows) + len(screen_windows(live)),
     )
     window_map = await _correction_window_map(saga, existing, changed, corrected_at)
     last = await meeting_episodes(
@@ -785,13 +793,13 @@ def _correction_index(name: str, meeting_id: str) -> int | None:
     return int(match.group(1)) if match is not None else None
 
 
-def _visual_index(name: str, meeting_id: str) -> int | None:
-    match = re.fullmatch(rf"{re.escape(meeting_id)}:v(\d+)", name)
+def _screen_index(name: str, meeting_id: str) -> int | None:
+    match = re.fullmatch(rf"{re.escape(meeting_id)}:s(\d+)", name)
     return int(match.group(1)) if match is not None else None
 
 
 def _transcript_window(name: str, meeting_id: str) -> bool:
-    return _correction_index(name, meeting_id) is None and _visual_index(name, meeting_id) is None
+    return _correction_index(name, meeting_id) is None and _screen_index(name, meeting_id) is None
 
 
 async def _saga_episodes(

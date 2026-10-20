@@ -22,7 +22,6 @@ def _final_transcript(*, finalized: bool = True) -> TranscriptEvent:
         finalized=finalized,
         participant_id="speaker-a",
         speaker_evidence_id=None,
-        visual_refs=("frame-1",),
         voice_clusters=("cluster-a",),
     )
 
@@ -106,7 +105,6 @@ def test_transcript_final_event_carries_only_contract_fields() -> None:
         "id": "utt-1",
         "participant_id": "speaker-a",
         "text": "hello everyone",
-        "visual_refs": ["frame-1"],
         "voice_clusters": ["cluster-a"],
     }
 
@@ -191,7 +189,7 @@ def test_retired_flags_are_decided_and_voiceprint_is_still_off() -> None:
         "stt.idle_reconnect_seconds",
     }
     assert Settings().identity.voiceprint_enabled is False
-    assert Settings().perception.enabled is False
+    assert Settings().perception.enabled is True
     assert Settings().conversation.sentence_streaming is True
     assert leaf_names
 

@@ -55,7 +55,6 @@ from fakeyou.config.settings import (
     require_secret,
 )
 from fakeyou.foundation.provenance import render_evidence
-from fakeyou.foundation.transcript import visual_refs_of
 from fakeyou.foundation.triggers import current_trigger
 from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED as MEET_ACTION_QUEUED
 from fakeyou.meet.meet_tools import create_meet_action_tools as create_meet_action_tools
@@ -96,7 +95,6 @@ PREFETCH_QUERY_MAX_CHARS = 2000
 PREFETCH_RETAINED_EVIDENCE = 3
 PREFETCH_RETAINED_MAX_CHARS = 1200
 PREFETCH_TOOL_NAME = "recall_meeting_context"
-VisualCaptionResolver = Callable[[str], Awaitable[str | None]]
 FORGET_BATCH_SIZE = 100
 REEMBED_BATCH_SIZE = 100
 
@@ -378,14 +376,12 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         group_id: str,
         recall: RecallSettings,
         diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-        visual_caption: VisualCaptionResolver | None = None,
     ) -> None:
         self._memory = memory
         self._group_id = group_id
         self._recall = recall
         self._faults = diag.faults
         self._journal = diag.journal or Journal("", echo=False)
-        self._visual_caption = visual_caption
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
         self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
         self._sequence = 0
@@ -426,13 +422,10 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
                     self._retained.pop(next(iter(self._retained)))
         _, call, evidence = self._latest
-        visual = await self._visual_message(speech)
         assembled: list[AnyMessage] = []
         for index, message in enumerate(request.messages):
             assembled.append(message)
             if index == position - 1:
-                if visual is not None:
-                    assembled.append(visual)
                 assembled.extend([call, evidence])
             elif (
                 isinstance(message, HumanMessage) and message.id is not None and message.id in kept
@@ -440,37 +433,6 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 kept_call, kept_evidence = kept[message.id]
                 assembled.extend([kept_call, _trim_retained_evidence(kept_evidence)])
         return await handler(request.override(messages=assembled))
-
-    async def _visual_message(self, speech: list[HumanMessage]) -> HumanMessage | None:
-        captioner = self._visual_caption
-        if captioner is None:
-            return None
-        refs = visual_refs_of(speech[-1])
-        if not refs:
-            return None
-
-        async def attempt() -> str | None:
-            return await captioner(refs[-1])
-
-        line, error = await capture_error(attempt)
-        if error is not None:
-            if self._faults is not None:
-                self._faults.record(classify_exception("memory", error, operation="visual_caption"))
-            self._journal.record(
-                "visual_caption_failed",
-                source="memory",
-                stage="caption",
-                error_type=type(error).__name__,
-            )
-            return None
-        if not line:
-            return None
-        transcript_id = speech[-1].id
-        return HumanMessage(
-            content=line,
-            id=f"{transcript_id}-visual" if transcript_id else None,
-            additional_kwargs={"meeting_event": {"kind": "visual", "source": "meeting_visual"}},
-        )
 
     async def _evidence(
         self,
@@ -561,14 +523,12 @@ def create_memory_prefetch_middleware(
     group_id: str,
     recall: RecallSettings = DEFAULTS.memory.recall,
     diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-    visual_caption: VisualCaptionResolver | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
         memory,
         group_id=group_id,
         recall=recall,
         diag=diag,
-        visual_caption=visual_caption,
     )
 
 

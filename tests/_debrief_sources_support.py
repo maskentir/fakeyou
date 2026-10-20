@@ -24,6 +24,38 @@ def transcript(**changes: Any) -> dict[str, Any]:
     } | changes
 
 
+def screen(**changes: Any) -> dict[str, Any]:
+    return {
+        "kind": "screen",
+        "at": "2026-10-03T12:00:05Z",
+        "ref": "screen-1",
+        "shown_at": "2026-10-03T12:00:03Z",
+        "sha256": "ab" * 32,
+        "presenter_id": "devices/7",
+        "presenter": "Rina",
+        "content": "slide",
+        "title": "Q3 revenue",
+        "text": "Quarterly revenue grew twelve percent.",
+        "key_points": ["Revenue is up"],
+        "figures": ["12%"],
+        "visuals": ["bar chart"],
+        "people": [],
+    } | changes
+
+
+def chat(**changes: Any) -> dict[str, Any]:
+    return {
+        "kind": "chat",
+        "at": "2026-10-03T12:00:09Z",
+        "ref": "chat-1",
+        "message_id": "message-1",
+        "sender_id": "devices/8",
+        "sender": "Budi",
+        "text": "I will send the deck tonight.",
+        "sent_at": "2026-10-03T12:00:08Z",
+    } | changes
+
+
 def encoded(*entries: dict[str, Any]) -> bytes:
     return ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in entries) + "\n").encode()
 

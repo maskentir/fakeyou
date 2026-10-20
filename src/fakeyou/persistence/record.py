@@ -1,13 +1,13 @@
 import json
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
@@ -16,7 +16,7 @@ from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.layout import MeetingDir
 
 RECORD_SYNC_INTERVAL = 20
-RECORD_VERSION = 2
+RECORD_VERSION = 3
 _TAIL_BLOCK_BYTES = 8192
 
 
@@ -28,7 +28,7 @@ class _Entry(BaseModel):
 
 class RecordHeader(_Entry):
     kind: Literal["header"] = "header"
-    v: Literal[2] = 2
+    v: Literal[3] = 3
 
 
 class TranscriptEntry(_Entry):
@@ -43,7 +43,6 @@ class TranscriptEntry(_Entry):
     capture_ms: float = 0.0
     display_claim: str | None = None
     corrected_speaker_uuid: str | None = None
-    visual_refs: tuple[str, ...] = ()
     voice_clusters: tuple[str, ...] = ()
 
 
@@ -64,28 +63,64 @@ class ResumeEntry(_Entry):
     attempt: int
 
 
-@dataclass(frozen=True, slots=True)
-class VisualDraft:
-    visual_id: str
-    caption: str
-    sha256: str
-    captured_at: datetime
-    frame_ref: str
-    captured_page_ms: float = 0.0
+class PerceptFields(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class VisualEntry(_Entry):
-    kind: Literal["visual"] = "visual"
-    visual_id: str
-    captured_at: AwareDatetime
+class ScreenFields(PerceptFields):
+    ref: str
+    shown_at: AwareDatetime
     sha256: str
-    caption: str
-    frame_ref: str
-    captured_page_ms: float = 0.0
+    presenter_id: str | None = None
+    presenter: str | None = None
+    content: str
+    title: str
+    text: str
+    key_points: tuple[str, ...] = ()
+    figures: tuple[str, ...] = ()
+    visuals: tuple[str, ...] = ()
+    people: tuple[str, ...] = ()
+
+
+class ScreenEntry(_Entry, ScreenFields):
+    kind: Literal["screen"] = "screen"
+
+
+class ChatFields(PerceptFields):
+    ref: str
+    message_id: str
+    sender_id: str
+    sender: str
+    text: str
+    sent_at: AwareDatetime
+    own: bool = False
+    backlog: bool = False
+
+
+class ChatEntry(_Entry, ChatFields):
+    kind: Literal["chat"] = "chat"
+
+
+class SignalFields(PerceptFields):
+    signal: str
+    participant_id: str
+    participant: str
+    observed_at: AwareDatetime
+    detail: str | None = None
+
+
+class SignalEntry(_Entry, SignalFields):
+    kind: Literal["signal"] = "signal"
 
 
 RecordEntry = Annotated[
-    TranscriptEntry | TwinSpeechEntry | ToolResultEntry | ResumeEntry | VisualEntry,
+    TranscriptEntry
+    | TwinSpeechEntry
+    | ToolResultEntry
+    | ResumeEntry
+    | ScreenEntry
+    | ChatEntry
+    | SignalEntry,
     Field(discriminator="kind"),
 ]
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
@@ -119,6 +154,10 @@ def record_header_of(line: str | bytes) -> RecordHeader | None:
         return None
     if not isinstance(row, dict) or row.get("kind") != "header":
         return None
+    if row.get("v") != RECORD_VERSION:
+        raise FakeYouError(
+            ErrorCode.RECORD_VERSION_UNSUPPORTED, found=row.get("v"), expected=RECORD_VERSION
+        )
     return RecordHeader.model_validate(row)
 
 
@@ -197,13 +236,16 @@ class MeetingRecord:
         dropped = _drop_torn_tail(path)
         if dropped and journal is not None:
             journal.record("record_tail_dropped", source="meeting_record", bytes_dropped=dropped)
+        if path.exists() and path.stat().st_size:
+            read_record_header(path)
         self._file = path.open("a", encoding="utf-8")
         self._faults = faults
         self._now = now
         self._header_pending = self._file.tell() == 0
         self._unsynced = 0
         self._seen: set[str] = set()
-        self._seen_visual: set[str] = set()
+        self._seen_chat: set[str] = set()
+        self._screens: dict[str, ScreenFields] = {}
         self._closed = False
 
     def add_transcript(self, event: TranscriptEvent) -> None:
@@ -222,7 +264,6 @@ class MeetingRecord:
                 stream_id=event.stream_id,
                 capture_ms=event.capture_ms,
                 display_claim=event.display_claim,
-                visual_refs=event.visual_refs,
                 voice_clusters=event.voice_clusters,
             )
         )
@@ -239,26 +280,20 @@ class MeetingRecord:
     def add_resume(self, *, attempt: int) -> None:
         self._append(ResumeEntry(at=self._now(), attempt=attempt))
 
-    def add_visual(self, draft: VisualDraft) -> None:
-        if (
-            not draft.visual_id.strip()
-            or not draft.caption.strip()
-            or not draft.frame_ref.strip()
-            or draft.visual_id in self._seen_visual
-        ):
+    def add_screen(self, fields: ScreenFields) -> None:
+        if not fields.ref.strip() or self._screens.get(fields.ref) == fields:
             return
-        self._seen_visual.add(draft.visual_id)
-        self._append(
-            VisualEntry(
-                at=self._now(),
-                visual_id=draft.visual_id,
-                captured_at=draft.captured_at,
-                sha256=draft.sha256,
-                caption=draft.caption,
-                frame_ref=draft.frame_ref,
-                captured_page_ms=draft.captured_page_ms,
-            )
-        )
+        self._screens[fields.ref] = fields
+        self._append(ScreenEntry(at=self._now(), **fields.model_dump()))
+
+    def add_chat(self, fields: ChatFields) -> None:
+        if not fields.text.strip() or fields.message_id in self._seen_chat:
+            return
+        self._seen_chat.add(fields.message_id)
+        self._append(ChatEntry(at=self._now(), **fields.model_dump()))
+
+    def add_signal(self, fields: SignalFields) -> None:
+        self._append(SignalEntry(at=self._now(), **fields.model_dump()))
 
     def close(self) -> None:
         if self._closed:

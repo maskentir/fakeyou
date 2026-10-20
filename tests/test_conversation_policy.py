@@ -21,7 +21,6 @@ from fakeyou.conversation.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
     SPOKEN_LANGUAGE_GUIDANCE,
-    VISUAL_GUIDANCE,
     create_meeting_agent,
 )
 from fakeyou.conversation.conversation import LangGraphResponder
@@ -69,6 +68,7 @@ from fakeyou.memory.persona import build_system_prompt as persona_build_system_p
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration.assembly import build_decider
 from fakeyou.orchestration.persona_prompt import build_persona_prompt, persona_prompt_sections
+from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel
@@ -1436,11 +1436,11 @@ def test_escape_xml_data_neutralizes_markup_characters() -> None:
 
 @pytest.mark.parametrize("strategy", ["tool", "prefetch"])
 @pytest.mark.parametrize("scope", [None, "brief_only", "persona_memory"])
-@pytest.mark.parametrize("surface", ["audio", "visual"])
+@pytest.mark.parametrize("surface", ["audio", "perception"])
 def test_persona_prompt_prose_keeps_the_current_prompt_text(
     strategy: RecallStrategy, scope: KnowledgeScope | None, surface: str
 ) -> None:
-    visual = surface == "visual"
+    perception = surface == "perception"
     loaded = profile()
     meeting = (
         None
@@ -1450,10 +1450,10 @@ def test_persona_prompt_prose_keeps_the_current_prompt_text(
         )
     )
     expected = persona_build_system_prompt(loaded, brief=meeting, recall_strategy=strategy)
-    if visual:
-        expected = f"{expected}\n\n{VISUAL_GUIDANCE}"
+    if perception:
+        expected = f"{expected}\n\n{PERCEPTION_GUIDANCE}"
     prompt = build_persona_prompt(
-        loaded, brief=meeting, recall_strategy=strategy, language="en", visual=visual
+        loaded, brief=meeting, recall_strategy=strategy, language="en", perception=perception
     )
     assert prompt == expected
 
@@ -1474,12 +1474,12 @@ def test_persona_sections_keep_rules_as_instructions_and_profile_as_data() -> No
         knowledge_scope="persona_memory",
     )
     sections = persona_prompt_sections(
-        loaded, brief=meeting, recall_strategy="tool", language="en", visual=True
+        loaded, brief=meeting, recall_strategy="tool", language="en", perception=True
     )
     assert SOURCE_RULES in sections.authority
     assert BRIEF_RULES in sections.authority
     assert RECALL_RULES["tool"] in sections.memory_rules
-    assert VISUAL_GUIDANCE in sections.tools
+    assert PERCEPTION_GUIDANCE in sections.tools
     assert sections.output_rules.endswith(ENDING_RULE)
     assert json.loads(sections.persona)["display_name"] == "Rani Twin"
     assert "approved_facts" in json.loads(sections.brief)

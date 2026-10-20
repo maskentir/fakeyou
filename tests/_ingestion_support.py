@@ -11,7 +11,7 @@ from fakeyou.memory.ingestion import IngestControl, IngestScope, ingest_meeting
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
-from fakeyou.persistence.record import TranscriptEntry
+from fakeyou.persistence.record import ScreenEntry, TranscriptEntry
 
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
 
@@ -29,6 +29,21 @@ def said(seconds: float, text: str, participant_id: str = "unknown") -> Transcri
         participant_id=participant_id,
         speaker_evidence_id=None,
     )
+
+
+def shown(ref: str, title: str, **changes: Any) -> ScreenEntry:
+    fields: dict[str, Any] = {
+        "at": START,
+        "ref": ref,
+        "shown_at": START,
+        "sha256": "cd" * 32,
+        "presenter_id": "devices/7",
+        "presenter": "Rina",
+        "content": "slide",
+        "title": title,
+        "text": "",
+    }
+    return ScreenEntry(**fields | changes)
 
 
 async def run(memory: MagicMock, entries: list[Any], **overrides: Any) -> tuple[Any, list[Any]]:

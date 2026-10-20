@@ -1,12 +1,14 @@
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, TypedDict, get_args
 
 EVIDENCE_SCHEMA = "memory_evidence/v1"
 EvidenceOutcome = Literal["found", "empty", "unavailable"]
-SourceKind = Literal["owner_note", "meeting_transcript", "meeting_visual", "other"]
-TimeGranularity = Literal["document", "episode_window", "frame"]
+SourceKind = Literal["owner_note", "meeting_transcript", "meeting_screen", "meeting_chat", "other"]
+TimeGranularity = Literal["document", "episode_window"]
+SOURCE_KINDS: frozenset[str] = frozenset(get_args(SourceKind))
+TIME_GRANULARITIES: frozenset[str] = frozenset(get_args(TimeGranularity))
 
 
 class SourceDict(TypedDict):
@@ -18,7 +20,6 @@ class SourceDict(TypedDict):
     time_granularity: TimeGranularity
     speaker_verified: bool
     speaker_identity: str
-    frame_ref: NotRequired[str]
 
 
 class FactDict(TypedDict):
@@ -39,7 +40,6 @@ class MemoryEvidence(TypedDict):
     excluded: ExcludedDict
 
 
-EVIDENCE_SCHEMA_V2 = "memory_evidence/v2"
 OWNER_SPEAKER_IDENTITY = "owner"
 UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
 
@@ -47,43 +47,27 @@ UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any na
 @dataclass(frozen=True, slots=True)
 class SourceEvidence:
     episode_id: str
-    kind: Literal["owner_note", "meeting_transcript", "meeting_visual", "other"]
+    kind: SourceKind
     label: str
     source_at: datetime
     recorded_at: datetime
-    time_granularity: Literal["document", "episode_window", "frame"]
+    time_granularity: TimeGranularity
     speaker_verified: bool = False
     speaker_identity: str = UNVERIFIED_SPEAKER_IDENTITY
-    frame_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.episode_id.strip():
             raise ValueError("episode_id must not be blank")
-        kind_value: str = self.kind
-        if kind_value not in ("owner_note", "meeting_transcript", "meeting_visual", "other"):
-            raise ValueError(
-                "kind must be owner_note, meeting_transcript, meeting_visual, or other"
-            )
+        if self.kind not in SOURCE_KINDS:
+            raise ValueError(f"kind must be one of {sorted(SOURCE_KINDS)}")
         if self.source_at.tzinfo is None or self.source_at.utcoffset() is None:
             raise ValueError("source_at must carry timezone")
         if self.recorded_at.tzinfo is None or self.recorded_at.utcoffset() is None:
             raise ValueError("recorded_at must carry timezone")
-        granularity_value: str = self.time_granularity
-        if granularity_value not in ("document", "episode_window", "frame"):
-            raise ValueError("time_granularity must be document, episode_window, or frame")
+        if self.time_granularity not in TIME_GRANULARITIES:
+            raise ValueError("time_granularity must be document or episode_window")
         if not self.speaker_identity.strip():
             raise ValueError("speaker_identity must not be blank")
-        _check_visual_kind(kind_value, granularity_value, self.frame_ref)
-
-
-def _check_visual_kind(kind_value: str, granularity_value: str, frame_ref: str | None) -> None:
-    if kind_value == "meeting_visual":
-        if frame_ref is None or not frame_ref.strip():
-            raise ValueError("meeting_visual needs frame_ref")
-        if granularity_value != "frame":
-            raise ValueError("meeting_visual needs frame granularity")
-    elif frame_ref is not None:
-        raise ValueError("frame_ref needs meeting_visual kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,8 +93,6 @@ def _rendered_source_compact(source: SourceEvidence) -> dict[str, str | bool]:
     }
     if source.recorded_at != source.source_at:
         rendered["recorded_at"] = source.recorded_at.astimezone(UTC).isoformat()
-    if source.frame_ref is not None:
-        rendered["frame_ref"] = source.frame_ref
     rendered["speaker_identity"] = source.speaker_identity
     return rendered
 
@@ -130,7 +112,7 @@ def _validate_render_inputs(result_limit: int, excluded: dict[str, int]) -> None
             raise ValueError("excluded counts must be zero or more")
 
 
-def _dedupe_sources(facts: list[FactEvidence]) -> dict[str, SourceEvidence]:
+def _check_sources(facts: list[FactEvidence]) -> None:
     seen: dict[str, SourceEvidence] = {}
     for fact in facts:
         for source in fact.sources:
@@ -138,7 +120,6 @@ def _dedupe_sources(facts: list[FactEvidence]) -> dict[str, SourceEvidence]:
             if prior is not None and prior != source:
                 raise ValueError(f"conflicting metadata for episode {source.episode_id}")
             seen[source.episode_id] = source
-    return seen
 
 
 def _merge_facts(
@@ -225,8 +206,6 @@ def _render_fact_entry(entry: _OrderedEntry, *, compact: bool) -> dict[str, obje
             "speaker_verified": source.speaker_verified,
             "speaker_identity": source.speaker_identity,
         }
-        if source.frame_ref is not None:
-            rendered_source["frame_ref"] = source.frame_ref
         rendered_sources.append(rendered_source)
     if compact:
         return {"text": text, "sources": rendered_sources}
@@ -242,18 +221,13 @@ def render_evidence(
     search_rank: dict[str, int] | None = None,
 ) -> str:
     _validate_render_inputs(result_limit, excluded)
-    seen = _dedupe_sources(facts)
+    _check_sources(facts)
     merged_ids, merged_sources = _merge_facts(facts)
     ordered = _rank_facts(merged_ids, merged_sources)
     trimmed = _trim_ordered(ordered, result_limit, search_rank)
     rendered_facts = [_render_fact_entry(entry, compact=compact) for entry in trimmed]
-    schema = (
-        EVIDENCE_SCHEMA_V2
-        if any(source.kind == "meeting_visual" for source in seen.values())
-        else EVIDENCE_SCHEMA
-    )
     payload = {
-        "schema": schema,
+        "schema": EVIDENCE_SCHEMA,
         "facts": rendered_facts,
         "excluded": {
             "pending": excluded.get("pending", 0),

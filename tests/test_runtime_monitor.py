@@ -4,12 +4,14 @@ from typing import Any
 
 import pytest
 
+from fakeyou.config.settings import PerceptionSettings, Settings
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.orchestration.perception import create_perception_stack
 from fakeyou.orchestration.runtime import MeetingWorker
 from tests._fakes_common import FakeClock
-from tests._meet_browser_fakes import meet_page
+from tests._meet_browser_fakes import FakePage, meet_page
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import mining_payload, session_config
 
@@ -147,18 +149,27 @@ async def test_start_capture_drain_records_poll_faults(journal: RecordingJournal
         await worker.close_capture_drain()
 
 
-async def test_start_visual_observer_records_poll_faults(
-    journal: RecordingJournal, tmp_path: Path
+async def test_start_perception_drains_the_page_and_listens_for_roster_syncs(
+    journal: RecordingJournal,
 ) -> None:
-    from fakeyou.visual.visual_store import VisualStore
-
     reporter = FaultReporter(journal=journal)
-    worker = _bare_worker(visual_enabled=True)
+    worker = _bare_worker()
     worker.faults = reporter
-    worker.visual_store = VisualStore(tmp_path / "visual")
-    await worker.start_visual_observer()
+    worker.journal = journal
+    worker.perception = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    page = worker.page
+    assert isinstance(page, FakePage)
+    await worker.start_perception()
     try:
         await _wait_for_faults(reporter)
         assert reporter.total() >= 1
+        assert len(page.listeners["response"]) == 1
     finally:
-        await worker.close_visual_observer()
+        await worker.close_perception()
+    assert page.listeners["response"] == []
+    assert [row["event"] for row in journal.events() if "perception_drain" in row["event"]] == [
+        "perception_drain_started",
+        "perception_drain_stopped",
+    ]

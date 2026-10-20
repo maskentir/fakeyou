@@ -160,7 +160,18 @@ class FakePage(Page):
         self.typed: list[str] = []
         self.waited: list[str] = []
         self.evaluate_calls: list[str] = []
+        self.listeners: dict[str, list[Any]] = {}
         self._keyboard: Any = FakeKeyboard(self)
+
+    @override
+    def on(self, event: Any, f: Any) -> None:
+        self.listeners.setdefault(str(event), []).append(f)
+
+    @override
+    def remove_listener(self, event: Any, f: Any) -> None:
+        handlers = self.listeners.get(str(event), [])
+        if f in handlers:
+            handlers.remove(f)
 
     @property
     @override

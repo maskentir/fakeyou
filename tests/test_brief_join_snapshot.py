@@ -10,9 +10,14 @@ from langchain_core.outputs import ChatResult
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    HistoryTrimMiddleware,
+    OrphanToolCallMiddleware,
+)
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
+from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.brief import brief_digest, load_meeting_brief, read_meeting_context
 from tests._cli_support import (
     BRIEF_DATA,
@@ -74,8 +79,12 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
         type(create_greeting_middleware("id")),
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
+        ChatTurnToolsMiddleware,
+        PerceptionContextMiddleware,
     ]
-    assert created["persona"] == build_system_prompt(profile, brief=brief)
+    assert created["persona"] == (
+        f"{build_system_prompt(profile, brief=brief)}\n\n{PERCEPTION_GUIDANCE}"
+    )
     assert model.seen[0][0].content == created["persona"]
     assert audio.spoken == ["Hello."]
     assert read_meeting_context(context_file) == expected_context(brief, profile)
@@ -105,7 +114,9 @@ async def test_join_persona_memory_brief_exposes_only_profile_scoped_recall(
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     brief = meeting_brief(knowledge_scope="persona_memory")
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
-    assert created["persona"] == build_system_prompt(profile, brief=brief)
+    assert created["persona"] == (
+        f"{build_system_prompt(profile, brief=brief)}\n\n{PERCEPTION_GUIDANCE}"
+    )
     assert "recall_meeting_context" in created["persona"]
     assert audio.spoken == ["Okay."]
     assert graphiti.events == ["verify", "close"]
@@ -127,9 +138,10 @@ async def test_join_persona_memory_brief_without_memory_omits_recall_rules(
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     brief = meeting_brief(knowledge_scope="persona_memory")
     assert created["tools"] == []
-    assert created["persona"] == build_system_prompt(
+    expected = build_system_prompt(
         profile.model_copy(update={"allowed_tools": frozenset()}), brief=brief
     )
+    assert created["persona"] == f"{expected}\n\n{PERCEPTION_GUIDANCE}"
     assert "recall_meeting_context" not in created["persona"]
     assert read_meeting_context(meeting_context_file(settings)) == expected_context(brief, profile)
 
@@ -245,7 +257,9 @@ async def test_join_keeps_the_snapshot_when_the_source_brief_changes(
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     original = meeting_brief()
     assert "EDITED-FACT-MARKER" in brief_path.read_text(encoding="utf-8")
-    assert model.seen[0][0].content == build_system_prompt(profile, brief=original)
+    assert model.seen[0][0].content == (
+        f"{build_system_prompt(profile, brief=original)}\n\n{PERCEPTION_GUIDANCE}"
+    )
     assert "EDITED-FACT-MARKER" not in model.seen[0][0].content
     assert read_meeting_context(meeting_context_file(settings)) == expected_context(
         original, profile

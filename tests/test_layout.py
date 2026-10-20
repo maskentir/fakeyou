@@ -17,11 +17,12 @@ from fakeyou.persistence.layout import (
     LEDGER_LOCK_FILE_NAME,
     LOCK_FILE_SUFFIX,
     MARKDOWN_FILE_NAME,
+    PERCEPTION_DIR_NAME,
     PROBE_FILE_NAME,
     RECORD_FILE_NAME,
     REPORT_FILE_NAME,
+    SCREENS_DIR_NAME,
     SLOTS_FILE_NAME,
-    VISUAL_DIR_NAME,
     MeetingDir,
     meeting_profile_dir,
 )
@@ -45,7 +46,8 @@ def test_meeting_dir_builds_every_path_under_the_meeting_directory(tmp_path: Pat
     assert layout.debrief_md == layout.dir / "debrief.md"
     assert layout.debrief_attempt == layout.dir / "debrief-attempt.json"
     assert layout.audio_dir == layout.dir / "audio"
-    assert layout.visual_dir == layout.dir / "visual"
+    assert layout.perception_dir == layout.dir / "perception"
+    assert layout.screens_dir == layout.dir / "perception" / "screens"
     assert layout.slots == layout.dir / "audio" / "slots.json"
     assert layout.lock == tmp_path / "meeting-9.lock"
 
@@ -67,7 +69,8 @@ def test_meeting_dir_file_names_are_the_single_source() -> None:
         ATTEMPT_FILE_NAME,
         SLOTS_FILE_NAME,
         AUDIO_DIR_NAME,
-        VISUAL_DIR_NAME,
+        PERCEPTION_DIR_NAME,
+        SCREENS_DIR_NAME,
         LOCK_FILE_SUFFIX,
     ) == (
         "record.jsonl",
@@ -85,7 +88,8 @@ def test_meeting_dir_file_names_are_the_single_source() -> None:
         "debrief-attempt.json",
         "slots.json",
         "audio",
-        "visual",
+        "perception",
+        "screens",
         ".lock",
     )
 

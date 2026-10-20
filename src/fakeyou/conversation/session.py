@@ -107,7 +107,7 @@ class SessionConfig:
     participant_evidence_path: Path | None = None
     per_stream_enabled: bool = False
     meet_actions_enabled: bool = False
-    visual_enabled: bool = False
+    perception_enabled: bool = False
     resume: bool = False
 
 

@@ -20,7 +20,7 @@ from fakeyou.config.settings import (
     ParticipationDeciderSettings,
     Settings,
 )
-from fakeyou.conversation.agent import create_meeting_agent, create_visual_tools
+from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
     LangGraphResponder,
     MeetingAgent,
@@ -34,7 +34,11 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
-from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    HistoryTrimMiddleware,
+    OrphanToolCallMiddleware,
+)
 from fakeyou.conversation.participation_decider import (
     Decider,
     StructuredGeminiDecider,
@@ -52,7 +56,6 @@ from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifa
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
 from fakeyou.memory.memory import (
-    VisualCaptionResolver,
     create_meet_action_tools,
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -65,26 +68,17 @@ from fakeyou.memory.persona import (
     memory_wiring,
     refuse_meet_tool,
 )
-from fakeyou.memory.visual_hydrate import (
-    VISUAL_HYDRATE_MAX_IMAGES,
-    create_visual_hydrate_middleware,
-    create_visual_resolver,
-)
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
     create_chat_model,
     create_decider_chat_model,
     create_fallback_chat_model,
-    create_perception_chat_model,
 )
+from fakeyou.perception.context import PerceptionContext, create_perception_middleware
 from fakeyou.persistence.brief import MeetingBrief
-from fakeyou.visual.visual_caption import VisualCaptioner
-from fakeyou.visual.visual_store import VisualStore
-from fakeyou.visual.visual_tools import visual_tool_allowed
 
 
 @dataclass(slots=True)
@@ -169,16 +163,6 @@ def default_persona(settings: Settings) -> str:
     return build_persona_prompt(None, language=settings.speech.language)
 
 
-def create_visual_captioner(
-    settings: Settings, journal: Journal | None = None
-) -> VisualCaptioner | None:
-    if not settings.perception.enabled:
-        return None
-    return VisualCaptioner(
-        create_perception_chat_model(settings), settings=settings.perception, journal=journal
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class SignalHandlers:
     installed: tuple[str, ...]
@@ -221,8 +205,7 @@ class AgentWiring:
     profile: PersonaProfile | None = None
     brief: MeetingBrief | None = None
     graphiti: Graphiti | None = None
-    visual_store: VisualStore | None = None
-    visual_captioner: VisualCaptioner | None = None
+    perception: PerceptionContext | None = None
 
 
 DEFAULT_AGENT_WIRING = AgentWiring()
@@ -237,14 +220,6 @@ class TurnBehavior:
     on_tool_result: ToolResultCallback | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
     others_speaking: Callable[[], bool] | None = None
-
-
-def _visual_wired(settings: Settings, agent: AgentWiring) -> bool:
-    return (
-        settings.perception.enabled
-        and agent.visual_store is not None
-        and agent.visual_captioner is not None
-    )
 
 
 def build_decider(provider: str, settings: ParticipationDeciderSettings) -> Decider:
@@ -295,7 +270,7 @@ class _ConversationBuilder:
             brief=self._agent.brief,
             recall_strategy=self._settings.memory.recall.strategy,
             language=self._settings.speech.language,
-            visual=_visual_wired(self._settings, self._agent),
+            perception=self._agent.perception is not None,
         )
 
     def add_greeting(self) -> None:
@@ -312,16 +287,7 @@ class _ConversationBuilder:
         )
         self._middleware.append(OrphanToolCallMiddleware())
 
-    def wired_visual(self) -> VisualCaptionResolver | None:
-        if not _visual_wired(self._settings, self._agent):
-            return None
-        store = self._agent.visual_store
-        captioner = self._agent.visual_captioner
-        assert store is not None
-        assert captioner is not None
-        return create_visual_resolver(store, captioner)
-
-    def add_memory(self, visual: VisualCaptionResolver | None) -> None:
+    def add_memory(self) -> None:
         profile = self._agent.profile
         graphiti = self._agent.graphiti
         if graphiti is None or profile is None or not self._tool_names:
@@ -334,7 +300,6 @@ class _ConversationBuilder:
                     group_id=profile.memory_group,
                     recall=self._settings.memory.recall,
                     diag=self._diagnostics,
-                    visual_caption=visual,
                 )
             )
         if bound:
@@ -347,23 +312,14 @@ class _ConversationBuilder:
             )
             self._middleware.append(create_recall_error_middleware(self._diagnostics.faults))
 
-    def add_visual(self) -> None:
-        if not _visual_wired(self._settings, self._agent):
+    def add_perception(self) -> None:
+        self._middleware.append(ChatTurnToolsMiddleware())
+        perception = self._agent.perception
+        if perception is None:
             return
-        store = self._agent.visual_store
-        captioner = self._agent.visual_captioner
-        assert store is not None
-        assert captioner is not None
         self._middleware.append(
-            create_visual_hydrate_middleware(
-                store,
-                captioner,
-                max_images=VISUAL_HYDRATE_MAX_IMAGES,
-                journal=self._diagnostics.journal,
-            )
+            create_perception_middleware(perception, journal=self._diagnostics.journal)
         )
-        if visual_tool_allowed(self._tool_names, visual_enabled=self._settings.perception.enabled):
-            self._tools.extend(create_visual_tools(store, captioner))
 
     def add_meet_tools(self) -> None:
         if self._agent.profile is None or self._behavior.meet_dispatcher is None:
@@ -460,8 +416,8 @@ async def open_conversation(
         )
         builder.add_greeting()
         builder.add_history()
-        builder.add_memory(builder.wired_visual())
-        builder.add_visual()
+        builder.add_memory()
+        builder.add_perception()
         builder.add_meet_tools()
         thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
         meeting_agent = builder.build_agent(model, checkpointer)

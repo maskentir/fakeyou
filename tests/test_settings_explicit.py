@@ -302,6 +302,7 @@ def test_every_active_role_requires_its_own_key(role: str) -> None:
 
 def test_disabled_roles_do_not_require_keys() -> None:
     settings = Settings(**env_file_opt(None))
+    settings.perception.enabled = False
     settings.participation_decider.enabled = False
     settings.require_roles("perception", "participation_decider", "reply_fallback")
     with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__API_KEY"):
@@ -325,7 +326,7 @@ def test_enabled_compatible_perception_requires_a_base_url() -> None:
     compatible = PerceptionInterpreterSettings(provider="openai_compatible")
     with pytest.raises(ValueError, match="FAKEYOU_PERCEPTION__INTERPRETER__BASE_URL"):
         PerceptionSettings(enabled=True, interpreter=compatible)
-    assert PerceptionSettings(interpreter=compatible).interpreter.base_url is None
+    assert PerceptionSettings(enabled=False, interpreter=compatible).interpreter.base_url is None
 
 
 def test_inspection_does_not_require_credentials(capsys: pytest.CaptureFixture[str]) -> None:

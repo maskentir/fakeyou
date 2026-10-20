@@ -437,7 +437,7 @@ class AttentionSettings(Section):
 
 
 class PerceptionSettings(Section):
-    enabled: bool = False
+    enabled: bool = True
     screen: bool = True
     chat: bool = True
     signals: bool = True

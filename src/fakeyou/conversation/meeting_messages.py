@@ -25,8 +25,6 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
             "stream_id": event.stream_id,
             "speaker_status": "observed" if event.participant_id != "unknown" else "unknown",
         }
-        if event.visual_refs:
-            meeting["visual_refs"] = list(event.visual_refs)
         messages.append(
             HumanMessage(
                 content=event.text,

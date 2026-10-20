@@ -175,7 +175,7 @@ fakeyou worker stop standup-1
 fakeyou diarize run --meeting-id standup-1
 fakeyou diarize show --meeting-id standup-1
 fakeyou audio purge-expired --days 30
-fakeyou visual purge-expired --days 30
+fakeyou perception purge-expired --days 30
 fakeyou db upgrade
 fakeyou db status
 ```

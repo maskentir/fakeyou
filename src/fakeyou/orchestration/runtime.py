@@ -111,14 +111,13 @@ from fakeyou.orchestration.lifecycle import (
     resume_lifecycle,
 )
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
+from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
-from fakeyou.visual.visual_caption import VisualCaption, VisualCaptioner
-from fakeyou.visual.visual_observer import (
-    DEFAULT_POLL_SCHEDULE,
-    CaptionSink,
-    VisualObserver,
+from fakeyou.perception.sensors import (
+    DEFAULT_PERCEPTION_SCHEDULE,
+    PerceptionDrain,
+    load_perception_script,
 )
-from fakeyou.visual.visual_store import VisualFrame, VisualStore
 
 
 @asynccontextmanager
@@ -216,10 +215,8 @@ class MeetingWorker:
     voice_loop: VoiceActivityLoop | None = None
     capture_drain: CaptureDrainLoop | None = None
     capture_registry: StreamRegistry | None = None
-    visual_store: VisualStore | None = None
-    visual_observer: VisualObserver | None = None
-    visual_captioner: VisualCaptioner | None = None
-    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
+    perception: PerceptionStack | None = None
+    perception_drain: PerceptionDrain | None = None
     on_phase: Callable[[str], None] | None = None
     detail: str = ""
     base: LifecycleState | None = None
@@ -287,8 +284,10 @@ class MeetingWorker:
         )
 
     def _probe_scripts(self) -> tuple[str, ...]:
-        return ((load_voice_activity_script(),) if self.voice_activity is not None else ()) + (
-            (load_capture_script(),) if self.config.per_stream_enabled else ()
+        return (
+            ((load_voice_activity_script(),) if self.voice_activity is not None else ())
+            + ((load_capture_script(),) if self.config.per_stream_enabled else ())
+            + ((load_perception_script(),) if self.perception is not None else ())
         )
 
     async def prepare(self, state: LifecycleState) -> LifecycleUpdate:
@@ -577,33 +576,37 @@ class MeetingWorker:
             self.capture_drain = None
         self.capture_registry = None
 
-    async def start_visual_observer(self) -> None:
-        if self.visual_observer is not None or self.visual_store is None:
+    async def start_perception(self) -> None:
+        if self.perception is None or self.perception_drain is not None:
             return
-        if not self.config.visual_enabled:
-            return
-        self.visual_observer = VisualObserver(
+        drain = PerceptionDrain(
             self.page,
-            self.visual_store,
-            schedule=replace(DEFAULT_POLL_SCHEDULE, monotonic=self.monotonic),
-            captions=CaptionSink(self.visual_captioner, self.visual_on_caption),
+            self.perception.sensors,
+            schedule=replace(DEFAULT_PERCEPTION_SCHEDULE, monotonic=self.monotonic),
             sinks=ConsumerSink(faults=self.faults, journal=self.journal),
         )
-        await self.visual_observer.start()
-        self.record("visual_observer_started", source="runtime")
+        self.page.on("response", drain.on_response)
+        self.perception_drain = drain
+        await drain.start()
+        self.record("perception_drain_started", source="runtime")
 
-    async def close_visual_observer(self) -> None:
-        if self.visual_observer is not None:
-            await close_safely(self.visual_observer.close, source="browser", faults=self.faults)
+    async def close_perception(self) -> None:
+        drain = self.perception_drain
+        if drain is not None:
+            self.perception_drain = None
+            await close_safely(drain.close, source="browser", faults=self.faults)
+            self.page.remove_listener("response", drain.on_response)
             self.record(
-                "visual_observer_stopped",
+                "perception_drain_stopped",
                 source="runtime",
-                polls=self.visual_observer.polls,
-                poll_failures=self.visual_observer.poll_failures,
-                last_poll_error=self.visual_observer.last_poll_error,
-                caption_failures=self.visual_observer.caption_failures,
+                polls=drain.polls,
+                poll_failures=drain.poll_failures,
+                last_poll_error=drain.last_poll_error,
+                frames=drain.sensors.frames_seen,
+                rejected=drain.sensors.rejected_messages,
             )
-            self.visual_observer = None
+        if self.perception is not None:
+            await close_safely(self.perception.close, source="browser", faults=self.faults)
 
     async def _start_guarded(self, starter: Callable[[], Awaitable[None]], operation: str) -> None:
         try:
@@ -617,10 +620,10 @@ class MeetingWorker:
             await self._start_guarded(self.start_participant_observer, "participant_observer")
             await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
             await self._start_guarded(self.start_voice_activity, "voice_activity")
-            await self._start_guarded(self.start_visual_observer, "visual_observer")
+            await self._start_guarded(self.start_perception, "perception_drain")
             return await self._monitor_loop(admitted_at)
         finally:
-            await self.close_visual_observer()
+            await self.close_perception()
             await self.close_voice_activity()
             await self.close_capture_drain()
             await self.close_participant_observer()
@@ -808,7 +811,7 @@ class MeetingWorker:
         self.origin_kind = kind
         self.origin_attribution = attribution
         self._send(kind, attribution, detail)
-        await self.close_visual_observer()
+        await self.close_perception()
         await self.close_participant_observer()
         if self.conversation is not None:
             await close_safely(self.conversation.close, source="agent", faults=self.faults)
@@ -835,9 +838,7 @@ class SessionWiring:
     preflight_budget_seconds: float | None = None
     voice_activity: VoiceActivityTracker | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
-    visual_store: VisualStore | None = None
-    visual_captioner: VisualCaptioner | None = None
-    visual_on_caption: Callable[[VisualFrame, VisualCaption], None] | None = None
+    perception: PerceptionStack | None = None
     on_phase: Callable[[str], None] | None = None
 
 
@@ -1019,9 +1020,7 @@ async def _launch_session_browser(
         faults=hooks.faults,
         journal=journal,
         voice_activity=hooks.voice_activity,
-        visual_store=hooks.visual_store,
-        visual_captioner=hooks.visual_captioner,
-        visual_on_caption=hooks.visual_on_caption,
+        perception=hooks.perception,
         on_phase=hooks.on_phase,
     )
     context = RuntimeContext(browser=page, audio=audio, session=worker)

@@ -9,10 +9,9 @@ import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.foundation.visual_retention import PurgeReport
 from fakeyou.persistence.retention import (
+    PurgeReport,
     purge_audio_expired,
-    purge_visual_expired,
     purge_voiceprints_expired,
 )
 from tests._error_support import message_pattern
@@ -53,24 +52,6 @@ def test_audio_purge_rejects_non_positive_days(settings: Settings, tmp_path: Pat
         purge_audio_expired(root=tmp_path, days=0, settings=settings)
 
     assert rejected.value.code is ErrorCode.AUDIO_RETENTION_DAYS_NOT_POSITIVE
-
-
-def test_visual_purge_returns_report_with_prefixed_removals(
-    settings: Settings, tmp_path: Path
-) -> None:
-    root = tmp_path / "meetings"
-    visual = root / "meeting-old" / "visual"
-    visual.mkdir(parents=True)
-    frame = visual / "shot-old.jpg"
-    frame.write_bytes(b"\xff\xd8old-frame")
-    stamp = time.time() - 9.0 * DAY
-    os.utime(frame, (stamp, stamp))
-
-    report = purge_visual_expired(root=root, days=None, settings=settings)
-
-    assert report.removed == ["meeting-old/shot-old.jpg"]
-    assert report.freed_bytes == len(b"\xff\xd8old-frame")
-    assert not frame.exists()
 
 
 def test_voiceprint_purge_returns_removed_ids_and_journals_each(settings: Settings) -> None:

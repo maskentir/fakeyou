@@ -214,35 +214,38 @@ def test_renderer_never_trims_the_latest_set() -> None:
     assert json.loads(latest)["facts"][0]["text"] == "y" * 500
 
 
-def test_renderer_uses_v2_schema_for_visual_sources() -> None:
-    visual: MemoryEvidence = {
-        "outcome": "found",
-        "facts": [
-            {
-                "fact_ids": ["f9"],
-                "text": "The slide shows Q3 revenue.",
-                "sources": [
-                    {
-                        "episode_id": "v1",
-                        "kind": "meeting_visual",
-                        "label": "Google Meet m1 visual",
-                        "source_at": "2026-09-30T09:00:00+00:00",
-                        "recorded_at": "2026-09-30T09:00:00+00:00",
-                        "time_granularity": "frame",
-                        "speaker_verified": False,
-                        "speaker_identity": "unverified",
-                        "frame_ref": "frame-1",
-                    }
-                ],
-            }
-        ],
-        "excluded": {"pending": 0, "superseded": 0, "missing_source": 0},
+async def test_search_evidence_maps_screen_and_chat_episodes_to_their_kinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored = {
+        "s1": fake_episode("s1", "team_alpha", "Google Meet m1 shared screen", SOURCE_AT),
+        "c1": fake_episode("c1", "team_alpha", "Google Meet m1 chat", SOURCE_AT),
+        "o1": fake_episode("o1", "team_alpha", "imported slides", SOURCE_AT),
     }
+    memory = make_graphiti(
+        facts=["The slide shows Q3 revenue.", "Send the deck later.", "Imported fact."],
+        episodes={
+            "The slide shows Q3 revenue.": ["s1"],
+            "Send the deck later.": ["c1"],
+            "Imported fact.": ["o1"],
+        },
+    )
+    patch_episodes(monkeypatch, memory, stored)
 
-    payload = json.loads(render_memory_evidence([visual], 1200))
+    result = await search_evidence(memory, "deck", group_id="team_alpha", recall=RecallSettings())
+    rendered = evidence_set(result, result_limit=5)
 
-    assert payload["schema"] == "memory_evidence/v2"
-    assert payload["facts"][0]["sources"][0]["frame_ref"] == "frame-1"
+    sources = {
+        source["episode_id"]: (source["kind"], source["time_granularity"])
+        for fact in rendered["facts"]
+        for source in fact["sources"]
+    }
+    assert sources == {
+        "s1": ("meeting_screen", "episode_window"),
+        "c1": ("meeting_chat", "episode_window"),
+        "o1": ("other", "document"),
+    }
+    assert json.loads(render_memory_evidence([rendered], 1200))["schema"] == "memory_evidence/v1"
 
 
 def test_renderer_speaks_prose_for_latest_empty_or_unavailable() -> None:

@@ -8,8 +8,6 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
-from fakeyou.visual.visual_tools import create_visual_tools as create_visual_tools
-
 MEETING_GUIDANCE = (
     "You are a precise digital twin for a meeting participant. "
     "Track the meeting context, distinguish known facts from assumptions, "
@@ -33,12 +31,6 @@ SPOKEN_LANGUAGE_GUIDANCE = {
     ),
 }
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
-VISUAL_GUIDANCE = (
-    "Visual context: the participant message may carry visual references to shared screen "
-    "frames. When exactly one visual reference is attached, answer about that frame and cite "
-    "its frame reference. When several or no visual references are attached, ask exactly one "
-    "neutral clarification question and do not guess."
-)
 
 
 def create_meeting_agent(

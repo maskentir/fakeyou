@@ -77,7 +77,7 @@ EVAL_FILES = (
     "tests/_memory_fakes.py",
     "tests/_persistence_fakes.py",
     "tests/_runtime_fakes.py",
-    "tests/_visual_fakes.py",
+    "tests/_perception_fakes.py",
     "tests/_voiceprint_fakes.py",
     "pyproject.toml",
     "uv.lock",

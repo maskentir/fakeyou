@@ -176,7 +176,7 @@ def test_audio_commands_dispatch_without_leaking_parser_state(
     assert set(call) == {"root", "days", "settings"}
 
 
-def test_visual_purge_command_dispatches_root_and_days(
+def test_perception_purge_command_dispatches_root_and_days(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -184,9 +184,11 @@ def test_visual_purge_command_dispatches_root_and_days(
     def fake_purge(**kwargs: Any) -> None:
         calls.append(kwargs)
 
-    monkeypatch.setattr(cli_main, "visual_purge_expired", fake_purge)
+    monkeypatch.setattr(cli_main, "perception_purge_expired", fake_purge)
     monkeypatch.setattr(
-        sys, "argv", ["fakeyou", "visual", "purge-expired", "--root", str(tmp_path), "--days", "3"]
+        sys,
+        "argv",
+        ["fakeyou", "perception", "purge-expired", "--root", str(tmp_path), "--days", "3"],
     )
     with pytest.raises(SystemExit) as exited:
         cli_main.main()

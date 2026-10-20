@@ -421,22 +421,30 @@ def test_rendered_json_roundtrips_through_file(tmp_path: Path) -> None:
     assert reloaded["excluded"] == {"pending": 1, "superseded": 0, "missing_source": 0}
 
 
-def test_provenance_visual_kind() -> None:
+def test_screen_and_chat_sources_render_as_episode_windows_under_one_schema() -> None:
     at = datetime(2026, 10, 3, 12, tzinfo=UTC)
-    ref = f"frame:abcd1234@{at.isoformat()}"
-    visual = SourceEvidence(
-        "e9", "meeting_visual", "Google Meet m1 visual", at, at, "frame", frame_ref=ref
+    screen = SourceEvidence(
+        "e8", "meeting_screen", "Google Meet m1 shared screen", at, at, "episode_window"
     )
-    facts = [FactEvidence(("v1",), "Quarterly revenue grew.", (visual,))]
+    chat = SourceEvidence("e9", "meeting_chat", "Google Meet m1 chat", at, at, "episode_window")
+    facts = [
+        FactEvidence(("s1",), "Quarterly revenue grew.", (screen,)),
+        FactEvidence(("c1",), "Send the deck after the call.", (chat,)),
+    ]
     payload = json.loads(render_evidence(facts, result_limit=5, excluded={}))
 
-    assert payload["schema"] == "memory_evidence/v2"
-    [source] = payload["facts"][0]["sources"]
-    assert source["kind"] == "meeting_visual"
-    assert source["frame_ref"] == ref
-    assert source["time_granularity"] == "frame"
+    assert payload["schema"] == "memory_evidence/v1"
+    sources = [fact["sources"][0] for fact in payload["facts"]]
+    assert {source["kind"] for source in sources} == {"meeting_screen", "meeting_chat"}
+    assert {source["time_granularity"] for source in sources} == {"episode_window"}
+    assert all("frame_ref" not in source for source in sources)
     slim = json.loads(render_evidence(facts, result_limit=5, excluded={}, compact=True))
-    assert slim["schema"] == "memory_evidence/v2"
-    assert slim["facts"][0]["sources"][0]["frame_ref"] == ref
-    with pytest.raises(ValueError, match="meeting_visual needs frame_ref"):
-        SourceEvidence("e9", "meeting_visual", "Google Meet m1 visual", at, at, "frame")
+    assert slim["schema"] == "memory_evidence/v1"
+
+
+def test_removed_visual_kind_and_frame_granularity_are_rejected() -> None:
+    at = datetime(2026, 10, 3, 12, tzinfo=UTC)
+    with pytest.raises(ValueError, match="kind"):
+        SourceEvidence("e9", cast(Any, "meeting_visual"), "Google Meet m1", at, at, "document")
+    with pytest.raises(ValueError, match="time_granularity"):
+        SourceEvidence("e9", "meeting_screen", "Google Meet m1", at, at, cast(Any, "frame"))

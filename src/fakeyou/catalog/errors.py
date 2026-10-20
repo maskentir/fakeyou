@@ -122,9 +122,9 @@ class ErrorCode(StrEnum):
     AUDIO_RETENTION_DAYS_NOT_POSITIVE = "audio.retention_days_not_positive"
     AUDIO_ROOT_MISSING = "audio.root_missing"
     AUDIO_PURGE_FAILED = "audio.purge_failed"
-    VISUAL_RETENTION_DAYS_NOT_POSITIVE = "visual.retention_days_not_positive"
-    VISUAL_ROOT_MISSING = "visual.root_missing"
-    VISUAL_PURGE_FAILED = "visual.purge_failed"
+    PERCEPTION_RETENTION_DAYS_NOT_POSITIVE = "perception.retention_days_not_positive"
+    PERCEPTION_ROOT_MISSING = "perception.root_missing"
+    PERCEPTION_PURGE_FAILED = "perception.purge_failed"
     DIAGNOSTICS_JOURNAL_MISSING = "diagnostics.journal_missing"
     DIAGNOSTICS_REPORT_FAILED = "diagnostics.report_failed"
     DIARIZE_INPUT_UNREADABLE = "diarize.input_unreadable"
@@ -180,8 +180,8 @@ class ErrorCode(StrEnum):
     DEBRIEF_RECORD_INVALID_LINE = "debrief.record_invalid_line"
     DEBRIEF_TRANSCRIPT_ID_BLANK = "debrief.transcript_id_blank"
     DEBRIEF_TRANSCRIPT_CONTRADICTORY = "debrief.transcript_contradictory"
-    DEBRIEF_VISUAL_ID_BLANK = "debrief.visual_id_blank"
-    DEBRIEF_VISUAL_CONTRADICTORY = "debrief.visual_contradictory"
+    DEBRIEF_SCREEN_REF_BLANK = "debrief.screen_ref_blank"
+    DEBRIEF_CHAT_CONTRADICTORY = "debrief.chat_contradictory"
     DEBRIEF_NO_SPEECH_SOURCES = "debrief.no_speech_sources"
     DEBRIEF_CONTEXT_UNREADABLE = "debrief.context_unreadable"
     DEBRIEF_CONTEXT_TOO_LARGE = "debrief.context_too_large"
@@ -213,6 +213,7 @@ class ErrorCode(StrEnum):
     PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
     PERCEPTION_READING_UNPARSED = "perception.reading_unparsed"
     PERCEPTION_PROTOCOL_UNREADABLE = "perception.protocol_unreadable"
+    RECORD_VERSION_UNSUPPORTED = "record.version_unsupported"
     API_UNAUTHORIZED = "api.unauthorized"
     API_FORBIDDEN = "api.forbidden"
     API_NOT_FOUND = "api.not_found"
@@ -568,13 +569,13 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "audio root is missing: {path}", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.AUDIO_PURGE_FAILED: ErrorSpec("audio purge failed: {reason}"),
-    ErrorCode.VISUAL_RETENTION_DAYS_NOT_POSITIVE: ErrorSpec(
+    ErrorCode.PERCEPTION_RETENTION_DAYS_NOT_POSITIVE: ErrorSpec(
         "--days must be positive", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.VISUAL_ROOT_MISSING: ErrorSpec(
-        "visual root is missing: {path}", ExitCode.INPUT_REJECTED
+    ErrorCode.PERCEPTION_ROOT_MISSING: ErrorSpec(
+        "perception root is missing: {path}", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.VISUAL_PURGE_FAILED: ErrorSpec("visual purge failed: {reason}"),
+    ErrorCode.PERCEPTION_PURGE_FAILED: ErrorSpec("perception purge failed: {reason}"),
     ErrorCode.DIAGNOSTICS_JOURNAL_MISSING: ErrorSpec(
         "no journal for meeting {meeting_id} at {path}", ExitCode.INPUT_REJECTED
     ),
@@ -693,8 +694,8 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.DEBRIEF_TRANSCRIPT_CONTRADICTORY: ErrorSpec(
         "contradictory duplicate transcript source"
     ),
-    ErrorCode.DEBRIEF_VISUAL_ID_BLANK: ErrorSpec("visual source id must not be blank"),
-    ErrorCode.DEBRIEF_VISUAL_CONTRADICTORY: ErrorSpec("contradictory duplicate visual source"),
+    ErrorCode.DEBRIEF_SCREEN_REF_BLANK: ErrorSpec("screen source reference must not be blank"),
+    ErrorCode.DEBRIEF_CHAT_CONTRADICTORY: ErrorSpec("contradictory duplicate chat source"),
     ErrorCode.DEBRIEF_NO_SPEECH_SOURCES: ErrorSpec(
         "meeting record contains no usable speech sources"
     ),
@@ -761,6 +762,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.PERCEPTION_PROTOCOL_UNREADABLE: ErrorSpec(
         "a Meet protocol message could not be decoded: {reason}"
+    ),
+    ErrorCode.RECORD_VERSION_UNSUPPORTED: ErrorSpec(
+        "meeting record version {found} is not supported; this build reads version {expected}",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.API_UNAUTHORIZED: ErrorSpec(
         "missing or invalid API credentials", ExitCode.INPUT_REJECTED

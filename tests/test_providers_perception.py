@@ -120,7 +120,7 @@ def test_perception_role_never_borrows_the_reply_key() -> None:
 def test_perception_settings_defaults() -> None:
     settings = PerceptionSettings()
 
-    assert settings.enabled is False
+    assert settings.enabled is True
     assert (settings.screen, settings.chat, settings.signals, settings.cameras) == (
         True,
         True,

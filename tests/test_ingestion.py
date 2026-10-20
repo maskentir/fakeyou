@@ -14,9 +14,8 @@ from fakeyou.persistence.record import (
     ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
-    VisualEntry,
 )
-from tests._ingestion_support import START, run, said
+from tests._ingestion_support import START, run, said, shown
 from tests._memory_fakes import make_graphiti
 
 
@@ -323,19 +322,10 @@ async def test_resume_over_a_long_saga_issues_one_retrieval() -> None:
     existing = [
         SimpleNamespace(uuid=f"old-{index}", name=f"meeting-1:w{index:05d}") for index in range(150)
     ]
-    existing.append(SimpleNamespace(uuid="old-visual", name="meeting-1:v00000"))
+    existing.append(SimpleNamespace(uuid="old-screen", name="meeting-1:s00000"))
     memory = make_graphiti(episode_prefix="uuid-", existing=existing)
     entries: list[RecordEntry] = [long_line(index) for index in range(160)]
-    entries.append(
-        VisualEntry(
-            at=START,
-            visual_id="frame-1",
-            captured_at=START,
-            sha256="a" * 64,
-            caption="Slide one shows the launch plan.",
-            frame_ref="frame:1",
-        )
-    )
+    entries.append(shown("screen-1", "Launch plan", text="Slide one shows the launch plan."))
 
     result, _lines = await run(memory, entries)
 
@@ -346,7 +336,7 @@ async def test_resume_over_a_long_saga_issues_one_retrieval() -> None:
     assert [episode["name"] for episode in memory.added] == [
         f"meeting-1:w{index:05d}" for index in range(150, 160)
     ]
-    assert memory.added[0]["saga_previous_episode_uuid"] == "old-visual"
+    assert memory.added[0]["saga_previous_episode_uuid"] == "old-screen"
 
 
 async def test_resume_from_a_transcript_head_skips_the_saga_retrieval() -> None:

@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from fakeyou.catalog.errors import ErrorCode
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.debrief.debrief_schema import DebriefValidationError
 from fakeyou.debrief.debrief_sources import SourceEntry, load_context_snapshot, load_record_snapshot
 from fakeyou.persistence.brief import MeetingBrief, MeetingContext, brief_digest
@@ -101,8 +101,8 @@ def test_twin_ids_count_all_raw_lines_and_tool_output_is_not_a_source(tmp_path: 
     assert sources[1].text == "I will ask the owner."
 
 
-def test_v2_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path: Path) -> None:
-    header = {"kind": "header", "v": 2, "at": "2026-10-03T12:00:00Z"}
+def test_v3_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path: Path) -> None:
+    header = {"kind": "header", "v": 3, "at": "2026-10-03T12:00:00Z"}
     twin = {"kind": "twin_speech", "at": "2026-10-03T12:00:01Z", "text": "I will ask the owner."}
     path = tmp_path / "record.jsonl"
     path.write_bytes(encoded(header, transcript(), twin))
@@ -112,11 +112,9 @@ def test_v2_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path:
     assert [entry.id for entry in sources] == ["transcript:entry-1", "twin_speech:3"]
 
 
-def test_header_with_an_unknown_version_is_an_invalid_line(tmp_path: Path) -> None:
+def test_malformed_current_header_is_an_invalid_line(tmp_path: Path) -> None:
     path = tmp_path / "record.jsonl"
-    path.write_bytes(
-        encoded({"kind": "header", "v": 3, "at": "2026-10-03T12:00:00Z"}, transcript())
-    )
+    path.write_bytes(encoded({"kind": "header", "v": 3}, transcript()))
 
     with pytest.raises(
         DebriefValidationError, match=message_pattern(ErrorCode.DEBRIEF_RECORD_INVALID_LINE)
@@ -124,6 +122,21 @@ def test_header_with_an_unknown_version_is_an_invalid_line(tmp_path: Path) -> No
         load_record_snapshot(path)
 
     assert caught.value.code is ErrorCode.DEBRIEF_RECORD_INVALID_LINE
+
+
+@pytest.mark.parametrize("version", [2, 4])
+def test_header_with_another_version_is_unsupported(tmp_path: Path, version: int) -> None:
+    path = tmp_path / "record.jsonl"
+    path.write_bytes(
+        encoded({"kind": "header", "v": version, "at": "2026-10-03T12:00:00Z"}, transcript())
+    )
+
+    with pytest.raises(
+        FakeYouError, match=message_pattern(ErrorCode.RECORD_VERSION_UNSUPPORTED)
+    ) as caught:
+        load_record_snapshot(path)
+
+    assert caught.value.code is ErrorCode.RECORD_VERSION_UNSUPPORTED
 
 
 def test_identical_transcript_ids_are_deduplicated(tmp_path: Path) -> None:

@@ -18,7 +18,11 @@ from fakeyou.config.settings import (
     MiniMaxTTS,
     Settings,
 )
-from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    HistoryTrimMiddleware,
+    OrphanToolCallMiddleware,
+)
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.invariants import (
@@ -408,6 +412,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
         ModelFallbackMiddleware,
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
+        ChatTurnToolsMiddleware,
     ]
 
 

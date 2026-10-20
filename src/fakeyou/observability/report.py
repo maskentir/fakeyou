@@ -150,10 +150,8 @@ class _ReportState:
     diff_classes: Counter[str] = field(default_factory=Counter)
     norm_dist_buckets: Counter[str] = field(default_factory=Counter)
     overlaps: list[float] = field(default_factory=list)
-    visual_frames: int = 0
-    visual_captioned: int = 0
-    visual_cost_usd: float = 0.0
-    visual_capture_ms: list[float] = field(default_factory=list)
+    perception: Counter[str] = field(default_factory=Counter)
+    reading_ms: list[float] = field(default_factory=list)
 
 
 def _parse_row_at(row: dict[str, Any]) -> datetime | None:
@@ -436,17 +434,45 @@ def _apply_capture_polled(state: _ReportState, row: dict[str, Any], _at: datetim
             state.capture_engines[engine] += 1
 
 
-def _apply_visual_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
-    if row.get("event") == "visual_captured":
-        state.visual_frames += 1
+def _apply_perception_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    event = str(row.get("event"))
+    if event == "budget_exhausted" and row.get("source") != "perception":
+        return
+    if event == "screen_captured":
+        event = f"screen_{row.get('change')}"
+    elif event == "meeting_view_emitted" and row.get("image_attached") is True:
+        state.perception["view_with_image"] += 1
+    elif event == "screen_reading_finished":
         duration = finite_float(row.get("duration_ms"))
         if duration is not None and duration >= 0:
-            state.visual_capture_ms.append(duration)
-    else:
-        state.visual_captioned += 1
-        cost = finite_float(row.get("cost_usd"))
-        if cost is not None and cost >= 0:
-            state.visual_cost_usd += cost
+            state.reading_ms.append(duration)
+    state.perception[event] += 1
+
+
+def _perception_section(state: _ReportState) -> dict[str, Any]:
+    counts = state.perception
+    return {
+        "screens": {
+            "new": counts["screen_new"],
+            "revisited": counts["screen_revisit"],
+            "merged": counts["screen_duplicate_detected"],
+        },
+        "readings": {
+            "finished": counts["screen_reading_finished"],
+            "failed": counts["screen_reading_failed"],
+            "skipped": counts["screen_reading_skipped"],
+            "p95_ms": summarize(state.reading_ms)["p95"],
+        },
+        "views": {
+            "emitted": counts["meeting_view_emitted"],
+            "with_image": counts["view_with_image"],
+        },
+        "chat_lines": counts["chat_line_observed"],
+        "signals": counts["meeting_signal_observed"],
+        "rejected_inputs": counts["perception_input_rejected"],
+        "budget_exhausted": counts["budget_exhausted"],
+        "interpreter_disabled": counts["perception_interpreter_disabled"],
+    }
 
 
 def _apply_pregeneration_finished(
@@ -509,8 +535,17 @@ _ROW_HANDLERS: dict[str, _RowHandler] = {
     "tap_slot_dropped": _apply_counter_event,
     "stt_turn_recorded": _apply_stt_turn,
     "capture_polled": _apply_capture_polled,
-    "visual_captured": _apply_visual_event,
-    "visual_captioned": _apply_visual_event,
+    "screen_captured": _apply_perception_event,
+    "screen_duplicate_detected": _apply_perception_event,
+    "screen_reading_finished": _apply_perception_event,
+    "screen_reading_failed": _apply_perception_event,
+    "screen_reading_skipped": _apply_perception_event,
+    "meeting_view_emitted": _apply_perception_event,
+    "chat_line_observed": _apply_perception_event,
+    "meeting_signal_observed": _apply_perception_event,
+    "perception_input_rejected": _apply_perception_event,
+    "budget_exhausted": _apply_perception_event,
+    "perception_interpreter_disabled": _apply_perception_event,
     "pregeneration_started": _apply_counter_event,
     "pregeneration_finished": _apply_pregeneration_finished,
 }
@@ -625,12 +660,7 @@ def _assemble_report(
             "norm_dist_buckets": dict(state.norm_dist_buckets),
             "adopted_overlap_seconds": summarize(state.overlaps),
         },
-        "visual": {
-            "frames": state.visual_frames,
-            "captioned": state.visual_captioned,
-            "cost_usd": round(state.visual_cost_usd, 6),
-            "p95_ms": summarize(state.visual_capture_ms)["p95"],
-        },
+        "perception": _perception_section(state),
         "result": state.result,
     }
 

@@ -19,7 +19,11 @@ import fakeyou.orchestration.assembly as assembly
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
-from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    HistoryTrimMiddleware,
+    OrphanToolCallMiddleware,
+)
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import (
     OperatorIdentity,
@@ -28,6 +32,7 @@ from fakeyou.memory.persona import (
     memory_group_for,
     require_persona_group,
 )
+from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import (
     MEET_LINK,
@@ -212,8 +217,9 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     )
 
     profile = PersonaProfile.model_validate(PERSONA_DATA)
-    assert created["persona"] == build_system_prompt(
-        profile.model_copy(update={"allowed_tools": frozenset()})
+    assert created["persona"] == (
+        f"{build_system_prompt(profile.model_copy(update={'allowed_tools': frozenset()}))}"
+        f"\n\n{PERCEPTION_GUIDANCE}"
     )
     assert "recall_meeting_context" not in created["persona"]
     assert created["tools"] == []
@@ -221,6 +227,8 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
         type(create_greeting_middleware("id")),
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
+        ChatTurnToolsMiddleware,
+        PerceptionContextMiddleware,
     ]
     assert audio.spoken == ["Hello."]
 
@@ -264,6 +272,8 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
         ToolErrorMiddleware,
+        ChatTurnToolsMiddleware,
+        PerceptionContextMiddleware,
     ]
     assert graphiti.searched == [
         {
@@ -287,7 +297,11 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         )
         == profile.memory_group
     )
-    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    tool_results = [
+        m
+        for m in model.seen[-1]
+        if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
+    ]
     [content] = [m.content for m in tool_results]
     assert isinstance(content, str)
     payload = json.loads(content)
@@ -321,7 +335,11 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
         join=join,
     )
 
-    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    tool_results = [
+        m
+        for m in model.seen[-1]
+        if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
+    ]
     assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
     assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"
@@ -417,6 +435,8 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
         type(create_greeting_middleware("id")),
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
+        ChatTurnToolsMiddleware,
+        PerceptionContextMiddleware,
     ]
     assert graphiti.added == []
     assert "recall" not in created["persona"].casefold()
@@ -460,7 +480,11 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
         join=join,
     )
 
-    tool_results = [m for m in model.seen[-1] if isinstance(m, ToolMessage)]
+    tool_results = [
+        m
+        for m in model.seen[-1]
+        if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
+    ]
     assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
     assert graphiti.search_cancelled.is_set()
     assert audio.spoken == ["I don't know yet, I'll check with Rani."]

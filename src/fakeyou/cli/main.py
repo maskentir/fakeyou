@@ -10,7 +10,7 @@ import typer
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
-from fakeyou.cli.audio import audio_purge_expired, visual_purge_expired
+from fakeyou.cli.audio import audio_purge_expired, perception_purge_expired
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat_via_api
 from fakeyou.cli.client import ApiFailure, api_failure, client_settings_from_env
@@ -142,8 +142,8 @@ audio_app = typer.Typer(
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
 )
-visual_app = typer.Typer(
-    help="Manage persisted meeting visual evidence",
+perception_app = typer.Typer(
+    help="Manage what the twin saw in meetings: screens and readings",
     add_completion=False,
     no_args_is_help=False,
     pretty_exceptions_enable=False,
@@ -161,7 +161,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(voiceprint_app, name="voiceprint")
 app.add_typer(calibrate_app, name="calibrate")
 app.add_typer(audio_app, name="audio")
-app.add_typer(visual_app, name="visual")
+app.add_typer(perception_app, name="perception")
 app.add_typer(diarize_app, name="diarize")
 
 
@@ -660,14 +660,14 @@ def audio_purge_expired_command(
     audio_purge_expired(root=root, days=days, settings=_load_settings())
 
 
-@visual_app.command("purge-expired", help="Delete meeting visual evidence past retention")
+@perception_app.command("purge-expired", help="Delete saved screens and readings past retention")
 @_guard_interrupts
-def visual_purge_expired_command(
+def perception_purge_expired_command(
     *,
     root: Annotated[Path | None, typer.Option("--root")] = None,
     days: Annotated[int | None, typer.Option("--days")] = None,
 ) -> None:
-    visual_purge_expired(root=root, days=days, settings=_load_settings())
+    perception_purge_expired(root=root, days=days, settings=_load_settings())
 
 
 @diarize_app.command("run", help="Mix slot audio and write diarization sidecars")

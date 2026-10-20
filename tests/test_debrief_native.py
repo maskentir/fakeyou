@@ -1,5 +1,4 @@
 import asyncio
-import json
 from pathlib import Path
 from typing import Any, override
 
@@ -16,6 +15,7 @@ from fakeyou.debrief.debrief_schema import (
 )
 from fakeyou.debrief.debrief_sources import RecordSnapshot, load_record_snapshot
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.record import ScreenEntry
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._debrief_support import AT, item, ref, report_for, source
 from tests._debrief_support import (
@@ -329,7 +329,7 @@ async def test_outer_cancellation_cancels_only_local_extraction_without_fallback
         "A withdrawn or superseded proposal uses proposal with uncertain",
         "Copy relative task due wording into due_text verbatim",
         "Do not convert source capture timestamps into dates for undated or forwarded statements.",
-        "conflicting visual claims remain separate uncertain items with frame evidence",
+        "keep a screen or chat claim that conflicts with speech as a separate uncertain item",
     ],
 )
 async def test_native_prompt_carries_semantic_extraction_obligations(obligation: str) -> None:
@@ -449,37 +449,36 @@ async def test_native_conflicting_claims_remain_separate_without_authentication(
     assert len(model.seen) == 2
 
 
-async def test_debrief_cites_frame(record_path: Path) -> None:
-    visual_ref = f"frame:abcd1234@{AT.isoformat()}"
+async def test_debrief_cites_a_shared_screen(record_path: Path) -> None:
+    screen_id = "screen:screen-1"
     caption = "Quarterly revenue grew twelve percent."
     with record_path.open("a", encoding="utf-8") as handle:
         handle.write(
-            json.dumps(
-                {
-                    "kind": "visual",
-                    "at": AT.isoformat(),
-                    "visual_id": "frame-1",
-                    "captured_at": AT.isoformat(),
-                    "captured_page_ms": 1727966400000.0,
-                    "sha256": "ab" * 32,
-                    "caption": caption,
-                    "frame_ref": visual_ref,
-                }
-            )
+            ScreenEntry(
+                at=AT,
+                ref="screen-1",
+                shown_at=AT,
+                sha256="ab" * 32,
+                presenter_id="devices/7",
+                presenter="Rina",
+                content="slide",
+                title="Q3 revenue",
+                text=caption,
+            ).model_dump_json()
             + "\n"
         )
 
     snapshot = load_record_snapshot(record_path)
-    visual = next(entry for entry in snapshot.sources if entry.id == visual_ref)
+    screen = next(entry for entry in snapshot.sources if entry.id == screen_id)
 
-    assert visual.kind == "visual"
-    assert visual.text == caption
+    assert screen.kind == "screen"
+    assert screen.text == f"Q3 revenue\n{caption}"
     cited = DebriefItem.model_validate(
         {
             "kind": "decision_claim",
             "text": "Revenue grew twelve percent.",
             "status": "stated",
-            "evidence": [{"entry_id": visual_ref, "quote": "revenue grew twelve percent"}],
+            "evidence": [{"entry_id": screen_id, "quote": "revenue grew twelve percent"}],
         }
     )
     merged = await module.generate_debrief(
@@ -489,20 +488,20 @@ async def test_debrief_cites_frame(record_path: Path) -> None:
         stop=asyncio.Event(),
     )
     [kept] = merged.items
-    assert kept.evidence[0].entry_id == visual_ref
+    assert kept.evidence[0].entry_id == screen_id
     assert kept.evidence[0].quote in caption
     assert len(kept.evidence[0].quote) <= 1000
     report = report_for(record_path, items=[cited])
-    assert any(entry.kind == "visual" for entry in report.evidence_sources)
+    assert any(entry.kind == "screen" for entry in report.evidence_sources)
     rendered = module.render_debrief(report)
-    assert "frame&#58;abcd1234" in rendered
+    assert "screen&#58;screen\\-1" in rendered
     assert "revenue grew twelve percent" in rendered
     first = DebriefItem.model_validate(
         {
             "kind": "decision_claim",
             "text": "First reading of the slide.",
             "status": "uncertain",
-            "evidence": [{"entry_id": visual_ref, "quote": "revenue grew"}],
+            "evidence": [{"entry_id": screen_id, "quote": "revenue grew"}],
         }
     )
     second = DebriefItem.model_validate(
@@ -510,7 +509,7 @@ async def test_debrief_cites_frame(record_path: Path) -> None:
             "kind": "decision_claim",
             "text": "Second reading of the slide.",
             "status": "uncertain",
-            "evidence": [{"entry_id": visual_ref, "quote": "twelve percent"}],
+            "evidence": [{"entry_id": screen_id, "quote": "twelve percent"}],
         }
     )
     conflicts = module.merge_drafts(

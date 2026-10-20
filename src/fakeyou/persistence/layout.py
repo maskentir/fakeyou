@@ -19,7 +19,8 @@ ATTEMPT_FILE_NAME = "debrief-attempt.json"
 SLOTS_FILE_NAME = "slots.json"
 ANCHORS_FILE_NAME = "anchors.jsonl"
 AUDIO_DIR_NAME = "audio"
-VISUAL_DIR_NAME = "visual"
+PERCEPTION_DIR_NAME = "perception"
+SCREENS_DIR_NAME = "screens"
 LOCK_FILE_SUFFIX = ".lock"
 
 
@@ -96,8 +97,12 @@ class MeetingDir:
         return self.dir / AUDIO_DIR_NAME
 
     @property
-    def visual_dir(self) -> Path:
-        return self.dir / VISUAL_DIR_NAME
+    def perception_dir(self) -> Path:
+        return self.dir / PERCEPTION_DIR_NAME
+
+    @property
+    def screens_dir(self) -> Path:
+        return self.perception_dir / SCREENS_DIR_NAME
 
     @property
     def slots(self) -> Path:

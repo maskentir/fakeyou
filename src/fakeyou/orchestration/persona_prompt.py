@@ -5,7 +5,6 @@ from fakeyou.conversation.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
     SPOKEN_LANGUAGE_GUIDANCE,
-    VISUAL_GUIDANCE,
 )
 from fakeyou.conversation.prompt_builder import PromptSections
 from fakeyou.memory.persona import (
@@ -22,6 +21,7 @@ from fakeyou.memory.persona import (
     SOURCE_RULES,
     PersonaProfile,
 )
+from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import MeetingBrief
 
 PARAGRAPH = "\n\n"
@@ -38,7 +38,7 @@ class _PromptParts:
     brief_json: str = ""
     provenance: str = ""
     natural_speech: str = ""
-    visual: str = ""
+    perception: str = ""
 
 
 def _paragraphs(*parts: str) -> str:
@@ -51,13 +51,13 @@ def _prompt_parts(
     brief: MeetingBrief | None,
     recall_strategy: RecallStrategy,
     language: str,
-    visual: bool,
+    perception: bool,
 ) -> _PromptParts:
-    visual_guidance = VISUAL_GUIDANCE if visual else ""
+    perception_guidance = PERCEPTION_GUIDANCE if perception else ""
     if profile is None:
         return _PromptParts(
             role=(f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}",),
-            visual=visual_guidance,
+            perception=perception_guidance,
         )
     scope = brief.knowledge_scope if brief is not None else None
     persona_knowledge = scope != "brief_only"
@@ -77,7 +77,7 @@ def _prompt_parts(
         ),
         provenance=PROVENANCE_RULE if recall else "",
         natural_speech=NATURAL_SPEECH_RULE,
-        visual=visual_guidance,
+        perception=perception_guidance,
     )
 
 
@@ -87,10 +87,14 @@ def persona_prompt_sections(
     brief: MeetingBrief | None = None,
     recall_strategy: RecallStrategy = "tool",
     language: str = DEFAULTS.speech.language,
-    visual: bool = False,
+    perception: bool = False,
 ) -> PromptSections:
     parts = _prompt_parts(
-        profile, brief=brief, recall_strategy=recall_strategy, language=language, visual=visual
+        profile,
+        brief=brief,
+        recall_strategy=recall_strategy,
+        language=language,
+        perception=perception,
     )
     return PromptSections(
         role=_paragraphs(*parts.role),
@@ -98,7 +102,7 @@ def persona_prompt_sections(
         persona=parts.profile_json,
         brief=parts.brief_json,
         memory_rules=_paragraphs(parts.recall, parts.provenance),
-        tools=parts.visual,
+        tools=parts.perception,
         output_rules=_paragraphs(parts.natural_speech, ENDING_RULE),
     )
 
@@ -109,10 +113,14 @@ def build_persona_prompt(
     brief: MeetingBrief | None = None,
     recall_strategy: RecallStrategy = "tool",
     language: str = DEFAULTS.speech.language,
-    visual: bool = False,
+    perception: bool = False,
 ) -> str:
     parts = _prompt_parts(
-        profile, brief=brief, recall_strategy=recall_strategy, language=language, visual=visual
+        profile,
+        brief=brief,
+        recall_strategy=recall_strategy,
+        language=language,
+        perception=perception,
     )
     return _paragraphs(
         *parts.role,
@@ -125,5 +133,5 @@ def build_persona_prompt(
         parts.provenance,
         parts.natural_speech,
         ENDING_RULE,
-        parts.visual,
+        parts.perception,
     )

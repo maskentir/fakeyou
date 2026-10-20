@@ -101,7 +101,6 @@ def transcript_final_event(
     payload["id"] = event.id
     payload["participant_id"] = event.participant_id
     payload["text"] = event.text
-    payload["visual_refs"] = list(event.visual_refs)
     payload["voice_clusters"] = list(event.voice_clusters)
     return payload
 

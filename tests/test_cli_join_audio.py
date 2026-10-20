@@ -18,10 +18,15 @@ from fakeyou.conversation.conversation import (
     conversation_thread_id,
 )
 from fakeyou.conversation.meeting_turns import MeetingTurns
-from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    HistoryTrimMiddleware,
+    OrphanToolCallMiddleware,
+)
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptUpdate
+from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.record import (
     TranscriptEntry,
     TwinSpeechEntry,
@@ -65,11 +70,13 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     assert loop.lifecycle.phase == "closed"
     assert created["tools"] == []
     assert created["checkpointer"] is not None
-    assert created["persona"] == DEFAULT_PERSONA
+    assert created["persona"] == f"{DEFAULT_PERSONA}\n\n{PERCEPTION_GUIDANCE}"
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id")),
         HistoryTrimMiddleware,
         OrphanToolCallMiddleware,
+        ChatTurnToolsMiddleware,
+        PerceptionContextMiddleware,
     ]
     responder = loop.responder
     assert isinstance(responder, LangGraphResponder)

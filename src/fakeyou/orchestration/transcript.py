@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
@@ -12,7 +12,6 @@ from fakeyou.conversation.turn_events import (
     arbitrate,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.foundation.timeparse import assume_utc, require_iso_datetime
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,
@@ -37,9 +36,7 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.assembly import VoiceprintLive
-from fakeyou.persistence.record import MeetingRecord, VisualDraft
-from fakeyou.visual.visual_caption import VisualCaption, frame_ref
-from fakeyou.visual.visual_store import VisualFrame, VisualStore, visual_refs_for_utterance
+from fakeyou.persistence.record import MeetingRecord
 
 
 def _stream_slot(stream_id: str) -> int | None:
@@ -142,43 +139,12 @@ class TranscriptSinks:
     record: MeetingRecord
     conversation: TurnIngress | None = None
     faults: FaultReporter | None = None
-    visual_store: VisualStore | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class LiveScoring:
     voiceprint: VoiceprintLive | None
     registry: SpeakerRegistry
-
-
-def record_visual_caption(
-    record: MeetingRecord,
-    update: VisualFrame,
-    caption: VisualCaption,
-    *,
-    journal: Journal | None = None,
-) -> None:
-    try:
-        captured_at = assume_utc(require_iso_datetime(update.captured_at))
-    except ValueError as error:
-        if journal is not None:
-            journal.record(
-                "visual_caption_dropped",
-                source="meeting_record",
-                visual_id=update.frame_id,
-                error_type=type(error).__name__,
-            )
-        return
-    record.add_visual(
-        VisualDraft(
-            visual_id=update.frame_id,
-            caption=caption.text,
-            sha256=update.sha256,
-            captured_at=captured_at,
-            frame_ref=frame_ref(update),
-            captured_page_ms=update.captured_page_ms,
-        )
-    )
 
 
 def _claim_for_uuid(registry: SpeakerRegistry | None, speaker_uuid: Any) -> str | None:
@@ -188,19 +154,6 @@ def _claim_for_uuid(registry: SpeakerRegistry | None, speaker_uuid: Any) -> str 
     if row is None:
         return None
     return claim_of(row)
-
-
-def _visual_event(event: TranscriptEvent, visual_store: VisualStore | None) -> TranscriptEvent:
-    if visual_store is None:
-        return event
-    return replace(
-        event,
-        visual_refs=visual_refs_for_utterance(
-            visual_store.frames,
-            capture_ms=event.capture_ms,
-            spoken_at=event.timestamp,
-        ),
-    )
 
 
 class TranscriptDrain:
@@ -356,18 +309,15 @@ class TranscriptDrain:
         participant_id, evidence_id, stream_id, extra, capture_ms, device = attribute_stream_frame(
             update, self._binder
         )
-        event = _visual_event(
-            transcript_event(
-                update,
-                participant_id,
-                evidence_id,
-                CaptureContext(
-                    stream_id,
-                    capture_ms=capture_ms,
-                    display_claim=_claim_for_uuid(self._registry(), extra.get("speaker_uuid")),
-                ),
+        event = transcript_event(
+            update,
+            participant_id,
+            evidence_id,
+            CaptureContext(
+                stream_id,
+                capture_ms=capture_ms,
+                display_claim=_claim_for_uuid(self._registry(), extra.get("speaker_uuid")),
             ),
-            self._sinks.visual_store,
         )
         self._pending.append(event)
         self._extras[event.id] = extra
@@ -390,14 +340,13 @@ class TranscriptDrain:
                 attribution.evidence_id,
                 CaptureContext(display_claim=display_claim),
             )
-        visual_event = _visual_event(event, self._sinks.visual_store)
         await _emit_transcript(
-            visual_event,
+            event,
             journal=self._sinks.journal,
             record=self._sinks.record,
             extra=attribution.journal_fields() if attribution is not None else None,
         )
-        await self._route_window([visual_event])
+        await self._route_window([event])
         await self._score_turn(speaker_uuid, "", None, finalized=update.final)
 
 

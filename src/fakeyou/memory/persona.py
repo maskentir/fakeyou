@@ -20,7 +20,6 @@ from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 
 PersonaTool = Literal[
     "recall_meeting_context",
-    "describe_frame",
     "meet_raise_hand",
     "meet_lower_hand",
     "meet_send_chat",
