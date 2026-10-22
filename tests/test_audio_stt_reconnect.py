@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.audio.audio import (
+    STT_ROTATION_LEAD_SECONDS,
     MeetingAudioError,
     MeetingAudioSession,
     SessionCapture,
@@ -102,6 +103,16 @@ class _GatedReconnectSTT:
         self.started.set()
         await self.release.wait()
         self.finished.set()
+
+
+class _ExpiringSTT(FakeReconnectableSTT):
+    def __init__(self, expires_in: float | None) -> None:
+        super().__init__()
+        self.expires_in = expires_in
+
+    def session_expires_in(self, now: float) -> float | None:
+        del now
+        return self.expires_in
 
 
 @asynccontextmanager
@@ -322,6 +333,33 @@ async def test_proactive_reconnect_stays_off_by_default() -> None:
     async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=3600.0) as session:
         await session.maintenance_tick(is_busy=False, remote_participants=2)
     assert stt.calls == 0
+
+
+async def test_stt_session_rotates_before_the_provider_limit_while_the_room_is_quiet() -> None:
+    stt = _ExpiringSTT(STT_ROTATION_LEAD_SECONDS - 1.0)
+    async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=0.0) as session:
+        await session.maintenance_tick(is_busy=False, remote_participants=2)
+        await settle_reconnect(session)
+    assert stt.calls == 1
+    assert session.reconnect_state() == "idle"
+
+
+async def test_stt_session_is_left_alone_while_far_from_the_provider_limit() -> None:
+    stt = _ExpiringSTT(STT_ROTATION_LEAD_SECONDS + 1.0)
+    async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=0.0) as session:
+        await session.maintenance_tick(is_busy=False, remote_participants=2)
+    assert stt.calls == 0
+    assert session.reconnect_state() == "idle"
+
+
+async def test_stt_session_rotation_waits_for_a_quiet_floor_without_queueing() -> None:
+    stt = _ExpiringSTT(STT_ROTATION_LEAD_SECONDS - 1.0)
+    async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=0.0) as session:
+        await session.maintenance_tick(is_busy=True, remote_participants=2)
+        assert session.reconnect_state() == "idle"
+        await session.maintenance_tick(is_busy=False, remote_participants=2)
+        await settle_reconnect(session)
+    assert stt.calls == 1
 
 
 async def test_stt_ready_reports_duck_typed_session() -> None:

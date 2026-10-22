@@ -47,6 +47,7 @@ from fakeyou.foundation.invariants import (
 from fakeyou.foundation.protocols import (
     SupportsIdleSeconds,
     SupportsReconnectWhenIdle,
+    SupportsSessionExpiry,
 )
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -72,6 +73,7 @@ from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
 STOP_DEADLINE_SECONDS = 8.0
 STT_START_TIMEOUT_SECONDS = 25.0
 RECONNECT_DEADLINE_SECONDS = 120.0
+STT_ROTATION_LEAD_SECONDS = 600.0
 
 
 class MeetingAudioError(RuntimeError):
@@ -362,15 +364,33 @@ class MeetingAudioSession:
 
     def _maybe_proactive_reconnect(self, stamp: float, *, is_busy: bool) -> None:
         if (
-            self._reconnect_state == "idle"
-            and self._stt_idle_reconnect_seconds > 0
-            and not stt_socket_dead(self._stt)
-            and self._quiet_for_reconnect(stamp, is_busy=is_busy)
+            self._reconnect_state != "idle"
+            or stt_socket_dead(self._stt)
+            or not self._backoff_elapsed(stamp)
+            or not self._quiet_for_reconnect(stamp, is_busy=is_busy)
         ):
-            stt = self._stt
-            idle = stt.idle_seconds(stamp) if isinstance(stt, SupportsIdleSeconds) else None
+            return
+        reason = self._proactive_reason(stamp)
+        if reason is not None:
+            self.request_stt_reconnect(reason)
+
+    def _proactive_reason(self, stamp: float) -> str | None:
+        stt = self._stt
+        if isinstance(stt, SupportsSessionExpiry):
+            remaining = stt.session_expires_in(stamp)
+            if remaining is not None and remaining <= STT_ROTATION_LEAD_SECONDS:
+                return "session_rotation"
+        if self._stt_idle_reconnect_seconds > 0 and isinstance(stt, SupportsIdleSeconds):
+            idle = stt.idle_seconds(stamp)
             if idle is not None and idle >= self._stt_idle_reconnect_seconds:
-                self.request_stt_reconnect("proactive_idle")
+                return "proactive_idle"
+        return None
+
+    def _backoff_elapsed(self, stamp: float) -> bool:
+        return (
+            self._last_reconnect_at is None
+            or stamp - self._last_reconnect_at >= self._reconnect_delay
+        )
 
     def _reconnect_ready(self, stamp: float, *, is_busy: bool) -> bool:
         if self._reconnect_state != "queued":
@@ -386,12 +406,7 @@ class MeetingAudioSession:
         if not stt_socket_dead(self._stt):
             if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
                 return False
-        if (
-            self._last_reconnect_at is not None
-            and stamp - self._last_reconnect_at < self._reconnect_delay
-        ):
-            return False
-        return True
+        return self._backoff_elapsed(stamp)
 
     def _note_reconnect_failure(self, error: BaseException) -> None:
         fault = classify_exception("stt", error)

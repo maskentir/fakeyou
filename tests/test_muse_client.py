@@ -3,7 +3,7 @@ import json
 import os
 import time
 import wave
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -16,7 +16,12 @@ from fakeyou.foundation.participation import same_voice
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.journal import Journal
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
-from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
+from fakeyou.transcription.muse import (
+    MUSE_MAX_SESSION_SECONDS,
+    MuseClient,
+    MuseDeps,
+    MuseOptions,
+)
 
 RATE = 16000
 SECOND = RATE * 2
@@ -93,6 +98,7 @@ class Harness:
         *,
         options: MuseOptions = FAST,
         on_final_error: BaseException | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.sockets = list(sockets)
         self.urls: list[str] = []
@@ -109,7 +115,7 @@ class Harness:
                 on_interim=self._interim,
                 on_lost=self.lost.append,
             ),
-            deps=MuseDeps(journal=cast(Journal, self.journal), open_socket=self._open),
+            deps=MuseDeps(journal=cast(Journal, self.journal), open_socket=self._open, clock=clock),
         )
 
     async def _open(self, url: str) -> FakeSocket:
@@ -420,6 +426,18 @@ async def test_reconnect_opens_a_new_socket_and_keeps_audio_that_waited() -> Non
     await harness.client.close()
 
 
+async def test_failed_reconnect_leaves_the_socket_marked_dead() -> None:
+    harness = Harness([FakeSocket(), FakeSocket(ack={"message": "busy"})])
+    await harness.client.start()
+    assert harness.client.socket_dead is False
+
+    with pytest.raises(TranscriptionError, match="rejected the session"):
+        await harness.client.reconnect_when_idle()
+
+    assert harness.client.socket_dead is True
+    await harness.client.close()
+
+
 async def test_turn_recording_reports_interim_count_and_latency() -> None:
     socket = FakeSocket()
     harness = Harness([socket])
@@ -605,6 +623,36 @@ async def test_overload_error_is_a_connection_loss_so_the_session_reconnects(
 
     assert harness.client.socket_dead is True
     assert [type(error) for error in harness.lost] == [SttConnectionLost]
+
+
+async def test_max_session_duration_is_a_connection_loss_so_the_session_reconnects() -> None:
+    socket = FakeSocket()
+    harness = Harness([socket])
+    await harness.client.start()
+
+    socket.push({"type": "error", "message": "Max session duration reached"})
+    await _settle()
+
+    assert harness.client.socket_dead is True
+    assert [type(error) for error in harness.lost] == [SttConnectionLost]
+
+
+async def test_session_expiry_counts_down_from_each_new_session() -> None:
+    clock = [1000.0]
+    harness = Harness(
+        [FakeSocket(), FakeSocket(ack={"sessionId": "session-2"})], clock=lambda: clock[0]
+    )
+    assert harness.client.session_expires_in(clock[0]) is None
+
+    await harness.client.start()
+    clock[0] += 3000.0
+    assert harness.client.session_expires_in(clock[0]) == MUSE_MAX_SESSION_SECONDS - 3000.0
+
+    await harness.client.reconnect_when_idle()
+    assert harness.client.session_expires_in(clock[0]) == MUSE_MAX_SESSION_SECONDS
+
+    await harness.client.close()
+    assert harness.client.session_expires_in(clock[0]) is None
 
 
 async def test_other_server_errors_are_not_connection_losses() -> None:
