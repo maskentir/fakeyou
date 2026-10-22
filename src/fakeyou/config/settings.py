@@ -187,15 +187,12 @@ class AnthropicReply(ReplyBase):
     base_url: OptionalURL = "https://api.anthropic.com"
 
 
-GoogleReasoningEffort = Literal["low", "medium", "high"]
-
-
 class GoogleReply(ReplyBase):
     langchain_provider: ClassVar[str] = "google_genai"
     provider: Literal["google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = "https://generativelanguage.googleapis.com"
-    reasoning_effort: GoogleReasoningEffort | None = "low"
+    reasoning_effort: ReasoningEffort | None = "low"
 
 
 ReplySettings = Annotated[

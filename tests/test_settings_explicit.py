@@ -384,7 +384,7 @@ _REPLY_MATCH = {
     '{"provider": "anthropic", "reasoning_effort": "minimal"}': ("Extra inputs are not permitted"),
     '{"extra_body": {}, "provider": "google"}': "Extra inputs are not permitted",
     '{"provider": "google", "reasoning_effort": "unlimited"}': (
-        "Input should be 'low', 'medium' or 'high'"
+        "Input should be 'minimal', 'low', 'medium' or 'high'"
     ),
     '{"model": "google_genai:gemini-3.8-flash", "provider": "google"}': (
         "must not contain a provider prefix"

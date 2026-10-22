@@ -62,7 +62,17 @@ def _init_chat_model(role: ReplySettings, name: ConfigKey) -> BaseChatModel:
         api_key=require_secret(role.api_key, name),
         **options,
     )
+    if isinstance(role, GoogleReply) and role.reasoning_effort == "minimal":
+        _require_minimal_reasoning(model, role.model)
     return model
+
+
+def _require_minimal_reasoning(model: BaseChatModel, name: str) -> None:
+    levels = (model.profile or {}).get("reasoning_effort_levels") or ()
+    if "minimal" not in levels:
+        raise FakeYouError(
+            ErrorCode.CONFIG_INVALID, reason=f"{name} does not support minimal reasoning effort"
+        )
 
 
 def create_chat_model(settings: Settings) -> BaseChatModel:
