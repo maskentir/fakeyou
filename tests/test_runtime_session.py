@@ -14,6 +14,7 @@ from psycopg import OperationalError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.session import ConversationError, SessionResult
+from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.lifecycle import (
@@ -23,6 +24,7 @@ from fakeyou.orchestration.lifecycle import (
     initialize_lifecycle,
 )
 from fakeyou.orchestration.runtime import (
+    OBSERVATION_GRACE_SECONDS,
     SessionWiring,
     drive_session,
     run_meeting_session,
@@ -840,3 +842,82 @@ async def test_checkpoint_failures_while_admitted_and_active_degrade_and_replay_
             final_degraded.checkpoint["channel_values"][key]
             == (final_clean.checkpoint["channel_values"][key])
         )
+
+
+def _script_observations(
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: list[CallObservation | Exception],
+    *,
+    then: CallObservation | Exception,
+) -> list[int]:
+    calls = [0]
+
+    async def observe(*args: Any) -> CallObservation:
+        del args
+        calls[0] += 1
+        outcome = outcomes.pop(0) if outcomes else then
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr("fakeyou.orchestration.runtime.observe_call_state", observe)
+    return calls
+
+
+async def _observed_run(journal: RecordingJournal) -> SessionResult:
+    clock = FakeClock()
+    return await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=FakePageSession(meet_page([IN_CALL])).open,
+            saver_factory=FakeSaverSession().factory,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+
+async def test_run_meeting_session_rides_out_slow_ui_observations_within_the_grace_window(
+    monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
+) -> None:
+    _script_observations(
+        monkeypatch,
+        [TimeoutError(), TimeoutError(), TimeoutError()],
+        then=CallObservation("ended", "the call has ended"),
+    )
+
+    result = await _observed_run(journal)
+
+    assert result.terminal_reason == "ended_by_host"
+    assert len(journal.events("watchdog_failed")) == 3
+    assert journal.events("ui_observation_expired") == []
+
+
+async def test_run_meeting_session_fails_once_ui_observation_stays_slow_past_the_grace_window(
+    monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
+) -> None:
+    calls = _script_observations(monkeypatch, [], then=TimeoutError())
+
+    result = await _observed_run(journal)
+
+    assert result.terminal_reason == "browser_failure"
+    [lost] = journal.events("ui_observation_expired")
+    assert lost["failing_ms"] >= OBSERVATION_GRACE_SECONDS * 1000
+    assert lost["detail"] == "TimeoutError"
+    assert len(journal.events("watchdog_failed")) == calls[0]
+
+
+async def test_run_meeting_session_fails_fast_when_the_page_itself_errors_twice(
+    monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
+) -> None:
+    from playwright.async_api import Error as PlaywrightError
+
+    _script_observations(monkeypatch, [], then=PlaywrightError("Target closed"))
+
+    result = await _observed_run(journal)
+
+    assert result.terminal_reason == "browser_failure"
+    [lost] = journal.events("ui_observation_expired")
+    assert lost["failing_ms"] < OBSERVATION_GRACE_SECONDS * 1000
+    assert len(journal.events("watchdog_failed")) == 2
