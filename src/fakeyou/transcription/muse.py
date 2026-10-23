@@ -28,7 +28,9 @@ from fakeyou.transcription.contract import (
 )
 
 MUSE_MAX_BACKLOG_SECONDS = 4
+MUSE_MAX_SESSION_SECONDS = 3600.0
 OVERLOAD_MARKERS = ("slower than real-time", "backlog too large", "slower than realtime")
+RECOVERABLE_ERROR_MARKERS = (*OVERLOAD_MARKERS, "max session duration")
 
 KEEPALIVE_IDLE_SECONDS = 0.5
 KEEPALIVE_CHUNK_SECONDS = 0.1
@@ -180,6 +182,11 @@ class MuseClient:
             return None
         return max(now - self._last_audio_at, 0.0)
 
+    def session_expires_in(self, now: float) -> float | None:
+        if self._stream_started is None or not self._socket_ready():
+            return None
+        return MUSE_MAX_SESSION_SECONDS - (now - self._stream_started)
+
     async def start(self) -> None:
         if self._closed:
             raise TranscriptionError("Muse client is closed")
@@ -201,7 +208,11 @@ class MuseClient:
 
     async def reconnect_when_idle(self) -> None:
         await self._drop_socket()
-        await self.start()
+        try:
+            await self.start()
+        except BaseException:
+            self._lost = True
+            raise
 
     async def close(self) -> None:
         self._closed = True
@@ -391,7 +402,7 @@ class MuseClient:
         elif kind == "speechComplete":
             await self._complete_turn(message)
         elif kind == "error":
-            if _is_overload(message.get("message", "unknown")):
+            if _is_recoverable(message.get("message", "unknown")):
                 raise SttConnectionLost(f"Muse error: {message.get('message', '')}")
             raise TranscriptionError(f"Muse error: {message.get('message', 'unknown')}")
         elif kind in ("speechEnd", "audioProgress"):
@@ -481,11 +492,11 @@ class MuseClient:
             self._journal.record(event, source="stt", **fields)
 
 
-def _is_overload(message: object) -> bool:
+def _is_recoverable(message: object) -> bool:
     if not isinstance(message, str):
         return False
     lowered = message.lower()
-    return any(marker in lowered for marker in OVERLOAD_MARKERS)
+    return any(marker in lowered for marker in RECOVERABLE_ERROR_MARKERS)
 
 
 def _now() -> str:

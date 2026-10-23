@@ -241,13 +241,14 @@ def test_stt_reconnect_and_retry_limits_have_ceilings(field: str, value: float) 
         STTSettings.model_validate({field: value})
 
 
-def test_google_reply_rejects_minimal_reasoning_effort() -> None:
-    from pydantic import ValidationError
-
+def test_google_reply_accepts_minimal_reasoning_effort_for_models_that_support_it() -> None:
     from fakeyou.config.settings import GoogleReply
 
-    with pytest.raises(ValidationError):
-        GoogleReply.model_validate({"reasoning_effort": "minimal"})
+    reply = GoogleReply.model_validate(
+        {"model": "gemini-3.1-flash-lite", "reasoning_effort": "minimal"}
+    )
+
+    assert reply.reasoning_effort == "minimal"
 
 
 def test_api_settings_default_to_loopback_without_tokens() -> None:

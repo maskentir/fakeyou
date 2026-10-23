@@ -1,4 +1,5 @@
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import field
 from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
@@ -32,6 +33,13 @@ class MeetingAudio(Protocol):
     def raise_if_failed(self) -> None: ...
 
     async def wait_failed(self) -> None: ...
+
+
+@runtime_checkable
+class SupportsCues(Protocol):
+    def prepare_cues(self, texts: Sequence[str]) -> None: ...
+
+    async def play_cue(self, text: str) -> bool: ...
 
 
 @runtime_checkable

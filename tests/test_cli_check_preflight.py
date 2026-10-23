@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, NoReturn, cast
 
 import pytest
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
 
 import fakeyou.cli.main as cli_main
@@ -234,6 +235,28 @@ def test_chat_model_uses_role_configuration(
             },
         )
     ]
+
+
+def test_minimal_reasoning_is_refused_for_a_gemini_model_without_it(settings: Settings) -> None:
+    settings.reply = GoogleReply(
+        model="gemini-3.8-flash", api_key=SecretStr("google-key"), reasoning_effort="minimal"
+    )
+
+    with pytest.raises(FakeYouError, match="does not support minimal reasoning effort"):
+        providers.create_chat_model(settings)
+
+
+def test_minimal_reasoning_is_kept_for_a_gemini_model_that_supports_it(
+    settings: Settings,
+) -> None:
+    settings.reply = GoogleReply(
+        model="gemini-3.1-flash-lite", api_key=SecretStr("google-key"), reasoning_effort="minimal"
+    )
+
+    model = providers.create_chat_model(settings)
+
+    assert isinstance(model, ChatGoogleGenerativeAI)
+    assert model.reasoning_effort == "minimal"
 
 
 def test_chat_model_forwards_google_reasoning_effort(

@@ -187,15 +187,12 @@ class AnthropicReply(ReplyBase):
     base_url: OptionalURL = "https://api.anthropic.com"
 
 
-GoogleReasoningEffort = Literal["low", "medium", "high"]
-
-
 class GoogleReply(ReplyBase):
     langchain_provider: ClassVar[str] = "google_genai"
     provider: Literal["google"] = "google"
     model: str = "gemini-3.8-flash"
     base_url: OptionalURL = "https://generativelanguage.googleapis.com"
-    reasoning_effort: GoogleReasoningEffort | None = "low"
+    reasoning_effort: ReasoningEffort | None = "low"
 
 
 ReplySettings = Annotated[
@@ -361,6 +358,8 @@ class ConversationSettings(Section):
     max_spoken_sentences: int = Field(default=2, gt=0)
     activation_seconds: PositiveSeconds = 30.0
     sentence_streaming: bool = True
+    thinking_cue_enabled: bool = True
+    thinking_cue_after_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
     participant_evidence_max_bytes: int = Field(default=8388608, gt=0)
     voice_labels_enabled: bool = False
     meet_chat_per_minute: int = Field(default=3, gt=0)

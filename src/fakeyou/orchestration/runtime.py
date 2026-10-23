@@ -168,6 +168,7 @@ def _terminal_result(
 
 _STOPPED_BEFORE_JOIN = "owner stopped before guest join"
 _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
+OBSERVATION_GRACE_SECONDS = 60.0
 
 
 async def _readback_effect(
@@ -190,7 +191,8 @@ class _MonitorScan:
     next_scan: float
     remote_participants: int | None
     presence_at: float
-    observation_errors: int
+    failing_since: float | None = None
+    hard_failures: int = 0
 
 
 _LIVE_PHASES: tuple[PublicPhase, ...] = ("admitted", "active")
@@ -675,19 +677,31 @@ class MeetingWorker:
 
     async def _track_observation(self, scan: _MonitorScan, checked: WatchdogCheck) -> str | None:
         if not checked.observation_failed:
-            scan.observation_errors = 0
-            return None
-        scan.observation_errors += 1
-        if scan.observation_errors < 2:
+            scan.failing_since = None
+            scan.hard_failures = 0
             return None
         cause = next(
             (event.detail for event in checked.events if event.kind == "watchdog_failed"),
             "unknown",
         )
+        now = self.monotonic()
+        if scan.failing_since is None:
+            scan.failing_since = now
+        if cause != "TimeoutError":
+            scan.hard_failures += 1
+        failing_seconds = now - scan.failing_since
+        if scan.hard_failures < 2 and failing_seconds < OBSERVATION_GRACE_SECONDS:
+            return None
+        self.record(
+            "ui_observation_expired",
+            source="browser",
+            failing_ms=round(failing_seconds * 1000),
+            detail=cause,
+        )
         return await self.finish(
             "browser_failed",
             "system_fault",
-            f"Meeting UI observation failed: {cause}",
+            f"Meeting UI observation failed for {failing_seconds:.0f}s: {cause}",
         )
 
     async def _record_scan_events(
@@ -745,10 +759,10 @@ class MeetingWorker:
         if checked is None:
             return None, True
         self._note_slow_poll(self.monotonic() - poll_started)
-        finished = await self._track_observation(scan, checked)
+        finished = await self._record_scan_events(scan, checked, now)
         if finished is not None:
             return finished, False
-        finished = await self._record_scan_events(scan, checked, now)
+        finished = await self._track_observation(scan, checked)
         if finished is not None:
             return finished, False
         return await self.apply_observation(checked), False
@@ -762,7 +776,6 @@ class MeetingWorker:
             next_scan=admitted_at,
             remote_participants=None,
             presence_at=admitted_at,
-            observation_errors=0,
         )
         while True:
             finished = await self._poll_stop(deadline)

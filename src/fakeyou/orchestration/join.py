@@ -257,6 +257,11 @@ async def _open_join_conversation(
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
     if run.voice_activity is not None:
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
+    if event.cue:
+        run.journal.record(
+            event.kind.replace("playback_", "thinking_cue_"), source="playback", detail=event.detail
+        )
+        return
     run.journal.record(
         event.kind,
         source="playback",

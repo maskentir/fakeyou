@@ -9,7 +9,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.jev_refresh import JevState
-from fakeyou.conversation.session import ConversationError, MeetingAudio
+from fakeyou.conversation.session import ConversationError, MeetingAudio, SupportsCues
+from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.conversation.turn_graph import (
     BargeLatch,
@@ -110,6 +111,12 @@ class _SessionSpeaker:
     async def stop_playback(self) -> None:
         await self._session().stop_playback()
 
+    async def play_cue(self, text: str) -> bool:
+        session = self._lifecycle.session
+        if not isinstance(session, SupportsCues):
+            return False
+        return await session.play_cue(text)
+
     def _session(self) -> MeetingAudio:
         session = self._lifecycle.session
         if session is None:
@@ -131,6 +138,7 @@ class TurnLifecycle:
         self._speech = build_speech_graph()
         self._barge_in = True
         self._shadow = False
+        self._cue: ThinkingCue | None = None
         self._journal = journal
         self._responder = responder
         self._jev = jev
@@ -233,6 +241,16 @@ class TurnLifecycle:
         self._deferred_options = options
         self._refresh_runtime()
 
+    def configure_cue(self, cue: ThinkingCue | None) -> None:
+        self._cue = cue
+        self._prepare_cues()
+        self._refresh_runtime()
+
+    def _prepare_cues(self) -> None:
+        session = self._session
+        if self._cue is not None and isinstance(session, SupportsCues):
+            session.prepare_cues(self._cue.lines)
+
     def observe_spoken(self, observer: Callable[[str], None]) -> None:
         self._spoken = observer
 
@@ -277,6 +295,8 @@ class TurnLifecycle:
             faults=self._options.faults,
             chat=self._deferred_options.chat,
             chat_turn=self._deferred_options.chat_turn,
+            cue=self._cue,
+            others_speaking=self._deferred_options.others_speaking,
         )
 
     def _note_spoken(self, sentence: str) -> None:
@@ -342,6 +362,7 @@ class TurnLifecycle:
         if self._session is not None and self._session is not session:
             raise ConversationError("meeting conversation already owns an audio session")
         self._session = session
+        self._prepare_cues()
         self.start_pending()
 
     def request_pending(self) -> None:

@@ -25,6 +25,7 @@ from fakeyou.audio.deaf import (
 from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
+    CuePlayback,
     PlaybackBackend,
     PlaybackEngine,
     PlaybackError,
@@ -47,6 +48,7 @@ from fakeyou.foundation.invariants import (
 from fakeyou.foundation.protocols import (
     SupportsIdleSeconds,
     SupportsReconnectWhenIdle,
+    SupportsSessionExpiry,
 )
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -72,6 +74,7 @@ from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
 STOP_DEADLINE_SECONDS = 8.0
 STT_START_TIMEOUT_SECONDS = 25.0
 RECONNECT_DEADLINE_SECONDS = 120.0
+STT_ROTATION_LEAD_SECONDS = 600.0
 
 
 class MeetingAudioError(RuntimeError):
@@ -264,6 +267,7 @@ class MeetingAudioSession:
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._cue_task: asyncio.Task[None] | None = None
         run.task.add_done_callback(self._graph_finished)
 
     def fail(self, message: str, *, cause: BaseException | None = None) -> None:
@@ -362,15 +366,33 @@ class MeetingAudioSession:
 
     def _maybe_proactive_reconnect(self, stamp: float, *, is_busy: bool) -> None:
         if (
-            self._reconnect_state == "idle"
-            and self._stt_idle_reconnect_seconds > 0
-            and not stt_socket_dead(self._stt)
-            and self._quiet_for_reconnect(stamp, is_busy=is_busy)
+            self._reconnect_state != "idle"
+            or stt_socket_dead(self._stt)
+            or not self._backoff_elapsed(stamp)
+            or not self._quiet_for_reconnect(stamp, is_busy=is_busy)
         ):
-            stt = self._stt
-            idle = stt.idle_seconds(stamp) if isinstance(stt, SupportsIdleSeconds) else None
+            return
+        reason = self._proactive_reason(stamp)
+        if reason is not None:
+            self.request_stt_reconnect(reason)
+
+    def _proactive_reason(self, stamp: float) -> str | None:
+        stt = self._stt
+        if isinstance(stt, SupportsSessionExpiry):
+            remaining = stt.session_expires_in(stamp)
+            if remaining is not None and remaining <= STT_ROTATION_LEAD_SECONDS:
+                return "session_rotation"
+        if self._stt_idle_reconnect_seconds > 0 and isinstance(stt, SupportsIdleSeconds):
+            idle = stt.idle_seconds(stamp)
             if idle is not None and idle >= self._stt_idle_reconnect_seconds:
-                self.request_stt_reconnect("proactive_idle")
+                return "proactive_idle"
+        return None
+
+    def _backoff_elapsed(self, stamp: float) -> bool:
+        return (
+            self._last_reconnect_at is None
+            or stamp - self._last_reconnect_at >= self._reconnect_delay
+        )
 
     def _reconnect_ready(self, stamp: float, *, is_busy: bool) -> bool:
         if self._reconnect_state != "queued":
@@ -386,12 +408,7 @@ class MeetingAudioSession:
         if not stt_socket_dead(self._stt):
             if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
                 return False
-        if (
-            self._last_reconnect_at is not None
-            and stamp - self._last_reconnect_at < self._reconnect_delay
-        ):
-            return False
-        return True
+        return self._backoff_elapsed(stamp)
 
     def _note_reconnect_failure(self, error: BaseException) -> None:
         fault = classify_exception("stt", error)
@@ -495,6 +512,28 @@ class MeetingAudioSession:
     async def stop_playback(self) -> None:
         await self._engine.stop()
 
+    def prepare_cues(self, texts: Sequence[str]) -> None:
+        engine = self._engine
+        if not isinstance(engine, CuePlayback) or self._cue_task is not None or self._stopping:
+            return
+        self._cue_task = asyncio.create_task(self._prepare_cues(engine, tuple(texts)))
+
+    async def _prepare_cues(self, engine: CuePlayback, texts: tuple[str, ...]) -> None:
+        for text in texts:
+            try:
+                await engine.prepare_cue(text)
+            except (OSError, TimeoutError, ProviderFault, PlaybackError) as error:
+                if self._faults is not None:
+                    self._faults.record(classify_exception("tts", error, operation="cue"))
+                return
+
+    async def play_cue(self, text: str) -> bool:
+        engine = self._engine
+        if self._failure is not None or self._stopping or not isinstance(engine, CuePlayback):
+            return False
+        with self._gate.own_speech.speaking(text):
+            return await engine.play_cue(text)
+
     async def _stop(self) -> None:
         self._stopping = True
         self.activity.mark_unavailable()
@@ -510,6 +549,10 @@ class MeetingAudioSession:
             done, _ = await asyncio.wait({reconnect}, timeout=remaining())
             if not done:
                 failures.append(TimeoutError("meeting audio reconnect shutdown timed out"))
+        cue = self._cue_task
+        if cue is not None and not cue.done():
+            cue.cancel()
+            await asyncio.wait({cue}, timeout=remaining())
         try:
             try:
                 await _bounded_call(self._engine.stop(), min(3.0, remaining()))

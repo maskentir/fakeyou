@@ -4,10 +4,11 @@ from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.foundation.invariants import PCM_CHANNELS, PCM_FORMAT
+from fakeyou.foundation.invariants import PCM_CHANNELS, PCM_FORMAT, PLAYBACK_SAMPLE_RATE
+from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.cleanup import close_safely
@@ -27,6 +28,7 @@ class PlaybackEvent:
     kind: PlaybackEventKind
     text: str = ""
     detail: str = ""
+    cue: bool = False
 
 
 PlayStream = Callable[[AsyncIterator[bytes]], Coroutine[Any, Any, None]]
@@ -37,6 +39,10 @@ class SetMuted(Protocol):
 
 
 SYNTH_TIMEOUT_SECONDS = 45.0
+CUE_CHUNK_BYTES = 4800
+CUE_MAX_SECONDS = 1.2
+CUE_MAX_PAUSE_SECONDS = 0.3
+CUE_RENDER_ATTEMPTS = 3
 PLAYBACK_TIMEOUT_SECONDS = 120.0
 CLEANUP_TIMEOUT_SECONDS = 5.0
 
@@ -189,6 +195,31 @@ class PlaybackPort(Protocol):
     async def close(self) -> None: ...
 
 
+@runtime_checkable
+class CuePlayback(Protocol):
+    async def prepare_cue(self, text: str) -> None: ...
+
+    async def play_cue(self, text: str) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Clip:
+    audio: AsyncIterator[bytes]
+    text: str
+    done: asyncio.Future[None]
+    cue: bool = False
+
+
+def _fits_cue(clip: VoicedClip) -> bool:
+    seconds = len(clip.pcm) / (PLAYBACK_SAMPLE_RATE * PCM16_SAMPLE_BYTES)
+    return seconds <= CUE_MAX_SECONDS and clip.longest_pause_seconds <= CUE_MAX_PAUSE_SECONDS
+
+
+async def _pcm_chunks(pcm: bytes) -> AsyncIterator[bytes]:
+    for start in range(0, len(pcm), CUE_CHUNK_BYTES):
+        yield pcm[start : start + CUE_CHUNK_BYTES]
+
+
 class PlaybackEngine:
     def __init__(
         self,
@@ -209,9 +240,8 @@ class PlaybackEngine:
         self._cleanup_timeout_seconds = timing.cleanup_timeout_seconds
         self._faults = diagnostics.faults
         self._journal = diagnostics.journal
-        self._queue: asyncio.Queue[tuple[AsyncIterator[bytes], str, asyncio.Future[None]]] = (
-            asyncio.Queue()
-        )
+        self._queue: asyncio.Queue[_Clip] = asyncio.Queue()
+        self._cues: dict[str, bytes] = {}
         self._worker: asyncio.Task[None] | None = None
         self._play_tasks: set[asyncio.Task[Any]] = set()
         self._muted = True
@@ -327,10 +357,43 @@ class PlaybackEngine:
         )
         return
 
-    async def _play_queued(self, audio: AsyncIterator[bytes], text: str) -> None:
+    async def prepare_cue(self, text: str) -> None:
+        if self._closed or text in self._cues:
+            return
+        for _attempt in range(CUE_RENDER_ATTEMPTS):
+            clip = voiced_clip(await self._render(text), PLAYBACK_SAMPLE_RATE)
+            if clip is not None and _fits_cue(clip):
+                self._cues[text] = clip.pcm
+                return
+        if self._journal is not None:
+            self._journal.record(
+                "thinking_cue_rejected",
+                source="playback",
+                chars=len(text),
+                attempts=CUE_RENDER_ATTEMPTS,
+            )
+
+    async def _render(self, text: str) -> bytes:
+        chunks = self._synthesizer.stream(text)
+        try:
+            async with asyncio.timeout(self._synth_timeout_seconds):
+                return b"".join([chunk async for chunk in chunks])
+        finally:
+            await self._close_stream(chunks)
+
+    async def play_cue(self, text: str) -> bool:
+        pcm = self._cues.get(text)
+        if pcm is None or self._closed or self._speaking or not self._queue.empty():
+            return False
+        await self._play_queued(_pcm_chunks(pcm), text, cue=True)
+        return True
+
+    async def _play_queued(
+        self, audio: AsyncIterator[bytes], text: str, *, cue: bool = False
+    ) -> None:
         loop = asyncio.get_running_loop()
         done: asyncio.Future[None] = loop.create_future()
-        await self._queue.put((audio, text, done))
+        await self._queue.put(_Clip(audio, text, done, cue))
         self._ensure_worker()
         try:
             await done
@@ -348,21 +411,20 @@ class PlaybackEngine:
         closing = []
         while True:
             try:
-                audio, text, done = self._queue.get_nowait()
+                clip = self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            dropped.append((text, done))
-            task = asyncio.create_task(self._close_audio(audio))
+            dropped.append(clip)
+            task = asyncio.create_task(self._close_audio(clip.audio))
             closing.append(task)
             self._play_tasks.add(task)
         try:
             await self._cancelled_tasks_cleanup()
         finally:
             self._play_tasks.difference_update(closing)
-            for text, done in dropped:
-                if not done.cancelled() and not done.done():
-                    done.set_result(None)
-                self._emit("playback_dropped", text, "interrupted")
+            for clip in dropped:
+                self._settle_done(clip.done)
+                self._emit("playback_dropped", clip.text, "interrupted", cue=clip.cue)
         await self._mute()
 
     async def _close_audio(self, audio: AsyncIterator[bytes]) -> None:
@@ -414,11 +476,13 @@ class PlaybackEngine:
             self._record_fault("playback", error)
             self._emit("playback_failed", "", f"{type(error).__name__}: {error}")
 
-    def _emit(self, kind: PlaybackEventKind, text: str, detail: str = "") -> None:
+    def _emit(
+        self, kind: PlaybackEventKind, text: str, detail: str = "", *, cue: bool = False
+    ) -> None:
         if self._on_event is None:
             return
         guard_observer(
-            partial(self._on_event, PlaybackEvent(kind, text, detail)),
+            partial(self._on_event, PlaybackEvent(kind, text, detail, cue)),
             sink=ConsumerSink(faults=self._faults, journal=self._journal),
             source="playback",
             detail="playback_event",
@@ -470,25 +534,23 @@ class PlaybackEngine:
         if not done.cancelled() and not done.done():
             done.set_result(None)
 
-    async def _drop_stale(
-        self, audio: AsyncIterator[bytes], text: str, done: asyncio.Future[None]
-    ) -> None:
-        await self._close_audio(audio)
+    async def _drop_stale(self, clip: _Clip) -> None:
+        await self._close_audio(clip.audio)
         await self._mute()
-        self._settle_done(done)
+        self._settle_done(clip.done)
         self._emit(
             "playback_dropped",
-            text,
-            "cancelled" if done.cancelled() else "interrupted",
+            clip.text,
+            "cancelled" if clip.done.cancelled() else "interrupted",
+            cue=clip.cue,
         )
 
     def _must_raise_cancel(self, play_task: asyncio.Task[Any]) -> bool:
         current = asyncio.current_task()
         return current is None or current.cancelling() > 0 or not play_task.cancelled()
 
-    async def _play_one(
-        self, play_task: asyncio.Task[Any], text: str, done: asyncio.Future[None]
-    ) -> None:
+    async def _play_one(self, play_task: asyncio.Task[Any], clip: _Clip) -> None:
+        text, cue = clip.text, clip.cue
         try:
             async with asyncio.timeout(self._playback_timeout_seconds):
                 await play_task
@@ -497,22 +559,22 @@ class PlaybackEngine:
             with suppress(TimeoutError):
                 async with asyncio.timeout(self._cleanup_timeout_seconds):
                     await play_task
-            self._emit("playback_failed", text, "playback timed out")
+            self._emit("playback_failed", text, "playback timed out", cue=cue)
             self._record_fault("playback", TimeoutError("playback timed out"))
         except asyncio.CancelledError:
             if self._must_raise_cancel(play_task):
                 raise
-            self._emit("playback_dropped", text, "interrupted")
+            self._emit("playback_dropped", text, "interrupted", cue=cue)
         except (OSError, PlaybackError, ProviderFault) as error:
-            self._emit("playback_failed", text, f"{type(error).__name__}: {error}")
+            self._emit("playback_failed", text, f"{type(error).__name__}: {error}", cue=cue)
             self._record_fault("playback", error)
         else:
-            self._emit("playback_finished", text)
+            self._emit("playback_finished", text, cue=cue)
         finally:
             self._play_tasks.discard(play_task)
             self._active_done = None
             self._active_play_task = None
-            self._settle_done(done)
+            self._settle_done(clip.done)
 
     async def _idle_tail(self) -> None:
         if not self._queue.empty():
@@ -524,10 +586,10 @@ class PlaybackEngine:
 
     async def _run(self) -> None:
         while True:
-            audio, text, done = await self._queue.get()
+            clip = await self._queue.get()
             generation = self._generation
-            if done.cancelled():
-                await self._close_audio(audio)
+            if clip.done.cancelled():
+                await self._close_audio(clip.audio)
                 continue
             unmuted = False
             try:
@@ -535,15 +597,15 @@ class PlaybackEngine:
                 unmuted = True
             finally:
                 if not unmuted:
-                    await self._close_audio(audio)
-                    self._settle_done(done)
-            if generation != self._generation or done.cancelled() or self._closed:
-                await self._drop_stale(audio, text, done)
+                    await self._close_audio(clip.audio)
+                    self._settle_done(clip.done)
+            if generation != self._generation or clip.done.cancelled() or self._closed:
+                await self._drop_stale(clip)
                 continue
-            self._emit("playback_started", text)
-            play_task = asyncio.create_task(self._consume_audio(audio))
+            self._emit("playback_started", clip.text, cue=clip.cue)
+            play_task = asyncio.create_task(self._consume_audio(clip.audio))
             self._play_tasks.add(play_task)
-            self._active_done = done
+            self._active_done = clip.done
             self._active_play_task = play_task
-            await self._play_one(play_task, text, done)
+            await self._play_one(play_task, clip)
             await self._idle_tail()
