@@ -25,7 +25,7 @@ dependencies = [
     "neo4j>=6.3,<7",
     "numpy>=2.5,<3",
     "openai==3.19.2",
-    "pillow>=12.3,<13",
+    "pillow>=13,<14",
     "loudness>=0.2,<1",
     "onnxruntime~=1.24.3",
     "sentencex==1.0.31",
