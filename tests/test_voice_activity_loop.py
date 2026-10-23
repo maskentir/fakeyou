@@ -202,6 +202,38 @@ async def test_voice_script_reads_level_and_csrc_from_encoded_frames() -> None:
             await browser.close()
 
 
+@pytest.mark.browser
+async def test_voice_script_releases_analysers_it_no_longer_samples() -> None:
+    from playwright.async_api import async_playwright
+
+    count_disconnects = (
+        "window.__released = 0;"
+        " const disconnect = AudioNode.prototype.disconnect;"
+        " AudioNode.prototype.disconnect = function (...args) {"
+        "  if (args[0] instanceof AnalyserNode) window.__released += 1;"
+        "  return disconnect.apply(this, args); };"
+    )
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(count_disconnects)
+            await page.add_init_script(load_voice_activity_script())
+            await page.goto("about:blank")
+            released = await page.evaluate(
+                "() => {"
+                " const ctx = new AudioContext();"
+                " const remote = ctx.createMediaStreamDestination();"
+                " for (let i = 0; i < 20; i += 1) ctx.createMediaStreamSource(remote.stream);"
+                " for (let i = 0; i < 20; i += 1)"
+                "  ctx.createMediaStreamSource(ctx.createMediaStreamDestination().stream);"
+                " return window.__released; }"
+            )
+            assert released == 19 + 5
+        finally:
+            await browser.close()
+
+
 async def test_voice_activity_loop_reraises_unexpected_errors() -> None:
     tracker = tracker_at(FakeClock(now=10.0))
     page = meet_page([], evaluates=[KeyError("bug")])

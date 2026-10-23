@@ -82,6 +82,22 @@
     }
   }
 
+  function release(tap) {
+    try {
+      tap.node.disconnect(tap.analyser);
+    } catch {
+      /* the page already tore the source down */
+    }
+  }
+
+  function addTap(node, analyser, key) {
+    for (let index = taps.length - 1; index >= 0; index -= 1) {
+      if (taps[index].key === key) release(taps.splice(index, 1)[0]);
+    }
+    taps.push({ node, analyser, key, slot: slotFor(key) });
+    while (taps.length > MAX_TAPS) release(taps.shift());
+  }
+
   function wrapAudioContext(name) {
     const Original = window[name];
     if (typeof Original !== "function" || Original.__fakeyouVoiceWrapped) return;
@@ -98,8 +114,7 @@
                 const analyser = ctx.createAnalyser();
                 analyser.fftSize = FFT_SIZE;
                 node.connect(analyser);
-                taps.push({ analyser, key, slot: slotFor(key) });
-                if (taps.length > MAX_TAPS) taps.splice(0, 1);
+                addTap(node, analyser, key);
               }
             } catch {
               /* tapping must never break audio */
