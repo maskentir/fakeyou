@@ -1,0 +1,61 @@
+name: Bug report
+description: The twin, the API, the CLI or a worker did something wrong.
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Meet and browser
+        - Audio and transcription
+        - Speech and playback
+        - Conversation and turn taking
+        - Perception
+        - Memory and ingestion
+        - Debrief
+        - API, CLI or workers
+        - Deploy and configuration
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: What the twin did, as an observer in the meeting or an operator would describe it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Command, meeting shape (participants, language, length) and configuration that differs from `.env.example`.
+  - type: input
+    id: session
+    attributes:
+      label: Meeting id and terminal reason
+      placeholder: "hangout-2, browser_failure"
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal excerpt
+      description: The events around the failure from `.runtime/audio/journals/<meeting>.jsonl`. Paste events, not transcript text.
+      render: json
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or branch
+      placeholder: "main @ 1a2b3c4"
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: No API keys, tokens, `.env` contents, recordings or meeting transcripts are pasted here
+          required: true

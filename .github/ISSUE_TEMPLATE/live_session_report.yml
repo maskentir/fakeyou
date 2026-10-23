@@ -1,0 +1,62 @@
+name: Live session report
+description: How the twin did in a real Google Meet, measured from its journal.
+labels: ["question"]
+body:
+  - type: input
+    id: session
+    attributes:
+      label: Meeting id
+      placeholder: "standup-2026-10-24"
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or branch
+      placeholder: "main @ 1a2b3c4"
+    validations:
+      required: true
+  - type: input
+    id: shape
+    attributes:
+      label: Meeting shape
+      description: Length, number of people, language and the kind of meeting.
+      placeholder: "62 min, 4 people, Indonesian with English, daily standup"
+    validations:
+      required: true
+  - type: input
+    id: ending
+    attributes:
+      label: Terminal reason
+      placeholder: "stopped_by_owner"
+    validations:
+      required: true
+  - type: input
+    id: latency
+    attributes:
+      label: Reply latency
+      description: From the end of the speaker's turn to the first audio of the reply, p50 and p95, and how many replies were spoken versus cancelled.
+      placeholder: "p50 3.1 s, p95 4.4 s, 11 spoken, 2 cancelled"
+  - type: textarea
+    id: faults
+    attributes:
+      label: Faults and recoveries
+      description: STT reconnects, watchdog failures, provider faults, thinking cues skipped or rejected.
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+  - type: textarea
+    id: failed
+    attributes:
+      label: What did not work
+      description: Moments where a human would have done better, and what the people in the call said about it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: Participants agreed to the twin being in the call, and no transcript text or recording is pasted here
+          required: true

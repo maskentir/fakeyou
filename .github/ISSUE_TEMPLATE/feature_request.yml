@@ -1,0 +1,32 @@
+name: Feature request
+description: Something the twin should be able to do in a meeting, or something operators need.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What a person in the meeting, or the owner, cannot do today.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: The live session, journal, eval or report where this showed up.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behaviour you want, as it would look from inside the call.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: Authority, privacy, latency or cost the change could affect.
