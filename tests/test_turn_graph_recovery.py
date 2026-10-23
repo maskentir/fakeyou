@@ -17,7 +17,12 @@ from fakeyou.conversation.turn_graph import (
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
-from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnScope, turn_request_id
+from fakeyou.conversation.turn_recovery import (
+    RecoveryOptions,
+    TurnScope,
+    raised_where,
+    turn_request_id,
+)
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -190,9 +195,14 @@ async def test_sentence_over_the_budget_times_out_and_the_turn_recovers() -> Non
     await harness.say("f1", "twin, are you there?")
 
     assert harness.session.spoken == ["First sentence.", TURN_FAILED_EN]
-    assert harness.journal.of("turn_failed") == [
-        {"source": "agent", "transcript_id": "f1", "error": "TimeoutError", "consecutive": 1}
-    ]
+    [failed] = harness.journal.of("turn_failed")
+    assert {key: failed[key] for key in ("source", "transcript_id", "error", "consecutive")} == {
+        "source": "agent",
+        "transcript_id": "f1",
+        "error": "TimeoutError",
+        "consecutive": 1,
+    }
+    assert failed["raised_at"]
     assert [fields["request_id"] for fields in harness.journal.of("agent_failed")] == ["f1:1"]
     assert harness.journal.of("agent_finished") == []
     assert harness.lifecycle.phase == "waiting"
@@ -204,9 +214,14 @@ async def test_responder_error_counts_one_failure_and_records_a_fault() -> None:
 
     await harness.say("f1", "twin, are you there?")
 
-    assert harness.journal.of("turn_failed") == [
-        {"source": "agent", "transcript_id": "f1", "error": "RuntimeError", "consecutive": 1}
-    ]
+    [failed] = harness.journal.of("turn_failed")
+    assert {key: failed[key] for key in ("source", "transcript_id", "error", "consecutive")} == {
+        "source": "agent",
+        "transcript_id": "f1",
+        "error": "RuntimeError",
+        "consecutive": 1,
+    }
+    assert failed["raised_at"]
     assert harness.lifecycle.recovery.consecutive_failures == 1
     assert [fault.source for fault in faults.summaries()] == ["agent"]
     assert harness.session.spoken == [TURN_FAILED_EN]
@@ -309,3 +324,17 @@ async def test_dropped_sentence_journals_sentence_dropped_then_agent_cancelled()
     assert cancelled[0]["generation"] == 1
     assert cancelled[0]["request_id"] == "f1:1"
     assert journal.names.index("sentence_dropped") < journal.names.index("agent_cancelled")
+
+
+def test_a_failure_names_where_it_was_raised_and_the_last_package_frame() -> None:
+    def explode() -> None:
+        raise TypeError("boom")
+
+    try:
+        explode()
+    except TypeError as error:
+        where = raised_where(error)
+
+    assert where["raised_at"].endswith(":explode")
+    assert "raised_in" not in where
+    assert raised_where(TypeError("never raised")) == {}

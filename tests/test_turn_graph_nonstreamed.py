@@ -210,9 +210,14 @@ async def test_whole_respond_over_the_turn_budget_is_cut_journaled_and_counted()
     await harness.say("f1", "twin, are you there?")
 
     assert harness.session.spoken == [TURN_FAILED_EN]
-    assert harness.journal.of("turn_failed") == [
-        {"source": "agent", "transcript_id": "f1", "error": "TimeoutError", "consecutive": 1}
-    ]
+    [failed] = harness.journal.of("turn_failed")
+    assert {key: failed[key] for key in ("source", "transcript_id", "error", "consecutive")} == {
+        "source": "agent",
+        "transcript_id": "f1",
+        "error": "TimeoutError",
+        "consecutive": 1,
+    }
+    assert failed["raised_in"].endswith(":_respond_within")
     assert [fields["request_id"] for fields in harness.journal.of("agent_failed")] == ["f1:1"]
     assert harness.journal.of("agent_finished") == []
     assert harness.lifecycle.recovery.consecutive_failures == 1
