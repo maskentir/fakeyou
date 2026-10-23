@@ -44,7 +44,6 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
         model=first_model,
         brief_path=write_brief(tmp_path),
         transcripts=("Rani Twin, first meeting question?",),
-        native_checkpointer=True,
         settings=settings,
         join=join,
     )
@@ -56,7 +55,6 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
         meeting_id="meeting-10",
         brief_path=write_brief(tmp_path, "second-brief.json", **second),
         transcripts=("Rani Twin, second meeting question?",),
-        native_checkpointer=True,
         settings=settings,
         join=join,
     )
@@ -84,7 +82,6 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
         model=retry_model,
         brief_path=write_brief(tmp_path),
         transcripts=("Rani Twin, retry question?",),
-        native_checkpointer=True,
         settings=settings,
         join=join,
     )

@@ -94,6 +94,7 @@ class _JoinRun:
     record_error: str | None = None
     exit_code: ExitCode = ExitCode.FAILURE
     final_exit: ExitCode = ExitCode.FAILURE
+    speaking: str | None = None
 
 
 def _write_pending_status(
@@ -235,6 +236,7 @@ async def _open_join_conversation(
                 brief=prepared.brief,
                 graphiti=run.graphiti,
                 perception=run.perception.context if run.perception is not None else None,
+                history=run.record,
             ),
             behavior=TurnBehavior(
                 on_transition=log_transition,
@@ -268,8 +270,14 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         ends_with_question=event.text.rstrip().endswith("?"),
         detail=event.detail,
     )
-    if event.kind == "playback_finished":
+    if event.kind == "playback_started":
+        run.speaking = event.text
+    elif event.kind == "playback_finished":
+        run.speaking = None
         run.record.add_twin_speech(event.text)
+    elif event.kind == "playback_dropped" and event.text == run.speaking:
+        run.speaking = None
+        run.record.add_twin_speech(event.text, interrupted=True)
 
 
 def _build_audio_factory(

@@ -358,14 +358,14 @@ async def forget_meeting(
     files = summary.files or ForgottenFiles(
         record_removed=False,
         journal_files_removed=0,
-        conversation_thread_removed=False,
+        lifecycle_thread_removed=False,
         browser_profile_removed=False,
     )
     return ForgetView(
         removed_episodes=summary.removed_episodes,
         record_removed=files.record_removed,
         journal_files_removed=files.journal_files_removed,
-        conversation_thread_removed=files.conversation_thread_removed,
+        lifecycle_thread_removed=files.lifecycle_thread_removed,
         browser_profile_removed=files.browser_profile_removed,
         stages=tuple(
             ForgetStageView(stage=stage.stage, status=stage.status, detail=stage.detail)

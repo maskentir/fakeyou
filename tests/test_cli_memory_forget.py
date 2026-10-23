@@ -17,7 +17,6 @@ from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, require_url
 from fakeyou.memory.forget import ForgetRequest, require_complete, run_forget
@@ -35,7 +34,6 @@ from tests._cli_support import (
     fake_persona_memory,
     meeting_brief,
     meeting_context_file,
-    seed_conversation_thread,
     thread_exists,
     write_persona,
 )
@@ -94,7 +92,7 @@ async def test_memory_forget_meeting_uses_persona_group(
         "removed_episodes": 3,
         "record_removed": False,
         "journal_files_removed": 0,
-        "conversation_thread_removed": False,
+        "lifecycle_thread_removed": False,
         "browser_profile_removed": False,
     }
 
@@ -112,8 +110,6 @@ async def forget_meeting_with_local_files(
     settings.paths.journal_dir.mkdir()
     for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
         (settings.paths.journal_dir / name).write_text("{}\n")
-    thread_id = await seed_conversation_thread(settings, "meeting-9")
-    await seed_conversation_thread(settings, "meeting-10")
     from fakeyou.orchestration.lifecycle import (
         LifecycleThread,
         build_lifecycle_graph,
@@ -121,6 +117,8 @@ async def forget_meeting_with_local_files(
         initialize_lifecycle,
         meeting_thread_id,
     )
+
+    thread_id = meeting_thread_id(profile.twin_id, "meeting-9")
 
     async with open_checkpointer(require_url(configured_url(settings))) as saver:
         for meeting in ("meeting-9", "meeting-10"):
@@ -160,7 +158,7 @@ async def test_memory_forget_meeting_removes_record_journal_and_thread(
         "removed_episodes": 2,
         "record_removed": True,
         "journal_files_removed": 2,
-        "conversation_thread_removed": True,
+        "lifecycle_thread_removed": True,
         "browser_profile_removed": False,
     }
     assert not (settings.paths.record_dir / "meeting-9").exists()
@@ -169,8 +167,7 @@ async def test_memory_forget_meeting_removes_record_journal_and_thread(
     ]
     assert not await thread_exists(settings, thread_id)
     profile = PersonaProfile.model_validate(PERSONA_DATA)
-    other = conversation_thread_id(profile.owner_id, profile.twin_id, "meeting-10")
-    assert await thread_exists(settings, other)
+    assert await thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-10"))
 
 
 async def test_memory_forget_meeting_keep_record_only_removes_episodes(

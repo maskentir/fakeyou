@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
@@ -23,9 +22,9 @@ from fakeyou.conversation.agent import (
     SPOKEN_LANGUAGE_GUIDANCE,
     create_meeting_agent,
 )
-from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.conversation import MeetingResponder
 from fakeyou.conversation.jev_refresh import JevRefreshInput, JevState, turn_jev_key
-from fakeyou.conversation.meeting_messages import request_messages
+from fakeyou.conversation.meeting_messages import NoHistory, request_messages
 from fakeyou.conversation.meeting_turns import (
     TurnGeneration,
     TurnInteraction,
@@ -327,9 +326,9 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
         timeout=30,
         max_retries=0,
     )
-    agent = create_meeting_agent(model, checkpointer=InMemorySaver())
+    agent = create_meeting_agent(model)
     loop = build_meeting_turns(
-        LangGraphResponder(agent, "loopback-thread", journal=journal),
+        MeetingResponder(agent, NoHistory(), journal=journal),
         diagnostics=Diagnostics(journal=journal),
     )
     audio = FakeReplyAudio()
@@ -1742,19 +1741,19 @@ def hanging_tool_agent(started: asyncio.Event) -> Any:
     return create_meeting_agent(
         ToolCallingFakeModel(responses=[AIMessage(content="", tool_calls=[call])]),
         tools=[lookup],
-        checkpointer=InMemorySaver(),
     )
 
 
 @pytest.mark.parametrize("mode", ["streamed", "whole_turn"])
-async def test_cancel_mid_tool_leaves_no_orphan_in_checkpoint(mode: str) -> None:
+async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None:
     started = asyncio.Event()
     agent = hanging_tool_agent(started)
+    audio = FakeReplyAudio()
     turns = build_meeting_turns(
-        LangGraphResponder(agent, "orphan-cancel", language="en"),
+        MeetingResponder(agent, NoHistory(), language="en"),
         generation=TurnGeneration(sentence_streaming=mode == "streamed", language="en"),
     )
-    turns.lifecycle.bind(FakeReplyAudio())
+    turns.lifecycle.bind(audio)
     await turns.ingress.receive_final(event("f1", "check that please"))
     await asyncio.wait_for(started.wait(), 2)
     runtime = turns.lifecycle.runtime
@@ -1769,6 +1768,5 @@ async def test_cancel_mid_tool_leaves_no_orphan_in_checkpoint(mode: str) -> None
         context=runtime,
     )
     await asyncio.wait_for(turns.lifecycle.drained(), 2)
-    checkpoint = await agent.aget_state({"configurable": {"thread_id": "orphan-cancel"}})
-    assert_tool_pairs_intact(checkpoint.values["messages"])
+    assert audio.spoken == []
     await turns.lifecycle.close()

@@ -11,7 +11,7 @@ from evals.runtime_evidence import (
 )
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.conversation import MeetingResponder
 from fakeyou.memory.persona import PersonaProfile
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._memory_fakes import make_graphiti
@@ -40,8 +40,9 @@ async def test_native_responder_works_without_database_url() -> None:
             counter=ModelCallCounter(),
             trajectory=[],
         ),
-    ) as responder:
-        assert isinstance(responder, LangGraphResponder)
+    ) as native:
+        assert isinstance(native.responder, MeetingResponder)
+        assert native.responder.history is native.record
 
 
 def test_candidate_files_name_existing_runtime_sources() -> None:

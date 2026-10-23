@@ -21,8 +21,6 @@ from fakeyou.config.settings import (
 )
 from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
-    HistoryTrimMiddleware,
-    OrphanToolCallMiddleware,
 )
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
@@ -433,8 +431,6 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     assert [type(item) for item in created["middleware"]] == [
         greeting_type,
         ModelFallbackMiddleware,
-        HistoryTrimMiddleware,
-        OrphanToolCallMiddleware,
         ChatTurnToolsMiddleware,
     ]
 
@@ -442,7 +438,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 async def test_open_conversation_wires_sentence_streaming_flag(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation.conversation import LangGraphResponder
+    from fakeyou.conversation.conversation import MeetingResponder
 
     seen: dict[str, Any] = {}
 
@@ -476,7 +472,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
         behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
-    assert type(seen["responder"]) is LangGraphResponder
+    assert type(seen["responder"]) is MeetingResponder
     assert seen["kwargs"]["generation"].sentence_streaming is True
 
     settings.conversation.sentence_streaming = True
@@ -486,7 +482,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
         behavior=TurnBehavior(on_transition=lambda *_args: None),
     ):
         pass
-    assert type(seen["responder"]) is LangGraphResponder
+    assert type(seen["responder"]) is MeetingResponder
     assert seen["responder"].max_sentences == settings.conversation.max_spoken_sentences
     assert seen["responder"].language == settings.speech.language
     assert seen["kwargs"]["generation"].sentence_streaming is True

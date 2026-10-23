@@ -21,10 +21,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
+    MeetingResponder,
     cap_spoken_reply,
     stream_sentences,
 )
+from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
     TurnGeneration,
@@ -136,7 +137,7 @@ def streamed_loop(
     language: str = "id",
     **kwargs: Any,
 ) -> MeetingTurns:
-    responder = LangGraphResponder(agent, "thread", journal=journal, language=language)
+    responder = MeetingResponder(agent, NoHistory(), journal=journal, language=language)
     interaction_keys = (
         "on_transition",
         "wake_phrases",
@@ -238,7 +239,7 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(
 ) -> None:
     agent = ScriptedAgent([], fallback_reply="One. Two. Three.")
     audio = FakeReplyAudio()
-    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    responder = MeetingResponder(cast(AgentT, agent), NoHistory(), journal=journal)
     loop = build_meeting_turns(
         responder,
         generation=TurnGeneration(sentence_streaming=False),
@@ -416,7 +417,7 @@ async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) 
 
 def test_streaming_responder_rejects_non_positive_cap() -> None:
     with pytest.raises(ValueError, match="max_sentences"):
-        LangGraphResponder(cast(AgentT, ScriptedAgent([])), "thread", max_sentences=0)
+        MeetingResponder(cast(AgentT, ScriptedAgent([])), NoHistory(), max_sentences=0)
 
 
 async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJournal) -> None:
@@ -669,7 +670,7 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
             ]
         }
     )
-    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    responder = MeetingResponder(cast(AgentT, agent), NoHistory(), journal=journal)
 
     seen: list[str] = []
 
@@ -695,7 +696,7 @@ async def test_stream_error_before_first_sentence_skips_recovery_for_domain_erro
     agent = ScriptedAgent(
         {"t1": [("error", FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED))]}
     )
-    responder = LangGraphResponder(cast(AgentT, agent), "thread", journal=journal)
+    responder = MeetingResponder(cast(AgentT, agent), NoHistory(), journal=journal)
 
     with pytest.raises(
         FakeYouError,
@@ -835,7 +836,7 @@ async def test_streamed_sentences_match_non_streaming_answer() -> None:
             cast(AgentT, agent), [HumanMessage("hello")], stream_config(), max_sentences=2
         )
     ]
-    whole = await LangGraphResponder(cast(AgentT, agent), "thread").respond(
+    whole = await MeetingResponder(cast(AgentT, agent), NoHistory()).respond(
         [event("t1", "hello")], lambda: None
     )
     assert streamed == ["First sentence.", "Second sentence."]
@@ -858,7 +859,7 @@ async def test_text_during_tool_run_is_not_spoken() -> None:
 async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
     agent = SlowTokenAgent(["First sentence. ", "Second sentence. ", "Third one."], delay=0.10)
     start = time.perf_counter()
-    whole = await LangGraphResponder(cast(AgentT, agent), "thread").respond(
+    whole = await MeetingResponder(cast(AgentT, agent), NoHistory()).respond(
         [event("t1", "hello")], lambda: None
     )
     whole_first_ms = (time.perf_counter() - start) * 1000

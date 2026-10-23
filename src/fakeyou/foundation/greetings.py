@@ -2,10 +2,10 @@ import json
 from typing import Any, override
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from fakeyou.foundation.resources import read_package_text
-from fakeyou.foundation.triggers import trigger_kind
+from fakeyou.foundation.triggers import current_trigger, trigger_kind
 
 _VOCABULARY: dict[str, Any] = json.loads(read_package_text("greetings_vocabulary.json"))
 _OUTPUTS: dict[str, str] = _VOCABULARY["outputs"]
@@ -66,14 +66,11 @@ class _GreetingMiddleware(AgentMiddleware[Any, Any, Any]):
     @hook_config(can_jump_to=["end"])
     @override
     def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        trailing: list[HumanMessage] = []
-        for message in reversed(state.get("messages", [])):
-            if not isinstance(message, HumanMessage):
-                break
-            trailing.append(message)
-        if len(trailing) != 1:
+        messages = state.get("messages", [])
+        position, trigger = current_trigger(messages)
+        if len(trigger) != 1 or position != len(messages):
             return None
-        latest = trailing[0]
+        latest = trigger[0]
         if trigger_kind(latest) != "speech":
             return None
         reply = neutral_greeting(latest.text, self._language)

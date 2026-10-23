@@ -1,7 +1,6 @@
 import json
 import sys
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,7 +10,6 @@ import pytest
 import fakeyou.cli.main as cli_main
 import fakeyou.orchestration.assembly as assembly
 import fakeyou.orchestration.providers as providers
-import tests._join_runner as cli_join
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import PersonaProfile
@@ -27,8 +25,6 @@ from tests._cli_support import (
     meeting_brief,
     meeting_context_file,
     persona_join_arguments,
-    seed_conversation_thread,
-    thread_exists,
     write_brief,
     write_ingest_windows,
     write_persona,
@@ -233,29 +229,6 @@ async def test_join_brief_refuses_a_record_with_conversation_and_no_context(
     assert not meeting_context_file(settings).exists()
 
 
-async def test_join_brief_refuses_a_checkpoint_thread_without_context(
-    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    thread_id = await seed_conversation_thread(settings, "meeting-9")
-    other_thread = await seed_conversation_thread(settings, "meeting-10")
-    prepare_brief_join(settings, monkeypatch)
-
-    with pytest.raises(FakeYouError, match="conversation data.*new meeting ID") as caught:
-        await join(
-            MEET_LINK,
-            **persona_join_arguments(
-                settings,
-                persona_path=write_persona(tmp_path, ingest_transcripts=True),
-                brief_path=write_brief(tmp_path),
-            ),
-        )
-    assert caught.value.code is ErrorCode.MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT
-    assert await thread_exists(settings, thread_id)
-    assert await thread_exists(settings, other_thread)
-    assert meeting_files(settings) == {}
-    assert not settings.paths.journal_dir.exists()
-
-
 @pytest.mark.parametrize("with_brief", [True, False])
 async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
     join: Callable[..., Any],
@@ -284,47 +257,11 @@ async def test_join_refuses_a_corrupt_meeting_context_and_keeps_it(
     assert not settings.paths.journal_dir.exists()
 
 
-async def test_join_brief_refuses_an_unreachable_checkpoint_before_resources(
-    join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    @asynccontextmanager
-    async def unreachable(url: Any, **_kwargs: Any) -> AsyncIterator[Any]:
-        del url
-        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
-        yield
-
-    monkeypatch.setattr(cli_join, "open_checkpointer", unreachable)
-    prepare_brief_join(settings, monkeypatch)
-
-    with pytest.raises(
-        FakeYouError, match=message_pattern(ErrorCode.MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE)
-    ) as caught:
-        await join(
-            MEET_LINK,
-            **persona_join_arguments(
-                settings,
-                persona_path=write_persona(tmp_path, ingest_transcripts=True),
-                brief_path=write_brief(tmp_path),
-            ),
-        )
-    assert caught.value.code is ErrorCode.MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE
-    assert str(caught.value) == (
-        "conversation checkpoint cannot be checked: FakeYouError: "
-        "PostgreSQL is unreachable; check FAKEYOU_DATABASE__URL and that the postgres "
-        "service is up."
-    )
-    assert meeting_files(settings) == {}
-    assert not settings.paths.journal_dir.exists()
-
-
 async def test_open_conversation_rejects_a_brief_without_a_persona(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
-    )
-    monkeypatch.setattr(
-        assembly, "open_checkpointer", lambda *_a, **_k: pytest.fail("saver must stay closed")
     )
     config = SimpleNamespace(owner_id="settings-owner", twin_id="settings-twin", meeting_id="m")
 
@@ -346,9 +283,6 @@ async def test_open_conversation_rejects_memory_with_a_brief_only_scope(
 ) -> None:
     monkeypatch.setattr(
         providers, "init_chat_model", lambda *_a, **_k: pytest.fail("model must stay closed")
-    )
-    monkeypatch.setattr(
-        assembly, "open_checkpointer", lambda *_a, **_k: pytest.fail("saver must stay closed")
     )
     config = SimpleNamespace(owner_id="settings-owner", twin_id="settings-twin", meeting_id="m")
 

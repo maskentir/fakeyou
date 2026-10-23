@@ -3,15 +3,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
-    conversation_thread_id,
+    MeetingResponder,
 )
+from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnGeneration, build_meeting_turns
 from fakeyou.foundation.transcript import (
     CaptureContext,
@@ -19,6 +17,9 @@ from fakeyou.foundation.transcript import (
     TranscriptUpdate,
     transcript_event,
 )
+from fakeyou.foundation.triggers import current_trigger, is_history
+from fakeyou.persistence.record import MeetingRecord
+from tests._conversation_fakes import ToolCallingFakeModel
 from tests._conversation_support import AgentT, event
 
 
@@ -47,35 +48,33 @@ def test_frame_adapter_has_stable_event_identity_and_no_invented_participant() -
     assert transcript_event(first, "p1", "e1", CaptureContext("s0")).stream_id == "s0"
 
 
-def test_conversation_threads_include_all_session_identities() -> None:
-    first = conversation_thread_id("owner-a", "twin", "meeting")
-    assert first == conversation_thread_id("owner-a", "twin", "meeting")
-    assert first != conversation_thread_id("owner-b", "twin", "meeting")
-    assert first != conversation_thread_id("owner-a", "twin-2", "meeting")
-    assert first != conversation_thread_id("owner-a", "twin", "meeting-2")
-
-
-async def test_langgraph_adapter_uses_native_checkpoint_history_and_message_ids() -> None:
-    agent = create_meeting_agent(
-        FakeMessagesListChatModel(
-            responses=[AIMessage(content="first answer"), AIMessage(content="second answer")]
-        ),
-        checkpointer=InMemorySaver(),
+async def test_each_turn_is_built_from_what_the_meeting_record_holds(tmp_path: Path) -> None:
+    model = ToolCallingFakeModel(
+        responses=[AIMessage(content="first answer"), AIMessage(content="second answer")]
     )
-    responder = LangGraphResponder(agent, "owner:twin:meeting")
-    assert await responder.respond([event("one", "first")], lambda: None) == "first answer"
-    assert await responder.respond([event("two", "second")], lambda: None) == "second answer"
-    state = await agent.aget_state({"configurable": {"thread_id": "owner:twin:meeting"}})
-    assert [item.content for item in state.values["messages"]] == [
-        "first",
-        "first answer",
-        "second",
-        "second answer",
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    responder = MeetingResponder(create_meeting_agent(model), record)
+    first, second, aside = event("one", "first"), event("two", "second"), event("x", "aside")
+
+    record.add_transcript(first)
+    assert await responder.respond([first], lambda: None) == "first answer"
+    record.add_twin_speech("First answer was cut")
+    record.add_twin_speech("short", interrupted=True)
+    record.add_transcript(aside)
+    record.add_transcript(second)
+    assert await responder.respond([second], lambda: None) == "second answer"
+    record.close()
+
+    seen = model.seen[-1][1:]
+    assert [(type(item).__name__, item.text) for item in seen] == [
+        ("HumanMessage", "first"),
+        ("AIMessage", "First answer was cut short —"),
+        ("HumanMessage", "aside"),
+        ("HumanMessage", "second"),
     ]
-    assert [item.id for item in state.values["messages"] if isinstance(item, HumanMessage)] == [
-        "one",
-        "two",
-    ]
+    assert [item.id for item in seen if isinstance(item, HumanMessage)] == ["one", "x", "two"]
+    assert current_trigger(model.seen[-1])[1] == [model.seen[-1][-1]]
+    assert is_history(model.seen[-1][1])
 
 
 @pytest.mark.parametrize(
@@ -94,7 +93,7 @@ async def test_adapter_never_speaks_user_or_tool_output(
             del request
             return {"messages": [message]}
 
-    responder = LangGraphResponder(cast(AgentT, Agent()), "thread")
+    responder = MeetingResponder(cast(AgentT, Agent()), NoHistory())
     assert await responder.respond([event("one")], lambda: None) == ""
 
 
@@ -143,7 +142,7 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks() -> N
                 ]
             }
 
-    responder = LangGraphResponder(cast(AgentT, Agent()), "thread")
+    responder = MeetingResponder(cast(AgentT, Agent()), NoHistory())
     assert await responder.respond([event("one")], lambda: observed.append("tool")) == "spoken"
     assert observed == ["tool"]
 

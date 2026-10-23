@@ -1,32 +1,28 @@
-import asyncio
-import json
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol, override, runtime_checkable
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackManager
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import Runnable, RunnableConfig
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.meeting_messages import request_messages
-from fakeyou.conversation.middleware import reconcile_cancelled_tools
+from fakeyou.conversation.meeting_messages import (
+    MeetingHistory,
+    history_messages,
+    request_messages,
+)
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import classify_exception
-
-
-def conversation_thread_id(owner_id: str, twin_id: str, meeting_id: str) -> str:
-    identity = json.dumps([owner_id, twin_id, meeting_id])
-    return f"meeting:{uuid5(NAMESPACE_URL, identity)}"
 
 
 @runtime_checkable
@@ -48,7 +44,8 @@ class StreamingConversationResponder(Protocol):
 
 
 ToolResultCallback = Callable[[str, str, float], None]
-MeetingAgent = Runnable[dict[str, list[HumanMessage]], dict[str, Any]]
+MeetingAgent = Runnable[dict[str, list[BaseMessage]], dict[str, Any]]
+REPLY_CONFIG: RunnableConfig = {"recursion_limit": 30}
 
 
 class _ToolActivity(AsyncCallbackHandler):
@@ -305,7 +302,7 @@ def _with_callback(config: RunnableConfig, callback: AsyncCallbackHandler) -> Ru
 
 async def invoke_reply(
     agent: MeetingAgent,
-    messages: Sequence[HumanMessage],
+    messages: Sequence[BaseMessage],
     config: RunnableConfig,
     *,
     trace: StreamTrace = DEFAULT_STREAM_TRACE,
@@ -317,9 +314,6 @@ async def invoke_reply(
         result = await agent.ainvoke(
             {"messages": list(messages)}, config=_with_callback(config, activity)
         )
-    except asyncio.CancelledError:
-        await reconcile_cancelled_tools(agent, config)
-        raise
     except Exception as error:
         fault = classify_exception("agent", error)
         raise fault from error
@@ -385,7 +379,7 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
 
 async def _fallback_sentences(
     agent: MeetingAgent,
-    messages: Sequence[HumanMessage],
+    messages: Sequence[BaseMessage],
     config: RunnableConfig,
     state: _SentenceStream,
     trace: StreamTrace,
@@ -406,7 +400,7 @@ async def _fallback_sentences(
 
 async def stream_sentences(
     agent: MeetingAgent,
-    messages: Sequence[HumanMessage],
+    messages: Sequence[BaseMessage],
     config: RunnableConfig,
     *,
     max_sentences: int,
@@ -432,12 +426,7 @@ async def stream_sentences(
                 yield sentence
         finally:
             await _close_stream_optional(stream, trace.journal)
-    except (asyncio.CancelledError, GeneratorExit):
-        await reconcile_cancelled_tools(agent, config)
-        raise
-    except TimeoutError:
-        raise
-    except FakeYouError:
+    except (TimeoutError, FakeYouError):
         raise
     except Exception as error:
         if state.yielded:
@@ -448,20 +437,26 @@ async def stream_sentences(
 
 
 @dataclass(frozen=True, slots=True)
-class LangGraphResponder:
+class MeetingResponder:
     agent: MeetingAgent
-    thread_id: str
+    history: MeetingHistory
     journal: Journal | None = None
     on_tool_result: ToolResultCallback | None = None
     language: str = DEFAULTS.speech.language
     max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
+    history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
             raise ValueError("max_sentences must be positive")
 
-    def thread_config(self, thread_id: str) -> RunnableConfig:
-        return {"configurable": {"thread_id": thread_id}, "recursion_limit": 30}
+    def messages(self, events: Sequence[TranscriptEvent]) -> list[BaseMessage]:
+        earlier = history_messages(
+            self.history.entries(),
+            exclude={event.id for event in events},
+            max_tokens=self.history_max_tokens,
+        )
+        return [*earlier, *request_messages(events)]
 
     def _trace(
         self,
@@ -483,8 +478,8 @@ class LangGraphResponder:
     ) -> str:
         return await invoke_reply(
             self.agent,
-            request_messages(events),
-            self.thread_config(self.thread_id),
+            self.messages(events),
+            REPLY_CONFIG,
             trace=self._trace(events, on_tool_start),
         )
 
@@ -497,8 +492,8 @@ class LangGraphResponder:
     ) -> AsyncIterator[str]:
         return stream_sentences(
             self.agent,
-            request_messages(events),
-            self.thread_config(self.thread_id),
+            self.messages(events),
+            REPLY_CONFIG,
             max_sentences=self.max_sentences,
             trace=self._trace(events, on_tool_start, request_id),
         )

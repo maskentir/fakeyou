@@ -12,8 +12,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage
-from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
 import fakeyou.memory.memory as memory_module
@@ -27,7 +25,6 @@ from fakeyou.config.settings import (
     Settings,
 )
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.conversation.session import SessionResult
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, require_url
@@ -77,15 +74,6 @@ async def join_with_audio(
     enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
 
-    @asynccontextmanager
-    async def fake_saver(
-        value: Any, url: Any = None, **_kwargs: Any
-    ) -> AsyncIterator[InMemorySaver]:
-        del url
-        del value
-        yield InMemorySaver()
-
-    monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
     arguments: dict[str, Any] = {
         "twin_name": None,
         "owner_id": None,
@@ -195,19 +183,6 @@ def meeting_context_file(settings: Settings, meeting_id: str = "meeting-9") -> P
     return context_path(meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)))
 
 
-async def seed_conversation_thread(settings: Settings, meeting_id: str) -> str:
-    thread_id = conversation_thread_id("settings-owner", "settings-twin", meeting_id)
-    async with open_checkpointer(require_url(configured_url(settings))) as saver:
-        agent = create_meeting_agent(
-            FakeMessagesListChatModel(responses=[AIMessage(content="ok")]), checkpointer=saver
-        )
-        await agent.ainvoke(
-            {"messages": [{"role": "user", "content": "hello"}]},
-            {"configurable": {"thread_id": thread_id}},
-        )
-    return thread_id
-
-
 SETTLE_TIMEOUT_SECONDS = 5.0
 
 
@@ -218,7 +193,6 @@ class PersonaConversation(TypedDict, total=False):
     persona_overrides: dict[str, Any]
     audio: FakeReplyAudio
     on_start: Callable[[], Any]
-    native_checkpointer: bool
     brief_path: Path
     memory: bool
     meeting_id: str
@@ -243,15 +217,6 @@ async def join_persona_conversation(
     enable_audio_platform(monkeypatch)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: model)
 
-    @asynccontextmanager
-    async def memory_saver(
-        _value: Any, url: Any = None, **_kwargs: Any
-    ) -> AsyncIterator[InMemorySaver]:
-        del url
-        yield InMemorySaver()
-
-    if not script.pop("native_checkpointer", False):
-        monkeypatch.setattr(assembly, "open_checkpointer", memory_saver)
     if graphiti is not None:
         monkeypatch.setattr(
             memory_module, "create_graphiti_memory", lambda _config, **_kwargs: graphiti

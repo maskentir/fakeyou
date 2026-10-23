@@ -8,26 +8,27 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool, tool
-from langgraph.checkpoint.memory import InMemorySaver
 
 from evals._shared import sanitized_role
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
+    REPLY_CONFIG,
+    MeetingResponder,
     StreamTrace,
     cap_spoken_reply,
     stream_sentences,
 )
-from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt
 from fakeyou.observability.faults import capture_error
+from fakeyou.persistence.record import MeetingRecord
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "acc-0930-replay.json"
@@ -123,7 +124,7 @@ def score_turn(
 
 
 async def _collect_sentences(
-    responder: LangGraphResponder,
+    responder: MeetingResponder,
     event: TranscriptEvent,
     sentences: list[str],
     score: ReplayScore,
@@ -131,8 +132,8 @@ async def _collect_sentences(
 ) -> bool:
     async for sentence in stream_sentences(
         responder.agent,
-        request_messages([event]),
-        responder.thread_config(responder.thread_id),
+        responder.messages([event]),
+        REPLY_CONFIG,
         max_sentences=responder.max_sentences,
         trace=StreamTrace(language=responder.language, request_id=event.id, transcript_id=event.id),
     ):
@@ -158,17 +159,13 @@ async def replay(
                 model_factory(),
                 tools=[recall_tool(session["memory"])],
                 persona=prompt_builder(profile),
-                checkpointer=InMemorySaver(),
             )
+            folder = TemporaryDirectory()
+            record = MeetingRecord(Path(folder.name) / "record.jsonl")
             responder = (
-                LangGraphResponder(
-                    agent,
-                    f"replay-{run}-{session['meeting_id']}",
-                    language=profile.language,
-                    max_sentences=2,
-                )
+                MeetingResponder(agent, record, language=profile.language, max_sentences=2)
                 if streaming
-                else LangGraphResponder(agent, f"replay-{run}-{session['meeting_id']}")
+                else MeetingResponder(agent, record)
             )
             for index, turn in enumerate(session["turns"]):
                 calls: list[None] = []
@@ -185,6 +182,7 @@ async def replay(
                 def _note_tool_start(calls: list[None] = calls) -> None:
                     calls.append(None)
 
+                record.add_transcript(event)
                 started = time.monotonic()
                 if streaming:
                     sentences: list[str] = []
@@ -198,6 +196,7 @@ async def replay(
                     )
                     reply = answered or ""
                 latency = time.monotonic() - started
+                record.add_twin_speech(reply)
                 score.latencies.append(latency)
                 score.replies.append(reply)
                 outcome = score_turn(score, turn, reply, recalled=bool(calls))
@@ -211,6 +210,8 @@ async def replay(
                         "checks": outcome,
                     }
                 )
+            record.close()
+            folder.cleanup()
     return score
 
 
