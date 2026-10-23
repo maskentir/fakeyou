@@ -1,13 +1,15 @@
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from fakeyou.config.settings import PerceptionSettings, Settings
-from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.conversation.state import LifecycleState
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, JoinResult
 from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.perception import create_perception_stack
 from fakeyou.orchestration.runtime import MeetingWorker
 from tests._fakes_common import FakeClock
@@ -173,3 +175,32 @@ async def test_start_perception_drains_the_page_and_listens_for_roster_syncs(
         "perception_drain_started",
         "perception_drain_stopped",
     ]
+
+
+async def test_roster_syncs_are_heard_from_the_first_join_attempt(
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _bare_worker()
+    worker.journal = journal
+    worker.perception = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    page = worker.page
+    assert isinstance(page, FakePage)
+    heard: list[int] = []
+
+    async def attempt() -> JoinResult:
+        heard.append(len(page.listeners.get("response", [])))
+        return JoinResult(status="admitted", detail="guest admitted to the call")
+
+    monkeypatch.setattr(worker, "_attempt_guest_join", attempt)
+    created = initial_lifecycle_state("owner", "twin", "meeting-1")
+    prepared = cast(LifecycleState, {**created, **await worker.prepare(created)})
+    await worker.join(prepared, JoinAttempt(number=1, last=False))
+    await worker.start_perception()
+    try:
+        assert heard == [1]
+        assert len(page.listeners["response"]) == 1
+    finally:
+        await worker.close_perception()
+    assert page.listeners["response"] == []

@@ -230,20 +230,21 @@ async def test_the_drain_feeds_sensors_and_assigns_streams_once() -> None:
     assert timeline.snapshot().presenting is not None
 
 
-async def test_sync_responses_update_the_roster() -> None:
-    sensed, timeline, _ = sensors()
-    drain = PerceptionDrain(FakePerceptionPage([]), sensed)
+async def test_sync_responses_update_the_roster_and_are_journaled() -> None:
+    sensed, timeline, journal = sensors()
 
-    await drain.on_response(FakeResponse("https://example.test/other", b""))
-    await drain.on_response(
+    await sensed.on_response(FakeResponse("https://example.test/other", b""))
+    await sensed.on_response(
         FakeResponse(
             "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/"
             "SyncMeetingSpaceCollections",
-            sync_body([user_info(AYU, "Ayu")]),
+            sync_body([user_info(AYU, "Ayu"), user_info(SCREEN, "", parent=AYU)]),
         )
     )
 
     assert [person.name for person in timeline.snapshot().participants] == ["Ayu"]
+    [synced] = journal.events("perception_sync_accepted")
+    assert (synced["users"], synced["screens"]) == (2, 1)
 
 
 def test_the_perception_script_ships_with_the_bridge() -> None:

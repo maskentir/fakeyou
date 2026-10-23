@@ -220,6 +220,7 @@ class MeetingWorker:
     capture_registry: StreamRegistry | None = None
     perception: PerceptionStack | None = None
     perception_drain: PerceptionDrain | None = None
+    perception_sync_watched: bool = False
     on_phase: Callable[[str], None] | None = None
     detail: str = ""
     base: LifecycleState | None = None
@@ -312,6 +313,7 @@ class MeetingWorker:
             return self._settle_join(stopped, attempts=attempt.number - 1)
         if attempt.number == 1:
             self.record("join_requested", source="runtime")
+        self.watch_perception_sync()
         result = await self._attempt_guest_join()
         if attempt.retries(result.status):
             if not self.stop.is_set():
@@ -591,16 +593,22 @@ class MeetingWorker:
             self.capture_drain = None
         self.capture_registry = None
 
+    def watch_perception_sync(self) -> None:
+        if self.perception is None or self.perception_sync_watched:
+            return
+        self.page.on("response", self.perception.sensors.on_response)
+        self.perception_sync_watched = True
+
     async def start_perception(self) -> None:
         if self.perception is None or self.perception_drain is not None:
             return
+        self.watch_perception_sync()
         drain = PerceptionDrain(
             self.page,
             self.perception.sensors,
             schedule=replace(DEFAULT_PERCEPTION_SCHEDULE, monotonic=self.monotonic),
             sinks=ConsumerSink(faults=self.faults, journal=self.journal),
         )
-        self.page.on("response", drain.on_response)
         self.perception_drain = drain
         await drain.start()
         self.record("perception_drain_started", source="runtime")
@@ -610,7 +618,6 @@ class MeetingWorker:
         if drain is not None:
             self.perception_drain = None
             await close_safely(drain.close, source="browser", faults=self.faults)
-            self.page.remove_listener("response", drain.on_response)
             self.record(
                 "perception_drain_stopped",
                 source="runtime",
@@ -621,6 +628,9 @@ class MeetingWorker:
                 rejected=drain.sensors.rejected_messages,
             )
         if self.perception is not None:
+            if self.perception_sync_watched:
+                self.page.remove_listener("response", self.perception.sensors.on_response)
+                self.perception_sync_watched = False
             await close_safely(self.perception.close, source="browser", faults=self.faults)
 
     async def _start_guarded(self, starter: Callable[[], Awaitable[None]], operation: str) -> None:

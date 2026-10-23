@@ -80,6 +80,13 @@ def page_time(page_ms: float) -> datetime:
     return datetime.fromtimestamp(page_ms / 1000, UTC)
 
 
+class ResponseLike(Protocol):
+    @property
+    def url(self) -> str: ...
+
+    async def body(self) -> bytes: ...
+
+
 class PerceptionSensors:
     def __init__(
         self,
@@ -106,12 +113,27 @@ class PerceptionSensors:
         for frame in batch.frames:
             await self._accept_frame(frame)
 
+    async def on_response(self, response: ResponseLike) -> None:
+        if SYNC_COLLECTIONS_PATH not in response.url:
+            return
+        try:
+            body = await response.body()
+        except (OSError, RuntimeError):
+            return
+        self.accept_sync(body)
+
     def accept_sync(self, body: bytes) -> None:
         try:
             users = decode_sync_response(body)
         except FakeYouError as error:
             self._reject("sync", error)
             return
+        self._journal.record(
+            "perception_sync_accepted",
+            source="perception",
+            users=len(users),
+            screens=sum(user.is_screen for user in users),
+        )
         self._apply_changes(self.roster.apply_users(users, complete=True), self._clock())
 
     def assignments(self) -> list[StreamAssignment]:
@@ -199,13 +221,6 @@ class PerceptionPage(Protocol):
     async def evaluate(self, expression: str, arg: Any = None, /) -> Any: ...
 
 
-class ResponseLike(Protocol):
-    @property
-    def url(self) -> str: ...
-
-    async def body(self) -> bytes: ...
-
-
 DEFAULT_PERCEPTION_SCHEDULE = PollSchedule(interval_seconds=PERCEPTION_POLL_SECONDS)
 
 
@@ -234,16 +249,6 @@ class PerceptionDrain(PollingLoop):
     @property
     def sensors(self) -> PerceptionSensors:
         return self._sensors
-
-    async def on_response(self, response: ResponseLike) -> None:
-        if SYNC_COLLECTIONS_PATH not in response.url:
-            return
-        try:
-            body = await response.body()
-        except (OSError, RuntimeError):
-            return
-        self._sensors.accept_sync(body)
-        await self._push_assignments()
 
     @override
     async def _poll_once(self) -> None:
