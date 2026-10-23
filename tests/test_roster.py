@@ -22,8 +22,7 @@ def roster_with_people() -> MeetRoster:
             user(AYU, "Ayu"),
             user(BUDI, "Budi"),
             MeetUser(device_id=TWIN, name="Rani Twin", present=True, current_user=True),
-        ],
-        complete=True,
+        ]
     )
     return roster
 
@@ -31,33 +30,29 @@ def roster_with_people() -> MeetRoster:
 def test_people_joining_are_announced_once() -> None:
     roster = MeetRoster()
 
-    first = roster.apply_users([user(AYU, "Ayu")], complete=False)
-    again = roster.apply_users([user(AYU, "Ayu")], complete=False)
+    first = roster.apply_users([user(AYU, "Ayu")])
+    again = roster.apply_users([user(AYU, "Ayu")])
 
     assert first == [RosterChange("joined", AYU, "Ayu")]
     assert again == []
 
 
-def test_a_complete_sync_reveals_who_left() -> None:
+def test_people_leave_only_when_their_status_says_so() -> None:
     roster = roster_with_people()
 
-    changes = roster.apply_users(
-        [
-            user(AYU, "Ayu"),
-            MeetUser(device_id=TWIN, name="Rani Twin", present=True, current_user=True),
-        ],
-        complete=True,
-    )
+    quiet = roster.apply_users([])
+    partial = roster.apply_users([user(AYU, "Ayu")])
+    left = roster.apply_users([user(BUDI, "Budi", present=False)])
 
-    assert changes == [RosterChange("left", BUDI, "Budi")]
+    assert (quiet, partial) == ([], [])
+    assert left == [RosterChange("left", BUDI, "Budi")]
 
 
 def test_the_twin_itself_is_never_announced() -> None:
     roster = MeetRoster()
 
     changes = roster.apply_users(
-        [MeetUser(device_id=TWIN, name="Rani Twin", present=True, current_user=True)],
-        complete=False,
+        [MeetUser(device_id=TWIN, name="Rani Twin", present=True, current_user=True)]
     )
 
     assert changes == []
@@ -67,8 +62,8 @@ def test_the_twin_itself_is_never_announced() -> None:
 def test_a_screen_device_means_its_parent_is_presenting() -> None:
     roster = roster_with_people()
 
-    started = roster.apply_users([user(SCREEN, "", parent=AYU)], complete=False)
-    stopped = roster.apply_users([user(SCREEN, "", parent=AYU, present=False)], complete=False)
+    started = roster.apply_users([user(SCREEN, "", parent=AYU)])
+    stopped = roster.apply_users([user(SCREEN, "", parent=AYU, present=False)])
 
     assert started == [RosterChange("presenting_started", AYU, "Ayu")]
     assert stopped == [RosterChange("presenting_stopped", AYU, "Ayu")]
@@ -76,7 +71,7 @@ def test_a_screen_device_means_its_parent_is_presenting() -> None:
 
 def test_video_streams_are_assigned_to_screens_and_cameras() -> None:
     roster = roster_with_people()
-    roster.apply_users([user(SCREEN, "", parent=AYU)], complete=False)
+    roster.apply_users([user(SCREEN, "", parent=AYU)])
     roster.apply_outputs(
         [
             video(SCREEN, "stream-screen"),
@@ -114,6 +109,6 @@ def test_cameras_switching_on_and_off_are_signals() -> None:
 def test_an_update_without_a_name_keeps_the_known_name() -> None:
     roster = roster_with_people()
 
-    roster.apply_users([user(AYU, "")], complete=False)
+    roster.apply_users([user(AYU, "")])
 
     assert roster.name_of(AYU) == "Ayu"

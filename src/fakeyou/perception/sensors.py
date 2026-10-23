@@ -134,7 +134,7 @@ class PerceptionSensors:
             users=len(users),
             screens=sum(user.is_screen for user in users),
         )
-        self._apply_changes(self.roster.apply_users(users, complete=True), self._clock())
+        self._apply_changes(self.roster.apply_users(users), self._clock())
 
     def assignments(self) -> list[StreamAssignment]:
         settings = self._settings
@@ -154,7 +154,7 @@ class PerceptionSensors:
         self._apply_update(update, page_time(message.page_ms))
 
     def _apply_update(self, update: CollectionUpdate, at: datetime) -> None:
-        changes = self.roster.apply_users(update.users, complete=False)
+        changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
         if self._settings.chat:

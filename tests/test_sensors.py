@@ -170,10 +170,22 @@ async def test_join_and_leave_signals_respect_the_signals_toggle() -> None:
     loud, loud_timeline, _ = sensors()
     for sensed in (quiet, loud):
         await sensed.accept_batch(DrainBatch(messages=[message(people())]))
-        sensed.accept_sync(sync_body([user_info(AYU, "Ayu"), user_info(SCREEN, "", parent=AYU)]))
+        sensed.accept_sync(sync_body([user_info(BUDI, "Budi", status=2)]))
 
     assert [signal.kind for signal in quiet_timeline.snapshot().signals] == ["presenting_started"]
     assert "left" in [signal.kind for signal in loud_timeline.snapshot().signals]
+
+
+async def test_an_empty_sync_keeps_the_presenter_and_the_roster() -> None:
+    sensed, timeline, _ = sensors()
+    await sensed.accept_batch(DrainBatch(messages=[message(people())]))
+
+    sensed.accept_sync(sync_body([]))
+
+    snapshot = timeline.snapshot()
+    assert snapshot.presenting is not None
+    assert "left" not in [signal.kind for signal in snapshot.signals]
+    assert {item.role for item in sensed.assignments()} == {"screen", "camera"}
 
 
 async def test_unreadable_inputs_are_counted_and_journaled() -> None:

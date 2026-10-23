@@ -45,17 +45,8 @@ class MeetRoster:
         user = self._users.get(device_id)
         return user.name if user is not None else ""
 
-    def apply_users(self, users: Iterable[MeetUser], *, complete: bool) -> list[RosterChange]:
-        changes: list[RosterChange] = []
-        seen: set[str] = set()
-        for user in users:
-            seen.add(user.device_id)
-            changes.extend(self._upsert(user))
-        if complete:
-            for device_id, known in tuple(self._users.items()):
-                if device_id not in seen and known.present:
-                    changes.extend(self._upsert(known.model_copy(update={"present": False})))
-        return changes
+    def apply_users(self, users: Iterable[MeetUser]) -> list[RosterChange]:
+        return [change for user in users for change in self._upsert(user)]
 
     def apply_outputs(self, outputs: Iterable[DeviceOutput]) -> list[RosterChange]:
         changes: list[RosterChange] = []
