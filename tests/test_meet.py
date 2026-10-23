@@ -670,6 +670,16 @@ async def test_media_toggle_preserves_state_and_reports_failure(
         assert page.clicked == ([opposite, opposite] if scenario == "transient_click" else [])
 
 
+async def test_camera_without_a_device_counts_as_disabled_without_waiting() -> None:
+    page = meet_page([], visible={CAM_ON_SELECTOR: False, CAM_OFF_SELECTOR: False})
+    clock = FakeClock()
+
+    assert await disable_meeting_camera(page, clock.sleep) is True
+    assert page.clicked == []
+    assert page.waited == []
+    assert clock.sleeps == []
+
+
 async def test_request_guest_join_admits_on_deadline_recheck() -> None:
     reads: list[int] = []
     page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, IN_CALL], on_content=reads.append)

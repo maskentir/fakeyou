@@ -76,6 +76,40 @@ class _Modal:
     fingerprint: str
 
 
+def _known_error_action(folded: str) -> str | None:
+    return next((label for text, label in _DISMISSABLE_ERRORS if text == folded), None)
+
+
+async def _read_modals(page: Page) -> list[_Modal]:
+    dialogs = page.locator(DIALOG_SELECTOR)
+    result: list[_Modal] = []
+    seen: set[str] = set()
+    for index in range(min(await dialogs.count(), 32)):
+        dialog = dialogs.nth(index)
+        if not await dialog.is_visible():
+            continue
+        raw = await dialog.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
+        if not isinstance(raw, str):
+            raise TypeError("Dialog text must be a string")
+        text = " ".join(raw.split())
+        fingerprint = hashlib.sha256(text.encode()).hexdigest()
+        if fingerprint not in seen:
+            result.append(_Modal(index, text, fingerprint))
+            seen.add(fingerprint)
+    return result
+
+
+async def dismiss_known_errors(page: Page) -> tuple[str, ...]:
+    dismissed: list[str] = []
+    for modal in reversed(await _read_modals(page)):
+        action = _known_error_action(modal.text.casefold())
+        if action is None:
+            continue
+        await page.locator(_dialog_button_xpath(modal.index, action)).first.click(timeout=2000)
+        dismissed.append(modal.text)
+    return tuple(dismissed)
+
+
 class UIWatchdog:
     def __init__(
         self,
@@ -142,11 +176,7 @@ class UIWatchdog:
         action = next((label for text, label in _HARMLESS_NOTICES if text == folded), None)
         if action is not None:
             return action, True
-        action = next(
-            (label for text, label in _DISMISSABLE_ERRORS if text == folded),
-            None,
-        )
-        return action, False
+        return _known_error_action(folded), False
 
     async def _try_dismiss(
         self, modal: _Modal, action: str, *, strict: bool, events: list[WatchdogEvent]
@@ -206,7 +236,7 @@ class UIWatchdog:
         observation = self._debounce_lobby(observation)
         self._last_observation = observation
         try:
-            modals = await self._read_modals()
+            modals = await _read_modals(self._page)
         except (PlaywrightError, TypeError) as error:
             self._quiet_checks = 0
             self._stable.clear()
@@ -238,24 +268,6 @@ class UIWatchdog:
         if self._lobby_checks < 2:
             return CallObservation("unknown", "Waiting to confirm the lobby observation")
         return observation
-
-    async def _read_modals(self) -> list[_Modal]:
-        dialogs = self._page.locator(DIALOG_SELECTOR)
-        result: list[_Modal] = []
-        seen: set[str] = set()
-        for index in range(min(await dialogs.count(), 32)):
-            dialog = dialogs.nth(index)
-            if not await dialog.is_visible():
-                continue
-            raw = await dialog.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
-            if not isinstance(raw, str):
-                raise TypeError("Dialog text must be a string")
-            text = " ".join(raw.split())
-            fingerprint = hashlib.sha256(text.encode()).hexdigest()
-            if fingerprint not in seen:
-                result.append(_Modal(index, text, fingerprint))
-                seen.add(fingerprint)
-        return result
 
 
 async def read_participant_count(page: Page) -> int | None:

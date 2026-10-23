@@ -481,6 +481,12 @@ async def disable_meeting_camera(
 ) -> bool:
     on = 'button[aria-label^="Turn off camera" i]'
     off = 'button[aria-label^="Turn on camera" i]'
+    try:
+        sending = await page.locator(on).first.is_visible()
+    except PlaywrightError as error:
+        raise RuntimeError(f"checking camera state failed: {error}") from error
+    if not sending:
+        return True
     return await toggle_control(page, ToggleSelectors(off, on), "camera", "disabled", sleep)
 
 

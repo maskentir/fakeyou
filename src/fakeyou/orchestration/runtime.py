@@ -77,7 +77,7 @@ from fakeyou.meet.participant_observer import (
     ParticipantObserver,
     observer_epoch,
 )
-from fakeyou.meet.watchdog import UIWatchdog, WatchdogCheck
+from fakeyou.meet.watchdog import UIWatchdog, WatchdogCheck, dismiss_known_errors
 from fakeyou.observability.cleanup import TeardownStack, close_safely
 from fakeyou.observability.faults import (
     ConsumerSink,
@@ -169,6 +169,7 @@ def _terminal_result(
 _STOPPED_BEFORE_JOIN = "owner stopped before guest join"
 _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
 OBSERVATION_GRACE_SECONDS = 60.0
+KNOWN_ERROR_DISMISS_SECONDS = 5.0
 
 
 async def _readback_effect(
@@ -382,6 +383,7 @@ class MeetingWorker:
         audio.raise_if_failed()
         if isinstance(audio, SupportsAdmission):
             audio.mark_admitted()
+        await self.dismiss_known_errors_best_effort()
         await self.disable_camera_best_effort()
         try:
             enabled = await until_stopped(
@@ -459,6 +461,17 @@ class MeetingWorker:
         keeps_origin = self.origin_kind in ("audio_failed", "conversation_failed")
         self.detail = origin_detail if keeps_origin else left.detail
         return self._commit()
+
+    async def dismiss_known_errors_best_effort(self) -> None:
+        try:
+            async with asyncio.timeout(KNOWN_ERROR_DISMISS_SECONDS):
+                dismissed = await dismiss_known_errors(self.page)
+        except (PlaywrightError, TimeoutError, TypeError) as error:
+            if self.faults is not None:
+                self.faults.record(classify_exception("browser", error, operation="dismiss_modal"))
+            return
+        for text in dismissed:
+            self.record("modal_dismissed", source="browser", detail=text)
 
     async def disable_camera_best_effort(self) -> None:
         if self.stop.is_set():
