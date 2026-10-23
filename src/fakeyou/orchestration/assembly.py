@@ -381,6 +381,11 @@ class _ConversationBuilder:
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
                 activation_seconds=conversation_settings.activation_seconds,
+                thinking_cue_after_seconds=(
+                    conversation_settings.thinking_cue_after_seconds
+                    if conversation_settings.thinking_cue_enabled
+                    else None
+                ),
             ),
             generation=TurnGeneration(
                 max_spoken_sentences=conversation_settings.max_spoken_sentences,

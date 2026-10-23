@@ -295,6 +295,8 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
+        handler(PlaybackEvent("playback_started", "Hmm…", "", cue=True))
+        handler(PlaybackEvent("playback_finished", "Hmm…", "", cue=True))
         handler(PlaybackEvent("playback_started", "hello", ""))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
         handler(PlaybackEvent("playback_finished", "hello?  ", ""))
@@ -308,11 +310,13 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{"')
     ]
     playback = [
-        (row["event"], row["ends_with_question"], row["detail"])
+        (row["event"], row.get("ends_with_question"), row["detail"])
         for row in rows
         if row.get("source") == "playback"
     ]
     assert playback == [
+        ("thinking_cue_started", None, None),
+        ("thinking_cue_finished", None, None),
         ("playback_started", False, None),
         ("playback_dropped", False, "interrupted"),
         ("playback_finished", True, None),

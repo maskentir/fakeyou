@@ -25,6 +25,7 @@ from fakeyou.audio.deaf import (
 from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
+    CuePlayback,
     PlaybackBackend,
     PlaybackEngine,
     PlaybackError,
@@ -266,6 +267,7 @@ class MeetingAudioSession:
         self._stopping = False
         self._stop_task: asyncio.Task[None] | None = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._cue_task: asyncio.Task[None] | None = None
         run.task.add_done_callback(self._graph_finished)
 
     def fail(self, message: str, *, cause: BaseException | None = None) -> None:
@@ -510,6 +512,28 @@ class MeetingAudioSession:
     async def stop_playback(self) -> None:
         await self._engine.stop()
 
+    def prepare_cues(self, texts: Sequence[str]) -> None:
+        engine = self._engine
+        if not isinstance(engine, CuePlayback) or self._cue_task is not None or self._stopping:
+            return
+        self._cue_task = asyncio.create_task(self._prepare_cues(engine, tuple(texts)))
+
+    async def _prepare_cues(self, engine: CuePlayback, texts: tuple[str, ...]) -> None:
+        for text in texts:
+            try:
+                await engine.prepare_cue(text)
+            except (OSError, TimeoutError, ProviderFault, PlaybackError) as error:
+                if self._faults is not None:
+                    self._faults.record(classify_exception("tts", error, operation="cue"))
+                return
+
+    async def play_cue(self, text: str) -> bool:
+        engine = self._engine
+        if self._failure is not None or self._stopping or not isinstance(engine, CuePlayback):
+            return False
+        with self._gate.own_speech.speaking(text):
+            return await engine.play_cue(text)
+
     async def _stop(self) -> None:
         self._stopping = True
         self.activity.mark_unavailable()
@@ -525,6 +549,10 @@ class MeetingAudioSession:
             done, _ = await asyncio.wait({reconnect}, timeout=remaining())
             if not done:
                 failures.append(TimeoutError("meeting audio reconnect shutdown timed out"))
+        cue = self._cue_task
+        if cue is not None and not cue.done():
+            cue.cancel()
+            await asyncio.wait({cue}, timeout=remaining())
         try:
             try:
                 await _bounded_call(self._engine.stop(), min(3.0, remaining()))

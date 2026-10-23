@@ -12,6 +12,7 @@ from fakeyou.conversation.jev_refresh import JevState
 from fakeyou.conversation.model_responder import ReplierStreamResponder, ReplierWholeResponder
 from fakeyou.conversation.participation_decider import Decider
 from fakeyou.conversation.session import MeetingAudio
+from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
     ChatChannel,
     Responder,
@@ -66,6 +67,7 @@ class TurnTiming:
     activation_seconds: float = DEFAULTS.conversation.activation_seconds
     quiet_gap_seconds: float = DEFAULTS.perception.attention.floor_gap_seconds
     deferred_ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
+    thinking_cue_after_seconds: float | None = None
     clock: Callable[[], float] = time.monotonic
 
 
@@ -191,6 +193,9 @@ def build_meeting_turns(
     lifecycle.configure_deferred(_deferred_options(replier, interaction, timing))
     lifecycle.configure_barge_in(enabled=interaction.barge_in)
     lifecycle.configure_shadow(enabled=interaction.shadow)
+    lifecycle.configure_cue(
+        thinking_cue_for(generation.language, timing.thinking_cue_after_seconds)
+    )
     if interaction.on_transition is not None:
         lifecycle.observe(interaction.on_transition)
     wake_phrases = addressing_phrases(interaction.wake_phrases)

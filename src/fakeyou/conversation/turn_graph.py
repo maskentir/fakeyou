@@ -37,6 +37,7 @@ from fakeyou.conversation.participation_graph import (
     build_participation_subgraph,
 )
 from fakeyou.conversation.sentence_stream import cap_reply, shape_sentences
+from fakeyou.conversation.thinking_cue import CueSpeaker, CueTurn, ThinkingCue, cue_when_slow
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
 from fakeyou.conversation.turn_recovery import (
@@ -268,6 +269,8 @@ class TurnRuntime:
     faults: FaultReporter | None = None
     chat: ChatChannel | None = None
     chat_turn: WholeTurnFactory | None = None
+    cue: ThinkingCue | None = None
+    others_speaking: Callable[[], bool] | None = None
 
 
 def _closed(runtime: TurnRuntime) -> bool:
@@ -564,12 +567,18 @@ class _TurnSink:
         self._streamed = streamed
         self._stop_mark = 0 if runtime.barge is None else runtime.barge.stream_stops
         self._spoken = 0
+        self._started = False
+
+    @property
+    def started(self) -> bool:
+        return self._started
 
     async def say(self, sentence: str) -> None:
         runtime = self._runtime
         sentence = scrub_internal_refs(sentence)
         if not sentence:
             return
+        self._started = True
         index = self._spoken
         if self._streamed:
             self._check_live(index)
@@ -718,16 +727,48 @@ async def _run_turn(
         whole=whole,
         sentences=runtime.sentences,
     )
-    output = await speech.ainvoke(
-        SpeechInput(
-            transcript=final.text,
-            speaking_generation=floor_generation,
-            transcript_event=final,
-        ),
-        context=context,
-    )
+    cue = _start_cue(runtime, CueTurn(final.id, partial(_cue_blocker, runtime, sink, generations)))
+    try:
+        output = await speech.ainvoke(
+            SpeechInput(
+                transcript=final.text,
+                speaking_generation=floor_generation,
+                transcript_event=final,
+            ),
+            context=context,
+        )
+    finally:
+        await _settle_cue(cue)
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
+
+
+def _start_cue(runtime: TurnRuntime, turn: CueTurn) -> asyncio.Task[None] | None:
+    cue, speaker = runtime.cue, runtime.speaker
+    if cue is None or runtime.shadow or not isinstance(speaker, CueSpeaker):
+        return None
+    return asyncio.create_task(cue_when_slow(cue, speaker, runtime.journal, turn))
+
+
+async def _settle_cue(task: asyncio.Task[None] | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+def _cue_blocker(runtime: TurnRuntime, sink: _TurnSink, generations: tuple[int, int]) -> str | None:
+    generation, floor_generation = generations
+    if sink.started:
+        return "answered"
+    if _paused(runtime) or not _bound(runtime):
+        return "paused"
+    if not _turn_current(runtime, generation, floor_generation):
+        return "stale"
+    others = runtime.others_speaking
+    if others is not None and others():
+        return "floor_busy"
+    return None
 
 
 async def _held(
