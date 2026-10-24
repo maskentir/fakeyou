@@ -13,12 +13,13 @@ from fakeyou.memory.persona import (
     persona_digest,
     require_persona_group,
 )
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from tests._persona_support import EXAMPLES, profile, profile_data
 
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
 
 
-EXAMPLE_PERSONA_DIGEST = "e9373b4317ab6a602c2d6a3ff0830bf18b8145bb1b9684c4a77b6fa968672f36"
+EXAMPLE_PERSONA_DIGEST = "e502182a3de44518fc991de5e617c2e42f8506d61c9af4f566936d00050b264b"
 
 
 def identity(owner_id: str = "owner-a", twin_id: str = "twin-a") -> dict[str, str]:
@@ -225,3 +226,34 @@ def test_persona_digest_keeps_list_order() -> None:
 
     assert persona_digest(forward) != persona_digest(backward)
     assert persona_digest(forward) == persona_digest(profile(goals=["First goal", "Second goal"]))
+
+
+def test_the_twin_never_claims_to_be_human_whatever_the_disclosure_setting() -> None:
+    for disclosure in ("when_asked", "upfront"):
+        loaded = PersonaProfile.model_validate(
+            {
+                **profile_data(owner_id="demo_owner", twin_id="demo_twin"),
+                "ai_disclosure": disclosure,
+            }
+        )
+
+        prompt = build_persona_prompt(loaded, language=loaded.language)
+
+        assert "never claim or imply that you are human" in prompt
+
+
+def test_upfront_disclosure_asks_the_twin_to_say_it_first() -> None:
+    data = profile_data(owner_id="demo_owner", twin_id="demo_twin")
+    upfront = PersonaProfile.model_validate({**data, "ai_disclosure": "upfront"})
+    when_asked = PersonaProfile.model_validate(data)
+
+    assert "The first time you speak" in build_persona_prompt(upfront, language="en")
+    assert "The first time you speak" not in build_persona_prompt(when_asked, language="en")
+    assert when_asked.ai_disclosure == "when_asked"
+
+
+def test_there_is_no_setting_that_lets_the_twin_deny_being_an_ai() -> None:
+    with pytest.raises(ValidationError):
+        PersonaProfile.model_validate(
+            {**profile_data(owner_id="demo_owner", twin_id="demo_twin"), "ai_disclosure": "never"}
+        )

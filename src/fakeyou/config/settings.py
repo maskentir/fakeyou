@@ -492,6 +492,7 @@ class Configuration(Section):
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None
+    reply_strong: ReplySettings | None = None
     debrief: ReplySettings | None = None
     tts: TTSSettings = Field(default_factory=OpenAITTS)
     stt: STTSettings = Field(default_factory=STTSettings)
@@ -513,7 +514,8 @@ class Configuration(Section):
 
     @model_validator(mode="after")
     def response_budget(self) -> Self:
-        roles = [self.reply] + ([self.reply_fallback] if self.reply_fallback else [])
+        primary = self.reply_strong or self.reply
+        roles = [primary] + ([self.reply_fallback] if self.reply_fallback else [])
         budget = sum(role.timeout_seconds * (role.max_retries + 1) for role in roles)
         budget += self.memory.recall.timeout_seconds
         if budget > self.conversation.response_timeout_seconds:

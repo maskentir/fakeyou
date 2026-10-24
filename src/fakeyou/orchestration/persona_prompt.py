@@ -11,6 +11,7 @@ from fakeyou.memory.persona import (
     BRIEF_ONLY_PROFILE_FIELDS,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
+    DISCLOSURE_RULES,
     GOALS_RULE,
     IDENTITY_RULE,
     KNOWN_FACT_RULES,
@@ -65,7 +66,16 @@ def _prompt_parts(
     profile_fields = PROMPT_PROFILE_FIELDS if persona_knowledge else BRIEF_ONLY_PROFILE_FIELDS
     return _PromptParts(
         role=(MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE[profile.language]),
-        authority=f"{IDENTITY_RULE} {KNOWN_FACT_RULES[scope]} {SOURCE_RULES}",
+        authority=" ".join(
+            rule
+            for rule in (
+                IDENTITY_RULE,
+                DISCLOSURE_RULES[profile.ai_disclosure],
+                KNOWN_FACT_RULES[scope],
+                SOURCE_RULES,
+            )
+            if rule
+        ),
         goals=GOALS_RULE if persona_knowledge else "",
         recall=RECALL_RULES[recall_strategy] if recall else "",
         profile_json=profile.model_dump_json(include=profile_fields, indent=2),

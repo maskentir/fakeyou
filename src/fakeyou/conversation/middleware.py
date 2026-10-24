@@ -11,6 +11,7 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.exceptions import ModelError
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
@@ -178,6 +179,36 @@ class PlainReplyMiddleware(AgentMiddleware[Any, Any, Any]):
             return await handler(request)
         except StructuredOutputValidationError as error:
             return ModelResponse(result=[error.ai_message])
+
+
+class EvidenceRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
+    def __init__(self, strong: BaseChatModel, *, evidence_tools: frozenset[str]) -> None:
+        self._strong = strong
+        self._evidence_tools = evidence_tools
+
+    def route(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
+        latest = request.messages[-1] if request.messages else None
+        if not isinstance(latest, ToolMessage) or latest.name not in self._evidence_tools:
+            return request
+        if latest.additional_kwargs.get("memory_prefetch"):
+            return request
+        return request.override(model=self._strong)
+
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]:
+        return handler(self.route(request))
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        return await handler(self.route(request))
 
 
 @dataclass(slots=True)

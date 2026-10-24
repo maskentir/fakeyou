@@ -164,6 +164,7 @@ fakeyou memory-init
 fakeyou join https://meet.google.com/abc-defg-hij --meeting-id standup-1 --audio --converse
 fakeyou report --meeting-id standup-1
 fakeyou debrief --meeting-id standup-1
+fakeyou brief standup-1 --persona .runtime/audio/persona.json
 fakeyou memory-ingest --meeting-id standup-1
 fakeyou memory-add "The Acme renewal closes on 3 March" --persona .runtime/audio/persona.json
 fakeyou memory-correct "The Acme renewal closes on 28 February" --episode 5b7a3c1e-2f4d-4a6b-8c9d-0e1f2a3b4c5d --source-at 2026-02-01T00:00:00+00:00
@@ -200,6 +201,23 @@ FAKEYOU_REPLY__API_KEY=...          # reply model
 FAKEYOU_DATABASE__URL=postgresql://fakeyou:...@postgres:5432/fakeyou
 FAKEYOU_MEMORY__STORE__PASSWORD=...
 ```
+
+The twin's replies use up to three model roles, each its own `FAKEYOU_<ROLE>__*` block:
+
+| Role | Used for |
+| --- | --- |
+| `reply` | Every turn, unless a role below takes it |
+| `reply_strong` | Turns answered from evidence the twin looked up itself: memory recall, the meeting view, a closer look at the screen or a camera. Prefetched memory does not count. Leave it empty to answer every turn with `reply` |
+| `reply_fallback` | A turn whose model call failed |
+
+When `reply_strong` is set, the response budget
+(`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of
+`reply`.
+
+The persona's `ai_disclosure` sets when the twin says it is an AI: `when_asked`
+(the default) or `upfront`, the first time it speaks. Either way it answers
+honestly when asked and never claims to be human; no value lets it deny being an
+AI.
 
 ## Quality gates
 

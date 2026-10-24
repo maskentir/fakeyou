@@ -331,6 +331,7 @@ async def _open_native_conversation(
         closing(MeetingRecord(Path(folder) / "record.jsonl")) as record,
         patch.object(assembly, "create_chat_model", return_value=model),
         patch.object(assembly, "create_fallback_chat_model", return_value=context.fallback),
+        patch.object(assembly, "create_strong_chat_model", return_value=None),
     ):
         async with assembly.open_conversation(
             settings,

@@ -35,7 +35,11 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
-from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
+from fakeyou.conversation.middleware import (
+    ChatTurnToolsMiddleware,
+    EvidenceRoutingMiddleware,
+    SpeakerAttributionMiddleware,
+)
 from fakeyou.conversation.participation_decider import (
     Decider,
     StructuredGeminiDecider,
@@ -51,6 +55,7 @@ from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifa
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
 from fakeyou.memory.memory import (
+    PREFETCH_TOOL_NAME,
     create_meet_action_tools,
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -71,9 +76,20 @@ from fakeyou.orchestration.providers import (
     create_chat_model,
     create_decider_chat_model,
     create_fallback_chat_model,
+    create_strong_chat_model,
 )
-from fakeyou.perception.context import PerceptionContext, create_perception_middleware
+from fakeyou.perception.context import (
+    LOOK_AT_PARTICIPANT,
+    LOOK_AT_SCREEN,
+    OBSERVE_MEETING,
+    PerceptionContext,
+    create_perception_middleware,
+)
 from fakeyou.persistence.brief import MeetingBrief
+
+EVIDENCE_TOOLS = frozenset(
+    {PREFETCH_TOOL_NAME, OBSERVE_MEETING, LOOK_AT_SCREEN, LOOK_AT_PARTICIPANT}
+)
 
 
 @dataclass(slots=True)
@@ -271,6 +287,13 @@ class _ConversationBuilder:
             perception=self._agent.perception is not None,
         )
 
+    def add_routing(self) -> None:
+        strong = create_strong_chat_model(self._settings)
+        if strong is not None:
+            self._middleware.append(
+                EvidenceRoutingMiddleware(strong, evidence_tools=EVIDENCE_TOOLS)
+            )
+
     def add_fallback(self) -> None:
         fallback = create_fallback_chat_model(self._settings)
         if fallback is not None:
@@ -414,6 +437,7 @@ async def open_conversation(
     builder.build_persona()
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
+        builder.add_routing()
         builder.add_fallback()
         builder.add_memory()
         builder.add_perception()
