@@ -154,26 +154,27 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 
 ### Angka Fase 1 (replay live, 9 run × 12 skenario)
 
-Balasan sekarang berupa `ReplyPlan` (structured output native provider lewat `create_agent(response_format=...)`),
-bukan header teks. Laporan: `docs/reports/2026-10-24-conversation-replay-structured.json`.
+Balasan berupa `ReplyPlan` (structured output native provider lewat `create_agent(response_format=...)`). Field
+pertamanya `understood`: kalimat peserta seperti yang dipahami twin, dengan salah dengar dikoreksi. Bahasa dinilai dari
+kalimat itu, lalu teks ditulis dalam bahasa tersebut. Laporan: `docs/reports/2026-10-24-conversation-replay-understood.json`.
 
 | Keluarga | Baseline awal | Sekarang |
 | --- | --- | --- |
-| `small_talk` | 0,259 | 0,667 |
-| `misheard` | 0,944 | 1,000 |
+| `small_talk` | 0,259 | 1,000 |
+| `misheard` | 0,944 | 0,944 |
 | `recall` | 0,833 | 1,000 |
 | `control` | 1,000 | 1,000 |
 | `floor` | 1,000 | 1,000 |
 | `honesty` | 1,000 | 1,000 |
-| `language` | 0,000 | 0,444 |
+| `language` | 0,000 | 1,000 |
 
-Pertanyaan penutup yang lolos turun dari 13 jadi 0 dari 99 balasan. Pelanggaran serius 0, regresi 0, judge 30 dari 30
-label. Baseline beku dinaikkan ke angka ini.
+Pertanyaan penutup yang lolos turun dari 13 jadi 0 dari 99 balasan. Pelanggaran serius 0, regresi 0. Baseline beku
+dinaikkan ke angka ini.
 
-Sisa masalah `language`: model balasan (flash-lite) masih salah menilai bahasa peserta saat `speaking_style` persona
-ditulis dalam bahasa Indonesia; dengan `speaking_style` berbahasa Inggris, skenario yang sama lolos 3 dari 3. Arah
-perbaikan: bahasa peserta dinilai sebagai persepsi oleh model yang lebih kuat yang sudah ada di jalur giliran (decider
-partisipasi), lalu diteruskan ke balasan, bukan ditebak oleh model penyusun kalimat.
+Kenapa `understood`: tanpa field itu, model flash-lite menilai bahasa peserta sebagai Indonesia untuk kalimat Inggris
+(9 dari 15 benar) saat `speaking_style` persona ditulis dalam bahasa Indonesia. Dengan menyalin dulu kalimat yang
+dipahami, 15 dari 15 benar dan "walk" terbaca eksplisit sebagai "work". Kalimat pertama tidak melambat (p50 1,15 s vs
+1,22 s pada probe yang sama).
 
 ## Fase 2: sadar meeting
 
