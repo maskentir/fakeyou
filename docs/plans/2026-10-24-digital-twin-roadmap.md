@@ -161,7 +161,7 @@ tanpa kutipan pembicara.
 | Persepsi chat tidak bisa dipercaya | Twin melaporkan area chat kosong, lalu mengoreksinya sendiri dan tetap salah | Layar chat dibaca dari DOM chat, bukan tebakan |
 | Kalimat 1 karakter ditolak provider TTS | `synthesis_failed` `provider_status` 400 lalu `playback_failed` ProviderFault (07:39:17) | Kalimat terlalu pendek harus dilewati, bukan dikirim ke provider |
 | Fault kamera saat join | 1 `fault_recorded` `operation: camera` RuntimeError (07:35:13), sesi tetap jalan | Tidak memblokir, tapi tetap tercatat di skor fault |
-| Provider kehabisan kredit | 1 `fault_recorded` `payment_required` 402 `quota_exceeded` (07:52:27); twin diam ~20 s dan peserta mengira ini lag | Twin harus bilang terus terang saat tidak bisa menjawab, dan ada model cadangan |
+| TTS kehabisan kredit | `fault_recorded` `payment_required` 402 `quota_exceeded` dari TTS (07:52:27), lalu seluruh `synthesis_failed` 402 + 18 `playback_failed` sejak 07:58; twin masih dengar tapi tidak bisa bicara | Twin harus bilang terus terang saat tidak bisa bicara, ada provider cadangan, dan fault TTS harus menaikkan alarm, bukan cuma dihitung di skor |
 
 Latency jalur chat biasa sehat: `speech_stopped` ke PCM pertama p50 1,69 s, p95 3,08 s, max 5,25 s.
 
