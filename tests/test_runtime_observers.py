@@ -1,10 +1,13 @@
 import asyncio
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.meet.participant_observer import OBSERVE_JS
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
+from fakeyou.perception.meet_protocol import MeetUser
+from fakeyou.perception.roster import MeetRoster
 from tests._audio_fakes import FakeAudio
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, FakePageSession, meet_page
@@ -101,3 +104,44 @@ async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path: Path
     assert evidence.read_text(encoding="utf-8").splitlines() == lines_before
     assert len(page.evaluate_calls) == polls_before
     assert worker.audio.events == ["audio_stopped"]
+
+
+class _KeywordAudio(FakeAudio):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.keywords: list[list[str]] = []
+
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        self.keywords.append(list(terms))
+        return True
+
+
+def test_roster_names_bias_the_transcriber() -> None:
+    clock = FakeClock()
+    journal = RecordingJournal()
+    worker = MeetingWorker(
+        session_config(),
+        meet_page([]),
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+        journal=journal,
+    )
+    audio = _KeywordAudio()
+    worker.audio = audio
+    roster = MeetRoster()
+    roster.apply_users(
+        [
+            MeetUser(device_id="devices/ayu", name="Ayu", present=True),
+            MeetUser(device_id="devices/budi", name="Budi", present=True),
+            MeetUser(device_id="devices/twin", name="Rani Twin", present=True, current_user=True),
+        ]
+    )
+
+    worker.bias_transcriber(roster)
+
+    assert audio.keywords == [["Ayu", "Budi"]]
+    [recorded] = journal.events("stt_keywords_recorded")
+    assert recorded["keywords"] == 2
+    assert "Ayu" not in json.dumps(recorded)

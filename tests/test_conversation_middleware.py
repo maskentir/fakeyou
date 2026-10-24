@@ -1,8 +1,10 @@
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.exceptions import ModelAuthenticationError, ModelRateLimitError
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
@@ -11,18 +13,22 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import MeetingResponder
 from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.middleware import (
+    SPEECH_MARK,
     HistoryTrimMiddleware,
     OrphanToolCallMiddleware,
     SpeakerAttributionMiddleware,
+    SpeechMark,
     attributed,
-    estimate_message_tokens,
     patch_orphan_tool_calls,
+    retry_before_speech,
     trim_messages_to_budget,
 )
 from fakeyou.persistence.record import MeetingRecord, TranscriptEntry
@@ -115,14 +121,6 @@ async def test_orphan_middleware_answers_stale_calls_on_a_chat_thread() -> None:
     assert any(call not in stored_answered for call in stored_calls)
 
 
-def test_estimate_message_tokens_counts_text_heuristic() -> None:
-    assert estimate_message_tokens([HumanMessage(content="a" * 40)]) == 12
-    assert estimate_message_tokens([HumanMessage(content="")]) == 2
-    assert (
-        estimate_message_tokens([HumanMessage(content=[{"type": "text", "text": "b" * 40}])]) == 12
-    )
-
-
 def test_trim_messages_to_budget_keeps_system_and_recent() -> None:
     messages: list[AnyMessage] = [
         SystemMessage(content="sys"),
@@ -134,7 +132,7 @@ def test_trim_messages_to_budget_keeps_system_and_recent() -> None:
     trimmed = trim_messages_to_budget(messages, max_tokens=20)
 
     assert trimmed == [messages[0], messages[-1]]
-    assert estimate_message_tokens(trimmed) <= 20
+    assert count_tokens_approximately(trimmed) <= 20
 
 
 def test_trim_messages_to_budget_leaves_short_history_unchanged() -> None:
@@ -162,11 +160,12 @@ def test_trim_drops_answers_whose_call_was_trimmed() -> None:
 def test_trim_patches_calls_whose_answer_was_trimmed() -> None:
     messages: list[AnyMessage] = [
         HumanMessage(content="o" * 400),
+        HumanMessage(content="question"),
         AIMessage(content="", tool_calls=[_orphan_call("call-1")]),
         HumanMessage(content="latest"),
     ]
 
-    trimmed = trim_messages_to_budget(messages, max_tokens=10)
+    trimmed = trim_messages_to_budget(messages, max_tokens=40)
 
     calls, answered = _tool_ids(trimmed)
     assert calls == ["call-1"]
@@ -196,7 +195,7 @@ async def test_history_trim_limits_a_chat_request_but_not_its_thread() -> None:
 
     assert result["messages"][-1].text == "Fresh answer."
     seen = model.seen[-1]
-    assert estimate_message_tokens(seen[1:]) <= 100
+    assert count_tokens_approximately(seen[1:]) <= 100
     assert seen[-1].content == "new question"
     assert all(
         "xxxxx" not in str(message.content) and "yyyyy" not in str(message.content)
@@ -218,7 +217,8 @@ async def test_the_model_reads_who_said_each_line_while_the_record_keeps_plain_t
     record.add_transcript(now)
     agent = create_meeting_agent(model, middleware=[SpeakerAttributionMiddleware()])
 
-    assert await MeetingResponder(agent, record).respond([now], lambda: None) == "Noted."
+    reply = await MeetingResponder(agent, record).respond([now], lambda: None)
+    assert reply.text == "Noted."
     record.close()
 
     assert [message.text for message in model.seen[-1][1:]] == [
@@ -248,3 +248,44 @@ def test_attribution_keeps_attached_images_and_leaves_other_messages_alone() -> 
     ]
     assert attributed(HumanMessage(content="owner chat")) == HumanMessage(content="owner chat")
     assert attributed(AIMessage(content="reply")) == AIMessage(content="reply")
+
+
+def test_a_transient_model_error_is_retried_before_the_twin_speaks() -> None:
+    assert retry_before_speech(ModelRateLimitError("slow down")) is True
+    assert retry_before_speech(ModelAuthenticationError("bad key")) is False
+    assert retry_before_speech(RuntimeError("model exploded")) is False
+
+
+def test_nothing_is_retried_once_the_twin_has_started_speaking() -> None:
+    mark = SpeechMark(started=True)
+    token = SPEECH_MARK.set(mark)
+    try:
+        assert retry_before_speech(ModelRateLimitError("slow down")) is False
+    finally:
+        SPEECH_MARK.reset(token)
+
+
+async def test_the_meeting_agent_retries_a_rate_limited_model_once() -> None:
+    class FlakyModel(ToolCallingFakeModel):
+        attempts: int = 0
+
+        @override
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ModelRateLimitError("slow down")
+            return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+    model = FlakyModel(responses=[AIMessage(content="Noted.")])
+    agent = create_meeting_agent(model)
+
+    result = await agent.ainvoke({"messages": [HumanMessage("hello")]})
+
+    assert model.attempts == 2
+    assert result["messages"][-1].text == "Noted."

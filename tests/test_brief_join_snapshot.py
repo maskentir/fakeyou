@@ -14,7 +14,6 @@ from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
-from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
 from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.brief import brief_digest, load_meeting_brief, read_meeting_context
@@ -75,7 +74,6 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
     assert observed == [True]
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,

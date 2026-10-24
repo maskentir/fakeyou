@@ -4,6 +4,8 @@ from typing import Any
 
 import pytest
 
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_graph import build_turn_graph
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
@@ -33,8 +35,8 @@ class FakeSession:
 
 
 class FakeResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield "Yes, I am here."
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class FakeJournal:

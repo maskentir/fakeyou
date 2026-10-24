@@ -3,7 +3,7 @@ import json
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -92,13 +92,30 @@ async def connect_muse_socket(url: str) -> MuseSocket:
     return _LiveSocket(connection)
 
 
+class KeywordSource:
+    def __init__(self, terms: Sequence[str] = ()) -> None:
+        self._base = tuple(dict.fromkeys(term for term in terms if term))
+        self._context: tuple[str, ...] = ()
+
+    @property
+    def terms(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self._base, *self._context)))
+
+    def update(self, terms: Sequence[str]) -> bool:
+        merged = tuple(dict.fromkeys(term for term in terms if term))
+        if merged == self._context:
+            return False
+        self._context = merged
+        return True
+
+
 @dataclass(frozen=True, slots=True)
 class MuseOptions:
     model: str = DEFAULTS.stt.model
     mode: STTMode = DEFAULTS.stt.mode
     url: str = DEFAULTS.stt.url
     language: str = DEFAULTS.speech.language
-    keywords: tuple[str, ...] = ()
+    keywords: KeywordSource = field(default_factory=KeywordSource)
     sample_rate: int = CAPTURE_SAMPLE_RATE
     handshake_timeout_seconds: float = HANDSHAKE_TIMEOUT_SECONDS
     keepalive_idle_seconds: float = KEEPALIVE_IDLE_SECONDS
@@ -206,6 +223,9 @@ class MuseClient:
             asyncio.create_task(self._send_loop()),
         ]
 
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        return self._options.keywords.update(terms)
+
     async def reconnect_when_idle(self) -> None:
         await self._drop_socket()
         try:
@@ -258,8 +278,8 @@ class MuseClient:
             "emitAudioProgress": False,
             "languageBias": [MUSE_LANGUAGE_NAMES[options.language]],
         }
-        if options.keywords:
-            handshake["keywords"] = list(options.keywords)
+        if options.keywords.terms:
+            handshake["keywords"] = list(options.keywords.terms)
         return handshake
 
     def _socket_ready(self) -> bool:

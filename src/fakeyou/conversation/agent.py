@@ -2,11 +2,15 @@ from collections.abc import Sequence
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
+from langchain.agents.structured_output import ProviderStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
+
+from fakeyou.conversation.middleware import PlainReplyMiddleware, create_reply_retry_middleware
+from fakeyou.conversation.reply_planner import ReplyPlan
 
 MEETING_GUIDANCE = (
     "You are a precise digital twin for a meeting participant. "
@@ -27,14 +31,17 @@ ENDING_RULE = (
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (
-        "Reply in casual spoken Indonesian like a helpful coworker, "
-        "using sentences that sound natural when read aloud."
+        "Reply in the language the participant just used. When their language is unclear, reply "
+        "in casual spoken Indonesian like a helpful coworker, using sentences that sound natural "
+        "when read aloud."
     ),
     "en": (
-        "Reply in casual spoken English like a helpful coworker, "
-        "using sentences that sound natural when read aloud."
+        "Reply in the language the participant just used. When their language is unclear, reply "
+        "in casual spoken English like a helpful coworker, using sentences that sound natural "
+        "when read aloud."
     ),
 }
+MAX_TOOL_CALLS_PER_TURN = 4
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
 
 
@@ -51,6 +58,12 @@ def create_meeting_agent(
         model=model,
         tools=configured_tools,
         system_prompt=persona,
-        middleware=middleware,
+        middleware=[
+            *middleware,
+            ToolCallLimitMiddleware(run_limit=MAX_TOOL_CALLS_PER_TURN),
+            create_reply_retry_middleware(),
+            PlainReplyMiddleware(),
+        ],
         checkpointer=checkpointer,
+        response_format=ProviderStrategy(ReplyPlan),
     )

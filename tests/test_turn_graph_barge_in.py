@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     SpeechFloor,
@@ -21,10 +23,10 @@ from fakeyou.foundation.transcript import TranscriptEvent
 
 
 class SilentResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         sentences: tuple[str, ...] = ()
         for sentence in sentences:
-            yield sentence
+            yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
 class HeldResponder:
@@ -33,12 +35,12 @@ class HeldResponder:
         self._release = release
         self.transcripts: list[str] = []
 
-    async def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
-        yield self._sentences[0]
+        yield SpokenChunk(text=self._sentences[0], language=DEFAULTS.speech.language)
         await self._release.wait()
         for sentence in self._sentences[1:]:
-            yield sentence
+            yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
 class FakeSink:
@@ -46,7 +48,8 @@ class FakeSink:
         self.sentences: list[str] = []
         self.first_spoken = asyncio.Event()
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
         self.first_spoken.set()
 
@@ -56,7 +59,8 @@ class SupersedingSink:
         self._floor = floor
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
         if len(self.sentences) == 1:
             self._floor.advance()
@@ -215,8 +219,8 @@ CANCEL_FIELDS = {"source", "request_id", "transcript_id", "generation", "reason"
 
 
 class OneSentenceResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield "Yes, I am here."
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class BargeAudio:

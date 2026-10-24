@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator
+from functools import partial
 
 import httpx2
 
@@ -39,11 +40,12 @@ class ElevenLabsSpeechSynthesizer:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
         return journaled_stream(
             self._journal,
             text,
-            self._stream_pcm,
+            partial(self._stream_pcm, language=language or self._language),
             SpeechTag("elevenlabs", sentence_index, transcript_id),
         )
 
@@ -64,16 +66,16 @@ class ElevenLabsSpeechSynthesizer:
     def journal(self) -> Journal | None:
         return self._journal
 
-    def _payload(self, text: str) -> dict[str, object]:
-        return {"text": text, "model_id": self._model, "language_code": self._language}
+    def _payload(self, text: str, language: str) -> dict[str, object]:
+        return {"text": text, "model_id": self._model, "language_code": language}
 
-    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
+    async def _stream_pcm(self, text: str, language: str) -> AsyncGenerator[bytes]:
         async with self._client.stream(
             "POST",
             self._url,
             headers=self._headers,
             params=self._params,
-            json=self._payload(text),
+            json=self._payload(text, language),
             timeout=TTS_REQUEST_TIMEOUT_SECONDS,
         ) as response:
             if response.status_code >= 400:

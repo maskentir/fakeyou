@@ -2,7 +2,9 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, override
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.model_responder import ReplierWholeResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     ToolStartHook,
@@ -22,8 +24,14 @@ class Session:
         self.is_speaking = False
 
     async def speak(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         self.spoken.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
@@ -70,7 +78,7 @@ class GatedReplier:
 
     async def respond(
         self, events: Sequence[TranscriptEvent], _on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         self.calls.append(tuple(event.id for event in events))
         self.started.set()
         try:
@@ -79,7 +87,7 @@ class GatedReplier:
         except asyncio.CancelledError:
             self.cancelled.set()
             raise
-        return f"Reply to {events[-1].id}."
+        return SpokenChunk(text=f"Reply to {events[-1].id}.", language=DEFAULTS.speech.language)
 
 
 class SentenceSource:
@@ -102,11 +110,11 @@ class SentenceStream:
         self._sentences = sentences
         self._gate = gate
 
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         for index, sentence in enumerate(self._sentences):
             if index == 1 and self._gate is not None:
                 await self._gate.wait()
-            yield sentence
+            yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
 SILENT = SentenceStream((), None)

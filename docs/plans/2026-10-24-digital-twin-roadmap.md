@@ -126,26 +126,54 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 ## Fase 1: percakapan yang natural
 
 - **Response planner terstruktur.**
-  - Model membalas `{intent: answer | ack | clarify | decline | silent, text}`.
+  - Model membalas `intent: answer | ack | clarify | decline | silent | stop | shorter | repeat | louder` di baris
+    pertama, lalu bahasa yang dipakai (`lang: id` atau `lang: en`), lalu isi kalimatnya.
   - Kode menegakkan bentuk: ack satu kalimat pendek; answer tanpa tawaran atau pertanyaan penutup; clarify hanya bila
     planner menyatakan tidak ada tafsiran masuk akal.
   - Aturan penutup di prompt bisa dipangkas setelah ini.
 - **Intent kendali di turn graph.**
-  - Stop, shorter, repeat, dan louder dikenali deterministik (kosakata JSON id/en, pola yang sama dengan ack
-    vocabulary).
+  - Model membaca maksud pesertanya lalu menulis `intent: stop | shorter | repeat | louder`; kode yang menjalankan
+    akibatnya. Tidak ada tabel kata kunci: "bisa tolong lebih singkat?" dan "make it shorter" berakhir sama.
   - Barge-in sudah menghentikan audio; giliran kendali tidak dikirim ke LLM.
-  - Shorter mengubah anggaran kalimat sesi; repeat memutar ulang kalimat terakhir dari record.
+  - Shorter menurunkan anggaran kalimat sesi; repeat memutar ulang kalimat terakhir dari record; louder menaikkan gain
+    playback.
 - **Biasing STT kontekstual.**
   - Keyword Muse diperbarui selama meeting dari roster (nama), layar (judul dan istilah), dan percakapan (istilah
     berulang).
-  - Ini butuh verifikasi apakah Muse menerima update keyword di tengah sesi; bila tidak, keyword dipakai saat rotasi
-    sesi STT.
-- **Bahasa mengikuti lawan bicara.** Bahasa balasan ditentukan per giliran dari bahasa trigger, persona hanya default.
+  - Muse hanya menerima `keywords` saat handshake, jadi keyword baru dipakai lewat rotasi sesi STT yang menunggu
+    ruangan sepi (jalur yang sama dengan rotasi 60 menit).
+  - Sudah jalan untuk nama dari roster protokol Meet. Istilah layar dan istilah percakapan belum: keduanya butuh
+    pemilihan istilah yang tidak membanjiri keyword, dan rotasi terlalu sering memecah label pembicara Muse.
+- **Bahasa mengikuti lawan bicara.** Model menulis bahasa yang ia pakai di baris `lang:` pada balasan; kode mengikuti
+  tanpa menebak. Persona hanya default. Bahasa ikut merambat sampai TTS, jadi suara dan pemisah kalimat ikut bahasa.
 - **Target:**
   - pertanyaan penutup di bawah 3%;
   - salah dengar ditafsirkan benar minimal 80%;
   - kendali dipatuhi 100%;
   - latency p50 dari final tetap di bawah 1,5 s.
+
+### Angka Fase 1 (replay live, 9 run × 12 skenario)
+
+Balasan sekarang berupa `ReplyPlan` (structured output native provider lewat `create_agent(response_format=...)`),
+bukan header teks. Laporan: `docs/reports/2026-10-24-conversation-replay-structured.json`.
+
+| Keluarga | Baseline awal | Sekarang |
+| --- | --- | --- |
+| `small_talk` | 0,259 | 0,667 |
+| `misheard` | 0,944 | 1,000 |
+| `recall` | 0,833 | 1,000 |
+| `control` | 1,000 | 1,000 |
+| `floor` | 1,000 | 1,000 |
+| `honesty` | 1,000 | 1,000 |
+| `language` | 0,000 | 0,444 |
+
+Pertanyaan penutup yang lolos turun dari 13 jadi 0 dari 99 balasan. Pelanggaran serius 0, regresi 0, judge 30 dari 30
+label. Baseline beku dinaikkan ke angka ini.
+
+Sisa masalah `language`: model balasan (flash-lite) masih salah menilai bahasa peserta saat `speaking_style` persona
+ditulis dalam bahasa Indonesia; dengan `speaking_style` berbahasa Inggris, skenario yang sama lolos 3 dari 3. Arah
+perbaikan: bahasa peserta dinilai sebagai persepsi oleh model yang lebih kuat yang sudah ada di jalur giliran (decider
+partisipasi), lalu diteruskan ke balasan, bukan ditebak oleh model penyusun kalimat.
 
 ## Fase 2: sadar meeting
 

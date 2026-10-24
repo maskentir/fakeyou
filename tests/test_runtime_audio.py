@@ -309,8 +309,14 @@ async def test_owner_stop_interrupts_blocked_initial_speech(
     class BlockingAudio(FakeAudio):
         @override
         async def speak(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> None:
+            del language
             self.events.append("greeting_started")
             session.stop.set()
             try:

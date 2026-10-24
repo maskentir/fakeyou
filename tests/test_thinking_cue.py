@@ -42,7 +42,9 @@ class CueAudio(FakeReplyAudio):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         self.timeline.append(("reply", text))
         await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
 

@@ -38,9 +38,11 @@ class FakeAudio:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         del sentence_index
         del transcript_id
+        del language
         self.events.append(f"speak:{text}")
 
     async def stop_playback(self) -> None:
@@ -213,6 +215,7 @@ class FakeReplyAudio(FakeAudio):
         self.spoken: list[str] = []
         self.indices: list[int | None] = []
         self.transcripts: list[str | None] = []
+        self.languages: list[str | None] = []
         self.stops = 0
         self.speaking = False
         self.on_playback_event: Callable[[PlaybackEvent], None] | None = None
@@ -229,10 +232,12 @@ class FakeReplyAudio(FakeAudio):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.spoken.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
+        self.languages.append(language)
         if self.on_playback_event is not None:
             self.on_playback_event(PlaybackEvent("playback_finished", text))
 

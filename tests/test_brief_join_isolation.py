@@ -145,8 +145,14 @@ async def test_join_brief_stop_during_playback_records_no_twin_speech(
 
         @override
         async def speak(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> None:
+            del language
             self.speaking = True
             event_callback = self.on_playback_event
             assert event_callback is not None

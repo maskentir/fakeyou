@@ -4,8 +4,10 @@ from typing import Any, Literal
 
 import pytest
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.jev_refresh import JevState
 from fakeyou.conversation.participation_decider import DeciderTurn, ParticipationDecision
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     ConversationPhase,
@@ -68,8 +70,8 @@ class FakeJournal:
 
 
 class FakeResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield TWIN_REPLY
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text=TWIN_REPLY, language=DEFAULTS.speech.language)
 
 
 class FakeDecider:

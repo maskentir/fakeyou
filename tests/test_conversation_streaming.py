@@ -37,7 +37,7 @@ from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel, recall_call
-from tests._conversation_support import AgentT, event
+from tests._conversation_support import AgentT, callback_handlers, event
 from tests._error_support import message_pattern
 from tests._persistence_fakes import RecordingJournal
 from tests._pregen_support import StreamingResponder
@@ -117,7 +117,7 @@ class ScriptedAgent:
             actions = self._scripts
         self.configs.append(config)
         self.stream_modes.append(kwargs.get("stream_mode"))
-        stream = ScriptedStream(self, actions, (config or {}).get("callbacks", ()))
+        stream = ScriptedStream(self, actions, callback_handlers(config))
         self.streams.append(stream)
         return stream
 
@@ -212,6 +212,72 @@ async def test_streamed_reply_matches_cap_across_languages(
     assert " ".join(audio.spoken) == cap_spoken_reply(
         "Morning update. All systems ready.", language=language
     )
+    await loop.lifecycle.close()
+
+
+async def test_the_declared_language_reaches_the_speaker(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [
+            (
+                "chunk",
+                '{"language": "en", "intent": "answer", "text": "The launch is on 14 October."}',
+                "model",
+            )
+        ]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal, language="id")
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["The launch is on 14 October."]
+    assert audio.languages == ["en"]
+    await loop.lifecycle.close()
+
+
+async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [
+            ("chunk", '{"language": "en", "intent": "sil', "model"),
+            ("chunk", 'ent", "text": "I would have said something."}', "model"),
+        ]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == []
+    await loop.lifecycle.close()
+
+
+async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [("chunk", '{"language": "id", "intent": "ack", "text": "Okay. More to say."}', "model")]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["Okay."]
+    await loop.lifecycle.close()
+
+
+async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [
+            (
+                "chunk",
+                '{"language": "en", "intent": "answer", '
+                '"text": "The launch is on 14 October. Anything else?"}',
+                "model",
+            )
+        ]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal, language="en")
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["The launch is on 14 October."]
+    assert "intent" not in " ".join(audio.spoken)
     await loop.lifecycle.close()
 
 
@@ -529,22 +595,21 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     await loop.lifecycle.close()
 
 
-async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(
+async def test_stream_failure_fails_the_turn_without_re_running_the_agent(
     journal: RecordingJournal,
 ) -> None:
     agent = ScriptedAgent(
         [("error", RuntimeError("stream unsupported"))],
-        fallback_reply="Full reply one. Full reply two. Full reply three.",
+        fallback_reply="Full reply one. Full reply two.",
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
     await loop.ingress.receive_final(event("t1", "hello"))
     await loop.lifecycle.wait_idle()
-    assert audio.spoken == ["Full reply one.", "Full reply two."]
+    assert "Full reply one." not in audio.spoken
     [failed] = [row for row in journal.events("agent_failed") if row.get("detail") == "stream"]
     assert failed["request_id"] == "t1:1"
-    assert journal.events("agent_finished") != []
-    assert len(agent.ainvoke_calls) == 1
+    assert agent.ainvoke_calls == []
     await loop.lifecycle.close()
 
 
@@ -678,7 +743,7 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
         async for sentence in responder.stream_sentences(
             [event("t1", "hi")], lambda: None, request_id="req-1"
         ):
-            seen.append(sentence)
+            seen.append(sentence.text)
 
     with pytest.raises(
         FakeYouError,
@@ -720,9 +785,15 @@ async def test_speaking_time_does_not_count_against_the_response_budget() -> Non
             *,
             sentence_index: int | None = None,
             transcript_id: str | None = None,
+            language: str | None = None,
         ) -> None:
             await asyncio.sleep(0.2)
-            await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+            await super().speak(
+                text,
+                sentence_index=sentence_index,
+                transcript_id=transcript_id,
+                language=language,
+            )
 
     responder = StreamingResponder(["First sentence.", "Second sentence."])
     audio = SlowReplyAudio()
@@ -809,7 +880,7 @@ class ToolInterleavedAgent:
         self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
     ) -> ToolInterleavedStream:
         del payload, kwargs
-        return ToolInterleavedStream((config or {}).get("callbacks", ()))
+        return ToolInterleavedStream(callback_handlers(config))
 
 
 def stream_config() -> RunnableConfig:
@@ -823,9 +894,12 @@ async def test_first_sentence_arrives_before_stream_ends() -> None:
     )
     start = time.perf_counter()
     first = await anext(stream)
-    assert first == "First sentence."
+    assert first.text == "First sentence."
     assert time.perf_counter() - start < 0.30
-    assert [first] + [s async for s in stream] == ["First sentence.", "Second sentence."]
+    assert [first.text] + [s.text async for s in stream] == [
+        "First sentence.",
+        "Second sentence.",
+    ]
 
 
 async def test_streamed_sentences_match_non_streaming_answer() -> None:
@@ -839,8 +913,8 @@ async def test_streamed_sentences_match_non_streaming_answer() -> None:
     whole = await MeetingResponder(cast(AgentT, agent), NoHistory()).respond(
         [event("t1", "hello")], lambda: None
     )
-    assert streamed == ["First sentence.", "Second sentence."]
-    assert " ".join(streamed) == cap_spoken_reply(whole, 2)
+    assert [chunk.text for chunk in streamed] == ["First sentence.", "Second sentence."]
+    assert " ".join(chunk.text for chunk in streamed) == cap_spoken_reply(whole.text, 2)
 
 
 async def test_text_during_tool_run_is_not_spoken() -> None:
@@ -853,7 +927,7 @@ async def test_text_during_tool_run_is_not_spoken() -> None:
             max_sentences=6,
         )
     ]
-    assert spoken == ["I have checked it."]
+    assert [chunk.text for chunk in spoken] == ["I have checked it."]
 
 
 async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
@@ -870,5 +944,7 @@ async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
     first = await anext(stream)
     streamed_first_ms = (time.perf_counter() - start) * 1000
     rest = [s async for s in stream]
-    assert " ".join([first, *rest]) == cap_spoken_reply(whole, 6)
+    assert " ".join([first.text, *(chunk.text for chunk in rest)]) == cap_spoken_reply(
+        whole.text, 6
+    )
     assert streamed_first_ms < whole_first_ms

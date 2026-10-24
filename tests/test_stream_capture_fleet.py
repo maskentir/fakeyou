@@ -28,6 +28,9 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         def is_speaking(self) -> bool:
             return False
 
+        def louder(self) -> None:
+            pass
+
         async def speak(self, text: str, **extra: object) -> None:
             pass
 
@@ -73,6 +76,9 @@ class _Playback:
     @property
     def is_speaking(self) -> bool:
         return False
+
+    def louder(self) -> None:
+        pass
 
     async def speak(self, text: str, **extra: object) -> None:
         pass

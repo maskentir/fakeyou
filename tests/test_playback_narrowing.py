@@ -25,10 +25,16 @@ class _Synth:
         self.texts: list[str] = []
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
         del sentence_index
         del transcript_id
+        del language
         self.texts.append(text)
         if self.error is not None:
             raise self.error

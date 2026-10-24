@@ -26,8 +26,14 @@ class _SlowSynth:
         self.release = asyncio.Event()
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
+        del language
         del sentence_index
         del transcript_id
         self.texts.append(text)
@@ -543,8 +549,9 @@ async def test_a_slow_consumer_does_not_count_against_synthesis() -> None:
             *,
             sentence_index: int | None = None,
             transcript_id: str | None = None,
+            language: str | None = None,
         ) -> AsyncIterator[bytes]:
-            del text, sentence_index, transcript_id
+            del text, sentence_index, transcript_id, language
             for _ in range(3):
                 yield b"\x00" * 480
 

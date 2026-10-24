@@ -20,36 +20,6 @@ from fakeyou.config.settings import Settings
 from tests._conversation_fakes import ToolCallingFakeModel
 
 
-async def test_trust_native_greeting_avoids_model_and_records_callbacks(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fixture = load_trust_fixture()
-    profile = json.loads((ROOT / fixture["persona"]).read_text())
-    profile["language"] = "en"
-    (tmp_path / "persona.json").write_text(json.dumps(profile), encoding="utf-8")
-    monkeypatch.setitem(replay_trust.__globals__, "ROOT", tmp_path)
-    case = {
-        **fixture["cases"][0],
-        "needs_recall": False,
-        "turns": [{"say": "Hello", "contract_reply": "Model must not greet."}],
-    }
-    settings = Settings()
-    settings = settings.model_copy(
-        update={"speech": settings.speech.model_copy(update={"language": "id"})}
-    )
-    score = await replay_trust(
-        contract_model,
-        {**fixture, "persona": "persona.json", "cases": [case]},
-        1,
-        options=ReplayOptions(settings=settings),
-    )
-    assert score.turns[0]["reply"] == "Hello."
-    assert score.turns[0]["model_calls"] == 0
-    assert score.turns[0]["tool_trajectory"] == []
-    assert score.candidate["unchanged"] is True
-
-
 class EvalFailingModel(ToolCallingFakeModel):
     @override
     async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:

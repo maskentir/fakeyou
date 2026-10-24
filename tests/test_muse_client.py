@@ -18,6 +18,7 @@ from fakeyou.observability.journal import Journal
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
 from fakeyou.transcription.muse import (
     MUSE_MAX_SESSION_SECONDS,
+    KeywordSource,
     MuseClient,
     MuseDeps,
     MuseOptions,
@@ -190,6 +191,28 @@ async def test_each_connection_gets_its_own_session_id() -> None:
     assert len(harness.urls) == 2
     assert harness.urls[0] != harness.urls[1]
     assert all("?sessionId=stream-" in url for url in harness.urls)
+
+
+async def test_new_keywords_reach_the_next_handshake_after_the_persona_words() -> None:
+    first, second = FakeSocket(), FakeSocket(ack={"sessionId": "session-2"})
+    harness = Harness([first, second], options=MuseOptions(keywords=KeywordSource(["Rani"])))
+
+    await harness.client.start()
+    assert harness.client.update_keywords(["Ayu", "Budi"]) is True
+    assert harness.client.update_keywords(["Ayu", "Budi"]) is False
+    await harness.client.reconnect_when_idle()
+    await harness.client.close()
+
+    assert first.text_sent()[0]["keywords"] == ["Rani"]
+    assert second.text_sent()[0]["keywords"] == ["Rani", "Ayu", "Budi"]
+
+
+def test_keyword_source_keeps_the_persona_words_and_drops_blanks_and_repeats() -> None:
+    source = KeywordSource(["Rani", "Orchid", ""])
+
+    assert source.update(["Ayu", "Rani", "", "Ayu"]) is True
+
+    assert source.terms == ("Rani", "Orchid", "Ayu")
 
 
 async def test_rejected_handshake_raises_and_closes_the_socket() -> None:

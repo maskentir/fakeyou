@@ -103,10 +103,14 @@ class FakePlayback:
         self.stops = 0
         self.closed = False
         self.speaking = False
+        self.louder_calls = 0
 
     @property
     def is_speaking(self) -> bool:
         return self.speaking
+
+    def louder(self) -> None:
+        self.louder_calls += 1
 
     async def speak(
         self,
@@ -114,7 +118,9 @@ class FakePlayback:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         self.spoken.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
@@ -136,8 +142,14 @@ class FakeSynth:
         self.closed = False
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
+        del language
         self.texts.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)

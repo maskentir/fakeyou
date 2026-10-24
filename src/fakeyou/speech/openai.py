@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator
+from functools import partial
 from typing import cast
 
 from openai import AsyncOpenAI
@@ -37,7 +38,8 @@ class OpenAISpeechSynthesizer:
         resolved = settings if settings is not None else OpenAITTS()
         self._voice = resolved.voice
         self._model = resolved.model
-        self._instructions = tts_voice_instructions(language)
+        self._instructions = {code: tts_voice_instructions(code) for code in SPEECH_LANGUAGES}
+        self._language = language
         self._journal = journal
         self._owns_client = client is None
         self._client = client or AsyncOpenAI(
@@ -50,11 +52,12 @@ class OpenAISpeechSynthesizer:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
         return journaled_stream(
             self._journal,
             text,
-            self._stream_pcm,
+            partial(self._stream_pcm, language=language or self._language),
             SpeechTag("openai", sentence_index, transcript_id),
         )
 
@@ -79,19 +82,20 @@ class OpenAISpeechSynthesizer:
     def journal(self) -> Journal | None:
         return self._journal
 
-    def _arguments(self, text: str) -> SpeechCreateParams:
+    def _arguments(self, text: str, language: str) -> SpeechCreateParams:
         arguments: SpeechCreateParams = {
             "model": self._model,
             "voice": cast(Voice, self._voice),
             "input": text,
             "response_format": "pcm",
         }
-        if self._instructions is not None:
-            arguments["instructions"] = self._instructions
+        instructions = self._instructions.get(language)
+        if instructions is not None:
+            arguments["instructions"] = instructions
         return arguments
 
-    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
-        arguments = self._arguments(text)
+    async def _stream_pcm(self, text: str, language: str) -> AsyncGenerator[bytes]:
+        arguments = self._arguments(text, language)
         arguments["stream_format"] = "audio"
         async with self._client.audio.speech.with_streaming_response.create(
             **arguments,

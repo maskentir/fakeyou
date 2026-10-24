@@ -21,6 +21,7 @@ class MeetingAudio(Protocol):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None: ...
 
     async def stop_playback(self) -> None: ...
@@ -40,6 +41,11 @@ class SupportsCues(Protocol):
     def prepare_cues(self, texts: Sequence[str]) -> None: ...
 
     async def play_cue(self, text: str) -> bool: ...
+
+
+@runtime_checkable
+class SupportsLouder(Protocol):
+    def louder(self) -> None: ...
 
 
 @runtime_checkable

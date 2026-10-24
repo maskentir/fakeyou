@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator
+from functools import partial
 
 import httpx2
 
@@ -42,11 +43,12 @@ class CartesiaSpeechSynthesizer:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
         return journaled_stream(
             self._journal,
             text,
-            self._stream_pcm,
+            partial(self._stream_pcm, language=language or self._language),
             SpeechTag("cartesia", sentence_index, transcript_id),
         )
 
@@ -67,12 +69,12 @@ class CartesiaSpeechSynthesizer:
     def journal(self) -> Journal | None:
         return self._journal
 
-    def _payload(self, text: str) -> dict[str, object]:
+    def _payload(self, text: str, language: str) -> dict[str, object]:
         return {
             "model_id": self._model,
             "transcript": text,
             "voice": {"mode": "id", "id": self._voice},
-            "language": self._language,
+            "language": language,
             "output_format": {
                 "container": "raw",
                 "encoding": "pcm_s16le",
@@ -80,12 +82,12 @@ class CartesiaSpeechSynthesizer:
             },
         }
 
-    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
+    async def _stream_pcm(self, text: str, language: str) -> AsyncGenerator[bytes]:
         async with self._client.stream(
             "POST",
             self._url,
             headers=self._headers,
-            json=self._payload(text),
+            json=self._payload(text, language),
             timeout=TTS_REQUEST_TIMEOUT_SECONDS,
         ) as response:
             if response.status_code >= 400:

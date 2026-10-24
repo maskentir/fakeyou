@@ -6,8 +6,10 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessageChunk
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_lifecycle
-from fakeyou.conversation.model_responder import ModelResponder, ReplierWholeResponder
+from fakeyou.conversation.model_responder import ReplierWholeResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     Responder,
     SentenceLimits,
@@ -17,6 +19,7 @@ from fakeyou.conversation.turn_graph import (
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
@@ -92,9 +95,9 @@ class FakeReplier:
 
     async def respond(
         self, events: Sequence[TranscriptEvent], _on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         self.batches.append(tuple(event.id for event in events))
-        return "Yes, I am here."
+        return SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class FixedStream:
@@ -102,9 +105,9 @@ class FixedStream:
         self._batch = batch
         self._batches = batches
 
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         self._batches.append(self._batch)
-        yield "Yes, I am here."
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class Harness:

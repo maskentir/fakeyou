@@ -8,10 +8,12 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import MeetingResponder
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnInteraction, TurnTiming, build_meeting_turns
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -46,7 +48,7 @@ class _BuggyResponder(FakeResponder):
     @override
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         raise ValueError("bug")
 
 
@@ -87,7 +89,7 @@ async def test_responder_error_fails_loop_after_the_failure_limit() -> None:
     class Broken:
         async def respond(
             self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-        ) -> str:
+        ) -> SpokenChunk:
             del events
             del on_tool_start
             raise RuntimeError("model exploded")
@@ -117,10 +119,10 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
 
         async def respond(
             self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-        ) -> str:
+        ) -> SpokenChunk:
             del events
             del on_tool_start
-            return "ok"
+            return SpokenChunk(text="ok", language=DEFAULTS.speech.language)
 
     responder = JournaledResponder()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
@@ -184,11 +186,10 @@ async def test_model_and_tool_events_carry_their_transcript(journal: RecordingJo
     )
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
-    assert (
-        await responder.respond([event("t1", "When is the demo?")], lambda: None)
-        == "The demo is on Friday."
-    )
-    assert await responder.respond([event("t2", "What time?")], lambda: None) == "Tuesday at ten."
+    first = await responder.respond([event("t1", "When is the demo?")], lambda: None)
+    second = await responder.respond([event("t2", "What time?")], lambda: None)
+    assert first.text == "The demo is on Friday."
+    assert second.text == "Tuesday at ten."
 
     assert [row["transcript_id"] for row in journal.events("request_started")] == ["t1", "t1", "t2"]
     assert [row["transcript_id"] for row in journal.events("request_finished")] == [
@@ -300,10 +301,8 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
         on_tool_result=lambda *result: results.append(result),
     )
 
-    assert (
-        await responder.respond([event("one", "When is the demo?")], lambda: None)
-        == "The demo is on Friday."
-    )
+    reply = await responder.respond([event("one", "When is the demo?")], lambda: None)
+    assert reply.text == "The demo is on Friday."
 
     [(tool_name, output, duration_ms)] = results
     assert tool_name == "recall_meeting_context"

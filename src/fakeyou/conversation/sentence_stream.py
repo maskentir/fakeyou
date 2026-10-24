@@ -1,7 +1,6 @@
 from collections.abc import AsyncIterator
 
-from langchain_core.messages import BaseMessage
-
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.sentences import sentence_end
 
 
@@ -20,6 +19,10 @@ class SentenceStream:
         if boundary != self._boundary:
             self._boundary = boundary
             self.buffer = ""
+
+    def observe_language(self, language: str) -> None:
+        if language:
+            self.language = language
 
     def take(self, piece: str) -> list[str]:
         self.buffer += piece
@@ -48,42 +51,16 @@ class SentenceStream:
         return None
 
 
-def model_text(message: object, metadata: object, *, tool_pending: bool) -> str:
-    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model":
-        return ""
-    if tool_pending or not isinstance(message, BaseMessage):
-        return ""
-    return message.text
-
-
 async def shape_sentences(
-    pieces: AsyncIterator[str], *, max_sentences: int, language: str
-) -> AsyncIterator[str]:
+    chunks: AsyncIterator[SpokenChunk], *, max_sentences: int, language: str
+) -> AsyncIterator[SpokenChunk]:
     stream = SentenceStream(max_sentences, language)
-    async for piece in pieces:
-        for sentence in stream.take(piece):
-            yield sentence
+    async for chunk in chunks:
+        stream.observe_language(chunk.language)
+        for sentence in stream.take(chunk.text):
+            yield SpokenChunk(text=sentence, language=chunk.language)
         if stream.check_cap():
             return
     tail = stream.flush()
     if tail is not None:
-        yield tail
-
-
-def cap_reply(reply: str, max_sentences: int, language: str) -> str:
-    if max_sentences <= 0:
-        raise ValueError("max_sentences must be positive")
-    if not reply.strip():
-        return reply
-    remaining = reply.strip()
-    sentences: list[str] = []
-    for _ in range(max_sentences):
-        boundary = sentence_end(remaining, language=language)
-        if not boundary:
-            sentences.append(remaining)
-            break
-        sentences.append(remaining[:boundary].strip())
-        remaining = remaining[boundary:].strip()
-        if not remaining:
-            break
-    return " ".join(sentences)
+        yield SpokenChunk(text=tail, language=language)

@@ -5,12 +5,14 @@ from typing import Any, cast
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
     MeetingResponder,
 )
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnGeneration, build_meeting_turns
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,
@@ -57,12 +59,14 @@ async def test_each_turn_is_built_from_what_the_meeting_record_holds(tmp_path: P
     first, second, aside = event("one", "first"), event("two", "second"), event("x", "aside")
 
     record.add_transcript(first)
-    assert await responder.respond([first], lambda: None) == "first answer"
+    reply = await responder.respond([first], lambda: None)
+    assert reply.text == "first answer"
     record.add_twin_speech("First answer was cut")
     record.add_twin_speech("short", interrupted=True)
     record.add_transcript(aside)
     record.add_transcript(second)
-    assert await responder.respond([second], lambda: None) == "second answer"
+    reply = await responder.respond([second], lambda: None)
+    assert reply.text == "second answer"
     record.close()
 
     seen = model.seen[-1][1:]
@@ -94,7 +98,8 @@ async def test_adapter_never_speaks_user_or_tool_output(
             return {"messages": [message]}
 
     responder = MeetingResponder(cast(AgentT, Agent()), NoHistory())
-    assert await responder.respond([event("one")], lambda: None) == ""
+    reply = await responder.respond([event("one")], lambda: None)
+    assert reply.text == ""
 
 
 def test_transcript_event_and_record_carry_capture_ms(tmp_path: Path) -> None:
@@ -143,7 +148,8 @@ async def test_adapter_uses_native_text_blocks_and_current_tool_callbacks() -> N
             }
 
     responder = MeetingResponder(cast(AgentT, Agent()), NoHistory())
-    assert await responder.respond([event("one")], lambda: observed.append("tool")) == "spoken"
+    reply = await responder.respond([event("one")], lambda: observed.append("tool"))
+    assert reply.text == "spoken"
     assert observed == ["tool"]
 
 
@@ -154,14 +160,14 @@ class _StreamOnlyResponder:
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[SpokenChunk]:
         del events
         del on_tool_start
         del request_id
         return self._generate()
 
-    async def _generate(self) -> AsyncIterator[str]:
-        yield "Hello."
+    async def _generate(self) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Hello.", language=DEFAULTS.speech.language)
 
 
 def test_stream_only_responder_is_rejected_when_sentence_streaming_is_off() -> None:

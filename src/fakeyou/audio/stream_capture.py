@@ -610,8 +610,14 @@ class StreamFleetSession:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
-        await self._voice().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+        await self._voice().speak(
+            text,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
 
     async def stop_playback(self) -> None:
         await run_fleet_calls(
@@ -639,6 +645,10 @@ class StreamFleetSession:
     def mark_admitted(self) -> None:
         for session in self._sessions:
             session.mark_admitted()
+
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        changed = [session.update_keywords(terms) for session in self._sessions]
+        return any(changed)
 
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None

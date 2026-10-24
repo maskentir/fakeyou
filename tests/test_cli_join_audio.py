@@ -1,11 +1,11 @@
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 import fakeyou.orchestration.assembly as assembly
 from fakeyou.audio.playback import PlaybackEvent
@@ -19,7 +19,6 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.meeting_turns import MeetingTurns
 from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.session import SessionResult
-from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.record import (
@@ -66,7 +65,6 @@ async def test_join_audio_builds_conversation_on_the_meeting_record(
     assert "checkpointer" not in created
     assert created["persona"] == f"{DEFAULT_PERSONA}\n\n{PERCEPTION_GUIDANCE}"
     assert [type(item) for item in created["middleware"]] == [
-        type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
@@ -94,6 +92,12 @@ async def test_join_audio_transcript_reaches_conversation(
             agent_calls.append((request, config))
             return {"messages": [AIMessage(content="Reply.")]}
 
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            agent_calls.append((request, config))
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
+
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
     captured = {}
 
@@ -101,7 +105,7 @@ async def test_join_audio_transcript_reaches_conversation(
         del config
         captured.update(kwargs)
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         frame = TranscriptUpdate(
             text="Settings Twin, hello.",
             final=True,
@@ -212,12 +216,19 @@ async def test_join_wake_phrase_gates_agent_replies(
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
 
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            agent_calls.append(request)
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
+
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
@@ -248,6 +259,13 @@ async def test_join_barge_in_stops_speaking_session(
             del config
             del request
             return {"messages": [AIMessage(content="Reply.")]}
+
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            del request
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
 
     async def stop_playback() -> None:
         stops.append(True)
@@ -404,12 +422,19 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
 
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            agent_calls.append(request)
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
+
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         for _ident, text in (
             ("t1", "let's review the budget"),
             ("t2", "who owns the migration"),

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, override
 
@@ -27,7 +27,7 @@ from fakeyou.config.settings import OpenAITTS, STTSettings
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.transcription.contract import SpeechSinks, TranscriptionError
-from fakeyou.transcription.muse import MuseClient, MuseOptions
+from fakeyou.transcription.muse import KeywordSource, MuseClient, MuseOptions
 from tests._audio_fakes import (
     FakeReconnectableSTT,
     NonReconnectableSTT,
@@ -44,13 +44,18 @@ class _Playback:
     def is_speaking(self) -> bool:
         return False
 
+    def louder(self) -> None:
+        pass
+
     async def speak(
         self,
         text: str,
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         del sentence_index, transcript_id, text
 
     async def stop(self) -> None:
@@ -633,3 +638,32 @@ async def test_a_successful_reconnect_starts_the_new_session_with_a_clean_slate(
         await runner_task
     assert session.reconnect_state() == "idle"
     assert activity.snapshot().pending_speech_at is None
+
+
+class _KeywordSTT(FakeReconnectableSTT):
+    def __init__(self) -> None:
+        super().__init__()
+        self.source = KeywordSource(["Rani"])
+
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        return self.source.update(terms)
+
+
+async def test_new_keywords_rotate_the_transcriber_once_the_room_is_quiet() -> None:
+    stt = _KeywordSTT()
+    async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=0.0) as session:
+        assert session.update_keywords(["Ayu"]) is True
+        assert session.reconnect_state() == "queued"
+        await session.maintenance_tick(is_busy=False)
+        await settle_reconnect(session)
+        assert session.update_keywords(["Ayu"]) is False
+
+    assert stt.calls == 1
+    assert stt.source.terms == ("Rani", "Ayu")
+
+
+async def test_a_transcriber_without_keywords_is_left_alone() -> None:
+    stt = FakeReconnectableSTT()
+    async with _quiet_session(stt, stt_idle_reconnect_seconds=0.0, idle_seconds=0.0) as session:
+        assert session.update_keywords(["Ayu"]) is False
+        assert session.reconnect_state() == "idle"

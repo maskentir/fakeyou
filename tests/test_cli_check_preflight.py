@@ -24,7 +24,6 @@ from fakeyou.conversation.middleware import (
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.session import SessionResult
-from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
@@ -428,9 +427,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     ):
         pass
 
-    greeting_type = type(create_greeting_middleware("id"))
     assert [type(item) for item in created["middleware"]] == [
-        greeting_type,
         ModelFallbackMiddleware,
         ChatTurnToolsMiddleware,
         SpeakerAttributionMiddleware,

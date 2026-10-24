@@ -69,7 +69,7 @@ from fakeyou.transcription.contract import (
     TranscriptionError,
     TranscriptSink,
 )
-from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
+from fakeyou.transcription.muse import KeywordSource, MuseClient, MuseDeps, MuseOptions
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_START_TIMEOUT_SECONDS = 25.0
@@ -100,6 +100,11 @@ def stt_reconnect_supported(stt: object) -> bool:
     return isinstance(stt, SupportsReconnectWhenIdle) and asyncio.iscoroutinefunction(
         stt.reconnect_when_idle
     )
+
+
+@runtime_checkable
+class SupportsKeywords(Protocol):
+    def update_keywords(self, terms: Sequence[str]) -> bool: ...
 
 
 @runtime_checkable
@@ -318,6 +323,15 @@ class MeetingAudioSession:
             return
         self.fail("meeting audio provider failed", cause=fault)
 
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        stt = self._stt
+        if not isinstance(stt, SupportsKeywords):
+            return False
+        if not stt.update_keywords(terms):
+            return False
+        self.request_stt_reconnect("keyword_change")
+        return True
+
     def request_stt_reconnect(self, reason: str) -> None:
         if self._stopping or self._reconnect_state in (
             "queued",
@@ -492,6 +506,7 @@ class MeetingAudioSession:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.raise_if_failed()
         if self._stopping:
@@ -501,6 +516,8 @@ class MeetingAudioSession:
             extra["sentence_index"] = sentence_index
         if transcript_id is not None:
             extra["transcript_id"] = transcript_id
+        if language is not None:
+            extra["language"] = language
         with self._gate.own_speech.speaking(text):
             try:
                 await self._engine.speak(text, **extra)
@@ -512,6 +529,9 @@ class MeetingAudioSession:
 
     async def stop_playback(self) -> None:
         await self._engine.stop()
+
+    def louder(self) -> None:
+        self._engine.louder()
 
     def prepare_cues(self, texts: Sequence[str]) -> None:
         engine = self._engine
@@ -693,7 +713,7 @@ def _default_speech_session(
                 mode=speech.stt_settings.mode,
                 url=speech.stt_settings.url,
                 language=speech.speech_language,
-                keywords=tuple(speech.stt_keywords or ()),
+                keywords=KeywordSource(speech.stt_keywords or ()),
                 sample_rate=CAPTURE_SAMPLE_RATE,
             ),
             sinks=sinks,

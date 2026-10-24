@@ -161,7 +161,9 @@ class ScenarioAudio(FakeReplyAudio):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         cut = self._cut_after
         if cut is not None and len(self.turn) > cut:
             return

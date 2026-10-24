@@ -8,8 +8,14 @@ from typing import Literal
 from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.jev_refresh import JevState
-from fakeyou.conversation.session import ConversationError, MeetingAudio, SupportsCues
+from fakeyou.conversation.session import (
+    ConversationError,
+    MeetingAudio,
+    SupportsCues,
+    SupportsLouder,
+)
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.conversation.turn_graph import (
@@ -101,12 +107,18 @@ class _SessionSpeaker:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         session = self._session()
         if sentence_index is None and transcript_id is None:
-            await session.speak(utterance)
+            await session.speak(utterance, language=language)
             return
-        await session.speak(utterance, sentence_index=sentence_index, transcript_id=transcript_id)
+        await session.speak(
+            utterance,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
 
     async def stop_playback(self) -> None:
         await self._session().stop_playback()
@@ -142,6 +154,7 @@ class TurnLifecycle:
         self._journal = journal
         self._responder = responder
         self._jev = jev
+        self._control: ReplyControl | None = None
         self._options = RecoveryOptions()
         self._recovery = self._build_recovery()
         self._reply = ReplyOptions()
@@ -241,6 +254,10 @@ class TurnLifecycle:
         self._deferred_options = options
         self._refresh_runtime()
 
+    def configure_control(self, control: ReplyControl | None) -> None:
+        self._control = control
+        self._bind_control()
+
     def configure_cue(self, cue: ThinkingCue | None) -> None:
         self._cue = cue
         self._prepare_cues()
@@ -250,6 +267,14 @@ class TurnLifecycle:
         session = self._session
         if self._cue is not None and isinstance(session, SupportsCues):
             session.prepare_cues(self._cue.lines)
+
+    def _bind_control(self) -> None:
+        control = self._control
+        session = self._session
+        if control is None or session is None:
+            return
+        if isinstance(session, SupportsLouder):
+            control.on_louder = session.louder
 
     def observe_spoken(self, observer: Callable[[str], None]) -> None:
         self._spoken = observer
@@ -362,6 +387,7 @@ class TurnLifecycle:
         if self._session is not None and self._session is not session:
             raise ConversationError("meeting conversation already owns an audio session")
         self._session = session
+        self._bind_control()
         self._prepare_cues()
         self.start_pending()
 

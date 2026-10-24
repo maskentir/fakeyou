@@ -4,6 +4,7 @@ from typing import override
 import pytest
 
 from fakeyou.conversation.meeting_turns import build_meeting_turns
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES, TURN_FAILED_LINES
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -24,7 +25,7 @@ class ScriptedResponder(FakeResponder):
     @override
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         if self._outcomes.pop(0) == "fail":
             self.calls.append(list(events))
             raise RuntimeError("model unavailable")

@@ -2,11 +2,10 @@ import asyncio
 import html
 import json
 import os
-import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 from langchain.agents import create_agent
@@ -18,6 +17,7 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.structured_output import StructuredOutputError, ToolStrategy
 from langchain_core.language_models import BaseChatModel
+from langgraph.func import entrypoint, task
 from langgraph.runtime import Runtime
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -160,26 +160,65 @@ class DebriefStopRequested(Exception):
     pass
 
 
-async def _wait_for_chunk(
-    models: DebriefModels,
-    chunk: tuple[sources.SourceEntry, ...],
-    *,
-    brief: MeetingBrief | None,
-    stop: asyncio.Event,
-) -> schema.DebriefDraft:
-    if stop.is_set():
-        raise DebriefStopRequested
-    extraction = asyncio.create_task(_extract_chunk(models, chunk, brief))
+DEBRIEF_PARALLEL_CHUNKS = 4
+
+
+@dataclass(frozen=True, slots=True)
+class _DebriefJob:
+    models: DebriefModels
+    chunks: tuple[tuple[sources.SourceEntry, ...], ...]
+    brief: MeetingBrief | None
+    record_sha256: str
+    journal: Journal | None
+
+
+@task
+async def _extract_chunk_task(job: _DebriefJob, index: int) -> schema.DebriefDraft:
+    chunk = job.chunks[index - 1]
+    journal = job.journal
+    request_id = (
+        journal.request_started(
+            source="agent",
+            operation="debrief",
+            chunk=index,
+            source_count=len(chunk),
+            record_sha256=job.record_sha256,
+        )
+        if journal is not None
+        else None
+    )
+    try:
+        draft = await _extract_chunk(job.models, chunk, job.brief)
+        sources.validate_draft(draft, sources={entry.id: entry for entry in chunk}, brief=job.brief)
+    except BaseException as error:
+        if journal is not None and request_id is not None:
+            journal.request_failed(request_id, error=type(error).__name__)
+        raise
+    if journal is not None and request_id is not None:
+        journal.request_finished(request_id, item_count=len(draft.items))
+    return draft
+
+
+@entrypoint()
+async def _extract_chunks(job: _DebriefJob) -> list[schema.DebriefDraft]:
+    pending = [_extract_chunk_task(job, index) for index in range(1, len(job.chunks) + 1)]
+    return [await draft for draft in pending]
+
+
+async def _until_stopped(job: _DebriefJob, stop: asyncio.Event) -> list[schema.DebriefDraft]:
+    extraction = asyncio.create_task(
+        _extract_chunks.ainvoke(job, config={"max_concurrency": DEBRIEF_PARALLEL_CHUNKS})
+    )
     stopped = asyncio.create_task(stop.wait())
     try:
         await asyncio.wait((extraction, stopped), return_when=asyncio.FIRST_COMPLETED)
         if stop.is_set():
             raise DebriefStopRequested
-        return await extraction
+        return cast(list[schema.DebriefDraft], await extraction)
     finally:
-        for task in (extraction, stopped):
-            if not task.done():
-                task.cancel()
+        for running in (extraction, stopped):
+            if not running.done():
+                running.cancel()
         await asyncio.gather(extraction, stopped, return_exceptions=True)
 
 
@@ -193,30 +232,14 @@ async def generate_debrief(
 ) -> schema.DebriefDraft:
     if stop.is_set():
         raise DebriefStopRequested
-    chunks = sources.chunk_sources(snapshot.sources)
-    drafts: list[schema.DebriefDraft] = []
-    for index, chunk in enumerate(chunks, start=1):
-        request_id = (
-            journal.request_started(
-                source="agent",
-                operation="debrief",
-                chunk=index,
-                source_count=len(chunk),
-                record_sha256=snapshot.record_sha256,
-            )
-            if journal is not None
-            else None
-        )
-        try:
-            draft = await _wait_for_chunk(models, chunk, brief=brief, stop=stop)
-            sources.validate_draft(draft, sources={entry.id: entry for entry in chunk}, brief=brief)
-            if journal is not None and request_id is not None:
-                journal.request_finished(request_id, item_count=len(draft.items))
-            drafts.append(draft)
-        finally:
-            error = sys.exception()
-            if error is not None and journal is not None and request_id is not None:
-                journal.request_failed(request_id, error=type(error).__name__)
+    job = _DebriefJob(
+        models=models,
+        chunks=tuple(sources.chunk_sources(snapshot.sources)),
+        brief=brief,
+        record_sha256=snapshot.record_sha256,
+        journal=journal,
+    )
+    drafts = await _until_stopped(job, stop) if job.chunks else []
     if stop.is_set():
         raise DebriefStopRequested
     merged = merge_drafts(drafts)

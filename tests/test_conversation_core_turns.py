@@ -190,12 +190,23 @@ class GatedAudio(FakeReplyAudio):
 
     @override
     async def speak(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.attempts += 1
         self.entered.set()
         await self.gate.wait()
-        await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+        await super().speak(
+            text,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
+        del language
 
 
 async def test_interim_cancels_pre_pcm_child_without_answering(journal: RecordingJournal) -> None:

@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
+from functools import partial
 from typing import Any
 
 import httpx2
@@ -35,7 +36,7 @@ class MiniMaxSpeechSynthesizer:
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._voice = resolved.voice
         self._model = resolved.model
-        self._language_boost = SPEECH_LANGUAGES[language].english
+        self._language = language
         self._url = resolved.base_url
         self._journal = journal
         self._owns_client = client is None
@@ -47,11 +48,12 @@ class MiniMaxSpeechSynthesizer:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
         return journaled_stream(
             self._journal,
             text,
-            self._stream_pcm,
+            partial(self._stream_pcm, language=language or self._language),
             SpeechTag("minimax", sentence_index, transcript_id),
         )
 
@@ -76,12 +78,12 @@ class MiniMaxSpeechSynthesizer:
     def journal(self) -> Journal | None:
         return self._journal
 
-    def _payload(self, text: str) -> dict[str, Any]:
+    def _payload(self, text: str, language: str) -> dict[str, Any]:
         return {
             "model": self._model,
             "text": text,
             "stream": True,
-            "language_boost": self._language_boost,
+            "language_boost": SPEECH_LANGUAGES[language].english,
             "voice_setting": {"voice_id": self._voice},
             "audio_setting": {
                 "sample_rate": PLAYBACK_SAMPLE_RATE,
@@ -91,9 +93,9 @@ class MiniMaxSpeechSynthesizer:
             "stream_options": {"exclude_aggregated_audio": True},
         }
 
-    async def _stream_pcm(self, text: str) -> AsyncGenerator[bytes]:
+    async def _stream_pcm(self, text: str, language: str) -> AsyncGenerator[bytes]:
         async with self._client.stream(
-            "POST", self._url, headers=self._headers, json=self._payload(text)
+            "POST", self._url, headers=self._headers, json=self._payload(text, language)
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():

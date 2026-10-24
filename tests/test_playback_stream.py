@@ -18,8 +18,14 @@ class _StreamSynth:
         self.closed = False
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
+        del language
         del sentence_index
         del transcript_id
         self.texts.append(text)
@@ -50,7 +56,12 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
 
         @override
         async def stream(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> AsyncIterator[bytes]:
             self.calls += 1
             if self.calls == 1:
@@ -87,7 +98,12 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
 
         @override
         async def stream(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> AsyncIterator[bytes]:
             self.calls += 1
             yield self.chunks[0]
@@ -183,7 +199,12 @@ async def test_engine_closes_retained_stream_after_first_chunk(outcome: str) -> 
     class Synth(FakeSynth):
         @override
         async def stream(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> AsyncIterator[bytes]:
             try:
                 yield b"first"
@@ -221,7 +242,12 @@ async def test_engine_limits_stream_finalizer_to_cleanup_budget() -> None:
     class Synth(FakeSynth):
         @override
         async def stream(
-            self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+            self,
+            text: str,
+            *,
+            sentence_index: int | None = None,
+            transcript_id: str | None = None,
+            language: str | None = None,
         ) -> AsyncIterator[bytes]:
             try:
                 yield b"first"
@@ -310,3 +336,20 @@ async def test_stopping_paplay_after_its_input_closed_is_quiet(
         await play
     [proc] = spawned
     assert proc.returncode is not None
+
+
+async def test_a_louder_playback_scales_the_audio() -> None:
+    player = _StreamPlayer()
+    events: list[PlaybackEvent] = []
+    engine = build_engine(_StreamSynth(chunks=[b"\x10\x00" * 10]), player, FakeMuter(), events)
+
+    await engine.speak("hello")
+    plain = player.chunks[0]
+
+    engine.louder()
+    player.chunks.clear()
+    await engine.speak("hello")
+    louder = player.chunks[0]
+
+    assert louder != plain
+    assert louder == b"\x13\x00" * 10

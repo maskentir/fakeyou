@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     ConversationResponder,
     StreamingConversationResponder,
@@ -59,6 +60,7 @@ class TurnInteraction:
     window_turns: int = DEFAULTS.participation_decider.window_turns
     shadow: bool = False
     chat: ChatChannel | None = None
+    control: ReplyControl | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +184,7 @@ def build_meeting_turns(
         jev=_jev_state(interaction),
         clock=timing.clock,
     )
+    lifecycle.configure_control(interaction.control)
     lifecycle.configure_recovery(
         RecoveryOptions(
             faults=diagnostics.faults,
