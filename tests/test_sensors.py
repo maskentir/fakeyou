@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fakeyou.config.settings import PerceptionSettings
+from fakeyou.perception.context import PerceptionContext
+from fakeyou.perception.meet_protocol import DeviceOutput
 from fakeyou.perception.sensors import (
     PERCEPTION_ASSIGN_JS,
     PERCEPTION_DRAIN_JS,
@@ -286,3 +288,19 @@ async def test_people_who_left_are_no_longer_in_the_meeting_state() -> None:
     sensed.accept_sync(sync_body([user_info(BUDI, "Budi", status=2)]))
 
     assert "Budi" not in {person.name for person in timeline.snapshot().participants}
+
+
+async def test_the_view_reports_the_protocol_camera_and_presenter() -> None:
+    sensed, timeline, _ = sensors()
+    await sensed.accept_batch(DrainBatch(messages=[message(people())]))
+    sensed.accept_sync(sync_body([user_info(AYU, "Ayu")]))
+    sensed.roster.apply_outputs(
+        [DeviceOutput(device_id=AYU, kind="video", stream_id="7", disabled=False)]
+    )
+
+    context = PerceptionContext(timeline, None, max_chars=4000, state=sensed.roster.state)
+    view = context.view()
+
+    by_name = {person.name: person for person in view.participants}
+    assert by_name["Ayu"].camera_on is True
+    assert view.presenting == "Ayu"

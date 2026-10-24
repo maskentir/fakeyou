@@ -15,6 +15,7 @@ from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.perception.interpreter import ImagePayload, PerceptionInterpreter, image_payload
 from fakeyou.perception.percepts import ScreenSegment
+from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline
 from fakeyou.perception.view import (
     MeetingView,
@@ -78,14 +79,23 @@ class PerceptionContext:
         *,
         max_chars: int,
         clock: Clock = _utc_now,
+        state: Callable[[], MeetingState] | None = None,
     ) -> None:
         self.timeline = timeline
         self.interpreter = interpreter
         self.max_chars = max_chars
         self.clock = clock
+        self._state = state
 
     def view(self) -> MeetingView:
-        return render_view(self.timeline.snapshot(), now=self.clock(), max_chars=self.max_chars)
+        meeting = self._state() if self._state is not None else None
+        return render_view(
+            self.timeline.snapshot(),
+            now=self.clock(),
+            max_chars=self.max_chars,
+            camera_on=meeting.cameras_on if meeting is not None else None,
+            presenter=meeting.presenter if meeting is not None else None,
+        )
 
     def pending_screen(self) -> ScreenSegment | None:
         current = self.timeline.snapshot().current_screen

@@ -163,7 +163,12 @@ def create_perception_stack(
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
     sensors = PerceptionSensors(timeline, perception, joined_at=datetime.now(UTC), journal=journal)
     sensors.roster_listener = on_roster
-    context = PerceptionContext(timeline, interpreter, max_chars=perception.view_max_chars)
+    context = PerceptionContext(
+        timeline,
+        interpreter,
+        max_chars=perception.view_max_chars,
+        state=sensors.roster.state,
+    )
     return PerceptionStack(
         timeline=timeline, sensors=sensors, context=context, archive=archive, reader=reader
     )
