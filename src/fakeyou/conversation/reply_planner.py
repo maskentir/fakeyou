@@ -40,7 +40,8 @@ class ReplyPlan(BaseModel):
     language: ReplyLanguage = Field(
         description=(
             "The language of understood: en for English words, id for Indonesian words. The "
-            "spoken text uses this language."
+            "participant's words decide it, never the language of your profile, your speaking "
+            "style or the rest of the meeting."
         )
     )
     intent: ReplyIntent = Field(
@@ -54,8 +55,9 @@ class ReplyPlan(BaseModel):
     )
     text: str = Field(
         description=(
-            "The words you speak aloud, in that language, one or two short sentences. Empty when "
-            "the intent is silent."
+            "The words you speak aloud, every word in the language you declared: English when "
+            "language is en, Indonesian when it is id, even when your profile and the meeting use "
+            "the other one. One or two short sentences. Empty when the intent is silent."
         )
     )
 
