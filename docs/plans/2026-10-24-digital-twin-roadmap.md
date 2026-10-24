@@ -120,6 +120,8 @@ Replay percakapan: 7 keluarga skenario, baseline di `evals/fixtures/conversation
 masih lemah sengaja dibiarkan sebagai target Fase 1: `small_talk` 0,259 (pertanyaan penutup) dan `language` 0,0
 (bahasa balasan masih mengikuti persona, bukan lawan bicara).
 
+Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 regresi terhadap baseline beku.
+
 ## Fase 1: percakapan yang natural
 
 - **Response planner terstruktur.**
