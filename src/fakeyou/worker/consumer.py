@@ -22,8 +22,14 @@ from fakeyou.orchestration.join_types import JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.ingestion_status import read_status
-from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
-from fakeyou.transport.schemas import INGESTION_STREAM, command_stream, encode_ingestion_job
+from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_profile_dir
+from fakeyou.transport.schemas import (
+    DEBRIEF_STREAM,
+    INGESTION_STREAM,
+    command_stream,
+    encode_debrief_job,
+    encode_ingestion_job,
+)
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.documents import (
     BRIEF_FILE_NAME,
@@ -399,6 +405,8 @@ class WorkerConsumer:
             {"phase": session.phase, "terminal_reason": session.terminal_reason},
         )
         await self._queue_pending_ingestion(meeting_id)
+        if session.phase == "ended":
+            await self._queue_debrief(meeting_id)
         await self._transport.release_lease(meeting_id, self._worker_id)
         self._forget(meeting_id)
 
@@ -413,6 +421,16 @@ class WorkerConsumer:
         await self._transport.publish_job(
             INGESTION_STREAM,
             encode_ingestion_job(meeting_id=meeting_id, kind="ingest", at=_now_iso()),
+        )
+
+    async def _queue_debrief(self, meeting_id: str) -> None:
+        record = self._settings.paths.record_dir
+        path = session_dir(record, meeting_id) / RECORD_FILE_NAME
+        if not path.exists() or not path.stat().st_size:
+            return
+        await self._transport.publish_job(
+            DEBRIEF_STREAM,
+            encode_debrief_job(meeting_id=meeting_id, at=_now_iso()),
         )
 
     async def _handle_stop(self, meeting_id: str, entry_id: str) -> None:

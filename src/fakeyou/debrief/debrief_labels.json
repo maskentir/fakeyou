@@ -14,6 +14,7 @@
   "chunk_count": "Jumlah chunk",
   "warning": "Laporan unreviewed. Kutipan cocok belum membuktikan makna ringkasan. Identitas unknown tetap unknown; ucapan twin bukan persetujuan owner atau bukti terdengar oleh host. PIC dan tenggat ialah klaim. Permintaan keputusan owner bersifat lokal dan bukan bukti owner telah dihubungi.",
   "items": "Klaim dan tindak lanjut",
+  "unanswered": "Pertanyaan yang belum terjawab",
   "empty_items": "Tidak ada item yang diekstrak; bukan bukti semua tujuan tercapai.",
   "decision_claim": "Klaim keputusan",
   "proposal": "Usulan",

@@ -30,7 +30,12 @@ from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.ingestion_status import IngestionStatus, read_status, write_status
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
-from fakeyou.transport.schemas import INGESTION_STREAM, encode_command, encode_ingestion_job
+from fakeyou.transport.schemas import (
+    DEBRIEF_STREAM,
+    INGESTION_STREAM,
+    encode_command,
+    encode_ingestion_job,
+)
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.__main__ import run_consumers, verify_boot_dependencies
 from fakeyou.worker.consumer import (
@@ -1033,3 +1038,24 @@ async def test_settling_a_session_with_an_ingested_meeting_queues_nothing(
     await harness.finish_session(phase="ended", terminal_reason="stopped_by_owner")
 
     assert harness.client.streams.get(INGESTION_STREAM, []) == []
+
+
+async def test_the_debrief_is_queued_when_the_meeting_ends(harness: Harness) -> None:
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once(harness.discovery) == "m-1"
+    record = MeetingDir(harness.settings.paths.record_dir, SessionId("m-1")).record
+    record.write_text('{"kind": "header", "at": "2026-01-01T00:00:00+00:00"}\n')
+
+    await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
+
+    jobs = [fields for _entry, fields in harness.client.streams.get(DEBRIEF_STREAM, [])]
+    assert [job["meeting_id"] for job in jobs] == ["m-1"]
+    assert jobs[0]["type"] == "debrief_job"
+
+
+async def test_no_debrief_is_queued_without_a_record(harness: Harness) -> None:
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once(harness.discovery) == "m-1"
+
+    await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
+    assert harness.client.streams.get(DEBRIEF_STREAM, []) == []

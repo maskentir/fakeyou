@@ -236,6 +236,20 @@ Yang masih perlu bukti live: `display_claim` muncul dan label pembicara stabil (
   dijawab twin.
 - **Target:** trust replay tetap 0 severe; recall memory dipakai pada pertanyaan yang membutuhkannya ≥ 90%.
 
+### Status Fase 4 (2026-10-24)
+
+- Laporan pasca-meeting jalan sendiri: saat meeting berakhir, worker mengantrekan `debrief_job` (hanya kalau record-nya
+  punya isi). Laporan dikelompokkan per jenis: keputusan, tindak lanjut, usulan, pertanyaan terbuka, dan bagian khusus
+  "Pertanyaan yang belum terjawab" untuk temuan brief yang masih `open` atau `uncertain`. Aturan ekstraksi kini meminta
+  pertanyaan yang tidak bisa dijawab twin dicatat sebagai `open_question` dengan status `needs_owner`.
+- Brief pra-meeting bisa disiapkan twin: `fakeyou brief <meeting-id> --persona <path>` menulis brief dari catatan owner di
+  memory, pertanyaan terbuka dari laporan terakhir, dan profil owner. Id item dibuat kode, permission dibatasi ke
+  `explain_facts`, `discuss_options`, `ask_brief_questions`, dan tidak ada `approved_facts` yang dikarang model.
+- Counter `recall_calls` pada manifest trust sekarang menghitung injeksi prefetch juga, bukan hanya pemanggilan tool.
+
+Yang masih perlu bukti live: sesi dengan `--memory` (Graphiti hidup, recall dipakai), dan brief yang dipakai utk satu
+sesi nyata.
+
 ## Fase 5: kualitas kelas atas
 
 - **Routing model per giliran:** model ringan untuk obrolan dan ack, model kuat untuk pertanyaan sulit atau tool.

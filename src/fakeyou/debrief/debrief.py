@@ -331,6 +331,72 @@ def _append_evidence(
         lines.append(f"  {labels['quote']}: {_safe_text(reference.quote)}")
 
 
+def _grouped_items(
+    items: Sequence[schema.DebriefItem],
+) -> list[tuple[str, list[schema.DebriefItem]]]:
+    labels = _labels()
+    order = (
+        ("decision_claim", "owner_decision"),
+        ("action_item",),
+        ("proposal",),
+        ("open_question",),
+    )
+    groups: list[tuple[str, list[schema.DebriefItem]]] = []
+    for kinds in order:
+        section = ", ".join(labels[kind] for kind in kinds)
+        matching = [item for item in items if item.kind in kinds]
+        if matching:
+            groups.append((section, matching))
+    return groups
+
+
+def _item_sections(
+    items: Sequence[schema.DebriefItem],
+    source_index: dict[str, schema.EvidenceSource],
+    labels: Mapping[str, str],
+    speaker_names: Mapping[str, str] | None,
+) -> list[str]:
+    lines: list[str] = []
+    for section, grouped in _grouped_items(items):
+        lines.extend([f"## {section}", ""])
+        for item in grouped:
+            lines.extend(
+                [
+                    f"### {labels[item.kind]} ({item.kind}, {item.status})",
+                    "",
+                    _safe_text(item.text),
+                    "",
+                ]
+            )
+            if item.assignee_claim is not None:
+                lines.append(f"{labels['assignee_claim']}: {_safe_text(item.assignee_claim)}")
+            if item.due_text is not None:
+                lines.append(f"{labels['due_claim']}: {_safe_text(item.due_text)}")
+            _append_evidence(lines, source_index, labels, speaker_names, item.evidence)
+            lines.append("")
+    return lines
+
+
+def _unanswered_section(
+    report: schema.DebriefReport,
+    source_index: dict[str, schema.EvidenceSource],
+    labels: Mapping[str, str],
+    speaker_names: Mapping[str, str] | None,
+) -> list[str]:
+    unanswered = [finding for finding in report.findings if finding.status in ("open", "uncertain")]
+    if not unanswered:
+        return []
+    lines = [f"## {labels['unanswered']}", ""]
+    for finding in unanswered:
+        lines.append(f"### {_safe_text(finding.objective_id)} ({finding.status})")
+        lines.append("")
+        if not finding.evidence:
+            lines.append(labels["no_evidence"])
+        _append_evidence(lines, source_index, labels, speaker_names, finding.evidence)
+        lines.append("")
+    return lines
+
+
 def render_debrief(
     report: schema.DebriefReport, *, speaker_names: Mapping[str, str] | None = None
 ) -> str:
@@ -352,29 +418,15 @@ def render_debrief(
         "",
         labels["warning"],
         "",
-        f"## {labels['items']}",
-        "",
     ]
     source_index = {entry.id: entry for entry in report.evidence_sources}
 
     if not report.items:
-        lines.append(labels["empty_items"])
-    for index, item in enumerate(report.items, start=1):
-        lines.extend(
-            [
-                f"### {index}. {labels[item.kind]} ({item.kind}, {item.status})",
-                "",
-                _safe_text(item.text),
-                "",
-            ]
-        )
-        if item.assignee_claim is not None:
-            lines.append(f"{labels['assignee_claim']}: {_safe_text(item.assignee_claim)}")
-        if item.due_text is not None:
-            lines.append(f"{labels['due_claim']}: {_safe_text(item.due_text)}")
-        _append_evidence(lines, source_index, labels, speaker_names, item.evidence)
-        lines.append("")
+        lines.extend([f"## {labels['items']}", "", labels["empty_items"], ""])
+    lines.extend(_item_sections(report.items, source_index, labels, speaker_names))
+    lines.extend(_unanswered_section(report, source_index, labels, speaker_names))
     lines.extend([f"## {labels['findings']}", ""])
+
     if not report.findings:
         lines.append(labels["no_brief"] if report.context_sha256 is None else labels["no_findings"])
     for finding in report.findings:
