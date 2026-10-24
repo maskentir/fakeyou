@@ -151,6 +151,55 @@ async def test_camera_failure_is_recorded_without_failing_session(
     )
 
 
+async def test_known_error_dialogs_are_dismissed_before_the_microphone_is_enabled(
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def dismiss(*args: Any) -> tuple[str, ...]:
+        del args
+        return ("Camera not found",)
+
+    monkeypatch.setattr(runtime, "dismiss_known_errors", dismiss)
+
+    await runtime.run_meeting_session(
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, journal=journal, **session.kwargs),
+    )
+
+    [dismissed] = journal.events("modal_dismissed")
+    assert dismissed["detail"] == "Camera not found"
+    names = [row["event"] for row in journal.events()]
+    assert names.index("modal_dismissed") < names.index("microphone_enabled")
+
+
+async def test_a_failed_dialog_dismissal_is_recorded_without_failing_session(
+    journal: RecordingJournal,
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def dismiss(*args: Any) -> NoReturn:
+        del args
+        raise TimeoutError
+
+    monkeypatch.setattr(runtime, "dismiss_known_errors", dismiss)
+    reporter = FaultReporter(journal=journal)
+
+    result = await runtime.run_meeting_session(
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, faults=reporter, **session.kwargs),
+    )
+
+    assert result.terminal_reason != "audio_failure"
+    assert journal.events("microphone_enabled")
+    assert any(
+        (entry.source, entry.operation) == ("browser", "dismiss_modal")
+        for entry in reporter.summaries()
+    )
+
+
 async def test_session_duration_counts_from_admission(
     session: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

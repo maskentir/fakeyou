@@ -66,7 +66,6 @@ class ErrorCode(StrEnum):
     MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT = "meeting.has_conversation_without_context"
     MEETING_UNFINISHED_SESSION = "meeting.unfinished_session"
     MEETING_ALREADY_ENDED = "meeting.already_ended"
-    MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE = "meeting.conversation_checkpoint_uncheckable"
     MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE = "meeting.lifecycle_checkpoint_uncheckable"
     MEETING_CHECKPOINT_IDENTITY_MISMATCH = "meeting.checkpoint_identity_mismatch"
     MEETING_CANNOT_RESUME_PHASE = "meeting.cannot_resume_phase"
@@ -428,9 +427,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.MEETING_ALREADY_ENDED: ErrorSpec(
         "meeting {meeting_id} already ended; use a new meeting ID", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE: ErrorSpec(
-        "conversation checkpoint cannot be checked: {reason}"
     ),
     ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE: ErrorSpec(
         "lifecycle checkpoint cannot be checked: {reason}"

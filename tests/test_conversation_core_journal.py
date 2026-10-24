@@ -7,10 +7,10 @@ import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
-from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.conversation import MeetingResponder
+from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnInteraction, TurnTiming, build_meeting_turns
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES
@@ -74,7 +74,7 @@ async def test_agent_error_raises_typed_provider_fault() -> None:
             del request
             raise RuntimeError("agent exploded")
 
-    responder = LangGraphResponder(cast(AgentT, FailingAgent()), "thread")
+    responder = MeetingResponder(cast(AgentT, FailingAgent()), NoHistory())
     with pytest.raises(ProviderFault) as caught:
         await responder.respond([event("one")], lambda: None)
 
@@ -154,10 +154,8 @@ async def test_responder_journals_tool_failures(
         raise RuntimeError("graph down")
 
     lines = journal.lines
-    agent = create_meeting_agent(
-        _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
-    )
-    responder = LangGraphResponder(agent, "thread", journal=journal)
+    agent = create_meeting_agent(_recall_then_reply(), tools=[recall_meeting_context])
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     with pytest.raises(ProviderFault):
         await responder.respond([event("one", "When is the demo?")], lambda: None)
@@ -183,9 +181,8 @@ async def test_model_and_tool_events_carry_their_transcript(journal: RecordingJo
             ]
         ),
         tools=[recall_meeting_context],
-        checkpointer=InMemorySaver(),
     )
-    responder = LangGraphResponder(agent, "thread", journal=journal)
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     assert (
         await responder.respond([event("t1", "When is the demo?")], lambda: None)
@@ -230,9 +227,8 @@ async def test_failed_model_request_keeps_transcript_and_error_type(
 
     agent = create_meeting_agent(
         FailingChatModel(responses=[AIMessage(content="unused")]),
-        checkpointer=InMemorySaver(),
     )
-    responder = LangGraphResponder(agent, "thread", journal=journal)
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     with pytest.raises(ProviderFault):
         await responder.respond([event("t1", "When is the demo?")], lambda: None)
@@ -261,9 +257,8 @@ async def test_cancelled_tool_run_keeps_transcript_without_content(
     agent = create_meeting_agent(
         ToolCallingFakeModel(responses=[recall_call({"query": "demo"}, id="call-1")]),
         tools=[recall_meeting_context],
-        checkpointer=InMemorySaver(),
     )
-    responder = LangGraphResponder(agent, "thread", journal=journal)
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
     task = asyncio.create_task(
         responder.respond([event("t1", "When is the demo?")], lambda: begun.set())
     )
@@ -297,12 +292,10 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
         )
 
     results: list[tuple[str, str, float]] = []
-    agent = create_meeting_agent(
-        _recall_then_reply(), tools=[recall_meeting_context], checkpointer=InMemorySaver()
-    )
-    responder = LangGraphResponder(
+    agent = create_meeting_agent(_recall_then_reply(), tools=[recall_meeting_context])
+    responder = MeetingResponder(
         agent,
-        "thread",
+        NoHistory(),
         journal=journal,
         on_tool_result=lambda *result: results.append(result),
     )

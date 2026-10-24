@@ -12,13 +12,18 @@ MEETING_GUIDANCE = (
     "You are a precise digital twin for a meeting participant. "
     "Track the meeting context, distinguish known facts from assumptions, "
     "and ask for clarification when an action is ambiguous. "
-    "Keep spoken replies to one or two short sentences."
+    "Keep spoken replies to one or two short sentences. "
+    "Participant lines are live speech-recognition transcripts and can contain misheard words: "
+    "read each line by its most plausible meaning in this conversation, the way a person who "
+    "half-heard a word would, and answer that meaning instead of the literal words."
 )
 ENDING_RULE = (
     "Ending rule: stop right after the answer. Never end with a question or an offer such as "
-    "'Anything else?', 'Do you have other questions?', 'Should I note that?', or 'Can I help "
-    "with anything else?', in any language. Ask a question only when you cannot answer without "
-    "the missing information."
+    "'Anything else?', 'What else is on your mind?', 'Was that what you were looking for?', "
+    "'Should I note that?', or 'Did you want me to look at something?', in any language: do not "
+    "check whether your answer helped and do not ask what else the person wants. When someone "
+    "asks you to stop or to be shorter, acknowledge it in a few words and stop. Ask a question "
+    "only when no plausible reading of the request lets you answer."
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (

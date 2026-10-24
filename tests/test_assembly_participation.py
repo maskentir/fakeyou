@@ -4,7 +4,8 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.config.settings import ParticipationDeciderSettings, Settings
-from fakeyou.conversation.conversation import LangGraphResponder, MeetingAgent
+from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
+from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_decider import StructuredGeminiDecider
 from fakeyou.conversation.participation_graph import DeciderFailure
 from fakeyou.observability.diagnostics import Diagnostics
@@ -15,8 +16,8 @@ from fakeyou.orchestration.assembly import (
 )
 
 
-def _responder() -> LangGraphResponder:
-    return LangGraphResponder(cast(MeetingAgent, object()), "participation-thread")
+def _responder() -> MeetingResponder:
+    return MeetingResponder(cast(MeetingAgent, object()), NoHistory())
 
 
 def _builder(settings: Settings) -> _ConversationBuilder:

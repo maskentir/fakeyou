@@ -1,8 +1,3 @@
-from fakeyou.audio.stream_capture import (
-    parse_roster_names,
-)
-
-
 def test_parse_roster_excludes_twin_self() -> None:
     from fakeyou.audio.stream_capture import parse_roster
 
@@ -34,19 +29,3 @@ def test_parse_roster_keeps_all_entries_when_twin_name_collides() -> None:
     assert parse_roster(mixed, twin_name="Twin") == (
         tuple(f"devices/{index}" for index in range(4)) + ("devices/9",)
     )
-
-
-def test_parse_roster_names_keeps_id_name_and_drops_twin() -> None:
-    payload = {
-        "roster": [
-            {"id": "dev-x", "name": "  Harun  "},
-            {"id": "dev-t", "name": "Rani Twin"},
-            {"id": "dev-blank", "name": "   "},
-            {"name": "NoDevice"},
-            {"id": "dev-noname"},
-            "junk",
-        ]
-    }
-    assert parse_roster_names(payload, twin_name="Rani Twin") == ({"id": "dev-x", "name": "Harun"},)
-    assert parse_roster_names({"roster": []}) == ()
-    assert parse_roster_names({}) == ()

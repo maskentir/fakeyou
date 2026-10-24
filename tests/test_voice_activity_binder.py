@@ -422,7 +422,7 @@ def test_tracker_and_binder_share_registry_rows() -> None:
     registry.update_roster(["dev-a", "dev-b"])
     binder = SlotBinder(registry=registry)
     clock = FakeClock(now=10.0)
-    tracker = VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic, registry=registry)
+    tracker = VoiceActivityTracker(monotonic=clock.monotonic, registry=registry)
     binder.observe_stream(0, [99])
     assert isinstance(binder.resolve(0), Tenure)
     binder.observe_stream(1, [11])

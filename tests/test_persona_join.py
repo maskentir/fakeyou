@@ -21,8 +21,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
-    HistoryTrimMiddleware,
-    OrphanToolCallMiddleware,
+    SpeakerAttributionMiddleware,
 )
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import (
@@ -225,10 +224,9 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id")),
-        HistoryTrimMiddleware,
-        OrphanToolCallMiddleware,
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     assert audio.spoken == ["Hello."]
 
@@ -269,11 +267,10 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     greeting_type = type(create_greeting_middleware("id"))
     assert [type(item) for item in created["middleware"]] == [
         greeting_type,
-        HistoryTrimMiddleware,
-        OrphanToolCallMiddleware,
         ToolErrorMiddleware,
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     assert graphiti.searched == [
         {
@@ -433,10 +430,9 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id")),
-        HistoryTrimMiddleware,
-        OrphanToolCallMiddleware,
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     assert graphiti.added == []
     assert "recall" not in created["persona"].casefold()

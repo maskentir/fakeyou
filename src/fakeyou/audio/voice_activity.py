@@ -14,6 +14,7 @@ from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import finite_float
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.speakers import voice_participant_id
 from fakeyou.identity.identity import ResolveRefusal, SpeakerRegistry
 from fakeyou.observability.faults import ConsumerSink, create_poll_guard
 
@@ -21,7 +22,6 @@ VOICE_ACTIVITY_DRAIN_JS = (
     "() => { const tracker = window.__fakeyouVoiceActivity;"
     " if (!tracker) return null; return tracker.drain(); }"
 )
-VOICE_PARTICIPANT_PREFIX = "speaker-"
 PIPELINE_LAG_MS = 200.0
 FRAME_LAG_MS = 300.0
 ACTIVE_LEVEL = 0.01
@@ -61,20 +61,6 @@ def voice_label(index: int) -> str:
         remaining, position = divmod(remaining - 1, len(ascii_uppercase))
         letters = ascii_uppercase[position] + letters
     return letters
-
-
-def voice_participant_id(label: str) -> str:
-    return VOICE_PARTICIPANT_PREFIX + label.lower()
-
-
-def voice_speaker_name(participant_id: str, display_claim: str | None = None) -> str | None:
-    label = participant_id.removeprefix(VOICE_PARTICIPANT_PREFIX)
-    if label == participant_id or not label or not set(label) <= set(ascii_uppercase.lower()):
-        return None
-    name = f"Speaker {label.upper()}"
-    if display_claim is None:
-        return name
-    return f"{name}, shown as {display_claim}, unverified"
 
 
 @dataclass(slots=True)
@@ -192,13 +178,11 @@ class VoiceActivityTracker:
     def __init__(
         self,
         *,
-        twin_name: str,
         monotonic: Callable[[], float] = time.monotonic,
         lag_ms: float = PIPELINE_LAG_MS,
         frame_lag_ms: float = FRAME_LAG_MS,
         registry: SpeakerRegistry | None = None,
     ) -> None:
-        self._twin_name = twin_name.strip().casefold()
         self._monotonic = monotonic
         self._lag_ms = lag_ms
         self._frame_lag_ms = frame_lag_ms
@@ -208,7 +192,6 @@ class VoiceActivityTracker:
         self._anchors: deque[tuple[float, float]] = deque(maxlen=CLOCK_ANCHORS)
         self._speech = _Intervals()
         self._self_speech = _Intervals()
-        self._seen: dict[str, float] = {}
         self._local_slots: frozenset[int] = frozenset()
         self._sampled_page_ms: float | None = None
         self._instance: Any = None
@@ -263,9 +246,6 @@ class VoiceActivityTracker:
             self._local_slots = frozenset(
                 int(slot) for slot in local if finite_float(slot) is not None
             )
-        participants = batch.get("participants")
-        if isinstance(participants, list):
-            self._observe_roster(participants, received_ms)
         self._expire(received_ms)
 
     def attribute(self) -> VoiceAttribution:
@@ -388,38 +368,6 @@ class VoiceActivityTracker:
         if not self._anchors:
             return None
         return min(self._anchors, key=itemgetter(0))[1]
-
-    def _observe_roster(self, participants: Sequence[Any], received_ms: float) -> None:
-        matches = sum(
-            1
-            for participant in participants
-            if isinstance(participant, Mapping)
-            and isinstance(participant.get("id"), str)
-            and participant.get("id")
-            and isinstance(participant.get("name"), str)
-            and str(participant.get("name")).strip().casefold() == self._twin_name
-        )
-        for participant in participants:
-            if not isinstance(participant, Mapping):
-                continue
-            device = participant.get("id")
-            name = participant.get("name")
-            if not isinstance(device, str) or not device:
-                continue
-            if (
-                self._twin_name
-                and matches == 1
-                and isinstance(name, str)
-                and name.strip().casefold() == self._twin_name
-            ):
-                continue
-            self._seen[device] = received_ms
-        self._seen = {
-            device: seen
-            for device, seen in self._seen.items()
-            if received_ms - seen <= DEPARTURE_GRACE_MS
-        }
-        self._binder.update_roster(self._seen)
 
     def _expire(self, now_ms: float) -> None:
         cutoff = now_ms - RETENTION_MS

@@ -204,5 +204,7 @@ async def test_session_join_attempts_follow_the_configured_maximum() -> None:
     assert result.terminal_reason == "lobby_timeout_reached"
     attempts = journal.events("join_attempt_finished")
     assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "retry"), (2, "failed")]
+    assert {row["status"] for row in attempts} == {"timeout"}
+    assert all(row["detail"] for row in attempts)
     [finished] = journal.events("join_finished")
     assert finished["attempts"] == 2

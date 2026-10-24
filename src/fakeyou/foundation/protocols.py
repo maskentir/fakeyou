@@ -1,22 +1,9 @@
-from collections.abc import Mapping
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
 class SupportsAclose(Protocol):
     async def aclose(self) -> None: ...
-
-
-@runtime_checkable
-class SupportsAgentState(Protocol):
-    async def aget_state(self, config: Mapping[str, Any]) -> Any: ...
-
-    async def aupdate_state(
-        self,
-        config: Mapping[str, Any],
-        values: Mapping[str, Any],
-        as_node: str | None = None,
-    ) -> None: ...
 
 
 @runtime_checkable

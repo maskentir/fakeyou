@@ -6,7 +6,6 @@ from pydantic import ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId, is_identifier
-from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.memory.persona import (
     PersonaProfile,
     load_persona,
@@ -146,9 +145,6 @@ def test_memory_group_is_stable_across_rename_and_meetings() -> None:
     assert is_identifier(original.memory_group)
     assert original.memory_group.startswith("twin_")
     assert "owner-a" not in original.memory_group
-    assert conversation_thread_id("owner-a", "twin-a", "meeting-1") != conversation_thread_id(
-        "owner-a", "twin-a", "meeting-2"
-    )
 
 
 def test_memory_group_isolates_owners_and_twins() -> None:

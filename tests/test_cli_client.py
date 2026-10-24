@@ -1,9 +1,12 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import httpx2
 import pytest
+from pydantic import SecretStr
 
+from fakeyou.api.app import ApiDeps, create_app
+from fakeyou.api.sessions import SessionStore
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.client import (
@@ -19,6 +22,8 @@ from fakeyou.cli.client import (
     owner_client,
 )
 from fakeyou.cli.diagnostics import check_api
+from fakeyou.cli.sessions import SessionOptions, session_body
+from fakeyou.config.settings import Settings
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -257,3 +262,53 @@ async def test_debrief_gives_up_with_a_named_timeout(monkeypatch: pytest.MonkeyP
         )
 
     assert caught.value.code == ErrorCode.API_JOB_TIMEOUT
+
+
+class _Commands:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
+        del meeting_id
+        self.sent.append(str(fields["type"]))
+        return f"{len(self.sent)}-0"
+
+
+async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: Settings) -> None:
+    settings.api.owner_token = SecretStr("owner-secret")
+    commands = _Commands()
+    app = create_app(
+        settings,
+        ApiDeps(
+            transport=lambda: commands,
+            snapshot_store=lambda: SessionStore(settings.paths.record_dir),
+        ),
+    )
+    body = session_body(
+        SessionOptions(
+            link="https://meet.google.com/abc-defg-hij",
+            meeting_id="contract-1",
+            owner_id=settings.identity.owner_id,
+            twin_id=settings.identity.twin_id,
+        )
+    )
+
+    async with ApiClient(
+        base_url="http://testserver",
+        token="owner-secret",
+        transport=httpx2.ASGITransport(app=app),
+    ) as client:
+        created = await client.create_session(body)
+        joined = await client.join_session("contract-1")
+        stopped = await client.stop_session("contract-1")
+        listed = await client.list_sessions()
+        status = await client.get_session("contract-1")
+
+    assert (created["phase"], joined["phase"], stopped["phase"]) == (
+        "created",
+        "joining",
+        "joining",
+    )
+    assert [session["meeting_id"] for session in listed] == ["contract-1"]
+    assert status["meeting_id"] == "contract-1"
+    assert commands.sent == ["join", "stop"]

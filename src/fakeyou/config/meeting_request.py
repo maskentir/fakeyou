@@ -25,7 +25,7 @@ class MeetingRequest:
     twin_id: str | None = None
 
 
-_MEET_CODE_PATH = re.compile(r"/[a-z]{3}-[a-z]{4}-[a-z]{3}")
+_MEET_CODE_PATH = re.compile(r"/(?:meet/)?[a-z]{3}-[a-z]{4}-[a-z]{3}")
 _ALLOWED_LINK_QUERY: dict[str, re.Pattern[str]] = {
     "authuser": re.compile(r"\d+"),
     "hl": re.compile(r"[a-zA-Z-]+"),

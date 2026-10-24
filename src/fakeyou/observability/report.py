@@ -152,6 +152,8 @@ class _ReportState:
     overlaps: list[float] = field(default_factory=list)
     perception: Counter[str] = field(default_factory=Counter)
     reading_ms: list[float] = field(default_factory=list)
+    watchdog_failures: int = 0
+    last_at: datetime | None = None
 
 
 def _parse_row_at(row: dict[str, Any]) -> datetime | None:
@@ -402,6 +404,20 @@ def _apply_counter_event(state: _ReportState, row: dict[str, Any], _at: datetime
         state.starts += 1
 
 
+def _apply_watchdog_failure(
+    state: _ReportState, _row: dict[str, Any], _at: datetime | None
+) -> None:
+    state.watchdog_failures += 1
+
+
+def _in_call_seconds(state: _ReportState) -> float | None:
+    join = state.milestones.get("join_finished", {})
+    admitted_at = join.get("at") if join.get("status") == "admitted" else None
+    if not isinstance(admitted_at, datetime) or state.last_at is None:
+        return None
+    return round((state.last_at - admitted_at).total_seconds(), 3)
+
+
 def _apply_session_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
     event = row.get("event")
     if event == "session_finished":
@@ -499,6 +515,7 @@ def _apply_meet_action(state: _ReportState, row: dict[str, Any], _at: datetime |
 _RowHandler = Callable[[_ReportState, dict[str, Any], datetime | None], None]
 
 _ROW_HANDLERS: dict[str, _RowHandler] = {
+    "watchdog_failed": _apply_watchdog_failure,
     "speech_stopped": _apply_speech_event,
     "speech_started": _apply_speech_event,
     "barge_in_detected": _apply_speech_event,
@@ -605,6 +622,8 @@ def _assemble_report(
     return {
         "journal": {"corrupt_lines": corrupt_lines},
         "startup": _startup_report(state.milestones),
+        "in_call_seconds": _in_call_seconds(state),
+        "browser": {"watchdog_failures": state.watchdog_failures},
         "session_outcome": _session_outcome(state.result),
         "ingestion_outcome": _ingestion_outcome(state.ingest_runs),
         "cancellation": {
@@ -670,6 +689,7 @@ def build_session_report(rows: list[dict[str, Any]], *, corrupt_lines: int = 0) 
     for row in rows:
         event = row.get("event")
         at = _parse_row_at(row)
+        state.last_at = at or state.last_at
         if event in STARTUP_MILESTONES and row.get("source") == "runtime":
             state.milestones.setdefault(str(event), {**row, "at": at})
         handler = _ROW_HANDLERS.get(event) if event is not None else None

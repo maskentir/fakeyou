@@ -17,6 +17,7 @@ from fakeyou.debrief.debrief import debrief_report_status, read_debrief
 from fakeyou.debrief.debrief_schema import DebriefValidationError
 from fakeyou.observability.journal import journal_path
 from fakeyou.observability.report import build_session_report, read_journal_with_corrupt
+from fakeyou.observability.scorecard import score_session
 from fakeyou.persistence.record import meeting_record_path
 from fakeyou.transport.schemas import DEBRIEF_STREAM
 
@@ -180,4 +181,5 @@ async def read_session_report(
     report["debrief"] = {
         "status": debrief_report_status(meeting_record_path(settings.paths.record_dir, session))
     }
+    report["scorecard"] = score_session(report)
     return {"meeting_id": meeting_id, **report}

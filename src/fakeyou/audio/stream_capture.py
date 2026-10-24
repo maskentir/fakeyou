@@ -25,7 +25,7 @@ from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.audio.own_speech import OwnSpeech
 from fakeyou.audio.playback import PlaybackPort
 from fakeyou.audio.stream_input import StreamAudioInput
-from fakeyou.audio.voice_activity import DEPARTURE_GRACE_MS, MEET_AUDIO_SLOTS, SlotBinder
+from fakeyou.audio.voice_activity import MEET_AUDIO_SLOTS, SlotBinder
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import real_number
@@ -206,33 +206,6 @@ def parse_roster(payload: Mapping[str, Any], *, twin_name: str | None = None) ->
     return tuple(ident for ident, _ in found)
 
 
-def parse_roster_names(
-    payload: Mapping[str, Any], *, twin_name: str | None = None
-) -> tuple[dict[str, str], ...]:
-    roster = payload.get("roster")
-    if not isinstance(roster, list):
-        return ()
-    folded = twin_name.strip().casefold() if isinstance(twin_name, str) else ""
-    found: list[tuple[str, str]] = []
-    for entry in roster:
-        if not isinstance(entry, Mapping):
-            continue
-        ident = entry.get("id")
-        name = entry.get("name")
-        if not isinstance(ident, str) or not ident:
-            continue
-        if not isinstance(name, str) or not name.strip():
-            continue
-        found.append((ident, name.strip()))
-    if folded:
-        matches = [ident for ident, name in found if name.casefold() == folded]
-        if len(matches) == 1:
-            return tuple(
-                {"id": ident, "name": name} for ident, name in found if ident != matches[0]
-            )
-    return tuple({"id": ident, "name": name} for ident, name in found)
-
-
 @dataclass(frozen=True)
 class TapHealth:
     slot: int
@@ -310,7 +283,6 @@ class StreamRegistry:
         self._journal = journal
         self.recorder = recorder
         self._sessions: dict[int, StreamSession] = {}
-        self._roster_seen: dict[str, float] = {}
 
     @property
     def sessions(self) -> Mapping[int, StreamSession]:
@@ -324,20 +296,6 @@ class StreamRegistry:
         self._sessions[slot] = StreamSession(
             slot=slot, input=audio, pinned=True, last_seen=self._monotonic()
         )
-
-    def update_roster(self, devices: Iterable[str]) -> None:
-        now = self._monotonic()
-        for device in devices:
-            self._roster_seen[device] = now
-        grace = DEPARTURE_GRACE_MS / 1000.0
-        for device in [name for name, seen in self._roster_seen.items() if now - seen > grace]:
-            del self._roster_seen[device]
-        if self._binder is not None:
-            self._binder.update_roster(self._roster_seen)
-
-    def note_roster(self, entries: Iterable[Mapping[str, str]]) -> None:
-        if self._binder is not None:
-            self._binder.note_roster(entries)
 
     async def feed(self, chunk: StreamChunk) -> None:
         session = self._sessions.get(chunk.slot)
@@ -573,8 +531,6 @@ class CaptureDrainLoop(PollingLoop):
             self._fails += 1
             self._note_failure("parse", error)
             return False
-        self._registry.update_roster(parse_roster(batch, twin_name=self._twin_name))
-        self._registry.note_roster(parse_roster_names(batch, twin_name=self._twin_name))
         failed = await self._feed_chunks(parsed.chunks)
         self._settle_batch(batch, parsed)
         if parsed.skipped and parsed.first_error is not None:

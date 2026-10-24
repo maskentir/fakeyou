@@ -188,7 +188,7 @@ async def test_create_rejects_principal_and_document_mismatch(api: ApiHarness) -
 
 async def test_stop_is_idempotent_after_terminal_and_hidden_cross_owner(api: ApiHarness) -> None:
     meeting_id = await api.create_terminal_session()
-    stopped = await api.post(f"/v1/sessions/{meeting_id}/stop", json={"reason": "done"})
+    stopped = await api.post(f"/v1/sessions/{meeting_id}/stop")
     assert stopped.status_code == 200
     assert stopped.json()["terminal_reason"] == "stopped_by_owner"
     assert (
@@ -234,7 +234,7 @@ async def test_resume_and_stop_publish_exactly_their_commands(api: ApiHarness) -
     meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
     await api.post(f"/v1/sessions/{meeting_id}/join")
     resumed = await api.post(f"/v1/sessions/{meeting_id}/resume")
-    stopped = await api.post(f"/v1/sessions/{meeting_id}/stop", json={"reason": "wind down"})
+    stopped = await api.post(f"/v1/sessions/{meeting_id}/stop")
     assert resumed.status_code == 202
     assert stopped.status_code == 202
     stream = command_stream(meeting_id)

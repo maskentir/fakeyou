@@ -19,6 +19,7 @@ from fakeyou.perception.meet_protocol import (
     COLLECTIONS_CHANNEL,
     SYNC_COLLECTIONS_PATH,
     CollectionUpdate,
+    DeviceOutput,
     MeetChatMessage,
     decode_collection_event,
     decode_sync_response,
@@ -80,6 +81,13 @@ def page_time(page_ms: float) -> datetime:
     return datetime.fromtimestamp(page_ms / 1000, UTC)
 
 
+class ResponseLike(Protocol):
+    @property
+    def url(self) -> str: ...
+
+    async def body(self) -> bytes: ...
+
+
 class PerceptionSensors:
     def __init__(
         self,
@@ -92,12 +100,14 @@ class PerceptionSensors:
     ) -> None:
         self.timeline = timeline
         self.roster = MeetRoster()
+        self.roster_listener: Callable[[MeetRoster], None] | None = None
         self._settings = settings
         self._joined_at = joined_at
         self._journal = journal or Journal("", echo=False)
         self._clock = clock
         self.rejected_messages = 0
         self.frames_seen = 0
+        self._audio_outputs: set[tuple[str, str]] = set()
 
     async def accept_batch(self, batch: DrainBatch) -> None:
         for message in batch.messages:
@@ -106,13 +116,29 @@ class PerceptionSensors:
         for frame in batch.frames:
             await self._accept_frame(frame)
 
+    async def on_response(self, response: ResponseLike) -> None:
+        if SYNC_COLLECTIONS_PATH not in response.url:
+            return
+        try:
+            body = await response.body()
+        except (OSError, RuntimeError):
+            return
+        self.accept_sync(body)
+
     def accept_sync(self, body: bytes) -> None:
         try:
             users = decode_sync_response(body)
         except FakeYouError as error:
             self._reject("sync", error)
             return
-        self._apply_changes(self.roster.apply_users(users, complete=True), self._clock())
+        self._journal.record(
+            "perception_sync_accepted",
+            source="perception",
+            users=len(users),
+            screens=sum(user.is_screen for user in users),
+        )
+        self._apply_changes(self.roster.apply_users(users), self._clock())
+        self._share_roster()
 
     def assignments(self) -> list[StreamAssignment]:
         settings = self._settings
@@ -132,12 +158,33 @@ class PerceptionSensors:
         self._apply_update(update, page_time(message.page_ms))
 
     def _apply_update(self, update: CollectionUpdate, at: datetime) -> None:
-        changes = self.roster.apply_users(update.users, complete=False)
+        self._journal_audio_outputs(update.outputs)
+        changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
+        if update.users or update.outputs:
+            self._share_roster()
         if self._settings.chat:
             for chat in update.chat:
                 self._accept_chat(chat, at)
+
+    def _share_roster(self) -> None:
+        if self.roster_listener is not None:
+            self.roster_listener(self.roster)
+
+    def _journal_audio_outputs(self, outputs: Sequence[DeviceOutput]) -> None:
+        for output in outputs:
+            key = (output.device_id, output.stream_id)
+            if output.kind != "audio" or key in self._audio_outputs:
+                continue
+            self._audio_outputs.add(key)
+            self._journal.record(
+                "perception_audio_output_observed",
+                source="perception",
+                device_id=output.device_id,
+                stream_id=output.stream_id,
+                own=output.device_id in self.roster.own_device_ids,
+            )
 
     def _person(self, device_id: str) -> ParticipantRef:
         return self.timeline.participant(device_id, self.roster.name_of(device_id))
@@ -199,13 +246,6 @@ class PerceptionPage(Protocol):
     async def evaluate(self, expression: str, arg: Any = None, /) -> Any: ...
 
 
-class ResponseLike(Protocol):
-    @property
-    def url(self) -> str: ...
-
-    async def body(self) -> bytes: ...
-
-
 DEFAULT_PERCEPTION_SCHEDULE = PollSchedule(interval_seconds=PERCEPTION_POLL_SECONDS)
 
 
@@ -234,16 +274,6 @@ class PerceptionDrain(PollingLoop):
     @property
     def sensors(self) -> PerceptionSensors:
         return self._sensors
-
-    async def on_response(self, response: ResponseLike) -> None:
-        if SYNC_COLLECTIONS_PATH not in response.url:
-            return
-        try:
-            body = await response.body()
-        except (OSError, RuntimeError):
-            return
-        self._sensors.accept_sync(body)
-        await self._push_assignments()
 
     @override
     async def _poll_once(self) -> None:

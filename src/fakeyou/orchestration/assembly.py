@@ -22,11 +22,11 @@ from fakeyou.config.settings import (
 )
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
     MeetingAgent,
+    MeetingResponder,
     ToolResultCallback,
-    conversation_thread_id,
 )
+from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
     TurnGeneration,
@@ -34,11 +34,7 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
-from fakeyou.conversation.middleware import (
-    ChatTurnToolsMiddleware,
-    HistoryTrimMiddleware,
-    OrphanToolCallMiddleware,
-)
+from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.participation_decider import (
     Decider,
     StructuredGeminiDecider,
@@ -47,8 +43,7 @@ from fakeyou.conversation.participation_decider import (
 from fakeyou.conversation.participation_graph import DeciderFailure
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_graph import ConversationPhase
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import configured_url, open_database, require_url
+from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
 from fakeyou.foundation.greetings import create_greeting_middleware
@@ -206,6 +201,7 @@ class AgentWiring:
     brief: MeetingBrief | None = None
     graphiti: Graphiti | None = None
     perception: PerceptionContext | None = None
+    history: MeetingHistory = field(default_factory=NoHistory)
 
 
 DEFAULT_AGENT_WIRING = AgentWiring()
@@ -281,12 +277,6 @@ class _ConversationBuilder:
         if fallback is not None:
             self._middleware.append(ModelFallbackMiddleware(fallback))
 
-    def add_history(self) -> None:
-        self._middleware.append(
-            HistoryTrimMiddleware(max_tokens=self._settings.conversation.history_max_tokens)
-        )
-        self._middleware.append(OrphanToolCallMiddleware())
-
     def add_memory(self) -> None:
         profile = self._agent.profile
         graphiti = self._agent.graphiti
@@ -336,28 +326,31 @@ class _ConversationBuilder:
                 if tool.name in meet
             )
 
-    def build_agent(self, model: Any, checkpointer: Any) -> Any:
+    def add_speaker_attribution(self) -> None:
+        self._middleware.append(SpeakerAttributionMiddleware())
+
+    def build_agent(self, model: Any) -> Any:
         return create_meeting_agent(
             model,
             tools=self._tools,
-            checkpointer=checkpointer,
             persona=self._persona,
             middleware=self._middleware,
         )
 
-    def build_responder(self, agent: MeetingAgent, thread_id: str) -> LangGraphResponder:
-        return LangGraphResponder(
+    def build_responder(self, agent: MeetingAgent) -> MeetingResponder:
+        return MeetingResponder(
             agent,
-            thread_id,
+            self._agent.history,
             journal=self._diagnostics.journal,
             on_tool_result=self._behavior.on_tool_result,
             language=self._settings.speech.language,
             max_sentences=self._settings.conversation.max_spoken_sentences,
+            history_max_tokens=self._settings.conversation.history_max_tokens,
         )
 
     def build_turns(
         self,
-        responder: LangGraphResponder,
+        responder: MeetingResponder,
         *,
         participant_policy_enabled: bool = False,
     ) -> MeetingTurns:
@@ -411,22 +404,12 @@ async def open_conversation(
     builder.build_persona()
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
-        checkpointer = await resources.enter_async_context(
-            open_checkpointer(
-                require_url(configured_url(settings)),
-                connect_timeout_seconds=settings.database.connect_timeout_seconds,
-                statement_timeout_seconds=settings.database.statement_timeout_seconds,
-                keepalive_idle_seconds=settings.database.keepalive_idle_seconds,
-            )
-        )
         builder.add_greeting()
-        builder.add_history()
         builder.add_memory()
         builder.add_perception()
         builder.add_meet_tools()
-        thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
-        meeting_agent = builder.build_agent(model, checkpointer)
-        responder = builder.build_responder(meeting_agent, thread_id)
+        builder.add_speaker_attribution()
+        responder = builder.build_responder(builder.build_agent(model))
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled
         )

@@ -49,6 +49,7 @@ class TranscriptEntry(_Entry):
 class TwinSpeechEntry(_Entry):
     kind: Literal["twin_speech"] = "twin_speech"
     text: str
+    interrupted: bool = False
 
 
 class ToolResultEntry(_Entry):
@@ -236,15 +237,19 @@ class MeetingRecord:
         dropped = _drop_torn_tail(path)
         if dropped and journal is not None:
             journal.record("record_tail_dropped", source="meeting_record", bytes_dropped=dropped)
+        self._entries: list[RecordEntry] = []
         if path.exists() and path.stat().st_size:
             read_record_header(path)
+            self._entries = load_meeting_record(path, journal=journal)
         self._file = path.open("a", encoding="utf-8")
         self._faults = faults
         self._now = now
         self._header_pending = self._file.tell() == 0
         self._unsynced = 0
-        self._seen: set[str] = set()
-        self._seen_chat: set[str] = set()
+        self._seen = {entry.id for entry in self._entries if isinstance(entry, TranscriptEntry)}
+        self._seen_chat = {
+            entry.message_id for entry in self._entries if isinstance(entry, ChatEntry)
+        }
         self._screens: dict[str, ScreenFields] = {}
         self._closed = False
 
@@ -268,9 +273,12 @@ class MeetingRecord:
             )
         )
 
-    def add_twin_speech(self, text: str) -> None:
+    def entries(self) -> tuple[RecordEntry, ...]:
+        return tuple(self._entries)
+
+    def add_twin_speech(self, text: str, *, interrupted: bool = False) -> None:
         if text.strip():
-            self._append(TwinSpeechEntry(at=self._now(), text=text))
+            self._append(TwinSpeechEntry(at=self._now(), text=text, interrupted=interrupted))
 
     def add_tool_result(self, tool: str, output: str, duration_ms: float) -> None:
         self._append(
@@ -306,6 +314,7 @@ class MeetingRecord:
             self._file.close()
 
     def _append(self, entry: RecordEntry) -> None:
+        self._entries.append(entry)
         line = entry.model_dump_json() + "\n"
         if self._header_pending:
             line = RecordHeader(at=entry.at).model_dump_json() + "\n" + line

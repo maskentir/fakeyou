@@ -16,7 +16,6 @@ from fakeyou.api.schemas import (
     SessionCreate,
     SessionSnapshot,
     SessionView,
-    StopSession,
     build_snapshot,
 )
 from fakeyou.api.transport import shared_stream_transport
@@ -238,7 +237,6 @@ async def join_session(
 @router.post("/{meeting_id}/stop", status_code=202, response_model=SessionView)
 async def stop_session(
     meeting_id: str,
-    _payload: StopSession,
     principal: _Owner,
     request: Request,
     response: Response,

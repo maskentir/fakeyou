@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import (
@@ -12,14 +14,18 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import LangGraphResponder
+from fakeyou.conversation.conversation import MeetingResponder
+from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.middleware import (
     HistoryTrimMiddleware,
     OrphanToolCallMiddleware,
+    SpeakerAttributionMiddleware,
+    attributed,
     estimate_message_tokens,
     patch_orphan_tool_calls,
     trim_messages_to_budget,
 )
+from fakeyou.persistence.record import MeetingRecord, TranscriptEntry
 from tests._conversation_fakes import ToolCallingFakeModel, recall_call
 from tests._conversation_support import event
 
@@ -79,7 +85,7 @@ def test_patch_orphan_tool_calls_ignores_text_only_history() -> None:
     assert patch_orphan_tool_calls(messages) == messages
 
 
-async def test_orphan_middleware_covers_non_streaming_path() -> None:
+async def test_orphan_middleware_answers_stale_calls_on_a_chat_thread() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="Fresh answer.")])
     agent = create_meeting_agent(
         model,
@@ -95,42 +101,18 @@ async def test_orphan_middleware_covers_non_streaming_path() -> None:
             ]
         },
     )
-    responder = LangGraphResponder(agent, "orphan-nonstream")
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="new question")]},
+        {"configurable": {"thread_id": "orphan-nonstream"}},
+    )
 
-    assert await responder.respond([event("new", "new question")], lambda: None) == "Fresh answer."
+    assert result["messages"][-1].text == "Fresh answer."
     calls, answered = _tool_ids(model.seen[-1])
     assert calls != []
     assert all(call in answered for call in calls)
     stored = await agent.aget_state({"configurable": {"thread_id": "orphan-nonstream"}})
     stored_calls, stored_answered = _tool_ids(stored.values["messages"])
     assert any(call not in stored_answered for call in stored_calls)
-
-
-async def test_orphan_middleware_covers_streaming_path() -> None:
-    model = ToolCallingFakeModel(responses=[AIMessage(content="Fresh answer.")])
-    agent = create_meeting_agent(
-        model,
-        checkpointer=InMemorySaver(),
-        middleware=[OrphanToolCallMiddleware()],
-    )
-    await agent.aupdate_state(
-        {"configurable": {"thread_id": "orphan-stream"}},
-        {
-            "messages": [
-                HumanMessage(content="old question"),
-                AIMessage(content="", tool_calls=[_orphan_call("call-old")]),
-            ]
-        },
-    )
-    responder = LangGraphResponder(agent, "orphan-stream")
-
-    stream = responder.stream_sentences(
-        [event("new", "new question")], lambda: None, request_id="new:1"
-    )
-    assert [sentence async for sentence in stream] == ["Fresh answer."]
-    calls, answered = _tool_ids(model.seen[-1])
-    assert calls != []
-    assert all(call in answered for call in calls)
 
 
 def test_estimate_message_tokens_counts_text_heuristic() -> None:
@@ -191,7 +173,7 @@ def test_trim_patches_calls_whose_answer_was_trimmed() -> None:
     assert answered == {"call-1"}
 
 
-async def test_history_trim_limits_model_request_but_not_checkpoint() -> None:
+async def test_history_trim_limits_a_chat_request_but_not_its_thread() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="Fresh answer.")])
     agent = create_meeting_agent(
         model,
@@ -207,11 +189,14 @@ async def test_history_trim_limits_model_request_but_not_checkpoint() -> None:
             ]
         },
     )
-    responder = LangGraphResponder(agent, "trim-thread")
+    result = await agent.ainvoke(
+        {"messages": [HumanMessage(content="new question")]},
+        {"configurable": {"thread_id": "trim-thread"}},
+    )
 
-    assert await responder.respond([event("new", "new question")], lambda: None) == "Fresh answer."
+    assert result["messages"][-1].text == "Fresh answer."
     seen = model.seen[-1]
-    assert estimate_message_tokens(seen) <= 200
+    assert estimate_message_tokens(seen[1:]) <= 100
     assert seen[-1].content == "new question"
     assert all(
         "xxxxx" not in str(message.content) and "yyyyy" not in str(message.content)
@@ -219,3 +204,47 @@ async def test_history_trim_limits_model_request_but_not_checkpoint() -> None:
     )
     state = await agent.aget_state({"configurable": {"thread_id": "trim-thread"}})
     assert len(state.values["messages"]) == 4
+
+
+async def test_the_model_reads_who_said_each_line_while_the_record_keeps_plain_text(
+    tmp_path: Path,
+) -> None:
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Noted.")])
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    earlier = replace(event("one", "Budget is fine."), participant_id="speaker-a")
+    now = replace(event("two", "Do you agree?"), participant_id="speaker-b", display_claim="Maya")
+    record.add_transcript(earlier)
+    record.add_twin_speech("I heard that.")
+    record.add_transcript(now)
+    agent = create_meeting_agent(model, middleware=[SpeakerAttributionMiddleware()])
+
+    assert await MeetingResponder(agent, record).respond([now], lambda: None) == "Noted."
+    record.close()
+
+    assert [message.text for message in model.seen[-1][1:]] == [
+        "Speaker A with unverified identity: Budget is fine.",
+        "I heard that.",
+        "Speaker B, shown as Maya, unverified: Do you agree?",
+    ]
+    assert [entry.text for entry in record.entries() if isinstance(entry, TranscriptEntry)] == [
+        "Budget is fine.",
+        "Do you agree?",
+    ]
+
+
+def test_attribution_keeps_attached_images_and_leaves_other_messages_alone() -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    spoken = request_messages([event("one", "See this?")])[0]
+    with_image = spoken.model_copy(
+        update={"content": [{"type": "text", "text": "See this?"}, image]}
+    )
+
+    labelled = attributed(with_image)
+
+    assert labelled.content == [
+        {"type": "text", "text": "Speaker with unverified identity:"},
+        {"type": "text", "text": "See this?"},
+        image,
+    ]
+    assert attributed(HumanMessage(content="owner chat")) == HumanMessage(content="owner chat")
+    assert attributed(AIMessage(content="reply")) == AIMessage(content="reply")

@@ -1,21 +1,19 @@
+from collections.abc import Sequence
 from typing import Any
 
-from fakeyou.audio.voice_activity import VoiceActivityTracker
+from fakeyou.audio.voice_activity import MEET_AUDIO_SLOTS, VoiceActivityTracker
+from fakeyou.identity.identity import SpeakerRegistry
 from tests._fakes_common import FakeClock
 
 
-def batch(
-    page_ms: float,
-    levels: list[list[Any]],
-    participants: list[dict[str, str]] | None = None,
-    **extra: Any,
-) -> dict[str, Any]:
-    roster = participants if participants is not None else [{"id": "d1", "name": "Rani"}]
-    return {"instance": "i1", "page_ms": page_ms, "levels": levels, "participants": roster, **extra}
+def batch(page_ms: float, levels: list[list[Any]], **extra: Any) -> dict[str, Any]:
+    return {"instance": "i1", "page_ms": page_ms, "levels": levels, **extra}
 
 
-def tracker_at(clock: FakeClock) -> VoiceActivityTracker:
-    return VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic)
+def tracker_at(clock: FakeClock, people: Sequence[str] = ("d1",)) -> VoiceActivityTracker:
+    registry = SpeakerRegistry(capacity=MEET_AUDIO_SLOTS)
+    registry.update_roster(people)
+    return VoiceActivityTracker(monotonic=clock.monotonic, registry=registry)
 
 
 def speak(tracker: VoiceActivityTracker, clock: FakeClock, start: float, end: float) -> None:

@@ -76,7 +76,7 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
         on_content=lambda reads: stop.set() if reads >= 2 else None,
         evaluates=[batch(0.0, [])] * 8,
     )
-    tracker = VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic)
+    tracker = VoiceActivityTracker(monotonic=clock.monotonic)
     config = SessionConfig(
         owner_id=SessionId("o"),
         twin_id=SessionId("t"),
@@ -152,7 +152,6 @@ async def test_voice_script_taps_remote_audio_and_skips_local_microphone() -> No
             await asyncio.sleep(0.2)
         assert drained["local"] == [1]
         assert {int(slot) for _, slot, level in levels if level > 0.1} == {0}
-        assert drained["participants"] == [{"id": "devices/1", "name": "Rani"}]
         assert isinstance(drained["instance"], str)
         assert drained["instance"]
 
@@ -198,6 +197,38 @@ async def test_voice_script_reads_level_and_csrc_from_encoded_frames() -> None:
             assert {frame[1] for frame in frames} == {0}
             assert max(frame[2] for frame in frames) > 0.1
             assert all(frame[3] == [] for frame in frames)
+        finally:
+            await browser.close()
+
+
+@pytest.mark.browser
+async def test_voice_script_releases_analysers_it_no_longer_samples() -> None:
+    from playwright.async_api import async_playwright
+
+    count_disconnects = (
+        "window.__released = 0;"
+        " const disconnect = AudioNode.prototype.disconnect;"
+        " AudioNode.prototype.disconnect = function (...args) {"
+        "  if (args[0] instanceof AnalyserNode) window.__released += 1;"
+        "  return disconnect.apply(this, args); };"
+    )
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.add_init_script(count_disconnects)
+            await page.add_init_script(load_voice_activity_script())
+            await page.goto("about:blank")
+            released = await page.evaluate(
+                "() => {"
+                " const ctx = new AudioContext();"
+                " const remote = ctx.createMediaStreamDestination();"
+                " for (let i = 0; i < 20; i += 1) ctx.createMediaStreamSource(remote.stream);"
+                " for (let i = 0; i < 20; i += 1)"
+                "  ctx.createMediaStreamSource(ctx.createMediaStreamDestination().stream);"
+                " return window.__released; }"
+            )
+            assert released == 19 + 5
         finally:
             await browser.close()
 

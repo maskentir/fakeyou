@@ -170,10 +170,22 @@ async def test_join_and_leave_signals_respect_the_signals_toggle() -> None:
     loud, loud_timeline, _ = sensors()
     for sensed in (quiet, loud):
         await sensed.accept_batch(DrainBatch(messages=[message(people())]))
-        sensed.accept_sync(sync_body([user_info(AYU, "Ayu"), user_info(SCREEN, "", parent=AYU)]))
+        sensed.accept_sync(sync_body([user_info(BUDI, "Budi", status=2)]))
 
     assert [signal.kind for signal in quiet_timeline.snapshot().signals] == ["presenting_started"]
     assert "left" in [signal.kind for signal in loud_timeline.snapshot().signals]
+
+
+async def test_an_empty_sync_keeps_the_presenter_and_the_roster() -> None:
+    sensed, timeline, _ = sensors()
+    await sensed.accept_batch(DrainBatch(messages=[message(people())]))
+
+    sensed.accept_sync(sync_body([]))
+
+    snapshot = timeline.snapshot()
+    assert snapshot.presenting is not None
+    assert "left" not in [signal.kind for signal in snapshot.signals]
+    assert {item.role for item in sensed.assignments()} == {"screen", "camera"}
 
 
 async def test_unreadable_inputs_are_counted_and_journaled() -> None:
@@ -230,23 +242,39 @@ async def test_the_drain_feeds_sensors_and_assigns_streams_once() -> None:
     assert timeline.snapshot().presenting is not None
 
 
-async def test_sync_responses_update_the_roster() -> None:
-    sensed, timeline, _ = sensors()
-    drain = PerceptionDrain(FakePerceptionPage([]), sensed)
+async def test_sync_responses_update_the_roster_and_are_journaled() -> None:
+    sensed, timeline, journal = sensors()
 
-    await drain.on_response(FakeResponse("https://example.test/other", b""))
-    await drain.on_response(
+    await sensed.on_response(FakeResponse("https://example.test/other", b""))
+    await sensed.on_response(
         FakeResponse(
             "https://meet.google.com/$rpc/google.rtc.meetings.v1.MeetingSpaceService/"
             "SyncMeetingSpaceCollections",
-            sync_body([user_info(AYU, "Ayu")]),
+            sync_body([user_info(AYU, "Ayu"), user_info(SCREEN, "", parent=AYU)]),
         )
     )
 
     assert [person.name for person in timeline.snapshot().participants] == ["Ayu"]
+    [synced] = journal.events("perception_sync_accepted")
+    assert (synced["users"], synced["screens"]) == (2, 1)
 
 
 def test_the_perception_script_ships_with_the_bridge() -> None:
     script = load_perception_script()
 
     assert script.index("__fakeyouRtc") < script.index("__fakeyouPerception")
+
+
+async def test_each_audio_output_is_journaled_once_with_its_device() -> None:
+    sensed, _, journal = sensors()
+    audio = collection_payload(
+        users=[user_info(AYU, "Ayu")],
+        outputs=[output(AYU, "3553701704", kind=1), output(AYU, "stream-ayu")],
+    )
+
+    await sensed.accept_batch(DrainBatch(messages=[message(audio), message(audio)]))
+
+    assert [
+        (row["device_id"], row["stream_id"], row["own"])
+        for row in journal.events("perception_audio_output_observed")
+    ] == [(AYU, "3553701704", False)]

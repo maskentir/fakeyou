@@ -111,7 +111,6 @@ async def test_join_resume_reuses_history_without_replaying_answers(
         model=first_model,
         transcripts=("Rani Twin, when does Orchid launch?",),
         brief_path=brief_path,
-        native_checkpointer=True,
         settings=settings,
         join=join,
     )
@@ -132,7 +131,6 @@ async def test_join_resume_reuses_history_without_replaying_answers(
         model=second_model,
         transcripts=("Rani Twin, anything else?",),
         brief_path=brief_path,
-        native_checkpointer=True,
         settings=settings,
         join=join,
         resume=True,

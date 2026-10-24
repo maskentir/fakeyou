@@ -10,7 +10,6 @@ from typing import Any
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType, EpisodicNode
 
-from fakeyou.audio.voice_activity import voice_speaker_name
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS, IngestionSettings
 from fakeyou.diarization.correction_labels import (
@@ -24,6 +23,8 @@ from fakeyou.foundation.speakers import (
     TWIN_SPEAKER,
     UNIDENTIFIED_PARTICIPANT,
     VOICE_SPEAKER_SUFFIX,
+    speaker_name,
+    voice_speaker_name,
 )
 from fakeyou.foundation.timeparse import is_aware, parse_iso_datetime
 from fakeyou.memory.evidence import SCREEN_SOURCE_SUFFIX, TRANSCRIPT_SOURCE_SUFFIX
@@ -157,24 +158,17 @@ def screen_episode_body(entry: ScreenEntry) -> str:
     return "\n".join(lines)
 
 
-def _speaker(participant_id: str) -> str:
-    if participant_id == "unknown":
-        return UNIDENTIFIED_PARTICIPANT
-    voice = voice_speaker_name(participant_id)
-    return participant_id if voice is None else voice + VOICE_SPEAKER_SUFFIX
-
-
 def _entry_speaker(entry: TranscriptEntry, labels: Mapping[str, str]) -> str:
     corrected = entry.corrected_speaker_uuid
     if corrected is not None and corrected in labels:
         return labels[corrected]
-    return _speaker(entry.participant_id)
+    return speaker_name(entry.participant_id)
 
 
 def _utterance(entry: RecordEntry, labels: Mapping[str, str] | None = None) -> Utterance | None:
     if isinstance(entry, TranscriptEntry):
         if labels is None:
-            speaker = _speaker(entry.participant_id)
+            speaker = speaker_name(entry.participant_id)
         else:
             speaker = _entry_speaker(entry, labels)
         spoken: datetime | None = _spoken_moment(entry.spoken_at)

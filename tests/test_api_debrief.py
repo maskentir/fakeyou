@@ -9,6 +9,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.debrief.debrief import debrief_report_status
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
 from fakeyou.observability.report import build_session_report, read_journal_with_corrupt
+from fakeyou.observability.scorecard import score_session
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import DEBRIEF_STREAM
@@ -152,6 +153,7 @@ async def test_report_matches_the_journal_composition(api: MemoryHarness) -> Non
     )
     expected = {"meeting_id": "m-1", **build_session_report(rows, corrupt_lines=corrupt)}
     expected["debrief"] = {"status": "missing"}
+    expected["scorecard"] = score_session(expected)
     response = await api.get("/v1/sessions/m-1/report")
     assert response.status_code == 200
     assert response.json() == expected

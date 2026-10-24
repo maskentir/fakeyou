@@ -7,7 +7,6 @@ from typing import Literal
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url
 from fakeyou.memory.memory import forget_episode, forget_meeting
@@ -37,7 +36,7 @@ class ForgetRequest:
 class ForgottenFiles:
     record_removed: bool
     journal_files_removed: int
-    conversation_thread_removed: bool
+    lifecycle_thread_removed: bool
     browser_profile_removed: bool
 
 
@@ -161,18 +160,12 @@ async def forget_meeting_files(
             settings.paths.browser_profile_dir, twin_id=profile.twin_id, meeting_id=meeting_id
         ),
     )
-    checkpoint = await _remove_threads(
-        settings,
-        (
-            conversation_thread_id(profile.owner_id, profile.twin_id, meeting_id),
-            lifecycle_thread_id(profile.twin_id, meeting_id),
-        ),
-    )
+    checkpoint = await _remove_thread(settings, lifecycle_thread_id(profile.twin_id, meeting_id))
     return ForgetFilesOutcome(
         files=ForgottenFiles(
             record_removed=record.status == "removed",
             journal_files_removed=journals_removed,
-            conversation_thread_removed=checkpoint.status == "removed",
+            lifecycle_thread_removed=checkpoint.status == "removed",
             browser_profile_removed=browser.status == "removed",
         ),
         stages=(record, journal, browser, checkpoint),
@@ -209,26 +202,23 @@ def _remove_journals(settings: Settings, meeting_id: SessionId) -> tuple[ForgetS
     return ForgetStageResult("journal", "removed" if removed else "absent"), removed
 
 
-async def _remove_threads(settings: Settings, thread_ids: tuple[str, ...]) -> ForgetStageResult:
+async def _remove_thread(settings: Settings, thread_id: str) -> ForgetStageResult:
     url = configured_url(settings)
     if url is None:
         return ForgetStageResult("checkpoint", "absent")
 
-    async def delete_threads() -> bool:
-        existed = False
+    async def delete_thread() -> bool:
         async with open_checkpointer(
             url,
             connect_timeout_seconds=settings.database.connect_timeout_seconds,
             statement_timeout_seconds=settings.database.statement_timeout_seconds,
             keepalive_idle_seconds=settings.database.keepalive_idle_seconds,
         ) as saver:
-            for thread_id in thread_ids:
-                if await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None:
-                    existed = True
-                await saver.adelete_thread(thread_id)
+            existed = await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
+            await saver.adelete_thread(thread_id)
         return existed
 
-    existed, error = await capture_error(delete_threads)
+    existed, error = await capture_error(delete_thread)
     if error is not None:
         return ForgetStageResult("checkpoint", "failed", type(error).__name__)
     return ForgetStageResult("checkpoint", "removed" if existed else "absent")

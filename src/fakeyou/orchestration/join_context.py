@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.conversation import conversation_thread_id
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.state import TERMINAL_PHASES
 from fakeyou.db.engine import configured_url
@@ -187,13 +186,13 @@ async def guard_join(prepared: PreparedJoin, ports: JoinPorts) -> tuple[bool, bo
         session_state == "unfinished" or await _has_live_thread(prepared.config, ports)
     )
     context_reused = await _settle_meeting_context(
-        prepared.record_path, prepared.config, prepared.meeting_context, ports
+        prepared.record_path, prepared.config, prepared.meeting_context
     )
     return resuming, context_reused
 
 
 async def _settle_meeting_context(
-    record_path: Path, config: SessionConfig, context: MeetingContext | None, ports: JoinPorts
+    record_path: Path, config: SessionConfig, context: MeetingContext | None
 ) -> bool:
     path = context_path(record_path)
     try:
@@ -208,8 +207,7 @@ async def _settle_meeting_context(
         if existing != context:
             raise FakeYouError(ErrorCode.MEETING_CONTEXT_DIFFERS)
         return True
-    thread_id = conversation_thread_id(config.owner_id, config.twin_id, config.meeting_id)
-    if await _has_conversation(record_path, thread_id, config, ports):
+    if await asyncio.to_thread(_has_entries, record_path):
         raise FakeYouError(
             ErrorCode.MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT, meeting_id=config.meeting_id
         )
@@ -220,28 +218,6 @@ async def _settle_meeting_context(
             ErrorCode.MEETING_CONTEXT_NOT_WRITTEN, reason=type(error).__name__
         ) from None
     return False
-
-
-async def _has_conversation(
-    record_path: Path, thread_id: str, config: SessionConfig, ports: JoinPorts
-) -> bool:
-    if await asyncio.to_thread(_has_entries, record_path):
-        return True
-    if config.database_url is None:
-        return False
-    try:
-        async with ports.open_checkpointer(
-            config.database_url,
-            connect_timeout_seconds=config.database_connect_timeout_seconds,
-            statement_timeout_seconds=config.database_statement_timeout_seconds,
-            keepalive_idle_seconds=config.database_keepalive_idle_seconds,
-        ) as saver:
-            return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
-    except FakeYouError as error:
-        reason = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
-        raise FakeYouError(
-            ErrorCode.MEETING_CONVERSATION_CHECKPOINT_UNCHECKABLE, reason=reason
-        ) from None
 
 
 def _has_entries(path: Path) -> bool:

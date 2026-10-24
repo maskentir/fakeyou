@@ -16,6 +16,8 @@ from fakeyou.config.settings import (
 from fakeyou.orchestration import providers
 from fakeyou.orchestration.providers import create_perception_chat_model
 
+NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
+
 InitCalls = list[tuple[tuple[Any, ...], dict[str, Any]]]
 
 
@@ -136,4 +138,4 @@ def test_perception_settings_defaults() -> None:
     assert settings.retention_raw_days == 7
     assert settings.retention_text_days == 30
     assert settings.attention.enabled is True
-    assert Settings().perception == settings
+    assert Settings(**NO_ENV_FILE).perception == settings

@@ -348,6 +348,8 @@ def _join_node(
             source="runtime",
             attempt=number,
             outcome=_join_outcome(step.result.status, retrying=retrying),
+            status=step.result.status,
+            detail=step.result.detail,
         )
         if retrying:
             raise JoinRetryRequested(step.result)

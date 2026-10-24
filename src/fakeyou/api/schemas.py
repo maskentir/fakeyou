@@ -232,16 +232,10 @@ class ForgetView(BaseModel):
     removed_episodes: int
     record_removed: bool
     journal_files_removed: int
-    conversation_thread_removed: bool
+    lifecycle_thread_removed: bool
     browser_profile_removed: bool
     stages: tuple[ForgetStageView, ...]
     complete: bool
-
-
-class StopSession(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    reason: str | None = None
 
 
 class ErrorBody(BaseModel):

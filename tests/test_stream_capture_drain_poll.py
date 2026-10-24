@@ -100,7 +100,6 @@ async def test_drain_poll_survives_a_feed_failure_mid_batch() -> None:
 async def test_drain_loop_survives_an_unexpected_poll_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from collections.abc import Iterable
 
     from fakeyou.audio.stream_capture import CaptureDrainLoop, DrainPolling
     from fakeyou.observability.faults import ConsumerSink
@@ -116,16 +115,16 @@ async def test_drain_loop_survives_an_unexpected_poll_error(
         polling=DrainPolling(poll_interval_seconds=0.01),
         sinks=ConsumerSink(journal=journal),
     )
-    real_update = registry.update_roster
+    real_prune = registry.prune
     calls: list[str] = []
 
-    def flaky_update(devices: Iterable[str]) -> None:
-        calls.append("update")
+    def flaky_prune() -> None:
+        calls.append("prune")
         if len(calls) == 1:
-            raise RuntimeError("roster store hiccup")
-        real_update(devices)
+            raise RuntimeError("registry hiccup")
+        real_prune()
 
-    monkeypatch.setattr(registry, "update_roster", flaky_update)
+    monkeypatch.setattr(registry, "prune", flaky_prune)
     await loop.start()
     try:
         for _ in range(200):

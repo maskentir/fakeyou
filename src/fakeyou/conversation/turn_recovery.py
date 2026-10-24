@@ -1,8 +1,10 @@
 import asyncio
 import json
 import math
+import traceback
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.turn_events import JournalSink
@@ -11,9 +13,23 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import classify_exception
 
 MAX_CONSECUTIVE_TURN_FAILURES = 3
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 TURN_FAILED_LINES: dict[str, str] = json.loads(read_package_text("spoken_lines.json"))[
     "turn_failed"
 ]
+
+
+def _frame_label(frame: traceback.FrameSummary) -> str:
+    return f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+
+
+def raised_where(error: BaseException) -> dict[str, str]:
+    frames = traceback.extract_tb(error.__traceback__)
+    if not frames:
+        return {}
+    own = [frame for frame in frames if Path(frame.filename).is_relative_to(PACKAGE_ROOT)]
+    origin = {"raised_at": _frame_label(frames[-1])}
+    return origin | ({"raised_in": _frame_label(own[-1])} if own else {})
 
 
 def turn_request_id(transcript_id: str, generation: int) -> str:
@@ -135,6 +151,7 @@ class TurnRecovery:
             transcript_id=transcript_id,
             error=type(error).__name__,
             consecutive=self._consecutive,
+            **raised_where(error),
         )
         if self._is_closed() or self._consecutive >= MAX_CONSECUTIVE_TURN_FAILURES:
             return True

@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import PerceptionContext
 from fakeyou.perception.interpreter import PerceptionInterpreter, ScreenReader
 from fakeyou.perception.percepts import ChatLine, MeetingSignal, ScreenSegment
+from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import PerceptionSensors
 from fakeyou.perception.timeline import (
     ChatReceived,
@@ -149,6 +151,7 @@ def create_perception_stack(
     journal: Journal,
     record: MeetingRecord | None = None,
     screens_dir: Path | None = None,
+    on_roster: Callable[[MeetRoster], None] | None = None,
 ) -> PerceptionStack | None:
     perception = settings.perception
     if not perception.enabled:
@@ -159,6 +162,7 @@ def create_perception_stack(
     interpreter = create_perception_interpreter(settings, journal=journal)
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
     sensors = PerceptionSensors(timeline, perception, joined_at=datetime.now(UTC), journal=journal)
+    sensors.roster_listener = on_roster
     context = PerceptionContext(timeline, interpreter, max_chars=perception.view_max_chars)
     return PerceptionStack(
         timeline=timeline, sensors=sensors, context=context, archive=archive, reader=reader

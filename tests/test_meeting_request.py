@@ -30,8 +30,11 @@ def request(**overrides: Any) -> dict[str, Any]:
     return {**VALID_REQUEST, **overrides}
 
 
-@pytest.mark.parametrize("link", [f"{LINK}?authuser=0", f"{LINK}?hl=fr"])
-def test_meet_links_with_allowed_query_parameters_are_accepted(link: str) -> None:
+@pytest.mark.parametrize(
+    "link",
+    [f"{LINK}?authuser=0", f"{LINK}?hl=fr", "https://meet.google.com/meet/abc-defg-hij"],
+)
+def test_meet_links_in_every_accepted_shape_are_accepted(link: str) -> None:
     validate_meeting_request(MeetingRequest(**request(link=link)))
 
 
@@ -78,6 +81,11 @@ def test_a_request_that_honours_every_rule_raises_nothing() -> None:
             {"link": "https://user:secret@meet.google.com/abc-defg-hij"},
             ErrorCode.MEETING_LINK_INVALID,
             id="link-userinfo",
+        ),
+        pytest.param(
+            {"link": "https://meet.google.com/meet/abc-defg-hij/extra"},
+            ErrorCode.MEETING_LINK_INVALID,
+            id="link-meet-prefix-extra-path",
         ),
         pytest.param(
             {"link": "https://meet.google.com/abc-defg-hij/extra"},

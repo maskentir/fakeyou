@@ -53,9 +53,6 @@ def memory_only_join(
     monkeypatch.setattr(
         assembly, "create_meeting_agent", lambda *_a, **_k: pytest.fail("agent must not be built")
     )
-    monkeypatch.setattr(
-        assembly, "open_checkpointer", lambda *_a, **_k: pytest.fail("checkpointer must not open")
-    )
     arguments = persona_join_arguments(settings, memory=True, persona_path=write_persona(tmp_path))
 
     async def run(graphiti: MagicMock) -> Any:

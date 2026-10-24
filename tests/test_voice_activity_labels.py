@@ -1,8 +1,9 @@
 from pathlib import Path
 
 from fakeyou.audio import voice_activity
-from fakeyou.audio.voice_activity import voice_label, voice_speaker_name
+from fakeyou.audio.voice_activity import voice_label
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.foundation.speakers import voice_speaker_name
 from fakeyou.memory.ingestion import extraction_instructions, meeting_windows
 from fakeyou.observability.report import build_session_report
 from fakeyou.persistence.record import TranscriptEntry

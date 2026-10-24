@@ -1,13 +1,10 @@
 import json
 import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import SecretStr
 
 import fakeyou.orchestration.assembly as assembly
@@ -194,12 +191,6 @@ async def test_join_resume_requires_the_same_brief_and_persona(
     monkeypatch.setattr(join_preflight, "parec_available", lambda: True)
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
 
-    @asynccontextmanager
-    async def fake_saver(url: str, **_kwargs: Any) -> AsyncIterator[InMemorySaver]:
-        del url
-        yield InMemorySaver()
-
-    monkeypatch.setattr(assembly, "open_checkpointer", fake_saver)
     monkeypatch.setattr(
         assembly, "create_meeting_agent", lambda *_a, **_k: SimpleNamespace(name="agent")
     )

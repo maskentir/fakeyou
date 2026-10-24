@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast, override
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
@@ -6,17 +6,15 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
 )
 
-from fakeyou.db.checkpoint import is_checkpoint_error
-from fakeyou.foundation.protocols import SupportsAgentState
-from fakeyou.foundation.triggers import current_trigger, trigger_kind
+from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.meet.meet_tools import MEET_SEND_CHAT
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
-CANCELLED_TOOL_RESULT = "Tool execution was cancelled."
 TOKENS_PER_MESSAGE = 2
 
 
@@ -69,35 +67,6 @@ def patch_orphan_tool_calls(messages: Sequence[BaseMessage]) -> list[BaseMessage
                 pending.remove(call["id"])
                 patched.append(ToolMessage(content=ORPHAN_TOOL_RESULT, tool_call_id=call["id"]))
     return patched
-
-
-async def reconcile_cancelled_tools(agent: object, config: Mapping[str, Any]) -> None:
-    if not isinstance(agent, SupportsAgentState):
-        return
-    thread = {"configurable": dict(config.get("configurable") or {})}
-    try:
-        state = await agent.aget_state(thread)
-    except Exception as error:
-        if not is_checkpoint_error(error):
-            raise
-        return
-    pending = unanswered_tool_calls(state.values.get("messages", []))
-    if not pending:
-        return
-    try:
-        await agent.aupdate_state(
-            thread,
-            {
-                "messages": [
-                    ToolMessage(content=CANCELLED_TOOL_RESULT, tool_call_id=call_id)
-                    for call_id in pending
-                ]
-            },
-            as_node="tools",
-        )
-    except Exception as error:
-        if not is_checkpoint_error(error):
-            raise
 
 
 def _drop_dangling_answers(messages: list[AnyMessage]) -> list[AnyMessage]:
@@ -187,3 +156,26 @@ class ChatTurnToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         if len(tools) == len(request.tools):
             return await handler(request)
         return await handler(request.override(tools=tools))
+
+
+def attributed(message: AnyMessage) -> AnyMessage:
+    event = meeting_event_of(message)
+    speaker = event.get("speaker") if event is not None else None
+    if not isinstance(message, HumanMessage) or not isinstance(speaker, str):
+        return message
+    if isinstance(message.content, str):
+        return message.model_copy(update={"content": f"{speaker}: {message.content}"})
+    labelled: list[str | dict[Any, Any]] = [{"type": "text", "text": f"{speaker}:"}]
+    return message.model_copy(update={"content": [*labelled, *message.content]})
+
+
+class SpeakerAttributionMiddleware(AgentMiddleware[Any, Any, Any]):
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        return await handler(
+            request.override(messages=[attributed(message) for message in request.messages])
+        )

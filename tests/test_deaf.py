@@ -68,6 +68,59 @@ def test_speech_without_final_becomes_stt_fault(
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "hearing"
 
 
+def test_a_short_noise_never_counts_as_unheard_speech(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
+    capture, clock = activity
+    capture.observe_speech(active=True)
+    clock[0] += 0.3
+    capture.observe_speech(active=False)
+    clock[0] += 240
+    capture.observe_audio()
+    assert capture.snapshot().pending_speech_at is None
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
+
+
+def test_an_ongoing_utterance_counts_once_it_is_long_enough(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
+    capture, clock = activity
+    capture.observe_speech(active=True)
+    clock[0] += 0.5
+    capture.observe_speech(active=True)
+    assert capture.snapshot().pending_speech_at is None
+    clock[0] += 0.5
+    capture.observe_speech(active=True)
+    assert capture.snapshot().pending_speech_at == 1000.0
+
+
+def test_a_restarted_stt_session_is_not_blamed_for_earlier_speech(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
+    capture, clock = activity
+    capture.observe_speech(active=True)
+    clock[0] += 2
+    capture.observe_speech(active=False)
+    capture.observe_stt_restart()
+    clock[0] += 240
+    capture.observe_audio()
+    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
+
+
+def test_speech_still_running_at_a_final_starts_a_new_utterance(
+    activity: tuple[CaptureActivity, list[float]],
+) -> None:
+    capture, clock = activity
+    capture.observe_speech(active=True)
+    clock[0] += 2
+    capture.observe_speech(active=True)
+    capture.observe_transcript(finalized=True)
+    assert capture.snapshot().pending_speech_at is None
+    clock[0] += 1
+    capture.observe_speech(active=True)
+    assert capture.snapshot().pending_speech_at == 1002.0
+
+
 def test_unknown_presence_never_implies_alone(
     activity: tuple[CaptureActivity, list[float]],
 ) -> None:

@@ -4,10 +4,11 @@ import json
 import subprocess
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, override
 from unittest.mock import patch
 
@@ -15,24 +16,24 @@ from graphiti_core import Graphiti
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.assembly as assembly
 from evals._shared import sanitized_role
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
+    REPLY_CONFIG,
+    MeetingResponder,
     StreamTrace,
     ToolResultCallback,
     stream_sentences,
 )
-from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.record import MeetingRecord
 
 ROOT = Path(__file__).resolve().parent.parent
 DEBRIEF_SOURCES = frozenset(
@@ -173,7 +174,7 @@ def runtime_metadata(settings: Settings) -> dict[str, Any]:
             else "native non-streaming agent/responder; not full turn graph/audio"
         ),
         "assembly": "fakeyou.orchestration.assembly.open_conversation",
-        "boundaries": "supplied model/fallback, synthetic Graphiti, fresh InMemorySaver",
+        "boundaries": "supplied model/fallback, synthetic Graphiti, fresh meeting record",
         "reply": sanitized_role(dumped["reply"]),
         "reply_fallback": sanitized_role(dumped["reply_fallback"])
         if isinstance(dumped["reply_fallback"], dict)
@@ -304,19 +305,19 @@ class ResponderContext:
     trajectory: list[dict[str, Any]]
 
 
+@dataclass(frozen=True, slots=True)
+class NativeResponder:
+    responder: MeetingResponder
+    record: MeetingRecord
+
+
 @asynccontextmanager
 async def _open_native_conversation(
     model: BaseChatModel,
     context: ResponderContext,
     settings: Settings,
-) -> AsyncIterator[LangGraphResponder]:
+) -> AsyncIterator[NativeResponder]:
     profile = context.profile
-
-    @asynccontextmanager
-    async def checkpointer(url: str, **_kwargs: Any) -> AsyncIterator[InMemorySaver]:
-        del url
-        yield InMemorySaver()
-
     config = SessionConfig(
         owner_id=profile.owner_id,
         twin_id=profile.twin_id,
@@ -326,16 +327,16 @@ async def _open_native_conversation(
     )
     context.counter.trajectory = context.trajectory
     with (
+        TemporaryDirectory() as folder,
+        closing(MeetingRecord(Path(folder) / "record.jsonl")) as record,
         patch.object(assembly, "create_chat_model", return_value=model),
         patch.object(assembly, "create_fallback_chat_model", return_value=context.fallback),
-        patch.object(assembly, "open_checkpointer", checkpointer),
-        patch.object(assembly, "require_url", lambda url: url or "eval-in-memory"),
     ):
         async with assembly.open_conversation(
             settings,
             config,
             agent=assembly.AgentWiring(
-                profile=profile, brief=context.brief, graphiti=context.memory
+                profile=profile, brief=context.brief, graphiti=context.memory, history=record
             ),
             behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
@@ -344,11 +345,11 @@ async def _open_native_conversation(
             ),
         ) as conversation:
             responder = conversation.responder
-            if not isinstance(responder, LangGraphResponder):
-                raise TypeError("expected the native non-streaming responder")
-            yield replace(
-                responder,
-                agent=responder.agent.with_config(callbacks=[context.counter]),
+            if not isinstance(responder, MeetingResponder):
+                raise TypeError("expected the native meeting responder")
+            yield NativeResponder(
+                replace(responder, agent=responder.agent.with_config(callbacks=[context.counter])),
+                record,
             )
 
 
@@ -356,7 +357,7 @@ async def _open_native_conversation(
 async def native_responder(
     model: BaseChatModel,
     context: ResponderContext,
-) -> AsyncIterator[LangGraphResponder]:
+) -> AsyncIterator[NativeResponder]:
     settings = context.settings.model_copy(
         update={
             "conversation": context.settings.conversation.model_copy(
@@ -369,45 +370,50 @@ async def native_responder(
     )
     if settings.conversation.max_spoken_sentences > 2:
         raise ValueError("these evals require a spoken cap of at most two sentences")
-    async with _open_native_conversation(model, context, settings) as responder:
-        yield responder
+    async with _open_native_conversation(model, context, settings) as native:
+        yield native
 
 
 async def respond_with_deadline(
-    responder: LangGraphResponder, event: TranscriptEvent, settings: Settings
+    native: NativeResponder, event: TranscriptEvent, settings: Settings
 ) -> str:
+    native.record.add_transcript(event)
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
-        return await responder.respond([event], lambda: None)
+        reply = await native.responder.respond([event], lambda: None)
+    native.record.add_twin_speech(reply)
+    return reply
 
 
 @asynccontextmanager
 async def native_streaming_responder(
     model: BaseChatModel,
     context: ResponderContext,
-) -> AsyncIterator[LangGraphResponder]:
+) -> AsyncIterator[NativeResponder]:
     if not context.settings.conversation.sentence_streaming:
         raise ValueError("the streaming eval mode requires sentence streaming")
     if context.settings.conversation.max_spoken_sentences > 2:
         raise ValueError("these evals require a spoken cap of at most two sentences")
-    async with _open_native_conversation(model, context, context.settings) as responder:
-        yield responder
+    async with _open_native_conversation(model, context, context.settings) as native:
+        yield native
 
 
 async def stream_with_deadline(
-    responder: LangGraphResponder,
+    native: NativeResponder,
     event: TranscriptEvent,
     settings: Settings,
     *,
     request_id: str,
 ) -> tuple[list[str], float]:
+    responder = native.responder
+    native.record.add_transcript(event)
     started = time.monotonic()
     sentences: list[str] = []
     first_latency = 0.0
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
         async for sentence in stream_sentences(
             responder.agent,
-            request_messages([event]),
-            responder.thread_config(responder.thread_id),
+            responder.messages([event]),
+            REPLY_CONFIG,
             max_sentences=responder.max_sentences,
             trace=StreamTrace(
                 language=responder.language,
@@ -420,4 +426,5 @@ async def stream_with_deadline(
             if not sentences:
                 first_latency = time.monotonic() - started
             sentences.append(sentence)
+            native.record.add_twin_speech(sentence)
     return sentences, first_latency

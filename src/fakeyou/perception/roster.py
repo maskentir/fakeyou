@@ -45,17 +45,8 @@ class MeetRoster:
         user = self._users.get(device_id)
         return user.name if user is not None else ""
 
-    def apply_users(self, users: Iterable[MeetUser], *, complete: bool) -> list[RosterChange]:
-        changes: list[RosterChange] = []
-        seen: set[str] = set()
-        for user in users:
-            seen.add(user.device_id)
-            changes.extend(self._upsert(user))
-        if complete:
-            for device_id, known in tuple(self._users.items()):
-                if device_id not in seen and known.present:
-                    changes.extend(self._upsert(known.model_copy(update={"present": False})))
-        return changes
+    def apply_users(self, users: Iterable[MeetUser]) -> list[RosterChange]:
+        return [change for user in users for change in self._upsert(user)]
 
     def apply_outputs(self, outputs: Iterable[DeviceOutput]) -> list[RosterChange]:
         changes: list[RosterChange] = []
@@ -72,6 +63,21 @@ class MeetRoster:
                 kind: RosterChangeKind = "camera_off" if output.disabled else "camera_on"
                 changes.append(RosterChange(kind, output.device_id, self.name_of(output.device_id)))
         return changes
+
+    def people(self) -> dict[str, str]:
+        return {
+            device_id: user.name
+            for device_id, user in self._users.items()
+            if user.present and not user.is_screen and not self._is_own(device_id)
+        }
+
+    def audio_sources(self) -> dict[int, str]:
+        people = self.people()
+        return {
+            int(output.stream_id): device_id
+            for (device_id, kind), output in self._outputs.items()
+            if kind == "audio" and device_id in people and output.stream_id.isdigit()
+        }
 
     def assignments(self) -> list[StreamAssignment]:
         assigned: list[StreamAssignment] = []

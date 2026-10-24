@@ -8,7 +8,7 @@ from playwright.async_api import Page
 
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import CallObservation, CallState
-from fakeyou.meet.watchdog import UIWatchdog, read_participant_count
+from fakeyou.meet.watchdog import UIWatchdog, dismiss_known_errors, read_participant_count
 
 
 class _ImmediateTimeout:
@@ -179,6 +179,20 @@ async def test_should_dismiss_camera_not_found_dialog(
     ]
     assert '@aria-label="Close"' in selector
     dialog.button.click.assert_awaited_once()
+
+
+async def test_known_errors_are_dismissed_on_first_sight(page: MagicMock) -> None:
+    dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG)
+
+    assert await dismiss_known_errors(cast(Page, page)) == (CAMERA_NOT_FOUND_DIALOG,)
+    dialog.button.click.assert_awaited_once()
+
+
+async def test_unknown_dialogs_are_left_for_the_watchdog(page: MagicMock) -> None:
+    dialog = show_dialog(page, "Grant account access Continue")
+
+    assert await dismiss_known_errors(cast(Page, page)) == ()
+    dialog.button.click.assert_not_awaited()
 
 
 async def test_should_escalate_when_camera_dismissal_fails(

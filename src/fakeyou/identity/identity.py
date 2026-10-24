@@ -82,6 +82,7 @@ class SpeakerRegistry:
         self._slot_labels: dict[int, str] = {}
         self._voice_scores: dict[str, VoiceScores] = {}
         self._pending_claims: dict[str, str] = {}
+        self._csrc_devices: dict[int, str] = {}
 
     @property
     def roster_size(self) -> int:
@@ -174,10 +175,41 @@ class SpeakerRegistry:
         known = {self._by_csrc[csrc] for csrc in labeled}
         if len(known) > 1 or (labeled and len(labeled) < len(csrcs)):
             return None
-        uuid = known.pop() if known else self._mint(None)
+        device = self._device_of(csrcs)
+        uuid = known.pop() if known else self._row_of(device) or self._mint(None)
         for csrc in csrcs:
             self._by_csrc.setdefault(csrc, uuid)
+        if device is not None:
+            self._bind_device(uuid, device)
         return self._snapshot(uuid)
+
+    def note_audio_sources(self, sources: Mapping[int, str]) -> None:
+        self._csrc_devices = dict(sources)
+        for csrc, uuid in tuple(self._by_csrc.items()):
+            device = self._csrc_devices.get(csrc)
+            if device is not None:
+                self._bind_device(uuid, device)
+
+    def _device_of(self, csrcs: Iterable[int]) -> str | None:
+        devices = {self._csrc_devices[csrc] for csrc in csrcs if csrc in self._csrc_devices}
+        return devices.pop() if len(devices) == 1 else None
+
+    def _row_of(self, device: str | None) -> str | None:
+        if device is None:
+            return None
+        return next((uuid for uuid, row in self._rows.items() if row.device == device), None)
+
+    def _bind_device(self, uuid: str, device: str) -> None:
+        record = self._rows[uuid]
+        owner = self._row_of(device)
+        if record.device is not None or (owner is not None and owner != uuid):
+            return
+        record.device = device
+        record.history.append("bound")
+        self._emit({"event": "tenure_bound", "label": record.label, "device": device})
+        pending = self._pending_claims.get(device)
+        if pending is not None:
+            self._apply_claim(device, pending)
 
     def note_voice_scores(self, uuid: str, scores: VoiceScores) -> None:
         if uuid not in self._rows:

@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker, voice_participant_id
+from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker
 from fakeyou.conversation.turn_events import (
     ArbitrationResult,
     TurnEvent,
@@ -12,6 +12,7 @@ from fakeyou.conversation.turn_events import (
     arbitrate,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
+from fakeyou.foundation.speakers import voice_participant_id
 from fakeyou.foundation.transcript import (
     CaptureContext,
     TranscriptEvent,

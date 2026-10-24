@@ -14,20 +14,16 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import DEFAULT_PERSONA
 from fakeyou.conversation.conversation import (
-    LangGraphResponder,
-    conversation_thread_id,
+    MeetingResponder,
 )
 from fakeyou.conversation.meeting_turns import MeetingTurns
-from fakeyou.conversation.middleware import (
-    ChatTurnToolsMiddleware,
-    HistoryTrimMiddleware,
-    OrphanToolCallMiddleware,
-)
+from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.record import (
+    MeetingRecord,
     TranscriptEntry,
     TwinSpeechEntry,
     load_meeting_record,
@@ -39,7 +35,7 @@ from tests._runtime_fakes import SessionRun
 
 
 @pytest.mark.asyncio
-async def test_join_audio_builds_conversation_with_meeting_thread(
+async def test_join_audio_builds_conversation_on_the_meeting_record(
     audio_join: AudioJoin,
     session_run: SessionRun,
     monkeypatch: pytest.MonkeyPatch,
@@ -50,12 +46,10 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
         model: Any,
         *,
         tools: tuple[Any, ...] = (),
-        checkpointer: Any = None,
         **kwargs: Any,
     ) -> SimpleNamespace:
         del model
         created["tools"] = list(tools)
-        created["checkpointer"] = checkpointer
         created.update(kwargs)
         return SimpleNamespace(name="agent")
 
@@ -69,17 +63,17 @@ async def test_join_audio_builds_conversation_with_meeting_thread(
     assert isinstance(loop, MeetingTurns)
     assert loop.lifecycle.phase == "closed"
     assert created["tools"] == []
-    assert created["checkpointer"] is not None
+    assert "checkpointer" not in created
     assert created["persona"] == f"{DEFAULT_PERSONA}\n\n{PERCEPTION_GUIDANCE}"
     assert [type(item) for item in created["middleware"]] == [
         type(create_greeting_middleware("id")),
-        HistoryTrimMiddleware,
-        OrphanToolCallMiddleware,
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     responder = loop.responder
-    assert isinstance(responder, LangGraphResponder)
+    assert isinstance(responder, MeetingResponder)
+    assert isinstance(responder.history, MeetingRecord)
     assert responder.journal is not None
 
 
@@ -97,8 +91,7 @@ async def test_join_audio_transcript_reaches_conversation(
         async def ainvoke(
             self, request: dict[str, Any], config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
-            del request
-            agent_calls.append(config)
+            agent_calls.append((request, config))
             return {"messages": [AIMessage(content="Reply.")]}
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
@@ -127,9 +120,9 @@ async def test_join_audio_transcript_reaches_conversation(
     assert [event.text for event in captured["conversation"].ingress.events] == [
         "Settings Twin, hello."
     ]
-    assert agent_calls[0]["configurable"]["thread_id"] == conversation_thread_id(
-        "settings-owner", "settings-twin", "meeting-9"
-    )
+    request, config = agent_calls[0]
+    assert [message.text for message in request["messages"]] == ["Settings Twin, hello."]
+    assert "configurable" not in config
     rows = [
         json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{"')
     ]
@@ -331,6 +324,31 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
     )
     speeches = cast(list[TwinSpeechEntry], entries)
     assert [(entry.kind, entry.text) for entry in speeches] == [("twin_speech", "hello?  ")]
+
+
+async def test_join_records_a_sentence_cut_off_mid_playback_and_skips_queued_ones(
+    audio_join: AudioJoin, session_run: SessionRun, settings: Settings
+) -> None:
+    async def run(config: Any, **kwargs: Any) -> SessionResult:
+        del config
+        handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
+        handler(PlaybackEvent("playback_started", "First part.", ""))
+        handler(PlaybackEvent("playback_finished", "First part.", ""))
+        handler(PlaybackEvent("playback_started", "Second part is long.", ""))
+        handler(PlaybackEvent("playback_dropped", "Second part is long.", "interrupted"))
+        handler(PlaybackEvent("playback_dropped", "Never started.", "interrupted"))
+        return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
+
+    session_run.effect = run
+
+    await audio_join()
+
+    entries = load_meeting_record(
+        meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
+    )
+    assert [
+        (entry.text, entry.interrupted) for entry in entries if isinstance(entry, TwinSpeechEntry)
+    ] == [("First part.", False), ("Second part is long.", True)]
 
 
 async def test_join_routes_interim_transcripts_to_barge_in(
