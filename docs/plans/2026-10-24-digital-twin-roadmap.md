@@ -152,6 +152,19 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
   - kendali dipatuhi 100%;
   - latency p50 dari final tetap di bawah 1,5 s.
 
+### Status Fase 3 (2026-10-24)
+
+- Chat Meet: baris chat dari protokol Meet masuk ke jalur chat, twin menjawab lewat `meet_send_chat` **hanya kalau brief mengizinkan
+  `meet_chat`**. Chat yang tidak menyebut twin dibiarkan.
+- Partisipasi proaktif: `AttentionPrefilter` memberi twin kesempatan bicara sendiri paling banyak
+  `max_interjections_per_10min`, pemicunya isi ruangan (slide yang dibaca atau chat terakhir). Yang memutuskan apakah ada
+  yang perlu dikatakan tetap model: `intent: silent` berarti twin diam.
+- Skenario replay baru: keluarga `chat` (skenario s13, s14) di `evals/fixtures/conversation-scenarios.json`, plus
+  pengukuran latensi per langkah.
+
+Angka replay live (9 run × 14 skenario): semua keluarga 1,0 kecuali `recall` 0,944. Latensi balasan chat maksimum 1,5
+detik (target ≤ 5 detik). Laporan: `docs/reports/2026-10-24-conversation-replay-chat.json`.
+
 ### Angka Fase 1 (replay live, 9 run × 12 skenario)
 
 Balasan berupa `ReplyPlan` (structured output native provider lewat `create_agent(response_format=...)`). Field

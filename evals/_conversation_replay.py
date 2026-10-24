@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import closing
@@ -18,7 +19,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.sentences import sentence_end
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
@@ -63,6 +64,7 @@ class Step(BaseModel):
     claim: str | None = None
     cut_after: int | None = Field(default=None, ge=0)
     expect: Expectation | None = None
+    source: EventSource = "meeting_audio"
 
 
 class Scenario(BaseModel):
@@ -126,6 +128,7 @@ class StepOutcome:
     index: int
     said: str
     spoken: list[SpokenLine]
+    latency_ms: float = 0.0
     failures: list[str] = field(default_factory=list)
     checks: dict[str, bool] = field(default_factory=dict)
     reasons: dict[str, str] = field(default_factory=dict)
@@ -141,6 +144,16 @@ class StepOutcome:
 
 
 Judge = Callable[[str, str, str], Awaitable[Verdict]]
+
+
+class FakeChat:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def send(self, text: str, *, transcript_id: str) -> bool:
+        del transcript_id
+        self.sent.append(text)
+        return True
 
 
 class ScenarioAudio(FakeReplyAudio):
@@ -195,13 +208,21 @@ def _event(scenario: Scenario, index: int, step: Step) -> TranscriptEvent:
     return TranscriptEvent(
         id=f"{scenario.id}-{index}",
         timestamp=datetime.now(UTC).isoformat(),
-        source="meeting_audio",
+        source=step.source,
         text=step.say,
         finalized=True,
         participant_id=step.speaker,
         speaker_evidence_id=None,
         display_claim=step.claim,
     )
+
+
+async def _settle(turns: Any) -> None:
+    for _ in range(200):
+        await turns.lifecycle.wait_idle()
+        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+            return
+        await asyncio.sleep(0.02)
 
 
 async def run_scenario(
@@ -222,6 +243,7 @@ async def run_scenario(
         closing(MeetingRecord(Path(folder) / "record.jsonl")) as record,
     ):
         audio = ScenarioAudio(record)
+        chat = FakeChat()
         async with assembly.open_conversation(
             settings,
             config,
@@ -231,6 +253,7 @@ async def run_scenario(
                 wake_phrases=(profile.display_name,),
                 twin_names=(profile.display_name,),
                 barge_in=True,
+                chat=chat,
             ),
             diagnostics=Diagnostics(journal=journal),
         ) as turns:
@@ -239,15 +262,24 @@ async def run_scenario(
                 event = _event(scenario, index, step)
                 record.add_transcript(event)
                 audio.begin(step.cut_after)
-                await turns.ingress.receive_final(event)
-                await asyncio.wait_for(turns.lifecycle.wait_idle(), STEP_TIMEOUT_SECONDS)
+                started = time.monotonic()
+                if step.source == "meeting_audio":
+                    await turns.ingress.receive_final(event)
+                else:
+                    turns.ingress.receive_chat(event)
+                await _settle(turns)
+                spoken = audio.turn
+                if step.source != "meeting_audio":
+                    spoken = [SpokenLine(text=text, interrupted=False) for text in chat.sent]
+                    chat.sent.clear()
                 outcomes.append(
                     StepOutcome(
                         scenario.id,
                         scenario.family,
                         index,
                         step.say,
-                        audio.turn,
+                        spoken,
+                        (time.monotonic() - started) * 1000,
                         failures=_turn_failures(lines, event.id),
                     )
                 )
@@ -359,6 +391,14 @@ class ReplayReport:
             for family in sorted(totals)
         }
 
+    def latencies(self) -> dict[str, float]:
+        by_family: dict[str, list[float]] = {}
+        for outcome in self.graded():
+            by_family.setdefault(outcome.family, []).append(outcome.latency_ms)
+        return {
+            family: round(max(values), 1) for family, values in sorted(by_family.items())
+        }
+
     def checks(self) -> dict[str, dict[str, int]]:
         tally: dict[str, Counter[str]] = {}
         for outcome in self.graded():
@@ -377,6 +417,7 @@ class ReplayReport:
     def as_json(self) -> dict[str, Any]:
         return {
             "families": self.families(),
+            "latency_ms": self.latencies(),
             "checks": self.checks(),
             "severe_failures": [f"{o.scenario}#{o.index}" for o in self.severe_failures()],
             "steps": [
@@ -385,6 +426,7 @@ class ReplayReport:
                     "family": o.family,
                     "index": o.index,
                     "said": o.said,
+                    "latency_ms": round(o.latency_ms, 1),
                     "reply": [
                         {"text": line.text, "interrupted": line.interrupted} for line in o.spoken
                     ],

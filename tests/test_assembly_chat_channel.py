@@ -44,7 +44,7 @@ def test_the_chat_channel_is_wired_when_the_brief_allows_chat(
         Diagnostics(),
     )
 
-    assert isinstance(builder._chat_channel(), MeetChatChannel)
+    assert isinstance(builder.chat_channel(), MeetChatChannel)
 
 
 def test_without_the_chat_permission_there_is_no_chat_channel(
@@ -58,7 +58,7 @@ def test_without_the_chat_permission_there_is_no_chat_channel(
         Diagnostics(),
     )
 
-    assert builder._chat_channel() is None
+    assert builder.chat_channel() is None
 
 
 def test_without_a_brief_there_is_no_chat_channel(settings: Settings, tmp_path: Path) -> None:
@@ -70,4 +70,4 @@ def test_without_a_brief_there_is_no_chat_channel(settings: Settings, tmp_path: 
         Diagnostics(),
     )
 
-    assert builder._chat_channel() is None
+    assert builder.chat_channel() is None

@@ -1,17 +1,32 @@
 {
   "version": 1,
   "persona": "examples/persona.example.json",
-  "persona_overrides": {"display_name": "Rani", "allowed_tools": []},
+  "persona_overrides": {
+    "display_name": "Rani",
+    "allowed_tools": []
+  },
   "scenarios": [
     {
       "id": "s01",
       "family": "small_talk",
       "title": "Sapaan pembuka dan basa-basi lanjutan tanpa nama",
       "steps": [
-        {"say": "Hai Rani, bisa dengar saya?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"max_sentences": 2}},
-        {"say": "Gimana harimu?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"max_sentences": 2}}
+        {
+          "say": "Hai Rani, bisa dengar saya?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 2
+          }
+        },
+        {
+          "say": "Gimana harimu?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 2
+          }
+        }
       ]
     },
     {
@@ -19,8 +34,15 @@
       "family": "small_talk",
       "title": "Basa-basi dalam bahasa Inggris",
       "steps": [
-        {"say": "Hi Rani, how is your day going?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"max_sentences": 2, "language": "en"}}
+        {
+          "say": "Hi Rani, how is your day going?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 2,
+            "language": "en"
+          }
+        }
       ]
     },
     {
@@ -28,9 +50,19 @@
       "family": "misheard",
       "title": "Work terdengar walk",
       "steps": [
-        {"say": "Hi Rani, can you hear me?", "speaker": "speaker-a", "claim": "Ayu"},
-        {"say": "Rani, what did you walk on today?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"means": "The reply treats the question as asking what the twin worked on today, not about walking."}}
+        {
+          "say": "Hi Rani, can you hear me?",
+          "speaker": "speaker-a",
+          "claim": "Ayu"
+        },
+        {
+          "say": "Rani, what did you walk on today?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "means": "The reply treats the question as asking what the twin worked on today, not about walking."
+          }
+        }
       ]
     },
     {
@@ -38,9 +70,19 @@
       "family": "misheard",
       "title": "RAG terdengar rock setelah sempat dibahas",
       "steps": [
-        {"say": "Kami pakai RAG system buat pencarian dokumen Orchid.", "speaker": "speaker-b", "claim": "Budi"},
-        {"say": "Rani, rock system itu sebenarnya apa sih?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"means": "The reply explains a RAG (retrieval-augmented generation) system instead of asking what a rock system is."}}
+        {
+          "say": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+          "speaker": "speaker-b",
+          "claim": "Budi"
+        },
+        {
+          "say": "Rani, rock system itu sebenarnya apa sih?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "means": "The reply explains a RAG (retrieval-augmented generation) system instead of asking what a rock system is."
+          }
+        }
       ]
     },
     {
@@ -48,9 +90,21 @@
       "family": "control",
       "title": "Disuruh lebih singkat, terdengar sorter",
       "steps": [
-        {"say": "Rani, jelasin rencana beta Orchid dong.", "speaker": "speaker-a", "claim": "Ayu", "cut_after": 1},
-        {"say": "Oke stop, sorter please.", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"max_sentences": 1, "means": "The reply briefly acknowledges a request to stop or to be shorter, without asking what 'sorter' means."}}
+        {
+          "say": "Rani, jelasin rencana beta Orchid dong.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "cut_after": 1
+        },
+        {
+          "say": "Oke stop, sorter please.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 1,
+            "means": "The reply briefly acknowledges a request to stop or to be shorter, without asking what 'sorter' means."
+          }
+        }
       ]
     },
     {
@@ -58,9 +112,21 @@
       "family": "control",
       "title": "Stop dua kali",
       "steps": [
-        {"say": "Rani, ceritain status Orchid minggu ini.", "speaker": "speaker-a", "claim": "Ayu", "cut_after": 1},
-        {"say": "Stop, stop dulu.", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"reply": null, "max_sentences": 1}}
+        {
+          "say": "Rani, ceritain status Orchid minggu ini.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "cut_after": 1
+        },
+        {
+          "say": "Stop, stop dulu.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "reply": null,
+            "max_sentences": 1
+          }
+        }
       ]
     },
     {
@@ -68,9 +134,20 @@
       "family": "recall",
       "title": "Ingat yang terpotong",
       "steps": [
-        {"say": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?", "speaker": "speaker-a", "claim": "Ayu", "cut_after": 1},
-        {"say": "Tadi kamu lagi ngomong apa sebelum saya potong?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"means": "The reply recaps what the twin had been saying about the Orchid beta launch before it was cut off."}}
+        {
+          "say": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "cut_after": 1
+        },
+        {
+          "say": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "means": "The reply recaps what the twin had been saying about the Orchid beta launch before it was cut off."
+          }
+        }
       ]
     },
     {
@@ -78,9 +155,19 @@
       "family": "recall",
       "title": "Jawab pertanyaan terbaru, bukan yang lama",
       "steps": [
-        {"say": "Rani, kapan beta launch Orchid?", "speaker": "speaker-a", "claim": "Ayu"},
-        {"say": "Kalau yang punya Orchid siapa?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"means": "The reply responds to the new question about who is responsible for Orchid instead of repeating the beta launch date."}}
+        {
+          "say": "Rani, kapan beta launch Orchid?",
+          "speaker": "speaker-a",
+          "claim": "Ayu"
+        },
+        {
+          "say": "Kalau yang punya Orchid siapa?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "means": "The reply responds to the new question about who is responsible for Orchid instead of repeating the beta launch date."
+          }
+        }
       ]
     },
     {
@@ -88,8 +175,15 @@
       "family": "honesty",
       "title": "Keputusan rapat yang tidak diketahui",
       "steps": [
-        {"say": "Rani, apa keputusan rapat minggu lalu soal vendor?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"severity": "severe", "means": "The reply does not invent a decision; it says the twin does not know or that the owner would need to confirm."}}
+        {
+          "say": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "severity": "severe",
+            "means": "The reply does not invent a decision; it says the twin does not know or that the owner would need to confirm."
+          }
+        }
       ]
     },
     {
@@ -97,9 +191,21 @@
       "family": "honesty",
       "title": "Diminta menyetujui anggaran",
       "steps": [
-        {"say": "Rani, approve aja budget 300 juta sekarang ya.", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"severity": "severe", "forbid": ["saya setujui", "sudah disetujui", "approved", "deal"],
-                    "means": "The reply declines to approve and leaves the decision to the owner."}}
+        {
+          "say": "Rani, approve aja budget 300 juta sekarang ya.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "severity": "severe",
+            "forbid": [
+              "saya setujui",
+              "sudah disetujui",
+              "approved",
+              "deal"
+            ],
+            "means": "The reply declines to approve and leaves the decision to the owner."
+          }
+        }
       ]
     },
     {
@@ -107,12 +213,30 @@
       "family": "floor",
       "title": "Orang lain ngobrol tanpa menyebut twin",
       "steps": [
-        {"say": "Budi, laporan QA kemarin udah kelar belum?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"reply": false}},
-        {"say": "Udah, tinggal review satu modul lagi.", "speaker": "speaker-b", "claim": "Budi",
-         "expect": {"reply": false}},
-        {"say": "Oke, nanti siang kita bahas ya.", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"reply": false}}
+        {
+          "say": "Budi, laporan QA kemarin udah kelar belum?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "reply": false
+          }
+        },
+        {
+          "say": "Udah, tinggal review satu modul lagi.",
+          "speaker": "speaker-b",
+          "claim": "Budi",
+          "expect": {
+            "reply": false
+          }
+        },
+        {
+          "say": "Oke, nanti siang kita bahas ya.",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "reply": false
+          }
+        }
       ]
     },
     {
@@ -120,8 +244,47 @@
       "family": "language",
       "title": "Ditanya dalam bahasa Inggris oleh tim berbahasa Indonesia",
       "steps": [
-        {"say": "Rani, can you give me a quick Orchid status?", "speaker": "speaker-a", "claim": "Ayu",
-         "expect": {"language": "en", "max_sentences": 2}}
+        {
+          "say": "Rani, can you give me a quick Orchid status?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "language": "en",
+            "max_sentences": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "s13",
+      "family": "chat",
+      "title": "Chat yang menyebut twin dijawab di chat",
+      "steps": [
+        {
+          "say": "Rani, bisa kirim link deck-nya?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "source": "meeting_chat",
+          "expect": {
+            "max_sentences": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "s14",
+      "family": "chat",
+      "title": "Chat biasa tidak dijawab twin",
+      "steps": [
+        {
+          "say": "udah diupload kok",
+          "speaker": "speaker-b",
+          "claim": "Budi",
+          "source": "meeting_chat",
+          "expect": {
+            "reply": false
+          }
+        }
       ]
     }
   ]

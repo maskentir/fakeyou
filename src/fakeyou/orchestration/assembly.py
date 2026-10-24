@@ -43,7 +43,7 @@ from fakeyou.conversation.participation_decider import (
 )
 from fakeyou.conversation.participation_graph import DeciderFailure
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.conversation.turn_graph import ConversationPhase
+from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
@@ -215,6 +215,7 @@ class TurnBehavior:
     barge_in: bool = False
     on_tool_result: ToolResultCallback | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
+    chat: ChatChannel | None = None
     others_speaking: Callable[[], bool] | None = None
 
 
@@ -309,7 +310,9 @@ class _ConversationBuilder:
             create_perception_middleware(perception, journal=self._diagnostics.journal)
         )
 
-    def _chat_channel(self) -> MeetChatChannel | None:
+    def chat_channel(self) -> ChatChannel | None:
+        if self._behavior.chat is not None:
+            return self._behavior.chat
         dispatcher = self._behavior.meet_dispatcher
         brief = self._agent.brief
         if dispatcher is None or brief is None or "meet_chat" not in brief.permissions:
@@ -376,7 +379,7 @@ class _ConversationBuilder:
                 speak_threshold=decider_settings.speak_threshold,
                 clarify_threshold=decider_settings.clarify_threshold,
                 window_turns=decider_settings.window_turns,
-                chat=self._chat_channel(),
+                chat=self.chat_channel(),
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
