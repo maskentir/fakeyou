@@ -18,7 +18,12 @@ from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.identity.verify import CalibrationArtifact
 from fakeyou.orchestration.assembly import VoiceprintLive, build_voiceprint_live
-from fakeyou.orchestration.transcript import LiveScoring, TranscriptSinks, build_transcript_callback
+from fakeyou.orchestration.transcript import (
+    DrainOptions,
+    LiveScoring,
+    TranscriptSinks,
+    build_transcript_callback,
+)
 from fakeyou.persistence.record import MeetingRecord, meeting_record_path
 from tests._persistence_fakes import RecordingJournal
 from tests._voiceprint_fakes import FakeEmbedder, InMemoryVoiceprints, make_record
@@ -81,7 +86,7 @@ async def test_final_scores_turn_and_notes_honest_margin(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(text="Hello.", final=True, timestamp="2026-10-06T01:00:03+00:00")
     frame = replace(frame, stream_id="slot-0")
@@ -113,7 +118,7 @@ async def test_scoring_timeout_records_a_fault_and_keeps_the_callback_alive(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(text="Hello.", final=True, timestamp="2026-10-06T01:00:03+00:00")
     frame = replace(frame, stream_id="slot-0")
@@ -140,7 +145,7 @@ async def test_short_clip_skips_scoring_without_decision(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(text="Hi.", final=True, timestamp="2026-10-06T01:00:03+00:00")
     frame = replace(frame, stream_id="slot-0")
@@ -168,7 +173,7 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     prime_turn_tap(live, "slot-0", b"\x0a" * 3200)
     stale = TranscriptUpdate(text="Stale.", final=True, timestamp="2026-10-06T01:00:03+00:00")
@@ -219,7 +224,7 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
         binder=SlotBinder(registry=registry),
         voice_activity=cast(Any, voice_activity),
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=False,
+        options=DrainOptions(per_stream_enabled=False),
     )
     prime_turn_tap(live, "", b"\x0a" * 3200)
     await callback(
@@ -257,7 +262,7 @@ async def test_disabled_voiceprint_never_scores(tmp_path: Path) -> None:
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(text="Hello.", final=True, timestamp="2026-10-06T01:00:03+00:00")
     frame = replace(frame, stream_id="slot-0")
@@ -304,7 +309,7 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(text="Hello.", final=True, timestamp="2026-10-06T01:00:03+00:00")
     frame = replace(frame, stream_id="slot-0")
@@ -354,7 +359,7 @@ async def test_mixed_stream_transcript_carries_display_claim(tmp_path: Path) -> 
         binder=binder,
         voice_activity=cast(Any, voice_activity),
         scoring=LiveScoring(None, registry),
-        per_stream_enabled=False,
+        options=DrainOptions(per_stream_enabled=False),
     )
     frame = TranscriptUpdate(text="Hi.", final=True, timestamp="2026-10-06T01:00:03+00:00")
 
@@ -383,7 +388,7 @@ async def test_scoring_bug_records_a_fault_then_propagates(
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
 
     async def boom(*args: Any, **kwargs: Any) -> Any:
@@ -417,7 +422,7 @@ async def test_scoring_operational_error_records_a_fault_and_keeps_callback_aliv
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
 
     async def boom(*args: Any, **kwargs: Any) -> Any:

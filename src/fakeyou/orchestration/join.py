@@ -56,6 +56,7 @@ from fakeyou.orchestration.perception import PerceptionStack, create_perception_
 from fakeyou.orchestration.providers import preflight_hosts
 from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.orchestration.transcript import (
+    DrainOptions,
     LiveScoring,
     TranscriptSinks,
     build_transcript_callback,
@@ -294,6 +295,7 @@ def _build_audio_factory(
 ) -> None:
     log_playback = partial(_log_playback_event, run)
     stream_binder = SlotBinder(capacity=STREAM_FLEET_SLOTS, registry=registry)
+    judge = prepared.request.settings.turn_judge
     transcript = build_transcript_callback(
         sinks=TranscriptSinks(
             journal=run.journal,
@@ -304,8 +306,12 @@ def _build_audio_factory(
         binder=stream_binder,
         voice_activity=run.voice_activity,
         scoring=LiveScoring(run.voiceprint_live, registry),
-        per_stream_enabled=prepared.request.settings.conversation.per_stream_enabled,
+        options=DrainOptions(
+            per_stream_enabled=prepared.request.settings.conversation.per_stream_enabled,
+            early_hold_seconds=(judge.commit_hold_seconds if judge.early_commit_enabled else None),
+        ),
     )
+    resources.push_async_callback(transcript.close)
 
     audio_recorder: SlotAudioWriter | None = None
     if (
