@@ -9,6 +9,7 @@ from fakeyou.config.identifiers import verify_chat_thread_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.reply_planner import ReplyPlan
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import configured_url, require_url
 from fakeyou.meet.browser import BrowserLaunch, open_browser_tools
@@ -96,4 +97,7 @@ async def _chat_turn(
             {"messages": [{"role": "user", "content": message}]},
             config={"configurable": {"thread_id": thread}, "recursion_limit": 30},
         )
+        plan = response.get("structured_response")
+        if isinstance(plan, ReplyPlan):
+            return plan.text
         return str(response["messages"][-1].content)

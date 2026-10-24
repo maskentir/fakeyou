@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
 from langchain.agents.structured_output import ProviderStrategy
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -41,6 +41,7 @@ SPOKEN_LANGUAGE_GUIDANCE = {
         "when read aloud."
     ),
 }
+MAX_TOOL_CALLS_PER_TURN = 4
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
 
 
@@ -57,7 +58,12 @@ def create_meeting_agent(
         model=model,
         tools=configured_tools,
         system_prompt=persona,
-        middleware=[*middleware, create_reply_retry_middleware(), PlainReplyMiddleware()],
+        middleware=[
+            *middleware,
+            ToolCallLimitMiddleware(run_limit=MAX_TOOL_CALLS_PER_TURN),
+            create_reply_retry_middleware(),
+            PlainReplyMiddleware(),
+        ],
         checkpointer=checkpointer,
         response_format=ProviderStrategy(ReplyPlan),
     )

@@ -11,6 +11,7 @@ import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
+from fakeyou.conversation.reply_planner import ReplyPlan
 from fakeyou.memory.persona import memory_group_for
 from tests._error_support import message_pattern
 from tests._memory_fakes import make_graphiti
@@ -234,3 +235,25 @@ async def test_chat_returns_the_agent_reply_for_the_caller_to_print(
     )
 
     assert reply == "reply"
+
+
+async def test_chat_returns_the_spoken_text_of_a_structured_reply(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = ReplyPlan(language="en", intent="answer", text="The launch is on 14 October.")
+
+    class FakeAgent:
+        async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "messages": [SimpleNamespace(content=plan.model_dump_json())],
+                "structured_response": plan,
+            }
+
+    monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(api_chat, "create_meeting_agent", lambda *_a, **_k: FakeAgent())
+
+    reply = await api_chat.chat(
+        "hello", "thread", use_browser=False, use_memory=False, settings=settings
+    )
+
+    assert reply == "The launch is on 14 October."
