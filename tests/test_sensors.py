@@ -263,3 +263,18 @@ def test_the_perception_script_ships_with_the_bridge() -> None:
     script = load_perception_script()
 
     assert script.index("__fakeyouRtc") < script.index("__fakeyouPerception")
+
+
+async def test_each_audio_output_is_journaled_once_with_its_device() -> None:
+    sensed, _, journal = sensors()
+    audio = collection_payload(
+        users=[user_info(AYU, "Ayu")],
+        outputs=[output(AYU, "3553701704", kind=1), output(AYU, "stream-ayu")],
+    )
+
+    await sensed.accept_batch(DrainBatch(messages=[message(audio), message(audio)]))
+
+    assert [
+        (row["device_id"], row["stream_id"], row["own"])
+        for row in journal.events("perception_audio_output_observed")
+    ] == [(AYU, "3553701704", False)]

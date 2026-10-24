@@ -19,6 +19,7 @@ from fakeyou.perception.meet_protocol import (
     COLLECTIONS_CHANNEL,
     SYNC_COLLECTIONS_PATH,
     CollectionUpdate,
+    DeviceOutput,
     MeetChatMessage,
     decode_collection_event,
     decode_sync_response,
@@ -105,6 +106,7 @@ class PerceptionSensors:
         self._clock = clock
         self.rejected_messages = 0
         self.frames_seen = 0
+        self._audio_outputs: set[tuple[str, str]] = set()
 
     async def accept_batch(self, batch: DrainBatch) -> None:
         for message in batch.messages:
@@ -154,12 +156,27 @@ class PerceptionSensors:
         self._apply_update(update, page_time(message.page_ms))
 
     def _apply_update(self, update: CollectionUpdate, at: datetime) -> None:
+        self._journal_audio_outputs(update.outputs)
         changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
         if self._settings.chat:
             for chat in update.chat:
                 self._accept_chat(chat, at)
+
+    def _journal_audio_outputs(self, outputs: Sequence[DeviceOutput]) -> None:
+        for output in outputs:
+            key = (output.device_id, output.stream_id)
+            if output.kind != "audio" or key in self._audio_outputs:
+                continue
+            self._audio_outputs.add(key)
+            self._journal.record(
+                "perception_audio_output_observed",
+                source="perception",
+                device_id=output.device_id,
+                stream_id=output.stream_id,
+                own=output.device_id in self.roster.own_device_ids,
+            )
 
     def _person(self, device_id: str) -> ParticipantRef:
         return self.timeline.participant(device_id, self.roster.name_of(device_id))
