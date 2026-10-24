@@ -63,7 +63,7 @@ def make_ingress(
     barge_in: bool = True,
 ) -> tuple[TurnIngress, TurnLifecycle, Audio]:
     lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3),
+        build_turn_graph(),
         journal=journal,
         responder=Responder(),
     )
@@ -221,11 +221,12 @@ def test_policy_literals_are_in_the_graph_ingress_and_participation_source() -> 
         "others_speaking=self._others_speaking(),",
         "return self._participant_policy and signal is not None and signal()",
         "return bool(self._addressing_names) or self._participant_policy",
-        "return same_observed_speaker(self._engaged_speaker, event.participant_id)",
-        "if bare_ack or self._wake_phrases or not lifecycle.barge_in or session is None:",
-        "or not lifecycle.barge_in\n",
+        "if decision.backchannel or self._wake_phrases or not lifecycle.barge_in "
+        "or session is None:",
+        "if lifecycle.is_closed or lifecycle.is_failed or not lifecycle.barge_in "
+        "or session is None:",
     )
     for literal in ingress_literals:
         assert literal in INGRESS_SOURCE, literal
-    for literal in ('"policy_decided"', 'f"rules_fallback:{rule.reason_code}"'):
+    for literal in ('"policy_decided"', '"policy_judge_failed"', 'f"judge_{judgement.action}"'):
         assert literal in PARTICIPATION_SOURCE, literal

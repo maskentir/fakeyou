@@ -1,5 +1,4 @@
 import asyncio
-import importlib
 import inspect
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -112,7 +111,7 @@ class Harness:
             ),
         )
         self.lifecycle = TurnLifecycle(
-            build_turn_graph(decider=None, window_turns=3),
+            build_turn_graph(),
             journal=self.journal,
             responder=self.responder,
         )
@@ -145,7 +144,7 @@ async def test_whole_phrase_name_match_rejects_a_longer_word() -> None:
 
     assert decision is not None
     assert decision.decision == "silent"
-    assert decision.reason_code == "not_addressed"
+    assert decision.reason_code == "fallback_unnamed"
     assert harness.session.spoken == []
 
 
@@ -162,8 +161,8 @@ async def test_unaddressed_final_with_names_is_silent_and_journals_the_loop_reas
     assert len(policy) == 1
     assert policy[0]["transcript_id"] == "f1"
     assert policy[0]["action"] == "silent"
-    assert policy[0]["reason"] == "not_addressed"
-    assert policy[0]["decision_source"] == "rule"
+    assert policy[0]["reason"] == "fallback_unnamed"
+    assert policy[0]["decision_source"] == "fallback"
 
 
 async def test_unaddressed_final_without_names_is_admitted_like_the_loop() -> None:
@@ -176,23 +175,6 @@ async def test_unaddressed_final_without_names_is_admitted_like_the_loop() -> No
     assert decision.decision == "speak"
     assert harness.session.spoken == ["Yes, I am here."]
     assert harness.journal.of("policy_decided") == []
-
-
-async def test_bare_ack_after_a_bare_ack_is_silent_and_journals_bare_ack_run() -> None:
-    harness = Harness()
-    ingress = harness.ingress(())
-
-    await ingress.handle_final(transcript("f1", "okay"))
-    spoken_after_first = list(harness.session.spoken)
-    decision = await ingress.handle_final(transcript("f2", "yeah"))
-
-    assert decision is not None
-    assert decision.decision == "silent"
-    assert decision.reason_code == "bare_ack_run"
-    assert harness.session.spoken == spoken_after_first
-    assert harness.journal.of("ack_decided") == [
-        {"source": "agent", "transcript_id": "f2", "action": "silent", "reason": "bare_ack_run"}
-    ]
 
 
 async def test_bare_ack_not_after_a_bare_ack_is_admitted_without_names() -> None:
@@ -308,59 +290,9 @@ def test_reply_path_literals_are_the_graph_literals() -> None:
         '"answer_text_emitted"',
         '"answer_sentence_emitted"',
         '"reply_capped"',
-        '"ack_decided"',
-        '"bare_ack_run"',
         '"queued"',
         '"listening"',
         '"waiting"',
         '"acting"',
     ):
         assert literal in GRAPH_SOURCE
-
-
-def test_ack_vocabulary_is_the_one_shared_foundation_module() -> None:
-    acks = importlib.import_module("fakeyou.foundation.acks")
-    assert vars(turn_ingress)["is_bare_ack"] is acks.is_bare_ack
-    assert vars(turn_ingress)["is_interjection"] is acks.is_interjection
-    assert not hasattr(conversation_module, "BARE_ACK_VOCABULARY")
-    assert not hasattr(conversation_module, "is_bare_ack")
-
-
-async def test_bare_ack_after_a_statement_follow_up_is_silent_with_the_loop_reason() -> None:
-    harness = Harness()
-    ingress = harness.ingress(("twin",))
-
-    await ingress.handle_final(transcript("f1", "twin, hello"))
-    decision = await ingress.handle_final(transcript("f2", "yeah"))
-
-    assert decision is not None
-    assert decision.decision == "silent"
-    assert decision.reason_code == "bare_ack"
-    assert harness.session.spoken == ["Yes, I am here."]
-
-
-async def test_bare_ack_answering_a_question_replies_with_the_loop_reason() -> None:
-    harness = Harness(model_chunks("Are you there? "))
-    ingress = harness.ingress(("twin",))
-
-    await ingress.handle_final(transcript("f1", "twin, hello"))
-    decision = await ingress.handle_final(transcript("f2", "yeah"))
-
-    assert decision is not None
-    assert decision.decision == "speak"
-    assert decision.reason_code == "followup_answers_question"
-    assert harness.journal.of("policy_decided")[-1]["reason"] == "followup_answers_question"
-    assert harness.session.spoken == ["Are you there?", "Are you there?"]
-
-
-async def test_interjection_during_a_follow_up_is_silent_with_the_loop_reason() -> None:
-    harness = Harness()
-    ingress = harness.ingress(("twin",))
-
-    await ingress.handle_final(transcript("f1", "twin, hello"))
-    decision = await ingress.handle_final(transcript("f2", "wait, hold on a second"))
-
-    assert decision is not None
-    assert decision.decision == "silent"
-    assert decision.reason_code == "interjection"
-    assert harness.session.spoken == ["Yes, I am here."]

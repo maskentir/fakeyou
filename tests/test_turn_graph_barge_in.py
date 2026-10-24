@@ -100,17 +100,7 @@ class FakeJournal:
 def stop_input(speaking_generation: int) -> Any:
     return {
         "event": TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
-        "turns": [],
-        "context": ParticipationContext(
-            addressed=False,
-            followup=False,
-            same_participant=False,
-            ambiguous=False,
-            others_speaking=False,
-            activation_valid=False,
-            turn_cue="explicit",
-            turn_mine=True,
-        ),
+        "context": ParticipationContext(addressed=False),
         "speaking_generation": speaking_generation,
     }
 
@@ -168,7 +158,7 @@ async def test_stop_during_speech_ends_the_turn_without_a_new_reply() -> None:
     speaker = FakeSpeaker()
     turn_journal = FakeJournal()
 
-    out = await build_turn_graph(decider=None, window_turns=6).ainvoke(
+    out = await build_turn_graph().ainvoke(
         stop_input(speaking_generation=4),
         context=TurnRuntime(
             speaker=speaker,
@@ -249,7 +239,7 @@ def barge_ingress(
     journal: FakeJournal, addressing_names: tuple[str, ...]
 ) -> tuple[TurnIngress, TurnLifecycle, BargeAudio]:
     lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3),
+        build_turn_graph(),
         journal=journal,
         responder=OneSentenceResponder(),
     )
@@ -367,27 +357,6 @@ async def test_interim_is_a_barge_in_while_only_twin_names_are_configured() -> N
         "agent_cancelled",
     ]
     assert audio.stops == 1
-
-
-async def test_interim_is_not_a_barge_in_outside_the_wake_phrase_activation_window() -> None:
-    journal = FakeJournal()
-    lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3),
-        journal=journal,
-        responder=OneSentenceResponder(),
-    )
-    audio = BargeAudio()
-    lifecycle.bind(audio)
-    ingress = TurnIngress(lifecycle, addressing_names=("twin",), wake_phrases=("twin",))
-    speech = await start_speaking(lifecycle)
-
-    await ingress.handle_interim("twin please stop talking")
-
-    assert not speech.done()
-    assert journal.names == []
-    assert audio.stops == 0
-    speech.cancel()
-    await asyncio.gather(speech, return_exceptions=True)
 
 
 async def test_cancelled_generation_drops_its_late_chunks() -> None:

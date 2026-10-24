@@ -15,7 +15,6 @@ from fakeyou.config.settings import (
     GoogleReply,
     MemorySettings,
     OpenAIReply,
-    ParticipationDeciderSettings,
     ReplySettings,
     Settings,
     require_secret,
@@ -37,6 +36,8 @@ def preflight_hosts(
             targets.append(settings.reply_fallback.resolved_base_url)
         if settings.reply_strong:
             targets.append(settings.reply_strong.resolved_base_url)
+        if settings.turn_judge.model:
+            targets.append(settings.turn_judge.model.resolved_base_url)
     if memory:
         targets.extend(
             [
@@ -128,15 +129,12 @@ def create_perception_chat_model(settings: Settings) -> BaseChatModel:
     return _init_chat_model(role, ConfigKey.PERCEPTION_API_KEY)
 
 
-def create_decider_chat_model(decider: ParticipationDeciderSettings) -> BaseChatModel:
-    values: dict[str, Any] = {
-        "model": decider.model,
-        "api_key": decider.api_key,
-        "timeout_seconds": decider.timeout_seconds,
-    }
-    if decider.base_url is not None:
-        values["base_url"] = decider.base_url
-    return _init_chat_model(GoogleReply(**values), ConfigKey.PARTICIPATION_DECIDER_API_KEY)
+def create_turn_judge_model(settings: Settings) -> BaseChatModel:
+    role = settings.turn_judge.model
+    if role is None:
+        return create_chat_model(settings)
+    settings.require_roles("turn_judge")
+    return _init_chat_model(role, ConfigKey.TURN_JUDGE_API_KEY)
 
 
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0

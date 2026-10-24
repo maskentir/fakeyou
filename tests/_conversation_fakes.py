@@ -13,6 +13,7 @@ from langchain_core.outputs import ChatResult
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError, MeetingAudio
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 
@@ -144,3 +145,46 @@ class FakeResponder:
             raise
         finally:
             self.active -= 1
+
+
+def judged(action: str = "reply", **changes: object) -> TurnJudgement:
+    values: dict[str, object] = {
+        "heard": "",
+        "finished": True,
+        "backchannel": False,
+        "addressee": "twin" if action != "stay_silent" else "someone_else",
+        "action": action,
+        "confidence": 0.9,
+    }
+    return TurnJudgement.model_validate(values | changes)
+
+
+class ScriptedJudge:
+    def __init__(
+        self,
+        verdict: Callable[[JudgeWindow], TurnJudgement] | None = None,
+        *,
+        fail: BaseException | None = None,
+        delay: float = 0.0,
+    ) -> None:
+        self.windows: list[JudgeWindow] = []
+        self._verdict = verdict or (lambda _window: judged("stay_silent"))
+        self._fail = fail
+        self._delay = delay
+
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        self.windows.append(window)
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        if self._fail is not None:
+            raise self._fail
+        return self._verdict(window)
+
+
+def replies_when_named(name: str) -> Callable[[JudgeWindow], TurnJudgement]:
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        if name.casefold() in window.latest.text.casefold():
+            return judged("reply")
+        return judged("stay_silent")
+
+    return verdict

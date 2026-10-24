@@ -209,6 +209,11 @@ The twin's replies use up to three model roles, each its own `FAKEYOU_<ROLE>__*`
 | `reply` | Every turn, unless a role below takes it |
 | `reply_strong` | Turns answered from evidence the twin looked up itself: memory recall, the meeting view, a closer look at the screen or a camera. Prefetched memory does not count. Leave it empty to answer every turn with `reply` |
 | `reply_fallback` | A turn whose model call failed |
+| `turn_judge.model` | Deciding, for every line, whether it is meant for the twin and whether the twin answers. Leave it empty to judge with `reply` |
+
+The turn judge reads the recent conversation from the meeting record, the twin's own
+lines included, and starts judging on the live transcript while the speaker is still
+talking. When it cannot answer in time the twin replies only to a line that names it.
 
 When `reply_strong` is set, the response budget
 (`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of

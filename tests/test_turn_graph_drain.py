@@ -133,9 +133,7 @@ def final(event_id: str, text: str) -> TranscriptEvent:
 
 
 def whole_lifecycle(replier: GatedReplier, journal: Journal) -> TurnLifecycle:
-    lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3), journal=journal, responder=SILENT
-    )
+    lifecycle = TurnLifecycle(build_turn_graph(), journal=journal, responder=SILENT)
     lifecycle.configure_reply(
         ReplyOptions(
             whole_turn=lambda events, hook: ReplierWholeResponder(replier, events, hook),
@@ -217,15 +215,13 @@ async def test_shadow_final_is_decided_but_never_answered() -> None:
     await ingress.handle_final(final("f1", "twin, status please"))
 
     assert replier.calls == []
-    assert [fields["reason"] for fields in journal.of("policy_decided")] == ["addressed"]
+    assert [fields["reason"] for fields in journal.of("policy_decided")] == ["fallback_named"]
     assert [fields["reason"] for fields in journal.of("transcript_suppressed")] == ["shadow"]
 
 
 async def test_streamed_sentences_reach_the_session_with_index_and_transcript() -> None:
     source, journal, session = SentenceSource(["One.", "Two."]), Journal(), Session()
-    lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3), journal=journal, responder=SILENT
-    )
+    lifecycle = TurnLifecycle(build_turn_graph(), journal=journal, responder=SILENT)
     lifecycle.configure_reply(ReplyOptions(stream_turn=source.responder))
     lifecycle.bind(session)
 

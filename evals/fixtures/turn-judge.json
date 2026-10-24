@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "twin_names": ["Rani"],
+  "cases": [
+    {"id": "j01", "kind": "named", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rani, kapan launch beta-nya?"}, "answer": true, "finished": true},
+    {"id": "j02", "kind": "follow_up", "earlier": [{"speaker": "Ayu", "text": "Rani, kapan launch beta-nya?"}, {"speaker": "twin", "text": "Beta rilis 14 Oktober.", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Terus yang publik kapan?"}, "answer": true, "finished": true},
+    {"id": "j03", "kind": "named", "earlier": [], "latest": {"speaker": "Budi", "text": "Rani, can you give us your update?"}, "answer": true, "finished": true},
+    {"id": "j04", "kind": "answer_to_twin", "earlier": [{"speaker": "Ayu", "text": "Rani, jelasin rencana rilisnya dong."}, {"speaker": "twin", "text": "Mau saya jelaskan dari sisi engineering atau bisnis?", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Engineering aja."}, "answer": true, "finished": true},
+    {"id": "j05", "kind": "named", "earlier": [{"speaker": "Budi", "text": "Oke, update dari tim desain sudah semua."}], "latest": {"speaker": "Ayu", "text": "Rani, dari kamu ada blocker?"}, "answer": true, "finished": true},
+    {"id": "j06", "kind": "follow_up", "earlier": [{"speaker": "Budi", "text": "Rani, what's the budget status?"}, {"speaker": "twin", "text": "The budget is on track at eighty percent.", "by_twin": true}], "latest": {"speaker": "Budi", "text": "And the timeline?"}, "answer": true, "finished": true},
+    {"id": "j07", "kind": "named", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rani bisa tolong rangkum keputusan tadi?"}, "answer": true, "finished": true},
+    {"id": "j08", "kind": "misheard_name", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rana, kamu udah cek dokumennya?"}, "answer": true, "finished": true},
+    {"id": "j09", "kind": "named", "earlier": [], "latest": {"speaker": "voice A", "text": "Rani, could you repeat that last part?"}, "answer": true, "finished": true},
+    {"id": "j10", "kind": "follow_up", "earlier": [{"speaker": "Ayu", "text": "Rani, siapa yang pegang QA?"}, {"speaker": "twin", "text": "QA dipegang tim Budi.", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Mulainya kapan kira-kira?"}, "answer": true, "finished": true},
+    {"id": "j11", "kind": "other_person", "earlier": [], "latest": {"speaker": "Ayu", "text": "Budi, kamu udah makan?"}, "answer": false, "finished": true},
+    {"id": "j12", "kind": "other_person", "earlier": [{"speaker": "Ayu", "text": "Rani, kapan beta?"}, {"speaker": "twin", "text": "Beta rilis 14 Oktober.", "by_twin": true}], "latest": {"speaker": "Budi", "text": "Ayu, nanti kirim link-nya ke aku ya."}, "answer": false, "finished": true},
+    {"id": "j13", "kind": "backchannel", "earlier": [{"speaker": "twin", "text": "Untuk beta kita fokus ke stabilitas dulu,", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "mm-hm"}, "answer": false, "finished": true},
+    {"id": "j14", "kind": "others_talking", "earlier": [{"speaker": "Ayu", "text": "Rani, kapan beta?"}, {"speaker": "twin", "text": "Beta rilis 14 Oktober.", "by_twin": true}, {"speaker": "Budi", "text": "Ayu, berarti QA mulai minggu depan ya?"}], "latest": {"speaker": "Ayu", "text": "Iya, Senin."}, "answer": false, "finished": true},
+    {"id": "j15", "kind": "other_person", "earlier": [], "latest": {"speaker": "Budi", "text": "Ayu, did you see the email from legal?"}, "answer": false, "finished": true},
+    {"id": "j16", "kind": "quoted_name", "earlier": [], "latest": {"speaker": "Ayu", "text": "Kemarin Rani bilang deadline-nya mundur, Budi udah tahu?"}, "answer": false, "finished": true},
+    {"id": "j17", "kind": "interjection", "earlier": [{"speaker": "Ayu", "text": "Jadi tadi kita sepakat beta tanggal 14."}], "latest": {"speaker": "Ayu", "text": "eh bentar bentar"}, "answer": false, "finished": false},
+    {"id": "j18", "kind": "self_talk", "earlier": [{"speaker": "Ayu", "text": "Budi, angkanya udah final?"}], "latest": {"speaker": "Budi", "text": "hmm saya cek dulu ya"}, "answer": false, "finished": true},
+    {"id": "j19", "kind": "room_logistics", "earlier": [], "latest": {"speaker": "Ayu", "text": "Bisa lihat layar saya semuanya?"}, "answer": false, "finished": true},
+    {"id": "j20", "kind": "backchannel", "earlier": [{"speaker": "twin", "text": "The first milestone is the internal beta,", "by_twin": true}], "latest": {"speaker": "Budi", "text": "yeah"}, "answer": false, "finished": true},
+    {"id": "j21", "kind": "others_talking", "earlier": [{"speaker": "Budi", "text": "Rani, what's the budget status?"}, {"speaker": "twin", "text": "The budget is on track.", "by_twin": true}, {"speaker": "Ayu", "text": "Budi, can you send me the invoice later?"}], "latest": {"speaker": "Budi", "text": "Sure, after lunch."}, "answer": false, "finished": true},
+    {"id": "j22", "kind": "fragment", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rani, jadi kalau dari sisi"}, "answer": false, "finished": false},
+    {"id": "j23", "kind": "fragment", "earlier": [{"speaker": "Ayu", "text": "Oke lanjut ke anggaran."}], "latest": {"speaker": "Budi", "text": "terus untuk budget-nya kita"}, "answer": false, "finished": false},
+    {"id": "j24", "kind": "fragment", "earlier": [], "latest": {"speaker": "Budi", "text": "so the main thing I wanted to say is"}, "answer": false, "finished": false},
+    {"id": "j25", "kind": "fragment", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rani, can you"}, "answer": false, "finished": false},
+    {"id": "j26", "kind": "fragment", "earlier": [{"speaker": "Budi", "text": "Soal timeline,"}], "latest": {"speaker": "Budi", "text": "I think we should probably"}, "answer": false, "finished": false},
+    {"id": "j27", "kind": "fragment", "earlier": [], "latest": {"speaker": "Ayu", "text": "eh tapi kan kemarin kita udah sepakat kalau"}, "answer": false, "finished": false}
+  ]
+}

@@ -136,6 +136,7 @@ class _ReportState:
     unknown_reasons: Counter[str] = field(default_factory=Counter)
     policy_actions: Counter[str] = field(default_factory=Counter)
     policy_reasons: Counter[str] = field(default_factory=Counter)
+    policy_sources: Counter[str] = field(default_factory=Counter)
     observer_methods: Counter[str] = field(default_factory=Counter)
     order_inversions: int = 0
     drain_gaps: int = 0
@@ -425,6 +426,7 @@ def _apply_session_event(state: _ReportState, row: dict[str, Any], _at: datetime
     elif event == "policy_decided":
         state.policy_actions[str(row.get("action"))] += 1
         state.policy_reasons[str(row.get("reason"))] += 1
+        state.policy_sources[str(row.get("decision_source"))] += 1
     else:
         state.observer_methods[str(row.get("method"))] += 1
 
@@ -640,6 +642,7 @@ def _assemble_report(
             "answers": sum(1 for turn in turn_reports if turn["llm_count"] > 0),
             "policy": dict(state.policy_actions),
             "policy_reasons": dict(state.policy_reasons),
+            "policy_sources": dict(state.policy_sources),
             "observer_methods": dict(state.observer_methods),
         },
         "turns": turn_reports,

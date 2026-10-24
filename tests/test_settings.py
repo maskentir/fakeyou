@@ -315,4 +315,4 @@ def test_example_env_file_loads_under_the_schema(tmp_path: Path) -> None:
     env_file.write_text(active, encoding="utf-8")
     settings = Settings(**env_file_opt(env_file))
     assert settings.api.host == "127.0.0.1"
-    assert settings.participation_decider.enabled is True
+    assert settings.turn_judge.model is None

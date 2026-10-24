@@ -1,20 +1,14 @@
 import asyncio
-from collections.abc import Sequence
 from typing import Any, NoReturn, override
 
 import pytest
 
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.conversation.jev_refresh import turn_jev_key
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
-from fakeyou.conversation.participation_decider import (
-    DeciderTurn,
-    ParticipationDecision,
-)
 from fakeyou.conversation.turn_graph import SpeechFloor
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
-from tests._conversation_fakes import FakeResponder
+from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._conversation_support import event
 from tests._persistence_fakes import RecordingJournal
 
@@ -351,18 +345,6 @@ async def test_cancelled_request_ids_do_not_attach_to_next_transcript(
     await loop.lifecycle.close()
 
 
-def test_jev_key_changes_when_turn_cue_changes() -> None:
-    key_a = turn_jev_key(("t1", "t2"), "none", mine=False, window_turns=6)
-    key_b = turn_jev_key(("t1", "t2"), "explicit", mine=True, window_turns=6)
-    assert key_a != key_b
-
-
-def test_stale_key_is_rejected() -> None:
-    assert turn_jev_key(("old-id",), "explicit", mine=True, window_turns=6) != turn_jev_key(
-        ("new-id",), "explicit", mine=True, window_turns=6
-    )
-
-
 async def test_shadow_mode_decides_without_speaking(
     journal: RecordingJournal,
 ) -> None:
@@ -377,40 +359,29 @@ async def test_shadow_mode_decides_without_speaking(
     await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
     assert responder.calls == []
     assert audio.spoken == []
-    assert [row["reason"] for row in journal.events("policy_decided")] == ["addressed"]
+    assert [row["reason"] for row in journal.events("policy_decided")] == ["fallback_named"]
     assert [row["reason"] for row in journal.events("transcript_suppressed")] == ["shadow"]
     await loop.lifecycle.close()
 
 
-class _SpeakingDecider:
-    def __init__(self) -> None:
-        self.windows: list[list[DeciderTurn]] = []
-
-    async def decide(self, window: Sequence[DeciderTurn]) -> ParticipationDecision:
-        self.windows.append(list(window))
-        return ParticipationDecision(decision="speak", confidence=0.9, reason_code="addressed")
-
-
-async def test_interim_refresh_feeds_gray_turn_without_blocking(
+async def test_interim_judgement_answers_the_final_without_blocking(
     journal: RecordingJournal,
 ) -> None:
-    decider = _SpeakingDecider()
+    judge = ScriptedJudge(lambda _window: judged("reply"))
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(
         responder,
-        interaction=TurnInteraction(twin_names=["harun"], decider=decider),
+        interaction=TurnInteraction(twin_names=["harun"], judge=judge),
         diagnostics=Diagnostics(journal=journal),
     )
     loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "update selesai", participant_id="a"))
-    await loop.ingress.handle_interim("next")
-    jev = loop.lifecycle.jev
-    assert jev is not None
-    await asyncio.wait_for(jev.wait_idle(), 2)
-    await loop.ingress.receive_final(event("t2", "next", participant_id="b"))
+    await loop.ingress.handle_interim("what is next")
+    judging = loop.lifecycle.judging
+    assert judging is not None
+    await asyncio.wait_for(judging.cache.wait_idle(), 2)
+    await loop.ingress.receive_final(event("t2", "What is next?", participant_id="b"))
     await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert "jev_speak" in reasons
-    assert decider.windows
-    assert audio.spoken == ["next"]
+    assert [row["reason"] for row in journal.events("policy_decided")] == ["judge_reply"]
+    assert len(judge.windows) == 1
+    assert audio.spoken == ["What is next?"]
     await loop.lifecycle.close()

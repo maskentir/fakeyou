@@ -332,6 +332,7 @@ async def _open_native_conversation(
         patch.object(assembly, "create_chat_model", return_value=model),
         patch.object(assembly, "create_fallback_chat_model", return_value=context.fallback),
         patch.object(assembly, "create_strong_chat_model", return_value=None),
+        patch.object(assembly, "build_turn_judge", return_value=None),
     ):
         async with assembly.open_conversation(
             settings,
@@ -363,9 +364,6 @@ async def native_responder(
         update={
             "conversation": context.settings.conversation.model_copy(
                 update={"sentence_streaming": False}
-            ),
-            "participation_decider": context.settings.participation_decider.model_copy(
-                update={"enabled": False}
             ),
         }
     )

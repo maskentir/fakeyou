@@ -32,16 +32,24 @@ from evals._conversation_replay import (
 )
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.orchestration.providers import create_chat_model, create_debrief_chat_model
-from tests._conversation_fakes import ToolCallingFakeModel
+from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
 
 NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
 
 
 def _offline_settings() -> Settings:
-    settings = Settings(**NO_ENV_FILE)
-    decider = settings.participation_decider.model_copy(update={"enabled": False})
-    return settings.model_copy(update={"participation_decider": decider})
+    return Settings(**NO_ENV_FILE)
+
+
+def _judge_answers_unless_for(other: str) -> ScriptedJudge:
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        if other.casefold() in window.latest.text.casefold():
+            return judged("stay_silent")
+        return judged("reply")
+
+    return ScriptedJudge(verdict)
 
 
 class UnreachableModel(ToolCallingFakeModel):
@@ -126,6 +134,9 @@ async def test_replay_grades_replies_silence_and_cut_offs_through_the_real_turn_
     monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
     monkeypatch.setattr(assembly, "create_fallback_chat_model", lambda _settings: None)
     monkeypatch.setattr(assembly, "create_strong_chat_model", lambda _settings: None)
+    monkeypatch.setattr(
+        assembly, "build_turn_judge", lambda *_args: _judge_answers_unless_for("Budi")
+    )
     scenario = Scenario(
         id="c1",
         family="recall",
@@ -167,6 +178,9 @@ async def test_a_failed_turn_fails_its_step_even_without_an_expectation(
     monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
     monkeypatch.setattr(assembly, "create_fallback_chat_model", lambda _settings: None)
     monkeypatch.setattr(assembly, "create_strong_chat_model", lambda _settings: None)
+    monkeypatch.setattr(
+        assembly, "build_turn_judge", lambda *_args: _judge_answers_unless_for("Budi")
+    )
     scenario = Scenario(
         id="c2",
         family="recall",

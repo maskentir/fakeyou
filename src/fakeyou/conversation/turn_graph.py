@@ -19,22 +19,18 @@ from langgraph.runtime import Runtime
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.conversation.jev_refresh import JevKick, JevState, kick_jev_refresh, turn_jev_key
 from fakeyou.conversation.memory_prefetch import (
     MemoryPrefetch,
     prefetch_memory_evidence,
     retain_evidence,
 )
-from fakeyou.conversation.participation_decider import (
-    Decider,
-    DeciderTurn,
-    ParticipationDecision,
-)
+from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
     DecisionSource,
-    JevKey,
+    JudgeThresholds,
     ParticipationRuntime,
     ParticipationState,
+    TurnJudging,
     build_participation_subgraph,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -249,7 +245,7 @@ class TurnRuntime:
     journal: JournalSink
     responder: Responder | None = None
     floor: SpeechFloor | None = None
-    jev: JevState | None = None
+    judging: TurnJudging | None = None
     phase: PhaseSink | None = None
     queue: PendingFinals | None = None
     recovery: TurnRecovery | None = None
@@ -382,7 +378,6 @@ Admission = Literal["rules", "admit"]
 
 class TurnInput(TypedDict):
     event: TurnEvent
-    turns: list[DeciderTurn]
     context: ParticipationContext
     speaking_generation: int
     transcript_event: NotRequired[TranscriptEvent | None]
@@ -394,7 +389,6 @@ class TurnInput(TypedDict):
 
 class TurnGraphState(TypedDict):
     event: TurnEvent
-    turns: list[DeciderTurn]
     context: ParticipationContext
     speaking_generation: int
     transcript_text: str
@@ -446,53 +440,48 @@ def route_after_participation(state: TurnGraphState) -> TurnRoute:
     return "end"
 
 
-def _participation_key(state: TurnGraphState, window_turns: int) -> JevKey:
-    history = state.get("history", [])
-    prior = tuple(event.id for event in history[:-1])
-    context = state["context"]
-    return turn_jev_key(prior, context.turn_cue, mine=context.turn_mine, window_turns=window_turns)
-
-
-def _refresh_jev(
-    state: TurnGraphState, runtime: TurnRuntime, decider: Decider | None, window_turns: int
-) -> None:
-    jev = runtime.jev
-    if decider is None or jev is None:
+def _prefetch_judgement(state: TurnGraphState, runtime: TurnRuntime) -> None:
+    judging = runtime.judging
+    text = state["transcript_text"]
+    if judging is None or state.get("pending", False) or not text.strip():
         return
-    kick_jev_refresh(
-        jev,
-        decider,
-        JevKick(
-            text=state["transcript_text"],
-            events=tuple(state.get("history", [])),
-            twin_names=state.get("addressing_names", ()),
-            window_turns=window_turns,
-        ),
-        busy=_busy(runtime) or runtime.speaker.is_speaking,
-        pending=state.get("pending", False),
+    judging.cache.prefetch(
+        judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
     )
+
+
+_NO_THRESHOLDS = JudgeThresholds(reply=1.0, clarify=1.0)
 
 
 async def _participate(
     state: TurnGraphState,
     runtime: TurnRuntime,
     participation_graph: ParticipationGraph,
-    window_turns: int,
 ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
     if state.get("admission") == "admit":
         return {"failure": None}
+    event = state.get("transcript_event")
+    if event is None:
+        raise ValueError("a final turn carries its transcript event")
+    judging = runtime.judging
+    window = (
+        judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking)
+        if judging is not None
+        else None
+    )
     result = await participation_graph.ainvoke(
         ParticipationState(
-            turns=state["turns"],
+            window=window,
             context=state["context"],
-            rule_decision=None,
-            model_decision=None,
-            last_participation=None,
             transcript_id=state["event"].event_id,
-            jev_key=_participation_key(state, window_turns),
+            last_participation=None,
             decision_source=None,
         ),
-        context=ParticipationRuntime(journal=runtime.journal, jev=runtime.jev),
+        context=ParticipationRuntime(
+            journal=runtime.journal,
+            thresholds=judging.thresholds if judging is not None else _NO_THRESHOLDS,
+            cache=judging.cache if judging is not None else None,
+        ),
     )
     return {
         "participation": result["last_participation"],
@@ -980,21 +969,17 @@ async def record_turn_failure(state: TurnGraphState, runtime: Runtime[TurnRuntim
 
 @dataclass(frozen=True, slots=True)
 class _TurnNodes:
-    decider: Decider | None
-    window_turns: int
     prefetch: MemoryPrefetch | None
     participation_graph: ParticipationGraph
     speech_graph: SpeechGraph
 
     async def refresh(self, state: TurnGraphState, runtime: Runtime[TurnRuntime]) -> None:
-        _refresh_jev(state, runtime.context, self.decider, self.window_turns)
+        _prefetch_judgement(state, runtime.context)
 
     async def participate(
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
-        return await _participate(
-            state, runtime.context, self.participation_graph, self.window_turns
-        )
+        return await _participate(state, runtime.context, self.participation_graph)
 
     async def prefetch_memory(
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
@@ -1025,14 +1010,10 @@ class _TurnNodes:
 
 def build_turn_graph(
     *,
-    decider: Decider | None,
-    window_turns: int,
     memory_prefetch: MemoryPrefetch | None = None,
     participation: ParticipationGraph | None = None,
 ) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
     nodes = _TurnNodes(
-        decider=decider,
-        window_turns=window_turns,
         prefetch=memory_prefetch,
         participation_graph=(
             build_participation_subgraph() if participation is None else participation

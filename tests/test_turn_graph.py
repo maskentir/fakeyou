@@ -1,20 +1,20 @@
 import asyncio
-from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.jev_refresh import JevRefreshInput, JevState
-from fakeyou.conversation.participation_decider import (
-    DeciderTurn,
-    ParticipationDecision,
-)
+from fakeyou.conversation.meeting_messages import NoHistory
+from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import TurnInput, TurnRuntime, build_turn_graph
+from fakeyou.conversation.turn_judge import JudgeCache, TurnJudge, WindowSource
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
+from tests._conversation_fakes import ScriptedJudge, judged
 
 TWIN_REPLY = "Yes, I am here."
+QUESTION = "twin, are you there?"
 
 
 class FakeResponder:
@@ -24,22 +24,6 @@ class FakeResponder:
     async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
         yield SpokenChunk(text=TWIN_REPLY, language=DEFAULTS.speech.language)
-
-
-class FakeDecider:
-    def __init__(
-        self, decision: ParticipationDecision | None, error: Exception | None = None
-    ) -> None:
-        self._decision = decision
-        self._error = error
-        self.windows: list[tuple[DeciderTurn, ...]] = []
-
-    async def decide(self, window: Sequence[DeciderTurn]) -> ParticipationDecision:
-        self.windows.append(tuple(window))
-        if self._error is not None:
-            raise self._error
-        assert self._decision is not None
-        return self._decision
 
 
 class FakeSpeaker:
@@ -73,39 +57,39 @@ class FakeJournal:
         self.fields.append({"source": source, **fields})
 
 
-def final_event(payload: str = "twin, are you there?") -> TurnEvent:
-    return TurnEvent(kind="final", event_id="e1", at=1.0, payload=payload)
-
-
-def mentioned_context() -> ParticipationContext:
-    return ParticipationContext(
-        addressed=False,
-        followup=False,
-        same_participant=False,
-        ambiguous=False,
-        others_speaking=False,
-        activation_valid=False,
-        turn_cue="explicit",
-        turn_mine=True,
+def judging(judge: TurnJudge) -> TurnJudging:
+    return TurnJudging(
+        cache=JudgeCache(judge),
+        windows=WindowSource(NoHistory(), window_lines=8),
+        thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
     )
 
 
-def addressed_context() -> ParticipationContext:
-    return ParticipationContext(
-        addressed=True,
-        followup=False,
-        same_participant=False,
-        ambiguous=False,
-        others_speaking=False,
-        activation_valid=True,
+def transcript(text: str = QUESTION) -> TranscriptEvent:
+    return TranscriptEvent(
+        id="e1",
+        timestamp="2026-10-17T10:00:00+00:00",
+        source="meeting_audio",
+        text=text,
+        finalized=True,
+        participant_id="Ana",
+        speaker_evidence_id=None,
     )
 
 
-def turn_input(context: ParticipationContext) -> TurnInput:
+def turn_input(*, addressed: bool = False, others_speaking: bool = False) -> TurnInput:
     return TurnInput(
-        event=final_event(),
-        turns=[DeciderTurn(speaker="Ana", text="twin, are you there?", mine=True)],
-        context=context,
+        event=TurnEvent(kind="final", event_id="e1", at=1.0, payload=QUESTION),
+        context=ParticipationContext(addressed=addressed, others_speaking=others_speaking),
+        speaking_generation=4,
+        transcript_event=transcript(),
+    )
+
+
+def interim_input(text: str) -> TurnInput:
+    return TurnInput(
+        event=TurnEvent(kind="interim", event_id="e0", at=0.5, payload=text),
+        context=ParticipationContext(addressed=False),
         speaking_generation=4,
     )
 
@@ -113,173 +97,127 @@ def turn_input(context: ParticipationContext) -> TurnInput:
 def stop_input() -> TurnInput:
     return TurnInput(
         event=TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
-        turns=[],
-        context=mentioned_context(),
+        context=ParticipationContext(addressed=False),
         speaking_generation=4,
     )
 
 
-def decision(kind: Literal["speak", "silent", "clarify"]) -> ParticipationDecision:
-    return ParticipationDecision(decision=kind, confidence=0.9, reason_code="model_says")
-
-
-async def seeded_jev(decider: FakeDecider) -> JevState:
-    jev = JevState()
-    await jev.cache.refresh(
-        decider,
-        JevRefreshInput(
-            event_ids=(),
-            turns=(DeciderTurn(speaker="Ana", text="twin, are you there?", mine=True),),
-            cue="explicit",
-            mine=True,
-            window_turns=6,
-        ),
+def runtime(
+    speaker: FakeSpeaker | None = None,
+    *,
+    judge: TurnJudge | None = None,
+    journal: FakeJournal | None = None,
+    responder: FakeResponder | None = None,
+) -> TurnRuntime:
+    return TurnRuntime(
+        speaker=speaker or FakeSpeaker(),
+        journal=journal or FakeJournal(),
+        responder=responder or FakeResponder(),
+        judging=judging(judge) if judge is not None else None,
     )
-    return jev
 
 
-async def test_mentioned_turn_reaches_the_decider_only_through_the_interim_refresh() -> None:
-    decider = FakeDecider(decision("silent"))
-    jev = JevState()
-    graph = build_turn_graph(decider=decider, window_turns=6)
-    runtime = TurnRuntime(
-        speaker=FakeSpeaker(), journal=FakeJournal(), responder=FakeResponder(), jev=jev
-    )
-    history = [
-        TranscriptEvent(
-            id="e1",
-            timestamp="2026-10-17T10:00:00+00:00",
-            source="meeting_audio",
-            text="twin, are you there?",
-            finalized=True,
-            participant_id="Ana",
-            speaker_evidence_id=None,
-        )
-    ]
-
-    await graph.ainvoke(turn_input(mentioned_context()), context=runtime)
-    assert decider.windows == []
-
-    await graph.ainvoke(
-        TurnInput(
-            event=TurnEvent(kind="interim", event_id="e1", at=2.0, payload="twin, are you there"),
-            turns=[],
-            context=mentioned_context(),
-            speaking_generation=4,
-            history=history,
-            addressing_names=("twin",),
-        ),
-        context=runtime,
-    )
-    await jev.wait_idle()
-
-    assert len(decider.windows) == 1
-    assert decider.windows[0][-1]["text"] == "twin, are you there?"
-
-
-async def test_addressed_turn_is_answered_on_rules_without_consulting_decider() -> None:
-    decider = FakeDecider(None)
+async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.01)
     speaker = FakeSpeaker()
-    graph = build_turn_graph(decider=decider, window_turns=6)
+    graph = build_turn_graph()
+    context = runtime(speaker, judge=judge)
 
-    await graph.ainvoke(
-        turn_input(addressed_context()),
-        context=TurnRuntime(speaker=speaker, journal=FakeJournal(), responder=FakeResponder()),
-    )
+    await graph.ainvoke(interim_input("twin are you there"), context=context)
+    await graph.ainvoke(turn_input(), context=context)
 
-    assert decider.windows == []
+    assert [window.latest.text for window in judge.windows] == ["twin are you there"]
     assert speaker.utterances == [TWIN_REPLY]
 
 
-async def test_silent_decision_does_not_invoke_the_speaker() -> None:
-    speaker = FakeSpeaker()
-    graph = build_turn_graph(decider=FakeDecider(decision("silent")), window_turns=6)
-
-    await graph.ainvoke(
-        turn_input(mentioned_context()),
-        context=TurnRuntime(speaker=speaker, journal=FakeJournal(), responder=FakeResponder()),
-    )
-
-    assert speaker.utterances == []
-
-
-async def test_silent_decision_never_consults_the_responder_and_never_speaks() -> None:
+async def test_a_judge_that_stays_silent_never_reaches_the_responder() -> None:
     speaker = FakeSpeaker()
     responder = FakeResponder()
-    graph = build_turn_graph(decider=FakeDecider(decision("silent")), window_turns=6)
 
-    await graph.ainvoke(
-        turn_input(mentioned_context()),
-        context=TurnRuntime(speaker=speaker, journal=FakeJournal(), responder=responder),
+    await build_turn_graph().ainvoke(
+        turn_input(),
+        context=runtime(
+            speaker, judge=ScriptedJudge(lambda _window: judged("stay_silent")), responder=responder
+        ),
     )
 
     assert responder.transcripts == []
     assert speaker.utterances == []
 
 
-async def test_speak_decision_invokes_the_speaker_exactly_once() -> None:
+async def test_a_judge_that_replies_speaks_exactly_once() -> None:
     speaker = FakeSpeaker()
-    graph = build_turn_graph(decider=FakeDecider(decision("speak")), window_turns=6)
-    jev = await seeded_jev(FakeDecider(decision("speak")))
+    journal = FakeJournal()
 
-    await graph.ainvoke(
-        turn_input(mentioned_context()),
-        context=TurnRuntime(
-            speaker=speaker, journal=FakeJournal(), responder=FakeResponder(), jev=jev
+    await build_turn_graph().ainvoke(
+        turn_input(),
+        context=runtime(
+            speaker, judge=ScriptedJudge(lambda _window: judged("reply")), journal=journal
         ),
     )
 
     assert speaker.utterances == [TWIN_REPLY]
+    decided = journal.fields[journal.names.index("policy_decided")]
+    assert (decided["decision_source"], decided["reason"], decided["addressee"]) == (
+        "judge",
+        "judge_reply",
+        "twin",
+    )
 
 
-async def test_cached_decider_failure_falls_back_to_rules_without_failing_the_turn() -> None:
-    speaker = FakeSpeaker()
+async def test_a_failed_judge_falls_back_to_the_name_without_failing_the_turn() -> None:
     journal = FakeJournal()
-    graph = build_turn_graph(decider=FakeDecider(None, error=TimeoutError()), window_turns=6)
-    jev = await seeded_jev(FakeDecider(None, error=TimeoutError()))
+    speaker = FakeSpeaker()
 
-    out = await graph.ainvoke(
-        turn_input(mentioned_context()),
-        context=TurnRuntime(speaker=speaker, journal=journal, responder=FakeResponder(), jev=jev),
+    out = await build_turn_graph().ainvoke(
+        turn_input(addressed=True),
+        context=runtime(speaker, judge=ScriptedJudge(fail=TimeoutError()), journal=journal),
     )
 
     assert out["failure"] is None
-    assert speaker.utterances == []
-    assert journal.names == ["policy_decider_failed", "policy_decided"]
-    assert journal.fields[0] == {
-        "source": "agent",
-        "code": "decider_timeout",
-        "decision_source": "rules",
-    }
+    assert speaker.utterances == [TWIN_REPLY]
+    assert journal.names[:2] == ["policy_judge_failed", "policy_decided"]
+    assert journal.fields[0]["code"] == "judge_timeout"
+    assert journal.fields[1]["reason"] == "fallback_named"
 
 
-async def test_stop_event_skips_the_decider_and_never_invokes_the_speaker() -> None:
-    decider = FakeDecider(None)
+async def test_without_a_judge_an_unnamed_line_stays_silent() -> None:
     speaker = FakeSpeaker()
-    graph = build_turn_graph(decider=decider, window_turns=6)
 
-    out = await graph.ainvoke(
-        stop_input(),
-        context=TurnRuntime(speaker=speaker, journal=FakeJournal(), responder=FakeResponder()),
+    await build_turn_graph().ainvoke(turn_input(), context=runtime(speaker))
+
+    assert speaker.utterances == []
+
+
+async def test_an_occupied_floor_is_held_without_asking_the_judge() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    speaker = FakeSpeaker()
+
+    await build_turn_graph().ainvoke(
+        turn_input(addressed=True, others_speaking=True), context=runtime(speaker, judge=judge)
     )
 
-    assert decider.windows == []
+    assert judge.windows == []
+    assert speaker.utterances == []
+
+
+async def test_stop_event_skips_the_judge_and_never_invokes_the_speaker() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    speaker = FakeSpeaker()
+
+    out = await build_turn_graph().ainvoke(stop_input(), context=runtime(speaker, judge=judge))
+
+    assert judge.windows == []
     assert speaker.utterances == []
     assert out["speaking_generation"] == 5
 
 
 async def test_speaking_generation_is_written_only_by_the_speak_node() -> None:
-    graph = build_turn_graph(decider=FakeDecider(None), window_turns=6)
+    graph = build_turn_graph()
     writers: list[str] = []
 
-    for model_input in (stop_input(), turn_input(addressed_context())):
-        async for chunk in graph.astream(
-            model_input,
-            context=TurnRuntime(
-                speaker=FakeSpeaker(), journal=FakeJournal(), responder=FakeResponder()
-            ),
-            stream_mode="updates",
-        ):
+    for model_input in (stop_input(), turn_input(addressed=True)):
+        async for chunk in graph.astream(model_input, context=runtime(), stream_mode="updates"):
             writers.extend(
                 node for node, update in chunk.items() if "speaking_generation" in update
             )

@@ -16,10 +16,7 @@ from langchain_core.tools import BaseTool
 
 from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import (
-    ParticipationDeciderSettings,
-    Settings,
-)
+from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
@@ -40,14 +37,10 @@ from fakeyou.conversation.middleware import (
     EvidenceRoutingMiddleware,
     SpeakerAttributionMiddleware,
 )
-from fakeyou.conversation.participation_decider import (
-    Decider,
-    StructuredGeminiDecider,
-    UnsupportedDeciderProvider,
-)
-from fakeyou.conversation.participation_graph import DeciderFailure
+from fakeyou.conversation.participation_graph import JudgeThresholds
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase
+from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
@@ -74,9 +67,9 @@ from fakeyou.orchestration.meet_actions import MeetActionDispatcher, MeetChatCha
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
     create_chat_model,
-    create_decider_chat_model,
     create_fallback_chat_model,
     create_strong_chat_model,
+    create_turn_judge_model,
 )
 from fakeyou.perception.context import (
     LOOK_AT_PARTICIPANT,
@@ -235,21 +228,12 @@ class TurnBehavior:
     others_speaking: Callable[[], bool] | None = None
 
 
-def build_decider(provider: str, settings: ParticipationDeciderSettings) -> Decider:
-    if provider != "gemini":
-        raise UnsupportedDeciderProvider(provider)
-    if settings.api_key is None:
-        raise DeciderFailure(
-            "decider_no_credentials", "participation decider enabled without API key"
-        )
-    return StructuredGeminiDecider(model=create_decider_chat_model(settings))
-
-
-def _participation_decider(settings: Settings) -> Decider | None:
-    config = settings.participation_decider
-    if not config.enabled:
-        return None
-    return build_decider(config.provider, config)
+def build_turn_judge(settings: Settings, twin_names: Sequence[str]) -> TurnJudge | None:
+    return ModelTurnJudge(
+        create_turn_judge_model(settings),
+        twin_names=twin_names,
+        timeout_seconds=settings.turn_judge.timeout_seconds,
+    )
 
 
 class _ConversationBuilder:
@@ -387,7 +371,8 @@ class _ConversationBuilder:
         participant_policy_enabled: bool = False,
     ) -> MeetingTurns:
         conversation_settings = self._settings.conversation
-        decider_settings = self._settings.participation_decider
+        judge_settings = self._settings.turn_judge
+        names = tuple(dict.fromkeys((*self._behavior.wake_phrases, *self._behavior.twin_names)))
         return build_meeting_turns(
             responder,
             interaction=TurnInteraction(
@@ -398,15 +383,17 @@ class _ConversationBuilder:
                 barge_in_min_words=conversation_settings.barge_in_min_words,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
-                decider=_participation_decider(self._settings),
-                speak_threshold=decider_settings.speak_threshold,
-                clarify_threshold=decider_settings.clarify_threshold,
-                window_turns=decider_settings.window_turns,
+                judge=build_turn_judge(self._settings, names),
+                history=self._agent.history,
+                judge_thresholds=JudgeThresholds(
+                    reply=judge_settings.reply_threshold,
+                    clarify=judge_settings.clarify_threshold,
+                ),
+                judge_window_lines=judge_settings.window_lines,
                 chat=self.chat_channel(),
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
-                activation_seconds=conversation_settings.activation_seconds,
                 thinking_cue_after_seconds=(
                     conversation_settings.thinking_cue_after_seconds
                     if conversation_settings.thinking_cue_enabled

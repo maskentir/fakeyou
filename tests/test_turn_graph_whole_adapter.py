@@ -113,7 +113,7 @@ class Harness:
         self.session = FakeSession()
         self.moves: list[str] = []
         self.lifecycle = TurnLifecycle(
-            build_turn_graph(decider=None, window_turns=3),
+            build_turn_graph(),
             journal=self.journal,
             responder=ModelResponder(
                 chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"

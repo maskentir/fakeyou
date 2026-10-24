@@ -2,8 +2,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypedDict
 
-from fakeyou.conversation.participation_decider import DeciderTurn
-from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.taxonomy import Subsystem
 
 TurnEventKind = Literal["stop", "final", "interim", "vad"]
@@ -28,8 +26,6 @@ class ArbitrationResult:
 class TurnState(TypedDict):
     last_event_id: str | None
     kind: TurnEventKind | None
-    turns: list[DeciderTurn]
-    context: ParticipationContext | None
 
 
 class JournalSink(Protocol):
@@ -65,6 +61,4 @@ def apply_arbitration(
     return TurnState(
         last_event_id=winner.event_id,
         kind=winner.kind,
-        turns=state["turns"],
-        context=state["context"],
     )

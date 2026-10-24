@@ -356,7 +356,6 @@ class ConversationSettings(Section):
     response_timeout_seconds: PositiveSeconds = 60.0
     barge_in_min_words: int = Field(default=3, gt=0)
     max_spoken_sentences: int = Field(default=2, gt=0)
-    activation_seconds: PositiveSeconds = 30.0
     sentence_streaming: bool = True
     thinking_cue_enabled: bool = True
     thinking_cue_after_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
@@ -367,16 +366,12 @@ class ConversationSettings(Section):
     history_max_tokens: int = Field(default=32000, gt=0)
 
 
-class ParticipationDeciderSettings(Section):
-    model: str = "gemini-3.8-flash"
-    provider: Literal["jev", "gemini"] = "gemini"
-    base_url: OptionalURL = None
-    api_key: SecretStr | None = None
-    timeout_seconds: PositiveSeconds = 15.0
-    window_turns: int = Field(default=6, gt=0, le=20)
-    speak_threshold: float = Field(default=0.70, gt=0, lt=1)
+class TurnJudgeSettings(Section):
+    model: ReplySettings | None = None
+    timeout_seconds: PositiveSeconds = 4.0
+    window_lines: int = Field(default=8, gt=0, le=30)
+    reply_threshold: float = Field(default=0.60, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
-    enabled: bool = True
 
 
 class MeetingSettings(Section):
@@ -499,9 +494,7 @@ class Configuration(Section):
     vad: VADSettings = Field(default_factory=VADSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
-    participation_decider: ParticipationDeciderSettings = Field(
-        default_factory=ParticipationDeciderSettings
-    )
+    turn_judge: TurnJudgeSettings = Field(default_factory=TurnJudgeSettings)
     meeting: MeetingSettings = Field(default_factory=MeetingSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
@@ -542,17 +535,7 @@ class Configuration(Section):
                 continue
             if role == "perception" and not self.perception.enabled:
                 continue
-            if role == "participation_decider" and not value.enabled:
-                continue
             require_secret(value.api_key, API_KEY_OF_ROLE[role])
-            if role == "participation_decider" and value.provider == "jev" and not value.base_url:
-                raise FakeYouError(
-                    ErrorCode.CONFIG_INVALID,
-                    reason=(
-                        "Set FAKEYOU_PARTICIPATION_DECIDER__BASE_URL in .env "
-                        "before using this command."
-                    ),
-                )
 
 
 DEFAULTS = Configuration()

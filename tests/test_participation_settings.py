@@ -14,11 +14,10 @@ def isolated_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
 
-def test_participation_decider_defaults_are_conservative() -> None:
-    decider = Settings().participation_decider
-    assert decider.model == "gemini-3.8-flash"
-    assert decider.provider == "gemini"
-    assert decider.window_turns == 6
-    assert decider.speak_threshold == 0.70
-    assert decider.clarify_threshold == 0.50
-    assert decider.enabled is True
+def test_the_turn_judge_runs_on_the_reply_model_by_default() -> None:
+    judge = Settings().turn_judge
+    assert judge.model is None
+    assert judge.window_lines == 8
+    assert judge.reply_threshold == 0.60
+    assert judge.clarify_threshold == 0.50
+    assert judge.timeout_seconds == 4.0

@@ -276,6 +276,9 @@ Angka replay live (9 run × 15 skenario): semua keluarga 1,0, 0 severe, 0 regres
 
 Belum dikerjakan di fase ini: turn detection semantik, backchannel, suara klon owner.
 
+Turn detection semantik dikerjakan lewat desain `docs/plans/2026-10-25-turn-judge.md`. PR 1 sudah mengganti rule
+partisipasi dan participation decider dengan satu turn judge berbasis LLM ringan; PR 2 menambah commit awal saat hening.
+
 ## Backlog live 2026-10-24
 
 Semua item di bawah ini dicatat dari sesi live `live-xnj-itkm-owt` (persona Harun, audio + conversation on, memory off;

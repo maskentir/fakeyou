@@ -126,7 +126,7 @@ def test_provider_roles_match_the_frozen_contract_list() -> None:
         "tts",
         "memory_llm",
         "memory_embedder",
-        "participation_decider",
+        "turn_judge",
         "perception",
     )
     assert set(API_KEY_OF_ROLE) == set(PROVIDER_ROLES)
@@ -134,12 +134,10 @@ def test_provider_roles_match_the_frozen_contract_list() -> None:
     assert set(ROLE_HEADER_SUFFIX) == set(PROVIDER_ROLES)
 
 
-def test_participation_decider_has_named_config_keys() -> None:
-    assert ConfigKey.PARTICIPATION_DECIDER_API_KEY.value == (
-        "FAKEYOU_PARTICIPATION_DECIDER__API_KEY"
-    )
-    assert API_KEY_OF_ROLE["participation_decider"] is (ConfigKey.PARTICIPATION_DECIDER_API_KEY)
-    assert ROLE_HEADER_SUFFIX["participation_decider"] == "Participation-Decider"
+def test_turn_judge_has_named_config_keys() -> None:
+    assert ConfigKey.TURN_JUDGE_API_KEY.value == "FAKEYOU_TURN_JUDGE__MODEL__API_KEY"
+    assert API_KEY_OF_ROLE["turn_judge"] is ConfigKey.TURN_JUDGE_API_KEY
+    assert ROLE_HEADER_SUFFIX["turn_judge"] == "Turn-Judge"
 
 
 def test_role_header_suffix_matches_the_frozen_map() -> None:
@@ -152,7 +150,7 @@ def test_role_header_suffix_matches_the_frozen_map() -> None:
         "tts": "Tts",
         "memory_llm": "Memory-Llm",
         "memory_embedder": "Memory-Embedder",
-        "participation_decider": "Participation-Decider",
+        "turn_judge": "Turn-Judge",
         "perception": "Perception",
     }
 
@@ -184,7 +182,7 @@ def test_env_example_documents_every_compose_only_key() -> None:
 
 
 def test_settings_leaf_count_matches_the_frozen_map() -> None:
-    assert len(_setting_env_keys(Settings)) == 172
+    assert len(_setting_env_keys(Settings)) == 174
 
 
 class _MigrationMap(NamedTuple):
@@ -193,7 +191,7 @@ class _MigrationMap(NamedTuple):
     new_keys: tuple[str, ...]
 
 
-EXPECTED_SETTINGS_COUNTS = {"keep": 172}
+EXPECTED_SETTINGS_COUNTS = {"keep": 174}
 EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
 EXPECTED_NEW_COUNT = 0
 

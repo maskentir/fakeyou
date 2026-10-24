@@ -147,6 +147,8 @@ def test_retired_browser_sandbox_setting_is_rejected(monkeypatch: pytest.MonkeyP
     [
         "FAKEYOU_CONVERSATION__PRE_GENERATE_ENABLED",
         "FAKEYOU_PARTICIPATION_DECIDER__PRE_GENERATE_ENABLED",
+        "FAKEYOU_PARTICIPATION_DECIDER__MODEL",
+        "FAKEYOU_CONVERSATION__ACTIVATION_SECONDS",
         "FAKEYOU_CONVERSATION__MEET_ACTIONS_ENABLED",
         "FAKEYOU_CONVERSATION__PARTICIPANT_POLICY_ENABLED",
         "FAKEYOU_MEMORY__STORE__GROUP",
@@ -283,7 +285,7 @@ def test_require_roles_rejects_unknown_role_by_name() -> None:
         "stt",
         "memory_llm",
         "memory_embedder",
-        "participation_decider",
+        "turn_judge",
         "perception",
     ],
 )
@@ -294,6 +296,7 @@ def test_every_active_role_requires_its_own_key(role: str) -> None:
         reply_fallback=OpenAIReply(max_retries=0),
         debrief=OpenAIReply(max_retries=0),
     )
+    settings.turn_judge.model = OpenAIReply(max_retries=0)
     settings.perception.enabled = True
     with pytest.raises(FakeYouError, match="API_KEY") as caught:
         settings.require_roles(role)
@@ -303,18 +306,10 @@ def test_every_active_role_requires_its_own_key(role: str) -> None:
 def test_disabled_roles_do_not_require_keys() -> None:
     settings = Settings(**env_file_opt(None))
     settings.perception.enabled = False
-    settings.participation_decider.enabled = False
-    settings.require_roles("perception", "participation_decider", "reply_fallback")
-    with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__API_KEY"):
-        Settings(**env_file_opt(None)).require_roles("participation_decider")
-
-
-def test_jev_decider_requires_a_base_url() -> None:
-    settings = Settings(**env_file_opt(None))
-    settings.participation_decider.provider = "jev"
-    settings.participation_decider.api_key = SecretStr("decider-secret")
-    with pytest.raises(FakeYouError, match="FAKEYOU_PARTICIPATION_DECIDER__BASE_URL"):
-        settings.require_roles("participation_decider")
+    settings.require_roles("perception", "turn_judge", "reply_fallback")
+    settings.turn_judge.model = OpenAIReply(max_retries=0)
+    with pytest.raises(FakeYouError, match="FAKEYOU_TURN_JUDGE__MODEL__API_KEY"):
+        settings.require_roles("turn_judge")
 
 
 def test_unknown_role_is_a_named_config_error() -> None:

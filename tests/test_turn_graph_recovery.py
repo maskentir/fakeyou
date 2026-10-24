@@ -157,7 +157,7 @@ class Harness:
             chunks=chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
         )
         self.lifecycle = TurnLifecycle(
-            build_turn_graph(decider=None, window_turns=3),
+            build_turn_graph(),
             journal=self.journal,
             responder=responder,
         )

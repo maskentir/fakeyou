@@ -7,8 +7,8 @@ import pytest
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_lifecycle
-from fakeyou.conversation.jev_refresh import JevState
-from fakeyou.conversation.participation_decider import DeciderTurn, ParticipationDecision
+from fakeyou.conversation.meeting_messages import NoHistory
+from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_graph import (
@@ -16,12 +16,14 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
+from fakeyou.conversation.turn_judge import JudgeCache, WindowSource
 from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import ProviderFault
 from tests._audio_fakes import wait_until
+from tests._conversation_fakes import ScriptedJudge
 
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
 LIFECYCLE_SOURCE = Path(turn_lifecycle.__file__).read_text(encoding="utf-8")
@@ -103,15 +105,6 @@ class ToolStartingWhole:
             self._outcomes.append(None)
 
 
-class FakeDecider:
-    def __init__(self) -> None:
-        self.calls: list[tuple[DeciderTurn, ...]] = []
-
-    async def decide(self, window: Any) -> ParticipationDecision:
-        self.calls.append(tuple(window))
-        return ParticipationDecision(decision="silent", confidence=0.9, reason_code="model_says")
-
-
 def transcript(event_id: str, text: str) -> TranscriptEvent:
     return TranscriptEvent(
         id=event_id,
@@ -128,14 +121,21 @@ def lifecycle_for(
     journal: Journal,
     *,
     faults: RecordingFaults | None = None,
-    decider: FakeDecider | None = None,
-    jev: JevState | None = None,
+    judge: ScriptedJudge | None = None,
 ) -> TurnLifecycle:
     lifecycle = TurnLifecycle(
-        build_turn_graph(decider=decider, window_turns=6),
+        build_turn_graph(),
         journal=journal,
         responder=Responder(),
-        jev=jev,
+        judging=(
+            TurnJudging(
+                cache=JudgeCache(judge),
+                windows=WindowSource(NoHistory(), window_lines=8),
+                thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
+            )
+            if judge is not None
+            else None
+        ),
     )
     if faults is not None:
         lifecycle.configure_recovery(RecoveryOptions(faults=faults))
@@ -164,9 +164,8 @@ def test_wait_idle_shields_the_drain_then_raises_the_failure() -> None:
     assert "await asyncio.shield(active.task)\n        self.raise_if_failed()" in LIFECYCLE_SOURCE
 
 
-def test_barge_in_and_jev_kick_read_the_session_speaking_probe() -> None:
+def test_barge_in_reads_the_session_speaking_probe() -> None:
     assert "if runtime.barge_in and speaker.is_speaking:" in GRAPH_SOURCE
-    assert "busy=_busy(runtime) or runtime.speaker.is_speaking," in GRAPH_SOURCE
 
 
 async def test_fail_records_the_first_fault_through_the_reporter_only_once() -> None:
@@ -279,32 +278,17 @@ async def test_final_barge_in_fires_when_the_speaker_is_speaking() -> None:
     assert session.stops == 1
 
 
-async def test_jev_kick_is_skipped_while_the_speaker_is_speaking() -> None:
-    decider = FakeDecider()
-    jev = JevState()
-    lifecycle = lifecycle_for(Journal(), decider=decider, jev=jev)
+async def test_an_interim_is_judged_while_the_twin_is_speaking() -> None:
+    judge = ScriptedJudge()
+    lifecycle = lifecycle_for(Journal(), judge=judge)
     session = Session()
     lifecycle.bind(session)
     ingress = TurnIngress(lifecycle, addressing_names=("twin",))
-    await ingress.handle_final(transcript("f1", "good morning everyone"))
 
     session.is_speaking = True
     await ingress.handle_interim("twin, what do you think")
-    await jev.wait_idle()
+    judging = lifecycle.judging
+    assert judging is not None
+    await judging.cache.wait_idle()
 
-    assert decider.calls == []
-    assert jev.task is None
-
-
-async def test_jev_kick_runs_when_the_speaker_is_silent() -> None:
-    decider = FakeDecider()
-    jev = JevState()
-    lifecycle = lifecycle_for(Journal(), decider=decider, jev=jev)
-    lifecycle.bind(Session())
-    ingress = TurnIngress(lifecycle, addressing_names=("twin",))
-    await ingress.handle_final(transcript("f1", "good morning everyone"))
-
-    await ingress.handle_interim("twin, what do you think")
-    await jev.wait_idle()
-
-    assert len(decider.calls) == 1
+    assert [window.twin_speaking for window in judge.windows] == [True]

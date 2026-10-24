@@ -32,7 +32,7 @@ def test_overrides_recognize_every_frozen_role_suffix() -> None:
     }
     found = overrides_from_headers(headers)
     assert set(found) == set(PROVIDER_ROLES)
-    assert found["participation_decider"].get_secret_value() == "key-participation_decider"
+    assert found["turn_judge"].get_secret_value() == "key-turn_judge"
     assert overrides_from_headers({"X-Fakeyou-Key-Unknown": "x"}) == {}
 
 
@@ -122,8 +122,7 @@ async def test_session_keys_never_leak_and_reach_only_the_worker_copy(
         assert set(overrides) == set(PROVIDER_ROLES)
         assert overrides["reply"].get_secret_value() == MARKER_HEADERS["X-Fakeyou-Key-Reply"]
         assert (
-            overrides["participation_decider"].get_secret_value()
-            == MARKER_HEADERS["X-Fakeyou-Key-Participation-Decider"]
+            overrides["turn_judge"].get_secret_value() == MARKER_HEADERS["X-Fakeyou-Key-Turn-Judge"]
         )
         assert again == {}
         assert retired.status_code == 404
