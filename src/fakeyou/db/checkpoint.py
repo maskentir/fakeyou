@@ -18,7 +18,7 @@ from fakeyou.config.settings import DEFAULTS
 
 CHECKPOINT_POOL_MAX_SIZE = 4
 CHECKPOINT_MSGPACK_TYPES = frozenset(
-    {("fakeyou.conversation.participation_decider", "ParticipationDecision")}
+    {("fakeyou.conversation.participation_decision", "ParticipationDecision")}
 )
 
 

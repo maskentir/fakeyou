@@ -176,9 +176,7 @@ class TranscriptDrain:
         self._handled: set[str] = set()
         self._extras: dict[str, dict[str, Any]] = {}
         self._emitted_max: TranscriptEvent | None = None
-        self._turn_state: TurnState = TurnState(
-            last_event_id=None, kind=None, turns=[], context=None
-        )
+        self._turn_state: TurnState = TurnState(last_event_id=None, kind=None)
         self._ingress_count = 0
 
     async def __call__(self, update: TranscriptUpdate) -> None:

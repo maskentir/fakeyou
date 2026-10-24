@@ -35,7 +35,6 @@ from fakeyou.config.settings import (
     OpenAIMemoryLLM,
     OpenAIReply,
     OpenAITTS,
-    ParticipationDeciderSettings,
     PathSettings,
     Settings,
     StoreSettings,
@@ -43,6 +42,7 @@ from fakeyou.config.settings import (
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.db.schema import upgrade
 from fakeyou.memory.persona import OperatorIdentity
+from fakeyou.orchestration import assembly
 from tests._audio_fakes import FakeAudio, PCMStream
 from tests._cli_support import AudioJoin, join_with_audio
 from tests._container_harness import (
@@ -89,6 +89,11 @@ def _isolated_operator_environment() -> Iterator[None]:
     finally:
         purge_operator_environment(os.environ, preserve=PRESERVE_OPERATOR_ENVIRONMENT)
         os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def _no_model_turn_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(assembly, "build_turn_judge", lambda *_args, **_kwargs: None)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -165,7 +170,6 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
             twin_name="Settings Twin",
         ),
         browser=BrowserSettings(headless=True),
-        participation_decider=ParticipationDeciderSettings(enabled=False),
         memory=MemorySettings(
             store=StoreSettings(password=SecretStr("password")),
             llm=OpenAIMemoryLLM(

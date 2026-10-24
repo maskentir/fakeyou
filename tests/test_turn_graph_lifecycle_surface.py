@@ -49,7 +49,7 @@ class FakeJournal:
 
 def _lifecycle() -> tuple[TurnLifecycle, FakeJournal]:
     journal = FakeJournal()
-    graph = build_turn_graph(decider=None, window_turns=1)
+    graph = build_turn_graph()
     return TurnLifecycle(graph, journal=journal, responder=FakeResponder()), journal
 
 

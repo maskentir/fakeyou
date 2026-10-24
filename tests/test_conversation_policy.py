@@ -4,7 +4,6 @@ import re
 import time
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
-from fakeyou.config.settings import DEFAULTS, ParticipationDeciderSettings, RecallStrategy
+from fakeyou.config.settings import DEFAULTS, RecallStrategy
 from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
     ENDING_RULE,
@@ -23,7 +22,6 @@ from fakeyou.conversation.agent import (
     create_meeting_agent,
 )
 from fakeyou.conversation.conversation import MeetingResponder
-from fakeyou.conversation.jev_refresh import JevRefreshInput, JevState, turn_jev_key
 from fakeyou.conversation.meeting_messages import NoHistory, request_messages
 from fakeyou.conversation.meeting_turns import (
     TurnGeneration,
@@ -41,13 +39,10 @@ from fakeyou.conversation.middleware import (
     trim_messages_to_budget,
     unanswered_tool_calls,
 )
-from fakeyou.conversation.participation_decider import DeciderTurn, ParticipationDecision
+from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
-    DeciderFailure,
     ParticipationRuntime,
     ParticipationState,
-    build_participation_subgraph,
-    decider_window,
 )
 from fakeyou.conversation.prompt_builder import PromptSections, build_system_prompt, escape_xml_data
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -59,7 +54,6 @@ from fakeyou.conversation.turn_events import (
     arbitrate,
 )
 from fakeyou.conversation.turn_graph import TurnInput, TurnRuntime, build_turn_graph
-from fakeyou.foundation.acks import BARE_ACK_VOCABULARY, is_bare_ack, is_interjection
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.provenance import UNVERIFIED_SPEAKER_IDENTITY, MemoryEvidence
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
@@ -67,13 +61,12 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import BRIEF_RULES, RECALL_RULES, SOURCE_RULES, PersonaLanguage
 from fakeyou.memory.persona import build_system_prompt as persona_build_system_prompt
 from fakeyou.observability.diagnostics import Diagnostics
-from fakeyou.orchestration.assembly import build_decider
 from fakeyou.orchestration.persona_prompt import build_persona_prompt, persona_prompt_sections
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 from tests._audio_fakes import FakeReplyAudio
-from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel
-from tests._conversation_support import event, voiced_event
+from tests._conversation_fakes import FakeResponder, ScriptedJudge, ToolCallingFakeModel, judged
+from tests._conversation_support import event
 from tests._fakes_common import FakeClock
 from tests._persistence_fakes import RecordingJournal
 from tests._persona_support import EXAMPLE_BRIEF, profile, revised
@@ -93,57 +86,6 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> N
     assert audio.spoken == []
     assert [item.text for item in loop.ingress.events] == ["our project status"]
     await loop.lifecycle.close()
-
-
-async def test_wake_phrase_activates_window_case_insensitively() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["hey fakeyou"]),
-        timing=TurnTiming(activation_seconds=30, clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "HEY Fakeyou, any update?"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 10
-    await loop.ingress.receive_final(event("two", "continue"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 31
-    await loop.ingress.receive_final(event("three", "still listening?"))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [
-        ["HEY Fakeyou, any update?"],
-        ["continue"],
-    ]
-    assert len(audio.spoken) == 2
-    await loop.lifecycle.close()
-
-
-async def test_wake_phrase_inside_window_extends_activation() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["hey fakeyou"]),
-        timing=TurnTiming(activation_seconds=30, clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "hey fakeyou hello"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 25
-    await loop.ingress.receive_final(event("two", "hey fakeyou again"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 25
-    await loop.ingress.receive_final(event("three", "still active?"))
-    await loop.lifecycle.wait_idle()
-    assert len(responder.calls) == 3
-    await loop.lifecycle.close()
-
-
-def test_activation_window_rejects_nonpositive_values() -> None:
-    with pytest.raises(ValueError, match="activation window"):
-        build_meeting_turns(FakeResponder(), timing=TurnTiming(activation_seconds=0))
-    with pytest.raises(ValueError, match="activation window"):
-        build_meeting_turns(FakeResponder(), timing=TurnTiming(activation_seconds=float("inf")))
 
 
 async def test_barge_in_stops_playback_only_while_speaking() -> None:
@@ -213,23 +155,17 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
     assert idle_audio.stops == 0
 
 
-async def test_interim_barge_in_respects_wake_phrases() -> None:
-    clock = FakeClock()
+async def test_interim_speech_over_the_twin_stops_it_in_wake_mode() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     loop = build_meeting_turns(
         FakeResponder(),
         interaction=TurnInteraction(wake_phrases=["rani twin"], barge_in=True),
-        timing=TurnTiming(clock=clock),
+        timing=TurnTiming(clock=FakeClock()),
     )
     loop.lifecycle.bind(audio)
 
     await loop.ingress.handle_interim("someone else is talking now")
-    assert audio.stops == 0
-    await loop.ingress.receive_final(event("t1", "rani twin please explain"))
-    audio.stops = 0
-    audio.speaking = True
-    await loop.ingress.handle_interim("wait just a moment")
 
     assert audio.stops == 1
     await loop.lifecycle.close()
@@ -406,7 +342,7 @@ async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJourna
     assert (decision["transcript_id"], decision["action"], decision["reason"]) == (
         "t1",
         "silent",
-        "not_addressed",
+        "fallback_unnamed",
     )
     await loop.lifecycle.close()
 
@@ -453,132 +389,6 @@ async def test_policy_answers_vocative_and_ignores_quote_mention(journal: Record
     await loop.lifecycle.close()
 
 
-async def test_policy_unknown_followup_does_not_inherit_activation(
-    journal: RecordingJournal,
-) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        event(
-            "t1",
-            "Rani Twin, when is the demo?",
-            participant_id="spaces/x/devices/1",
-            speaker_evidence_id="e1",
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(event("t2", "What time exactly?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert reasons == ["addressed", "not_addressed"]
-    await loop.lifecycle.close()
-
-
-async def test_policy_unknown_followup_after_unknown_vocative_stays_silent(
-    journal: RecordingJournal,
-) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani Twin, when is the demo?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(event("t2", "What time exactly?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert reasons == ["addressed", "not_addressed"]
-    await loop.lifecycle.close()
-
-
-async def test_policy_other_known_speaker_followup_stays_silent(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        event(
-            "t1",
-            "Rani Twin, when is the demo?",
-            participant_id="spaces/x/devices/1",
-            speaker_evidence_id="e1",
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(
-        event(
-            "t2",
-            "Move it to Thursday?",
-            participant_id="spaces/x/devices/2",
-            speaker_evidence_id="e2",
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert reasons == ["addressed", "not_addressed"]
-    await loop.lifecycle.close()
-
-
-async def test_policy_same_speaker_followup_replies(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        event(
-            "t1",
-            "Rani Twin, when is the demo?",
-            participant_id="spaces/x/devices/1",
-            speaker_evidence_id="e1",
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(
-        event(
-            "t2",
-            "What time exactly?",
-            participant_id="spaces/x/devices/1",
-            speaker_evidence_id="e2",
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == [
-        "Rani Twin, when is the demo?",
-        "What time exactly?",
-    ]
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert reasons == ["addressed", "followup_same_speaker"]
-    await loop.lifecycle.close()
-
-
 def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
     addressed = TranscriptEvent(
         "t1",
@@ -603,186 +413,6 @@ def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
     (anonymous,) = request_messages([event("t2", "Hello")])
     assert anonymous.additional_kwargs["meeting_event"]["speaker_status"] == "unknown"
     assert anonymous.additional_kwargs["meeting_event"]["speaker"] == UNIDENTIFIED_PARTICIPANT
-
-
-ACK_CASES = json.loads(
-    (Path(__file__).parent / "fixtures" / "ack-cases.json").read_text(encoding="utf-8")
-)
-
-
-def test_bare_ack_vocabulary_is_pinned() -> None:
-    assert BARE_ACK_VOCABULARY == frozenset(ACK_CASES["vocabulary"])
-
-
-@pytest.mark.parametrize("text", ACK_CASES["observed_bare"] + ACK_CASES["isolated"])
-def test_observed_single_token_acks_match_exactly(text: str) -> None:
-    assert is_bare_ack(text)
-
-
-@pytest.mark.parametrize("text", ACK_CASES["replies"] + ACK_CASES["blanks"])
-def test_substantive_text_is_never_a_bare_ack(text: str) -> None:
-    assert not is_bare_ack(text)
-
-
-@pytest.mark.parametrize("text", ACK_CASES["isolated"])
-async def test_isolated_bare_ack_still_gets_a_reply(text: str) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder)
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", text))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [[text]]
-    assert audio.spoken == [text]
-    await loop.lifecycle.close()
-
-
-async def test_bare_ack_run_suppresses_after_first(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    first, second, third = ACK_CASES["run"]
-    await loop.ingress.receive_final(event("t1", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", second))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t3", third))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [[first]]
-    assert audio.spoken == [first]
-    assert [item.text for item in loop.ingress.events] == [first, second, third]
-    await loop.lifecycle.close()
-
-
-async def test_ack_suppression_journals_a_silent_decision(journal: RecordingJournal) -> None:
-    loop = build_meeting_turns(FakeResponder(), diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(FakeReplyAudio())
-    first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
-    await loop.ingress.receive_final(event("t1", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", second))
-    await loop.lifecycle.wait_idle()
-    [decided] = journal.events("ack_decided")
-    assert (decided["transcript_id"], decided["action"], decided["reason"]) == (
-        "t2",
-        "silent",
-        "bare_ack_run",
-    )
-    await loop.lifecycle.close()
-
-
-@pytest.mark.parametrize("text", ACK_CASES["replies"])
-async def test_substantive_text_replies_inside_ack_runs(
-    journal: RecordingJournal, text: str
-) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    first = ACK_CASES["run"][0]
-    await loop.ingress.receive_final(event("t1", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", text))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [[first], [text]]
-    assert audio.spoken == [first, text]
-    assert journal.events("ack_decided") == []
-    await loop.lifecycle.close()
-
-
-async def test_substantive_text_breaks_the_ack_run(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    first, second, fourth = ACK_CASES["run"]
-    third = ACK_CASES["run_breaker"]
-    await loop.ingress.receive_final(event("t1", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", second))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t3", third))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t4", fourth))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [
-        [first],
-        [third],
-        [fourth],
-    ]
-    assert audio.spoken == [first, third, fourth]
-    [decided] = journal.events("ack_decided")
-    assert decided["transcript_id"] == "t2"
-    await loop.lifecycle.close()
-
-
-async def test_vocative_text_replies_inside_ack_runs(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    first = ACK_CASES["run"][0]
-    addressed = ACK_CASES["vocative"]
-    await loop.ingress.receive_final(event("t1", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", addressed))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [[first], [addressed]]
-    assert audio.spoken == [first, addressed]
-    assert journal.events("ack_decided") == []
-    await loop.lifecycle.close()
-
-
-async def test_bare_acks_after_a_statement_stay_silent_inside_the_window(
-    journal: RecordingJournal,
-) -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["rani twin"]),
-        timing=TurnTiming(activation_seconds=30, clock=clock),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    first, second = ACK_CASES["run"][0], ACK_CASES["run"][1]
-    await loop.ingress.receive_final(event("t1", "rani twin hello"))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", first))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t3", second))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t4", "rani twin, continue now"))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [
-        ["rani twin hello"],
-        ["rani twin, continue now"],
-    ]
-    silent = {
-        row["transcript_id"]: row["reason"]
-        for row in journal.events("policy_decided")
-        if row["action"] == "silent"
-    }
-    assert silent == {"t2": "bare_ack", "t3": "bare_ack"}
-    await loop.lifecycle.close()
-
-
-async def test_bare_ack_answers_a_question_the_twin_just_asked(journal: RecordingJournal) -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["rani twin"]),
-        timing=TurnTiming(activation_seconds=30, clock=clock),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    answer, after = ACK_CASES["run"][0], ACK_CASES["run"][1]
-    await loop.ingress.receive_final(event("t1", "rani twin, what do you need?"))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", answer))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t3", after))
-    await loop.lifecycle.wait_idle()
-    assert [[item.text for item in call] for call in responder.calls] == [
-        ["rani twin, what do you need?"],
-        [answer],
-    ]
-    await loop.lifecycle.close()
 
 
 async def test_wake_phrase_must_match_a_whole_word() -> None:
@@ -855,284 +485,20 @@ async def test_unaddressed_speech_yields_the_floor_without_a_reply() -> None:
     await loop.lifecycle.close()
 
 
-async def _assert_speaking_twin_keeps_the_floor(text: str) -> None:
+async def test_a_backchannel_while_speaking_does_not_yield_the_floor() -> None:
     responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
+    judge = ScriptedJudge(lambda _window: judged("stay_silent", backchannel=True))
     loop = build_meeting_turns(
         responder,
-        interaction=TurnInteraction(twin_names=["Rani"], barge_in=True),
+        interaction=TurnInteraction(twin_names=["Rani"], barge_in=True, judge=judge),
         timing=TurnTiming(clock=clock),
     )
     loop.lifecycle.bind(audio)
     audio.speaking = True
-    await loop.ingress.receive_final(event("one", text))
+    await loop.ingress.receive_final(event("one", "yeah"))
     await loop.lifecycle.wait_idle()
     assert responder.calls == []
     assert audio.stops == 0
-    await loop.lifecycle.close()
-
-
-@pytest.mark.parametrize("text", ACK_CASES["vocabulary"])
-async def test_bare_ack_while_speaking_does_not_yield_the_floor(text: str) -> None:
-    await _assert_speaking_twin_keeps_the_floor(text)
-
-
-@pytest.mark.parametrize("text", ACK_CASES["backchannels"])
-def test_english_backchannels_are_bare_acks(text: str) -> None:
-    assert is_bare_ack(text)
-
-
-@pytest.mark.parametrize("text", ACK_CASES["backchannels"])
-async def test_backchannel_while_speaking_does_not_yield_the_floor(text: str) -> None:
-    await _assert_speaking_twin_keeps_the_floor(text)
-
-
-async def test_bare_ack_inside_the_window_is_not_answered() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=["Rani"]),
-        timing=TurnTiming(clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani, the status is green.", participant_id="a"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 5
-    await loop.ingress.receive_final(event("t2", ACK_CASES["run"][0], participant_id="a"))
-    await loop.lifecycle.wait_idle()
-
-    assert len(responder.calls) == 1
-    await loop.lifecycle.close()
-
-
-async def test_interjection_inside_the_window_is_silent_and_yields_the_floor() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=["Rani"], barge_in=True),
-        timing=TurnTiming(clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani, what is the status?", participant_id="a"))
-    await loop.lifecycle.wait_idle()
-    audio.speaking = True
-    clock.now += 5
-    await loop.ingress.receive_final(event("t2", ACK_CASES["interjections"][0], participant_id="a"))
-    await loop.lifecycle.wait_idle()
-
-    assert len(responder.calls) == 1
-    assert audio.stops == 1
-    await loop.lifecycle.close()
-
-
-async def test_unnamed_follow_up_from_the_same_speaker_is_answered() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=["Rani"]),
-        timing=TurnTiming(clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani, what is the status?", participant_id="a"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 5
-    await loop.ingress.receive_final(
-        event("t2", ACK_CASES["unnamed_questions"][0], participant_id="a")
-    )
-    await loop.lifecycle.wait_idle()
-
-    assert len(responder.calls) == 2
-    await loop.lifecycle.close()
-
-
-async def test_unnamed_turn_from_another_speaker_inside_the_window_is_silent() -> None:
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=["Rani"]),
-        timing=TurnTiming(clock=clock),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani, what is the status?", participant_id="a"))
-    await loop.lifecycle.wait_idle()
-    clock.now += 5
-    await loop.ingress.receive_final(
-        event("t2", ACK_CASES["unnamed_questions"][0], participant_id="b")
-    )
-    await loop.lifecycle.wait_idle()
-
-    assert len(responder.calls) == 1
-    await loop.lifecycle.close()
-
-
-LIVE_ADDRESSING_LABELS = json.loads(
-    (Path(__file__).parent / "fixtures" / "addressing-labels-kyf-live-3.json").read_text(
-        encoding="utf-8"
-    )
-)
-
-
-async def test_live_turns_replay_with_the_labelled_answers_and_reasons(
-    journal: RecordingJournal,
-) -> None:
-    labels = LIVE_ADDRESSING_LABELS
-    responder, audio, clock = FakeResponder(), FakeReplyAudio(), FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=labels["twin_names"], barge_in=labels["barge_in"]),
-        timing=TurnTiming(clock=clock),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    for index, turn in enumerate(labels["turns"]):
-        clock.now = turn["at"]
-        before = len(responder.calls)
-        await loop.ingress.receive_final(
-            event(f"t{index}", turn["text"], participant_id=turn["speaker"])
-        )
-        await loop.lifecycle.wait_idle()
-        assert (len(responder.calls) > before) is turn["answer"], turn["text"]
-    decided = [(row["transcript_id"], row["reason"]) for row in journal.events("policy_decided")]
-    assert decided == [(f"t{index}", turn["reason"]) for index, turn in enumerate(labels["turns"])]
-    await loop.lifecycle.close()
-
-
-def test_interjection_detection_covers_the_fixture_openers() -> None:
-    for text in ACK_CASES["interjections"]:
-        assert is_interjection(text)
-    for text in ACK_CASES["non_interjections"]:
-        assert not is_interjection(text)
-
-
-async def test_policy_followup_from_another_voice_stays_silent(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        voiced_event(
-            "t1", "Rani Twin, when is the demo?", participant_id="speaker-a", voice_clusters=("A",)
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(
-        voiced_event("t2", "Anyone want coffee?", participant_id="speaker-a", voice_clusters=("B",))
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    reasons = [row["reason"] for row in journal.events("policy_decided")]
-    assert reasons == ["addressed", "not_addressed"]
-    await loop.lifecycle.close()
-
-
-async def test_policy_followup_from_the_engaged_voice_replies(journal: RecordingJournal) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        voiced_event(
-            "t1", "Rani Twin, when is the demo?", participant_id="speaker-a", voice_clusters=("A",)
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 5.0
-    await loop.ingress.receive_final(
-        voiced_event("t2", "What time exactly?", participant_id="speaker-a", voice_clusters=("A",))
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == [
-        "Rani Twin, when is the demo?",
-        "What time exactly?",
-    ]
-    assert [row["reason"] for row in journal.events("policy_decided")] == [
-        "addressed",
-        "followup_same_speaker",
-    ]
-    await loop.lifecycle.close()
-
-
-async def test_policy_chatter_between_other_voices_does_not_extend_the_window(
-    journal: RecordingJournal,
-) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        voiced_event(
-            "t1", "Rani Twin, when is the demo?", participant_id="speaker-a", voice_clusters=("A",)
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    for index, text in enumerate(("blueberry or new?", "the sugar is fine", "no, the other one")):
-        clock.now += 1.0
-        await loop.ingress.receive_final(
-            voiced_event(f"c{index}", text, participant_id="speaker-a", voice_clusters=("B",))
-        )
-        await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    assert [row["reason"] for row in journal.events("policy_decided")] == [
-        "addressed",
-        "not_addressed",
-        "not_addressed",
-        "not_addressed",
-    ]
-    await loop.lifecycle.close()
-
-
-async def test_name_addressed_policy_silences_other_voices_in_one_slot(
-    journal: RecordingJournal,
-) -> None:
-    responder, audio = FakeResponder(), FakeReplyAudio()
-    clock = FakeClock()
-    loop = build_meeting_turns(
-        responder,
-        interaction=TurnInteraction(twin_names=["Rani Twin"]),
-        timing=TurnTiming(clock=clock.monotonic),
-        diagnostics=Diagnostics(journal=journal),
-    )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(
-        voiced_event(
-            "t1", "Rani Twin, when is the demo?", participant_id="speaker-a", voice_clusters=("A",)
-        )
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 2.0
-    await loop.ingress.receive_final(
-        voiced_event("t2", "Anyone want coffee?", participant_id="speaker-a", voice_clusters=("B",))
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    clock.now += 2.0
-    await loop.ingress.receive_final(
-        voiced_event("t3", "What time exactly?", participant_id="speaker-a", voice_clusters=("A",))
-    )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == [
-        "Rani Twin, when is the demo?",
-        "What time exactly?",
-    ]
-    assert [row["reason"] for row in journal.events("policy_decided")] == [
-        "addressed",
-        "not_addressed",
-        "followup_same_speaker",
-    ]
     await loop.lifecycle.close()
 
 
@@ -1151,7 +517,7 @@ class ArbitrationJournal:
 
 
 def empty_turn_state() -> TurnState:
-    return TurnState(last_event_id=None, kind=None, turns=[], context=None)
+    return TurnState(last_event_id=None, kind=None)
 
 
 def test_stop_beats_final_beats_interim_and_vad() -> None:
@@ -1186,161 +552,11 @@ def test_latest_event_wins_within_one_priority() -> None:
     assert arbitrate([]).winner is None
 
 
-def test_applied_winner_records_its_kind_and_carries_turns_and_context() -> None:
+def test_applied_winner_records_its_kind() -> None:
     journal = ArbitrationJournal()
-    context = ParticipationContext(
-        addressed=True,
-        followup=False,
-        same_participant=False,
-        ambiguous=False,
-        others_speaking=False,
-        activation_valid=True,
-    )
-    turns = [decider_turn(0)]
-    before = TurnState(last_event_id=None, kind=None, turns=turns, context=context)
-    after = apply_arbitration(before, arbitrate([_ev("stop", "s1", 1.0)]), journal)
+    after = apply_arbitration(empty_turn_state(), arbitrate([_ev("stop", "s1", 1.0)]), journal)
     assert after["last_event_id"] == "s1"
     assert after["kind"] == "stop"
-    assert after["turns"] == turns
-    assert after["context"] is context
-
-
-def decider_turn(index: int) -> DeciderTurn:
-    return DeciderTurn(speaker="Ana", text=f"u{index}", mine=False)
-
-
-class FailingDecider:
-    async def decide(self, _window: Sequence[DeciderTurn]) -> ParticipationDecision:
-        raise TimeoutError
-
-
-class FixedDecider:
-    def __init__(self, decision: ParticipationDecision) -> None:
-        self._decision = decision
-
-    async def decide(self, _window: Sequence[DeciderTurn]) -> ParticipationDecision:
-        return self._decision
-
-
-def unaddressed_context(*, turn_cue: str) -> ParticipationContext:
-    return ParticipationContext(
-        addressed=False,
-        followup=False,
-        same_participant=False,
-        ambiguous=False,
-        others_speaking=False,
-        activation_valid=False,
-        turn_cue=turn_cue,
-        turn_mine=turn_cue != "none",
-    )
-
-
-def cache_key(turn_cue: str) -> tuple[str | bool, ...]:
-    return turn_jev_key((), turn_cue, mine=turn_cue != "none", window_turns=6)
-
-
-async def seeded_jev(decider: Any, turn_cue: str = "explicit") -> JevState:
-    jev = JevState()
-    await jev.cache.refresh(
-        decider,
-        JevRefreshInput(
-            event_ids=(),
-            turns=(decider_turn(0),),
-            cue=turn_cue,
-            mine=turn_cue != "none",
-            window_turns=6,
-        ),
-    )
-    return jev
-
-
-def unaddressed_turn_state(*, turn_cue: str = "explicit") -> ParticipationState:
-    return ParticipationState(
-        turns=[decider_turn(0)],
-        context=unaddressed_context(turn_cue=turn_cue),
-        rule_decision=None,
-        model_decision=None,
-        last_participation=None,
-        transcript_id="f1",
-        jev_key=cache_key(turn_cue),
-        decision_source=None,
-    )
-
-
-def decider_settings_without_key() -> ParticipationDeciderSettings:
-    return ParticipationDeciderSettings(provider="gemini")
-
-
-def test_window_turns_setting_bounds_decider_input() -> None:
-    turns = [decider_turn(i) for i in range(10)]
-    assert [t["text"] for t in decider_window(turns, 6)] == [f"u{i}" for i in range(4, 10)]
-    assert [t["text"] for t in decider_window(turns, 2)] == ["u8", "u9"]
-    with pytest.raises(ValueError, match="window_turns"):
-        decider_window(turns, 0)
-
-
-@pytest.mark.asyncio
-async def test_missing_cached_decision_falls_back_to_rules_and_is_journaled() -> None:
-    journal = ArbitrationJournal()
-    graph = build_participation_subgraph()
-    out = await graph.ainvoke(
-        unaddressed_turn_state(), context=ParticipationRuntime(journal=journal)
-    )
-    assert out["last_participation"].decision == "silent"
-    assert out["last_participation"].reason_code == "rules_fallback:not_addressed"
-    assert out["decision_source"] == "rules"
-    assert journal.names == ["policy_decider_failed", "policy_decided"]
-    assert journal.fields[0]["code"] == "decider_timeout"
-    assert journal.fields[0]["decision_source"] == "rules"
-
-
-@pytest.mark.asyncio
-async def test_cached_decider_failure_falls_back_to_rules_and_is_journaled() -> None:
-    journal = ArbitrationJournal()
-    jev = await seeded_jev(FailingDecider())
-    graph = build_participation_subgraph()
-    out = await graph.ainvoke(
-        unaddressed_turn_state(), context=ParticipationRuntime(journal=journal, jev=jev)
-    )
-    assert out["last_participation"].decision == "silent"
-    assert out["last_participation"].reason_code == "rules_fallback:not_addressed"
-    assert journal.names == ["policy_decider_failed", "policy_decided"]
-    assert journal.fields[0]["code"] == "decider_timeout"
-    assert journal.fields[0]["decision_source"] == "rules"
-
-
-@pytest.mark.asyncio
-async def test_model_decision_overrides_silent_rules_when_turn_cue_allows() -> None:
-    journal = ArbitrationJournal()
-    decision = ParticipationDecision(decision="speak", confidence=0.9, reason_code="named_ask")
-    jev = await seeded_jev(FixedDecider(decision))
-    graph = build_participation_subgraph()
-    out = await graph.ainvoke(
-        unaddressed_turn_state(), context=ParticipationRuntime(journal=journal, jev=jev)
-    )
-    assert out["last_participation"] == decision
-    assert out["decision_source"] == "jev"
-    assert journal.names == ["policy_decided"]
-    assert journal.fields[0]["decision_source"] == "jev"
-    assert journal.fields[0]["reason"] == "jev_speak"
-
-
-@pytest.mark.asyncio
-async def test_decider_is_not_consulted_without_turn_cue() -> None:
-    journal = ArbitrationJournal()
-    graph = build_participation_subgraph()
-    out = await graph.ainvoke(
-        unaddressed_turn_state(turn_cue="none"), context=ParticipationRuntime(journal=journal)
-    )
-    assert out["last_participation"].reason_code == "not_addressed"
-    assert out["decision_source"] == "rule"
-    assert journal.names == ["policy_decided"]
-    assert journal.fields[0]["decision_source"] == "rule"
-
-
-def test_enabled_decider_without_credentials_fails_at_assembly() -> None:
-    with pytest.raises(DeciderFailure, match="decider_no_credentials"):
-        build_decider(provider="gemini", settings=decider_settings_without_key())
 
 
 def sample_sections(**overrides: str) -> PromptSections:
@@ -1546,9 +762,9 @@ def slow_speaking_participation(
         await asyncio.sleep(seconds)
         return {
             "last_participation": ParticipationDecision(
-                decision="speak", confidence=1.0, reason_code="addressed"
+                decision="speak", confidence=1.0, reason_code="fallback_named"
             ),
-            "decision_source": "rule",
+            "decision_source": "fallback",
         }
 
     builder = StateGraph(ParticipationState, context_schema=ParticipationRuntime)
@@ -1561,16 +777,9 @@ def slow_speaking_participation(
 def addressed_final(text: str = "Twin, do you remember the Anya project?") -> TurnInput:
     return TurnInput(
         event=TurnEvent(kind="final", event_id="f1", at=1.0, payload=text),
-        turns=[DeciderTurn(speaker="Ana", text=text, mine=True)],
-        context=ParticipationContext(
-            addressed=True,
-            followup=False,
-            same_participant=False,
-            ambiguous=False,
-            others_speaking=False,
-            activation_valid=True,
-        ),
+        context=ParticipationContext(addressed=True),
         speaking_generation=0,
+        transcript_event=event("f1", text, participant_id="Ana"),
         admission="rules",
     )
 
@@ -1583,7 +792,7 @@ def prefetch_runtime(
 
 async def test_prefetch_writes_evidence_to_turn_state_not_a_fake_tool_call() -> None:
     search, speaker, replies = RecordedSearch(), QuietSpeaker(), StreamingReplies()
-    graph = build_turn_graph(decider=None, window_turns=6, memory_prefetch=memory_prefetch(search))
+    graph = build_turn_graph(memory_prefetch=memory_prefetch(search))
     out = await graph.ainvoke(
         addressed_final(), context=prefetch_runtime(speaker, ArbitrationJournal(), replies)
     )
@@ -1595,8 +804,6 @@ async def test_prefetch_writes_evidence_to_turn_state_not_a_fake_tool_call() -> 
 
 async def test_prefetch_overlaps_participation_preparation() -> None:
     graph = build_turn_graph(
-        decider=None,
-        window_turns=6,
         memory_prefetch=memory_prefetch(RecordedSearch(delay=0.30)),
         participation=slow_speaking_participation(0.30),
     )
@@ -1610,7 +817,7 @@ async def test_prefetch_overlaps_participation_preparation() -> None:
 async def test_failed_prefetch_is_unavailable_not_silent() -> None:
     search = RecordedSearch(error=RuntimeError("graph store down"))
     speaker, journal, replies = QuietSpeaker(), ArbitrationJournal(), StreamingReplies()
-    graph = build_turn_graph(decider=None, window_turns=6, memory_prefetch=memory_prefetch(search))
+    graph = build_turn_graph(memory_prefetch=memory_prefetch(search))
     out = await graph.ainvoke(
         addressed_final(), context=prefetch_runtime(speaker, journal, replies)
     )
@@ -1631,8 +838,6 @@ async def test_prefetch_past_its_timeout_is_unavailable() -> None:
     search = RecordedSearch(delay=0.5)
     speaker, journal = QuietSpeaker(), ArbitrationJournal()
     graph = build_turn_graph(
-        decider=None,
-        window_turns=6,
         memory_prefetch=memory_prefetch(search, timeout_seconds=0.05),
     )
     out = await graph.ainvoke(
@@ -1644,12 +849,11 @@ async def test_prefetch_past_its_timeout_is_unavailable() -> None:
 
 async def test_stop_event_does_not_search_memory() -> None:
     search = RecordedSearch()
-    graph = build_turn_graph(decider=None, window_turns=6, memory_prefetch=memory_prefetch(search))
+    graph = build_turn_graph(memory_prefetch=memory_prefetch(search))
     out = await graph.ainvoke(
         TurnInput(
             event=TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
-            turns=[],
-            context=unaddressed_context(turn_cue="none"),
+            context=ParticipationContext(addressed=False),
             speaking_generation=0,
         ),
         context=prefetch_runtime(QuietSpeaker(), ArbitrationJournal(), StreamingReplies()),
@@ -1660,7 +864,7 @@ async def test_stop_event_does_not_search_memory() -> None:
 
 async def test_turn_graph_without_prefetch_keeps_no_evidence() -> None:
     speaker = QuietSpeaker()
-    graph = build_turn_graph(decider=None, window_turns=6)
+    graph = build_turn_graph()
     out = await graph.ainvoke(
         addressed_final(),
         context=prefetch_runtime(speaker, ArbitrationJournal(), StreamingReplies()),
@@ -1765,8 +969,7 @@ async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None
     await turns.lifecycle.graph.ainvoke(
         TurnInput(
             event=TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
-            turns=[],
-            context=unaddressed_context(turn_cue="none"),
+            context=ParticipationContext(addressed=False),
             speaking_generation=turns.lifecycle.floor.generation,
         ),
         context=runtime,

@@ -16,7 +16,7 @@ from pydantic import SecretStr
 import fakeyou.db.checkpoint as checkpoint_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.participation_decider import ParticipationDecision
+from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.db.checkpoint import checkpoint_conninfo, open_checkpointer
 from tests._check_support import print_admin_check as check_setup
 from tests._error_support import message_pattern

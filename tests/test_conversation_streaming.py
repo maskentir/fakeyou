@@ -145,7 +145,7 @@ def streamed_loop(
         "barge_in_min_words",
         "participant_policy_enabled",
     )
-    timing_keys = ("response_timeout_seconds", "activation_seconds", "clock")
+    timing_keys = ("response_timeout_seconds", "clock")
     generation_keys = (
         "max_spoken_sentences",
         "sentence_streaming",

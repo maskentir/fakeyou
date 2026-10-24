@@ -9,7 +9,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
-from fakeyou.conversation.jev_refresh import JevState
+from fakeyou.conversation.participation_graph import TurnJudging
 from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
@@ -143,7 +143,7 @@ class TurnLifecycle:
         *,
         journal: JournalSink,
         responder: Responder | None = None,
-        jev: JevState | None = None,
+        judging: TurnJudging | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._graph = graph
@@ -153,7 +153,7 @@ class TurnLifecycle:
         self._cue: ThinkingCue | None = None
         self._journal = journal
         self._responder = responder
-        self._jev = jev
+        self._judging = judging
         self._control: ReplyControl | None = None
         self._options = RecoveryOptions()
         self._recovery = self._build_recovery()
@@ -297,7 +297,7 @@ class TurnLifecycle:
             journal=self._journal,
             responder=self._responder,
             floor=self._floor,
-            jev=self._jev,
+            judging=self._judging,
             phase=self,
             queue=self._queue,
             recovery=self._recovery,
@@ -330,8 +330,8 @@ class TurnLifecycle:
             self._spoken(sentence)
 
     @property
-    def jev(self) -> JevState | None:
-        return self._jev
+    def judging(self) -> TurnJudging | None:
+        return self._judging
 
     @property
     def barge_in(self) -> bool:
@@ -533,8 +533,8 @@ class TurnLifecycle:
         if self._wakeup is not None:
             self._wakeup.cancel()
             self._wakeup = None
-        if self._jev is not None:
-            self._jev.cancel()
+        if self._judging is not None:
+            self._judging.cache.cancel()
         self._session = None
         self._runtime = None
         await self._release_floor()

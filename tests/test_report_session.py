@@ -22,7 +22,14 @@ def test_report_summarizes_participation_and_policy() -> None:
             ),
         ]
         + [
-            row(1.0, "policy_decided", transcript_id="t1", action="reply", reason="addressed"),
+            row(
+                1.0,
+                "policy_decided",
+                transcript_id="t1",
+                action="reply",
+                reason="judge_reply",
+                decision_source="judge",
+            ),
             row(
                 2.0,
                 "transcript_finalized",
@@ -31,7 +38,14 @@ def test_report_summarizes_participation_and_policy() -> None:
                 participant_id="unknown",
                 speaker_evidence_id="e9",
             ),
-            row(2.0, "policy_decided", transcript_id="t2", action="silent", reason="not_addressed"),
+            row(
+                2.0,
+                "policy_decided",
+                transcript_id="t2",
+                action="silent",
+                reason="judge_stay_silent",
+                decision_source="judge",
+            ),
             row(
                 3.0,
                 "transcript_finalized",
@@ -40,7 +54,14 @@ def test_report_summarizes_participation_and_policy() -> None:
                 participant_id="unknown",
                 speaker_evidence_id=None,
             ),
-            row(3.0, "policy_decided", transcript_id="t3", action="silent", reason="not_addressed"),
+            row(
+                3.0,
+                "policy_decided",
+                transcript_id="t3",
+                action="silent",
+                reason="fallback_unnamed",
+                decision_source="fallback",
+            ),
             row(0.5, "participant_observer_started", source="runtime", method="dom_mining"),
         ]
     )
@@ -57,9 +78,11 @@ def test_report_summarizes_participation_and_policy() -> None:
     assert report["participation"]["answers"] == 1
     assert report["participation"]["policy"] == {"reply": 1, "silent": 2}
     assert report["participation"]["policy_reasons"] == {
-        "addressed": 1,
-        "not_addressed": 2,
+        "judge_reply": 1,
+        "judge_stay_silent": 1,
+        "fallback_unnamed": 1,
     }
+    assert report["participation"]["policy_sources"] == {"judge": 2, "fallback": 1}
     assert report["participation"]["observer_methods"] == {"dom_mining": 1}
 
 

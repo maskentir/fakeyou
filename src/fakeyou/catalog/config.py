@@ -32,8 +32,7 @@ class ConfigKey(StrEnum):
     MEMORY_LLM_API_KEY = "FAKEYOU_MEMORY__LLM__API_KEY"
     MEMORY_EMBEDDER_API_KEY = "FAKEYOU_MEMORY__EMBEDDER__API_KEY"
     MEMORY_EMBEDDER_DIM = "FAKEYOU_MEMORY__EMBEDDER__DIM"
-    PARTICIPATION_DECIDER_API_KEY = "FAKEYOU_PARTICIPATION_DECIDER__API_KEY"
-    PARTICIPATION_DECIDER_BASE_URL = "FAKEYOU_PARTICIPATION_DECIDER__BASE_URL"
+    TURN_JUDGE_API_KEY = "FAKEYOU_TURN_JUDGE__MODEL__API_KEY"
     API_ADMIN_TOKEN = "FAKEYOU_API__ADMIN_TOKEN"
     API_OWNER_TOKEN = "FAKEYOU_API__OWNER_TOKEN"
     TRANSPORT_REDIS_URL = "FAKEYOU_TRANSPORT__REDIS__URL"
@@ -68,7 +67,7 @@ PROVIDER_ROLES: tuple[str, ...] = (
     "tts",
     "memory_llm",
     "memory_embedder",
-    "participation_decider",
+    "turn_judge",
     "perception",
 )
 
@@ -81,7 +80,7 @@ ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
     "tts": "tts",
     "memory_llm": "memory.llm",
     "memory_embedder": "memory.embedder",
-    "participation_decider": "participation_decider",
+    "turn_judge": "turn_judge.model",
     "perception": "perception.interpreter",
 }
 
@@ -94,7 +93,7 @@ API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
     "tts": ConfigKey.TTS_API_KEY,
     "memory_llm": ConfigKey.MEMORY_LLM_API_KEY,
     "memory_embedder": ConfigKey.MEMORY_EMBEDDER_API_KEY,
-    "participation_decider": ConfigKey.PARTICIPATION_DECIDER_API_KEY,
+    "turn_judge": ConfigKey.TURN_JUDGE_API_KEY,
     "perception": ConfigKey.PERCEPTION_API_KEY,
 }
 
@@ -107,6 +106,6 @@ ROLE_HEADER_SUFFIX: Mapping[str, str] = {
     "tts": "Tts",
     "memory_llm": "Memory-Llm",
     "memory_embedder": "Memory-Embedder",
-    "participation_decider": "Participation-Decider",
+    "turn_judge": "Turn-Judge",
     "perception": "Perception",
 }

@@ -9,9 +9,9 @@ from fakeyou.conversation.conversation import (
     ConversationResponder,
     StreamingConversationResponder,
 )
-from fakeyou.conversation.jev_refresh import JevState
+from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.model_responder import ReplierStreamResponder, ReplierWholeResponder
-from fakeyou.conversation.participation_decider import Decider
+from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
@@ -30,6 +30,7 @@ from fakeyou.conversation.turn_ingress import (
     TurnIngress,
     addressing_phrases,
 )
+from fakeyou.conversation.turn_judge import JudgeCache, TurnJudge, WindowSource
 from fakeyou.conversation.turn_lifecycle import (
     DeferredOptions,
     ReplyOptions,
@@ -54,10 +55,13 @@ class TurnInteraction:
     barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
-    decider: Decider | None = None
-    speak_threshold: float = DEFAULTS.participation_decider.speak_threshold
-    clarify_threshold: float = DEFAULTS.participation_decider.clarify_threshold
-    window_turns: int = DEFAULTS.participation_decider.window_turns
+    judge: TurnJudge | None = None
+    history: MeetingHistory = NoHistory()
+    judge_thresholds: JudgeThresholds = JudgeThresholds(
+        reply=DEFAULTS.turn_judge.reply_threshold,
+        clarify=DEFAULTS.turn_judge.clarify_threshold,
+    )
+    judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
     chat: ChatChannel | None = None
     control: ReplyControl | None = None
@@ -66,7 +70,6 @@ class TurnInteraction:
 @dataclass(frozen=True, slots=True)
 class TurnTiming:
     response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
-    activation_seconds: float = DEFAULTS.conversation.activation_seconds
     quiet_gap_seconds: float = DEFAULTS.perception.attention.floor_gap_seconds
     deferred_ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
     thinking_cue_after_seconds: float | None = None
@@ -90,7 +93,6 @@ class MeetingTurns:
     lifecycle: TurnLifecycle
     ingress: TurnIngress
     responder: MeetingReplier
-    decider: Decider | None = None
 
     @property
     def is_busy(self) -> bool:
@@ -160,12 +162,13 @@ def _deferred_options(
     )
 
 
-def _jev_state(interaction: TurnInteraction) -> JevState | None:
-    if interaction.decider is None:
+def _judging(interaction: TurnInteraction) -> TurnJudging | None:
+    if interaction.judge is None:
         return None
-    return JevState(
-        speak_threshold=interaction.speak_threshold,
-        clarify_threshold=interaction.clarify_threshold,
+    return TurnJudging(
+        cache=JudgeCache(interaction.judge),
+        windows=WindowSource(interaction.history, interaction.judge_window_lines),
+        thresholds=interaction.judge_thresholds,
     )
 
 
@@ -179,9 +182,9 @@ def build_meeting_turns(
 ) -> MeetingTurns:
     reply = _reply_options(replier, generation)
     lifecycle = TurnLifecycle(
-        build_turn_graph(decider=interaction.decider, window_turns=interaction.window_turns),
+        build_turn_graph(),
         journal=_SilentJournal() if diagnostics.journal is None else diagnostics.journal,
-        jev=_jev_state(interaction),
+        judging=_judging(interaction),
         clock=timing.clock,
     )
     lifecycle.configure_control(interaction.control)
@@ -207,7 +210,6 @@ def build_meeting_turns(
         addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),
         wake_phrases=wake_phrases,
         timing=IngressTiming(
-            activation_seconds=timing.activation_seconds,
             barge_in_min_words=interaction.barge_in_min_words,
             clock=timing.clock,
         ),
@@ -218,6 +220,4 @@ def build_meeting_turns(
             others_speaking=interaction.others_speaking,
         )
     )
-    return MeetingTurns(
-        lifecycle=lifecycle, ingress=ingress, responder=replier, decider=interaction.decider
-    )
+    return MeetingTurns(lifecycle=lifecycle, ingress=ingress, responder=replier)

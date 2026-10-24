@@ -1,219 +1,162 @@
-from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypedDict
+from functools import partial
+from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
-from fakeyou.conversation.participation_decider import (
-    DeciderTurn,
+from fakeyou.conversation.participation_decision import (
     ParticipationDecision,
     to_participation_action,
 )
 from fakeyou.conversation.turn_events import JournalSink
-from fakeyou.foundation.participation import (
-    ParticipationContext,
-    RuleDecision,
-    choose_participation,
-)
+from fakeyou.conversation.turn_judge import JudgeCache, JudgeWindow, TurnJudgement, WindowSource
+from fakeyou.foundation.participation import ParticipationContext
+from fakeyou.observability.faults import capture_error
 
-DeciderFailureCode = Literal[
-    "decider_no_credentials",
-    "decider_timeout",
-    "decider_schema_invalid",
-    "decider_unavailable",
-]
-JevKey = tuple[str | bool, ...]
-DecisionSource = Literal["rule", "jev", "rules"]
+JudgeFailureCode = Literal["judge_timeout", "judge_schema_invalid", "judge_unavailable"]
+DecisionSource = Literal["judge", "fallback", "floor"]
+
+_DECISION_OF_ACTION: dict[str, Literal["speak", "silent", "clarify"]] = {
+    "reply": "speak",
+    "clarify": "clarify",
+    "stay_silent": "silent",
+}
 
 
-class DeciderFailure(Exception):
-    def __init__(self, code: DeciderFailureCode, detail: str) -> None:
-        self.code = code
-        self.detail = detail
-        super().__init__(f"{code}: {detail}")
+@dataclass(frozen=True, slots=True)
+class JudgeThresholds:
+    reply: float
+    clarify: float
 
 
-class JevReader(Protocol):
-    @property
-    def speak_threshold(self) -> float: ...
-
-    @property
-    def clarify_threshold(self) -> float: ...
-
-    def decision(self, key: JevKey) -> ParticipationDecision | None: ...
-
-    def failure(self, key: JevKey) -> DeciderFailure | None: ...
+@dataclass(frozen=True, slots=True)
+class TurnJudging:
+    cache: JudgeCache
+    windows: WindowSource
+    thresholds: JudgeThresholds
 
 
 @dataclass(frozen=True, slots=True)
 class ParticipationRuntime:
     journal: JournalSink
-    jev: JevReader | None = None
+    thresholds: JudgeThresholds
+    cache: JudgeCache | None = None
 
 
 class ParticipationState(TypedDict):
-    turns: list[DeciderTurn]
+    window: JudgeWindow | None
     context: ParticipationContext
-    rule_decision: ParticipationDecision | None
-    model_decision: ParticipationDecision | None
-    last_participation: ParticipationDecision | None
     transcript_id: str
-    jev_key: JevKey
+    last_participation: ParticipationDecision | None
     decision_source: DecisionSource | None
-
-
-_JEV_REASON: dict[str, str] = {
-    "speak": "jev_speak",
-    "silent": "jev_silent",
-    "clarify": "jev_clarify",
-}
 
 
 ParticipationVerdict = dict[str, ParticipationDecision | DecisionSource | None]
 
 
-def decider_window[T](turns: Sequence[T], window_turns: int) -> tuple[T, ...]:
-    if window_turns < 1:
-        raise ValueError("window_turns must be >= 1")
-    return tuple(turns[-window_turns:])
-
-
-def classify_decider_failure(error: Exception) -> DeciderFailure:
-    if isinstance(error, DeciderFailure):
-        return error
+def judge_failure_code(error: BaseException | None) -> JudgeFailureCode:
     if isinstance(error, TimeoutError):
-        code: DeciderFailureCode = "decider_timeout"
-    elif isinstance(error, ValidationError):
-        code = "decider_schema_invalid"
-    else:
-        code = "decider_unavailable"
-    return DeciderFailure(code, detail=type(error).__name__)
+        return "judge_timeout"
+    if isinstance(error, ValidationError):
+        return "judge_schema_invalid"
+    return "judge_unavailable"
 
 
-_RULE_TO_DECISION: dict[str, Literal["speak", "silent", "clarify"]] = {
-    "reply": "speak",
-    "silent": "silent",
-    "clarify": "clarify",
-}
-
-
-def _rule_as_decision(rule: RuleDecision) -> ParticipationDecision:
+def decision_of(judgement: TurnJudgement, thresholds: JudgeThresholds) -> ParticipationDecision:
+    decision = _DECISION_OF_ACTION[judgement.action]
+    floor = {"speak": thresholds.reply, "clarify": thresholds.clarify}.get(decision)
+    if floor is not None and judgement.confidence < floor:
+        return ParticipationDecision(
+            decision="silent",
+            confidence=judgement.confidence,
+            reason_code="judge_below_threshold",
+            backchannel=judgement.backchannel,
+        )
     return ParticipationDecision(
-        decision=_RULE_TO_DECISION[rule.action],
-        confidence=1.0,
-        reason_code=rule.reason,
+        decision=decision,
+        confidence=judgement.confidence,
+        reason_code=f"judge_{judgement.action}",
+        backchannel=judgement.backchannel,
     )
 
 
-def _rule_fallback(rule: ParticipationDecision) -> ParticipationDecision:
-    return rule.model_copy(update={"reason_code": f"rules_fallback:{rule.reason_code}"})
+def fallback_decision(context: ParticipationContext) -> ParticipationDecision:
+    if context.addressed:
+        return ParticipationDecision(decision="speak", confidence=1.0, reason_code="fallback_named")
+    return ParticipationDecision(decision="silent", confidence=1.0, reason_code="fallback_unnamed")
 
 
-def _consults_model(state: ParticipationState) -> bool:
-    rule = state["rule_decision"]
-    context = state["context"]
-    if rule is None or rule.reason_code != "not_addressed" or rule.decision != "silent":
-        return False
-    return context.turn_mine or context.turn_cue != "none"
-
-
-def _record_policy(
+def _record(
     journal: JournalSink,
     state: ParticipationState,
     verdict: ParticipationDecision,
-    *,
-    reason: str,
-    decision_source: DecisionSource,
-) -> None:
+    source: DecisionSource,
+    judgement: TurnJudgement | None = None,
+) -> ParticipationVerdict:
+    fields: dict[str, object] = {}
+    if judgement is not None:
+        fields = {
+            "addressee": judgement.addressee,
+            "finished": judgement.finished,
+            "backchannel": judgement.backchannel,
+        }
     journal.record(
         "policy_decided",
         source="agent",
         transcript_id=state["transcript_id"],
         action=to_participation_action(verdict),
-        reason=reason,
-        decision_source=decision_source,
+        reason=verdict.reason_code,
+        decision_source=source,
         confidence=verdict.confidence,
-        turn_cue=state["context"].turn_cue,
+        **fields,
     )
-
-
-def _fallback_verdict(
-    state: ParticipationState,
-    journal: JournalSink,
-    failure: DeciderFailure,
-) -> ParticipationVerdict:
-    rule = state["rule_decision"]
-    if rule is None:
-        raise RuntimeError("the cache verdict runs only after the rules node")
-    journal.record(
-        "policy_decider_failed", source="agent", code=failure.code, decision_source="rules"
-    )
-    fallback = _rule_fallback(rule)
-    _record_policy(journal, state, fallback, reason=fallback.reason_code, decision_source="rules")
-    return {"last_participation": fallback, "decision_source": "rules"}
-
-
-def _verdict_from_cache(
-    state: ParticipationState, runtime: Runtime[ParticipationRuntime]
-) -> ParticipationVerdict:
-    journal = runtime.context.journal
-    reader = runtime.context.jev
-    cached = None if reader is None else reader.decision(state["jev_key"])
-    if reader is None or cached is None:
-        failure = (None if reader is None else reader.failure(state["jev_key"])) or DeciderFailure(
-            "decider_timeout", "no decision ready for this window"
-        )
-        return _fallback_verdict(state, journal, failure)
-    threshold = reader.speak_threshold if cached.decision == "speak" else reader.clarify_threshold
-    if cached.decision != "silent" and cached.confidence < threshold:
-        silenced = ParticipationDecision(
-            decision="silent", confidence=cached.confidence, reason_code="jev_below_threshold"
-        )
-        _record_policy(
-            journal, state, silenced, reason="jev_below_threshold", decision_source="jev"
-        )
-        return {"last_participation": silenced, "decision_source": "jev"}
-    _record_policy(
-        journal, state, cached, reason=_JEV_REASON[cached.decision], decision_source="jev"
-    )
-    return {"last_participation": cached, "decision_source": "jev"}
+    return {"last_participation": verdict, "decision_source": source}
 
 
 def build_participation_subgraph() -> CompiledStateGraph[
     ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
 ]:
-    def rules(state: ParticipationState) -> dict[str, ParticipationDecision]:
-        return {"rule_decision": _rule_as_decision(choose_participation(state["context"]))}
-
-    def decide_rule(
+    def hold_floor(
         state: ParticipationState, runtime: Runtime[ParticipationRuntime]
     ) -> ParticipationVerdict:
-        rule = state["rule_decision"]
-        if rule is None:
-            raise RuntimeError("the rule decision runs only after the rules node")
-        _record_policy(
-            runtime.context.journal, state, rule, reason=rule.reason_code, decision_source="rule"
+        verdict = ParticipationDecision(
+            decision="silent", confidence=1.0, reason_code="floor_occupied"
         )
-        return {"last_participation": rule, "decision_source": "rule"}
+        return _record(runtime.context.journal, state, verdict, "floor")
 
-    def consult_cache(
+    async def judge(
         state: ParticipationState, runtime: Runtime[ParticipationRuntime]
     ) -> ParticipationVerdict:
-        return _verdict_from_cache(state, runtime)
+        context = runtime.context
+        cache, window = context.cache, state["window"]
+        if cache is None or window is None:
+            return _record(context.journal, state, fallback_decision(state["context"]), "fallback")
+        judgement, error = await capture_error(partial(cache.judgement, window))
+        if judgement is None:
+            return _fall_back(state, context, judge_failure_code(error))
+        verdict = decision_of(judgement, context.thresholds)
+        return _record(context.journal, state, verdict, "judge", judgement)
 
     builder = StateGraph(ParticipationState, context_schema=ParticipationRuntime)
-    builder.add_node("rules", rules)
-    builder.add_node("decide_rule", decide_rule)
-    builder.add_node("consult_cache", consult_cache)
-    builder.add_edge(START, "rules")
+    builder.add_node("hold_floor", hold_floor)
+    builder.add_node("judge", judge)
     builder.add_conditional_edges(
-        "rules",
-        lambda state: "consult_cache" if _consults_model(state) else "decide_rule",
-        {"consult_cache": "consult_cache", "decide_rule": "decide_rule"},
+        START,
+        lambda state: "hold_floor" if state["context"].others_speaking else "judge",
+        {"hold_floor": "hold_floor", "judge": "judge"},
     )
-    builder.add_edge("decide_rule", END)
-    builder.add_edge("consult_cache", END)
+    builder.add_edge("hold_floor", END)
+    builder.add_edge("judge", END)
     return builder.compile()
+
+
+def _fall_back(
+    state: ParticipationState, runtime: ParticipationRuntime, code: JudgeFailureCode
+) -> ParticipationVerdict:
+    runtime.journal.record(
+        "policy_judge_failed", source="agent", transcript_id=state["transcript_id"], code=code
+    )
+    return _record(runtime.journal, state, fallback_decision(state["context"]), "fallback")

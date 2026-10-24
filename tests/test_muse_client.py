@@ -12,7 +12,6 @@ import pytest
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
-from fakeyou.foundation.participation import same_voice
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.journal import Journal
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
@@ -602,7 +601,7 @@ async def test_voice_cluster_labels_reset_with_new_stt_session() -> None:
     before, after = (update.voice_clusters for update in harness.finals)
     assert before == ("cluster-a",)
     assert len(after) == 1
-    assert same_voice("cluster-a", after) is False
+    assert after != ("cluster-a",)
     await harness.client.close()
 
 

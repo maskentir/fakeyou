@@ -51,6 +51,12 @@ class _Spoken:
         }
 
 
+def spoken_by(line: TranscriptEvent | TranscriptEntry) -> str:
+    if line.participant_id == UNKNOWN_PARTICIPANT and line.voice_clusters:
+        return f"voice {line.voice_clusters[0]}"
+    return speaker_name(line.participant_id, line.display_claim)
+
+
 def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
     return [
         HumanMessage(

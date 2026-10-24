@@ -90,7 +90,7 @@ def transcript(
 
 def bound_ingress(journal: FakeJournal) -> tuple[TurnIngress, TurnLifecycle, FakeSession]:
     lifecycle = TurnLifecycle(
-        build_turn_graph(decider=None, window_turns=3),
+        build_turn_graph(),
         journal=journal,
         responder=FakeResponder(),
     )
