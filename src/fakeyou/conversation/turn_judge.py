@@ -16,6 +16,7 @@ from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
 JudgeAction = Literal["reply", "clarify", "stay_silent"]
 Addressee = Literal["twin", "someone_else", "everyone", "unclear"]
 SPEAKING_NOW = "speaking now"
+JUDGE_CONCURRENCY = 4
 
 _JUDGE_RULES = (
     "You read a live meeting for a digital twin and decide what the latest line means for it. "
@@ -129,57 +130,78 @@ def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
 
 class ModelTurnJudge:
     def __init__(
-        self, model: BaseChatModel, *, twin_names: Sequence[str], timeout_seconds: float
+        self,
+        model: BaseChatModel,
+        *,
+        twin_names: Sequence[str],
+        timeout_seconds: float,
+        concurrency: int = JUDGE_CONCURRENCY,
     ) -> None:
         self._structured: Runnable[Sequence[BaseMessage], object] = model.with_structured_output(
             TurnJudgement
         )
         self._twin_names = tuple(twin_names)
         self._timeout_seconds = timeout_seconds
+        self._slots = asyncio.Semaphore(max(1, concurrency))
 
     async def judge(self, window: JudgeWindow) -> TurnJudgement:
         messages: list[BaseMessage] = [
             SystemMessage(content=_JUDGE_RULES),
             HumanMessage(content=_rendered(window, self._twin_names)),
         ]
-        result = await asyncio.wait_for(
-            self._structured.ainvoke(messages), timeout=self._timeout_seconds
-        )
+        async with self._slots:
+            result = await asyncio.wait_for(
+                self._structured.ainvoke(messages), timeout=self._timeout_seconds
+            )
         return TurnJudgement.model_validate(result)
 
 
 class JudgeCache:
-    def __init__(self, judge: TurnJudge) -> None:
+    def __init__(self, judge: TurnJudge, *, keep: int = 16) -> None:
         self._judge = judge
-        self._key: tuple[object, ...] | None = None
-        self._task: asyncio.Task[TurnJudgement] | None = None
+        self._keep = max(1, keep)
+        self._tasks: dict[tuple[object, ...], asyncio.Task[TurnJudgement]] = {}
 
     def prefetch(self, window: JudgeWindow) -> bool:
-        if self._key == window.key and self._task is not None:
+        key = window.key
+        if key in self._tasks:
             return False
-        self.cancel()
-        self._key = window.key
-        self._task = asyncio.create_task(self._judge.judge(window))
-        self._task.add_done_callback(_consume_failure)
+        task = asyncio.create_task(self._judge.judge(window))
+        self._tasks[key] = task
+        task.add_done_callback(_consume_failure)
+        self._prune()
         return True
 
     async def judgement(self, window: JudgeWindow) -> TurnJudgement:
-        if self._key != window.key or self._task is None:
+        key = window.key
+        task = self._tasks.get(key)
+        if task is None:
             self.prefetch(window)
-        task = self._task
+            task = self._tasks.get(key)
         if task is None:
             raise RuntimeError("the judge task starts before it is awaited")
         return await asyncio.shield(task)
 
     def cancel(self) -> None:
-        task, self._task, self._key = self._task, None, None
-        if task is not None and not task.done():
-            task.cancel()
+        tasks = list(self._tasks.values())
+        self._tasks.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
     async def wait_idle(self) -> None:
-        task = self._task
-        if task is not None:
-            await asyncio.gather(task, return_exceptions=True)
+        tasks = list(self._tasks.values())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _prune(self) -> None:
+        if len(self._tasks) <= self._keep:
+            return
+        for key, task in list(self._tasks.items()):
+            if len(self._tasks) <= self._keep:
+                break
+            if task.done():
+                del self._tasks[key]
 
 
 def _consume_failure(task: asyncio.Task[TurnJudgement]) -> None:

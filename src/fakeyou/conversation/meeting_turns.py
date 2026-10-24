@@ -53,6 +53,7 @@ class TurnInteraction:
     twin_names: Sequence[str] = ()
     barge_in: bool = False
     barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
+    barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
     judge: TurnJudge | None = None
@@ -60,6 +61,7 @@ class TurnInteraction:
     judge_thresholds: JudgeThresholds = JudgeThresholds(
         reply=DEFAULTS.turn_judge.reply_threshold,
         clarify=DEFAULTS.turn_judge.clarify_threshold,
+        barge_in=DEFAULTS.turn_judge.barge_in_threshold,
     )
     judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
@@ -213,6 +215,7 @@ def build_meeting_turns(
             barge_in_min_words=interaction.barge_in_min_words,
             clock=timing.clock,
         ),
+        barge_in_judge_enabled=interaction.barge_in_judge_enabled,
     )
     ingress.configure_policy(
         PolicyOptions(

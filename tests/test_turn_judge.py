@@ -73,7 +73,7 @@ async def test_the_cache_asks_once_for_the_same_window() -> None:
     assert len(judge.windows) == 1
 
 
-async def test_a_new_line_replaces_the_judgement_in_flight() -> None:
+async def test_a_new_line_keeps_the_judgement_in_flight() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
     cache = JudgeCache(judge)
     cache.prefetch(JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when")))
@@ -81,7 +81,34 @@ async def test_a_new_line_replaces_the_judgement_in_flight() -> None:
     latest = await cache.judgement(JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when is it")))
 
     assert latest.action == "reply"
-    assert [window.latest.text for window in judge.windows] == ["Rani when is it"]
+    assert [window.latest.text for window in judge.windows] == ["Rani when", "Rani when is it"]
+
+
+async def test_several_interims_are_judged_at_the_same_time() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
+    cache = JudgeCache(judge)
+    windows = [
+        JudgeWindow((), JudgeLine(SPEAKING_NOW, f"Rani when is it {index}")) for index in range(3)
+    ]
+
+    for window in windows:
+        assert cache.prefetch(window) is True
+
+    judgements = await asyncio.gather(*(cache.judgement(window) for window in windows))
+
+    assert [judgement.action for judgement in judgements] == ["reply"] * 3
+    assert len(judge.windows) == 3
+
+
+async def test_the_cache_keeps_the_judgement_of_a_finished_line() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.0)
+    cache = JudgeCache(judge)
+    window = JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when is it"))
+
+    await cache.judgement(window)
+
+    assert cache.prefetch(window) is False
+    assert len(judge.windows) == 1
 
 
 async def test_a_failed_judgement_surfaces_to_the_caller() -> None:

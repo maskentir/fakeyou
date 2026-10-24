@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "twin_names": ["Rani"],
+  "cases": [
+    {
+      "id": "b01",
+      "kind": "named",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Rani, tunggu sebentar, saya mau tanya soal rilis."},
+      "barge_in": true
+    },
+    {
+      "id": "b02",
+      "kind": "named",
+      "earlier": [],
+      "latest": {"speaker": "Budi", "text": "Rani, can you share the engineering update?"},
+      "barge_in": true
+    },
+    {
+      "id": "b03",
+      "kind": "command",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Rani, kirim dekl itsinya ya."},
+      "barge_in": true
+    },
+    {
+      "id": "b04",
+      "kind": "follow_up",
+      "earlier": [
+        {"speaker": "Ayu", "text": "Kapan rilis beta?"},
+        {"speaker": "twin", "text": "Beta rilis 14 Oktober.", "by_twin": true}
+      ],
+      "latest": {"speaker": "Ayu", "text": "Terus yang publik kapan?"},
+      "barge_in": true
+    },
+    {
+      "id": "b05",
+      "kind": "answer_to_twin",
+      "earlier": [
+        {"speaker": "twin", "text": "Mau saya jelaskan dari sisi engineering atau bisnis?"},
+        {"speaker": "Ayu", "text": "Engineering."}
+      ],
+      "latest": {"speaker": "Ayu", "text": "Ya, engineering saja."},
+      "barge_in": true
+    },
+    {
+      "id": "b06",
+      "kind": "fragment",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Rani, aku mau nanya soal"},
+      "barge_in": true
+    },
+    {
+      "id": "b07",
+      "kind": "other_person",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Budi, bisa kirim link diskusinya?"},
+      "barge_in": false
+    },
+    {
+      "id": "b08",
+      "kind": "other_person",
+      "earlier": [],
+      "latest": {"speaker": "Budi", "text": "Ayu, ini masih kurang ya."},
+      "barge_in": false
+    },
+    {
+      "id": "b09",
+      "kind": "backchannel",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Iya, benar."},
+      "barge_in": false
+    },
+    {
+      "id": "b10",
+      "kind": "backchannel",
+      "earlier": [],
+      "latest": {"speaker": "Budi", "text": "Hmm, masuk akal."},
+      "barge_in": false
+    },
+    {
+      "id": "b11",
+      "kind": "others_talking",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Jadi kalau gitu kita lanjut ke trivanya ya."},
+      "barge_in": false
+    },
+    {
+      "id": "b12",
+      "kind": "room_logistics",
+      "earlier": [],
+      "latest": {"speaker": "Budi", "text": "Sudah jam tiga, kita mulai ya."},
+      "barge_in": false
+    },
+    {
+      "id": "b13",
+      "kind": "everyone",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Siapa yang mau jelasin soal migrasi database?"},
+      "barge_in": false
+    },
+    {
+      "id": "b14",
+      "kind": "misheard_name",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Randy, kamu bisa jelaskan lagi?"},
+      "barge_in": true
+    },
+    {
+      "id": "b15",
+      "kind": "quoted_name",
+      "earlier": [],
+      "latest": {"speaker": "Budi", "text": "Dia bilang Rani belum sampai ke kantor."},
+      "barge_in": false
+    },
+    {
+      "id": "b16",
+      "kind": "self_talk",
+      "earlier": [],
+      "latest": {"speaker": "Ayu", "text": "Hmm, ini harusnya sudah rilisan ya."},
+      "barge_in": false
+    },
+    {
+      "id": "b17",
+      "kind": "other_person",
+      "earlier": [
+        {"speaker": "twin", "text": "Target rilis kita 14 Oktober.", "by_twin": true}
+      ],
+      "latest": {"speaker": "Ayu", "text": "Budi, itu sama dengan launch tahun lalu?"},
+      "barge_in": false
+    },
+    {
+      "id": "b18",
+      "kind": "named",
+      "earlier": [
+        {"speaker": "Ayu", "text": "Rani, jadi kita jadwal ulang ya."},
+        {"speaker": "twin", "text": "Baik, saya kalenderkan.", "by_twin": true}
+      ],
+      "latest": {"speaker": "Ayu", "text": "Rani, satu hal lagi ya."},
+      "barge_in": true
+    }
+  ]
+}

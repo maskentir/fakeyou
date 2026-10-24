@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -6,7 +7,7 @@ from typing import cast
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.participation_decision import ParticipationDecision
-from fakeyou.conversation.participation_graph import decision_of
+from fakeyou.conversation.participation_graph import JudgeThresholds, decision_of
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     TurnGraphState,
@@ -15,6 +16,7 @@ from fakeyou.conversation.turn_graph import (
     cancel_speech,
     record_barge_in,
 )
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.participation import (
     ParticipationContext,
@@ -44,6 +46,12 @@ def addressing_phrases(phrases: Sequence[str]) -> tuple[str, ...]:
     return tuple(phrase.strip().casefold() for phrase in phrases if phrase.strip())
 
 
+def judge_yields_the_floor(judgement: TurnJudgement, thresholds: JudgeThresholds) -> bool:
+    if judgement.backchannel or judgement.addressee != "twin":
+        return False
+    return judgement.confidence >= thresholds.barge_in
+
+
 class TurnIngress:
     def __init__(
         self,
@@ -52,6 +60,7 @@ class TurnIngress:
         addressing_names: Sequence[str],
         wake_phrases: Sequence[str] = (),
         timing: IngressTiming | None = None,
+        barge_in_judge_enabled: bool = True,
     ) -> None:
         resolved = IngressTiming() if timing is None else timing
         self._lifecycle = lifecycle
@@ -63,6 +72,8 @@ class TurnIngress:
         self._clock = resolved.clock
         self._seen: set[str] = set()
         self._in_flight = False
+        self._barge_in_judge_enabled = barge_in_judge_enabled
+        self._judge_tasks: set[asyncio.Task[None]] = set()
 
     def configure_policy(self, options: PolicyOptions) -> None:
         if options.enabled and not self._wake_phrases:
@@ -120,12 +131,18 @@ class TurnIngress:
         lifecycle = self._lifecycle
         await cancel_speech(lifecycle.floor, lifecycle.journal, reason=reason)
 
+    async def settled(self) -> None:
+        tasks = list(self._judge_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def handle_interim(self, text: str) -> None:
         lifecycle = self._lifecycle
         if text.strip():
             lifecycle.note_activity()
+        window: JudgeWindow | None = None
         if lifecycle.runtime is not None and not lifecycle.is_closed and not lifecycle.is_failed:
-            await self._prefetch(text)
+            window = await self._prefetch(text)
         session = lifecycle.session
         if lifecycle.is_closed or lifecycle.is_failed or not lifecycle.barge_in or session is None:
             return
@@ -139,9 +156,47 @@ class TurnIngress:
         if text == latch.last_interim:
             return
         latch.last_interim = text
+        judging = lifecycle.judging
+        if judging is None or not self._barge_in_judge_enabled:
+            await self._yield_the_floor(words, decided_by=None)
+            return
+        self._ask_the_judge(text, words, window)
+
+    def _ask_the_judge(self, text: str, words: int, window: JudgeWindow | None) -> None:
+        task = asyncio.create_task(self._judge_the_barge_in(text, words, window))
+        self._judge_tasks.add(task)
+        task.add_done_callback(self._judge_tasks.discard)
+
+    async def _judge_the_barge_in(self, text: str, words: int, window: JudgeWindow | None) -> None:
+        lifecycle = self._lifecycle
+        judging = lifecycle.judging
+        if judging is None:
+            return
+        session = lifecycle.session
+        if window is None:
+            window = judging.windows.for_interim(
+                text, twin_speaking=session is not None and session.is_speaking
+            )
+        judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        if judgement is None:
+            await self._yield_the_floor(words, decided_by="judge_unavailable")
+            return
+        if not judge_yields_the_floor(judgement, judging.thresholds):
+            return
+        await self._yield_the_floor(words, decided_by="judge")
+
+    async def _yield_the_floor(self, words: int, *, decided_by: str | None) -> None:
+        lifecycle = self._lifecycle
+        session = lifecycle.session
+        latch = lifecycle.barge
+        if session is None:
+            return
+        active = lifecycle.floor.active
+        if not session.is_speaking and (active is None or active.task.done()):
+            return
         if not latch.interrupted:
             latch.interrupted = True
-            record_barge_in(lifecycle.journal, "interim", words)
+            record_barge_in(lifecycle.journal, "interim", words, decided_by=decided_by)
             if session.is_speaking:
                 await session.stop_playback()
                 latch.stream_stops += 1
@@ -222,10 +277,16 @@ class TurnIngress:
         record_barge_in(lifecycle.journal, "final", len(text.split()))
         await session.stop_playback()
 
-    async def _prefetch(self, text: str) -> None:
+    async def _prefetch(self, text: str) -> JudgeWindow | None:
         runtime = self._lifecycle.runtime
         if runtime is None:
-            return
+            return None
+        judging = self._lifecycle.judging
+        window = (
+            judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
+            if judging is not None
+            else None
+        )
         events = list(self._lifecycle.events)
         await self._lifecycle.graph.ainvoke(
             TurnInput(
@@ -240,6 +301,8 @@ class TurnIngress:
                 history=events,
                 addressing_names=self._addressing_names,
                 pending=self._in_flight or self._lifecycle.queue.pending,
+                judge_window=window,
             ),
             context=runtime,
         )
+        return window

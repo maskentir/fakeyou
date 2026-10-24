@@ -167,3 +167,48 @@ p90 1,13 s. Laporan: `docs/reports/2026-10-25-turn-judge-early-commit.json`.
 
 Perkiraan dari journal `live-xnj-itkm-owt`, belum diukur live: hening → kalimat pertama twin turun dari p50 3,6 s ke
 sekitar 1,5 s (0,3 s hold + p50 1,2 s model; penilaian judge sudah berjalan sejak interim).
+
+## Hasil PR 2b (2026-10-25): barge-in decided by the judge
+
+### Cache yang bisa menilai beberapa interim
+
+`JudgeCache` dulu hanya punya satu slot: interim yang baru membatalkan penilaian yang sedang jalan, jadi judge tidak
+pernah menilai dua baris sekaligus dan tidak ada penilaian lama yang bisa dipakai lagi. Sekarang cache menyimpan satu
+penilaian per jendela (`dict` key → task), tidak saling membatalkan, dan menyimpan maksimal 16 penilaian (yang selesai
+dulu yang dibuang). Final sebuah giliran memakai kembali penilaian interim terakhirnya kalau teksnya sama.
+`ModelTurnJudge` membatasi panggilan yang berjalan bersamaan (4) supaya beberapa interim tidak menumpuk tanpa batas.
+
+### Barge-in
+
+- Barge-in tidak lagi dari jumlah kata saja. Interim yang panjang cukup engañap twin, lalu **judge** yang memutuskan:
+  `addressee = twin`, bukan backchannel, dan `confidence ≥ barge_in_threshold` (default 0,6). Syarat `finished` tidak
+  dipakai, karena orang yang sedang bicara ke twin harus bisa menahan twin bahkan kalau kalimatnya belum selesai.
+- `addressee = everyone` tidak diambil giliran: twin boleh menyelesaikan kalimatnya.
+- Kalau judge gagal atau telat, giliran tetap diserahkan (`decided_by = judge_unavailable`), supaya twin tidak bicara
+  di atas orang.
+- Jurnal `barge_in_detected` menambah field `decided_by` (`judge`, `judge_unavailable`, atau kosong untuk jalur lama).
+- Setting baru: `CONVERSATION__BARGE_IN_JUDGE_ENABLED` (default true, false mengembalikan barge-in dari jumlah kata) dan
+  `TURN_JUDGE__BARGE_IN_THRESHOLD` (default 0,6).
+
+### Evaluasi
+
+- Fixture berlabel `evals/fixtures/turn-judge-barge-in.json` (18 kasus sintetis, bukan kutipan sesi nyata): sapaan ke
+  twin, perintah ke twin, follow-up, jawaban atas twin, fragmen ke twin, dan yang tidak untuk twin (orang lain, ack,
+  obrolan antar orang, logistics ruang, pertanyaan ke semua orang, nama yang disebut orang lain, self-talk).
+- Gerbang (`evals/test_barge_in_judge_eval.py`): twin tidak melepas giliran padahal baris itu untuknya ≤ 10%; twin
+  melepas giliran padahal baris itu bukan untuknya ≤ 5%.
+- Nama yang salah dengar ("Randy" untuk "Rani") tetap dihitung untuk twin, sama seperti di fixture partisipasi (j08):
+  twin melepas giliran lalu bisa bertanya siapa yang dipanggil.
+
+Eval live (`gemini-3.1-flash-lite`, 3 run × 18 kasus, `docs/reports/2026-10-25-turn-judge-barge-in.json`):
+
+| Metrik | Hasil | Gerbang |
+| --- | --- | --- |
+| Baris untuk twin tapi twin tidak melepas giliran | 0% | ≤ 10% |
+| Baris bukan untuk twin tapi twin melepas giliran | 0% | ≤ 5% |
+| Kegagalan | 0 | 0 |
+| Latensi judge p50 / p90 | 1,10 s / 1,30 s | p50 ~1 s (batas bawah twin melepas giliran) |
+
+- Yang perlu diukur live di sesi Meet: berapa detik twin masih bicara setelah orang mulai bicara dengannya, dan
+  apakah `barge_in_detected` dengan `decided_by = judge` memang mengurangi kalimat twin yang terpotong di tengah.
+
