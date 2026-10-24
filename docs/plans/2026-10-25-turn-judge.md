@@ -1,6 +1,6 @@
 # Turn judge: satu model yang memutuskan kapan giliran selesai dan apakah twin bicara
 
-Status: usulan, menunggu review owner. Belum ada kode yang diubah.
+Status: PR 1 (turn judge untuk keputusan partisipasi) selesai; PR 2 (endpointer commit awal) berikutnya.
 
 ## Masalah
 
@@ -132,3 +132,20 @@ bicara lagi setelah commit awal
 - Model judge: default `gemini-3.1-flash-lite` (role `reply`). Probe 20 kasus: 17/20 benar tanpa konteks percakapan,
   1 commit prematur, ~0,8 s sekuensial. Alternatif `gemini-3.8-flash` lebih akurat tapi lebih lambat.
 - Ambang `hold` 300 ms: lebih kecil berarti lebih cepat tapi lebih sering salah di jeda napas.
+
+## Hasil PR 1 (2026-10-25)
+
+Eval judge live (`evals/test_turn_judge_eval.py`, `gemini-3.1-flash-lite`, 3 run × 27 kasus):
+
+| Metrik | Hasil | Gerbang |
+| --- | --- | --- |
+| Sapaan langsung ke twin terlewat | 0 | 0 |
+| Kasus yang harus dijawab tapi terlewat | 0% | ≤ 10% |
+| Twin menjawab padahal bukan untuknya | 0% | ≤ 5% |
+| Kalimat belum selesai dinilai selesai | 14% (j17, 3/3 run) | gerbang PR 2: ≤ 2% |
+| Latensi judge p50 / p90 | 1,13 s / 1,45 s | target 0,9 s / 1,5 s |
+
+Replay percakapan live dengan judge asli (9 run × 15 skenario): semua keluarga 1,0, 0 severe, 0 regresi. Latensi per
+langkah naik sekitar 1 s karena replay tidak punya interim, jadi judge baru jalan saat final tiba.
+
+Laporan: `docs/reports/2026-10-25-turn-judge.json`, `docs/reports/2026-10-25-conversation-replay-turn-judge.json`.
