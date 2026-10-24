@@ -1,4 +1,3 @@
-
 from langchain_core.messages import AIMessage
 
 from fakeyou.config.identifiers import SessionId

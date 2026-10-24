@@ -82,11 +82,7 @@ def test_the_report_groups_decisions_actions_and_open_questions(record_path: Pat
 def test_the_report_lists_the_questions_that_stayed_unanswered(record_path: Path) -> None:
     report = report_for(
         record_path,
-        findings=[
-            ObjectiveFinding(
-                objective_id="question:q1", status="open", evidence=()
-            )
-        ],
+        findings=[ObjectiveFinding(objective_id="question:q1", status="open", evidence=())],
     )
 
     rendered = module.render_debrief(report)
