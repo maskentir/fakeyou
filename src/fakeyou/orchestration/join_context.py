@@ -96,6 +96,7 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         warmup_browser=settings.browser.warmup,
         deaf_window_seconds=settings.audio_health.deaf_window_seconds,
         deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
+        alone_leave_seconds=settings.meeting.alone_leave_seconds,
         preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,
         license_key=settings.browser.license_key.get_secret_value()

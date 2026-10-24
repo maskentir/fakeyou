@@ -388,6 +388,7 @@ class MeetingSettings(Section):
     join_max_attempts: int = Field(default=3, ge=1)
     join_retry_base_seconds: PositiveSeconds = 2.0
     join_retry_cap_seconds: PositiveSeconds = 30.0
+    alone_leave_seconds: PositiveSeconds = 600.0
 
 
 class BrowserSettings(Section):
@@ -407,7 +408,6 @@ class AudioSettings(Section):
 class AudioHealthSettings(Section):
     deaf_window_seconds: PositiveSeconds = 120.0
     deaf_grace_seconds: PositiveSeconds = 120.0
-    alone_leave_seconds: PositiveSeconds = 600.0
 
 
 class PreflightSettings(Section):

@@ -329,7 +329,6 @@ def _build_audio_factory(
         timing=DeafTiming(
             deaf_window_seconds=prepared.config.deaf_window_seconds,
             deaf_grace_seconds=prepared.config.deaf_grace_seconds,
-            alone_leave_seconds=prepared.request.settings.audio_health.alone_leave_seconds,
         ),
         speech=SpeechPipelineSettings(
             stt_settings=prepared.request.settings.stt,

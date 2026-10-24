@@ -165,25 +165,6 @@ async def test_start_capture_drain_uses_fleet_registry() -> None:
     assert worker.capture_registry is None
 
 
-async def test_fleet_alone_requires_every_slot_alone() -> None:
-    from fakeyou.audio.stream_capture import StreamFleetSession
-
-    class _Slot:
-        def __init__(self, verdict: str) -> None:
-            self._verdict = verdict
-
-        def raise_if_failed(self) -> None:
-            pass
-
-        async def maintenance_tick(self, **_extra: object) -> str:
-            return self._verdict
-
-    mixed = StreamFleetSession(cast(Any, [_Slot("alone"), _Slot("hearing")]), StreamRegistry())
-    assert await mixed.maintenance_tick(is_busy=False) == "hearing"
-    unanimous = StreamFleetSession(cast(Any, [_Slot("alone"), _Slot("alone")]), StreamRegistry())
-    assert await unanimous.maintenance_tick(is_busy=False) == "alone"
-
-
 async def test_fleet_ticks_slots_concurrently() -> None:
     from fakeyou.audio.stream_capture import StreamFleetSession
 

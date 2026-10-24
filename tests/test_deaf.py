@@ -131,29 +131,6 @@ def test_unknown_presence_never_implies_alone(
     assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
 
 
-def test_continuous_explicit_zero_presence_required_for_alone(
-    activity: tuple[CaptureActivity, list[float]],
-) -> None:
-    capture, clock = activity
-    for offset in range(0, 601, 10):
-        clock[0] = 1000 + offset
-        capture.observe_presence(0)
-        capture.observe_audio()
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "alone"
-    capture.observe_presence(None)
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
-
-
-def test_stale_presence_does_not_imply_alone(activity: tuple[CaptureActivity, list[float]]) -> None:
-    capture, clock = activity
-    capture.observe_presence(0)
-    clock[0] += 600
-    capture.observe_audio()
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
-    capture.observe_presence(0)
-    assert evaluate_deafness(capture.snapshot(), clock[0]) == "silent"
-
-
 def test_unknown_presence_keeps_recent_remote_presence_sticky(
     activity: tuple[CaptureActivity, list[float]],
 ) -> None:

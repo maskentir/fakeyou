@@ -2,7 +2,7 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, cast
 
@@ -113,6 +113,7 @@ from fakeyou.orchestration.lifecycle import (
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
+from fakeyou.orchestration.presence import AloneClock
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
     DEFAULT_PERCEPTION_SCHEDULE,
@@ -170,6 +171,7 @@ def _terminal_result(
 _STOPPED_BEFORE_JOIN = "owner stopped before guest join"
 _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
 OBSERVATION_GRACE_SECONDS = 60.0
+DOM_PRESENCE_FRESH_SECONDS = 30.0
 KNOWN_ERROR_DISMISS_SECONDS = 5.0
 
 
@@ -189,7 +191,7 @@ async def _readback_effect(
 
 
 @dataclass(slots=True)
-class _MonitorScan:
+class MonitorScan:
     next_scan: float
     remote_participants: int | None
     presence_at: float
@@ -232,8 +234,10 @@ class MeetingWorker:
     origin_attribution: LifecycleAttribution | None = None
     admission: JoinResult | None = None
     join_started: float | None = None
+    presence: AloneClock = field(init=False)
 
     def __post_init__(self) -> None:
+        self.presence = AloneClock(leave_after_seconds=self.config.alone_leave_seconds)
         self.begin(
             initial_lifecycle_state(
                 self.config.owner_id, self.config.twin_id, self.config.meeting_id
@@ -691,38 +695,59 @@ class MeetingWorker:
             except ConversationError as error:
                 await self.disable_conversation(error)
 
-    async def _service_audio(
-        self, remote_participants: int | None, presence_at: float
-    ) -> str | None:
+    async def _service_audio(self, remote_participants: int | None) -> None:
         if self.capture_drain is not None:
             self.capture_drain.raise_if_failed()
         if self.audio is None:
-            return None
+            return
         self.audio.raise_if_failed()
         if not isinstance(self.audio, SupportsMaintenance):
-            return None
-        verdict = await until_stopped(
+            return
+        await until_stopped(
             self.audio.maintenance_tick(
                 is_busy=self.conversation is not None and self.conversation.is_busy,
-                remote_participants=remote_participants
-                if self.monotonic() - presence_at <= 30
-                else None,
+                remote_participants=remote_participants,
             ),
             self.stop,
         )
-        if verdict == "alone":
-            return await self.finish(
-                "participants_left",
-                "policy",
-                "No remote participants for the presence window",
+
+    async def check_presence(self, scan: MonitorScan) -> tuple[int | None, str | None]:
+        now = self.monotonic()
+        dom = (
+            scan.remote_participants
+            if now - scan.presence_at <= DOM_PRESENCE_FRESH_SECONDS
+            else None
+        )
+        perception = self.perception
+        sensors = perception.sensors if perception is not None else None
+        was_drifting = self.presence.drifting
+        reading = self.presence.observe(
+            now,
+            state=sensors.roster.state() if sensors is not None else None,
+            syncs=sensors.syncs_accepted if sensors is not None else 0,
+            dom_remote=dom,
+        )
+        if reading.drift and not was_drifting:
+            self.record(
+                "presence_drift_observed",
+                source="runtime",
+                protocol=sensors.roster.state().remote_count if sensors is not None else None,
+                dom=dom,
             )
-        return None
+        if not self.presence.due(now):
+            return reading.remote, None
+        finished = await self.finish(
+            "participants_left",
+            "policy",
+            f"No remote participants for the presence window ({reading.source})",
+        )
+        return reading.remote, finished
 
     def _note_slow_poll(self, poll_seconds: float) -> None:
         if poll_seconds >= 1.0 and self.journal is not None:
             self.journal.record("monitor_polled", source="runtime", duration_ms=poll_seconds * 1000)
 
-    async def _track_observation(self, scan: _MonitorScan, checked: WatchdogCheck) -> str | None:
+    async def _track_observation(self, scan: MonitorScan, checked: WatchdogCheck) -> str | None:
         if not checked.observation_failed:
             scan.failing_since = None
             scan.hard_failures = 0
@@ -752,7 +777,7 @@ class MeetingWorker:
         )
 
     async def _record_scan_events(
-        self, scan: _MonitorScan, checked: WatchdogCheck, now: float
+        self, scan: MonitorScan, checked: WatchdogCheck, now: float
     ) -> str | None:
         scan.next_scan = now + checked.next_check_seconds * self.config.monitor_interval_seconds / 5
         scan.remote_participants = (
@@ -799,7 +824,7 @@ class MeetingWorker:
         return None
 
     async def _scan_once(
-        self, watchdog: UIWatchdog, scan: _MonitorScan, now: float
+        self, watchdog: UIWatchdog, scan: MonitorScan, now: float
     ) -> tuple[str | None, bool]:
         poll_started = self.monotonic()
         checked = await until_stopped(watchdog.check(), self.stop)
@@ -819,7 +844,7 @@ class MeetingWorker:
         watchdog = UIWatchdog(
             self.page, signals=self.signals, observe=observe_call_state, monotonic=self.monotonic
         )
-        scan = _MonitorScan(
+        scan = MonitorScan(
             next_scan=admitted_at,
             remote_participants=None,
             presence_at=admitted_at,
@@ -829,9 +854,10 @@ class MeetingWorker:
             if finished is not None:
                 return finished
             await self._service_conversation()
-            finished = await self._service_audio(scan.remote_participants, scan.presence_at)
+            remote, finished = await self.check_presence(scan)
             if finished is not None:
                 return finished
+            await self._service_audio(remote)
             now = self.monotonic()
             if now >= scan.next_scan:
                 finished, recheck = await self._scan_once(watchdog, scan, now)

@@ -15,7 +15,6 @@ DeafVerdict = Literal[
     "hearing",
     "silent",
     "unavailable",
-    "alone",
     "no_audio_frames",
     "no_transcripts",
     "silent_capture",
@@ -67,7 +66,6 @@ class CaptureSnapshot:
     pending_speech_at: float | None = None
     remote_participants: int | None = None
     presence_at: float | None = None
-    alone_since: float | None = None
     energetic_ms: float = 0.0
     last_energetic_at: float | None = None
 
@@ -130,28 +128,11 @@ class CaptureActivity:
         self._snapshot.speech_since = stamp if self._snapshot.speech_active else None
 
     def observe_presence(self, count: int | None) -> None:
-        stamp = self._now()
         if count is None:
-            if (
-                self._snapshot.remote_participants is not None
-                and self._snapshot.remote_participants > 0
-            ):
-                return
-            self._snapshot.alone_since = None
-            self._snapshot.presence_at = None
-            self._snapshot.remote_participants = None
             return
-        if count is not None and count < 0:
+        if count < 0:
             raise ValueError("participant count cannot be negative")
-        if count != 0:
-            self._snapshot.alone_since = None
-        elif (
-            self._snapshot.presence_at is None
-            or stamp - self._snapshot.presence_at > 30
-            or self._snapshot.alone_since is None
-        ):
-            self._snapshot.alone_since = stamp
-        self._snapshot.presence_at = stamp
+        self._snapshot.presence_at = self._now()
         self._snapshot.remote_participants = count
 
     def mark_unavailable(self) -> None:
@@ -167,7 +148,6 @@ def evaluate_deafness(
     *,
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds,
     deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds,
-    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds,
 ) -> DeafVerdict:
     if not snapshot.available:
         return "unavailable"
@@ -186,14 +166,6 @@ def evaluate_deafness(
     ):
         return "silent_capture"
     if (
-        snapshot.remote_participants == 0
-        and snapshot.presence_at is not None
-        and now - snapshot.presence_at <= 30
-        and snapshot.alone_since is not None
-        and now - snapshot.alone_since >= alone_leave_seconds
-    ):
-        return "alone"
-    if (
         snapshot.pending_speech_at is not None
         and now - snapshot.pending_speech_at >= deaf_window_seconds
     ):
@@ -207,7 +179,6 @@ def evaluate_deafness(
 class DeafTiming:
     deaf_window_seconds: float = DEFAULTS.audio_health.deaf_window_seconds
     deaf_grace_seconds: float = DEFAULTS.audio_health.deaf_grace_seconds
-    alone_leave_seconds: float = DEFAULTS.audio_health.alone_leave_seconds
     restate_interval_seconds: float = 60.0
 
 
@@ -225,7 +196,6 @@ class DeafMonitor:
     ) -> None:
         self._activity = activity
         self._faults = faults
-        self.alone_leave_seconds = timing.alone_leave_seconds
         self.deaf_window_seconds = timing.deaf_window_seconds
         self.deaf_grace_seconds = timing.deaf_grace_seconds
         self.restate_interval_seconds = timing.restate_interval_seconds
@@ -240,7 +210,6 @@ class DeafMonitor:
             now,
             deaf_window_seconds=self.deaf_window_seconds,
             deaf_grace_seconds=self.deaf_grace_seconds,
-            alone_leave_seconds=self.alone_leave_seconds,
         )
 
     def _report(self, verdict: DeafVerdict) -> None:
