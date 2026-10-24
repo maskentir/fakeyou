@@ -193,6 +193,21 @@ dipahami, 15 dari 15 benar dan "walk" terbaca eksplisit sebagai "work". Kalimat 
   - keluar otomatis ≤ 10 menit setelah sendirian walaupun watchdog sedang tidak stabil;
   - nama pembicara terlampir di ≥ 90% transkrip peserta yang punya tile.
 
+### Status Fase 2 (2026-10-24)
+
+`MeetRoster` sekarang melaporkan satu `MeetingState` (orang yang hadir, presenter, kamera, sudah tersinkron).
+Keputusan "sendirian" pindah dari monitor audio ke `AloneClock` di runtime:
+
+- protokol jadi sumber pertama, DOM hanya pemeriksa drift (kalau DOM melihat orang tapi protokol tidak, hasilnya
+  drift dan yang dipegang DOM);
+- jendela 10 menit tidak lagi di-reset oleh pembacaan DOM yang gagal, dan tidak lagi bergantung pada audio menyala;
+- kegagalan DOM tidak lagi mematikan sesi selama protokol masih sehat; kalau protokol ikut basi, barulah sesi berakhir
+  sebagai `browser_failed`;
+- view yang dilihat twin sekarang hanya berisi orang yang benar-benar ada di ruangan.
+
+Yang masih dari DOM, karena protokol Meet tidak memberi sinyalnya: meeting bubar, dikeluarkan host, dan penolakan masuk.
+Yang masih perlu bukti live: `display_claim` muncul dan label pembicara stabil (`621a47e`).
+
 ## Fase 3: kanal yang belum tersambung
 
 - **Chat Meet.** `receive_chat` belum punya pemanggil. Sambungkan dari perception chat (`ChatEntry`); balasan lewat
