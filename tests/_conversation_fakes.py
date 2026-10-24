@@ -13,8 +13,8 @@ from langchain_core.outputs import ChatResult
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError, MeetingAudio
-from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):

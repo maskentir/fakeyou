@@ -83,7 +83,9 @@ async def test_the_twin_own_chat_is_not_answered(journal: RecordingJournal) -> N
     assert cast(FakeConversation, worker.conversation).chat == []
 
 
-async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(journal: RecordingJournal) -> None:
+async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(
+    journal: RecordingJournal,
+) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(
