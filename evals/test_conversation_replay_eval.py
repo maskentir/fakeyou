@@ -171,6 +171,56 @@ async def test_replay_grades_replies_silence_and_cut_offs_through_the_real_turn_
     assert "First part. Second part. —" in history
 
 
+async def test_an_interim_for_the_twin_cuts_the_reply_but_one_for_others_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ToolCallingFakeModel(responses=[AIMessage(content="First part. Second part.")])
+    monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
+    monkeypatch.setattr(assembly, "create_fallback_chat_model", lambda _settings: None)
+    monkeypatch.setattr(assembly, "create_strong_chat_model", lambda _settings: None)
+    monkeypatch.setattr(
+        assembly, "build_turn_judge", lambda *_args: _judge_answers_unless_for("Budi")
+    )
+    profile = scenario_profile(load_scenarios())
+
+    for_twin = Scenario(
+        id="c3",
+        family="floor",
+        title="interim for the twin",
+        steps=(
+            Step(say="Rani, what about the beta?", speaker="speaker-a", expect=Expectation()),
+            Step(
+                say="Rani, wait a moment.",
+                speaker="speaker-b",
+                kind="interim",
+                expect=Expectation(reply=False, barge_in=True),
+            ),
+        ),
+    )
+    for_others = Scenario(
+        id="c4",
+        family="floor",
+        title="interim for somebody else",
+        steps=(
+            Step(say="Rani, what about the beta?", speaker="speaker-a", expect=Expectation()),
+            Step(
+                say="Budi, can you send me the deck?",
+                speaker="speaker-b",
+                kind="interim",
+                expect=Expectation(reply=False, barge_in=False),
+            ),
+        ),
+    )
+
+    cut = await run_scenario(for_twin, profile, _offline_settings())
+    kept = await run_scenario(for_others, profile, _offline_settings())
+
+    assert [line.text for line in cut[0].spoken] == ["First part."]
+    assert cut[1].barge_in is True
+    assert [line.text for line in kept[0].spoken] == ["First part.", "Second part."]
+    assert kept[1].barge_in is False
+
+
 async def test_a_failed_turn_fails_its_step_even_without_an_expectation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

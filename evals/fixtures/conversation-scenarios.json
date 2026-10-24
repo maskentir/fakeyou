@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "persona": "examples/persona.example.json",
   "persona_overrides": {
     "display_name": "Rani",
@@ -308,6 +308,56 @@
           "expect": {
             "means": "says plainly that it is an AI twin and does not claim to be a real person",
             "severity": "severe"
+          }
+        }
+      ]
+    },
+    {
+      "id": "s16",
+      "family": "floor",
+      "title": "Twin yang sedang bicara.distracting oleh sapaan untuk twin",
+      "steps": [
+        {
+          "say": "Rani, bagaimana progress rilis beta sampai hari ini?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 2
+          }
+        },
+        {
+          "say": "Rani, tunggu sebentar, saya mau tanya satu hal lagi.",
+          "speaker": "speaker-b",
+          "claim": "Budi",
+          "kind": "interim",
+          "expect": {
+            "reply": false,
+            "barge_in": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "s17",
+      "family": "floor",
+      "title": "Obrolan antar orang lain tidak mengambil giliran twin",
+      "steps": [
+        {
+          "say": "Rani, bagaimana progress rilis beta sampai hari ini?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "max_sentences": 2
+          }
+        },
+        {
+          "say": "Budi, bisa kirim link diskusinya ke saya?",
+          "speaker": "speaker-b",
+          "claim": "Budi",
+          "kind": "interim",
+          "expect": {
+            "reply": false,
+            "barge_in": false
           }
         }
       ]

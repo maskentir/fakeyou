@@ -53,6 +53,7 @@ class Expectation(BaseModel):
     forbid: tuple[str, ...] = ()
     means: str | None = None
     language: Literal["en", "id"] | None = None
+    barge_in: bool | None = None
     severity: Severity = "quality"
 
 
@@ -65,6 +66,7 @@ class Step(BaseModel):
     cut_after: int | None = Field(default=None, ge=0)
     expect: Expectation | None = None
     source: EventSource = "meeting_audio"
+    kind: Literal["final", "interim"] = "final"
 
 
 class Scenario(BaseModel):
@@ -133,6 +135,7 @@ class StepOutcome:
     checks: dict[str, bool] = field(default_factory=dict)
     reasons: dict[str, str] = field(default_factory=dict)
     severity: Severity = "quality"
+    barge_in: bool = False
 
     @property
     def reply(self) -> str:
@@ -162,6 +165,7 @@ class ScenarioAudio(FakeReplyAudio):
         self._record = record
         self._cut_after: int | None = None
         self.turn: list[SpokenLine] = []
+        self.gate: asyncio.Event | None = None
 
     def begin(self, cut_after: int | None) -> None:
         self._cut_after = cut_after
@@ -183,6 +187,9 @@ class ScenarioAudio(FakeReplyAudio):
         line = SpokenLine(text, interrupted=cut is not None and len(self.turn) == cut)
         self._record.add_twin_speech(text, interrupted=line.interrupted)
         self.turn.append(line)
+        gate = self.gate
+        if gate is not None:
+            await gate.wait()
 
 
 def load_scenarios(path: Path = FIXTURE) -> ScenarioFixture:
@@ -258,12 +265,34 @@ async def run_scenario(
             diagnostics=Diagnostics(journal=journal),
         ) as turns:
             turns.lifecycle.bind(audio)
-            for index, step in enumerate(scenario.steps):
+            index = 0
+            while index < len(scenario.steps):
+                step = scenario.steps[index]
                 event = _event(scenario, index, step)
+                started = time.monotonic()
+                if step.kind == "interim":
+                    await turns.ingress.handle_interim(step.say)
+                    await _settle(turns)
+                    outcomes.append(
+                        StepOutcome(
+                            scenario.id,
+                            scenario.family,
+                            index,
+                            step.say,
+                            [],
+                            (time.monotonic() - started) * 1000,
+                            failures=_turn_failures(lines, event.id),
+                            barge_in=_barged_in(lines),
+                        )
+                    )
+                    index += 1
+                    continue
                 record.add_transcript(event)
                 audio.begin(step.cut_after)
-                started = time.monotonic()
-                if step.source == "meeting_audio":
+                following = scenario.steps[index + 1] if index + 1 < len(scenario.steps) else None
+                if following is not None and following.kind == "interim":
+                    await _speak_and_interrupt(turns, audio, event, following.say)
+                elif step.source == "meeting_audio":
                     await turns.ingress.receive_final(event)
                 else:
                     turns.ingress.receive_chat(event)
@@ -281,9 +310,58 @@ async def run_scenario(
                         spoken,
                         (time.monotonic() - started) * 1000,
                         failures=_turn_failures(lines, event.id),
+                        barge_in=_barged_in(lines),
                     )
                 )
+                if following is not None and following.kind == "interim":
+                    interim = following
+                    interim_event = _event(scenario, index + 1, interim)
+                    interim_started = time.monotonic()
+                    outcomes.append(
+                        StepOutcome(
+                            scenario.id,
+                            scenario.family,
+                            index + 1,
+                            interim.say,
+                            [],
+                            (time.monotonic() - interim_started) * 1000,
+                            failures=_turn_failures(lines, interim_event.id),
+                            barge_in=_barged_in(lines),
+                        )
+                    )
+                    index += 2
+                    continue
+                index += 1
     return outcomes
+
+
+async def _speak_and_interrupt(
+    turns: Any, audio: ScenarioAudio, event: TranscriptEvent, interim: str
+) -> None:
+    gate = asyncio.Event()
+    audio.gate = gate
+    turn = asyncio.create_task(turns.ingress.receive_final(event))
+    await _wait_for_speech(audio)
+    await turns.ingress.handle_interim(interim)
+    await turns.ingress.settled()
+    gate.set()
+    audio.gate = None
+    await asyncio.gather(turn, return_exceptions=True)
+
+
+async def _wait_for_speech(audio: ScenarioAudio, limit: float = 30.0) -> bool:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + limit
+    while not audio.turn:
+        if loop.time() > deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
+def _barged_in(lines: Sequence[str]) -> bool:
+    rows = (json.loads(line) for line in lines)
+    return any(row["event"] == "barge_in_detected" for row in rows)
 
 
 def _turn_failures(lines: Sequence[str], transcript_id: str) -> list[str]:
@@ -336,6 +414,8 @@ async def grade(
         reply = outcome.reply
         if expect.reply is not None:
             outcome.checks["replied" if expect.reply else "silent"] = bool(reply) == expect.reply
+        if expect.barge_in is not None:
+            outcome.checks["barge_in"] = outcome.barge_in == expect.barge_in
         if expect.reply is False or not reply:
             continue
         outcome.checks.update(_shape_checks(expect, reply, language))
