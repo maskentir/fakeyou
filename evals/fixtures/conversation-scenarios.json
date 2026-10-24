@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "persona": "examples/persona.example.json",
   "persona_overrides": {
     "display_name": "Rani",
@@ -360,6 +360,47 @@
           "expect": {
             "reply": false,
             "barge_in": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "s18",
+      "family": "language",
+      "title": "Ditanya dalam bahasa Indonesia",
+      "steps": [
+        {
+          "say": "Rani, gimana progress rilis beta sampai hari ini?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "language": "id",
+            "max_sentences": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "s19",
+      "family": "language",
+      "title": "Bahasa participant terakhir, bukan bahasa room",
+      "steps": [
+        {
+          "say": "Rani, angka anggaran yang tadi sudah lengkap?",
+          "speaker": "speaker-a",
+          "claim": "Ayu",
+          "expect": {
+            "language": "id",
+            "max_sentences": 2
+          }
+        },
+        {
+          "say": "Rani, can you summarize that in English for the Berlin team?",
+          "speaker": "speaker-b",
+          "claim": "Budi",
+          "expect": {
+            "language": "en",
+            "max_sentences": 2
           }
         }
       ]
