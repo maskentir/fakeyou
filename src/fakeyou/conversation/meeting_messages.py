@@ -123,3 +123,10 @@ def history_messages(
         len(kept),
     )
     return kept[first_human:]
+
+
+def last_twin_text(entries: Sequence[RecordEntry]) -> str | None:
+    for entry in reversed(entries):
+        if isinstance(entry, TwinSpeechEntry) and entry.text.strip():
+            return entry.text.strip()
+    return None

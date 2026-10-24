@@ -22,6 +22,9 @@ class CueEngine:
     def is_speaking(self) -> bool:
         return False
 
+    def louder(self) -> None:
+        pass
+
     async def speak(
         self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
     ) -> None:

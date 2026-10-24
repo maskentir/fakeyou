@@ -126,15 +126,16 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 ## Fase 1: percakapan yang natural
 
 - **Response planner terstruktur.**
-  - Model membalas `{intent: answer | ack | clarify | decline | silent, text}`.
+  - Model membalas `intent: answer | ack | clarify | decline | silent` di baris pertama, lalu isi kalimatnya.
   - Kode menegakkan bentuk: ack satu kalimat pendek; answer tanpa tawaran atau pertanyaan penutup; clarify hanya bila
     planner menyatakan tidak ada tafsiran masuk akal.
   - Aturan penutup di prompt bisa dipangkas setelah ini.
 - **Intent kendali di turn graph.**
-  - Stop, shorter, repeat, dan louder dikenali deterministik (kosakata JSON id/en, pola yang sama dengan ack
-    vocabulary).
+  - Model membaca maksud pesertanya lalu menulis `intent: stop | shorter | repeat | louder`; kode yang menjalankan
+    akibatnya. Tidak ada tabel kata kunci: "bisa tolong lebih singkat?" dan "make it shorter" berakhir sama.
   - Barge-in sudah menghentikan audio; giliran kendali tidak dikirim ke LLM.
-  - Shorter mengubah anggaran kalimat sesi; repeat memutar ulang kalimat terakhir dari record.
+  - Shorter menurunkan anggaran kalimat sesi; repeat memutar ulang kalimat terakhir dari record; louder menaikkan gain
+    playback.
 - **Biasing STT kontekstual.**
   - Keyword Muse diperbarui selama meeting dari roster (nama), layar (judul dan istilah), dan percakapan (istilah
     berulang).
@@ -146,6 +147,21 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
   - salah dengar ditafsirkan benar minimal 80%;
   - kendali dipatuhi 100%;
   - latency p50 dari final tetap di bawah 1,5 s.
+
+### Angka Fase 1 (replay live, 9 run × 12 skenario)
+
+| Keluarga | Sebelum | Sesudah |
+| --- | --- | --- |
+| `small_talk` | 0,259 | 0,593 |
+| `misheard` | 0,944 | 0,889 |
+| `recall` | 0,833 | 0,833 |
+| `control` | 1,000 | 1,000 |
+| `floor` | 1,000 | 1,000 |
+| `honesty` | 1,000 | 1,000 |
+| `language` | 0,000 | 0,000 |
+
+Pertanyaan penutup yang lolos dari 13 dari 99 balasan jadi 2 dari 99. Pelanggaran serius 0, regresi 0, judge 29 dari 30
+label. `language` masih 0 karena bahasa balasan belum mengikuti lawan bicara.
 
 ## Fase 2: sadar meeting
 

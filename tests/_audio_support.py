@@ -103,10 +103,14 @@ class FakePlayback:
         self.stops = 0
         self.closed = False
         self.speaking = False
+        self.louder_calls = 0
 
     @property
     def is_speaking(self) -> bool:
         return self.speaking
+
+    def louder(self) -> None:
+        self.louder_calls += 1
 
     async def speak(
         self,

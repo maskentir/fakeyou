@@ -24,6 +24,9 @@ class FakePlayback:
     def is_speaking(self) -> bool:
         return False
 
+    def louder(self) -> None:
+        pass
+
     async def speak(self, text: str, **extra: object) -> None:
         pass
 

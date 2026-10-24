@@ -21,6 +21,7 @@ from fakeyou.config.settings import (
     Settings,
 )
 from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
     MeetingResponder,
@@ -251,6 +252,7 @@ class _ConversationBuilder:
         self._middleware: list[AgentMiddleware[Any, Any, Any]] = []
         self._persona = ""
         self._tool_names: frozenset[PersonaTool] = frozenset()
+        self._control = ReplyControl()
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -346,6 +348,7 @@ class _ConversationBuilder:
             language=self._settings.speech.language,
             max_sentences=self._settings.conversation.max_spoken_sentences,
             history_max_tokens=self._settings.conversation.history_max_tokens,
+            control=self._control,
         )
 
     def build_turns(

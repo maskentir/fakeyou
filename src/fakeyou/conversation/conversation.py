@@ -12,12 +12,19 @@ from langchain_core.runnables import Runnable, RunnableConfig
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.meeting_messages import (
     MeetingHistory,
     history_messages,
+    last_twin_text,
     request_messages,
 )
-from fakeyou.conversation.reply_planner import ReplyPlanner, planned_reply
+from fakeyou.conversation.reply_planner import (
+    IntentHandler,
+    ReplyIntent,
+    ReplyPlanner,
+    planned_reply,
+)
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -287,6 +294,7 @@ class StreamTrace:
     transcript_id: str | None = None
     on_tool_start: Callable[[], None] = _ignore_tool_start
     on_tool_result: ToolResultCallback | None = None
+    on_intent: IntentHandler | None = None
 
 
 DEFAULT_STREAM_TRACE = StreamTrace()
@@ -439,7 +447,9 @@ async def stream_sentences(
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
-    planner = ReplyPlanner(max_sentences=max_sentences, language=trace.language)
+    planner = ReplyPlanner(
+        max_sentences=max_sentences, language=trace.language, on_intent=trace.on_intent
+    )
     try:
         stream: AsyncIterator[Any] = agent.astream(
             {"messages": list(messages)},
@@ -470,10 +480,17 @@ class MeetingResponder:
     language: str = DEFAULTS.speech.language
     max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
+    control: ReplyControl | None = None
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
             raise ValueError("max_sentences must be positive")
+
+    @property
+    def limit(self) -> int:
+        if self.control is None:
+            return self.max_sentences
+        return self.control.limit(self.max_sentences)
 
     def messages(self, events: Sequence[TranscriptEvent]) -> list[BaseMessage]:
         earlier = history_messages(
@@ -482,6 +499,22 @@ class MeetingResponder:
             max_tokens=self.history_max_tokens,
         )
         return [*earlier, *request_messages(events)]
+
+    def on_intent(self, intent: ReplyIntent) -> str | None:
+        control = self.control
+        if control is None:
+            return None
+        if intent == "shorter":
+            control.sentence_cap = 1
+            return None
+        if intent == "louder":
+            control.gain_steps += 1
+            if control.on_louder is not None:
+                control.on_louder()
+            return None
+        if intent == "repeat":
+            return last_twin_text(self.history.entries())
+        return None
 
     def _trace(
         self,
@@ -496,6 +529,7 @@ class MeetingResponder:
             transcript_id=events[-1].id if events else None,
             on_tool_start=on_tool_start,
             on_tool_result=self.on_tool_result,
+            on_intent=self.on_intent,
         )
 
     async def respond(
@@ -507,7 +541,12 @@ class MeetingResponder:
             REPLY_CONFIG,
             trace=self._trace(events, on_tool_start),
         )
-        return planned_reply(reply, max_sentences=self.max_sentences, language=self.language)
+        return planned_reply(
+            reply,
+            max_sentences=self.limit,
+            language=self.language,
+            on_intent=self.on_intent,
+        )
 
     def stream_sentences(
         self,
@@ -520,7 +559,7 @@ class MeetingResponder:
             self.agent,
             self.messages(events),
             REPLY_CONFIG,
-            max_sentences=self.max_sentences,
+            max_sentences=self.limit,
             trace=self._trace(events, on_tool_start, request_id),
         )
 

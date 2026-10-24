@@ -27,10 +27,14 @@ ENDING_RULE = (
 )
 REPLY_FORMAT_RULE = (
     "Reply format: the first line of every reply is 'intent: answer', 'intent: ack', "
-    "'intent: clarify', 'intent: decline' or 'intent: silent', and the spoken words follow on "
-    "the next line. Use ack for a short acknowledgement, answer when you answer a question, "
-    "clarify only when no reading of the request makes sense, decline when you must not agree "
-    "or decide, and silent when you should not speak at all. Never speak the intent line."
+    "'intent: clarify', 'intent: decline', 'intent: silent', 'intent: stop', 'intent: shorter', "
+    "'intent: repeat' or 'intent: louder', and the spoken words follow on the next line. Use "
+    "ack for a short acknowledgement, answer when you answer a question, clarify only when no "
+    "reading of the request makes sense, decline when you must not agree or decide, and silent "
+    "when you should not speak at all. Use stop when the participant asks you to stop talking, "
+    "shorter when they ask you to be more concise, repeat when they ask you to say that again, "
+    "and louder when they ask you to speak louder. Read what the participant means, not the "
+    "exact words they used, and answer in the language they used. Never speak the intent line."
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (

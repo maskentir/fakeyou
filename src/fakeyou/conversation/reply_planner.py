@@ -1,25 +1,48 @@
 import re
+from collections.abc import Callable
 from typing import Literal, cast
 
 from fakeyou.foundation.sentences import sentence_end
 
-ReplyIntent = Literal["answer", "ack", "clarify", "decline", "silent"]
+ReplyIntent = Literal[
+    "answer",
+    "ack",
+    "clarify",
+    "decline",
+    "silent",
+    "stop",
+    "shorter",
+    "repeat",
+    "louder",
+]
 
 INTENT_PREFIX = "intent:"
 INTENT_LINE = re.compile(
-    r"^intent:[ \t]*(answer|ack|clarify|decline|silent)\b[ \t]*\n?", re.IGNORECASE
+    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b[ \t]*\n?",
+    re.IGNORECASE,
 )
-SHORT_INTENTS = frozenset({"ack", "decline"})
+SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
+CONTROL_INTENTS = frozenset({"stop", "shorter", "repeat", "louder"})
 MAX_HEAD_CHARS = 64
+
+IntentHandler = Callable[["ReplyIntent"], "str | None"]
 
 
 class ReplyPlanner:
-    def __init__(self, *, max_sentences: int, language: str) -> None:
+    def __init__(
+        self,
+        *,
+        max_sentences: int,
+        language: str,
+        on_intent: IntentHandler | None = None,
+    ) -> None:
         self._max_sentences = max_sentences
         self._language = language
+        self._on_intent = on_intent
         self._head = ""
         self._intent: ReplyIntent | None = None
         self._explicit = False
+        self._replaced = False
         self._held: str | None = None
         self._short_spoken = False
         self._spoken = 0
@@ -83,6 +106,9 @@ class ReplyPlanner:
         return [held]
 
     def _release(self) -> str:
+        if self._replaced:
+            self._head = ""
+            return ""
         if self._intent is None:
             head = self._head
             stripped = head.lstrip()
@@ -91,6 +117,11 @@ class ReplyPlanner:
                 if match is not None:
                     self._intent = cast(ReplyIntent, match.group(1).casefold())
                     self._explicit = True
+                    replacement = self._on_intent(self._intent) if self._on_intent else None
+                    if replacement is not None:
+                        self._replaced = True
+                        self._head = ""
+                        return replacement
                     rest = head[match.end() :]
                     self._head = ""
                     return rest
@@ -125,8 +156,14 @@ def split_sentences(text: str, *, language: str) -> list[str]:
     return [sentence for sentence in sentences if sentence]
 
 
-def planned_reply(text: str, *, max_sentences: int, language: str) -> str:
-    planner = ReplyPlanner(max_sentences=max_sentences, language=language)
+def planned_reply(
+    text: str,
+    *,
+    max_sentences: int,
+    language: str,
+    on_intent: IntentHandler | None = None,
+) -> str:
+    planner = ReplyPlanner(max_sentences=max_sentences, language=language, on_intent=on_intent)
     content = planner.feed(text) + planner.finish()
     if planner.silent:
         return ""

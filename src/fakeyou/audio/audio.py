@@ -513,6 +513,9 @@ class MeetingAudioSession:
     async def stop_playback(self) -> None:
         await self._engine.stop()
 
+    def louder(self) -> None:
+        self._engine.louder()
+
     def prepare_cues(self, texts: Sequence[str]) -> None:
         engine = self._engine
         if not isinstance(engine, CuePlayback) or self._cue_task is not None or self._stopping:

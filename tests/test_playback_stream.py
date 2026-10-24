@@ -310,3 +310,20 @@ async def test_stopping_paplay_after_its_input_closed_is_quiet(
         await play
     [proc] = spawned
     assert proc.returncode is not None
+
+
+async def test_a_louder_playback_scales_the_audio() -> None:
+    player = _StreamPlayer()
+    events: list[PlaybackEvent] = []
+    engine = build_engine(_StreamSynth(chunks=[b"\x10\x00" * 10]), player, FakeMuter(), events)
+
+    await engine.speak("hello")
+    plain = player.chunks[0]
+
+    engine.louder()
+    player.chunks.clear()
+    await engine.speak("hello")
+    louder = player.chunks[0]
+
+    assert louder != plain
+    assert louder == b"\x13\x00" * 10

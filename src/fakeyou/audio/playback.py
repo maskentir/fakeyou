@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal, Protocol, runtime_checkable
 
+import numpy as np
+
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import PCM_CHANNELS, PCM_FORMAT, PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
@@ -32,6 +34,8 @@ class PlaybackEvent:
 
 
 PlayStream = Callable[[AsyncIterator[bytes]], Coroutine[Any, Any, None]]
+GAIN_STEP = 1.2
+MAX_GAIN = 2.4
 
 
 class SetMuted(Protocol):
@@ -181,6 +185,8 @@ class PlaybackPort(Protocol):
     @property
     def is_speaking(self) -> bool: ...
 
+    def louder(self) -> None: ...
+
     async def speak(
         self,
         text: str,
@@ -244,6 +250,7 @@ class PlaybackEngine:
         self._worker: asyncio.Task[None] | None = None
         self._play_tasks: set[asyncio.Task[Any]] = set()
         self._muted = True
+        self._gain = 1.0
         self._speaking = False
         self._generation = 0
         self._closed = False
@@ -293,6 +300,17 @@ class PlaybackEngine:
                 chunks.aclose, source="playback", operation="close_stream", faults=self._faults
             )
 
+    def louder(self) -> None:
+        self._gain = min(MAX_GAIN, self._gain * GAIN_STEP)
+
+    def _apply_gain(self, chunk: bytes) -> bytes:
+        if self._gain == 1.0 or not chunk:
+            return chunk
+        usable = len(chunk) - (len(chunk) % PCM16_SAMPLE_BYTES)
+        samples = np.frombuffer(chunk[:usable], dtype="<i2").astype(np.float64)
+        scaled = np.clip(samples * self._gain, -32768, 32767).astype("<i2").tobytes()
+        return scaled + chunk[usable:]
+
     async def _paced_chunks(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
         iterator = chunks.__aiter__()
         while True:
@@ -301,7 +319,7 @@ class PlaybackEngine:
                     chunk = await anext(iterator)
             except StopAsyncIteration:
                 return
-            yield chunk
+            yield self._apply_gain(chunk)
 
     async def _retryable_stream(
         self,
@@ -514,6 +532,7 @@ class PlaybackEngine:
             self._record_fault("playback", error)
             return
         self._muted = True
+        self._gain = 1.0
         self._speaking = False
 
     async def _unmute(self) -> None:

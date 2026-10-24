@@ -43,6 +43,11 @@ class SupportsCues(Protocol):
 
 
 @runtime_checkable
+class SupportsLouder(Protocol):
+    def louder(self) -> None: ...
+
+
+@runtime_checkable
 class SupportsMaintenance(Protocol):
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None

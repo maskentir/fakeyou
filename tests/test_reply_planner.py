@@ -87,4 +87,7 @@ def test_a_reply_without_an_intent_line_keeps_its_closing_question() -> None:
 
 
 def test_sentences_are_split_by_the_language_of_the_reply() -> None:
-    assert split_sentences("Halo. Apa kabar?", language="id") == ["Halo.", "Apa kabar?"]
+    assert split_sentences("Good morning. How are you?", language="en") == [
+        "Good morning.",
+        "How are you?",
+    ]
