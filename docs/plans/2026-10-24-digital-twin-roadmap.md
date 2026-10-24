@@ -114,6 +114,7 @@ Scorecard terhadap sesi live yang tersimpan:
 | `live-qvr-1` | `session_completed`, `faults_per_hour` |
 | `live-rhd-1` | hampir semua metrik; sesi ini yang membuka roadmap |
 | `live-kmk-3` | `first_audio_p50_seconds`, `faults_per_hour`, `attribution_coverage`, `admission_to_listening_seconds` |
+| `live-xnj-itkm-owt` | `first_audio_p50_seconds`, `faults_per_hour`, `attribution_coverage`, `admission_to_listening_seconds` |
 
 Replay percakapan: 7 keluarga skenario, baseline di `evals/fixtures/conversation-baseline.json`, laporan di
 `docs/reports/2026-10-24-conversation-replay.json`. Judge mengeluh 1 dari 30 label (96,7% kecocokan). Family yang
@@ -166,6 +167,19 @@ tanpa kutipan pembicara.
 Latency jalur chat biasa sehat: `speech_stopped` ke PCM pertama p50 1,69 s, p95 3,08 s, max 5,25 s.
 
 Target baru: balasan yang tidak menyasar ≤ 1 per 10 menit; kalimat terpotong ≤ 5% dari balasan; pertanyaan layar dijawab ≤ 5 s.
+
+#### Akar masalah dari scorecard sesi
+
+Scorecard penuh sesi ini ada di `docs/reports/2026-10-24-live-xnj-itkm-owt.json`. Yang paling jelas:
+
+| Gejala | Angka | Akar masalah |
+| --- | --- | --- |
+| Twin terlalu sering menjawab | 102 balasan dari 193 ucapan; alasan policy `followup_same_speaker` 78, `not_addressed` 85 | Aturan "balas pembicara yang sama" terlalu longgar: twin mengejar obrolan orang yang bukan untuknya |
+| Balasan terpotong | 46 interupsi untuk 39 balasan selesai; trigger `interim` 59 vs `final` 14 | Barge-in dinyalakan oleh transkrip interim yang belum final, jadi suara orang berikutnya ikut memotong |
+| Terlalu lambat (keluhan "10 detik") | `first_interim_to_final_ms` p50 3,88 s, p95 12,0 s, max 24,0 s; `agent_to_reply` p50 4,9 s, p95 18,5 s | Delay terbesar ada di STT yang baru final, bukan di model; interim harus dipakai untuk placeholder, bukan menunggu final |
+| Atribusi lemah | `attribution_coverage` 0,518; `overlap` 81 dari 93 alasan unknown | Voice binding sering gagal saat orang bicara berdekatan |
+| Sesi ditutup host | `terminal_reason` `removed_by_host` | Remove dari host harus jadi exit yang bersih dan tidak dihitung sebagai fault |
+
 
 ## Fase 2: sadar meeting
 
