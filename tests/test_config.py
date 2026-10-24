@@ -120,6 +120,7 @@ def test_provider_roles_match_the_frozen_contract_list() -> None:
     assert PROVIDER_ROLES == (
         "reply",
         "reply_fallback",
+        "reply_strong",
         "debrief",
         "stt",
         "tts",
@@ -145,6 +146,7 @@ def test_role_header_suffix_matches_the_frozen_map() -> None:
     assert ROLE_HEADER_SUFFIX == {
         "reply": "Reply",
         "reply_fallback": "Reply-Fallback",
+        "reply_strong": "Reply-Strong",
         "debrief": "Debrief",
         "stt": "Stt",
         "tts": "Tts",
@@ -182,7 +184,7 @@ def test_env_example_documents_every_compose_only_key() -> None:
 
 
 def test_settings_leaf_count_matches_the_frozen_map() -> None:
-    assert len(_setting_env_keys(Settings)) == 164
+    assert len(_setting_env_keys(Settings)) == 172
 
 
 class _MigrationMap(NamedTuple):
@@ -191,7 +193,7 @@ class _MigrationMap(NamedTuple):
     new_keys: tuple[str, ...]
 
 
-EXPECTED_SETTINGS_COUNTS = {"keep": 164}
+EXPECTED_SETTINGS_COUNTS = {"keep": 172}
 EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
 EXPECTED_NEW_COUNT = 0
 

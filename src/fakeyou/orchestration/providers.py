@@ -35,6 +35,8 @@ def preflight_hosts(
         targets.append(settings.reply.resolved_base_url)
         if settings.reply_fallback:
             targets.append(settings.reply_fallback.resolved_base_url)
+        if settings.reply_strong:
+            targets.append(settings.reply_strong.resolved_base_url)
     if memory:
         targets.extend(
             [
@@ -76,7 +78,7 @@ def _require_minimal_reasoning(model: BaseChatModel, name: str) -> None:
 
 
 def create_chat_model(settings: Settings) -> BaseChatModel:
-    settings.require_roles("reply", "reply_fallback")
+    settings.require_roles("reply", "reply_fallback", "reply_strong")
     return _init_chat_model(settings.reply, ConfigKey.REPLY_API_KEY)
 
 
@@ -91,6 +93,12 @@ def create_fallback_chat_model(settings: Settings) -> BaseChatModel | None:
     if settings.reply_fallback is None:
         return None
     return _init_chat_model(settings.reply_fallback, ConfigKey.REPLY_FALLBACK_API_KEY)
+
+
+def create_strong_chat_model(settings: Settings) -> BaseChatModel | None:
+    if settings.reply_strong is None:
+        return None
+    return _init_chat_model(settings.reply_strong, ConfigKey.REPLY_STRONG_API_KEY)
 
 
 def create_perception_chat_model(settings: Settings) -> BaseChatModel:

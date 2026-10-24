@@ -44,7 +44,7 @@ def preflight_join(request: JoinRequest) -> None:
         )
     )
     if request.conversation_enabled:
-        settings.require_roles("reply", "reply_fallback")
+        settings.require_roles("reply", "reply_fallback", "reply_strong")
     if request.memory:
         memory_config(settings)
     if request.audio_enabled:

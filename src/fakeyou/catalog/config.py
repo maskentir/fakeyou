@@ -22,6 +22,7 @@ class ConfigKey(StrEnum):
     COMPOSE_NEO4J_URI = "FAKEYOU_COMPOSE_NEO4J_URI"
     REPLY_API_KEY = "FAKEYOU_REPLY__API_KEY"
     REPLY_FALLBACK_API_KEY = "FAKEYOU_REPLY_FALLBACK__API_KEY"
+    REPLY_STRONG_API_KEY = "FAKEYOU_REPLY_STRONG__API_KEY"
     DEBRIEF_API_KEY = "FAKEYOU_DEBRIEF__API_KEY"
     STT_API_KEY = "FAKEYOU_STT__API_KEY"
     TTS_API_KEY = "FAKEYOU_TTS__API_KEY"
@@ -61,6 +62,7 @@ COMPOSE_ONLY_KEYS = frozenset(
 PROVIDER_ROLES: tuple[str, ...] = (
     "reply",
     "reply_fallback",
+    "reply_strong",
     "debrief",
     "stt",
     "tts",
@@ -73,6 +75,7 @@ PROVIDER_ROLES: tuple[str, ...] = (
 ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
     "reply": "reply",
     "reply_fallback": "reply_fallback",
+    "reply_strong": "reply_strong",
     "debrief": "debrief",
     "stt": "stt",
     "tts": "tts",
@@ -85,6 +88,7 @@ ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
 API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
     "reply": ConfigKey.REPLY_API_KEY,
     "reply_fallback": ConfigKey.REPLY_FALLBACK_API_KEY,
+    "reply_strong": ConfigKey.REPLY_STRONG_API_KEY,
     "debrief": ConfigKey.DEBRIEF_API_KEY,
     "stt": ConfigKey.STT_API_KEY,
     "tts": ConfigKey.TTS_API_KEY,
@@ -97,6 +101,7 @@ API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
 ROLE_HEADER_SUFFIX: Mapping[str, str] = {
     "reply": "Reply",
     "reply_fallback": "Reply-Fallback",
+    "reply_strong": "Reply-Strong",
     "debrief": "Debrief",
     "stt": "Stt",
     "tts": "Tts",
