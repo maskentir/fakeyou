@@ -1,3 +1,5 @@
+from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.orchestration.join import share_roster
 from fakeyou.perception.meet_protocol import DeviceOutput, MeetUser
 from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
 
@@ -112,3 +114,34 @@ def test_an_update_without_a_name_keeps_the_known_name() -> None:
     roster.apply_users([user(AYU, "")])
 
     assert roster.name_of(AYU) == "Ayu"
+
+
+def audio(device_id: str, stream_id: str) -> DeviceOutput:
+    return DeviceOutput(device_id=device_id, kind="audio", stream_id=stream_id, disabled=False)
+
+
+def test_people_are_present_humans_with_their_audio_sources() -> None:
+    roster = roster_with_people()
+    roster.apply_users([user(SCREEN, "", parent=AYU), user("devices/gone", "Gone", present=False)])
+    roster.apply_outputs(
+        [audio(AYU, "3553701704"), audio(TWIN, "42"), audio(SCREEN, "77"), audio(BUDI, "mixed")]
+    )
+
+    assert roster.people() == {AYU: "Ayu", BUDI: "Budi"}
+    assert roster.audio_sources() == {3553701704: AYU}
+
+
+def test_the_speaker_registry_names_voices_from_the_meet_roster() -> None:
+    roster = roster_with_people()
+    roster.apply_outputs([audio(AYU, "111"), audio(BUDI, "222")])
+    registry = SpeakerRegistry()
+
+    share_roster(registry, roster)
+    ayu = registry.resolve_csrcs(frozenset({111}))
+    budi = registry.resolve_csrcs(frozenset({222}))
+
+    assert ayu is not None
+    assert budi is not None
+    assert (ayu.device, ayu.display_claim, ayu.status) == (AYU, "Ayu", "confirmed")
+    assert (budi.device, budi.display_claim) == (BUDI, "Budi")
+    assert ayu.label != budi.label

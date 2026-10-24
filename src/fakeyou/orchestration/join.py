@@ -60,6 +60,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
+from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
 from fakeyou.persistence.ingestion_status import (
@@ -180,13 +181,20 @@ async def _open_join_memory(
         )
 
 
+def share_roster(registry: SpeakerRegistry, roster: MeetRoster) -> None:
+    people = roster.people()
+    registry.update_roster(people)
+    registry.note_roster({"id": device, "name": name} for device, name in people.items() if name)
+    registry.note_audio_sources(roster.audio_sources())
+
+
 def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
     registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
     run.voiceprint_live = resources.enter_context(open_voiceprint(prepared.request.settings))
     run.voice_activity = (
-        VoiceActivityTracker(twin_name=prepared.config.twin_name, registry=registry)
+        VoiceActivityTracker(registry=registry)
         if prepared.request.settings.conversation.voice_labels_enabled
         and prepared.request.audio_enabled
         else None
@@ -207,6 +215,7 @@ def _build_join_layers(
         journal=run.journal,
         record=run.record,
         screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
+        on_roster=partial(share_roster, registry),
     )
     return registry
 

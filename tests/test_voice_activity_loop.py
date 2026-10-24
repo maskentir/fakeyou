@@ -76,7 +76,7 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
         on_content=lambda reads: stop.set() if reads >= 2 else None,
         evaluates=[batch(0.0, [])] * 8,
     )
-    tracker = VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic)
+    tracker = VoiceActivityTracker(monotonic=clock.monotonic)
     config = SessionConfig(
         owner_id=SessionId("o"),
         twin_id=SessionId("t"),
@@ -152,7 +152,6 @@ async def test_voice_script_taps_remote_audio_and_skips_local_microphone() -> No
             await asyncio.sleep(0.2)
         assert drained["local"] == [1]
         assert {int(slot) for _, slot, level in levels if level > 0.1} == {0}
-        assert drained["participants"] == [{"id": "devices/1", "name": "Rani"}]
         assert isinstance(drained["instance"], str)
         assert drained["instance"]
 

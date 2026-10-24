@@ -6,7 +6,6 @@
   const SILENCE_FLOOR = 0.001;
   const MAX_BUFFERED = 6000;
   const MAX_TAPS = 16;
-  const MAX_PARTICIPANTS = 32;
   const instance = Math.random().toString(36).slice(2, 12);
   const taps = [];
   const slots = new Map();
@@ -214,21 +213,6 @@
     if (levels.length > MAX_BUFFERED) levels.splice(0, levels.length - MAX_BUFFERED);
   }
 
-  function participants() {
-    const roster = [];
-    const seen = new Set();
-    for (const tile of document.querySelectorAll("[data-participant-id]")) {
-      const id = String(tile.getAttribute("data-participant-id") || "").slice(0, 128);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const label = tile.querySelector("span.notranslate");
-      const name = label && label.textContent ? label.textContent.trim() : "";
-      roster.push({ id, name: name.slice(0, 80) });
-      if (roster.length >= MAX_PARTICIPANTS) break;
-    }
-    return roster;
-  }
-
   function localSlots() {
     return taps.filter((tap) => localTracks.has(tap.key)).map((tap) => tap.slot);
   }
@@ -257,9 +241,8 @@
       };
       try {
         batch.local = localSlots();
-        batch.participants = participants();
       } catch {
-        /* roster unavailable this round */
+        /* local slots unavailable this round */
       }
       return batch;
     },

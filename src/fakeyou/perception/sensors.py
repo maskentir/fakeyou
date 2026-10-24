@@ -100,6 +100,7 @@ class PerceptionSensors:
     ) -> None:
         self.timeline = timeline
         self.roster = MeetRoster()
+        self.roster_listener: Callable[[MeetRoster], None] | None = None
         self._settings = settings
         self._joined_at = joined_at
         self._journal = journal or Journal("", echo=False)
@@ -137,6 +138,7 @@ class PerceptionSensors:
             screens=sum(user.is_screen for user in users),
         )
         self._apply_changes(self.roster.apply_users(users), self._clock())
+        self._share_roster()
 
     def assignments(self) -> list[StreamAssignment]:
         settings = self._settings
@@ -160,9 +162,15 @@ class PerceptionSensors:
         changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
+        if update.users or update.outputs:
+            self._share_roster()
         if self._settings.chat:
             for chat in update.chat:
                 self._accept_chat(chat, at)
+
+    def _share_roster(self) -> None:
+        if self.roster_listener is not None:
+            self.roster_listener(self.roster)
 
     def _journal_audio_outputs(self, outputs: Sequence[DeviceOutput]) -> None:
         for output in outputs:

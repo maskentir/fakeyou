@@ -113,7 +113,7 @@ async def test_start_voice_activity_records_poll_faults(journal: RecordingJourna
     reporter = FaultReporter(journal=journal)
     worker = _bare_worker()
     worker.faults = reporter
-    worker.voice_activity = VoiceActivityTracker(twin_name="twin")
+    worker.voice_activity = VoiceActivityTracker()
     await worker.start_voice_activity()
     try:
         await _wait_for_faults(reporter)

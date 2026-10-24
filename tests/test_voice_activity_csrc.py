@@ -127,7 +127,7 @@ def test_csrc_mode_ignores_webaudio_taps_and_twin_playback() -> None:
 
 def test_csrc_mode_shifts_frames_by_their_own_lag() -> None:
     clock = FakeClock(now=10.0)
-    tracker = VoiceActivityTracker(twin_name="Twin", monotonic=clock.monotonic, frame_lag_ms=500.0)
+    tracker = VoiceActivityTracker(monotonic=clock.monotonic, frame_lag_ms=500.0)
     speak(tracker, clock, 10.0, 11.0)
     tracker.observe_batch(
         frames_batch(11_000.0, [[9_600.0, 0, 0.3, [111]], [10_800.0, 1, 0.3, [222]]]),

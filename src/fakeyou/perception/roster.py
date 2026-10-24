@@ -64,6 +64,21 @@ class MeetRoster:
                 changes.append(RosterChange(kind, output.device_id, self.name_of(output.device_id)))
         return changes
 
+    def people(self) -> dict[str, str]:
+        return {
+            device_id: user.name
+            for device_id, user in self._users.items()
+            if user.present and not user.is_screen and not self._is_own(device_id)
+        }
+
+    def audio_sources(self) -> dict[int, str]:
+        people = self.people()
+        return {
+            int(output.stream_id): device_id
+            for (device_id, kind), output in self._outputs.items()
+            if kind == "audio" and device_id in people and output.stream_id.isdigit()
+        }
+
     def assignments(self) -> list[StreamAssignment]:
         assigned: list[StreamAssignment] = []
         for (device_id, kind), output in self._outputs.items():

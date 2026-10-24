@@ -274,3 +274,41 @@ def test_registry_applies_pending_claim_when_row_binds_late() -> None:
     assert row.device == "dev-a"
     assert row.display_claim == "Maya"
     assert row.claim_confidence == 1.0
+
+
+def test_a_voice_keeps_its_label_when_its_device_changes_audio_source() -> None:
+    registry = SpeakerRegistry()
+    registry.note_roster([{"id": "dev-a", "name": "Maya"}])
+    registry.note_audio_sources({11: "dev-a"})
+    first = registry.resolve_csrcs(frozenset({11}))
+    registry.note_audio_sources({22: "dev-a"})
+    again = registry.resolve_csrcs(frozenset({22}))
+
+    assert first is not None
+    assert again is not None
+    assert again.uuid == first.uuid
+    assert again.display_claim == "Maya"
+
+
+def test_audio_sources_arriving_late_still_name_an_earlier_voice() -> None:
+    registry = SpeakerRegistry()
+    early = registry.resolve_csrcs(frozenset({11}))
+    registry.note_roster([{"id": "dev-a", "name": "Maya"}])
+    registry.note_audio_sources({11: "dev-a"})
+
+    assert early is not None
+    named = registry.row(early.uuid)
+    assert named is not None
+    assert (named.device, named.display_claim) == ("dev-a", "Maya")
+
+
+def test_one_device_never_names_two_voices() -> None:
+    registry = SpeakerRegistry()
+    first = registry.resolve_csrcs(frozenset({11}))
+    second = registry.resolve_csrcs(frozenset({22}))
+    registry.note_audio_sources({11: "dev-a", 22: "dev-a"})
+
+    assert first is not None
+    assert second is not None
+    devices = [registry.row(row.uuid) for row in (first, second)]
+    assert [row.device for row in devices if row is not None].count("dev-a") == 1
