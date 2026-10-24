@@ -198,6 +198,8 @@ class PerceptionSensors:
             presenting = change.kind in {"presenting_started", "presenting_stopped"}
             if presenting or self._settings.signals:
                 self.timeline.add_signal(change.kind, person, at)
+            if change.kind == "left":
+                self.timeline.leave(change.device_id)
 
     def _accept_chat(self, chat: MeetChatMessage, at: datetime) -> None:
         sent_at = chat.sent_at or at

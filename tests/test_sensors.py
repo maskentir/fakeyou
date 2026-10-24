@@ -278,3 +278,11 @@ async def test_each_audio_output_is_journaled_once_with_its_device() -> None:
         (row["device_id"], row["stream_id"], row["own"])
         for row in journal.events("perception_audio_output_observed")
     ] == [(AYU, "3553701704", False)]
+
+
+async def test_people_who_left_are_no_longer_in_the_meeting_state() -> None:
+    sensed, timeline, _ = sensors()
+    await sensed.accept_batch(DrainBatch(messages=[message(people())]))
+    sensed.accept_sync(sync_body([user_info(BUDI, "Budi", status=2)]))
+
+    assert "Budi" not in {person.name for person in timeline.snapshot().participants}
