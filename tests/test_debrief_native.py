@@ -153,7 +153,7 @@ async def test_each_chunk_is_validated_before_merge() -> None:
             stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
-    assert len(model.seen) == 2
+    assert len(model.seen) == 4
 
 
 async def test_a_later_chunk_failure_never_returns_partial_draft() -> None:
@@ -520,3 +520,30 @@ async def test_debrief_cites_a_shared_screen(record_path: Path) -> None:
         "First reading of the slide.",
         "Second reading of the slide.",
     ]
+
+
+async def test_chunks_are_extracted_at_the_same_time() -> None:
+    entries = tuple(source(i) for i in range(1, 42))
+    active = 0
+    peak = 0
+
+    class SlowModel(ToolCallingFakeModel):
+        @override
+        async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+            return await super()._agenerate(*args, **kwargs)
+
+    model = SlowModel(responses=[native_response(DebriefDraft(items=(), findings=()))])
+
+    await module.generate_debrief(
+        module.DebriefModels(model),
+        RecordSnapshot("a" * 64, entries),
+        brief=None,
+        stop=asyncio.Event(),
+    )
+
+    assert peak == 2
