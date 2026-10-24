@@ -488,7 +488,10 @@ def write_trust_artifacts(directory: Path, *, score: TrustScore, meta: ArtifactM
         "recall_timeout_seconds": dumped.get("memory", {}).get("recall", {}).get("timeout_seconds"),
         "latency": score.latency_summary(),
         "model_calls": sum(int(turn.get("model_calls", 0)) for turn in score.turns),
-        "recall_calls": sum(len(turn.get("recall_evidence", [])) for turn in score.turns),
+        "recall_calls": sum(
+            len(turn.get("recall_evidence", [])) + len(turn.get("memory_prefetch", []))
+            for turn in score.turns
+        ),
     }
     (directory / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"

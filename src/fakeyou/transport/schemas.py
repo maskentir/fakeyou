@@ -47,6 +47,16 @@ def encode_ingestion_job(*, meeting_id: str, kind: str, at: str) -> dict[str, st
     return {"v": "1", "type": "ingestion_job", "at": at, "meeting_id": meeting_id, "kind": kind}
 
 
+def encode_debrief_job(*, meeting_id: str, at: str, force: bool = False) -> dict[str, str]:
+    return {
+        "v": "1",
+        "type": "debrief_job",
+        "at": at,
+        "meeting_id": meeting_id,
+        "force": "true" if force else "false",
+    }
+
+
 def encode_reembed_job(
     *, at: str, owner_id: str, twin_id: str, type: str = "reembed_job"
 ) -> dict[str, str]:

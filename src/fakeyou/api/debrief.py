@@ -19,7 +19,7 @@ from fakeyou.observability.journal import journal_path
 from fakeyou.observability.report import build_session_report, read_journal_with_corrupt
 from fakeyou.observability.scorecard import score_session
 from fakeyou.persistence.record import meeting_record_path
-from fakeyou.transport.schemas import DEBRIEF_STREAM
+from fakeyou.transport.schemas import DEBRIEF_STREAM, encode_debrief_job
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
@@ -105,13 +105,7 @@ def _served_report(record_path: Path) -> dict[str, Any] | None:
 
 
 def _debrief_job_fields(meeting_id: str, *, force: bool, at: str) -> dict[str, str]:
-    return {
-        "v": "1",
-        "type": "debrief_job",
-        "at": at,
-        "meeting_id": meeting_id,
-        "force": "true" if force else "false",
-    }
+    return encode_debrief_job(meeting_id=meeting_id, at=at, force=force)
 
 
 router = APIRouter(prefix="/v1/sessions", tags=["debrief"])

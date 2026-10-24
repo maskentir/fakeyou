@@ -11,6 +11,7 @@ from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.cli.audio import audio_purge_expired, perception_purge_expired
+from fakeyou.cli.brief import default_brief_path, prepare_brief
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
 from fakeyou.cli.chat import chat_via_api
 from fakeyou.cli.client import ApiFailure, api_failure, client_settings_from_env
@@ -334,6 +335,25 @@ def debrief_command(
             meeting_id=str(parse_session_id(meeting_id, field="--meeting-id")),
             force=force,
             settings=client_settings_from_env(),
+        )
+    )
+
+
+@app.command("brief", help="Prepare the pre-meeting brief for the twin to review")
+@_guard_interrupts
+def brief_command(
+    meeting_id: Annotated[str, typer.Argument()],
+    *,
+    persona: Annotated[Path, typer.Option("--persona")],
+    out: Annotated[Path | None, typer.Option("--out")] = None,
+) -> None:
+    settings = _load_settings()
+    asyncio.run(
+        prepare_brief(
+            meeting_id=str(parse_session_id(meeting_id, field="meeting_id")),
+            persona_path=persona,
+            out_path=out or default_brief_path(settings, meeting_id),
+            settings=settings,
         )
     )
 
