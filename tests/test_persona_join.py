@@ -23,7 +23,6 @@ from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
-from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import (
     OperatorIdentity,
     PersonaProfile,
@@ -223,7 +222,6 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     assert "recall_meeting_context" not in created["persona"]
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
@@ -264,9 +262,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     )
 
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
-    greeting_type = type(create_greeting_middleware("id"))
     assert [type(item) for item in created["middleware"]] == [
-        greeting_type,
         ToolErrorMiddleware,
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
@@ -429,7 +425,6 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,

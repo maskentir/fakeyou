@@ -47,7 +47,6 @@ from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
-from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
@@ -271,10 +270,7 @@ class _ConversationBuilder:
             perception=self._agent.perception is not None,
         )
 
-    def add_greeting(self) -> None:
-        profile = self._agent.profile
-        language = profile.language if profile is not None else self._settings.speech.language
-        self._middleware.append(create_greeting_middleware(language))
+    def add_fallback(self) -> None:
         fallback = create_fallback_chat_model(self._settings)
         if fallback is not None:
             self._middleware.append(ModelFallbackMiddleware(fallback))
@@ -407,7 +403,7 @@ async def open_conversation(
     builder.build_persona()
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
-        builder.add_greeting()
+        builder.add_fallback()
         builder.add_memory()
         builder.add_perception()
         builder.add_meet_tools()

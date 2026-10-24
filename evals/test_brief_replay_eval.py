@@ -33,7 +33,6 @@ from evals._trust import (
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.foundation.greetings import neutral_greeting
 from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
 from fakeyou.memory.persona import persona_digest
 from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
@@ -73,7 +72,6 @@ def test_brief_corpus_defines_12_categories() -> None:
         assert case["turns"]
         for turn in case["turns"]:
             assert turn["say"].strip()
-            assert neutral_greeting(turn["say"], profile.language) is None
             assert turn["contract_reply"].strip()
             assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
         final = str(case["turns"][-1]["contract_reply"])
