@@ -430,6 +430,7 @@ class MeetingAudioSession:
 
     def _note_reconnect_success(self) -> None:
         self._reconnect_state = "idle"
+        self.activity.observe_stt_restart()
         if self._journal is not None:
             self._journal.record(
                 "stt_reconnect_finished",

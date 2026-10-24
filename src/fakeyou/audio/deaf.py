@@ -22,6 +22,7 @@ DeafVerdict = Literal[
 ]
 
 ENERGY_THRESHOLD = 0.005
+MIN_UTTERANCE_SECONDS = 0.8
 _VERDICT_SOURCES: dict[DeafVerdict, Subsystem] = {
     "no_audio_frames": "audio",
     "no_transcripts": "stt",
@@ -62,6 +63,7 @@ class CaptureSnapshot:
     interim_count: int
     last_speech_at: float | None = None
     speech_active: bool = False
+    speech_since: float | None = None
     pending_speech_at: float | None = None
     remote_participants: int | None = None
     presence_at: float | None = None
@@ -95,19 +97,37 @@ class CaptureActivity:
             self._snapshot.last_energetic_at = self._snapshot.last_frame_at
 
     def observe_speech(self, *, active: bool) -> None:
-        self._snapshot.speech_active = active
-        self._snapshot.last_speech_at = self._now()
-        if active and self._snapshot.pending_speech_at is None:
-            self._snapshot.pending_speech_at = self._snapshot.last_speech_at
+        snapshot = self._snapshot
+        stamp = self._now()
+        if active and not snapshot.speech_active:
+            snapshot.speech_since = stamp
+        snapshot.speech_active = active
+        snapshot.last_speech_at = stamp
+        since = snapshot.speech_since
+        if (
+            since is not None
+            and snapshot.pending_speech_at is None
+            and stamp - since >= MIN_UTTERANCE_SECONDS
+        ):
+            snapshot.pending_speech_at = since
+        if not active:
+            snapshot.speech_since = None
 
     def observe_transcript(self, *, finalized: bool) -> None:
         stamp = self._now()
         if finalized:
             self._snapshot.finals_delivered += 1
             self._snapshot.last_final_at = stamp
-            self._snapshot.pending_speech_at = stamp if self._snapshot.speech_active else None
+            self._forget_unheard_speech(stamp)
         else:
             self._snapshot.interim_count += 1
+
+    def observe_stt_restart(self) -> None:
+        self._forget_unheard_speech(self._now())
+
+    def _forget_unheard_speech(self, stamp: float) -> None:
+        self._snapshot.pending_speech_at = None
+        self._snapshot.speech_since = stamp if self._snapshot.speech_active else None
 
     def observe_presence(self, count: int | None) -> None:
         stamp = self._now()

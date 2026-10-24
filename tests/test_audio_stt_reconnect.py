@@ -602,3 +602,34 @@ async def test_provider_overload_schedules_a_reconnect_instead_of_failing(
         assert session.reconnect_state() == "idle"
         assert stt.reconnects == 1
         session.raise_if_failed()
+
+
+async def test_a_successful_reconnect_starts_the_new_session_with_a_clean_slate(
+    journal: RecordingJournal,
+) -> None:
+    clock = [1000.0]
+    activity = CaptureActivity(now=lambda: clock[0])
+    activity.mark_ready()
+    activity.observe_speech(active=True)
+    clock[0] += 2.0
+    activity.observe_speech(active=False)
+    assert activity.snapshot().pending_speech_at == 1000.0
+    gate = asyncio.Event()
+    runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
+    stt = _SocketSTT(socket_dead=True)
+    session = MeetingAudioSession(
+        build_run(_Playback(), runner_task),
+        capture=SessionCapture(stt=stt, activity=activity),
+        diagnostics=Diagnostics(journal=journal),
+        runtime=SessionRuntime(now=lambda: clock[0]),
+    )
+    try:
+        session.request_stt_reconnect("no_transcripts")
+        clock[0] += 1.0
+        await session.maintenance_tick(is_busy=False)
+        await settle_reconnect(session)
+    finally:
+        gate.set()
+        await runner_task
+    assert session.reconnect_state() == "idle"
+    assert activity.snapshot().pending_speech_at is None
