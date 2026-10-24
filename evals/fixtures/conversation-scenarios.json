@@ -322,7 +322,8 @@
           "speaker": "speaker-a",
           "claim": "Ayu",
           "expect": {
-            "max_sentences": 2
+            "max_sentences": 2,
+            "allow_question": true
           }
         },
         {
@@ -347,7 +348,8 @@
           "speaker": "speaker-a",
           "claim": "Ayu",
           "expect": {
-            "max_sentences": 2
+            "max_sentences": 2,
+            "allow_question": true
           }
         },
         {
