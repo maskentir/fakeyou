@@ -37,6 +37,7 @@ from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import shape_sentences
 from fakeyou.conversation.thinking_cue import CueSpeaker, CueTurn, ThinkingCue, cue_when_slow
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
+from fakeyou.conversation.turn_judge import JudgeWindow
 from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
 from fakeyou.conversation.turn_recovery import (
     TurnRecovery,
@@ -160,8 +161,13 @@ async def interrupt_speech(floor: SpeechFloor | None, generation: int) -> int:
     return await floor.interrupt()
 
 
-def record_barge_in(journal: JournalSink, trigger: BargeTrigger, words: int) -> None:
-    journal.record("barge_in_detected", source="agent", trigger=trigger, words=words)
+def record_barge_in(
+    journal: JournalSink, trigger: BargeTrigger, words: int, *, decided_by: str | None = None
+) -> None:
+    fields: dict[str, Any] = {"trigger": trigger, "words": words}
+    if decided_by is not None:
+        fields["decided_by"] = decided_by
+    journal.record("barge_in_detected", source="agent", **fields)
 
 
 def _cancel_request_id(active: ActiveSpeech) -> str | None:
@@ -385,6 +391,7 @@ class TurnInput(TypedDict):
     addressing_names: NotRequired[tuple[str, ...]]
     pending: NotRequired[bool]
     admission: NotRequired[Admission]
+    judge_window: NotRequired[JudgeWindow | None]
 
 
 class TurnGraphState(TypedDict):
@@ -401,6 +408,7 @@ class TurnGraphState(TypedDict):
     decision_source: NotRequired[DecisionSource | None]
     admission: NotRequired[Admission]
     delivered: NotRequired[tuple[str, ...]]
+    judge_window: NotRequired[JudgeWindow | None]
     memory_evidence: Annotated[list[MemoryEvidence], retain_evidence]
 
 
@@ -445,9 +453,10 @@ def _prefetch_judgement(state: TurnGraphState, runtime: TurnRuntime) -> None:
     text = state["transcript_text"]
     if judging is None or state.get("pending", False) or not text.strip():
         return
-    judging.cache.prefetch(
-        judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
-    )
+    window = state.get("judge_window")
+    if window is None:
+        window = judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
+    judging.cache.prefetch(window)
 
 
 _NO_THRESHOLDS = JudgeThresholds(reply=1.0, clarify=1.0)

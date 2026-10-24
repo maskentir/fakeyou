@@ -16,7 +16,14 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_judge import JudgeCache, JudgeWindow, TurnJudgement, WindowSource
+from fakeyou.conversation.turn_judge import (
+    SPEAKING_NOW,
+    JudgeCache,
+    JudgeLine,
+    JudgeWindow,
+    TurnJudgement,
+    WindowSource,
+)
 from fakeyou.conversation.turn_lifecycle import PublicPhase, TurnLifecycle, public_phase
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -188,6 +195,29 @@ async def test_interim_is_not_judged_while_a_final_is_in_flight() -> None:
     assert judge.calls == []
 
 
+async def test_the_judge_is_asked_about_the_window_the_ingress_built() -> None:
+    judge = GatedJudge()
+    cache = judging(judge)
+    window = JudgeWindow((), JudgeLine(SPEAKING_NOW, "twin, hello"), twin_speaking=True)
+
+    await build_turn_graph().ainvoke(
+        TurnInput(
+            event=TurnEvent(kind="interim", event_id="i1", at=1.0, payload="twin, hello"),
+            context=ParticipationContext(addressed=False),
+            speaking_generation=0,
+            addressing_names=("twin",),
+            judge_window=window,
+        ),
+        context=TurnRuntime(
+            speaker=SilentSpeaker(), journal=FakeJournal(), responder=FakeResponder(), judging=cache
+        ),
+    )
+    await cache.cache.wait_idle()
+
+    assert len(judge.calls) == 1
+    assert judge.calls[0] is window
+
+
 async def test_repeated_interim_text_while_a_judgement_runs_is_deduped() -> None:
     gate = asyncio.Event()
     judge = GatedJudge(gate=gate)
@@ -204,7 +234,7 @@ async def test_repeated_interim_text_while_a_judgement_runs_is_deduped() -> None
     assert len(judge.calls) == 1
 
 
-async def test_new_interim_text_cancels_the_running_judgement() -> None:
+async def test_new_interim_text_keeps_the_running_judgement() -> None:
     gate = asyncio.Event()
     judge = GatedJudge(gate=gate)
     lifecycle, _ = bound(judge, FakeJournal())
@@ -217,7 +247,7 @@ async def test_new_interim_text_cancels_the_running_judgement() -> None:
     gate.set()
     await settle(lifecycle)
 
-    assert judge.cancelled == 1
+    assert judge.cancelled == 0
     assert len(judge.calls) == 2
 
 

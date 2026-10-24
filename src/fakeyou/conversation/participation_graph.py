@@ -30,6 +30,7 @@ _DECISION_OF_ACTION: dict[str, Literal["speak", "silent", "clarify"]] = {
 class JudgeThresholds:
     reply: float
     clarify: float
+    barge_in: float = 0.6
 
 
 @dataclass(frozen=True, slots=True)

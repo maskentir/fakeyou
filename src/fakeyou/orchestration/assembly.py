@@ -381,6 +381,7 @@ class _ConversationBuilder:
                 twin_names=self._behavior.twin_names,
                 barge_in=self._behavior.barge_in,
                 barge_in_min_words=conversation_settings.barge_in_min_words,
+                barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
                 judge=build_turn_judge(self._settings, names),
@@ -388,6 +389,7 @@ class _ConversationBuilder:
                 judge_thresholds=JudgeThresholds(
                     reply=judge_settings.reply_threshold,
                     clarify=judge_settings.clarify_threshold,
+                    barge_in=judge_settings.barge_in_threshold,
                 ),
                 judge_window_lines=judge_settings.window_lines,
                 chat=self.chat_channel(),
