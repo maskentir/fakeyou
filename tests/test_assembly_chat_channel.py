@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration.assembly import (
@@ -15,9 +16,9 @@ from fakeyou.persistence.brief import BriefPermission, MeetingBrief
 def _brief(*permissions: BriefPermission) -> MeetingBrief:
     return MeetingBrief(
         schema_version="meeting_brief/v2",
-        owner_id="b-owner",
-        twin_id="b-twin",
-        meeting_id="b-meeting",
+        owner_id=SessionId("b-owner"),
+        twin_id=SessionId("b-twin"),
+        meeting_id=SessionId("b-meeting"),
         permissions=frozenset(permissions),
         knowledge_scope="persona_memory",
     )
