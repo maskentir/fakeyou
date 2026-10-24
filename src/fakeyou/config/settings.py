@@ -372,6 +372,8 @@ class TurnJudgeSettings(Section):
     window_lines: int = Field(default=8, gt=0, le=30)
     reply_threshold: float = Field(default=0.60, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
+    early_commit_enabled: bool = True
+    commit_hold_seconds: float = Field(default=0.3, ge=0.0, le=3.0)
 
 
 class MeetingSettings(Section):
