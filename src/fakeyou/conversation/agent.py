@@ -26,27 +26,29 @@ ENDING_RULE = (
     "only when no plausible reading of the request lets you answer."
 )
 REPLY_FORMAT_RULE = (
-    "Reply format: the first line of every reply is 'intent: answer', 'intent: ack', "
-    "'intent: clarify', 'intent: decline', 'intent: silent', 'intent: stop', 'intent: shorter', "
-    "'intent: repeat' or 'intent: louder', followed by ' lang: id' or ' lang: en' for the "
-    "language you answered in, and the spoken words follow on the next line. Use ack for a "
-    "short acknowledgement, answer when you answer a question, clarify only when no reading of "
-    "the request makes sense, decline when you must not agree or decide, and silent when you "
+    "Reply format: every reply starts with the intent, then the language, then the spoken words. "
+    "Write 'intent: answer', 'intent: ack', 'intent: clarify', 'intent: decline', "
+    "'intent: silent', 'intent: stop', 'intent: shorter', 'intent: repeat' or 'intent: louder', "
+    "then 'lang: id' or 'lang: en' for the language you are answering in, then the spoken words "
+    "on the next line. Always write the spoken words, even for an acknowledgement. Use answer "
+    "when you answer a question, ack for a short acknowledgement, clarify only when no reading "
+    "of the request makes sense, decline when you must not agree or decide, and silent when you "
     "should not speak at all. Use stop when the participant asks you to stop talking, shorter "
-    "when they ask you to be more concise, repeat when they ask you to say that again, and "
-    "louder when they ask you to speak louder. Read what the participant means, not the exact "
-    "words they used, and answer in the language they used. Never speak the intent line."
+    "when they ask you to be more concise or to keep it short, repeat when they ask you to say "
+    "that again, and louder when they ask you to speak louder. Read what the participant means "
+    "rather than the exact words, because the words may be half heard. Never speak the intent "
+    "line or the language line."
 )
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (
-        "Your default language is Indonesian: reply in casual spoken Indonesian like a helpful "
-        "coworker, using sentences that sound natural when read aloud. When the participant "
-        "writes in another language, answer in that language."
+        "Reply in the language the participant just used. When their language is unclear, reply "
+        "in casual spoken Indonesian like a helpful coworker, using sentences that sound natural "
+        "when read aloud."
     ),
     "en": (
-        "Your default language is English: reply in casual spoken English like a helpful "
-        "coworker, using sentences that sound natural when read aloud. When the participant "
-        "writes in another language, answer in that language."
+        "Reply in the language the participant just used. When their language is unclear, reply "
+        "in casual spoken English like a helpful coworker, using sentences that sound natural "
+        "when read aloud."
     ),
 }
 DEFAULT_PERSONA = (

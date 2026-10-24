@@ -19,10 +19,10 @@ ReplyIntent = Literal[
 
 INTENT_PREFIX = "intent:"
 INTENT_LINE = re.compile(
-    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b[ \t]*"
-    r"(?:lang:[ \t]*(id|en)\b[ \t]*)?\n?",
+    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b",
     re.IGNORECASE,
 )
+LANG_LINE = re.compile(r"^[ \t]*lang:[ \t]*(id|en)\b", re.IGNORECASE)
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
 CONTROL_INTENTS = frozenset({"stop", "shorter", "repeat", "louder"})
 MAX_HEAD_CHARS = 64
@@ -124,17 +124,16 @@ class ReplyPlanner:
             if stripped.casefold().startswith(INTENT_PREFIX):
                 match = INTENT_LINE.match(head)
                 if match is not None:
-                    self._intent = cast(ReplyIntent, match.group(1).casefold())
+                    intent = cast(ReplyIntent, match.group(1).casefold())
+                    language, rest = _read_language(head[match.end() :])
+                    self._intent = intent
                     self._explicit = True
-                    declared = match.group(2)
-                    if declared is not None:
-                        self._declared_language = declared.casefold()
+                    self._declared_language = language
                     replacement = self._on_intent(self._intent) if self._on_intent else None
                     if replacement is not None:
                         self._replaced = True
                         self._head = ""
                         return replacement
-                    rest = head[match.end() :]
                     self._head = ""
                     return rest
                 if "\n" not in head and len(head) <= MAX_HEAD_CHARS:
@@ -147,6 +146,18 @@ class ReplyPlanner:
                 self._intent = "answer"
         released, self._head = self._head, ""
         return released
+
+
+def _read_language(rest: str) -> tuple[str | None, str]:
+    trimmed = rest.lstrip(" \t")
+    match = LANG_LINE.match(trimmed)
+    if match is not None:
+        return match.group(1).casefold(), trimmed[match.end() :].lstrip("\r\n")
+    after_break = trimmed.lstrip("\r\n")
+    match = LANG_LINE.match(after_break)
+    if match is not None:
+        return match.group(1).casefold(), after_break[match.end() :].lstrip("\r\n")
+    return None, after_break
 
 
 def _drop_first_line(head: str) -> str:
