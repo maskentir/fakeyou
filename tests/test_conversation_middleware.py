@@ -196,7 +196,7 @@ async def test_history_trim_limits_a_chat_request_but_not_its_thread() -> None:
 
     assert result["messages"][-1].text == "Fresh answer."
     seen = model.seen[-1]
-    assert estimate_message_tokens(seen) <= 200
+    assert estimate_message_tokens(seen[1:]) <= 100
     assert seen[-1].content == "new question"
     assert all(
         "xxxxx" not in str(message.content) and "yyyyy" not in str(message.content)
