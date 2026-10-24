@@ -12,6 +12,8 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.state import PublicPhase
 from fakeyou.foundation.invariants import PositiveSeconds, TwinName
 from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 
 
 class MeetingAudio(Protocol):
@@ -68,6 +70,10 @@ class MeetingConversation(Protocol):
     @property
     def is_busy(self) -> bool: ...
 
+    def receive_chat(self, event: TranscriptEvent) -> bool: ...
+
+    def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool: ...
+
     def bind(self, session: MeetingAudio) -> None: ...
 
     async def close(self) -> None: ...
@@ -123,6 +129,8 @@ class SessionConfig:
     per_stream_enabled: bool = False
     meet_actions_enabled: bool = False
     perception_enabled: bool = False
+    attention_enabled: bool = False
+    attention_max_interjections: int = 2
     resume: bool = False
 
 

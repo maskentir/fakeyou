@@ -3,6 +3,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from functools import partial
 from typing import Any, cast
 
@@ -47,6 +48,7 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
 )
 from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
     DEFAULT_MEET_SIGNALS,
@@ -114,12 +116,15 @@ from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.orchestration.presence import PROTOCOL_STALE_SECONDS, AloneClock
+from fakeyou.perception.attention import AttentionPrefilter
+from fakeyou.perception.percepts import ChatLine
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
     DEFAULT_PERCEPTION_SCHEDULE,
     PerceptionDrain,
     load_perception_script,
 )
+from fakeyou.perception.timeline import ChatReceived, TimelineEvent
 
 
 @asynccontextmanager
@@ -235,9 +240,12 @@ class MeetingWorker:
     admission: JoinResult | None = None
     join_started: float | None = None
     presence: AloneClock = field(init=False)
+    attention: AttentionPrefilter = field(init=False)
+    _events_watched: bool = False
 
     def __post_init__(self) -> None:
         self.presence = AloneClock(leave_after_seconds=self.config.alone_leave_seconds)
+        self.attention = AttentionPrefilter(max_per_window=self.config.attention_max_interjections)
         self.begin(
             initial_lifecycle_state(
                 self.config.owner_id, self.config.twin_id, self.config.meeting_id
@@ -604,6 +612,85 @@ class MeetingWorker:
         self.page.on("response", self.perception.sensors.on_response)
         self.perception_sync_watched = True
 
+    def attention_trigger(self) -> str | None:
+        perception = self.perception
+        if perception is None:
+            return None
+        snapshot = perception.timeline.snapshot()
+        screen = snapshot.current_screen
+        if screen is not None and screen.reading is not None:
+            title = screen.reading.title
+            points = screen.reading.key_points
+            detail = "; ".join(point for point in points[:2])
+            return f"The shared screen shows {title or 'a slide'}: {detail}" if detail else (
+                f"The shared screen shows {title or 'a slide'}"
+            )
+        for line in reversed(snapshot.chat):
+            if not line.own:
+                return f"A participant said in chat: {line.text}"
+        return None
+
+    async def offer_attention(self) -> None:
+        conversation = self.conversation
+        if conversation is None or not self.config.attention_enabled:
+            return
+        if conversation.is_busy:
+            return
+        now = self.monotonic()
+        if not self.attention.allow(now):
+            return
+        trigger = self.attention_trigger()
+        if trigger is None:
+            return
+        self.attention.take(now)
+        self.record("attention_observed", source="perception", chars=len(trigger))
+        conversation.receive_attention(
+            TranscriptEvent(
+                id=f"attention-{now:.0f}",
+                timestamp=datetime.now(UTC).isoformat(),
+                source="meeting_attention",
+                text=trigger,
+                finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
+            ),
+            channel="voice",
+        )
+
+    def watch_meeting_events(self) -> None:
+        perception = self.perception
+        if perception is None or self._events_watched:
+            return
+        perception.timeline.subscribe(self._on_timeline_event)
+        self._events_watched = True
+
+    def _on_timeline_event(self, event: TimelineEvent) -> None:
+        if isinstance(event, ChatReceived):
+            self._on_chat_line(event.line)
+
+    def _on_chat_line(self, line: ChatLine) -> None:
+        conversation = self.conversation
+        if conversation is None or line.own or line.backlog:
+            return
+        self.record(
+            "chat_line_observed",
+            source="perception",
+            ref=line.ref,
+            chars=len(line.text),
+        )
+        conversation.receive_chat(
+            TranscriptEvent(
+                id=line.ref,
+                timestamp=line.sent_at.isoformat(),
+                source="meeting_chat",
+                text=line.text,
+                finalized=True,
+                participant_id=line.sender.participant_id,
+                speaker_evidence_id=None,
+                display_claim=line.sender.name or None,
+            )
+        )
+
     def watch_roster_keywords(self) -> None:
         perception = self.perception
         if perception is None:
@@ -631,6 +718,7 @@ class MeetingWorker:
             return
         self.watch_perception_sync()
         self.watch_roster_keywords()
+        self.watch_meeting_events()
         drain = PerceptionDrain(
             self.page,
             self.perception.sensors,
@@ -866,6 +954,7 @@ class MeetingWorker:
             if finished is not None:
                 return finished
             await self._service_conversation()
+            await self.offer_attention()
             remote, finished = await self.check_presence(scan)
             if finished is not None:
                 return finished

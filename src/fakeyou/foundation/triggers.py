@@ -5,6 +5,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 
 MEETING_EVENT = "meeting_event"
 TriggerKind = Literal["speech", "chat", "attention"]
+ReplyChannel = Literal["voice", "chat"]
 TRIGGER_KINDS: frozenset[str] = frozenset(get_args(TriggerKind))
 DEFAULT_TRIGGER_KIND: TriggerKind = "speech"
 
