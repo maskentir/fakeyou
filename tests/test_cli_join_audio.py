@@ -1,11 +1,11 @@
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 import fakeyou.orchestration.assembly as assembly
 from fakeyou.audio.playback import PlaybackEvent
@@ -93,6 +93,12 @@ async def test_join_audio_transcript_reaches_conversation(
         ) -> dict[str, Any]:
             agent_calls.append((request, config))
             return {"messages": [AIMessage(content="Reply.")]}
+
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            agent_calls.append((request, config))
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
     captured = {}
@@ -212,6 +218,13 @@ async def test_join_wake_phrase_gates_agent_replies(
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
 
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            agent_calls.append(request)
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
+
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 
     async def run(config: Any, **kwargs: Any) -> SessionResult:
@@ -248,6 +261,13 @@ async def test_join_barge_in_stops_speaking_session(
             del config
             del request
             return {"messages": [AIMessage(content="Reply.")]}
+
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            del request
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
 
     async def stop_playback() -> None:
         stops.append(True)
@@ -403,6 +423,13 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
             del config
             agent_calls.append(request)
             return {"messages": [AIMessage(content="Reply.")]}
+
+        async def astream(
+            self, request: dict[str, Any], config: dict[str, Any] | None = None, **_: Any
+        ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+            del config
+            agent_calls.append(request)
+            yield AIMessageChunk(content="Reply."), {"langgraph_node": "model"}
 
     monkeypatch.setattr(assembly, "create_meeting_agent", lambda *_args, **_kwargs: FakeAgent())
 

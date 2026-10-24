@@ -1,8 +1,16 @@
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, cast, override
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    ModelRequest,
+    ModelResponse,
+    ModelRetryMiddleware,
+)
 from langchain.agents.structured_output import StructuredOutputValidationError
+from langchain_core.exceptions import ModelError
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
@@ -14,6 +22,7 @@ from langchain_core.messages import (
 
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.meet.meet_tools import MEET_SEND_CHAT
+from fakeyou.observability.provider_faults import classify_exception
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
 TOKENS_PER_MESSAGE = 2
@@ -204,3 +213,32 @@ class PlainReplyMiddleware(AgentMiddleware[Any, Any, Any]):
             return await handler(request)
         except StructuredOutputValidationError as error:
             return ModelResponse(result=[error.ai_message])
+
+
+@dataclass(slots=True)
+class SpeechMark:
+    started: bool = False
+
+
+SPEECH_MARK: ContextVar[SpeechMark | None] = ContextVar("speech_mark", default=None)
+REPLY_RETRIES = 1
+REPLY_RETRY_DELAY_SECONDS = 0.2
+
+
+def retry_before_speech(error: Exception) -> bool:
+    mark = SPEECH_MARK.get()
+    if mark is not None and mark.started:
+        return False
+    if isinstance(error, ModelError):
+        return error.is_retryable
+    return classify_exception("llm", error).retryable
+
+
+def create_reply_retry_middleware() -> ModelRetryMiddleware:
+    return ModelRetryMiddleware(
+        max_retries=REPLY_RETRIES,
+        retry_on=retry_before_speech,
+        on_failure="error",
+        initial_delay=REPLY_RETRY_DELAY_SECONDS,
+        max_delay=REPLY_RETRY_DELAY_SECONDS,
+    )

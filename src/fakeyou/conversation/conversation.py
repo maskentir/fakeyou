@@ -19,6 +19,7 @@ from fakeyou.conversation.meeting_messages import (
     last_twin_text,
     request_messages,
 )
+from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
     ReplyIntent,
@@ -412,29 +413,6 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
         )
 
 
-async def _fallback_sentences(
-    agent: MeetingAgent,
-    messages: Sequence[BaseMessage],
-    config: RunnableConfig,
-    state: _SentenceStream,
-    trace: StreamTrace,
-) -> AsyncIterator[SpokenChunk]:
-    reply = await invoke_reply(agent, messages, config, trace=trace)
-    _record_reply_text(state, reply)
-    planned = planned_reply(reply, max_sentences=state.max_sentences, language=state.language)
-    capped_text = cap_spoken_reply(planned.text, state.max_sentences, planned.language)
-    _record_reply_cap(state, reply, capped_text)
-    state.language = planned.language
-    state.buffer = capped_text.strip()
-    for sentence in state.drain():
-        yield SpokenChunk(text=sentence, language=planned.language)
-    rest = state.buffer.strip()
-    if rest:
-        state.record_sentence(rest)
-        state.yielded += 1
-        yield SpokenChunk(text=rest, language=planned.language)
-
-
 async def stream_sentences(
     agent: MeetingAgent,
     messages: Sequence[BaseMessage],
@@ -455,6 +433,8 @@ async def stream_sentences(
     planner = ReplyPlanner(
         max_sentences=max_sentences, language=trace.language, on_intent=trace.on_intent
     )
+    mark = SpeechMark()
+    marked = SPEECH_MARK.set(mark)
     try:
         stream: AsyncIterator[Any] = agent.astream(
             {"messages": list(messages)},
@@ -463,17 +443,17 @@ async def stream_sentences(
         )
         try:
             async for sentence in _pump_stream(stream, state, phase, planner):
+                mark.started = True
                 yield sentence
         finally:
             await _close_stream_optional(stream, trace.journal)
     except (TimeoutError, FakeYouError):
         raise
     except Exception as error:
-        if state.yielded:
-            raise classify_exception("agent", error) from error
         _record_stream_failure(state, started)
-        async for chunk in _fallback_sentences(agent, messages, config, state, trace):
-            yield chunk
+        raise classify_exception("agent", error) from error
+    finally:
+        SPEECH_MARK.reset(marked)
 
 
 @dataclass(frozen=True, slots=True)

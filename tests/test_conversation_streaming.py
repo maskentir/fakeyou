@@ -595,22 +595,21 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     await loop.lifecycle.close()
 
 
-async def test_stream_failure_before_first_sentence_falls_back_to_full_reply(
+async def test_stream_failure_fails_the_turn_without_re_running_the_agent(
     journal: RecordingJournal,
 ) -> None:
     agent = ScriptedAgent(
         [("error", RuntimeError("stream unsupported"))],
-        fallback_reply="Full reply one. Full reply two. Full reply three.",
+        fallback_reply="Full reply one. Full reply two.",
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
     await loop.ingress.receive_final(event("t1", "hello"))
     await loop.lifecycle.wait_idle()
-    assert audio.spoken == ["Full reply one.", "Full reply two."]
+    assert "Full reply one." not in audio.spoken
     [failed] = [row for row in journal.events("agent_failed") if row.get("detail") == "stream"]
     assert failed["request_id"] == "t1:1"
-    assert journal.events("agent_finished") != []
-    assert len(agent.ainvoke_calls) == 1
+    assert agent.ainvoke_calls == []
     await loop.lifecycle.close()
 
 
