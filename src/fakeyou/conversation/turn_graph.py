@@ -18,6 +18,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.conversation import cap_spoken_reply
 from fakeyou.conversation.jev_refresh import JevKick, JevState, kick_jev_refresh, turn_jev_key
 from fakeyou.conversation.memory_prefetch import (
     MemoryPrefetch,
@@ -37,7 +38,7 @@ from fakeyou.conversation.participation_graph import (
     build_participation_subgraph,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.sentence_stream import cap_reply, shape_sentences
+from fakeyou.conversation.sentence_stream import shape_sentences
 from fakeyou.conversation.thinking_cue import CueSpeaker, CueTurn, ThinkingCue, cue_when_slow
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
@@ -1203,7 +1204,7 @@ def _spoken_reply(
     spoken = (
         text
         if context.sentences is None
-        else cap_reply(text, context.sentences.max_sentences, reply.language)
+        else cap_spoken_reply(text, context.sentences.max_sentences, reply.language)
     )
     if spoken != text:
         context.journal.record(

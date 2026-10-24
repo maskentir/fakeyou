@@ -1,5 +1,5 @@
 import time
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol, override, runtime_checkable
@@ -27,8 +27,9 @@ from fakeyou.conversation.reply_planner import (
     SpokenChunk,
     planned_reply,
 )
+from fakeyou.conversation.sentence_stream import SentenceStream
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.sentences import sentence_end
+from fakeyou.foundation.sentences import split_sentences
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
@@ -184,19 +185,22 @@ class _StreamPhase(_ToolActivity):
             self.boundary += 1
 
 
-@dataclass(slots=True)
-class _SentenceStream:
-    request_id: str
-    transcript_id: str | None
-    max_sentences: int
-    language: str
-    journal: Journal | None
-    buffer: str = ""
-    yielded: int = 0
-    spoken_chars: int = 0
-    observed_chars: int = 0
-    first_text: bool = False
-    capped: bool = False
+class _SentenceStream(SentenceStream):
+    def __init__(
+        self,
+        request_id: str,
+        transcript_id: str | None,
+        max_sentences: int,
+        language: str,
+        journal: Journal | None,
+    ) -> None:
+        super().__init__(max_sentences, language)
+        self.request_id = request_id
+        self.transcript_id = transcript_id
+        self.journal = journal
+        self.spoken_chars = 0
+        self.observed_chars = 0
+        self.first_text = False
 
     def note_text(self, piece: str) -> None:
         self.observed_chars += len(piece)
@@ -210,51 +214,38 @@ class _SentenceStream:
                     transcript_id=self.transcript_id,
                 )
 
-    def record_sentence(self, sentence: str) -> None:
+    def record_sentence(self, sentence: str, index: int | None = None) -> None:
         if self.journal is not None:
             self.journal.record(
                 "answer_sentence_emitted",
                 source="agent",
                 request_id=self.request_id,
                 transcript_id=self.transcript_id,
-                sentence_index=self.yielded,
+                sentence_index=self.yielded if index is None else index,
                 chars=len(sentence),
             )
 
-    def drain(self) -> Iterator[str]:
-        while self.yielded < self.max_sentences:
-            boundary = sentence_end(self.buffer, language=self.language)
-            if not boundary:
-                break
-            sentence, self.buffer = (
-                self.buffer[:boundary].strip(),
-                self.buffer[boundary:].lstrip(),
-            )
-            if not sentence:
-                continue
-            self.record_sentence(sentence)
-            self.yielded += 1
+    @override
+    def take(self, piece: str) -> list[str]:
+        start = self.yielded
+        sentences = super().take(piece)
+        for offset, sentence in enumerate(sentences):
+            self.record_sentence(sentence, start + offset)
             self.spoken_chars += len(sentence) + (1 if self.spoken_chars else 0)
-            yield sentence
+        return sentences
 
+    @override
     def check_cap(self) -> bool:
-        if self.yielded >= self.max_sentences and self.buffer.strip():
-            if self.journal is not None:
-                self.journal.record(
-                    "reply_capped",
-                    source="agent",
-                    request_id=self.request_id,
-                    chars_in=self.observed_chars,
-                    chars_out=self.spoken_chars,
-                )
-            self.capped = True
-            return True
-        return False
-
-    def flush(self) -> str | None:
-        if not self.capped and self.yielded < self.max_sentences and self.buffer.strip():
-            return self.buffer.strip()
-        return None
+        capped = super().check_cap()
+        if capped and self.journal is not None:
+            self.journal.record(
+                "reply_capped",
+                source="agent",
+                request_id=self.request_id,
+                chars_in=self.observed_chars,
+                chars_out=self.spoken_chars,
+            )
+        return capped
 
 
 def _filter_piece(
@@ -343,11 +334,10 @@ def _planned_piece(
     if not content:
         return []
     state.note_text(content)
-    state.buffer += content
     state.max_sentences = planner.max_sentences
     state.language = planner.language
     spoken: list[str] = []
-    for sentence in state.drain():
+    for sentence in state.take(content):
         spoken.extend(planner.take_sentence(sentence))
     return [SpokenChunk(text=sentence, language=planner.language) for sentence in spoken]
 
@@ -558,15 +548,4 @@ def cap_spoken_reply(
         raise ValueError("max_sentences must be positive")
     if not reply.strip():
         return reply
-    remaining = reply.strip()
-    sentences: list[str] = []
-    for _ in range(max_sentences):
-        boundary = sentence_end(remaining, language=language)
-        if not boundary:
-            sentences.append(remaining)
-            break
-        sentences.append(remaining[:boundary].strip())
-        remaining = remaining[boundary:].strip()
-        if not remaining:
-            break
-    return " ".join(sentences)
+    return " ".join(split_sentences(reply, language=language)[:max_sentences])

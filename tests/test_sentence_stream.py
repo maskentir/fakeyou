@@ -14,8 +14,6 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import (
     SentenceStream,
-    cap_reply,
-    model_text,
     shape_sentences,
 )
 from fakeyou.conversation.turn_graph import (
@@ -23,6 +21,7 @@ from fakeyou.conversation.turn_graph import (
     SpeechRuntime,
     build_speech_graph,
 )
+from tests._model_responder import model_text
 
 MODEL_NODE = {"langgraph_node": "model"}
 
@@ -55,8 +54,7 @@ def _loop_pump(steps: Sequence[str | None], max_sentences: int, language: str = 
         )
         if not consumable:
             continue
-        state.buffer += piece
-        sentences.extend(state.drain())
+        sentences.extend(state.take(piece))
         if state.check_cap():
             return sentences
     tail = state.flush()
@@ -205,16 +203,16 @@ def test_model_text_keeps_text_exactly_as_produced_without_rewriting() -> None:
 def test_cap_reply_matches_the_loop_whole_reply_cap() -> None:
     reply = "One. Two. Three. Four."
 
-    assert cap_reply(reply, 2, "en") == cap_spoken_reply(reply, 2, "en") == "One. Two."
+    assert cap_spoken_reply(reply, 2, "en") == "One. Two."
 
 
 def test_cap_reply_keeps_a_blank_reply_unchanged() -> None:
-    assert cap_reply("   ", 2, "en") == cap_spoken_reply("   ", 2, "en") == "   "
+    assert cap_spoken_reply("   ", 2, "en") == "   "
 
 
 def test_cap_reply_rejects_a_non_positive_limit() -> None:
     with pytest.raises(ValueError, match="max_sentences must be positive"):
-        cap_reply("One.", 0, "en")
+        cap_spoken_reply("One.", 0, "en")
 
 
 class _CappingResponder:

@@ -5,7 +5,6 @@ from typing import Any
 from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.model_responder import ModelResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechInput,
@@ -16,6 +15,7 @@ from fakeyou.conversation.turn_graph import (
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
 TOOLS_NODE = {"langgraph_node": "tools"}

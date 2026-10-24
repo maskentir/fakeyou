@@ -87,3 +87,13 @@ def sentence_end(text: str, *, language: str | None = None) -> int:
     if len(sentences) > 1:
         return len(first_sentence)
     return 0
+
+
+def split_sentences(text: str, *, language: str | None = None) -> list[str]:
+    sentences: list[str] = []
+    remaining = text.strip()
+    while remaining:
+        boundary = sentence_end(remaining, language=language) or len(remaining)
+        sentences.append(remaining[:boundary].strip())
+        remaining = remaining[boundary:].strip()
+    return [sentence for sentence in sentences if sentence]

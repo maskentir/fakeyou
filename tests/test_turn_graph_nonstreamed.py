@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
-from fakeyou.conversation.model_responder import ModelResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
@@ -23,6 +22,7 @@ from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import SilentSpeaker
+from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")

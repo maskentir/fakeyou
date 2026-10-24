@@ -1,7 +1,5 @@
 from collections.abc import AsyncIterator
 
-from langchain_core.messages import BaseMessage
-
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.sentences import sentence_end
 
@@ -53,14 +51,6 @@ class SentenceStream:
         return None
 
 
-def model_text(message: object, metadata: object, *, tool_pending: bool) -> str:
-    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model":
-        return ""
-    if tool_pending or not isinstance(message, BaseMessage):
-        return ""
-    return message.text
-
-
 async def shape_sentences(
     chunks: AsyncIterator[SpokenChunk], *, max_sentences: int, language: str
 ) -> AsyncIterator[SpokenChunk]:
@@ -74,22 +64,3 @@ async def shape_sentences(
     tail = stream.flush()
     if tail is not None:
         yield SpokenChunk(text=tail, language=language)
-
-
-def cap_reply(reply: str, max_sentences: int, language: str) -> str:
-    if max_sentences <= 0:
-        raise ValueError("max_sentences must be positive")
-    if not reply.strip():
-        return reply
-    remaining = reply.strip()
-    sentences: list[str] = []
-    for _ in range(max_sentences):
-        boundary = sentence_end(remaining, language=language)
-        if not boundary:
-            sentences.append(remaining)
-            break
-        sentences.append(remaining[:boundary].strip())
-        remaining = remaining[boundary:].strip()
-        if not remaining:
-            break
-    return " ".join(sentences)

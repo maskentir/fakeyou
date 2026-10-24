@@ -5,7 +5,7 @@ from typing import Literal, cast, get_args
 from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, ConfigDict, Field
 
-from fakeyou.foundation.sentences import sentence_end
+from fakeyou.foundation.sentences import split_sentences
 
 ReplyIntent = Literal[
     "answer",
@@ -171,19 +171,6 @@ class ReplyPlanner:
         fresh = text[self._released :]
         self._released = len(text)
         return fresh
-
-
-def split_sentences(text: str, *, language: str) -> list[str]:
-    sentences: list[str] = []
-    remaining = text.strip()
-    while remaining:
-        boundary = sentence_end(remaining, language=language)
-        if not boundary:
-            sentences.append(remaining)
-            break
-        sentences.append(remaining[:boundary].strip())
-        remaining = remaining[boundary:].strip()
-    return [sentence for sentence in sentences if sentence]
 
 
 def planned_reply(

@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
-from fakeyou.conversation.model_responder import ModelResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechFloor,
@@ -30,6 +29,7 @@ from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
+from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = "".join(

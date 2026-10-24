@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import meeting_turns, turn_graph
-from fakeyou.conversation.model_responder import ModelResponder, ReplierWholeResponder
+from fakeyou.conversation.model_responder import ReplierWholeResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
@@ -18,6 +18,7 @@ from fakeyou.conversation.turn_graph import (
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")

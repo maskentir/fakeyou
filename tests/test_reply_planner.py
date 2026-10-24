@@ -1,6 +1,7 @@
 import json
 
-from fakeyou.conversation.reply_planner import ReplyPlanner, planned_reply, split_sentences
+from fakeyou.conversation.reply_planner import ReplyPlanner, planned_reply
+from fakeyou.foundation.sentences import split_sentences
 
 
 def plan(text: str, *, intent: str = "answer", language: str = "en") -> str:
