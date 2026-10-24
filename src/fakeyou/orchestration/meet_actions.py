@@ -206,3 +206,15 @@ async def readback_effect(
     if kind == "raise_hand":
         return await observe_hand_raised(page, signals)
     return await observe_hand_lowered(page, signals)
+
+
+class MeetChatChannel:
+    def __init__(self, dispatcher: MeetActionDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    async def send(self, text: str, *, transcript_id: str) -> bool:
+        try:
+            self._dispatcher.request("send_chat", action_id=transcript_id, text=text)
+        except FakeYouError:
+            return False
+        return True

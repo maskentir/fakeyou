@@ -622,8 +622,10 @@ class MeetingWorker:
             title = screen.reading.title
             points = screen.reading.key_points
             detail = "; ".join(point for point in points[:2])
-            return f"The shared screen shows {title or 'a slide'}: {detail}" if detail else (
-                f"The shared screen shows {title or 'a slide'}"
+            return (
+                f"The shared screen shows {title or 'a slide'}: {detail}"
+                if detail
+                else (f"The shared screen shows {title or 'a slide'}")
             )
         for line in reversed(snapshot.chat):
             if not line.own:
