@@ -36,9 +36,10 @@ Tujuan: setiap fase berikutnya punya angka pembanding yang bisa diulang.
 ### 0.1 Scorecard sesi
 
 - Perluas `observability/report.py`, bukan sistem baru. Tambah bagian `scorecard` yang menilai metrik yang sudah
-  dihitung report terhadap target di `evals/fixtures/session-targets.json` (versi beku, berubah lewat PR).
+  dihitung report terhadap target beku di `src/fakeyou/session_targets.json`. Target disimpan sebagai resource paket
+  supaya `fakeyou report` di produksi juga memakainya, dan berubah hanya lewat PR.
 - Metrik awal:
-  - p50 dan p95 `final_to_reply_seconds` dan `speech_stopped_to_first_pcm_seconds`;
+  - p50 dan p95 `speech_stopped_to_first_pcm_seconds` (latency yang dirasakan lawan bicara);
   - laju `trailing_questions` per balasan;
   - fault per jam;
   - `attribution_coverage`;
@@ -97,7 +98,9 @@ Tujuan: setiap fase berikutnya punya angka pembanding yang bisa diulang.
 
 ### Kriteria lolos Fase 0
 
-- Scorecard muncul di `fakeyou report` dan lulus untuk `live-qvr-2`.
+- Scorecard muncul di `fakeyou report` dan menilai sesi live yang ada sesuai kenyataan. Sesi yang mati gagal di
+  `session_completed`. `live-qvr-2` hanya gagal di watchdog, yang terbukti disebabkan beban test paralel di host yang
+  sama.
 - Replay percakapan berjalan dari satu perintah, menghasilkan laporan per keluarga, dan baseline terekam.
 - Judge lulus kalibrasi.
 
