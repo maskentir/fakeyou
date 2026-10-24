@@ -41,7 +41,7 @@ def test_the_planner_hands_the_intent_to_the_handler() -> None:
     planner = ReplyPlanner(
         max_sentences=2, language="en", on_intent=lambda _intent: seen.append(_intent)
     )
-    planner.feed("intent: shorter\nOkay, shorter.")
+    planner.feed('{"language": "en", "intent": "shorter", "text": "Okay, shorter."}')
 
     assert seen == ["shorter"]
     assert planner.intent == "shorter"
@@ -52,8 +52,10 @@ def test_the_planner_keeps_the_words_the_handler_returns() -> None:
         max_sentences=2, language="en", on_intent=lambda _intent: "Earlier sentence."
     )
 
-    assert planner.feed("intent: repeat\nLet me say that again.") == "Earlier sentence."
-    assert planner.feed(" and more text") == ""
+    assert (
+        planner.feed('{"language": "en", "intent": "repeat", "text": "Let me say that again."}')
+        == "Earlier sentence."
+    )
 
 
 def test_a_shorter_plan_lowers_the_sentence_budget() -> None:
@@ -114,7 +116,9 @@ def test_a_louder_plan_asks_the_session_for_more_volume() -> None:
 def test_the_control_intents_are_spoken_as_one_short_sentence() -> None:
     assert (
         planned_reply(
-            "intent: shorter\nOkay, shorter. Anything else?", max_sentences=2, language="en"
+            '{"language": "en", "intent": "shorter", "text": "Okay, shorter. Anything else?"}',
+            max_sentences=2,
+            language="en",
         ).text
         == "Okay, shorter."
     )
@@ -123,7 +127,9 @@ def test_the_control_intents_are_spoken_as_one_short_sentence() -> None:
 def test_a_stop_plan_keeps_the_acknowledgement_short() -> None:
     assert (
         planned_reply(
-            "intent: stop\nOkay, stopping. Anything else?", max_sentences=2, language="en"
+            '{"language": "en", "intent": "stop", "text": "Okay, stopping. Anything else?"}',
+            max_sentences=2,
+            language="en",
         ).text
         == "Okay, stopping."
     )

@@ -1,7 +1,9 @@
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, cast, get_args
+
+from langchain_core.utils.json import parse_partial_json
+from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.foundation.sentences import sentence_end
 
@@ -16,18 +18,41 @@ ReplyIntent = Literal[
     "repeat",
     "louder",
 ]
+ReplyLanguage = Literal["id", "en"]
 
-INTENT_PREFIX = "intent:"
-INTENT_LINE = re.compile(
-    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b",
-    re.IGNORECASE,
-)
-LANG_LINE = re.compile(r"^[ \t]*lang:[ \t]*(id|en)\b", re.IGNORECASE)
+REPLY_INTENTS: frozenset[str] = frozenset(get_args(ReplyIntent))
+REPLY_LANGUAGES: frozenset[str] = frozenset(get_args(ReplyLanguage))
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
-CONTROL_INTENTS = frozenset({"stop", "shorter", "repeat", "louder"})
-MAX_HEAD_CHARS = 64
+JSON_START = "{"
 
-IntentHandler = Callable[["ReplyIntent"], "str | None"]
+IntentHandler = Callable[[ReplyIntent], str | None]
+
+
+class ReplyPlan(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    language: ReplyLanguage = Field(
+        description=(
+            "The language of the participant's last line: en when its words are mostly English, "
+            "id when they are mostly Indonesian. Names, the meeting topic, the speaking style and "
+            "the default language do not count. The spoken text uses this language."
+        )
+    )
+    intent: ReplyIntent = Field(
+        description=(
+            "What this reply does. answer: answers a question. ack: a short acknowledgement. "
+            "clarify: only when no reading of the request makes sense. decline: you must not "
+            "agree, approve or decide. silent: you should not speak at all. stop, shorter, repeat, "
+            "louder: the participant asked you to stop talking, to be more concise, to say that "
+            "again, or to speak louder; the text is then only a few words acknowledging it."
+        )
+    )
+    text: str = Field(
+        description=(
+            "The words you speak aloud, in the chosen language, one or two short sentences. Empty "
+            "when the intent is silent."
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,23 +71,24 @@ class ReplyPlanner:
     ) -> None:
         self._max_sentences = max_sentences
         self._language = language
-        self._declared_language: str | None = None
         self._on_intent = on_intent
-        self._head = ""
-        self._intent: ReplyIntent | None = None
-        self._explicit = False
-        self._replaced = False
+        self._raw = ""
+        self._released = 0
+        self._structured: bool | None = None
+        self._declared_language: str | None = None
+        self._declared_intent: ReplyIntent | None = None
+        self._replacement: str | None = None
         self._held: str | None = None
         self._short_spoken = False
         self._spoken = 0
 
     @property
     def intent(self) -> ReplyIntent:
-        return self._intent if self._intent is not None else "answer"
+        return self._declared_intent or "answer"
 
     @property
     def explicit(self) -> bool:
-        return self._explicit
+        return self._declared_intent is not None
 
     @property
     def max_sentences(self) -> int:
@@ -77,13 +103,11 @@ class ReplyPlanner:
         return self._declared_language or self._language
 
     def feed(self, piece: str) -> str:
-        self._head += piece
-        return self._release()
+        self._raw += piece
+        return self._release(final=False)
 
     def finish(self) -> str:
-        if self._intent is None:
-            self._intent = "answer"
-        return self._release()
+        return self._release(final=True)
 
     def take_sentence(self, sentence: str) -> list[str]:
         if self.silent:
@@ -94,7 +118,7 @@ class ReplyPlanner:
             self._short_spoken = True
             self._spoken += 1
             return [sentence]
-        if self._explicit and self.intent == "answer" and sentence.rstrip().endswith("?"):
+        if self.explicit and self.intent == "answer" and sentence.rstrip().endswith("?"):
             self._held = sentence
             return []
         spoken: list[str] = []
@@ -114,56 +138,39 @@ class ReplyPlanner:
         self._spoken += 1
         return [held]
 
-    def _release(self) -> str:
-        if self._replaced:
-            self._head = ""
-            return ""
-        if self._intent is None:
-            head = self._head
-            stripped = head.lstrip()
-            if stripped.casefold().startswith(INTENT_PREFIX):
-                match = INTENT_LINE.match(head)
-                if match is not None:
-                    intent = cast(ReplyIntent, match.group(1).casefold())
-                    language, rest = _read_language(head[match.end() :])
-                    self._intent = intent
-                    self._explicit = True
-                    self._declared_language = language
-                    replacement = self._on_intent(self._intent) if self._on_intent else None
-                    if replacement is not None:
-                        self._replaced = True
-                        self._head = ""
-                        return replacement
-                    self._head = ""
-                    return rest
-                if "\n" not in head and len(head) <= MAX_HEAD_CHARS:
-                    return ""
-                self._intent = "answer"
-                self._head = _drop_first_line(head)
-            elif stripped and INTENT_PREFIX.startswith(stripped.casefold()):
+    def _release(self, *, final: bool) -> str:
+        if self._structured is None:
+            body = self._raw.lstrip()
+            if not body:
                 return ""
-            else:
-                self._intent = "answer"
-        released, self._head = self._head, ""
-        return released
+            self._structured = body.startswith(JSON_START)
+        if not self._structured:
+            return self._take_text(self._raw)
+        plan = parse_partial_json(self._raw.lstrip())
+        if not isinstance(plan, dict) or not self._read_plan(plan, final=final):
+            return ""
+        text = self._replacement if self._replacement is not None else plan.get("text")
+        return self._take_text(text) if isinstance(text, str) else ""
 
+    def _read_plan(self, plan: dict[str, object], *, final: bool) -> bool:
+        if self._declared_intent is not None:
+            return True
+        if "text" not in plan and not final:
+            return False
+        language = plan.get("language")
+        if isinstance(language, str) and language in REPLY_LANGUAGES:
+            self._declared_language = language
+        intent = plan.get("intent")
+        known = isinstance(intent, str) and intent in REPLY_INTENTS
+        self._declared_intent = cast(ReplyIntent, intent) if known else "answer"
+        if self._on_intent is not None:
+            self._replacement = self._on_intent(self.intent)
+        return True
 
-def _read_language(rest: str) -> tuple[str | None, str]:
-    trimmed = rest.lstrip(" \t")
-    match = LANG_LINE.match(trimmed)
-    if match is not None:
-        return match.group(1).casefold(), trimmed[match.end() :].lstrip("\r\n")
-    after_break = trimmed.lstrip("\r\n")
-    match = LANG_LINE.match(after_break)
-    if match is not None:
-        return match.group(1).casefold(), after_break[match.end() :].lstrip("\r\n")
-    return None, after_break
-
-
-def _drop_first_line(head: str) -> str:
-    if "\n" in head:
-        return head.split("\n", 1)[1]
-    return ""
+    def _take_text(self, text: str) -> str:
+        fresh = text[self._released :]
+        self._released = len(text)
+        return fresh
 
 
 def split_sentences(text: str, *, language: str) -> list[str]:

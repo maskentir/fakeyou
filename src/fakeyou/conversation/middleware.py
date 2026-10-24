@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast, override
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
@@ -179,3 +180,27 @@ class SpeakerAttributionMiddleware(AgentMiddleware[Any, Any, Any]):
         return await handler(
             request.override(messages=[attributed(message) for message in request.messages])
         )
+
+
+class PlainReplyMiddleware(AgentMiddleware[Any, Any, Any]):
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]:
+        try:
+            return handler(request)
+        except StructuredOutputValidationError as error:
+            return ModelResponse(result=[error.ai_message])
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        try:
+            return await handler(request)
+        except StructuredOutputValidationError as error:
+            return ModelResponse(result=[error.ai_message])

@@ -217,7 +217,13 @@ async def test_streamed_reply_matches_cap_across_languages(
 
 async def test_the_declared_language_reaches_the_speaker(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
-        [("chunk", "intent: answer lang: en\nThe launch is on 14 October.", "model")]
+        [
+            (
+                "chunk",
+                '{"language": "en", "intent": "answer", "text": "The launch is on 14 October."}',
+                "model",
+            )
+        ]
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="id")
@@ -231,8 +237,8 @@ async def test_the_declared_language_reaches_the_speaker(journal: RecordingJourn
 async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
-            ("chunk", "intent: sil", "model"),
-            ("chunk", "ent\nI would have said something.", "model"),
+            ("chunk", '{"language": "en", "intent": "sil', "model"),
+            ("chunk", 'ent", "text": "I would have said something."}', "model"),
         ]
     )
     audio = FakeReplyAudio()
@@ -244,7 +250,9 @@ async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
 
 
 async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> None:
-    agent = ScriptedAgent([("chunk", "intent: ack\nOkay. More to say.", "model")])
+    agent = ScriptedAgent(
+        [("chunk", '{"language": "id", "intent": "ack", "text": "Okay. More to say."}', "model")]
+    )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
     await loop.ingress.receive_final(event("t1", "hello"))
@@ -255,7 +263,14 @@ async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> Non
 
 async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
-        [("chunk", "intent: answer\nThe launch is on 14 October. Anything else?", "model")]
+        [
+            (
+                "chunk",
+                '{"language": "en", "intent": "answer", '
+                '"text": "The launch is on 14 October. Anything else?"}',
+                "model",
+            )
+        ]
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="en")

@@ -13,7 +13,6 @@ from fakeyou.config.settings import RecallStrategy, Settings
 from fakeyou.conversation.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
-    REPLY_FORMAT_RULE,
     SPOKEN_LANGUAGE_GUIDANCE,
 )
 from fakeyou.foundation.digest import canonical_json_digest
@@ -318,7 +317,6 @@ def build_system_prompt(
         sections.append(PROVENANCE_RULE)
     sections.append(NATURAL_SPEECH_RULE)
     sections.append(ENDING_RULE)
-    sections.append(REPLY_FORMAT_RULE)
     return "\n\n".join(sections)
 
 

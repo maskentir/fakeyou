@@ -3,7 +3,7 @@ import json
 import pytest
 
 from fakeyou.config.settings import RecallStrategy
-from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, REPLY_FORMAT_RULE
+from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.memory.persona import (
     BRIEF_RULES,
     GOALS_RULE,
@@ -227,7 +227,7 @@ def test_default_persona_keeps_indonesian_guidance() -> None:
 def test_build_persona_ends_with_the_ending_rule(overrides: dict[str, object]) -> None:
     prompt = build_system_prompt(profile(**overrides))
 
-    assert prompt.endswith(REPLY_FORMAT_RULE)
+    assert prompt.endswith(ENDING_RULE)
     assert prompt.count(ENDING_RULE) == 1
 
 
@@ -235,13 +235,8 @@ def test_build_persona_puts_speech_rules_at_the_end_of_the_prompt() -> None:
     sections = build_system_prompt(profile()).split("\n\n")
     without_recall = build_system_prompt(profile(allowed_tools=[])).split("\n\n")
 
-    assert sections[-4:] == [
-        PROVENANCE_RULE,
-        NATURAL_SPEECH_RULE,
-        ENDING_RULE,
-        REPLY_FORMAT_RULE,
-    ]
-    assert without_recall[-3:] == [NATURAL_SPEECH_RULE, ENDING_RULE, REPLY_FORMAT_RULE]
+    assert sections[-3:] == [PROVENANCE_RULE, NATURAL_SPEECH_RULE, ENDING_RULE]
+    assert without_recall[-2:] == [NATURAL_SPEECH_RULE, ENDING_RULE]
     assert PROVENANCE_RULE not in without_recall
 
 
@@ -382,17 +377,13 @@ def test_brief_without_permissions_keeps_the_permission_rules(
 @pytest.mark.parametrize(
     ("scope", "allowed_tools", "tail"),
     [
-        (
-            "brief_only",
-            ["recall_meeting_context"],
-            [NATURAL_SPEECH_RULE, ENDING_RULE, REPLY_FORMAT_RULE],
-        ),
+        ("brief_only", ["recall_meeting_context"], [NATURAL_SPEECH_RULE, ENDING_RULE]),
         (
             "persona_memory",
             ["recall_meeting_context"],
-            [PROVENANCE_RULE, NATURAL_SPEECH_RULE, ENDING_RULE, REPLY_FORMAT_RULE],
+            [PROVENANCE_RULE, NATURAL_SPEECH_RULE, ENDING_RULE],
         ),
-        ("persona_memory", [], [NATURAL_SPEECH_RULE, ENDING_RULE, REPLY_FORMAT_RULE]),
+        ("persona_memory", [], [NATURAL_SPEECH_RULE, ENDING_RULE]),
     ],
 )
 def test_brief_prompt_keeps_speech_rules_at_the_end(

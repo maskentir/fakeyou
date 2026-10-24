@@ -1,7 +1,6 @@
 from typing import Any
 
 import pytest
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
@@ -13,7 +12,6 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
     ENDING_RULE,
-    REPLY_FORMAT_RULE,
     create_meeting_agent,
 )
 from fakeyou.conversation.session import SessionConfig
@@ -32,7 +30,7 @@ def test_default_persona_instructs_casual_spoken_indonesian() -> None:
 
 
 def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
-    model = FakeMessagesListChatModel(
+    model = ToolCallingFakeModel(
         responses=[AIMessage(content="first"), AIMessage(content="second")]
     )
     agent = create_meeting_agent(model, checkpointer=InMemorySaver())
@@ -58,14 +56,14 @@ async def test_agent_reopens_postgres_checkpoint_for_same_thread(
     config: RunnableConfig = {"configurable": {"thread_id": "durable-thread"}}
     async with open_checkpointer(migrated_database_url) as saver:
         first_agent = create_meeting_agent(
-            FakeMessagesListChatModel(responses=[AIMessage(content="remembered")]),
+            ToolCallingFakeModel(responses=[AIMessage(content="remembered")]),
             checkpointer=saver,
         )
         await first_agent.ainvoke({"messages": [{"role": "user", "content": "keep this"}]}, config)
 
     async with open_checkpointer(migrated_database_url) as saver:
         second_agent = create_meeting_agent(
-            FakeMessagesListChatModel(responses=[AIMessage(content="reopened")]),
+            ToolCallingFakeModel(responses=[AIMessage(content="reopened")]),
             checkpointer=saver,
         )
         result = await second_agent.ainvoke(
@@ -77,8 +75,7 @@ async def test_agent_reopens_postgres_checkpoint_for_same_thread(
 
 
 def test_default_persona_ends_with_the_ending_rule() -> None:
-    assert DEFAULT_PERSONA.endswith(REPLY_FORMAT_RULE)
-    assert ENDING_RULE in DEFAULT_PERSONA
+    assert DEFAULT_PERSONA.endswith(ENDING_RULE)
     assert "Never end with a question or an offer" in ENDING_RULE
 
 
