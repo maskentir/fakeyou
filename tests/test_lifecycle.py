@@ -228,15 +228,6 @@ async def checkpointed_active_session() -> tuple[
             **initial_state("o1", "t1", "m1"),
             "phase": "active",
             "external_effects": [{"effect": "join_requested"}],
-            "memory_evidence": [
-                {
-                    "fact_ids": [],
-                    "text": "stale",
-                    "sources": [],
-                    "excluded": [],
-                    "outcome": "found",
-                }
-            ],
         },
         as_node="activate",
     )
@@ -286,12 +277,11 @@ async def test_missing_handle_after_restart_fails_with_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_is_explicit_and_refetches_evidence() -> None:
+async def test_resume_is_explicit_and_keeps_the_effects() -> None:
     graph, _cfg = await checkpointed_active_session()
     resumed = await resume_lifecycle(graph, "t1:m1", full_runtime_context())
     assert resumed["thread_id"] == "t1:m1"
     assert resumed["external_effects"] != []
-    assert resumed["memory_evidence"] == []
     with pytest.raises(ValueError, match="ended"):
         await resume_lifecycle(graph, "t1:done", full_runtime_context())
 
@@ -731,11 +721,6 @@ def test_checkpoint_state_rejects_runtime_handles() -> None:
         "thread_id": "t1:m1",
         "phase": "created",
         "terminal_reason": None,
-        "messages": [],
-        "memory_evidence": [],
-        "last_participation": None,
-        "note_offset": 0,
-        "note_prefix_hash": "",
         "external_effects": [],
         "browser": object(),
     }

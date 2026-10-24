@@ -28,7 +28,6 @@ from fakeyou.conversation.state import (
     validate_phase_reason,
 )
 from fakeyou.db.checkpoint import is_checkpoint_error
-from fakeyou.foundation.provenance import MemoryEvidence
 from fakeyou.foundation.taxonomy import FaultKind, TerminalReason
 from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.observability.faults import Fault, FaultReporter
@@ -121,7 +120,6 @@ class LifecycleUpdate(TypedDict, total=False):
     phase: PublicPhase
     terminal_reason: str | None
     external_effects: list[ExternalEffect]
-    memory_evidence: list[MemoryEvidence]
 
 
 def meeting_thread_id(twin_id: str, meeting_id: str) -> str:
@@ -137,11 +135,6 @@ def initial_lifecycle_state(owner_id: str, twin_id: str, meeting_id: str) -> Lif
         "thread_id": thread_id,
         "phase": "created",
         "terminal_reason": None,
-        "messages": [],
-        "memory_evidence": [],
-        "last_participation": None,
-        "note_offset": 0,
-        "note_prefix_hash": "",
         "external_effects": [],
     }
 
@@ -436,7 +429,6 @@ async def resume_lifecycle(
     if phase in TERMINAL_PHASES:
         raise ValueError(f"cannot resume lifecycle in phase {phase!r}")
     target = _RESUME_TARGETS[phase]
-    await graph.aupdate_state(config, {"memory_evidence": []}, as_node=target)
     command: Command[Any] = Command(goto=target)
     resumed: object = await graph.ainvoke(command, config, context=context)
     return cast(LifecycleState, resumed)

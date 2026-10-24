@@ -1,11 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
-from langchain_core.messages import BaseMessage
-
-from fakeyou.conversation.participation_decider import ParticipationDecision
-from fakeyou.foundation.provenance import MemoryEvidence
-
 PublicPhase = Literal[
     "created", "joining", "lobby", "admitted", "active", "leaving", "ended", "failed"
 ]
@@ -23,11 +18,6 @@ class LifecycleState(TypedDict):
     thread_id: str
     phase: PublicPhase
     terminal_reason: str | None
-    messages: list[BaseMessage]
-    memory_evidence: list[MemoryEvidence]
-    last_participation: ParticipationDecision | None
-    note_offset: int
-    note_prefix_hash: str
     external_effects: list[ExternalEffect]
 
 
