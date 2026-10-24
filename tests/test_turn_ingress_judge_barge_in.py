@@ -83,8 +83,11 @@ def build(
     return ingress, lifecycle, session, journal
 
 
-async def hold_the_floor(lifecycle: TurnLifecycle) -> asyncio.Task[None]:
-    task = asyncio.create_task(lifecycle.floor.hold(asyncio.Event().wait()))
+async def hold_the_floor(lifecycle: TurnLifecycle) -> asyncio.Task[bool]:
+    async def wait_forever() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(lifecycle.floor.hold(wait_forever()))
     await asyncio.sleep(0)
     return task
 

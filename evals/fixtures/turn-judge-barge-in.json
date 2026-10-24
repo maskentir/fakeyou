@@ -104,7 +104,7 @@
       "kind": "misheard_name",
       "earlier": [],
       "latest": {"speaker": "Ayu", "text": "Randy, kamu bisa jelaskan lagi?"},
-      "barge_in": false
+      "barge_in": true
     },
     {
       "id": "b15",

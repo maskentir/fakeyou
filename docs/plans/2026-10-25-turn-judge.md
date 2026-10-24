@@ -168,7 +168,7 @@ p90 1,13 s. Laporan: `docs/reports/2026-10-25-turn-judge-early-commit.json`.
 Perkiraan dari journal `live-xnj-itkm-owt`, belum diukur live: hening → kalimat pertama twin turun dari p50 3,6 s ke
 sekitar 1,5 s (0,3 s hold + p50 1,2 s model; penilaian judge sudah berjalan sejak interim).
 
-## Hasil PR 2b (2026-10-26): barge-in decided by the judge
+## Hasil PR 2b (2026-10-25): barge-in decided by the judge
 
 ### Cache yang bisa menilai beberapa interim
 
@@ -194,13 +194,21 @@ dulu yang dibuang). Final sebuah giliran memakai kembali penilaian interim terak
 
 - Fixture berlabel `evals/fixtures/turn-judge-barge-in.json` (18 kasus sintetis, bukan kutipan sesi nyata): sapaan ke
   twin, perintah ke twin, follow-up, jawaban atas twin, fragmen ke twin, dan yang tidak untuk twin (orang lain, ack,
-  obrolan antar orang, logistics ruang, pertanyaan ke semua orang, nama yang salah dengar, nama yang disebut orang
-  lain, self-talk).
+  obrolan antar orang, logistics ruang, pertanyaan ke semua orang, nama yang disebut orang lain, self-talk).
 - Gerbang (`evals/test_barge_in_judge_eval.py`): twin tidak melepas giliran padahal baris itu untuknya ≤ 10%; twin
   melepas giliran padahal baris itu bukan untuknya ≤ 5%.
-- **Belum ada eval live pada sesi ini** (butuh kunci model). Yang jalan di repo: fixture, perhitungan report, dan test
-  unit perilaku barge-in (`tests/test_turn_ingress_judge_barge_in.py`).
-- Yang perlu diukur live: berapa detik twin masih bicara setelah orang mulai bicara dengannya (tidak bisa lebih cepat
-  dari latensi judge, p50 ~1 s), dan apakah `barge_in_detected` dengan `decided_by = judge` memang mengurangi kalimat
-  twin yang terpotong di tengah.
+- Nama yang salah dengar ("Randy" untuk "Rani") tetap dihitung untuk twin, sama seperti di fixture partisipasi (j08):
+  twin melepas giliran lalu bisa bertanya siapa yang dipanggil.
+
+Eval live (`gemini-3.1-flash-lite`, 3 run × 18 kasus, `docs/reports/2026-10-25-turn-judge-barge-in.json`):
+
+| Metrik | Hasil | Gerbang |
+| --- | --- | --- |
+| Baris untuk twin tapi twin tidak melepas giliran | 0% | ≤ 10% |
+| Baris bukan untuk twin tapi twin melepas giliran | 0% | ≤ 5% |
+| Kegagalan | 0 | 0 |
+| Latensi judge p50 / p90 | 1,10 s / 1,30 s | p50 ~1 s (batas bawah twin melepas giliran) |
+
+- Yang perlu diukur live di sesi Meet: berapa detik twin masih bicara setelah orang mulai bicara dengannya, dan
+  apakah `barge_in_detected` dengan `decided_by = judge` memang mengurangi kalimat twin yang terpotong di tengah.
 
