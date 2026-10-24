@@ -113,7 +113,7 @@ from fakeyou.orchestration.lifecycle import (
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
-from fakeyou.orchestration.presence import AloneClock
+from fakeyou.orchestration.presence import PROTOCOL_STALE_SECONDS, AloneClock
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
     DEFAULT_PERCEPTION_SCHEDULE,
@@ -724,7 +724,7 @@ class MeetingWorker:
         reading = self.presence.observe(
             now,
             state=sensors.roster.state() if sensors is not None else None,
-            syncs=sensors.syncs_accepted if sensors is not None else 0,
+            heartbeats=sensors.heartbeats if sensors is not None else 0,
             dom_remote=dom,
         )
         if reading.drift and not was_drifting:
@@ -747,7 +747,17 @@ class MeetingWorker:
         if poll_seconds >= 1.0 and self.journal is not None:
             self.journal.record("monitor_polled", source="runtime", duration_ms=poll_seconds * 1000)
 
-    async def _track_observation(self, scan: MonitorScan, checked: WatchdogCheck) -> str | None:
+    def _protocol_available(self) -> bool:
+        perception = self.perception
+        sensors = perception.sensors if perception is not None else None
+        if sensors is None or sensors.heartbeats == 0:
+            return False
+        heartbeat = self.presence.last_heartbeat
+        if heartbeat is None:
+            return False
+        return self.monotonic() - heartbeat <= PROTOCOL_STALE_SECONDS
+
+    async def track_observation(self, scan: MonitorScan, checked: WatchdogCheck) -> str | None:
         if not checked.observation_failed:
             scan.failing_since = None
             scan.hard_failures = 0
@@ -770,6 +780,8 @@ class MeetingWorker:
             failing_ms=round(failing_seconds * 1000),
             detail=cause,
         )
+        if self._protocol_available():
+            return None
         return await self.finish(
             "browser_failed",
             "system_fault",
@@ -834,7 +846,7 @@ class MeetingWorker:
         finished = await self._record_scan_events(scan, checked, now)
         if finished is not None:
             return finished, False
-        finished = await self._track_observation(scan, checked)
+        finished = await self.track_observation(scan, checked)
         if finished is not None:
             return finished, False
         return await self.apply_observation(checked), False

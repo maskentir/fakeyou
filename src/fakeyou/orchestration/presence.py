@@ -26,16 +26,20 @@ class AloneClock:
     def drifting(self) -> bool:
         return self._drifting
 
+    @property
+    def last_heartbeat(self) -> float | None:
+        return self._synced_at
+
     def observe(
         self,
         now: float,
         *,
         state: MeetingState | None,
-        syncs: int,
+        heartbeats: int,
         dom_remote: int | None,
     ) -> PresenceReading:
-        if syncs != self._syncs_seen:
-            self._syncs_seen = syncs
+        if heartbeats != self._syncs_seen:
+            self._syncs_seen = heartbeats
             self._synced_at = now
         protocol = self._fresh_protocol(state, now)
         if protocol is None:

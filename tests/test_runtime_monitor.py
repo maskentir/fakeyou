@@ -7,8 +7,9 @@ import pytest
 
 from fakeyou.config.settings import PerceptionSettings, Settings
 from fakeyou.conversation.state import LifecycleState
-from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, JoinResult
+from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, CallObservation, JoinResult
 from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
+from fakeyou.meet.watchdog import WatchdogCheck
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.perception import create_perception_stack
@@ -212,7 +213,7 @@ class _Sensors:
     def __init__(self) -> None:
         self.roster = MeetRoster()
         self.roster.mark_synced()
-        self.syncs_accepted = 1
+        self.heartbeats = 1
 
 
 async def test_the_twin_leaves_an_empty_meeting_without_audio_while_the_dom_fails(
@@ -240,7 +241,7 @@ async def test_the_twin_leaves_an_empty_meeting_without_audio_while_the_dom_fail
     scan = MonitorScan(next_scan=clock.now, remote_participants=None, presence_at=clock.now)
     finished = None
     for _ in range(int(worker.config.alone_leave_seconds // 15) + 2):
-        sensors.syncs_accepted += 1
+        sensors.heartbeats += 1
         _remote, finished = await worker.check_presence(scan)
         if finished is not None:
             break
@@ -269,7 +270,7 @@ async def test_the_dom_seeing_people_keeps_the_twin_in_and_records_drift(
     worker.perception = cast(Any, SimpleNamespace(sensors=sensors, close=_closed))
     scan = MonitorScan(next_scan=clock.now, remote_participants=2, presence_at=clock.now)
     for _ in range(int(worker.config.alone_leave_seconds // 15) + 2):
-        sensors.syncs_accepted += 1
+        sensors.heartbeats += 1
         scan.presence_at = clock.now
         _remote, finished = await worker.check_presence(scan)
         assert finished is None
@@ -281,3 +282,44 @@ async def test_the_dom_seeing_people_keeps_the_twin_in_and_records_drift(
 
 async def _closed() -> None:
     return None
+
+
+async def test_a_failing_dom_does_not_end_a_session_whose_protocol_is_healthy(
+    journal: RecordingJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FakeClock()
+    worker = MeetingWorker(
+        session_config(),
+        meet_page([]),
+        asyncio.Event(),
+        DEFAULT_MEET_SIGNALS,
+        clock.sleep,
+        clock.monotonic,
+        journal=journal,
+    )
+    sensors = _Sensors()
+    worker.perception = cast(Any, SimpleNamespace(sensors=sensors, close=_closed))
+    scan = MonitorScan(next_scan=clock.now, remote_participants=None, presence_at=clock.now)
+    ended: list[str] = []
+
+    async def finish(kind: str, _attribution: str, detail: str) -> str:
+        ended.append(kind)
+        return detail
+
+    monkeypatch.setattr(worker, "finish", finish)
+    failing = WatchdogCheck(
+        observation=CallObservation(state="unknown", detail="scan failed"),
+        events=(),
+        observation_failed=True,
+        participant_count=None,
+        next_check_seconds=5.0,
+    )
+
+    for _ in range(40):
+        sensors.heartbeats += 1
+        await worker.check_presence(scan)
+        assert await worker.track_observation(scan, failing) is None
+        await clock.sleep(15)
+
+    assert ended == []
+    assert journal.events("ui_observation_expired")
