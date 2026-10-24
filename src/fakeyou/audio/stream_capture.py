@@ -669,11 +669,7 @@ class StreamFleetSession:
                 raise result
             verdicts.append(result)
         if verdicts:
-            if all(verdict == "alone" for verdict in verdicts):
-                return "alone"
-            for verdict in verdicts:
-                if verdict != "alone":
-                    return verdict
+            return verdicts[0]
         self.raise_if_failed()
         raise MeetingAudioError("stream fleet is exhausted")
 

@@ -70,6 +70,7 @@ class ViewParticipant(ViewPart):
     presenting: bool = False
     hand_raised: bool = False
     camera: str | None = None
+    camera_on: bool | None = None
 
 
 class MeetingView(ViewPart):
@@ -150,6 +151,7 @@ def _participant(
     snapshot: TimelineSnapshot,
     raised: set[str],
     cameras: dict[str, CameraGlance],
+    camera_on: frozenset[str] | None = None,
 ) -> ViewParticipant:
     glance = cameras.get(person.participant_id)
     return ViewParticipant(
@@ -158,6 +160,7 @@ def _participant(
         presenting=snapshot.presenting == person,
         hand_raised=person.participant_id in raised,
         camera=glance.description if glance else None,
+        camera_on=person.participant_id in camera_on if camera_on is not None else None,
     )
 
 
@@ -180,7 +183,13 @@ def _signal(signal: MeetingSignal, now: datetime) -> ViewSignal:
     )
 
 
-def build_view(snapshot: TimelineSnapshot, *, now: datetime) -> MeetingView:
+def build_view(
+    snapshot: TimelineSnapshot,
+    *,
+    now: datetime,
+    camera_on: frozenset[str] | None = None,
+    presenter: str | None = None,
+) -> MeetingView:
     current = snapshot.current_screen
     raised = _hands(snapshot.signals)
     cameras = {glance.participant.participant_id: glance for glance in snapshot.cameras}
@@ -188,7 +197,7 @@ def build_view(snapshot: TimelineSnapshot, *, now: datetime) -> MeetingView:
         signal.participant.participant_id for signal in snapshot.signals if signal.kind == "left"
     }
     return MeetingView(
-        presenting=snapshot.presenting.name if snapshot.presenting else None,
+        presenting=presenter or (snapshot.presenting.name if snapshot.presenting else None),
         screen_now=_screen(current, now=now, current=True) if current else None,
         earlier_screens=[
             _screen(screen, now=now, current=False) for screen in _content_screens(snapshot)
@@ -196,7 +205,9 @@ def build_view(snapshot: TimelineSnapshot, *, now: datetime) -> MeetingView:
         chat=[_chat(line, now) for line in snapshot.chat[-VIEW_CHAT_LINES:]],
         signals=[_signal(signal, now) for signal in snapshot.signals[-VIEW_SIGNALS:]],
         participants=[
-            _participant(person, snapshot=snapshot, raised=raised, cameras=cameras)
+            _participant(
+                person, snapshot=snapshot, raised=raised, cameras=cameras, camera_on=camera_on
+            )
             for person in snapshot.participants
             if person.participant_id not in left
         ],
@@ -264,8 +275,18 @@ def fit_view(view: MeetingView, *, max_chars: int) -> MeetingView:
     return _trim_current_text(fitted, overflow) if overflow > 0 else fitted
 
 
-def render_view(snapshot: TimelineSnapshot, *, now: datetime, max_chars: int) -> MeetingView:
-    return fit_view(build_view(snapshot, now=now), max_chars=max_chars)
+def render_view(
+    snapshot: TimelineSnapshot,
+    *,
+    now: datetime,
+    max_chars: int,
+    camera_on: frozenset[str] | None = None,
+    presenter: str | None = None,
+) -> MeetingView:
+    return fit_view(
+        build_view(snapshot, now=now, camera_on=camera_on, presenter=presenter),
+        max_chars=max_chars,
+    )
 
 
 def resolve_screen(snapshot: TimelineSnapshot, wanted: str) -> ScreenSegment | None:

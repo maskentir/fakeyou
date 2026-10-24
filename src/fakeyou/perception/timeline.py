@@ -152,6 +152,9 @@ class MeetingTimeline:
         self._state.participants[participant_id] = updated
         return updated
 
+    def leave(self, participant_id: str) -> None:
+        self._state.participants.pop(participant_id, None)
+
     def show_screen(
         self, keyframe: Keyframe, presenter: ParticipantRef | None, *, data: bytes | None = None
     ) -> ScreenShown:

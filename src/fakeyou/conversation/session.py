@@ -96,6 +96,7 @@ class SessionConfig:
     leave_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.leave_timeout_seconds
     deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
+    alone_leave_seconds: PositiveSeconds = DEFAULTS.meeting.alone_leave_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     database_url: str | None = field(default=None, repr=False)
     database_connect_timeout_seconds: PositiveSeconds = DEFAULTS.database.connect_timeout_seconds

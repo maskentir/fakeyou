@@ -106,6 +106,7 @@ class PerceptionSensors:
         self._journal = journal or Journal("", echo=False)
         self._clock = clock
         self.rejected_messages = 0
+        self.heartbeats = 0
         self.frames_seen = 0
         self._audio_outputs: set[tuple[str, str]] = set()
 
@@ -137,6 +138,8 @@ class PerceptionSensors:
             users=len(users),
             screens=sum(user.is_screen for user in users),
         )
+        self.roster.mark_synced()
+        self.heartbeats += 1
         self._apply_changes(self.roster.apply_users(users), self._clock())
         self._share_roster()
 
@@ -163,6 +166,7 @@ class PerceptionSensors:
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
         if update.users or update.outputs:
+            self.heartbeats += 1
             self._share_roster()
         if self._settings.chat:
             for chat in update.chat:
@@ -195,6 +199,8 @@ class PerceptionSensors:
             presenting = change.kind in {"presenting_started", "presenting_stopped"}
             if presenting or self._settings.signals:
                 self.timeline.add_signal(change.kind, person, at)
+            if change.kind == "left":
+                self.timeline.leave(change.device_id)
 
     def _accept_chat(self, chat: MeetChatMessage, at: datetime) -> None:
         sent_at = chat.sent_at or at

@@ -145,3 +145,18 @@ def test_the_speaker_registry_names_voices_from_the_meet_roster() -> None:
     assert (ayu.device, ayu.display_claim, ayu.status) == (AYU, "Ayu", "confirmed")
     assert (budi.device, budi.display_claim) == (BUDI, "Budi")
     assert ayu.label != budi.label
+
+
+def test_meeting_state_reports_people_presenter_and_cameras() -> None:
+    roster = roster_with_people()
+    roster.apply_users([user(SCREEN, "Ayu screen", parent=AYU)])
+    roster.apply_outputs([video(AYU, "7"), video(BUDI, "8", disabled=True)])
+    roster.mark_synced()
+
+    state = roster.state()
+
+    assert state.people == {AYU: "Ayu", BUDI: "Budi"}
+    assert state.remote_count == 2
+    assert state.presenter == "Ayu"
+    assert state.cameras_on == frozenset({AYU})
+    assert state.synced
