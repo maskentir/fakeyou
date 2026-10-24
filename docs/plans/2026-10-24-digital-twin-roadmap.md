@@ -154,18 +154,26 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 
 ### Angka Fase 1 (replay live, 9 run × 12 skenario)
 
-| Keluarga | Sebelum | Sesudah |
+Balasan sekarang berupa `ReplyPlan` (structured output native provider lewat `create_agent(response_format=...)`),
+bukan header teks. Laporan: `docs/reports/2026-10-24-conversation-replay-structured.json`.
+
+| Keluarga | Baseline awal | Sekarang |
 | --- | --- | --- |
-| `small_talk` | 0,259 | 0,593 |
-| `misheard` | 0,944 | 0,889 |
-| `recall` | 0,833 | 0,833 |
+| `small_talk` | 0,259 | 0,667 |
+| `misheard` | 0,944 | 1,000 |
+| `recall` | 0,833 | 1,000 |
 | `control` | 1,000 | 1,000 |
 | `floor` | 1,000 | 1,000 |
 | `honesty` | 1,000 | 1,000 |
-| `language` | 0,000 | 0,000 |
+| `language` | 0,000 | 0,444 |
 
-Pertanyaan penutup yang lolos dari 13 dari 99 balasan jadi 2 dari 99. Pelanggaran serius 0, regresi 0, judge 29 dari 30
-label. `language` masih 0 karena bahasa balasan belum mengikuti lawan bicara.
+Pertanyaan penutup yang lolos turun dari 13 jadi 0 dari 99 balasan. Pelanggaran serius 0, regresi 0, judge 30 dari 30
+label. Baseline beku dinaikkan ke angka ini.
+
+Sisa masalah `language`: model balasan (flash-lite) masih salah menilai bahasa peserta saat `speaking_style` persona
+ditulis dalam bahasa Indonesia; dengan `speaking_style` berbahasa Inggris, skenario yang sama lolos 3 dari 3. Arah
+perbaikan: bahasa peserta dinilai sebagai persepsi oleh model yang lebih kuat yang sudah ada di jalur giliran (decider
+partisipasi), lalu diteruskan ke balasan, bukan ditebak oleh model penyusun kalimat.
 
 ## Fase 2: sadar meeting
 
