@@ -21,6 +21,7 @@ class MeetingAudio(Protocol):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None: ...
 
     async def stop_playback(self) -> None: ...

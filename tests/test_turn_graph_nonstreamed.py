@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessageChunk
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
 from fakeyou.conversation.model_responder import ModelResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     SpeechFloor,
@@ -78,13 +79,13 @@ class FakeWholeResponder:
         self.calls: list[str] = []
         self.on_call: Callable[[], Any] | None = None
 
-    async def respond(self, transcript: str) -> str:
+    async def respond(self, transcript: str) -> SpokenChunk:
         self.calls.append(transcript)
         if self.on_call is not None:
             await self.on_call()
         if self._delay:
             await asyncio.sleep(self._delay)
-        return self._reply
+        return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
 def unused_chunks(_transcript: str) -> AsyncIterator[tuple[object, object]]:
@@ -143,23 +144,26 @@ class AdvancingSink:
     def __init__(self, floor: SpeechFloor) -> None:
         self._floor = floor
 
-    async def say(self, _sentence: str) -> None:
+    async def say(self, _sentence: str, language: str) -> None:
+        del language
         self._floor.advance()
 
 
 class StallingSink:
-    async def say(self, _sentence: str) -> None:
+    async def say(self, _sentence: str, language: str) -> None:
+        del language
         await asyncio.sleep(1.0)
 
 
 class StallingStream:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         await asyncio.sleep(1.0)
-        yield "Late sentence."
+        yield SpokenChunk(text="Late sentence.", language=DEFAULTS.speech.language)
 
 
 class SilentSink:
-    async def say(self, _sentence: str) -> None:
+    async def say(self, _sentence: str, language: str) -> None:
+        del language
         return None
 
 

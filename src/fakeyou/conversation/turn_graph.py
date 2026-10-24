@@ -36,6 +36,7 @@ from fakeyou.conversation.participation_graph import (
     ParticipationState,
     build_participation_subgraph,
 )
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import cap_reply, shape_sentences
 from fakeyou.conversation.thinking_cue import CueSpeaker, CueTurn, ThinkingCue, cue_when_slow
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
@@ -71,6 +72,7 @@ class Speaker(Protocol):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None: ...
 
     async def stop_playback(self) -> None: ...
@@ -200,11 +202,11 @@ class PhaseSink(Protocol):
 
 
 class Responder(Protocol):
-    def stream_reply(self, transcript: str) -> AsyncIterator[str]: ...
+    def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]: ...
 
 
 class WholeResponder(Protocol):
-    async def respond(self, transcript: str) -> str: ...
+    async def respond(self, transcript: str) -> SpokenChunk: ...
 
 
 ToolStartHook = Callable[[], None]
@@ -499,7 +501,7 @@ async def _participate(
 
 
 class SentenceSink(Protocol):
-    async def say(self, sentence: str) -> None: ...
+    async def say(self, sentence: str, language: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -531,7 +533,7 @@ class SpeechInput(TypedDict):
 class SpeechState(TypedDict):
     transcript: str
     speaking_generation: int
-    reply: AsyncIterator[str] | None
+    reply: AsyncIterator[SpokenChunk] | None
     failure: str | None
     transcript_event: NotRequired[TranscriptEvent | None]
     delivered: NotRequired[tuple[str, ...]]
@@ -540,7 +542,7 @@ class SpeechState(TypedDict):
     settled: NotRequired[bool]
     silent: NotRequired[bool]
     agent_journaled: NotRequired[bool]
-    source: NotRequired[AsyncIterator[str] | None]
+    source: NotRequired[AsyncIterator[SpokenChunk] | None]
 
 
 type SpeechGraph = CompiledStateGraph[SpeechState, SpeechRuntime, SpeechInput, SpeechState]
@@ -573,7 +575,7 @@ class _TurnSink:
     def started(self) -> bool:
         return self._started
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
         runtime = self._runtime
         sentence = scrub_internal_refs(sentence)
         if not sentence:
@@ -591,10 +593,13 @@ class _TurnSink:
             runtime.note_spoken(sentence)
         if self._streamed:
             await runtime.speaker.speak(
-                sentence, sentence_index=index, transcript_id=self._transcript_id
+                sentence,
+                sentence_index=index,
+                transcript_id=self._transcript_id,
+                language=language,
             )
         else:
-            await runtime.speaker.speak(sentence)
+            await runtime.speaker.speak(sentence, language=language)
         self._spoken += 1
 
     def _check_live(self, index: int) -> None:
@@ -863,7 +868,7 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
     )
     if not _turn_current(runtime, generation, floor_generation):
         raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
-    text = scrub_internal_refs(reply)
+    text = scrub_internal_refs(reply.text)
     if not text:
         _move_phase(runtime, "waiting", event.id)
         return
@@ -1085,8 +1090,8 @@ class _RecordingSink:
         self._inner = inner
         self._delivered = delivered
 
-    async def say(self, sentence: str) -> None:
-        await self._inner.say(sentence)
+    async def say(self, sentence: str, language: str) -> None:
+        await self._inner.say(sentence, language)
         self._delivered.append(sentence)
 
 
@@ -1105,9 +1110,9 @@ class _SupersedableSink:
         self._context = context
         self._delivered = delivered
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
         if self._floor.admits(self._generation):
-            await self._inner.say(sentence)
+            await self._inner.say(sentence, language)
             return
         detail, reason = _drop_outcome(self._floor)
         record_drop(
@@ -1124,17 +1129,17 @@ async def _close_stream(stream: object, faults: FaultReporter | None) -> None:
         await close_safely(stream.aclose, source="agent", operation="close_stream", faults=faults)
 
 
-async def _replay(sentences: tuple[str, ...]) -> AsyncIterator[str]:
+async def _replay(sentences: tuple[SpokenChunk, ...]) -> AsyncIterator[SpokenChunk]:
     for sentence in sentences:
         yield sentence
 
 
-async def _deliver(replies: AsyncIterator[str], sink: SentenceSink) -> None:
-    async for sentence in replies:
-        await sink.say(sentence)
+async def _deliver(replies: AsyncIterator[SpokenChunk], sink: SentenceSink) -> None:
+    async for chunk in replies:
+        await sink.say(chunk.text, chunk.language)
 
 
-def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[str]:
+def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[SpokenChunk]:
     responder = runtime.responder
     if responder is None:
         raise RuntimeError("a streamed reply needs a responder")
@@ -1147,7 +1152,7 @@ def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[str]
 
 def _whole_update(
     *,
-    reply: AsyncIterator[str] | None = None,
+    reply: AsyncIterator[SpokenChunk] | None = None,
     failure: str | None = None,
     error: Exception | None = None,
     settled: bool = False,
@@ -1186,26 +1191,29 @@ def _speech_bound(context: SpeechRuntime) -> bool:
     return context.bound is None or context.bound()
 
 
-async def _respond_within(whole: WholeResponder, transcript: str, seconds: float) -> str:
+async def _respond_within(whole: WholeResponder, transcript: str, seconds: float) -> SpokenChunk:
     async with asyncio.timeout(seconds):
         return await whole.respond(transcript)
 
 
-def _spoken_reply(context: SpeechRuntime, reply: str, request_id: str | None) -> str:
+def _spoken_reply(
+    context: SpeechRuntime, reply: SpokenChunk, request_id: str | None
+) -> SpokenChunk:
+    text = reply.text.strip()
     spoken = (
-        reply.strip()
+        text
         if context.sentences is None
-        else cap_reply(reply, context.sentences.max_sentences, context.sentences.language)
+        else cap_reply(text, context.sentences.max_sentences, reply.language)
     )
-    if spoken != reply.strip():
+    if spoken != text:
         context.journal.record(
             "reply_capped",
             source="agent",
             request_id=request_id,
-            chars_in=len(reply),
+            chars_in=len(text),
             chars_out=len(spoken),
         )
-    return spoken
+    return SpokenChunk(text=spoken, language=reply.language)
 
 
 async def _respond_whole(
@@ -1238,12 +1246,12 @@ async def _respond_whole(
             "turn_suppressed", source="agent", request_id=request_id, reason="paused"
         )
         return _whole_update(settled=True)
-    if not reply.strip() or not _speech_bound(context):
+    if not reply.text.strip() or not _speech_bound(context):
         return _whole_update(settled=True, silent=True)
     return _whole_update(reply=_replay((_spoken_reply(context, reply, request_id),)))
 
 
-def _open_reply(context: SpeechRuntime, transcript: str) -> AsyncIterator[str]:
+def _open_reply(context: SpeechRuntime, transcript: str) -> AsyncIterator[SpokenChunk]:
     try:
         return _reply_stream(context, transcript)
     except Exception:
@@ -1305,7 +1313,7 @@ def _journal_turn_end(context: SpeechRuntime, floor: SpeechFloor, end: _SpeechEn
 
 
 async def _deliver_held(
-    replies: AsyncIterator[str], sink: SentenceSink
+    replies: AsyncIterator[SpokenChunk], sink: SentenceSink
 ) -> tuple[bool, Exception | None]:
     _, error = await capture_error(lambda: _deliver(replies, sink))
     if isinstance(error, TurnDropped):
@@ -1332,7 +1340,7 @@ def _held_generation(floor: SpeechFloor | None, generation: int, *, completed: b
 
 
 async def _speak_held(
-    state: SpeechState, context: SpeechRuntime, reply: AsyncIterator[str]
+    state: SpeechState, context: SpeechRuntime, reply: AsyncIterator[SpokenChunk]
 ) -> SpeakUpdate:
     delivered: list[str] = []
     recorder = _RecordingSink(context.sink, delivered)

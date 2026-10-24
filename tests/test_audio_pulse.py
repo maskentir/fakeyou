@@ -52,8 +52,14 @@ class _ToneSynth:
         return struct.pack("<72000h", *samples)
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
+        del language
         del sentence_index
         del transcript_id
         if not text.strip():

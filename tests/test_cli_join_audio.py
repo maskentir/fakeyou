@@ -101,7 +101,7 @@ async def test_join_audio_transcript_reaches_conversation(
         del config
         captured.update(kwargs)
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         frame = TranscriptUpdate(
             text="Settings Twin, hello.",
             final=True,
@@ -217,7 +217,7 @@ async def test_join_wake_phrase_gates_agent_replies(
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
@@ -409,7 +409,7 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
         for _ident, text in (
             ("t1", "let's review the budget"),
             ("t2", "who owns the migration"),

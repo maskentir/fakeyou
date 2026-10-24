@@ -53,7 +53,9 @@ class _Playback:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         del sentence_index, transcript_id, text
 
     async def stop(self) -> None:

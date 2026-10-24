@@ -3,12 +3,14 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, override
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
     TurnInteraction,
     TurnTiming,
     build_meeting_turns,
 )
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
@@ -36,9 +38,9 @@ class FixedResponder(FakeResponder):
     @override
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         await super().respond(events, on_tool_start)
-        return self._reply
+        return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
 def meeting_input(event_id: str, text: str, source: EventSource) -> TranscriptEvent:

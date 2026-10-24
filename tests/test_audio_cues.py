@@ -26,9 +26,14 @@ class CueEngine:
         pass
 
     async def speak(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
-        del text, sentence_index, transcript_id
+        del text, sentence_index, transcript_id, language
 
     async def stop(self) -> None:
         return None

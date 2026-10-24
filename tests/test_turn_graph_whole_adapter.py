@@ -5,8 +5,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import meeting_turns, turn_graph
 from fakeyou.conversation.model_responder import ModelResponder, ReplierWholeResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     WholeResponder,
@@ -75,14 +77,14 @@ class FakeReplier:
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         self.events.append(tuple(events))
         self.hooks.append(on_tool_start)
         if self._on_call is not None:
             step = self._on_call(on_tool_start)
             if step is not None:
                 await step
-        return self._reply
+        return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
 def unused_chunks(_transcript: str) -> AsyncIterator[tuple[object, object]]:
@@ -145,7 +147,7 @@ async def test_adapter_passes_the_events_tuple_and_tool_hook_and_returns_the_tex
 
     text = await adapter.respond("twin, again")
 
-    assert text == "Hi there."
+    assert text.text == "Hi there."
     assert replier.events == [events]
     replier.hooks[0]()
     assert hook_calls == ["tool"]

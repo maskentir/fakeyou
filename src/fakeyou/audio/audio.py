@@ -492,6 +492,7 @@ class MeetingAudioSession:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         self.raise_if_failed()
         if self._stopping:
@@ -501,6 +502,8 @@ class MeetingAudioSession:
             extra["sentence_index"] = sentence_index
         if transcript_id is not None:
             extra["transcript_id"] = transcript_id
+        if language is not None:
+            extra["language"] = language
         with self._gate.own_speech.speaking(text):
             try:
                 await self._engine.speak(text, **extra)

@@ -10,6 +10,8 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.foundation.transcript import TranscriptEvent
 
@@ -113,7 +115,7 @@ class FakeResponder:
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         del on_tool_start
         self.calls.append(list(events))
         self.active += 1
@@ -122,7 +124,9 @@ class FakeResponder:
         try:
             if self.gate is not None and len(self.calls) == 1:
                 await self.gate.wait()
-            return "/".join(item.text for item in events)
+            return SpokenChunk(
+                text="/".join(item.text for item in events), language=DEFAULTS.speech.language
+            )
         except asyncio.CancelledError:
             self.cancelled.set()
             raise

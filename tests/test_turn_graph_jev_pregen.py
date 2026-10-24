@@ -1,9 +1,11 @@
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.jev_refresh import JevCache, JevRefreshInput, jev_cache_key
 from fakeyou.conversation.participation_decider import DeciderTurn, ParticipationDecision
 from fakeyou.conversation.participation_graph import DeciderFailure
+from fakeyou.conversation.reply_planner import SpokenChunk
 
 
 class RecordingDecider:
@@ -110,16 +112,17 @@ class RecordingResponder:
     def __init__(self) -> None:
         self.transcripts: list[str] = []
 
-    async def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
-        yield "Fresh one."
+        yield SpokenChunk(text="Fresh one.", language=DEFAULTS.speech.language)
 
 
 class RecordingSink:
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
 
 

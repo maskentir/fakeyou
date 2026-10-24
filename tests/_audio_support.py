@@ -118,7 +118,9 @@ class FakePlayback:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
+        del language
         self.spoken.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
@@ -140,8 +142,14 @@ class FakeSynth:
         self.closed = False
 
     async def stream(
-        self, text: str, *, sentence_index: int | None = None, transcript_id: str | None = None
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]:
+        del language
         self.texts.append(text)
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)

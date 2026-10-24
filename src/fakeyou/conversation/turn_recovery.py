@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.faults import FaultReporter
@@ -160,7 +161,9 @@ class TurnRecovery:
         return False
 
 
-async def within_sentence_budget(stream: AsyncIterator[str], seconds: float) -> AsyncIterator[str]:
+async def within_sentence_budget(
+    stream: AsyncIterator[SpokenChunk], seconds: float
+) -> AsyncIterator[SpokenChunk]:
     iterator = stream.__aiter__()
     while True:
         try:

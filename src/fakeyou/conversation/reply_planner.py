@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from fakeyou.foundation.sentences import sentence_end
@@ -18,7 +19,8 @@ ReplyIntent = Literal[
 
 INTENT_PREFIX = "intent:"
 INTENT_LINE = re.compile(
-    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b[ \t]*\n?",
+    r"^intent:[ \t]*(answer|ack|clarify|decline|silent|stop|shorter|repeat|louder)\b[ \t]*"
+    r"(?:lang:[ \t]*(id|en)\b[ \t]*)?\n?",
     re.IGNORECASE,
 )
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
@@ -26,6 +28,12 @@ CONTROL_INTENTS = frozenset({"stop", "shorter", "repeat", "louder"})
 MAX_HEAD_CHARS = 64
 
 IntentHandler = Callable[["ReplyIntent"], "str | None"]
+
+
+@dataclass(frozen=True, slots=True)
+class SpokenChunk:
+    text: str
+    language: str
 
 
 class ReplyPlanner:
@@ -38,6 +46,7 @@ class ReplyPlanner:
     ) -> None:
         self._max_sentences = max_sentences
         self._language = language
+        self._declared_language: str | None = None
         self._on_intent = on_intent
         self._head = ""
         self._intent: ReplyIntent | None = None
@@ -65,7 +74,7 @@ class ReplyPlanner:
 
     @property
     def language(self) -> str:
-        return self._language
+        return self._declared_language or self._language
 
     def feed(self, piece: str) -> str:
         self._head += piece
@@ -117,6 +126,9 @@ class ReplyPlanner:
                 if match is not None:
                     self._intent = cast(ReplyIntent, match.group(1).casefold())
                     self._explicit = True
+                    declared = match.group(2)
+                    if declared is not None:
+                        self._declared_language = declared.casefold()
                     replacement = self._on_intent(self._intent) if self._on_intent else None
                     if replacement is not None:
                         self._replaced = True
@@ -162,13 +174,13 @@ def planned_reply(
     max_sentences: int,
     language: str,
     on_intent: IntentHandler | None = None,
-) -> str:
+) -> SpokenChunk:
     planner = ReplyPlanner(max_sentences=max_sentences, language=language, on_intent=on_intent)
     content = planner.feed(text) + planner.finish()
     if planner.silent:
-        return ""
+        return SpokenChunk(text="", language=planner.language)
     spoken: list[str] = []
-    for sentence in split_sentences(content, language=language):
+    for sentence in split_sentences(content, language=planner.language):
         spoken.extend(planner.take_sentence(sentence))
     spoken.extend(planner.finish_sentences())
-    return " ".join(spoken)
+    return SpokenChunk(text=" ".join(spoken), language=planner.language)

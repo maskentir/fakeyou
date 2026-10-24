@@ -610,8 +610,14 @@ class StreamFleetSession:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
-        await self._voice().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+        await self._voice().speak(
+            text,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
 
     async def stop_playback(self) -> None:
         await run_fleet_calls(

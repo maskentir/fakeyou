@@ -4,12 +4,14 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.conversation import (
     _filter_piece,
     _SentenceStream,
     _StreamPhase,
     cap_spoken_reply,
 )
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import (
     SentenceStream,
     cap_reply,
@@ -25,14 +27,14 @@ from fakeyou.conversation.turn_graph import (
 MODEL_NODE = {"langgraph_node": "model"}
 
 
-async def _chunks(pieces: Sequence[str]) -> AsyncIterator[str]:
+async def _chunks(pieces: Sequence[str]) -> AsyncIterator[SpokenChunk]:
     for piece in pieces:
-        yield piece
+        yield SpokenChunk(text=piece, language=DEFAULTS.speech.language)
 
 
 async def _shaped(pieces: Sequence[str], max_sentences: int, language: str = "en") -> list[str]:
     return [
-        sentence
+        sentence.text
         async for sentence in shape_sentences(
             _chunks(pieces), max_sentences=max_sentences, language=language
         )
@@ -104,12 +106,12 @@ def test_sentence_stream_reports_the_cap_only_when_text_follows_the_limit() -> N
 async def test_trailing_fragment_is_emitted_only_after_the_stream_ends() -> None:
     events: list[str] = []
 
-    async def pieces() -> AsyncIterator[str]:
-        yield "One. Two"
+    async def pieces() -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="One. Two", language=DEFAULTS.speech.language)
         events.append("end")
 
     async for sentence in shape_sentences(pieces(), max_sentences=5, language="en"):
-        events.append(sentence)
+        events.append(sentence.text)
 
     assert events == ["One.", "end", "Two"]
 
@@ -216,16 +218,17 @@ def test_cap_reply_rejects_a_non_positive_limit() -> None:
 
 
 class _CappingResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         for piece in ("One. Two. ", "Three. Four."):
-            yield piece
+            yield SpokenChunk(text=piece, language=DEFAULTS.speech.language)
 
 
 class _RecordingSink:
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
 
 

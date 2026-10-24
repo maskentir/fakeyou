@@ -7,8 +7,10 @@ from typing import Any, override
 
 from langchain_core.messages import AIMessageChunk
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
 from fakeyou.conversation.model_responder import ModelResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechFloor,
     SpeechRuntime,
@@ -174,9 +176,9 @@ class StreamedReplies:
     def __init__(self, sentences: list[str]) -> None:
         self._sentences = sentences
 
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         for sentence in self._sentences:
-            yield sentence
+            yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
 class AdvancingSink:
@@ -184,7 +186,8 @@ class AdvancingSink:
         self._floor = floor
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
         self._floor.advance()
 

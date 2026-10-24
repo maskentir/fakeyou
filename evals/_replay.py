@@ -139,7 +139,7 @@ async def _collect_sentences(
     ):
         if not sentences:
             score.first_sentence_latencies.append(time.monotonic() - started)
-        sentences.append(sentence)
+        sentences.append(sentence.text)
     return bool(sentences)
 
 
@@ -194,7 +194,7 @@ async def replay(
                     answered, _ = await capture_error(
                         partial(responder.respond, [event], _note_tool_start)
                     )
-                    reply = answered or ""
+                    reply = answered.text if answered else ""
                 latency = time.monotonic() - started
                 record.add_twin_speech(reply)
                 score.latencies.append(latency)

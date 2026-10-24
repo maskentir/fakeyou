@@ -107,12 +107,18 @@ class _SessionSpeaker:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         session = self._session()
         if sentence_index is None and transcript_id is None:
-            await session.speak(utterance)
+            await session.speak(utterance, language=language)
             return
-        await session.speak(utterance, sentence_index=sentence_index, transcript_id=transcript_id)
+        await session.speak(
+            utterance,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
 
     async def stop_playback(self) -> None:
         await self._session().stop_playback()

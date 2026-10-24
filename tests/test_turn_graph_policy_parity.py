@@ -5,6 +5,7 @@ from typing import Any
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import participation_graph, turn_ingress, turn_lifecycle
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import build_turn_graph
 from fakeyou.conversation.turn_ingress import PolicyOptions, TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
@@ -49,8 +50,8 @@ class Audio:
 
 
 class Responder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield "Yes, I am here."
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 def make_ingress(

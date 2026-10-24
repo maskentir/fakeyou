@@ -193,6 +193,7 @@ class PlaybackPort(Protocol):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None: ...
 
     async def stop(self) -> None: ...
@@ -274,13 +275,15 @@ class PlaybackEngine:
         return self._journal
 
     def _stream_extra(
-        self, sentence_index: int | None, transcript_id: str | None
+        self, sentence_index: int | None, transcript_id: str | None, language: str | None
     ) -> dict[str, Any]:
         extra: dict[str, Any] = {}
         if sentence_index is not None:
             extra["sentence_index"] = sentence_index
         if transcript_id is not None:
             extra["transcript_id"] = transcript_id
+        if language is not None:
+            extra["language"] = language
         return extra
 
     def _should_retry(
@@ -326,6 +329,7 @@ class PlaybackEngine:
         text: str,
         sentence_index: int | None,
         transcript_id: str | None,
+        language: str | None,
         generation: int,
     ) -> AsyncIterator[bytes]:
         for attempt in range(2):
@@ -333,7 +337,7 @@ class PlaybackEngine:
             chunks: AsyncIterator[bytes] | None = None
             try:
                 chunks = self._synthesizer.stream(
-                    text, **self._stream_extra(sentence_index, transcript_id)
+                    text, **self._stream_extra(sentence_index, transcript_id, language)
                 )
                 if not hasattr(chunks, "__aiter__"):
                     raise TypeError("stream() must return an async iterator")
@@ -362,6 +366,7 @@ class PlaybackEngine:
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> None:
         if self._closed:
             return
@@ -370,7 +375,7 @@ class PlaybackEngine:
             self._emit("playback_dropped", text, "interrupted")
             return
         await self._play_queued(
-            self._retryable_stream(text, sentence_index, transcript_id, generation), text
+            self._retryable_stream(text, sentence_index, transcript_id, language, generation), text
         )
         return
 

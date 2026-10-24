@@ -115,7 +115,7 @@ def test_the_control_intents_are_spoken_as_one_short_sentence() -> None:
     assert (
         planned_reply(
             "intent: shorter\nOkay, shorter. Anything else?", max_sentences=2, language="en"
-        )
+        ).text
         == "Okay, shorter."
     )
 
@@ -124,6 +124,6 @@ def test_a_stop_plan_keeps_the_acknowledgement_short() -> None:
     assert (
         planned_reply(
             "intent: stop\nOkay, stopping. Anything else?", max_sentences=2, language="en"
-        )
+        ).text
         == "Okay, stopping."
     )

@@ -23,6 +23,7 @@ from fakeyou.conversation.reply_planner import (
     IntentHandler,
     ReplyIntent,
     ReplyPlanner,
+    SpokenChunk,
     planned_reply,
 )
 from fakeyou.foundation.protocols import SupportsAclose
@@ -37,7 +38,7 @@ from fakeyou.observability.provider_faults import classify_exception
 class ConversationResponder(Protocol):
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str: ...
+    ) -> SpokenChunk: ...
 
 
 @runtime_checkable
@@ -48,7 +49,7 @@ class StreamingConversationResponder(Protocol):
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[SpokenChunk]: ...
 
 
 ToolResultCallback = Callable[[str, str, float], None]
@@ -332,7 +333,9 @@ async def invoke_reply(
     return output[-1].text.strip()
 
 
-def _planned_piece(state: _SentenceStream, planner: ReplyPlanner, piece: str) -> list[str] | None:
+def _planned_piece(
+    state: _SentenceStream, planner: ReplyPlanner, piece: str
+) -> list[SpokenChunk] | None:
     content = planner.feed(piece)
     if planner.silent:
         return None
@@ -341,10 +344,11 @@ def _planned_piece(state: _SentenceStream, planner: ReplyPlanner, piece: str) ->
     state.note_text(content)
     state.buffer += content
     state.max_sentences = planner.max_sentences
+    state.language = planner.language
     spoken: list[str] = []
     for sentence in state.drain():
         spoken.extend(planner.take_sentence(sentence))
-    return spoken
+    return [SpokenChunk(text=sentence, language=planner.language) for sentence in spoken]
 
 
 async def _pump_stream(
@@ -352,7 +356,7 @@ async def _pump_stream(
     state: _SentenceStream,
     phase: _StreamPhase,
     planner: ReplyPlanner,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[SpokenChunk]:
     snapshot = phase.boundary
     async for message, metadata in stream:
         piece, snapshot, consumable = _filter_piece(message, metadata, state, phase, snapshot)
@@ -369,9 +373,9 @@ async def _pump_stream(
     if tail is not None:
         state.record_sentence(tail)
         for line in planner.take_sentence(tail):
-            yield line
+            yield SpokenChunk(text=line, language=planner.language)
     for line in planner.finish_sentences():
-        yield line
+        yield SpokenChunk(text=line, language=planner.language)
 
 
 def _record_reply_text(state: _SentenceStream, reply: str) -> None:
@@ -414,20 +418,21 @@ async def _fallback_sentences(
     config: RunnableConfig,
     state: _SentenceStream,
     trace: StreamTrace,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[SpokenChunk]:
     reply = await invoke_reply(agent, messages, config, trace=trace)
     _record_reply_text(state, reply)
     planned = planned_reply(reply, max_sentences=state.max_sentences, language=state.language)
-    capped_text = cap_spoken_reply(planned, state.max_sentences, state.language)
+    capped_text = cap_spoken_reply(planned.text, state.max_sentences, planned.language)
     _record_reply_cap(state, reply, capped_text)
+    state.language = planned.language
     state.buffer = capped_text.strip()
     for sentence in state.drain():
-        yield sentence
+        yield SpokenChunk(text=sentence, language=planned.language)
     rest = state.buffer.strip()
     if rest:
         state.record_sentence(rest)
         state.yielded += 1
-        yield rest
+        yield SpokenChunk(text=rest, language=planned.language)
 
 
 async def stream_sentences(
@@ -437,7 +442,7 @@ async def stream_sentences(
     *,
     max_sentences: int,
     trace: StreamTrace = DEFAULT_STREAM_TRACE,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[SpokenChunk]:
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
     started = time.monotonic()
@@ -467,8 +472,8 @@ async def stream_sentences(
         if state.yielded:
             raise classify_exception("agent", error) from error
         _record_stream_failure(state, started)
-        async for sentence in _fallback_sentences(agent, messages, config, state, trace):
-            yield sentence
+        async for chunk in _fallback_sentences(agent, messages, config, state, trace):
+            yield chunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,7 +539,7 @@ class MeetingResponder:
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str:
+    ) -> SpokenChunk:
         reply = await invoke_reply(
             self.agent,
             self.messages(events),
@@ -554,7 +559,7 @@ class MeetingResponder:
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[SpokenChunk]:
         return stream_sentences(
             self.agent,
             self.messages(events),

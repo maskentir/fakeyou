@@ -4,7 +4,9 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.model_responder import ModelResponder
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechInput,
     SpeechRuntime,
@@ -52,13 +54,14 @@ class FakeSink:
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
 
 
 class FakeResponder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield "Yes, I am here."
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class PhaseState:
@@ -187,4 +190,4 @@ async def test_responder_adapter_resets_partial_text_at_a_tool_boundary() -> Non
     adapter = ModelResponder(chunks=chunks, phase=phase, max_sentences=3, language="en")
     sentences = [sentence async for sentence in adapter.stream_reply("twin, go on")]
 
-    assert sentences == ["Fresh start."]
+    assert [chunk.text for chunk in sentences] == ["Fresh start."]

@@ -2,11 +2,13 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.jev_refresh import JevRefreshInput, JevState
 from fakeyou.conversation.participation_decider import (
     DeciderTurn,
     ParticipationDecision,
 )
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import TurnInput, TurnRuntime, build_turn_graph
 from fakeyou.foundation.participation import ParticipationContext
@@ -19,9 +21,9 @@ class FakeResponder:
     def __init__(self) -> None:
         self.transcripts: list[str] = []
 
-    async def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
-        yield TWIN_REPLY
+        yield SpokenChunk(text=TWIN_REPLY, language=DEFAULTS.speech.language)
 
 
 class FakeDecider:

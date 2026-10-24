@@ -5,9 +5,11 @@ from typing import Any, override
 
 import pytest
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_lifecycle
 from fakeyou.conversation.jev_refresh import JevState
 from fakeyou.conversation.participation_decider import DeciderTurn, ParticipationDecision
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
@@ -71,8 +73,8 @@ class RecordingFaults(FaultReporter):
 
 
 class Responder:
-    async def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
-        yield "Yes, I am here."
+    async def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
+        yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
 class ToolStartingWhole:
@@ -86,11 +88,11 @@ class ToolStartingWhole:
         self._lifecycle = lifecycle
         self._outcomes = outcomes
 
-    async def respond(self, _transcript: str) -> str:
+    async def respond(self, _transcript: str) -> SpokenChunk:
         self._record(self._hook)
         self._lifecycle.fail(RuntimeError("boom"))
         self._record(self._hook)
-        return "Yes, I am here."
+        return SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
     def _record(self, hook: Callable[[], None]) -> None:
         try:

@@ -1,6 +1,8 @@
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechInput,
     SpeechRuntime,
@@ -14,12 +16,12 @@ class FakeResponder:
         self._fail_after = fail_after
         self.transcripts: list[str] = []
 
-    async def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
         for index, sentence in enumerate(self._sentences):
             if self._fail_after is not None and index == self._fail_after:
                 raise RuntimeError("generator broke mid-reply")
-            yield sentence
+            yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
         if self._fail_after is not None and self._fail_after >= len(self._sentences):
             raise RuntimeError("generator broke mid-reply")
 
@@ -28,7 +30,8 @@ class FakeSink:
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str) -> None:
+    async def say(self, sentence: str, language: str) -> None:
+        del language
         self.sentences.append(sentence)
 
 

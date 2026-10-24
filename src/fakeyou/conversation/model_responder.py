@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import SentenceStream, model_text
 from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -86,10 +87,10 @@ class ModelResponder:
         self._language = language
         self._trace = ReplyTrace() if trace is None else trace
 
-    def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         return self._sentences(transcript)
 
-    async def _sentences(self, transcript: str) -> AsyncIterator[str]:
+    async def _sentences(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         stream = SentenceStream(self._max_sentences, self._language)
         answer = _AnswerJournal(self._trace)
         tool_active = False
@@ -107,20 +108,20 @@ class ModelResponder:
             base = stream.yielded
             for offset, sentence in enumerate(stream.take(piece)):
                 answer.note_sentence(sentence, base + offset, spoken=True)
-                yield sentence
+                yield SpokenChunk(text=sentence, language=self._language)
             if stream.check_cap():
                 answer.note_cap()
                 return
         tail = stream.flush()
         if tail is not None:
             answer.note_sentence(tail, stream.yielded, spoken=False)
-            yield tail
+            yield SpokenChunk(text=tail, language=self._language)
 
 
 class WholeReplier(Protocol):
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
-    ) -> str: ...
+    ) -> SpokenChunk: ...
 
 
 class ReplierWholeResponder:
@@ -134,7 +135,7 @@ class ReplierWholeResponder:
         self._events = events
         self._on_tool_start = on_tool_start
 
-    async def respond(self, _transcript: str) -> str:
+    async def respond(self, _transcript: str) -> SpokenChunk:
         return await self._replier.respond(self._events, self._on_tool_start)
 
 
@@ -145,7 +146,7 @@ class SentenceSource(Protocol):
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[SpokenChunk]: ...
 
 
 class ReplierStreamResponder:
@@ -161,7 +162,7 @@ class ReplierStreamResponder:
         self._on_tool_start = on_tool_start
         self._request_id = request_id
 
-    def stream_reply(self, _transcript: str) -> AsyncIterator[str]:
+    def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
         return self._source(self._events, self._on_tool_start, request_id=self._request_id)
 
 

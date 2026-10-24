@@ -215,6 +215,19 @@ async def test_streamed_reply_matches_cap_across_languages(
     await loop.lifecycle.close()
 
 
+async def test_the_declared_language_reaches_the_speaker(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [("chunk", "intent: answer lang: en\nThe launch is on 14 October.", "model")]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal, language="id")
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["The launch is on 14 October."]
+    assert audio.languages == ["en"]
+    await loop.lifecycle.close()
+
+
 async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
@@ -716,7 +729,7 @@ async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
         async for sentence in responder.stream_sentences(
             [event("t1", "hi")], lambda: None, request_id="req-1"
         ):
-            seen.append(sentence)
+            seen.append(sentence.text)
 
     with pytest.raises(
         FakeYouError,
@@ -758,9 +771,15 @@ async def test_speaking_time_does_not_count_against_the_response_budget() -> Non
             *,
             sentence_index: int | None = None,
             transcript_id: str | None = None,
+            language: str | None = None,
         ) -> None:
             await asyncio.sleep(0.2)
-            await super().speak(text, sentence_index=sentence_index, transcript_id=transcript_id)
+            await super().speak(
+                text,
+                sentence_index=sentence_index,
+                transcript_id=transcript_id,
+                language=language,
+            )
 
     responder = StreamingResponder(["First sentence.", "Second sentence."])
     audio = SlowReplyAudio()
@@ -861,9 +880,12 @@ async def test_first_sentence_arrives_before_stream_ends() -> None:
     )
     start = time.perf_counter()
     first = await anext(stream)
-    assert first == "First sentence."
+    assert first.text == "First sentence."
     assert time.perf_counter() - start < 0.30
-    assert [first] + [s async for s in stream] == ["First sentence.", "Second sentence."]
+    assert [first.text] + [s.text async for s in stream] == [
+        "First sentence.",
+        "Second sentence.",
+    ]
 
 
 async def test_streamed_sentences_match_non_streaming_answer() -> None:
@@ -877,8 +899,8 @@ async def test_streamed_sentences_match_non_streaming_answer() -> None:
     whole = await MeetingResponder(cast(AgentT, agent), NoHistory()).respond(
         [event("t1", "hello")], lambda: None
     )
-    assert streamed == ["First sentence.", "Second sentence."]
-    assert " ".join(streamed) == cap_spoken_reply(whole, 2)
+    assert [chunk.text for chunk in streamed] == ["First sentence.", "Second sentence."]
+    assert " ".join(chunk.text for chunk in streamed) == cap_spoken_reply(whole.text, 2)
 
 
 async def test_text_during_tool_run_is_not_spoken() -> None:
@@ -891,7 +913,7 @@ async def test_text_during_tool_run_is_not_spoken() -> None:
             max_sentences=6,
         )
     ]
-    assert spoken == ["I have checked it."]
+    assert [chunk.text for chunk in spoken] == ["I have checked it."]
 
 
 async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
@@ -908,5 +930,7 @@ async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
     first = await anext(stream)
     streamed_first_ms = (time.perf_counter() - start) * 1000
     rest = [s async for s in stream]
-    assert " ".join([first, *rest]) == cap_spoken_reply(whole, 6)
+    assert " ".join([first.text, *(chunk.text for chunk in rest)]) == cap_spoken_reply(
+        whole.text, 6
+    )
     assert streamed_first_ms < whole_first_ms

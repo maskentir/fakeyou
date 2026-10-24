@@ -380,8 +380,8 @@ async def respond_with_deadline(
     native.record.add_transcript(event)
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
         reply = await native.responder.respond([event], lambda: None)
-    native.record.add_twin_speech(reply)
-    return reply
+    native.record.add_twin_speech(reply.text)
+    return reply.text
 
 
 @asynccontextmanager
@@ -425,6 +425,6 @@ async def stream_with_deadline(
         ):
             if not sentences:
                 first_latency = time.monotonic() - started
-            sentences.append(sentence)
-            native.record.add_twin_speech(sentence)
+            sentences.append(sentence.text)
+            native.record.add_twin_speech(sentence.text)
     return sentences, first_latency

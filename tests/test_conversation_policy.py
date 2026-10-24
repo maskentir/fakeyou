@@ -14,7 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
-from fakeyou.config.settings import ParticipationDeciderSettings, RecallStrategy
+from fakeyou.config.settings import DEFAULTS, ParticipationDeciderSettings, RecallStrategy
 from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
     ENDING_RULE,
@@ -51,6 +51,7 @@ from fakeyou.conversation.participation_graph import (
     decider_window,
 )
 from fakeyou.conversation.prompt_builder import PromptSections, build_system_prompt, escape_xml_data
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import (
     TurnEvent,
     TurnEventKind,
@@ -1503,9 +1504,9 @@ class StreamingReplies:
     def __init__(self) -> None:
         self.transcripts: list[str] = []
 
-    async def stream_reply(self, transcript: str) -> AsyncIterator[str]:
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
         self.transcripts.append(transcript)
-        yield PREFETCH_REPLY
+        yield SpokenChunk(text=PREFETCH_REPLY, language=DEFAULTS.speech.language)
 
 
 class QuietSpeaker:

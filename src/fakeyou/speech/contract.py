@@ -9,6 +9,7 @@ class SpeechSynthesizer(Protocol):
         *,
         sentence_index: int | None = None,
         transcript_id: str | None = None,
+        language: str | None = None,
     ) -> AsyncIterator[bytes]: ...
 
     async def aclose(self) -> None: ...

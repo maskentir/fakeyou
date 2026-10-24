@@ -126,7 +126,8 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 ## Fase 1: percakapan yang natural
 
 - **Response planner terstruktur.**
-  - Model membalas `intent: answer | ack | clarify | decline | silent` di baris pertama, lalu isi kalimatnya.
+  - Model membalas `intent: answer | ack | clarify | decline | silent | stop | shorter | repeat | louder` di baris
+    pertama, lalu bahasa yang dipakai (`lang: id` atau `lang: en`), lalu isi kalimatnya.
   - Kode menegakkan bentuk: ack satu kalimat pendek; answer tanpa tawaran atau pertanyaan penutup; clarify hanya bila
     planner menyatakan tidak ada tafsiran masuk akal.
   - Aturan penutup di prompt bisa dipangkas setelah ini.
@@ -141,7 +142,8 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
     berulang).
   - Ini butuh verifikasi apakah Muse menerima update keyword di tengah sesi; bila tidak, keyword dipakai saat rotasi
     sesi STT.
-- **Bahasa mengikuti lawan bicara.** Bahasa balasan ditentukan per giliran dari bahasa trigger, persona hanya default.
+- **Bahasa mengikuti lawan bicara.** Model menulis bahasa yang ia pakai di baris `lang:` pada balasan; kode mengikuti
+  tanpa menebak. Persona hanya default. Bahasa ikut merambat sampai TTS, jadi suara dan pemisah kalimat ikut bahasa.
 - **Target:**
   - pertanyaan penutup di bawah 3%;
   - salah dengar ditafsirkan benar minimal 80%;

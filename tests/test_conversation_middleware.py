@@ -218,7 +218,8 @@ async def test_the_model_reads_who_said_each_line_while_the_record_keeps_plain_t
     record.add_transcript(now)
     agent = create_meeting_agent(model, middleware=[SpeakerAttributionMiddleware()])
 
-    assert await MeetingResponder(agent, record).respond([now], lambda: None) == "Noted."
+    reply = await MeetingResponder(agent, record).respond([now], lambda: None)
+    assert reply.text == "Noted."
     record.close()
 
     assert [message.text for message in model.seen[-1][1:]] == [
