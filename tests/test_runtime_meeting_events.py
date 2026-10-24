@@ -63,7 +63,7 @@ async def test_a_chat_line_reaches_the_conversation(journal: RecordingJournal) -
     worker = _worker(clock, journal, timeline)
     worker.watch_meeting_events()
 
-    line = _chat(timeline, "Rani, can you share the deck?")
+    _chat(timeline, "Rani, can you share the deck?")
     await asyncio.sleep(0)
 
     conversation = cast(FakeConversation, worker.conversation)
