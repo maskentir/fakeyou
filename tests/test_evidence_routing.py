@@ -6,9 +6,8 @@ from fakeyou.conversation.middleware import EvidenceRoutingMiddleware
 from tests._conversation_fakes import ToolCallingFakeModel
 
 
-@tool
+@tool(description="Look at the shared screen.")
 def look_at_screen(question: str) -> str:
-    """Look at the shared screen."""
     return f"The slide shows the beta date for: {question}"
 
 
