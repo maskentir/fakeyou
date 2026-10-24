@@ -212,3 +212,42 @@ Eval live (`gemini-3.1-flash-lite`, 3 run × 18 kasus, `docs/reports/2026-10-25-
 - Yang perlu diukur live di sesi Meet: berapa detik twin masih bicara setelah orang mulai bicara dengannya, dan
   apakah `barge_in_detected` dengan `decided_by = judge` memang mengurangi kalimat twin yang terpotong di tengah.
 
+### Replay percakapan
+
+- Harness replay sekarang bisa memberi interim: langkah skenario boleh berupa interim, dan langkah setelah final
+  disuntik saat twin masih bicara. Ucapan twin menunggu gerbang sampai judge menjawab, jadi barge-in jatuh di tengah
+  jawaban, bukan setelahnya.
+- Dua skenario baru (`s16`, `s17`, keluarga `floor`): interim yang menyapa twin harus mengambil giliran; interim
+  untuk orang lain tidak boleh.
+
+Replay live (`gemini-3.1-flash-lite`, 9 run × 17 skenario, `docs/reports/2026-10-25-conversation-replay-barge-in.json`):
+
+| Metrik | Hasil | Gerbang |
+| --- | --- | --- |
+| Cek `barge_in` (18 langkah berlabel) | 18 dari 18 | semua |
+| `s16`: twin disapa saat bicara | berhenti setelah 1 kalimat, 9 dari 9 | twin melepas giliran |
+| `s17`: interim untuk orang lain | menyelesaikan 2 kalimat, 9 dari 9 | twin tetap bicara |
+| Keluarga `floor` (63 langkah) | 63 dari 63 | 1,0 |
+| Severe failure | 0 | 0 |
+
+### Baseline dari semua sample
+
+Keluarga `language` (`s12`: ditanya dalam bahasa Inggris oleh tim berbahasa Indonesia) berubah-ubah antar batch pada kode
+yang sama: twin kadang menjawab dalam bahasa Indonesia (bahasa persona) padahal pertanyaannya bahasa Inggris.
+
+| Batch | Kode | Lulus |
+| --- | --- | --- |
+| Replay penuh 1 | branch ini | 6 / 9 |
+| Replay penuh 2 | branch ini | 9 / 9 |
+| Replay penuh 3 | branch ini | 6 / 9 |
+| Replay penuh | sebelum PR #27 (`e59a10b`) | 9 / 9 |
+| `s12` sendiri | branch ini | 9 / 9 |
+| `s12` sendiri | sebelum PR #27 | 8 / 9 |
+| **Total** | | **47 / 54 = 0,87** |
+
+Tidak ada yang di PR #27 menyentuh bahasa jawaban (barge-in hanya jalan di interim), dan arahnya berbalik tergantung
+batch, jadi ini variasi sampling model, bukan regresi. Baseline lama 1,0 berasal dari satu batch yang kebetulan lulus
+semua; baseline baru adalah rate dari semua sample di atas. Keluarga lain juga dihitung ulang dari semua batch:
+`control` 34/36 = 0,944, `recall` 72/72 = 1,0 (sebelumnya 0,944), sisanya 1,0.
+
+Perbaikan penyebabnya (twin memilih bahasa participant, bukan bahasa persona) belum dikerjakan dan jadi PR berikutnya.
