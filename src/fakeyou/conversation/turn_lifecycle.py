@@ -42,10 +42,10 @@ from fakeyou.conversation.turn_queue import (
     DeferredTurns,
     PendingFinals,
     QuietFloor,
-    ReplyChannel,
 )
 from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception

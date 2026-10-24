@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from graphiti_core import Graphiti
 
@@ -30,7 +30,7 @@ from fakeyou.catalog.commands import Command
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
 from fakeyou.conversation.meeting_turns import MeetingTurns
-from fakeyou.conversation.session import MeetingAudio, SessionResult
+from fakeyou.conversation.session import MeetingAudio, MeetingConversation, SessionResult
 from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
@@ -388,7 +388,7 @@ async def _drive_join_session(
                 stop=stop,
                 open_audio=run.audio_factory,
                 initial_speech=prepared.request.initial_speech,
-                conversation=run.conversation,
+                conversation=cast(MeetingConversation, run.conversation),
                 faults=run.faults,
                 journal=run.journal,
                 voice_activity=run.voice_activity,

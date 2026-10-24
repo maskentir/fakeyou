@@ -15,7 +15,6 @@ from fakeyou.conversation.turn_graph import (
     record_barge_in,
 )
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
-from fakeyou.conversation.turn_queue import ReplyChannel
 from fakeyou.foundation.acks import is_bare_ack, is_interjection
 from fakeyou.foundation.participation import (
     ParticipationContext,
@@ -26,6 +25,7 @@ from fakeyou.foundation.participation import (
     same_voice,
 )
 from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
+from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.foundation.turn_tracker import TurnState, detect_turn_cue, empty_turn_state, note_event
 
 

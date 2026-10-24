@@ -3,11 +3,10 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal
 
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 
-ReplyChannel = Literal["voice", "chat"]
 DEFERRED_RETRIES = 1
 
 

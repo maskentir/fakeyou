@@ -14,6 +14,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):
@@ -79,10 +80,21 @@ class FakeConversation:
         self.fail = fail
         self.bound: MeetingAudio | None = None
         self.closed = False
+        self.chat: list[str] = []
+        self.attention: list[str] = []
 
     @property
     def is_busy(self) -> bool:
         return False
+
+    def receive_chat(self, event: TranscriptEvent) -> bool:
+        self.chat.append(event.text)
+        return True
+
+    def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
+        del event
+        self.attention.append(channel)
+        return True
 
     def bind(self, session: MeetingAudio) -> None:
         self.bound = session

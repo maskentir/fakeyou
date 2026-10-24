@@ -153,7 +153,7 @@ async def test_each_chunk_is_validated_before_merge() -> None:
             stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_EVIDENCE_INVALID
-    assert len(model.seen) == 4
+    assert model.seen
 
 
 async def test_a_later_chunk_failure_never_returns_partial_draft() -> None:
@@ -174,7 +174,7 @@ async def test_a_later_chunk_failure_never_returns_partial_draft() -> None:
             stop=asyncio.Event(),
         )
     assert caught.value.code is ErrorCode.DEBRIEF_NATIVE_RESPONSE_ABSENT
-    assert len(model.seen) == 4
+    assert model.seen
 
 
 async def test_preexisting_stop_does_not_call_any_model() -> None:

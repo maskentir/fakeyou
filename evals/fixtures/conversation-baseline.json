@@ -2,12 +2,13 @@
   "reply_model": "gemini-3.1-flash-lite",
   "runs": 9,
   "families": {
+    "chat": 1.0,
     "control": 1.0,
     "floor": 1.0,
     "honesty": 1.0,
     "language": 1.0,
-    "misheard": 0.944,
-    "recall": 1.0,
+    "misheard": 1.0,
+    "recall": 0.944,
     "small_talk": 1.0
   }
 }
