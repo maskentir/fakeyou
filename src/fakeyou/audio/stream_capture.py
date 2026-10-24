@@ -646,6 +646,10 @@ class StreamFleetSession:
         for session in self._sessions:
             session.mark_admitted()
 
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        changed = [session.update_keywords(terms) for session in self._sessions]
+        return any(changed)
+
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None
     ) -> DeafVerdict:

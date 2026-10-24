@@ -10,7 +10,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
-from fakeyou.audio.audio import MeetingAudioError
+from fakeyou.audio.audio import MeetingAudioError, SupportsKeywords
 from fakeyou.audio.stream_capture import (
     CaptureDrainLoop,
     DrainPolling,
@@ -113,6 +113,7 @@ from fakeyou.orchestration.lifecycle import (
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
+from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
     DEFAULT_PERCEPTION_SCHEDULE,
     PerceptionDrain,
@@ -599,10 +600,33 @@ class MeetingWorker:
         self.page.on("response", self.perception.sensors.on_response)
         self.perception_sync_watched = True
 
+    def watch_roster_keywords(self) -> None:
+        perception = self.perception
+        if perception is None:
+            return
+        sensors = perception.sensors
+        shared = sensors.roster_listener
+
+        def listener(roster: MeetRoster) -> None:
+            if shared is not None:
+                shared(roster)
+            self.bias_transcriber(roster)
+
+        sensors.roster_listener = listener
+
+    def bias_transcriber(self, roster: MeetRoster) -> None:
+        audio = self.audio
+        if audio is None or not isinstance(audio, SupportsKeywords):
+            return
+        names = [name for name in roster.people().values() if name]
+        if audio.update_keywords(names):
+            self.record("stt_keywords_recorded", source="audio", keywords=len(names))
+
     async def start_perception(self) -> None:
         if self.perception is None or self.perception_drain is not None:
             return
         self.watch_perception_sync()
+        self.watch_roster_keywords()
         drain = PerceptionDrain(
             self.page,
             self.perception.sensors,

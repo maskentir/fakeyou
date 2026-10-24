@@ -69,7 +69,7 @@ from fakeyou.transcription.contract import (
     TranscriptionError,
     TranscriptSink,
 )
-from fakeyou.transcription.muse import MuseClient, MuseDeps, MuseOptions
+from fakeyou.transcription.muse import KeywordSource, MuseClient, MuseDeps, MuseOptions
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_START_TIMEOUT_SECONDS = 25.0
@@ -100,6 +100,11 @@ def stt_reconnect_supported(stt: object) -> bool:
     return isinstance(stt, SupportsReconnectWhenIdle) and asyncio.iscoroutinefunction(
         stt.reconnect_when_idle
     )
+
+
+@runtime_checkable
+class SupportsKeywords(Protocol):
+    def update_keywords(self, terms: Sequence[str]) -> bool: ...
 
 
 @runtime_checkable
@@ -317,6 +322,15 @@ class MeetingAudioSession:
             self.request_stt_reconnect("provider_fault")
             return
         self.fail("meeting audio provider failed", cause=fault)
+
+    def update_keywords(self, terms: Sequence[str]) -> bool:
+        stt = self._stt
+        if not isinstance(stt, SupportsKeywords):
+            return False
+        if not stt.update_keywords(terms):
+            return False
+        self.request_stt_reconnect("keyword_change")
+        return True
 
     def request_stt_reconnect(self, reason: str) -> None:
         if self._stopping or self._reconnect_state in (
@@ -699,7 +713,7 @@ def _default_speech_session(
                 mode=speech.stt_settings.mode,
                 url=speech.stt_settings.url,
                 language=speech.speech_language,
-                keywords=tuple(speech.stt_keywords or ()),
+                keywords=KeywordSource(speech.stt_keywords or ()),
                 sample_rate=CAPTURE_SAMPLE_RATE,
             ),
             sinks=sinks,
