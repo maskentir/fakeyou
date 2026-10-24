@@ -315,10 +315,10 @@
     {
       "id": "s16",
       "family": "floor",
-      "title": "Twin yang sedang bicara.distracting oleh sapaan untuk twin",
+      "title": "Twin yang sedang bicara tiba-tiba disela oleh sapaan untuk twin",
       "steps": [
         {
-          "say": "Rani, bagaimana progress rilis beta sampai hari ini?",
+          "say": "Rani, bagaimana progress rilis beta sampai hari ini dan apa yang masih belum selesai?",
           "speaker": "speaker-a",
           "claim": "Ayu",
           "expect": {
@@ -344,7 +344,7 @@
       "title": "Obrolan antar orang lain tidak mengambil giliran twin",
       "steps": [
         {
-          "say": "Rani, bagaimana progress rilis beta sampai hari ini?",
+          "say": "Rani, bagaimana progress rilis beta sampai hari ini dan apa yang masih belum selesai?",
           "speaker": "speaker-a",
           "claim": "Ayu",
           "expect": {
