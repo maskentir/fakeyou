@@ -125,6 +125,7 @@ async def test_replay_grades_replies_silence_and_cut_offs_through_the_real_turn_
     )
     monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
     monkeypatch.setattr(assembly, "create_fallback_chat_model", lambda _settings: None)
+    monkeypatch.setattr(assembly, "create_strong_chat_model", lambda _settings: None)
     scenario = Scenario(
         id="c1",
         family="recall",
@@ -165,6 +166,7 @@ async def test_a_failed_turn_fails_its_step_even_without_an_expectation(
     model = UnreachableModel(responses=[AIMessage(content="unused")])
     monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
     monkeypatch.setattr(assembly, "create_fallback_chat_model", lambda _settings: None)
+    monkeypatch.setattr(assembly, "create_strong_chat_model", lambda _settings: None)
     scenario = Scenario(
         id="c2",
         family="recall",
