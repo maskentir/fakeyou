@@ -104,6 +104,22 @@ Tujuan: setiap fase berikutnya punya angka pembanding yang bisa diulang.
 - Replay percakapan berjalan dari satu perintah, menghasilkan laporan per keluarga, dan baseline terekam.
 - Judge lulus kalibrasi.
 
+### Status Fase 0 (2026-10-24)
+
+Scorecard terhadap sesi live yang tersimpan:
+
+| Sesi | Gagal |
+| --- | --- |
+| `live-qvr-2` | `watchdog_failures_per_hour` (beban test paralel) |
+| `live-qvr-1` | `session_completed`, `faults_per_hour` |
+| `live-rhd-1` | hampir semua metrik; sesi ini yang membuka roadmap |
+| `live-kmk-3` | `first_audio_p50_seconds`, `faults_per_hour`, `attribution_coverage`, `admission_to_listening_seconds` |
+
+Replay percakapan: 7 keluarga skenario, baseline di `evals/fixtures/conversation-baseline.json`, laporan di
+`docs/reports/2026-10-24-conversation-replay.json`. Judge mengeluh 1 dari 30 label (96,7% kecocokan). Family yang
+masih lemah sengaja dibiarkan sebagai target Fase 1: `small_talk` 0,259 (pertanyaan penutup) dan `language` 0,0
+(bahasa balasan masih mengikuti persona, bukan lawan bicara).
+
 ## Fase 1: percakapan yang natural
 
 - **Response planner terstruktur.**
