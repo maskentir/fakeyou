@@ -70,13 +70,12 @@ def _render_window(window: Sequence[DeciderTurn]) -> str:
 
 class StructuredGeminiDecider:
     def __init__(self, *, model: StructuredChatModel) -> None:
-        self._model = model
+        self._structured = model.with_structured_output(ParticipationDecision)
 
     async def decide(self, window: Sequence[DeciderTurn]) -> ParticipationDecision:
-        structured = self._model.with_structured_output(ParticipationDecision)
         messages: list[BaseMessage] = [
             SystemMessage(content=_DECIDER_RULES),
             HumanMessage(content=_render_window(window)),
         ]
-        result = await structured.ainvoke(messages)
+        result = await self._structured.ainvoke(messages)
         return ParticipationDecision.model_validate(result)

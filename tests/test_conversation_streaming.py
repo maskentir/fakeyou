@@ -37,7 +37,7 @@ from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel, recall_call
-from tests._conversation_support import AgentT, event
+from tests._conversation_support import AgentT, callback_handlers, event
 from tests._error_support import message_pattern
 from tests._persistence_fakes import RecordingJournal
 from tests._pregen_support import StreamingResponder
@@ -117,7 +117,7 @@ class ScriptedAgent:
             actions = self._scripts
         self.configs.append(config)
         self.stream_modes.append(kwargs.get("stream_mode"))
-        stream = ScriptedStream(self, actions, (config or {}).get("callbacks", ()))
+        stream = ScriptedStream(self, actions, callback_handlers(config))
         self.streams.append(stream)
         return stream
 
@@ -880,7 +880,7 @@ class ToolInterleavedAgent:
         self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
     ) -> ToolInterleavedStream:
         del payload, kwargs
-        return ToolInterleavedStream((config or {}).get("callbacks", ()))
+        return ToolInterleavedStream(callback_handlers(config))
 
 
 def stream_config() -> RunnableConfig:

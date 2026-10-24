@@ -1,7 +1,9 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
+from langchain_core.callbacks import BaseCallbackManager
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 
@@ -35,3 +37,10 @@ def voiced_event(
     id: str, text: str, *, participant_id: str, voice_clusters: tuple[str, ...]
 ) -> TranscriptEvent:
     return replace(event(id, text, participant_id=participant_id), voice_clusters=voice_clusters)
+
+
+def callback_handlers(config: Mapping[str, Any] | None) -> list[Any]:
+    callbacks = (config or {}).get("callbacks") or ()
+    if isinstance(callbacks, BaseCallbackManager):
+        return list(callbacks.handlers)
+    return list(callbacks)
