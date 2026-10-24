@@ -516,8 +516,7 @@ async def test_summarization_middleware_replaces_old_history_with_summary() -> N
         assert "newest question" not in prompt
 
 
-def test_official_trim_budget_scale_against_custom_trim() -> None:
-    from fakeyou.conversation.middleware import estimate_message_tokens, trim_messages_to_budget
+def test_official_trim_budget_scale() -> None:
 
     def build(length: int, count: int) -> list[AnyMessage]:
         messages: list[AnyMessage] = [SystemMessage(content=("sys" + "x" * length)[:length])]
@@ -533,10 +532,7 @@ def test_official_trim_budget_scale_against_custom_trim() -> None:
 
     assert count_tokens_approximately([long_messages[1]]) == 104
     assert count_tokens_approximately([long_messages[2]]) == 106
-    assert estimate_message_tokens([long_messages[1]]) == 102
-    assert estimate_message_tokens([long_messages[2]]) == 102
     assert count_tokens_approximately(long_messages) == 42105
-    assert estimate_message_tokens(long_messages) == 40902
 
     official_long = trim_messages(
         long_messages,
@@ -546,25 +542,16 @@ def test_official_trim_budget_scale_against_custom_trim() -> None:
         include_system=True,
         start_on="human",
     )
-    custom_long = trim_messages_to_budget(list(long_messages), max_tokens=32000)
 
     assert official_long == [long_messages[0], *long_messages[99:]]
     assert len(official_long) == 303
-    assert custom_long == [long_messages[0], *long_messages[89:]]
-    assert len(custom_long) == 313
     assert count_tokens_approximately(official_long) == 31815
-    assert estimate_message_tokens(official_long) == 30906
-    assert count_tokens_approximately(custom_long) == 32865
-    assert estimate_message_tokens(custom_long) == 31926
 
     short_messages = build(40, 3000)
 
     assert count_tokens_approximately([short_messages[1]]) == 14
     assert count_tokens_approximately([short_messages[2]]) == 16
-    assert estimate_message_tokens([short_messages[1]]) == 12
-    assert estimate_message_tokens([short_messages[2]]) == 12
     assert count_tokens_approximately(short_messages) == 45015
-    assert estimate_message_tokens(short_messages) == 36012
 
     official_short = trim_messages(
         short_messages,
@@ -574,20 +561,13 @@ def test_official_trim_budget_scale_against_custom_trim() -> None:
         include_system=True,
         start_on="human",
     )
-    custom_short = trim_messages_to_budget(list(short_messages), max_tokens=32000)
 
     assert official_short == [short_messages[0], *short_messages[869:]]
     assert len(official_short) == 2133
-    assert custom_short == [short_messages[0], *short_messages[336:]]
-    assert len(custom_short) == 2666
     assert count_tokens_approximately(official_short) == 31995
-    assert estimate_message_tokens(official_short) == 25596
-    assert count_tokens_approximately(custom_short) == 39991
-    assert estimate_message_tokens(custom_short) == 31992
 
 
 def test_official_trim_drops_latest_message_below_its_own_cost() -> None:
-    from fakeyou.conversation.middleware import estimate_message_tokens, trim_messages_to_budget
 
     def official(
         messages: list[AnyMessage], budget: int, *, start_on_human: bool = True
@@ -610,7 +590,6 @@ def test_official_trim_drops_latest_message_below_its_own_cost() -> None:
     assert count_tokens_approximately([small_latest[-1]]) == 6
     assert official(small_latest, 5) == []
     assert official(small_latest, 6) == [small_latest[-1]]
-    assert trim_messages_to_budget(list(small_latest), max_tokens=5) == [small_latest[-1]]
 
     big_latest: list[AnyMessage] = [
         HumanMessage(content="first"),
@@ -621,9 +600,6 @@ def test_official_trim_drops_latest_message_below_its_own_cost() -> None:
     assert count_tokens_approximately([big_latest[-1]]) == 104
     assert official(big_latest, 103) == []
     assert official(big_latest, 104) == [big_latest[-1]]
-    custom_big = trim_messages_to_budget(list(big_latest), max_tokens=10)
-    assert custom_big == [big_latest[-1]]
-    assert estimate_message_tokens(custom_big) == 102
 
     ai_latest: list[AnyMessage] = [
         HumanMessage(content=("oldq" + "x" * 400)[:400]),
@@ -635,12 +611,10 @@ def test_official_trim_drops_latest_message_below_its_own_cost() -> None:
     assert count_tokens_approximately([ai_latest[-1]]) == 9
     assert official(ai_latest, 20) == []
     assert official(ai_latest, 20, start_on_human=False) == [ai_latest[-1]]
-    assert trim_messages_to_budget(list(ai_latest), max_tokens=20) == [ai_latest[-1]]
     assert official(ai_latest, 120) == [ai_latest[2], ai_latest[3]]
 
 
-def test_official_trim_system_message_semantics_against_custom_trim() -> None:
-    from fakeyou.conversation.middleware import estimate_message_tokens, trim_messages_to_budget
+def test_official_trim_system_message_semantics() -> None:
 
     def official(
         messages: list[AnyMessage], budget: int, *, include_system: bool
@@ -662,7 +636,6 @@ def test_official_trim_system_message_semantics_against_custom_trim() -> None:
     ]
 
     assert count_tokens_approximately([leading_system[0]]) == 105
-    assert estimate_message_tokens([leading_system[0]]) == 102
     assert official(leading_system, 110, include_system=True) == [leading_system[0]]
     assert official(leading_system, 111, include_system=True) == [
         leading_system[0],
@@ -670,10 +643,6 @@ def test_official_trim_system_message_semantics_against_custom_trim() -> None:
     ]
     assert count_tokens_approximately(official(leading_system, 111, include_system=True)) == 111
     assert official(leading_system, 110, include_system=False) == [leading_system[3]]
-    assert trim_messages_to_budget(list(leading_system), max_tokens=110) == [
-        leading_system[0],
-        leading_system[3],
-    ]
 
     oversized_system: list[AnyMessage] = [
         SystemMessage(content=("sys" + "x" * 4000)[:4000]),
@@ -684,7 +653,6 @@ def test_official_trim_system_message_semantics_against_custom_trim() -> None:
     kept_oversized = official(oversized_system, 100, include_system=True)
     assert kept_oversized == [oversized_system[0]]
     assert count_tokens_approximately(kept_oversized) == 1005
-    assert trim_messages_to_budget(list(oversized_system), max_tokens=100) == oversized_system
 
     middle_system: list[AnyMessage] = [
         HumanMessage(content=("oldq" + "x" * 400)[:400]),
@@ -694,15 +662,9 @@ def test_official_trim_system_message_semantics_against_custom_trim() -> None:
     ]
 
     assert official(middle_system, 130, include_system=True) == [middle_system[3]]
-    assert trim_messages_to_budget(list(middle_system), max_tokens=130) == [
-        middle_system[1],
-        middle_system[2],
-        middle_system[3],
-    ]
 
 
 def test_official_trim_tool_pair_at_window_boundary() -> None:
-    from fakeyou.conversation.middleware import estimate_message_tokens, trim_messages_to_budget
 
     def official(
         messages: list[AnyMessage], budget: int, *, start_on_human: bool = True
@@ -727,18 +689,12 @@ def test_official_trim_tool_pair_at_window_boundary() -> None:
     ]
 
     assert count_tokens_approximately([history[1]]) == 24
-    assert estimate_message_tokens([history[1]]) == 2
 
     dangling = official(history, 120, start_on_human=False)
     assert dangling == [history[2], history[3]]
     assert isinstance(dangling[0], ToolMessage)
     assert official(history, 120) == [history[3]]
     assert official(history, 140, start_on_human=False) == [
-        history[1],
-        history[2],
-        history[3],
-    ]
-    assert trim_messages_to_budget(list(history), max_tokens=120) == [
         history[1],
         history[2],
         history[3],
@@ -884,3 +840,19 @@ async def test_retry_policy_does_not_retry_exceptions_outside_retry_on() -> None
         await _retrying_graph(seen, LookupError).ainvoke({"attempts": []})
 
     assert seen == [1]
+
+
+def test_twin_trim_keeps_the_latest_message_the_official_trim_would_drop() -> None:
+    from fakeyou.conversation.middleware import trim_messages_to_budget
+
+    oversized_latest: list[AnyMessage] = [
+        HumanMessage(content=("old" + "x" * 400)[:400]),
+        HumanMessage(content=("latest" + "x" * 400)[:400]),
+    ]
+    oversized_system: list[AnyMessage] = [
+        SystemMessage(content=("sys" + "x" * 4000)[:4000]),
+        HumanMessage(content="latest"),
+    ]
+
+    assert trim_messages_to_budget(list(oversized_latest), max_tokens=10) == [oversized_latest[-1]]
+    assert trim_messages_to_budget(list(oversized_system), max_tokens=100) == oversized_system

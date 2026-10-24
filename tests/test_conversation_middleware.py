@@ -13,6 +13,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.outputs import ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -26,7 +27,6 @@ from fakeyou.conversation.middleware import (
     SpeakerAttributionMiddleware,
     SpeechMark,
     attributed,
-    estimate_message_tokens,
     patch_orphan_tool_calls,
     retry_before_speech,
     trim_messages_to_budget,
@@ -121,14 +121,6 @@ async def test_orphan_middleware_answers_stale_calls_on_a_chat_thread() -> None:
     assert any(call not in stored_answered for call in stored_calls)
 
 
-def test_estimate_message_tokens_counts_text_heuristic() -> None:
-    assert estimate_message_tokens([HumanMessage(content="a" * 40)]) == 12
-    assert estimate_message_tokens([HumanMessage(content="")]) == 2
-    assert (
-        estimate_message_tokens([HumanMessage(content=[{"type": "text", "text": "b" * 40}])]) == 12
-    )
-
-
 def test_trim_messages_to_budget_keeps_system_and_recent() -> None:
     messages: list[AnyMessage] = [
         SystemMessage(content="sys"),
@@ -140,7 +132,7 @@ def test_trim_messages_to_budget_keeps_system_and_recent() -> None:
     trimmed = trim_messages_to_budget(messages, max_tokens=20)
 
     assert trimmed == [messages[0], messages[-1]]
-    assert estimate_message_tokens(trimmed) <= 20
+    assert count_tokens_approximately(trimmed) <= 20
 
 
 def test_trim_messages_to_budget_leaves_short_history_unchanged() -> None:
@@ -168,11 +160,12 @@ def test_trim_drops_answers_whose_call_was_trimmed() -> None:
 def test_trim_patches_calls_whose_answer_was_trimmed() -> None:
     messages: list[AnyMessage] = [
         HumanMessage(content="o" * 400),
+        HumanMessage(content="question"),
         AIMessage(content="", tool_calls=[_orphan_call("call-1")]),
         HumanMessage(content="latest"),
     ]
 
-    trimmed = trim_messages_to_budget(messages, max_tokens=10)
+    trimmed = trim_messages_to_budget(messages, max_tokens=40)
 
     calls, answered = _tool_ids(trimmed)
     assert calls == ["call-1"]
@@ -202,7 +195,7 @@ async def test_history_trim_limits_a_chat_request_but_not_its_thread() -> None:
 
     assert result["messages"][-1].text == "Fresh answer."
     seen = model.seen[-1]
-    assert estimate_message_tokens(seen[1:]) <= 100
+    assert count_tokens_approximately(seen[1:]) <= 100
     assert seen[-1].content == "new question"
     assert all(
         "xxxxx" not in str(message.content) and "yyyyy" not in str(message.content)

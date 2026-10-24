@@ -18,33 +18,15 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
+    trim_messages,
 )
+from langchain_core.messages.utils import count_tokens_approximately
 
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.meet.meet_tools import MEET_SEND_CHAT
 from fakeyou.observability.provider_faults import classify_exception
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
-TOKENS_PER_MESSAGE = 2
-
-
-def _message_text(message: BaseMessage) -> str:
-    content = message.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        return "".join(parts)
-    return str(content)
-
-
-def estimate_message_tokens(messages: Sequence[BaseMessage]) -> int:
-    return sum(len(_message_text(message)) // 4 + TOKENS_PER_MESSAGE for message in messages)
 
 
 def _answered_calls(messages: Sequence[BaseMessage]) -> set[str]:
@@ -79,38 +61,21 @@ def patch_orphan_tool_calls(messages: Sequence[BaseMessage]) -> list[BaseMessage
     return patched
 
 
-def _drop_dangling_answers(messages: list[AnyMessage]) -> list[AnyMessage]:
-    calls = {
-        call["id"]
-        for message in messages
-        if isinstance(message, AIMessage) and message.tool_calls
-        for call in message.tool_calls
-        if call["id"] is not None
-    }
-    pruned = [
-        message
-        for message in messages
-        if not (isinstance(message, ToolMessage) and message.tool_call_id not in calls)
-    ]
-    return pruned if len(pruned) != len(messages) else messages
-
-
 def trim_messages_to_budget(messages: list[AnyMessage], *, max_tokens: int) -> list[AnyMessage]:
-    if estimate_message_tokens(messages) <= max_tokens:
+    if count_tokens_approximately(messages) <= max_tokens:
         return messages
-    system = [message for message in messages if isinstance(message, SystemMessage)]
-    rest = [message for message in messages if not isinstance(message, SystemMessage)]
-    budget = max_tokens - estimate_message_tokens(system)
-    kept_reversed: list[AnyMessage] = []
-    total = 0
-    for message in reversed(rest):
-        cost = len(_message_text(message)) // 4 + TOKENS_PER_MESSAGE
-        if kept_reversed and total + cost > budget:
-            break
-        kept_reversed.append(message)
-        total += cost
-    kept = system + list(reversed(kept_reversed))
-    return cast(list[AnyMessage], patch_orphan_tool_calls(_drop_dangling_answers(kept)))
+    trimmed = trim_messages(
+        messages,
+        max_tokens=max_tokens,
+        token_counter="approximate",
+        strategy="last",
+        include_system=True,
+        start_on="human",
+    )
+    if not any(not isinstance(message, SystemMessage) for message in trimmed):
+        system = [message for message in messages if isinstance(message, SystemMessage)]
+        trimmed = [*system, messages[-1]]
+    return cast(list[AnyMessage], patch_orphan_tool_calls(trimmed))
 
 
 class OrphanToolCallMiddleware(AgentMiddleware[Any, Any, Any]):

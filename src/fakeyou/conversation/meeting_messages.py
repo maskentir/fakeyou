@@ -2,9 +2,8 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, trim_messages
 
-from fakeyou.conversation.middleware import estimate_message_tokens
 from fakeyou.foundation.speakers import UNKNOWN_PARTICIPANT, speaker_name
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.foundation.triggers import MEETING_EVENT, TriggerKind
@@ -110,19 +109,13 @@ def _spoken(entries: Sequence[RecordEntry], exclude: Collection[str]) -> list[Ba
 def history_messages(
     entries: Sequence[RecordEntry], *, exclude: Collection[str], max_tokens: int
 ) -> list[BaseMessage]:
-    kept: list[BaseMessage] = []
-    total = 0
-    for message in reversed(_spoken(entries, exclude)):
-        total += estimate_message_tokens([message])
-        if total > max_tokens:
-            break
-        kept.append(message)
-    kept.reverse()
-    first_human = next(
-        (index for index, message in enumerate(kept) if isinstance(message, HumanMessage)),
-        len(kept),
+    return trim_messages(
+        _spoken(entries, exclude),
+        max_tokens=max_tokens,
+        token_counter="approximate",
+        strategy="last",
+        start_on="human",
     )
-    return kept[first_human:]
 
 
 def last_twin_text(entries: Sequence[RecordEntry]) -> str | None:
