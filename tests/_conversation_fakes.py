@@ -92,6 +92,7 @@ class FakeConversation:
         return True
 
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
+        del event
         self.attention.append(channel)
         return True
 
