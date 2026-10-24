@@ -23,6 +23,18 @@ class RosterChange:
 
 
 @dataclass(frozen=True, slots=True)
+class MeetingState:
+    people: dict[str, str]
+    presenter: str | None
+    cameras_on: frozenset[str]
+    synced: bool
+
+    @property
+    def remote_count(self) -> int:
+        return len(self.people)
+
+
+@dataclass(frozen=True, slots=True)
 class StreamAssignment:
     stream_id: str
     role: StreamRole
@@ -33,6 +45,30 @@ class MeetRoster:
     def __init__(self) -> None:
         self._users: dict[str, MeetUser] = {}
         self._outputs: dict[tuple[str, OutputKind], DeviceOutput] = {}
+        self._synced = False
+
+    def mark_synced(self) -> None:
+        self._synced = True
+
+    def state(self) -> MeetingState:
+        people = self.people()
+        return MeetingState(
+            people=people,
+            presenter=self.presenter(),
+            cameras_on=frozenset(
+                device_id
+                for (device_id, kind), output in self._outputs.items()
+                if kind == "video" and not output.disabled and device_id in people
+            ),
+            synced=self._synced,
+        )
+
+    def presenter(self) -> str | None:
+        for user in self._users.values():
+            parent = user.parent_device_id
+            if user.present and parent is not None and not self._is_own(user.device_id):
+                return self.name_of(parent) or None
+        return None
 
     @property
     def own_device_ids(self) -> frozenset[str]:

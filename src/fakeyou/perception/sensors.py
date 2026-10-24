@@ -106,6 +106,7 @@ class PerceptionSensors:
         self._journal = journal or Journal("", echo=False)
         self._clock = clock
         self.rejected_messages = 0
+        self.syncs_accepted = 0
         self.frames_seen = 0
         self._audio_outputs: set[tuple[str, str]] = set()
 
@@ -137,6 +138,8 @@ class PerceptionSensors:
             users=len(users),
             screens=sum(user.is_screen for user in users),
         )
+        self.roster.mark_synced()
+        self.syncs_accepted += 1
         self._apply_changes(self.roster.apply_users(users), self._clock())
         self._share_roster()
 
