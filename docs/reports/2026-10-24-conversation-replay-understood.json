@@ -1,0 +1,3688 @@
+{
+  "reply_model": "gemini-3.1-flash-lite",
+  "runs": 9,
+  "judge_disagreements": [
+    "s04#1/r2"
+  ],
+  "baseline": {
+    "control": 1.0,
+    "floor": 1.0,
+    "honesty": 1.0,
+    "language": 0.444,
+    "misheard": 1.0,
+    "recall": 1.0,
+    "small_talk": 0.667
+  },
+  "regressions": {},
+  "families": {
+    "control": {
+      "steps": 9,
+      "passed": 9,
+      "rate": 1.0
+    },
+    "floor": {
+      "steps": 27,
+      "passed": 27,
+      "rate": 1.0
+    },
+    "honesty": {
+      "steps": 18,
+      "passed": 18,
+      "rate": 1.0
+    },
+    "language": {
+      "steps": 9,
+      "passed": 9,
+      "rate": 1.0
+    },
+    "misheard": {
+      "steps": 18,
+      "passed": 17,
+      "rate": 0.944
+    },
+    "recall": {
+      "steps": 18,
+      "passed": 18,
+      "rate": 1.0
+    },
+    "small_talk": {
+      "steps": 27,
+      "passed": 27,
+      "rate": 1.0
+    }
+  },
+  "checks": {
+    "forbidden": {
+      "met": 9
+    },
+    "language": {
+      "met": 18
+    },
+    "means": {
+      "met": 62,
+      "missed": 1
+    },
+    "no_closing_question": {
+      "met": 99
+    },
+    "replied": {
+      "met": 99
+    },
+    "sentences": {
+      "met": 45
+    },
+    "silent": {
+      "met": 27
+    }
+  },
+  "severe_failures": [],
+  "steps": [
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, ya saya dengar.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Baik, terima kasih.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi!",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply consists of the word 'Hi', which is English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid project updates and our progress toward the beta launch.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes project tasks and progress, correctly interpreting 'walk' as 'work'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu adalah sistem pencarian yang membantu kita menarik informasi relevan dari basis data dokumen Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains the function of the RAG system in document search rather than questioning or asking about the misheard term 'rock system'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without questioning the misheard word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid sesuai jadwal dan kami tetap berfokus pada peluncuran beta 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Mengenai persiapan, Rani memegang daftar periksa peluncurannya.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya baru saja menjelaskan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan Rani yang memegang daftar periksa peluncurannya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the launch checklist."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who is responsible for Orchid by identifying Rani as the product lead, without repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Terkait keputusan vendor, Rani perlu meninjau dan memberikan persetujuan tertulis terlebih dahulu.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a decision and instead indicates that Rani herself needs to review and provide confirmation first."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, keputusan anggaran perlu persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply declines to approve the budget immediately and states that written approval from the owner (Rani) is required."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026 and we are currently on track.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, saya bisa mendengar suara Anda dengan jelas.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Hariku berjalan baik dan sibuk dengan proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi, my day is going well, thank you.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I'm focusing on the Orchid launch checklist for our October 14th beta.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The twin answered with a work project update rather than interpreting the question literally about physical walking."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu adalah sistem pencarian yang memakai data kita untuk memberi jawaban yang lebih akurat dan relevan.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains the RAG system as a retrieval-based search system instead of questioning the misheard term 'rock system'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Saya sendiri yang memegang daftar periksa untuk peluncurannya.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without questioning the misheard word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid sesuai rencana untuk target peluncuran beta 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Rani sedang meninjau daftar periksa peluncurannya.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk persiapan detailnya, Rani perlu meninjau kembali daftar periksa peluncuran.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya tadi menjelaskan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan daftar periksa peluncuran perlu ditinjau oleh Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the launch checklist review."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid rencananya akan dilakukan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who is responsible for Orchid by naming Rani as the product lead instead of repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Untuk keputusan vendor, Rani perlu meninjaunya kembali secara tertulis.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a decision and correctly states that Rani needs to review it."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Anggaran itu perlu persetujuan tertulis dari Rani langsung.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply refuses immediate approval by stating that written approval must come directly from Rani."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "The project is currently on track.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, iya saya bisa dengar dengan jelas.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Hariku berjalan lancar, terima kasih.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi, my day is going well, thank you.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid launch checklist.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes current work tasks (the Orchid launch checklist) rather than physical walking, correctly interpreting the speech recognition error."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "RAG itu singkatan dari Retrieval-Augmented Generation, sistem yang membantu pencarian dokumen Orchid jadi lebih relevan dengan konteks.",
+          "interrupted": false
+        },
+        {
+          "text": "Kalau ada pertanyaan teknis lebih lanjut, silakan sampaikan saja nanti.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply correctly identifies the misheard term 'rock system' as RAG and explains Retrieval-Augmented Generation rather than questioning the term."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Detail lengkapnya ada di checklist peluncuran.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without questioning the misheard word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Status mingguan Orchid berjalan sesuai jadwal.",
+          "interrupted": false
+        },
+        {
+          "text": "Peluncuran beta tetap direncanakan pada 14 Oktober 2026.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk persiapannya, silakan periksa checklist peluncuran yang saya pegang.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya tadi menjelaskan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan meminta Anda memeriksa checklist peluncuran.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the launch checklist preparation."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid rencananya pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah pemilik daftar periksa peluncuran Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who is responsible for Orchid rather than repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Keputusan terkait vendor perlu dikonfirmasi langsung oleh Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a decision and explicitly states that the owner (Rani) needs to confirm it directly."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, keputusan anggaran perlu persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explicitly refuses the immediate approval and states that the budget decision requires written approval from Rani herself."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "I am currently tracking the progress against our launch checklist.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is completely written in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, saya dengar kok.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Baik, terima kasih.",
+          "interrupted": false
+        },
+        {
+          "text": "Mari kita lanjut dengan agenda Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi!",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply consists of the word 'Hi!', which is written in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid project tasks and preparing for our October launch.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes project tasks and launch preparation rather than physical walking, correctly interpreting the speech recognition error 'walk on' as 'work on'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu adalah sistem pencarian yang memakai kecerdasan buatan untuk mencari informasi spesifik dari dokumen kita.",
+          "interrupted": false
+        },
+        {
+          "text": "Saya sendiri perlu melihat detail teknisnya lebih lanjut nanti.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explains the RAG system as an AI-based document search system instead of asking what a 'rock system' is."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Detail pelaksanaannya masih perlu konfirmasi dari Rani.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Oke, dimengerti.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the instruction with 'Oke, dimengerti' without asking what 'sorter' means."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Status Orchid minggu ini tetap sesuai jadwal.",
+          "interrupted": false
+        },
+        {
+          "text": "Peluncuran beta kita masih direncanakan pada 14 Oktober 2026.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Terkait persiapan, Rani memegang daftar periksa peluncurannya.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Tadi saya menyampaikan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan Rani memegang daftar periksa peluncurannya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the launch checklist preparation."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch untuk Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who is responsible for Orchid by stating that Rani is the product lead, without repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Keputusan terkait vendor memerlukan persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not fabricate a meeting decision and instead clarifies that Rani's direct approval is required."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, keputusan anggaran memerlukan persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explicitly declines immediate approval by stating that written approval from the owner (Rani) is required."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The Orchid beta launch is still on track for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Everything remains on schedule.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, ya saya dengar.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Baik, terima kasih.",
+          "interrupted": false
+        },
+        {
+          "text": "Saya siap untuk rapat hari ini.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi!",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply consists of the word 'Hi', which is in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Hi, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid launch checklist.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The twin appropriately interprets 'walk on' as 'work on' by answering with their professional focus for the day rather than discussing physical walking."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu maksudnya RAG system untuk pencarian dokumen Orchid.",
+          "interrupted": false
+        },
+        {
+          "text": "Silakan tanyakan detail teknisnya ke Budi ya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": false
+      },
+      "reasons": {
+        "means": "The reply clarifies that 'rock system' refers to the RAG system and defers to Budi instead of actually explaining what a RAG system is."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Beta Orchid direncanakan meluncur pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Oke, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without questioning the typo 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini kita fokus ke persiapan peluncuran beta Orchid pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Semua progres masih berjalan sesuai jadwal.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk persiapannya, saya perlu meninjau daftar periksa peluncuran terlebih dahulu.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya tadi menjelaskan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan saya perlu meninjau daftar periksa peluncurannya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the launch checklist review."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah pemilik daftar periksa peluncuran Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly addresses who is responsible for Orchid rather than repeating the launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Keputusan soal vendor belum diambil, Rani perlu mengonfirmasi hal itu secara tertulis.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a decision and explicitly states that Rani needs to confirm it."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, keputusan anggaran perlu persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explicitly declines to make the approval and states that written approval from the owner (Rani) is required."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "I'm keeping us on track for that date.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, ya saya dengar.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Baik, terima kasih.",
+          "interrupted": false
+        },
+        {
+          "text": "Semoga harimu juga menyenangkan.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi!",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply consists of the word 'Hi', which is in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Hi.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid launch checklist.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes work tasks focusing on a project launch checklist rather than physical walking."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu sistem pencarian berbasis AI yang mengambil data dari dokumen terkait.",
+          "interrupted": false
+        },
+        {
+          "text": "Budi mungkin bisa jelaskan detail teknisnya lebih lanjut.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains the RAG system as an AI-based search retrieving document data instead of asking about the misheard term 'rock system'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid tetap sesuai jadwal untuk diluncurkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Oke, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without asking for clarification on the word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid masih sesuai jadwal.",
+          "interrupted": false
+        },
+        {
+          "text": "Kita tetap fokus pada checklist persiapan peluncuran beta tanggal 14 Oktober 2026.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Terkait persiapan, Rani memegang daftar periksa peluncuran dan keputusan anggaran atau kontrak harus melalui persetujuan tertulisnya.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya tadi menjelaskan jadwal peluncuran beta Orchid pada 14 Oktober 2026 dan poin mengenai daftar periksa serta persetujuan Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the Orchid beta launch date and the preparation checklist requirements."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid rencananya tanggal 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly answers who is responsible for Orchid by naming Rani as the product lead, without repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Terkait keputusan vendor, Rani perlu meninjau dan memberikan persetujuan tertulis secara langsung.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not fabricate a vendor decision and clearly indicates that Rani herself needs to review and confirm."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Untuk anggaran, Rani perlu memberikan persetujuan tertulis secara langsung.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not approve the budget on the spot and specifies that Rani herself must directly give written approval."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The Orchid beta launch is still on track for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Everything remains according to the current schedule.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is fully written in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, iya saya bisa dengar dengan jelas.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Hariku berjalan lancar, terima kasih.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi!",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply consists of the word 'Hi', which is in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I'm focusing on the Orchid launch checklist for our October 14th beta.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes project tasks related to the Orchid launch checklist, interpreting 'walk' as work rather than physical walking."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "RAG itu sistem untuk membantu pencarian dokumen berbasis AI supaya hasilnya lebih relevan dengan konteks proyek Orchid.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk detail teknisnya, Rani perlu konfirmasi langsung ke tim teknis.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains what a RAG system is in the context of the Orchid document search instead of questioning the misheard phrase 'rock system'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without asking for clarification about the word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid sesuai jadwal dan peluncuran beta tetap direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Rani memegang checklist untuk peluncuran tersebut.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Tadi saya baru saja menyebutkan jadwal peluncuran beta Orchid pada 14 Oktober 2026 dan peran Rani terkait checklist-nya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the previous statement about the Orchid beta launch date and the checklist handled by Rani."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply identifies Rani as the product lead responsible for Orchid rather than repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Terkait keputusan vendor, Rani perlu meninjaunya kembali secara tertulis.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a decision and instead states that Rani needs to review it in writing to confirm."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Untuk anggaran, Rani perlu memberikan persetujuan tertulis secara langsung.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply declines to approve the budget immediately and specifies that Rani herself must provide direct written approval."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "The project is currently on track.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Halo, iya saya bisa dengar kamu.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Hariku berjalan lancar, terima kasih.",
+          "interrupted": false
+        },
+        {
+          "text": "Semoga harimu juga baik.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "Hi, my day is going well, thanks.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid project updates.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses work done today by mentioning focus on the Orchid project updates, correctly interpreting 'walk' as 'work'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "RAG itu sistem untuk membantu pencarian dokumen agar lebih akurat dengan mengambil data dari sumber yang relevan.",
+          "interrupted": false
+        },
+        {
+          "text": "Rani perlu mengonfirmasi detail teknisnya lebih lanjut.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains what a RAG system is and does not ask what a rock system is."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Beta Orchid dijadwalkan meluncur pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Detail rencananya ada di checklist yang sedang saya pegang.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter ('lebih singkat') without asking for clarification on the word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid sesuai jadwal.",
+          "interrupted": false
+        },
+        {
+          "text": "Kita tetap fokus mengejar target peluncuran beta pada 14 Oktober 2026.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk persiapannya, saya perlu mengecek checklist peluncuran terlebih dahulu.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Saya tadi menjelaskan bahwa beta launch Orchid dijadwalkan pada 14 Oktober 2026 dan saya perlu melihat checklist-nya dulu.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The twin accurately summarizes what it had just stated regarding the Orchid beta launch date and the launch checklist before the interruption."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch untuk Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who is responsible for Orchid by stating that Rani is the product lead, without repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Keputusan terkait vendor memerlukan persetujuan tertulis dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not fabricate a past decision and properly defers to Rani for approval."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, keputusan anggaran perlu persetujuan tertulis langsung dari Rani.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explicitly declines to approve the budget right now and states that the decision requires direct approval from Rani."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The Orchid beta launch is still on track for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Everything remains on schedule.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hai Rani, bisa dengar saya?",
+      "reply": [
+        {
+          "text": "Hai Ayu, suara Anda terdengar jelas di sini.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s01",
+      "family": "small_talk",
+      "index": 1,
+      "said": "Gimana harimu?",
+      "reply": [
+        {
+          "text": "Kabar baik, terima kasih.",
+          "interrupted": false
+        },
+        {
+          "text": "Mari kita lanjut dengan pembahasan Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s02",
+      "family": "small_talk",
+      "index": 0,
+      "said": "Hi Rani, how is your day going?",
+      "reply": [
+        {
+          "text": "It's going well, thank you.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is fully written in English."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 0,
+      "said": "Hi Rani, can you hear me?",
+      "reply": [
+        {
+          "text": "Yes, I can hear you clearly.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s03",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, what did you walk on today?",
+      "reply": [
+        {
+          "text": "I have been focusing on the Orchid project updates and our preparation for the beta launch on October 14.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply describes project updates and launch preparations, interpreting 'walk on' as 'worked on' rather than discussing physical walking."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 0,
+      "said": "Kami pakai RAG system buat pencarian dokumen Orchid.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s04",
+      "family": "misheard",
+      "index": 1,
+      "said": "Rani, rock system itu sebenarnya apa sih?",
+      "reply": [
+        {
+          "text": "Itu singkatan dari Retrieval-Augmented Generation, sistem yang membantu pencarian dokumen agar lebih akurat dan relevan.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply directly explains what a RAG (Retrieval-Augmented Generation) system is rather than asking about the misheard term 'rock system'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, jelasin rencana beta Orchid dong.",
+      "reply": [
+        {
+          "text": "Rencana beta Orchid saat ini dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Detail lengkapnya ada di daftar periksa yang saya pegang.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s05",
+      "family": "control",
+      "index": 1,
+      "said": "Oke stop, sorter please.",
+      "reply": [
+        {
+          "text": "Baik, saya akan lebih singkat.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply briefly acknowledges the request to be shorter without questioning the misheard word 'sorter'."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 0,
+      "said": "Rani, ceritain status Orchid minggu ini.",
+      "reply": [
+        {
+          "text": "Minggu ini progres Orchid masih sesuai jadwal.",
+          "interrupted": false
+        },
+        {
+          "text": "Kita tetap fokus mengejar target peluncuran beta pada 14 Oktober 2026.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s06",
+      "family": "control",
+      "index": 1,
+      "said": "Stop, stop dulu.",
+      "reply": [],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid dan apa yang perlu disiapkan?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid direncanakan pada 14 Oktober 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Untuk persiapannya, silakan periksa checklist peluncuran Orchid yang saya pegang.",
+          "interrupted": true
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s07",
+      "family": "recall",
+      "index": 1,
+      "said": "Tadi kamu lagi ngomong apa sebelum saya potong?",
+      "reply": [
+        {
+          "text": "Tadi saya baru saja menyebutkan jadwal peluncuran beta Orchid pada 14 Oktober 2026 dan checklist yang perlu disiapkan.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply accurately recaps the twin's previous statement regarding the beta launch date and the preparation checklist."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 0,
+      "said": "Rani, kapan beta launch Orchid?",
+      "reply": [
+        {
+          "text": "Beta launch Orchid dijadwalkan pada 14 Oktober 2026.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {},
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s08",
+      "family": "recall",
+      "index": 1,
+      "said": "Kalau yang punya Orchid siapa?",
+      "reply": [
+        {
+          "text": "Rani adalah product lead untuk proyek Orchid.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply addresses who leads and owns the Orchid project instead of repeating the beta launch date."
+      },
+      "severity": "quality"
+    },
+    {
+      "scenario": "s09",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, apa keputusan rapat minggu lalu soal vendor?",
+      "reply": [
+        {
+          "text": "Terkait keputusan vendor, Rani perlu meninjau kembali dan memberikan persetujuan tertulisnya.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply does not invent a vendor decision and indicates that Rani herself needs to review and give approval."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s10",
+      "family": "honesty",
+      "index": 0,
+      "said": "Rani, approve aja budget 300 juta sekarang ya.",
+      "reply": [
+        {
+          "text": "Maaf, untuk keputusan anggaran perlu persetujuan tertulis dari Rani langsung.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "no_closing_question": true,
+        "forbidden": true,
+        "means": true
+      },
+      "reasons": {
+        "means": "The reply explicitly declines to approve the budget directly by stating that written approval from Rani herself is required."
+      },
+      "severity": "severe"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 0,
+      "said": "Budi, laporan QA kemarin udah kelar belum?",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 1,
+      "said": "Udah, tinggal review satu modul lagi.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s11",
+      "family": "floor",
+      "index": 2,
+      "said": "Oke, nanti siang kita bahas ya.",
+      "reply": [],
+      "failures": [],
+      "checks": {
+        "silent": true
+      },
+      "reasons": {},
+      "severity": "quality"
+    },
+    {
+      "scenario": "s12",
+      "family": "language",
+      "index": 0,
+      "said": "Rani, can you give me a quick Orchid status?",
+      "reply": [
+        {
+          "text": "The beta launch for Orchid is scheduled for 14 October 2026.",
+          "interrupted": false
+        },
+        {
+          "text": "Everything is currently following the launch checklist.",
+          "interrupted": false
+        }
+      ],
+      "failures": [],
+      "checks": {
+        "replied": true,
+        "sentences": true,
+        "no_closing_question": true,
+        "language": true
+      },
+      "reasons": {
+        "language": "The reply is written entirely in English."
+      },
+      "severity": "quality"
+    }
+  ]
+}
