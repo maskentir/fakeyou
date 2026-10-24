@@ -215,6 +215,44 @@ async def test_streamed_reply_matches_cap_across_languages(
     await loop.lifecycle.close()
 
 
+async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [
+            ("chunk", "intent: sil", "model"),
+            ("chunk", "ent\nI would have said something.", "model"),
+        ]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == []
+    await loop.lifecycle.close()
+
+
+async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent([("chunk", "intent: ack\nOkay. More to say.", "model")])
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["Okay."]
+    await loop.lifecycle.close()
+
+
+async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJournal) -> None:
+    agent = ScriptedAgent(
+        [("chunk", "intent: answer\nThe launch is on 14 October. Anything else?", "model")]
+    )
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal, language="en")
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+    assert audio.spoken == ["The launch is on 14 October."]
+    assert "intent" not in " ".join(audio.spoken)
+    await loop.lifecycle.close()
+
+
 async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [

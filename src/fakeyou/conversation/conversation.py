@@ -17,6 +17,7 @@ from fakeyou.conversation.meeting_messages import (
     history_messages,
     request_messages,
 )
+from fakeyou.conversation.reply_planner import ReplyPlanner, planned_reply
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -323,24 +324,46 @@ async def invoke_reply(
     return output[-1].text.strip()
 
 
+def _planned_piece(state: _SentenceStream, planner: ReplyPlanner, piece: str) -> list[str] | None:
+    content = planner.feed(piece)
+    if planner.silent:
+        return None
+    if not content:
+        return []
+    state.note_text(content)
+    state.buffer += content
+    state.max_sentences = planner.max_sentences
+    spoken: list[str] = []
+    for sentence in state.drain():
+        spoken.extend(planner.take_sentence(sentence))
+    return spoken
+
+
 async def _pump_stream(
-    stream: AsyncIterator[Any], state: _SentenceStream, phase: _StreamPhase
+    stream: AsyncIterator[Any],
+    state: _SentenceStream,
+    phase: _StreamPhase,
+    planner: ReplyPlanner,
 ) -> AsyncIterator[str]:
     snapshot = phase.boundary
     async for message, metadata in stream:
         piece, snapshot, consumable = _filter_piece(message, metadata, state, phase, snapshot)
         if not consumable:
             continue
-        state.note_text(piece)
-        state.buffer += piece
-        for sentence in state.drain():
+        sentences = _planned_piece(state, planner, piece)
+        if sentences is None:
+            return
+        for sentence in sentences:
             yield sentence
         if state.check_cap():
             return
     tail = state.flush()
     if tail is not None:
         state.record_sentence(tail)
-        yield tail
+        for line in planner.take_sentence(tail):
+            yield line
+    for line in planner.finish_sentences():
+        yield line
 
 
 def _record_reply_text(state: _SentenceStream, reply: str) -> None:
@@ -386,7 +409,8 @@ async def _fallback_sentences(
 ) -> AsyncIterator[str]:
     reply = await invoke_reply(agent, messages, config, trace=trace)
     _record_reply_text(state, reply)
-    capped_text = cap_spoken_reply(reply, state.max_sentences, state.language)
+    planned = planned_reply(reply, max_sentences=state.max_sentences, language=state.language)
+    capped_text = cap_spoken_reply(planned, state.max_sentences, state.language)
     _record_reply_cap(state, reply, capped_text)
     state.buffer = capped_text.strip()
     for sentence in state.drain():
@@ -415,6 +439,7 @@ async def stream_sentences(
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
+    planner = ReplyPlanner(max_sentences=max_sentences, language=trace.language)
     try:
         stream: AsyncIterator[Any] = agent.astream(
             {"messages": list(messages)},
@@ -422,7 +447,7 @@ async def stream_sentences(
             stream_mode="messages",
         )
         try:
-            async for sentence in _pump_stream(stream, state, phase):
+            async for sentence in _pump_stream(stream, state, phase, planner):
                 yield sentence
         finally:
             await _close_stream_optional(stream, trace.journal)
@@ -476,12 +501,13 @@ class MeetingResponder:
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
     ) -> str:
-        return await invoke_reply(
+        reply = await invoke_reply(
             self.agent,
             self.messages(events),
             REPLY_CONFIG,
             trace=self._trace(events, on_tool_start),
         )
+        return planned_reply(reply, max_sentences=self.max_sentences, language=self.language)
 
     def stream_sentences(
         self,

@@ -10,7 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstr
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.config.settings import RecallStrategy, Settings
-from fakeyou.conversation.agent import ENDING_RULE, MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
+from fakeyou.conversation.agent import (
+    ENDING_RULE,
+    MEETING_GUIDANCE,
+    REPLY_FORMAT_RULE,
+    SPOKEN_LANGUAGE_GUIDANCE,
+)
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.invariants import TwinName
 from fakeyou.foundation.resources import read_package_text
@@ -313,6 +318,7 @@ def build_system_prompt(
         sections.append(PROVENANCE_RULE)
     sections.append(NATURAL_SPEECH_RULE)
     sections.append(ENDING_RULE)
+    sections.append(REPLY_FORMAT_RULE)
     return "\n\n".join(sections)
 
 

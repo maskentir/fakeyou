@@ -25,6 +25,13 @@ ENDING_RULE = (
     "asks you to stop or to be shorter, acknowledge it in a few words and stop. Ask a question "
     "only when no plausible reading of the request lets you answer."
 )
+REPLY_FORMAT_RULE = (
+    "Reply format: the first line of every reply is 'intent: answer', 'intent: ack', "
+    "'intent: clarify', 'intent: decline' or 'intent: silent', and the spoken words follow on "
+    "the next line. Use ack for a short acknowledgement, answer when you answer a question, "
+    "clarify only when no reading of the request makes sense, decline when you must not agree "
+    "or decide, and silent when you should not speak at all. Never speak the intent line."
+)
 SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (
         "Reply in casual spoken Indonesian like a helpful coworker, "
@@ -35,7 +42,9 @@ SPOKEN_LANGUAGE_GUIDANCE = {
         "using sentences that sound natural when read aloud."
     ),
 }
-DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
+DEFAULT_PERSONA = (
+    f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}\n\n{REPLY_FORMAT_RULE}"
+)
 
 
 def create_meeting_agent(

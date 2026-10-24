@@ -19,6 +19,7 @@ from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
     ENDING_RULE,
     MEETING_GUIDANCE,
+    REPLY_FORMAT_RULE,
     SPOKEN_LANGUAGE_GUIDANCE,
     create_meeting_agent,
 )
@@ -1465,7 +1466,10 @@ def test_persona_prompt_without_profile_is_the_default_meeting_prompt(
     language: PersonaLanguage,
 ) -> None:
     prompt = build_persona_prompt(None, language=language)
-    assert prompt == f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}\n\n{ENDING_RULE}"
+    assert prompt == (
+        f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}\n\n{ENDING_RULE}"
+        f"\n\n{REPLY_FORMAT_RULE}"
+    )
     assert build_persona_prompt(None, language="id") == DEFAULT_PERSONA
 
 
@@ -1482,7 +1486,8 @@ def test_persona_sections_keep_rules_as_instructions_and_profile_as_data() -> No
     assert BRIEF_RULES in sections.authority
     assert RECALL_RULES["tool"] in sections.memory_rules
     assert PERCEPTION_GUIDANCE in sections.tools
-    assert sections.output_rules.endswith(ENDING_RULE)
+    assert sections.output_rules.endswith(REPLY_FORMAT_RULE)
+    assert ENDING_RULE in sections.output_rules
     assert json.loads(sections.persona)["display_name"] == "Rani Twin"
     assert "approved_facts" in json.loads(sections.brief)
     prompt = build_system_prompt(sections, [], fake_render_evidence)

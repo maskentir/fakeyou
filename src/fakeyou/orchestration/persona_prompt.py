@@ -4,6 +4,7 @@ from fakeyou.config.settings import DEFAULTS, RecallStrategy
 from fakeyou.conversation.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
+    REPLY_FORMAT_RULE,
     SPOKEN_LANGUAGE_GUIDANCE,
 )
 from fakeyou.conversation.prompt_builder import PromptSections
@@ -103,7 +104,7 @@ def persona_prompt_sections(
         brief=parts.brief_json,
         memory_rules=_paragraphs(parts.recall, parts.provenance),
         tools=parts.perception,
-        output_rules=_paragraphs(parts.natural_speech, ENDING_RULE),
+        output_rules=_paragraphs(parts.natural_speech, ENDING_RULE, REPLY_FORMAT_RULE),
     )
 
 
@@ -133,5 +134,6 @@ def build_persona_prompt(
         parts.provenance,
         parts.natural_speech,
         ENDING_RULE,
+        REPLY_FORMAT_RULE,
         parts.perception,
     )

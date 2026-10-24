@@ -10,7 +10,12 @@ import fakeyou.orchestration.assembly as assembly_module
 import fakeyou.orchestration.providers as providers_module
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE, create_meeting_agent
+from fakeyou.conversation.agent import (
+    DEFAULT_PERSONA,
+    ENDING_RULE,
+    REPLY_FORMAT_RULE,
+    create_meeting_agent,
+)
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.memory.persona import PersonaProfile
@@ -72,7 +77,8 @@ async def test_agent_reopens_postgres_checkpoint_for_same_thread(
 
 
 def test_default_persona_ends_with_the_ending_rule() -> None:
-    assert DEFAULT_PERSONA.endswith(ENDING_RULE)
+    assert DEFAULT_PERSONA.endswith(REPLY_FORMAT_RULE)
+    assert ENDING_RULE in DEFAULT_PERSONA
     assert "Never end with a question or an offer" in ENDING_RULE
 
 
