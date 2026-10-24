@@ -1,6 +1,6 @@
 # Turn judge: satu model yang memutuskan kapan giliran selesai dan apakah twin bicara
 
-Status: PR 1 (turn judge untuk keputusan partisipasi) selesai; PR 2 (endpointer commit awal) berikutnya.
+Status: PR 1 (turn judge untuk keputusan partisipasi) dan PR 2 (commit awal saat hening) selesai; menunggu sesi live.
 
 ## Masalah
 
@@ -149,3 +149,21 @@ Replay percakapan live dengan judge asli (9 run × 15 skenario): semua keluarga 
 langkah naik sekitar 1 s karena replay tidak punya interim, jadi judge baru jalan saat final tiba.
 
 Laporan: `docs/reports/2026-10-25-turn-judge.json`, `docs/reports/2026-10-25-conversation-replay-turn-judge.json`.
+
+## Hasil PR 2 (2026-10-25)
+
+- `orchestration/early_turns.py` (`EarlyTurns`): setelah VAD lokal berhenti dan hening `commit_hold_seconds` (default
+  0,3 s), giliran dimulai dari teks interim terakhir bila judge menilai `finished` dan memutuskan menjawab. Final Muse
+  untuk giliran itu tetap disimpan ke record, tapi tidak memulai giliran kedua (`early_turn_verified`).
+- Bicara lagi setelah commit (interim tumbuh dari kata-kata yang sama) membatalkan giliran itu (`early_turn_cancelled`,
+  `speech_resumed`); final yang jauh lebih panjang dari teks commit juga membatalkannya (`final_says_more`) lalu
+  dijawab utuh. Pembicara berikutnya tidak membatalkan giliran yang sedang berjalan.
+- Aturan `finished` diperketat: kalimat yang hanya meminta orang lain menunggu tidak dihitung selesai.
+- Mode per-stream belum memakai commit awal.
+
+Eval judge live (5 run × 27 kasus): sapaan terlewat 0, jawaban terlewat 0%, salah jawab 0%, kalimat belum selesai
+dinilai selesai 0%, commit prematur (dinilai selesai **dan** dijawab padahal belum selesai) 0%, latensi p50 0,95 s /
+p90 1,13 s. Laporan: `docs/reports/2026-10-25-turn-judge-early-commit.json`.
+
+Perkiraan dari journal `live-xnj-itkm-owt`, belum diukur live: hening → kalimat pertama twin turun dari p50 3,6 s ke
+sekitar 1,5 s (0,3 s hold + p50 1,2 s model; penilaian judge sudah berjalan sejak interim).

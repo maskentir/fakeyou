@@ -1,10 +1,12 @@
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import cast
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.participation_decision import ParticipationDecision
+from fakeyou.conversation.participation_graph import decision_of
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     TurnGraphState,
@@ -21,6 +23,7 @@ from fakeyou.foundation.participation import (
 )
 from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
 from fakeyou.foundation.triggers import ReplyChannel
+from fakeyou.observability.faults import capture_error
 
 _ADMITTED = frozenset({"speak", "clarify"})
 
@@ -98,6 +101,24 @@ class TurnIngress:
         decision = await self.receive_final(event)
         await self._lifecycle.drained()
         return decision
+
+    async def ready_to_answer(self, text: str) -> bool:
+        lifecycle = self._lifecycle
+        judging = lifecycle.judging
+        session = lifecycle.session
+        if judging is None or lifecycle.is_closed or lifecycle.is_failed or not text.strip():
+            return False
+        window = judging.windows.for_interim(
+            text, twin_speaking=session is not None and session.is_speaking
+        )
+        judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        if judgement is None or not judgement.finished:
+            return False
+        return decision_of(judgement, judging.thresholds).decision in _ADMITTED
+
+    async def withdraw(self, *, reason: str) -> None:
+        lifecycle = self._lifecycle
+        await cancel_speech(lifecycle.floor, lifecycle.journal, reason=reason)
 
     async def handle_interim(self, text: str) -> None:
         lifecycle = self._lifecycle

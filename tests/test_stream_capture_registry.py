@@ -12,7 +12,7 @@ from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
 from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.transcript import TranscriptSinks
+from fakeyou.orchestration.transcript import DrainOptions, TranscriptSinks
 from tests._capture_support import recording_registry
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
@@ -232,7 +232,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
             sinks=TranscriptSinks(journal, record, cast(Any, conversation)),
             binder=SlotBinder(),
             voice_activity=None,
-            per_stream_enabled=per_stream,
+            options=DrainOptions(per_stream_enabled=per_stream),
         )
         for index, frame in enumerate(turns):
             if per_stream:
@@ -342,7 +342,7 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
         sinks=TranscriptSinks(journal, record, cast(Any, _Conversation())),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     for frame in frames:
         await callback(frame)

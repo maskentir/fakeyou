@@ -105,6 +105,11 @@ class JudgeReport:
         unfinished = [o for o in self._where(finished=False) if o.judgement is not None]
         return _share(sum(o.judgement.finished for o in unfinished if o.judgement), len(unfinished))
 
+    def premature_commit_rate(self) -> float:
+        unfinished = [o for o in self._where(finished=False) if o.judgement is not None]
+        cut_off = sum(o.answered and o.judgement.finished for o in unfinished if o.judgement)
+        return _share(cut_off, len(unfinished))
+
     def failures(self) -> list[str]:
         return [f"{o.case.id}/r{o.run}:{o.error}" for o in self.outcomes if o.error is not None]
 
@@ -120,6 +125,7 @@ class JudgeReport:
             "missed_answer_rate": self.missed_answer_rate(),
             "false_reply_rate": self.false_reply_rate(),
             "early_finish_rate": self.early_finish_rate(),
+            "premature_commit_rate": self.premature_commit_rate(),
             "failures": self.failures(),
             "latency": self.latency(),
             "outcomes": [

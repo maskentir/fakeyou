@@ -7,7 +7,7 @@ from typing import Any
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
 from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.transcript import TranscriptSinks
+from fakeyou.orchestration.transcript import DrainOptions, TranscriptSinks
 
 
 async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path: Path) -> None:
@@ -27,7 +27,7 @@ async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path:
         sinks=TranscriptSinks(journal, record, None),
         binder=SlotBinder(),
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(
         text="Hello from the call.", final=True, timestamp="2026-10-06T01:00:01+00:00"
@@ -65,7 +65,7 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     frame = TranscriptUpdate(
         text="Welcome to the call.", final=True, timestamp="2026-10-06T01:00:01+00:00"
@@ -104,7 +104,7 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     first = TranscriptUpdate(
         text="Welcome to the call.", final=True, timestamp="2026-10-06T01:00:01+00:00"
@@ -150,7 +150,7 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     later = TranscriptUpdate(
         text="Second sentence spoken first.",
@@ -200,7 +200,7 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
         sinks=TranscriptSinks(journal, record, None),
         binder=binder,
         voice_activity=None,
-        per_stream_enabled=True,
+        options=DrainOptions(per_stream_enabled=True),
     )
     for stamp, slot, text in [
         ("2026-10-06T01:00:01+00:00", "slot-0", "First."),

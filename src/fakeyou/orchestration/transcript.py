@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker
@@ -37,6 +38,7 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.assembly import VoiceprintLive
+from fakeyou.orchestration.early_turns import EarlyTurns
 from fakeyou.persistence.record import MeetingRecord
 
 
@@ -143,6 +145,15 @@ class TranscriptSinks:
 
 
 @dataclass(frozen=True, slots=True)
+class DrainOptions:
+    per_stream_enabled: bool = False
+    early_hold_seconds: float | None = None
+
+
+DEFAULT_DRAIN_OPTIONS = DrainOptions()
+
+
+@dataclass(frozen=True, slots=True)
 class LiveScoring:
     voiceprint: VoiceprintLive | None
     registry: SpeakerRegistry
@@ -165,8 +176,10 @@ class TranscriptDrain:
         binder: SlotBinder,
         voice_activity: VoiceActivityTracker | None,
         scoring: LiveScoring | None = None,
-        per_stream_enabled: bool = False,
+        options: DrainOptions = DEFAULT_DRAIN_OPTIONS,
     ) -> None:
+        per_stream_enabled = options.per_stream_enabled
+        early_hold_seconds = options.early_hold_seconds
         self._sinks = sinks
         self._binder = binder
         self._voice_activity = voice_activity
@@ -178,6 +191,23 @@ class TranscriptDrain:
         self._emitted_max: TranscriptEvent | None = None
         self._turn_state: TurnState = TurnState(last_event_id=None, kind=None)
         self._ingress_count = 0
+        conversation = sinks.conversation
+        self._early = (
+            EarlyTurns(
+                conversation,
+                hold_seconds=early_hold_seconds,
+                build_event=self._early_event,
+                journal=sinks.journal,
+            )
+            if conversation is not None
+            and early_hold_seconds is not None
+            and not per_stream_enabled
+            else None
+        )
+
+    async def close(self) -> None:
+        if self._early is not None:
+            await self._early.close()
 
     async def __call__(self, update: TranscriptUpdate) -> None:
         if self._per_stream_enabled:
@@ -190,9 +220,13 @@ class TranscriptDrain:
         conversation = self._sinks.conversation
         if winner is not None and conversation is not None:
             await conversation.handle_interim(update.text)
+            if self._early is not None:
+                await self._early.on_interim(update.text)
 
     async def on_vad(self, *, active: bool) -> None:
         self._settle([self._ingress_event("vad", "active" if active else "inactive")])
+        if self._early is not None:
+            self._early.on_speech(active=active)
 
     async def on_stop(self) -> TurnEvent | None:
         return self._settle([self._ingress_event("stop", "")]).winner
@@ -323,29 +357,34 @@ class TranscriptDrain:
         await self._drain_ordered()
         await self._score_turn(extra.get("speaker_uuid"), stream_id, device, finalized=update.final)
 
-    async def _mixed_stream(self, update: TranscriptUpdate) -> None:
+    def _attributed(self, update: TranscriptUpdate) -> tuple[TranscriptEvent, Any]:
         voice_activity = self._voice_activity
         attribution = voice_activity.attribute() if voice_activity is not None else None
         speaker_uuid = attribution.speaker_uuid if attribution is not None else None
-        display_claim = _claim_for_uuid(self._registry(), speaker_uuid)
+        capture = CaptureContext(display_claim=_claim_for_uuid(self._registry(), speaker_uuid))
         if attribution is None:
-            event = transcript_event(
-                update, "unknown", None, CaptureContext(display_claim=display_claim)
-            )
-        else:
-            event = transcript_event(
-                update,
-                attribution.participant_id,
-                attribution.evidence_id,
-                CaptureContext(display_claim=display_claim),
-            )
+            return transcript_event(update, "unknown", None, capture), None
+        return (
+            transcript_event(update, attribution.participant_id, attribution.evidence_id, capture),
+            attribution,
+        )
+
+    def _early_event(self, text: str) -> TranscriptEvent:
+        update = TranscriptUpdate(text=text, final=True, timestamp=datetime.now(UTC).isoformat())
+        return self._attributed(update)[0]
+
+    async def _mixed_stream(self, update: TranscriptUpdate) -> None:
+        event, attribution = self._attributed(update)
+        speaker_uuid = attribution.speaker_uuid if attribution is not None else None
         await _emit_transcript(
             event,
             journal=self._sinks.journal,
             record=self._sinks.record,
             extra=attribution.journal_fields() if attribution is not None else None,
         )
-        await self._route_window([event])
+        early = self._early
+        if early is None or not update.final or not await early.settle(event):
+            await self._route_window([event])
         await self._score_turn(speaker_uuid, "", None, finalized=update.final)
 
 
@@ -355,12 +394,8 @@ def build_transcript_callback(
     binder: SlotBinder,
     voice_activity: VoiceActivityTracker | None,
     scoring: LiveScoring | None = None,
-    per_stream_enabled: bool = False,
+    options: DrainOptions = DEFAULT_DRAIN_OPTIONS,
 ) -> TranscriptDrain:
     return TranscriptDrain(
-        sinks=sinks,
-        binder=binder,
-        voice_activity=voice_activity,
-        scoring=scoring,
-        per_stream_enabled=per_stream_enabled,
+        sinks=sinks, binder=binder, voice_activity=voice_activity, scoring=scoring, options=options
     )
