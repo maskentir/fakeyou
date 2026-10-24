@@ -63,11 +63,10 @@ async def _cleanup_paplay_stream(
 
 
 async def _cleanup_process(proc: asyncio.subprocess.Process) -> None:
+    if proc.stdin is not None:
+        proc.stdin.transport.abort()
     with suppress(ProcessLookupError):
         proc.kill()
-    if proc.stdin is not None:
-        with suppress(OSError):
-            proc.stdin.close()
     try:
         async with asyncio.timeout(CLEANUP_TIMEOUT_SECONDS):
             await proc.wait()
