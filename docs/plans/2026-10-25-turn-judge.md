@@ -63,7 +63,7 @@ Masukan: jendela percakapan terakhir dari `record.jsonl` (siapa bicara, termasuk
 interim/final terbaru, dan apakah twin sedang bicara. `heard` diletakkan pertama karena pada `ReplyPlan` field serupa
 menaikkan akurasi bahasa dari 0,44 ke 1,0.
 
-Caching per `(id jendela, teks)` memakai pola `JevCache` yang sudah ada, diganti nama menjadi `TurnJudgeCache`.
+Penilaian di-cache per `(id jendela, teks ternormalisasi)` di modul `turn_judge`. Kode `Jev*` lama dihapus, tidak dipindahkan.
 
 ### 2. Batas keras di kode (bukan keputusan bahasa)
 
