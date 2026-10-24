@@ -63,7 +63,7 @@ async def _cleanup_paplay_stream(
 
 
 async def _cleanup_process(proc: asyncio.subprocess.Process) -> None:
-    if proc.stdin is not None:
+    if proc.stdin is not None and not proc.stdin.transport.is_closing():
         proc.stdin.transport.abort()
     with suppress(ProcessLookupError):
         proc.kill()

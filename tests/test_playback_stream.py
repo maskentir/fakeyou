@@ -283,3 +283,30 @@ async def test_an_interrupted_paplay_drops_buffered_audio_and_exits_quietly(
     assert proc.stdin is not None
     assert proc.stdin.transport.is_closing()
     assert loop_errors == []
+
+
+async def test_stopping_paplay_after_its_input_closed_is_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawned: list[asyncio.subprocess.Process] = []
+    launch = asyncio.create_subprocess_exec
+
+    async def lingering_player(*_args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        proc = await launch("sleep", "30", **kwargs)
+        spawned.append(proc)
+        return proc
+
+    async def one_chunk() -> AsyncIterator[bytes]:
+        yield bytes(1024)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", lingering_player)
+    play = asyncio.create_task(
+        playback.create_paplay_stream_runner(sink="agent_output", rate=24000)(one_chunk())
+    )
+    await asyncio.sleep(0.2)
+    play.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await play
+    [proc] = spawned
+    assert proc.returncode is not None
