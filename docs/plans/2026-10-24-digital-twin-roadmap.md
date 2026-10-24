@@ -140,8 +140,10 @@ Run kedua di hari yang sama (`CONVERSATION_RUNS=9`): 0 pelanggaran serius, 0 reg
 - **Biasing STT kontekstual.**
   - Keyword Muse diperbarui selama meeting dari roster (nama), layar (judul dan istilah), dan percakapan (istilah
     berulang).
-  - Ini butuh verifikasi apakah Muse menerima update keyword di tengah sesi; bila tidak, keyword dipakai saat rotasi
-    sesi STT.
+  - Muse hanya menerima `keywords` saat handshake, jadi keyword baru dipakai lewat rotasi sesi STT yang menunggu
+    ruangan sepi (jalur yang sama dengan rotasi 60 menit).
+  - Sudah jalan untuk nama dari roster protokol Meet. Istilah layar dan istilah percakapan belum: keduanya butuh
+    pemilihan istilah yang tidak membanjiri keyword, dan rotasi terlalu sering memecah label pembicara Muse.
 - **Bahasa mengikuti lawan bicara.** Model menulis bahasa yang ia pakai di baris `lang:` pada balasan; kode mengikuti
   tanpa menebak. Persona hanya default. Bahasa ikut merambat sampai TTS, jadi suara dan pemisah kalimat ikut bahasa.
 - **Target:**
