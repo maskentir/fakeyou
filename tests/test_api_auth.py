@@ -51,10 +51,7 @@ TWIN_OPERATIONS: tuple[tuple[str, str], ...] = (
 ALL_OPERATIONS: tuple[tuple[str, str], ...] = (
     SESSION_OPERATIONS + MEMORY_OPERATIONS + TWIN_OPERATIONS
 )
-SESSION_BODY_POST_OPERATIONS: tuple[tuple[str, str], ...] = (
-    ("post", "/v1/sessions"),
-    ("post", "/v1/sessions/m-1/stop"),
-)
+SESSION_BODY_POST_OPERATIONS: tuple[tuple[str, str], ...] = (("post", "/v1/sessions"),)
 
 
 @asynccontextmanager

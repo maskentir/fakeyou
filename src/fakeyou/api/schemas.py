@@ -238,12 +238,6 @@ class ForgetView(BaseModel):
     complete: bool
 
 
-class StopSession(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    reason: str | None = None
-
-
 class ErrorBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
