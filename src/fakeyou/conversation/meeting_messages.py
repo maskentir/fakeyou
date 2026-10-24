@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from fakeyou.conversation.middleware import estimate_message_tokens
+from fakeyou.foundation.speakers import UNKNOWN_PARTICIPANT, speaker_name
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.foundation.triggers import MEETING_EVENT, TriggerKind
 from fakeyou.persistence.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
@@ -27,22 +28,28 @@ class NoHistory:
         return ()
 
 
-def _meeting_event(
-    source: EventSource,
-    timestamp: str,
-    participant_id: str,
-    speaker_evidence_id: str | None,
-    stream_id: str,
-) -> dict[str, Any]:
-    return {
-        "kind": KIND_OF_SOURCE[source],
-        "timestamp": timestamp,
-        "source": source,
-        "participant_id": participant_id,
-        "speaker_evidence_id": speaker_evidence_id,
-        "stream_id": stream_id,
-        "speaker_status": "observed" if participant_id != "unknown" else "unknown",
-    }
+@dataclass(frozen=True, slots=True)
+class _Spoken:
+    source: EventSource
+    timestamp: str
+    participant_id: str
+    speaker_evidence_id: str | None
+    stream_id: str
+    display_claim: str | None
+
+    def meeting_event(self) -> dict[str, Any]:
+        return {
+            "kind": KIND_OF_SOURCE[self.source],
+            "timestamp": self.timestamp,
+            "source": self.source,
+            "participant_id": self.participant_id,
+            "speaker_evidence_id": self.speaker_evidence_id,
+            "stream_id": self.stream_id,
+            "speaker": speaker_name(self.participant_id, self.display_claim),
+            "speaker_status": (
+                "observed" if self.participant_id != UNKNOWN_PARTICIPANT else UNKNOWN_PARTICIPANT
+            ),
+        }
 
 
 def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
@@ -51,13 +58,14 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
             content=event.text,
             id=event.id,
             additional_kwargs={
-                MEETING_EVENT: _meeting_event(
+                MEETING_EVENT: _Spoken(
                     event.source,
                     event.timestamp,
                     event.participant_id,
                     event.speaker_evidence_id,
                     event.stream_id,
-                )
+                    event.display_claim,
+                ).meeting_event()
             },
         )
         for event in events
@@ -66,9 +74,14 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
 
 def _history_message(entry: TranscriptEntry) -> HumanMessage:
     source: EventSource = entry.source if entry.source in KIND_OF_SOURCE else "meeting_audio"
-    event = _meeting_event(
-        source, entry.spoken_at, entry.participant_id, entry.speaker_evidence_id, entry.stream_id
-    )
+    event = _Spoken(
+        source,
+        entry.spoken_at,
+        entry.participant_id,
+        entry.speaker_evidence_id,
+        entry.stream_id,
+        entry.display_claim,
+    ).meeting_event()
     return HumanMessage(
         content=entry.text.strip(),
         id=entry.id,

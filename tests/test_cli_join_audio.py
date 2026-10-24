@@ -17,7 +17,7 @@ from fakeyou.conversation.conversation import (
     MeetingResponder,
 )
 from fakeyou.conversation.meeting_turns import MeetingTurns
-from fakeyou.conversation.middleware import ChatTurnToolsMiddleware
+from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.foundation.transcript import TranscriptUpdate
@@ -69,6 +69,7 @@ async def test_join_audio_builds_conversation_on_the_meeting_record(
         type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     responder = loop.responder
     assert isinstance(responder, MeetingResponder)

@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import (
@@ -12,14 +14,20 @@ from langchain_core.messages import (
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.conversation import MeetingResponder
+from fakeyou.conversation.meeting_messages import request_messages
 from fakeyou.conversation.middleware import (
     HistoryTrimMiddleware,
     OrphanToolCallMiddleware,
+    SpeakerAttributionMiddleware,
+    attributed,
     estimate_message_tokens,
     patch_orphan_tool_calls,
     trim_messages_to_budget,
 )
+from fakeyou.persistence.record import MeetingRecord, TranscriptEntry
 from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from tests._conversation_support import event
 
 
 def _orphan_call(call_id: str) -> dict[str, Any]:
@@ -196,3 +204,47 @@ async def test_history_trim_limits_a_chat_request_but_not_its_thread() -> None:
     )
     state = await agent.aget_state({"configurable": {"thread_id": "trim-thread"}})
     assert len(state.values["messages"]) == 4
+
+
+async def test_the_model_reads_who_said_each_line_while_the_record_keeps_plain_text(
+    tmp_path: Path,
+) -> None:
+    model = ToolCallingFakeModel(responses=[AIMessage(content="Noted.")])
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    earlier = replace(event("one", "Budget is fine."), participant_id="speaker-a")
+    now = replace(event("two", "Do you agree?"), participant_id="speaker-b", display_claim="Maya")
+    record.add_transcript(earlier)
+    record.add_twin_speech("I heard that.")
+    record.add_transcript(now)
+    agent = create_meeting_agent(model, middleware=[SpeakerAttributionMiddleware()])
+
+    assert await MeetingResponder(agent, record).respond([now], lambda: None) == "Noted."
+    record.close()
+
+    assert [message.text for message in model.seen[-1][1:]] == [
+        "Speaker A with unverified identity: Budget is fine.",
+        "I heard that.",
+        "Speaker B, shown as Maya, unverified: Do you agree?",
+    ]
+    assert [entry.text for entry in record.entries() if isinstance(entry, TranscriptEntry)] == [
+        "Budget is fine.",
+        "Do you agree?",
+    ]
+
+
+def test_attribution_keeps_attached_images_and_leaves_other_messages_alone() -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+    spoken = request_messages([event("one", "See this?")])[0]
+    with_image = spoken.model_copy(
+        update={"content": [{"type": "text", "text": "See this?"}, image]}
+    )
+
+    labelled = attributed(with_image)
+
+    assert labelled.content == [
+        {"type": "text", "text": "Speaker with unverified identity:"},
+        {"type": "text", "text": "See this?"},
+        image,
+    ]
+    assert attributed(HumanMessage(content="owner chat")) == HumanMessage(content="owner chat")
+    assert attributed(AIMessage(content="reply")) == AIMessage(content="reply")

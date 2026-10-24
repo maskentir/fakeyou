@@ -12,6 +12,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
+    SpeakerAttributionMiddleware,
 )
 from fakeyou.foundation.greetings import create_greeting_middleware
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
@@ -77,6 +78,7 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
         type(create_greeting_middleware("id")),
         ChatTurnToolsMiddleware,
         PerceptionContextMiddleware,
+        SpeakerAttributionMiddleware,
     ]
     assert created["persona"] == (
         f"{build_system_prompt(profile, brief=brief)}\n\n{PERCEPTION_GUIDANCE}"

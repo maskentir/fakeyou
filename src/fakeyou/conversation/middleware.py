@@ -6,11 +6,12 @@ from langchain_core.messages import (
     AIMessage,
     AnyMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
 )
 
-from fakeyou.foundation.triggers import current_trigger, trigger_kind
+from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.meet.meet_tools import MEET_SEND_CHAT
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
@@ -155,3 +156,26 @@ class ChatTurnToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         if len(tools) == len(request.tools):
             return await handler(request)
         return await handler(request.override(tools=tools))
+
+
+def attributed(message: AnyMessage) -> AnyMessage:
+    event = meeting_event_of(message)
+    speaker = event.get("speaker") if event is not None else None
+    if not isinstance(message, HumanMessage) or not isinstance(speaker, str):
+        return message
+    if isinstance(message.content, str):
+        return message.model_copy(update={"content": f"{speaker}: {message.content}"})
+    labelled: list[str | dict[Any, Any]] = [{"type": "text", "text": f"{speaker}:"}]
+    return message.model_copy(update={"content": [*labelled, *message.content]})
+
+
+class SpeakerAttributionMiddleware(AgentMiddleware[Any, Any, Any]):
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        return await handler(
+            request.override(messages=[attributed(message) for message in request.messages])
+        )

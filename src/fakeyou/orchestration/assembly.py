@@ -34,7 +34,7 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
-from fakeyou.conversation.middleware import ChatTurnToolsMiddleware
+from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.participation_decider import (
     Decider,
     StructuredGeminiDecider,
@@ -326,6 +326,9 @@ class _ConversationBuilder:
                 if tool.name in meet
             )
 
+    def add_speaker_attribution(self) -> None:
+        self._middleware.append(SpeakerAttributionMiddleware())
+
     def build_agent(self, model: Any) -> Any:
         return create_meeting_agent(
             model,
@@ -405,6 +408,7 @@ async def open_conversation(
         builder.add_memory()
         builder.add_perception()
         builder.add_meet_tools()
+        builder.add_speaker_attribution()
         responder = builder.build_responder(builder.build_agent(model))
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled

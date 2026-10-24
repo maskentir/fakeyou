@@ -61,6 +61,7 @@ from fakeyou.conversation.turn_graph import TurnInput, TurnRuntime, build_turn_g
 from fakeyou.foundation.acks import BARE_ACK_VOCABULARY, is_bare_ack, is_interjection
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.provenance import UNVERIFIED_SPEAKER_IDENTITY, MemoryEvidence
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import BRIEF_RULES, RECALL_RULES, SOURCE_RULES, PersonaLanguage
 from fakeyou.memory.persona import build_system_prompt as persona_build_system_prompt
@@ -595,10 +596,12 @@ def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
         "participant_id": "spaces/x/devices/1",
         "speaker_evidence_id": "e1",
         "stream_id": "",
+        "speaker": "spaces/x/devices/1",
         "speaker_status": "observed",
     }
     (anonymous,) = request_messages([event("t2", "Hello")])
     assert anonymous.additional_kwargs["meeting_event"]["speaker_status"] == "unknown"
+    assert anonymous.additional_kwargs["meeting_event"]["speaker"] == UNIDENTIFIED_PARTICIPANT
 
 
 ACK_CASES = json.loads(

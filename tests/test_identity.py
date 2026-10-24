@@ -8,6 +8,7 @@ from fakeyou.identity.voiceprint_match import VoiceScores
 DISPLAY_CLAIM_RENDER_READERS = frozenset(
     {
         "persistence/record.py",
+        "conversation/meeting_messages.py",
         "debrief/debrief.py",
         "debrief/debrief_sources.py",
         "diarization/correction_labels.py",

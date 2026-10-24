@@ -14,6 +14,7 @@ from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import finite_float
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.speakers import voice_participant_id
 from fakeyou.identity.identity import ResolveRefusal, SpeakerRegistry
 from fakeyou.observability.faults import ConsumerSink, create_poll_guard
 
@@ -21,7 +22,6 @@ VOICE_ACTIVITY_DRAIN_JS = (
     "() => { const tracker = window.__fakeyouVoiceActivity;"
     " if (!tracker) return null; return tracker.drain(); }"
 )
-VOICE_PARTICIPANT_PREFIX = "speaker-"
 PIPELINE_LAG_MS = 200.0
 FRAME_LAG_MS = 300.0
 ACTIVE_LEVEL = 0.01
@@ -61,20 +61,6 @@ def voice_label(index: int) -> str:
         remaining, position = divmod(remaining - 1, len(ascii_uppercase))
         letters = ascii_uppercase[position] + letters
     return letters
-
-
-def voice_participant_id(label: str) -> str:
-    return VOICE_PARTICIPANT_PREFIX + label.lower()
-
-
-def voice_speaker_name(participant_id: str, display_claim: str | None = None) -> str | None:
-    label = participant_id.removeprefix(VOICE_PARTICIPANT_PREFIX)
-    if label == participant_id or not label or not set(label) <= set(ascii_uppercase.lower()):
-        return None
-    name = f"Speaker {label.upper()}"
-    if display_claim is None:
-        return name
-    return f"{name}, shown as {display_claim}, unverified"
 
 
 @dataclass(slots=True)

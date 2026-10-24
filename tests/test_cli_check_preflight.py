@@ -21,6 +21,7 @@ from fakeyou.config.settings import (
 )
 from fakeyou.conversation.middleware import (
     ChatTurnToolsMiddleware,
+    SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.greetings import create_greeting_middleware
@@ -432,6 +433,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
         greeting_type,
         ModelFallbackMiddleware,
         ChatTurnToolsMiddleware,
+        SpeakerAttributionMiddleware,
     ]
 
 

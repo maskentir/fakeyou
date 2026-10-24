@@ -8,11 +8,11 @@ from typing import Literal
 
 from pydantic import TypeAdapter, ValidationError
 
-from fakeyou.audio.voice_activity import voice_speaker_name
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.debrief.debrief_schema import DebriefDraft, DebriefValidationError, EvidenceRef
 from fakeyou.diarization.diarize_client import DiarizeError
 from fakeyou.diarization.diarize_correction import load_corrected_record
+from fakeyou.foundation.speakers import voice_speaker_name
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
