@@ -395,9 +395,7 @@ class ReplayReport:
         by_family: dict[str, list[float]] = {}
         for outcome in self.graded():
             by_family.setdefault(outcome.family, []).append(outcome.latency_ms)
-        return {
-            family: round(max(values), 1) for family, values in sorted(by_family.items())
-        }
+        return {family: round(max(values), 1) for family, values in sorted(by_family.items())}
 
     def checks(self) -> dict[str, dict[str, int]]:
         tally: dict[str, Counter[str]] = {}
