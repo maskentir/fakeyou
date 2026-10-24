@@ -240,7 +240,12 @@ async def test_chat_returns_the_agent_reply_for_the_caller_to_print(
 async def test_chat_returns_the_spoken_text_of_a_structured_reply(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan = ReplyPlan(language="en", intent="answer", text="The launch is on 14 October.")
+    plan = ReplyPlan(
+        understood="When is the launch?",
+        language="en",
+        intent="answer",
+        text="The launch is on 14 October.",
+    )
 
     class FakeAgent:
         async def ainvoke(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:

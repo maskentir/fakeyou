@@ -31,11 +31,16 @@ IntentHandler = Callable[[ReplyIntent], str | None]
 class ReplyPlan(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    understood: str = Field(
+        description=(
+            "The participant's last line as you understood it, in the language it was spoken, "
+            "with misheard words corrected to their most plausible meaning."
+        )
+    )
     language: ReplyLanguage = Field(
         description=(
-            "The language of the participant's last line: en when its words are mostly English, "
-            "id when they are mostly Indonesian. Names, the meeting topic, the speaking style and "
-            "the default language do not count. The spoken text uses this language."
+            "The language of understood: en for English words, id for Indonesian words. The "
+            "spoken text uses this language."
         )
     )
     intent: ReplyIntent = Field(
@@ -49,8 +54,8 @@ class ReplyPlan(BaseModel):
     )
     text: str = Field(
         description=(
-            "The words you speak aloud, in the chosen language, one or two short sentences. Empty "
-            "when the intent is silent."
+            "The words you speak aloud, in that language, one or two short sentences. Empty when "
+            "the intent is silent."
         )
     )
 

@@ -101,3 +101,21 @@ def test_sentences_are_split_by_the_language_of_the_reply() -> None:
         "Good morning.",
         "How are you?",
     ]
+
+
+def test_the_understood_line_is_never_spoken() -> None:
+    planner = ReplyPlanner(max_sentences=2, language="id")
+    raw = json.dumps(
+        {
+            "understood": "Rani, what did you work on today?",
+            "language": "en",
+            "intent": "answer",
+            "text": "I worked on the launch checklist.",
+        }
+    )
+
+    pieces = [raw[start : start + 7] for start in range(0, len(raw), 7)]
+    released = "".join(planner.feed(piece) for piece in pieces) + planner.finish()
+
+    assert "work on today" not in released
+    assert planner.language == "en"
