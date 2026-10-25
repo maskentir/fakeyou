@@ -250,4 +250,26 @@ batch, jadi ini variasi sampling model, bukan regresi. Baseline lama 1,0 berasal
 semua; baseline baru adalah rate dari semua sample di atas. Keluarga lain juga dihitung ulang dari semua batch:
 `control` 34/36 = 0,944, `recall` 72/72 = 1,0 (sebelumnya 0,944), sisanya 1,0.
 
-Perbaikan penyebabnya (twin memilih bahasa participant, bukan bahasa persona) belum dikerjakan dan jadi PR berikutnya.
+Perbaikan penyebabnya dikerjakan di PR berikutnya (lihat bawah).
+
+## Hasil fix bahasa (2026-10-25)
+
+Penyebab: model sudah mendeklarasikan `language: en` dengan benar, tetapi menulis `text` dalam bahasa Indonesia. Di
+semua 6 kegagalan probe sebelum fix, bahasa yang dideklarasikan adalah `en`; teksnya ditarik oleh `speaking_style`
+persona yang berbahasa Indonesia.
+
+Perbaikan ada di kontrak, bukan di rule: deskripsi `ReplyPlan.language` menyatakan bahwa kata-kata participant yang
+menentukan bahasa, bukan profil atau sisa meeting, dan `ReplyPlan.text` meminta setiap kata dalam bahasa yang
+dideklarasikan. Panduan bahasa lisan di agent menambahkan bahwa gaya bicara menentukan nada, bukan bahasa. Fixture
+replay menambah `s18` (pertanyaan bahasa Indonesia) dan `s19` (pindah bahasa ke Inggris di tengah percakapan).
+
+| Metrik | Sebelum | Sesudah |
+| --- | --- | --- |
+| Probe `s12` (27 run): jawaban bahasa Indonesia untuk pertanyaan Inggris | 6 / 27 | 0 / 27 |
+| Keluarga `language` di replay penuh (9 run, `s12`, `s18`, `s19`) | 47 / 54 | 36 / 36 |
+| Severe failure | 0 | 0 |
+
+Baseline `language` sekarang dihitung hanya dari sample kode baru (replay 36/36 ditambah probe 27/27 = 1,0), karena
+sample lama mengukur perilaku yang sudah diperbaiki. Keluarga lain menambahkan batch ini ke pool sebelumnya: `control`
+43/45 = 0,956, sisanya 1,0. Satu batch replay kedua gagal tiga kali karena jaringan ke provider putus (DNS dan
+`No route to host`), bukan karena kode, jadi tidak ikut dihitung. Report: `docs/reports/2026-10-25-conversation-replay-language.json`.

@@ -37,12 +37,12 @@ SPOKEN_LANGUAGE_GUIDANCE = {
     "id": (
         "Reply in the language the participant just used. When their language is unclear, reply "
         "in casual spoken Indonesian like a helpful coworker, using sentences that sound natural "
-        "when read aloud."
+        "when read aloud. Your speaking style sets your tone, not your language."
     ),
     "en": (
         "Reply in the language the participant just used. When their language is unclear, reply "
         "in casual spoken English like a helpful coworker, using sentences that sound natural "
-        "when read aloud."
+        "when read aloud. Your speaking style sets your tone, not your language."
     ),
 }
 MAX_TOOL_CALLS_PER_TURN = 4
