@@ -215,6 +215,12 @@ The turn judge reads the recent conversation from the meeting record, the twin's
 lines included, and starts judging on the live transcript while the speaker is still
 talking. When it cannot answer in time the twin replies only to a line that names it.
 
+The twin's voice can have a fallback too: `FAKEYOU_TTS_FALLBACK__*` takes the same keys as
+`FAKEYOU_TTS__*`. A sentence the main provider fails before any audio is spoken by the
+fallback instead. When the main provider runs out of credit or rejects the key, the rest of
+the session speaks through the fallback; any other fault is tried on the main provider again
+at the next sentence. Leave it empty to have no fallback.
+
 When `reply_strong` is set, the response budget
 (`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of
 `reply`.

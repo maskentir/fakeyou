@@ -30,6 +30,8 @@ def preflight_hosts(
     settings: Settings, *, reply: bool = True, memory: bool = False
 ) -> tuple[str, ...]:
     targets: list[str | None] = [settings.tts.base_url, settings.stt.url]
+    if settings.tts_fallback:
+        targets.append(settings.tts_fallback.base_url)
     if reply:
         targets.append(settings.reply.resolved_base_url)
         if settings.reply_fallback:

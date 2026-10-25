@@ -340,6 +340,7 @@ def _build_audio_factory(
             stt_settings=prepared.request.settings.stt,
             stt_keywords=stt_keywords,
             tts_settings=prepared.request.settings.tts,
+            tts_fallback=prepared.request.settings.tts_fallback,
             speech_language=prepared.request.settings.speech.language,
             pactl_timeout_seconds=prepared.request.settings.audio.pactl_timeout_seconds,
         ),

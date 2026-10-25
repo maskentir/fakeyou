@@ -494,6 +494,7 @@ class Configuration(Section):
     reply_strong: ReplySettings | None = None
     debrief: ReplySettings | None = None
     tts: TTSSettings = Field(default_factory=OpenAITTS)
+    tts_fallback: TTSSettings | None = None
     stt: STTSettings = Field(default_factory=STTSettings)
     vad: VADSettings = Field(default_factory=VADSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
@@ -573,11 +574,12 @@ class Settings(Configuration, BaseSettings):
 
     @model_validator(mode="after")
     def speech_language_is_supported_by_tts(self) -> Self:
-        if self.speech.language not in self.tts.languages:
-            raise ValueError(
-                f"speech language {self.speech.language!r} is not supported by "
-                f"the {self.tts.provider!r} TTS provider"
-            )
+        for tts in (self.tts, self.tts_fallback):
+            if tts is not None and self.speech.language not in tts.languages:
+                raise ValueError(
+                    f"speech language {self.speech.language!r} is not supported by "
+                    f"the {tts.provider!r} TTS provider"
+                )
         return self
 
     @classmethod

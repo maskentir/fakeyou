@@ -90,7 +90,9 @@ def test_default_playback_engine_streams_tts_to_paplay(monkeypatch: pytest.Monke
         return create_paplay_stream_runner(**kwargs)
 
     monkeypatch.setattr(audio, "create_paplay_stream_runner", recording_runner)
-    engine = create_playback_engine(tts_settings=OpenAITTS(api_key=SecretStr("k")))
+    engine = create_playback_engine(
+        speech=SpeechPipelineSettings(tts_settings=OpenAITTS(api_key=SecretStr("k")))
+    )
 
     assert runners == [{"sink": AGENT_SINK_NAME, "rate": PLAYBACK_SAMPLE_RATE}]
     assert inspect.isasyncgen(engine.synthesizer.stream("hello"))
@@ -100,7 +102,9 @@ def test_default_playback_engine_uses_the_configured_tts_provider() -> None:
     from fakeyou.speech.minimax import MiniMaxSpeechSynthesizer
 
     engine = create_playback_engine(
-        tts_settings=MiniMaxTTS(api_key=SecretStr("k"), voice="Indonesian_CaringMan")
+        speech=SpeechPipelineSettings(
+            tts_settings=MiniMaxTTS(api_key=SecretStr("k"), voice="Indonesian_CaringMan")
+        )
     )
 
     assert isinstance(engine.synthesizer, MiniMaxSpeechSynthesizer)
@@ -114,7 +118,7 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
     reporter = FaultReporter(journal=Journal("meeting-1"))
     journal = Journal("meeting-1", emit=lambda _: None, echo=False)
     engine = create_playback_engine(
-        tts_settings=OpenAITTS(api_key=SecretStr("k")),
+        speech=SpeechPipelineSettings(tts_settings=OpenAITTS(api_key=SecretStr("k"))),
         diagnostics=Diagnostics(faults=reporter, journal=journal),
     )
     try:
@@ -154,8 +158,13 @@ async def test_playback_engine_threads_pactl_timeout_to_the_muter(
             return None
 
     def _stub_synth(
-        settings: TTSSettings, *, language: str = "id", journal: Any = None
+        settings: TTSSettings,
+        *,
+        language: str = "id",
+        journal: Any = None,
+        fallback: TTSSettings | None = None,
     ) -> SpeechSynthesizer:
+        del fallback
         del journal
         del language
         del settings
@@ -164,8 +173,9 @@ async def test_playback_engine_threads_pactl_timeout_to_the_muter(
     monkeypatch.setattr(audio, "build_speech_synthesizer", _stub_synth)
     events: list[PlaybackEvent] = []
     engine = create_playback_engine(
-        tts_settings=OpenAITTS(api_key=SecretStr("k")),
-        pactl_timeout_seconds=0.05,
+        speech=SpeechPipelineSettings(
+            tts_settings=OpenAITTS(api_key=SecretStr("k")), pactl_timeout_seconds=0.05
+        ),
         on_event=events.append,
     )
     try:

@@ -172,6 +172,7 @@ class SpeechPipelineSettings:
     stt_settings: STTSettings = field(default_factory=lambda: DEFAULTS.stt)
     stt_keywords: Sequence[str] | None = None
     tts_settings: TTSSettings = field(default_factory=lambda: DEFAULTS.tts)
+    tts_fallback: TTSSettings | None = None
     speech_language: str = DEFAULTS.speech.language
     vad_settings: VADSettings = field(default_factory=lambda: DEFAULTS.vad)
     pactl_timeout_seconds: float = DEFAULTS.audio.pactl_timeout_seconds
@@ -631,21 +632,20 @@ def vad_params(settings: VADSettings) -> VadParams:
 
 def create_playback_engine(
     *,
-    tts_settings: TTSSettings = DEFAULTS.tts,
-    speech_language: str = DEFAULTS.speech.language,
-    pactl_timeout_seconds: float = DEFAULTS.audio.pactl_timeout_seconds,
+    speech: SpeechPipelineSettings = DEFAULT_STREAM_POLICY.speech,
     on_event: Callable[[PlaybackEvent], None] | None = None,
     diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
 ) -> PlaybackEngine:
     return PlaybackEngine(
         build_speech_synthesizer(
-            settings=tts_settings,
-            language=speech_language,
+            settings=speech.tts_settings,
+            language=speech.speech_language,
             journal=diagnostics.journal,
+            fallback=speech.tts_fallback,
         ),
         PlaybackBackend(
             set_muted=create_pactl_muter(
-                sink=AGENT_SINK_NAME, timeout_seconds=pactl_timeout_seconds
+                sink=AGENT_SINK_NAME, timeout_seconds=speech.pactl_timeout_seconds
             ),
             stream_audio=create_paplay_stream_runner(
                 sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE
@@ -694,9 +694,7 @@ def _resolve_engine(
     if playback is not None:
         return playback
     return create_playback_engine(
-        tts_settings=speech.tts_settings,
-        speech_language=speech.speech_language,
-        pactl_timeout_seconds=speech.pactl_timeout_seconds,
+        speech=speech,
         on_event=callbacks.on_playback_event,
         diagnostics=diagnostics,
     )

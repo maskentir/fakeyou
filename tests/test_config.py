@@ -124,6 +124,7 @@ def test_provider_roles_match_the_frozen_contract_list() -> None:
         "debrief",
         "stt",
         "tts",
+        "tts_fallback",
         "memory_llm",
         "memory_embedder",
         "turn_judge",
@@ -148,6 +149,7 @@ def test_role_header_suffix_matches_the_frozen_map() -> None:
         "debrief": "Debrief",
         "stt": "Stt",
         "tts": "Tts",
+        "tts_fallback": "Tts-Fallback",
         "memory_llm": "Memory-Llm",
         "memory_embedder": "Memory-Embedder",
         "turn_judge": "Turn-Judge",
@@ -182,7 +184,7 @@ def test_env_example_documents_every_compose_only_key() -> None:
 
 
 def test_settings_leaf_count_matches_the_frozen_map() -> None:
-    assert len(_setting_env_keys(Settings)) == 178
+    assert len(_setting_env_keys(Settings)) == 184
 
 
 class _MigrationMap(NamedTuple):
@@ -191,7 +193,7 @@ class _MigrationMap(NamedTuple):
     new_keys: tuple[str, ...]
 
 
-EXPECTED_SETTINGS_COUNTS = {"keep": 178}
+EXPECTED_SETTINGS_COUNTS = {"keep": 184}
 EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
 EXPECTED_NEW_COUNT = 0
 
