@@ -370,10 +370,10 @@ class PlaybackEngine:
     ) -> None:
         if self._closed:
             return
-        generation = self._generation
-        if generation != self._generation or self._closed:
-            self._emit("playback_dropped", text, "interrupted")
+        if not any(char.isalnum() for char in text):
+            self._emit("playback_dropped", text, "nothing_to_say")
             return
+        generation = self._generation
         await self._play_queued(
             self._retryable_stream(text, sentence_index, transcript_id, language, generation), text
         )

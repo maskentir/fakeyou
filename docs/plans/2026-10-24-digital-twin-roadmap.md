@@ -305,6 +305,15 @@ pembicara.
 Target turunan dari item di atas: balasan yang tidak menyasar ≤ 1 per 10 menit; kalimat terpotong ≤ 5% dari balasan;
 pertanyaan layar dijawab ≤ 5 s.
 
+### Status backlog (2026-10-25)
+
+- LIVE-01, LIVE-02: digantikan oleh turn judge (`docs/plans/2026-10-25-turn-judge.md`): satu model memutuskan apakah
+  twin bicara, dan barge-in hanya terjadi bila judge bilang interim ditujukan ke twin.
+- LIVE-07: cap balasan sudah memotong di batas kalimat (`cap_spoken_reply` memakai `split_sentences`), tidak lagi di
+  karakter.
+- LIVE-10: teks tanpa huruf atau angka tidak pernah dikirim ke TTS; playback mencatat `playback_dropped` dengan
+  detail `nothing_to_say`.
+
 ## Aturan kerja
 
 - Satu fase, satu branch, commit per bagian. PR mengikuti template. Push hanya bila diminta.
