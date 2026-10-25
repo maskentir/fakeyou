@@ -36,7 +36,7 @@ from fakeyou.persistence.ingestion_status import (
     status_path,
     write_status,
 )
-from fakeyou.persistence.lease import LeaseError
+from fakeyou.persistence.lease import LeaseError, lock_owner
 from tests._error_support import message_pattern
 from tests._persistence_fakes import RecordingJournal
 
@@ -311,14 +311,13 @@ def test_record_lock_keeps_its_heartbeat_fresh_while_held(tmp_path: Path) -> Non
     record = tmp_path / "meeting-9" / "record.jsonl"
 
     with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
-        first = json.loads(lock_path(record).read_text(encoding="utf-8"))
-        assert first["heartbeat"]
+        first = lock_owner(lock_path(record))
+        assert first is not None
         time.sleep(0.5)
-        second = json.loads(lock_path(record).read_text(encoding="utf-8"))
+        second = lock_owner(lock_path(record))
+        assert second is not None
         assert second["token"] == first["token"]
-        assert datetime.fromisoformat(second["heartbeat"]) > datetime.fromisoformat(
-            first["heartbeat"]
-        )
+        assert second["heartbeat"] > first["heartbeat"]
 
     assert not lock_path(record).exists()
 
@@ -402,13 +401,13 @@ def test_record_lock_refuses_a_contender_past_the_original_deadline_while_held(
 ) -> None:
     record = tmp_path / "meeting-9" / "record.jsonl"
 
-    with record_lock(record, purpose="meeting", stale_after_seconds=0.3):
-        time.sleep(0.6)
+    with record_lock(record, purpose="meeting", stale_after_seconds=1.5):
+        time.sleep(2.0)
         monkeypatch.setattr(
             "fakeyou.persistence.lease.socket.gethostname", lambda: "other-container"
         )
         with pytest.raises(RecordLockError, match="locked") as error:
-            with record_lock(record, purpose="ingestion", stale_after_seconds=0.3):
+            with record_lock(record, purpose="ingestion", stale_after_seconds=1.5):
                 pytest.fail("renewed lease must refuse a contender past the deadline")
         assert error.value.code is ErrorCode.RECORD_LOCKED
 
@@ -868,3 +867,16 @@ def test_terminal_outcome_carries_the_stored_or_fallback_prefix_bytes() -> None:
     assert (
         terminal_outcome("failed", "provider_timeout", "fresh", fallback_bytes=9).record_bytes == 9
     )
+
+
+def test_a_reader_never_sees_the_lease_half_written_by_the_heartbeat(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+
+    with record_lock(record, purpose="meeting", stale_after_seconds=0.15):
+        deadline = time.monotonic() + 0.5
+        owners = []
+        while time.monotonic() < deadline:
+            owners.append(lock_owner(lock_path(record)))
+
+    assert owners
+    assert None not in owners
