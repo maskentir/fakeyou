@@ -26,10 +26,16 @@ class LeaseError(FakeYouError):
 
 def lock_owner(path: Path) -> dict[str, Any] | None:
     try:
-        raw = path.read_bytes()
+        fd = os.open(path, os.O_RDONLY)
     except OSError:
         return None
-    return _parse_owner(raw)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        return _parse_owner(_read_fd(fd))
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
 
 def _parse_owner(raw: bytes) -> dict[str, Any] | None:
@@ -141,7 +147,7 @@ def file_lease(
     owner_payload = {"host": host, "pid": os.getpid(), "purpose": purpose, "token": token}
     with _acquisition_guard(path) as fd:
         raw = _read_fd(fd)
-        owner = lock_owner(path) if raw else None
+        owner = _parse_owner(raw) if raw else None
         if raw and owner is None:
             raise LeaseError(ErrorCode.RECORD_LOCK_CORRUPT, path=path) from None
         if owner is not None and not _owner_recoverable(owner, stale_after_seconds):
