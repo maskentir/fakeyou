@@ -27,7 +27,11 @@ from fakeyou.conversation.state import (
     RuntimeContext,
     validate_phase_reason,
 )
-from fakeyou.db.checkpoint import is_checkpoint_error
+from fakeyou.db.checkpoint import (
+    CHECKPOINT_WRITE_ERRORS,
+    find_unserializable,
+    is_checkpoint_error,
+)
 from fakeyou.foundation.taxonomy import FaultKind, TerminalReason
 from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.observability.faults import Fault, FaultReporter
@@ -621,7 +625,49 @@ class DegradingCheckpointer(BaseCheckpointSaver[Any]):
     ) -> None:
         if self._queued.get(_thread_of(config)):
             return
-        await self._inner.aput_writes(config, writes, task_id, task_path)
+        try:
+            async with asyncio.timeout(self._policy.send_timeout_seconds):
+                await self._inner.aput_writes(config, writes, task_id, task_path)
+        except CHECKPOINT_WRITE_ERRORS as error:
+            self._record_write_failure(config, writes, error, task_id, task_path)
+
+    def _record_write_failure(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        error: Exception,
+        task_id: str,
+        task_path: str,
+    ) -> None:
+        culprit: str | None = None
+        serde = getattr(self._inner, "serde", None)
+        if serde is not None:
+            for channel, value in writes:
+                found = find_unserializable(value, serde, path=f"write[{channel!r}]")
+                if found is not None:
+                    culprit = found
+                    break
+        if is_checkpoint_error(error):
+            kind: FaultKind = "timeout" if isinstance(error, TimeoutError) else "unavailable"
+            detail = f"checkpoint write skipped: {type(error).__name__}"
+        else:
+            kind = "unknown"
+            detail = f"internal:{type(error).__name__}"
+        if self._policy.faults is not None:
+            self._policy.faults.record(Fault(source="runtime", kind=kind, detail=detail))
+        if self._policy.journal is None:
+            return
+        self._policy.journal.record(
+            "checkpoint_write_failed",
+            source="runtime",
+            thread_id=_thread_of(config),
+            task_id=task_id,
+            task_path=task_path,
+            channels=[channel for channel, _ in writes],
+            error_type=type(error).__name__,
+            error_detail=str(error)[:200],
+            culprit=culprit,
+        )
 
     @override
     async def adelete_thread(self, thread_id: str) -> None:

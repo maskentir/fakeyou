@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast, get_args, override
@@ -150,6 +151,18 @@ class FlakySaver(InMemorySaver):
         if self.mode == "commit_then_raise":
             raise OperationalError("response lost after commit")
         return result
+
+
+class UnserializableSaver(InMemorySaver):
+    @override
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        raise TypeError("Type is not msgpack serializable: async_generator")
 
 
 class _ExpiredTimeout:
@@ -515,6 +528,21 @@ async def test_send_maps_a_hung_checkpoint_write_to_unreachable() -> None:
         saver.released.set()
 
     assert caught.value.code is ErrorCode.DATABASE_UNREACHABLE
+
+
+async def test_a_failed_checkpoint_write_never_breaks_the_meeting() -> None:
+    saver = UnserializableSaver()
+    journal = RecordingJournal("meeting-1")
+    checkpointer = DegradingCheckpointer(saver, CheckpointDegradation(faults=None, journal=journal))
+
+    await checkpointer.aput_writes(
+        {"configurable": {"thread_id": THREAD}}, [("reply", object())], "task-1"
+    )
+
+    [failed] = journal.events("checkpoint_write_failed")
+    assert failed["error_type"] == "TypeError"
+    assert failed["culprit"] == "write['reply']: object"
+    assert failed["channels"] == ["reply"]
 
 
 async def test_send_failure_before_admitted_raises_unreachable() -> None:

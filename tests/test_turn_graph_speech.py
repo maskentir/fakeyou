@@ -1,5 +1,8 @@
 from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from typing import Any, TypedDict
+
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -8,6 +11,7 @@ from fakeyou.conversation.turn_graph import (
     SpeechRuntime,
     build_speech_graph,
 )
+from fakeyou.db.checkpoint import checkpoint_serializer
 
 
 class FakeResponder:
@@ -115,3 +119,53 @@ async def test_generator_failure_mid_reply_routes_to_a_named_failure_not_silence
     assert out["failure"] == "reply_failed"
     assert journal.names == ["turn_failed"]
     assert journal.fields == [{"source": "agent", "code": "reply_failed"}]
+
+
+async def test_the_speech_state_stays_serializable_for_a_checkpoint() -> None:
+    graph = build_speech_graph()
+    serializer = checkpoint_serializer()
+
+    out = await graph.ainvoke(
+        speech_input(),
+        context=SpeechRuntime(
+            responder=FakeResponder(["First sentence.", "Second sentence."]),
+            sink=FakeSink(),
+            journal=FakeJournal(),
+        ),
+    )
+
+    for _key, value in out.items():
+        serializer.dumps_typed(value)
+
+
+class _ParentState(TypedDict):
+    transcript: str
+    spoken: bool
+
+
+async def test_the_speech_turn_survives_a_checkpointed_parent() -> None:
+    speech = build_speech_graph()
+    sink = FakeSink()
+
+    async def _speak(state: _ParentState) -> dict[str, Any]:
+        await speech.ainvoke(
+            SpeechInput(transcript=state["transcript"], speaking_generation=0),
+            context=SpeechRuntime(
+                responder=FakeResponder(["Hello there."]), sink=sink, journal=FakeJournal()
+            ),
+        )
+        return {"spoken": True}
+
+    builder = StateGraph(_ParentState)
+    builder.add_node("speak", _speak)
+    builder.add_edge(START, "speak")
+    builder.add_edge("speak", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    out = await graph.ainvoke(
+        {"transcript": "twin, are you there?", "spoken": False},
+        {"configurable": {"thread_id": "t1:m1"}},
+    )
+
+    assert out["spoken"] is True
+    assert sink.sentences == ["Hello there."]

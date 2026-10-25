@@ -41,6 +41,7 @@ from fakeyou.conversation.turn_lifecycle import (
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 
 MeetingReplier = ConversationResponder | StreamingConversationResponder
@@ -99,6 +100,12 @@ class MeetingTurns:
     @property
     def is_busy(self) -> bool:
         return self.lifecycle.is_busy
+
+    def receive_chat(self, event: TranscriptEvent) -> bool:
+        return self.ingress.receive_chat(event)
+
+    def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
+        return self.ingress.receive_attention(event, channel=channel)
 
     def bind(self, session: MeetingAudio) -> None:
         self.lifecycle.bind(session)
