@@ -102,6 +102,33 @@ async def test_a_chat_that_names_the_twin_is_answered_in_chat() -> None:
     await turns.close()
 
 
+async def test_the_runtime_can_hand_a_chat_line_to_the_meeting_turns() -> None:
+    chat = FakeChat()
+    turns, _ = lanes(FixedResponder("Here is the deck link."), interaction=interaction(chat=chat))
+
+    accepted = turns.receive_chat(
+        meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
+    )
+    await settle(turns)
+
+    assert accepted
+    assert chat.sent == [("Here is the deck link.", "c1")]
+    await turns.close()
+
+
+async def test_the_runtime_can_offer_attention_to_the_meeting_turns() -> None:
+    turns, _ = lanes(FixedResponder("On it."))
+
+    accepted = turns.receive_attention(
+        meeting_input("a1", "A participant said in chat: the deck is ready", "meeting_attention"),
+        channel="voice",
+    )
+    await settle(turns)
+
+    assert accepted
+    await turns.close()
+
+
 async def test_a_chat_that_does_not_name_the_twin_is_left_alone() -> None:
     chat = FakeChat()
     responder = FakeResponder()

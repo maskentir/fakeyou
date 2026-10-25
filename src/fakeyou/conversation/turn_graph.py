@@ -8,7 +8,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
@@ -503,6 +503,12 @@ class SentenceSink(Protocol):
     async def say(self, sentence: str, language: str) -> None: ...
 
 
+@dataclass(slots=True)
+class ReplyStreams:
+    reply: AsyncIterator[SpokenChunk] | None = None
+    source: AsyncIterator[SpokenChunk] | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class SpeechRuntime:
     responder: Responder | None
@@ -521,6 +527,7 @@ class SpeechRuntime:
     bound: Callable[[], bool] | None = None
     faults: FaultReporter | None = None
     drop_detail: Callable[[], str] | None = None
+    streams: ReplyStreams = field(default_factory=ReplyStreams)
 
 
 class SpeechInput(TypedDict):
@@ -532,7 +539,7 @@ class SpeechInput(TypedDict):
 class SpeechState(TypedDict):
     transcript: str
     speaking_generation: int
-    reply: AsyncIterator[SpokenChunk] | None
+    reply: bool
     failure: str | None
     transcript_event: NotRequired[TranscriptEvent | None]
     delivered: NotRequired[tuple[str, ...]]
@@ -541,7 +548,6 @@ class SpeechState(TypedDict):
     settled: NotRequired[bool]
     silent: NotRequired[bool]
     agent_journaled: NotRequired[bool]
-    source: NotRequired[AsyncIterator[SpokenChunk] | None]
 
 
 type SpeechGraph = CompiledStateGraph[SpeechState, SpeechRuntime, SpeechInput, SpeechState]
@@ -1143,7 +1149,7 @@ def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[Spok
 
 def _whole_update(
     *,
-    reply: AsyncIterator[SpokenChunk] | None = None,
+    reply: bool = False,
     failure: str | None = None,
     error: Exception | None = None,
     settled: bool = False,
@@ -1157,7 +1163,7 @@ def _whole_update(
         "delivered": (),
         "settled": settled,
         "silent": silent,
-        "agent_journaled": reply is not None,
+        "agent_journaled": reply,
     }
 
 
@@ -1239,7 +1245,8 @@ async def _respond_whole(
         return _whole_update(settled=True)
     if not reply.text.strip() or not _speech_bound(context):
         return _whole_update(settled=True, silent=True)
-    return _whole_update(reply=_replay((_spoken_reply(context, reply, request_id),)))
+    context.streams.reply = _replay((_spoken_reply(context, reply, request_id),))
+    return _whole_update(reply=True)
 
 
 def _open_reply(context: SpeechRuntime, transcript: str) -> AsyncIterator[SpokenChunk]:
@@ -1260,13 +1267,14 @@ async def respond(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> dict[s
     replies = _open_reply(context, state["transcript"])
     scope = context.scope
     if scope is None:
-        return {"reply": replies, "source": replies}
+        context.streams.reply = replies
+        context.streams.source = replies
+        return {"reply": True}
     if not context.held:
         record_agent_started(context.journal, scope)
-    return {
-        "reply": within_sentence_budget(replies, scope.response_timeout_seconds),
-        "source": replies,
-    }
+    context.streams.reply = within_sentence_budget(replies, scope.response_timeout_seconds)
+    context.streams.source = replies
+    return {"reply": True}
 
 
 SpeakUpdate = dict[str, int | str | bool | tuple[str, ...] | Exception | None]
@@ -1347,7 +1355,7 @@ async def _speak_held(
             )
         raise
     finally:
-        await _close_stream(state.get("source"), context.faults)
+        await _close_stream(context.streams.source, context.faults)
     completed = error is None and not dropped
     if not state.get("agent_journaled"):
         _journal_held_end(context, error, completed=completed)
@@ -1356,10 +1364,10 @@ async def _speak_held(
 
 
 async def speak_reply(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> SpeakUpdate:
-    reply = state["reply"]
+    context = runtime.context
+    reply = context.streams.reply
     if reply is None:
         raise RuntimeError("speak runs only after respond set a reply")
-    context = runtime.context
     if context.held:
         return await _speak_held(state, context, reply)
     floor = context.floor
@@ -1408,7 +1416,7 @@ async def speak_reply(state: SpeechState, runtime: Runtime[SpeechRuntime]) -> Sp
 def route_after_respond(state: SpeechState) -> Literal["speak", "failed", "end"]:
     if state.get("failure") is not None:
         return "failed"
-    if state.get("reply") is None:
+    if not state.get("reply"):
         return "end"
     return "speak"
 

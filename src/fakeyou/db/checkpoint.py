@@ -30,6 +30,48 @@ def is_checkpoint_error(error: BaseException) -> bool:
     return isinstance(error, (psycopg.Error, TimeoutError))
 
 
+CHECKPOINT_WRITE_ERRORS: tuple[type[Exception], ...] = (
+    psycopg.Error,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+
+def find_unserializable(
+    value: Any,
+    serde: Any,
+    *,
+    path: str = "$",
+    depth: int = 0,
+    max_depth: int = 6,
+) -> str | None:
+    try:
+        serde.dumps_typed(value)
+    except (TypeError, ValueError):
+        if depth >= max_depth:
+            return f"{path}: {type(value).__name__}"
+        if isinstance(value, dict):
+            for key, item in value.items():
+                found = find_unserializable(
+                    item, serde, path=f"{path}[{key!r}]", depth=depth + 1, max_depth=max_depth
+                )
+                if found is not None:
+                    return found
+            return None
+        if isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                found = find_unserializable(
+                    item, serde, path=f"{path}[{index}]", depth=depth + 1, max_depth=max_depth
+                )
+                if found is not None:
+                    return found
+            return None
+        return f"{path}: {type(value).__name__}"
+    else:
+        return None
+
+
 def is_database_error(error: BaseException) -> bool:
     return isinstance(error, psycopg.Error)
 
