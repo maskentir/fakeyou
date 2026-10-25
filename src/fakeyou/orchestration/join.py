@@ -271,7 +271,10 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
     if event.cue:
         run.journal.record(
-            event.kind.replace("playback_", "thinking_cue_"), source="playback", detail=event.detail
+            event.kind.replace("playback_", "thinking_cue_"),
+            source="playback",
+            detail=event.detail,
+            cue_text=event.text,
         )
         return
     run.journal.record(

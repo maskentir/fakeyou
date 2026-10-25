@@ -68,6 +68,17 @@ class SpokenChunk:
     language: str
 
 
+@dataclass(frozen=True, slots=True)
+class PlanRead:
+    structured: bool
+    intent: ReplyIntent
+    language: str
+    replaced: bool
+
+
+PlanHandler = Callable[[PlanRead], None]
+
+
 class ReplyPlanner:
     def __init__(
         self,
@@ -75,10 +86,12 @@ class ReplyPlanner:
         max_sentences: int,
         language: str,
         on_intent: IntentHandler | None = None,
+        on_plan: PlanHandler | None = None,
     ) -> None:
         self._max_sentences = max_sentences
         self._language = language
         self._on_intent = on_intent
+        self._on_plan = on_plan
         self._raw = ""
         self._released = 0
         self._structured: bool | None = None
@@ -88,6 +101,7 @@ class ReplyPlanner:
         self._held: str | None = None
         self._short_spoken = False
         self._spoken = 0
+        self._reported = False
 
     @property
     def intent(self) -> ReplyIntent:
@@ -152,6 +166,7 @@ class ReplyPlanner:
                 return ""
             self._structured = body.startswith(JSON_START)
         if not self._structured:
+            self._report(structured=False)
             return self._take_text(self._raw)
         plan = parse_partial_json(self._raw.lstrip())
         if not isinstance(plan, dict) or not self._read_plan(plan, final=final):
@@ -172,7 +187,21 @@ class ReplyPlanner:
         self._declared_intent = cast(ReplyIntent, intent) if known else "answer"
         if self._on_intent is not None:
             self._replacement = self._on_intent(self.intent)
+        self._report(structured=True)
         return True
+
+    def _report(self, *, structured: bool) -> None:
+        if self._reported or self._on_plan is None:
+            return
+        self._reported = True
+        self._on_plan(
+            PlanRead(
+                structured=structured,
+                intent=self.intent,
+                language=self.language,
+                replaced=self._replacement is not None,
+            )
+        )
 
     def _take_text(self, text: str) -> str:
         fresh = text[self._released :]

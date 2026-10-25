@@ -2,6 +2,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Protocol, override, runtime_checkable
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from fakeyou.conversation.meeting_messages import (
 from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
+    PlanRead,
     ReplyIntent,
     ReplyPlanner,
     SpokenChunk,
@@ -369,6 +371,23 @@ async def _pump_stream(
         yield SpokenChunk(text=line, language=planner.language)
 
 
+def _record_reply_plan(
+    journal: Journal | None, request_id: str, transcript_id: str | None, plan: PlanRead
+) -> None:
+    if journal is None:
+        return
+    journal.record(
+        "reply_plan_observed",
+        source="llm",
+        request_id=request_id,
+        transcript_id=transcript_id,
+        structured=plan.structured,
+        intent=plan.intent,
+        language=plan.language,
+        replaced=plan.replaced,
+    )
+
+
 def _record_reply_text(state: _SentenceStream, reply: str) -> None:
     if not state.first_text and reply.strip():
         state.first_text = True
@@ -421,7 +440,14 @@ async def stream_sentences(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
     planner = ReplyPlanner(
-        max_sentences=max_sentences, language=trace.language, on_intent=trace.on_intent
+        max_sentences=max_sentences,
+        language=trace.language,
+        on_intent=trace.on_intent,
+        on_plan=(
+            None
+            if trace.journal is None
+            else partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id)
+        ),
     )
     mark = SpeechMark()
     marked = SPEECH_MARK.set(mark)
