@@ -585,3 +585,24 @@ async def test_a_slow_consumer_does_not_count_against_synthesis() -> None:
 
     assert len(player.played) == 3
     assert [event for event in events if event.kind == "playback_failed"] == []
+
+
+async def test_text_with_nothing_to_say_never_reaches_the_synthesizer() -> None:
+    synth = FakeSynth()
+    player = FakePlayer()
+    muter = FakeMuter()
+    events: list[PlaybackEvent] = []
+    engine = build_engine(synth, player, muter, events, tail_seconds=0)
+
+    try:
+        await engine.speak(".", sentence_index=0)
+        await engine.speak("—", sentence_index=1)
+        await engine.speak("Yes.", sentence_index=2)
+    finally:
+        await engine.close()
+
+    assert synth.texts == ["Yes."]
+    assert [(event.kind, event.text, event.detail) for event in events[:2]] == [
+        ("playback_dropped", ".", "nothing_to_say"),
+        ("playback_dropped", "—", "nothing_to_say"),
+    ]
