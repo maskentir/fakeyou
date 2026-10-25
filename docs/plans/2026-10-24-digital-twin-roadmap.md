@@ -313,6 +313,10 @@ pertanyaan layar dijawab ≤ 5 s.
   karakter.
 - LIVE-10: teks tanpa huruf atau angka tidak pernah dikirim ke TTS; playback mencatat `playback_dropped` dengan
   detail `nothing_to_say`.
+- LIVE-11 (sebagian): provider TTS cadangan (`FAKEYOU_TTS_FALLBACK__*`). Kalimat yang gagal di provider utama sebelum
+  ada audio diucapkan oleh cadangan; kredit habis atau key ditolak memindahkan sisa sesi ke cadangan. Journal
+  `tts_fallback_started`. Belum: twin bilang terus terang saat tidak bisa bicara sama sekali, dan alarm fault TTS.
+- LIVE-13: sudah benar. `removed_by_host` keluar dengan exit 0, `session_outcome` `completed`, tidak masuk fault.
 
 ## Aturan kerja
 

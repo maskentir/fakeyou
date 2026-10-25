@@ -49,4 +49,4 @@ def preflight_join(request: JoinRequest) -> None:
         memory_config(settings)
     if request.audio_enabled:
         _require_audio_platform()
-        settings.require_roles("stt", "tts")
+        settings.require_roles("stt", "tts", "tts_fallback")

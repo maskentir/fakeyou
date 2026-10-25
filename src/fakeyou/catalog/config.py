@@ -26,6 +26,7 @@ class ConfigKey(StrEnum):
     DEBRIEF_API_KEY = "FAKEYOU_DEBRIEF__API_KEY"
     STT_API_KEY = "FAKEYOU_STT__API_KEY"
     TTS_API_KEY = "FAKEYOU_TTS__API_KEY"
+    TTS_FALLBACK_API_KEY = "FAKEYOU_TTS_FALLBACK__API_KEY"
     PERCEPTION_BASE_URL = "FAKEYOU_PERCEPTION__INTERPRETER__BASE_URL"
     PERCEPTION_API_KEY = "FAKEYOU_PERCEPTION__INTERPRETER__API_KEY"
     MEMORY_STORE_PASSWORD = "FAKEYOU_MEMORY__STORE__PASSWORD"
@@ -65,6 +66,7 @@ PROVIDER_ROLES: tuple[str, ...] = (
     "debrief",
     "stt",
     "tts",
+    "tts_fallback",
     "memory_llm",
     "memory_embedder",
     "turn_judge",
@@ -78,6 +80,7 @@ ROLE_ATTRIBUTE_PATH: Mapping[str, str] = {
     "debrief": "debrief",
     "stt": "stt",
     "tts": "tts",
+    "tts_fallback": "tts_fallback",
     "memory_llm": "memory.llm",
     "memory_embedder": "memory.embedder",
     "turn_judge": "turn_judge.model",
@@ -91,6 +94,7 @@ API_KEY_OF_ROLE: Mapping[str, ConfigKey] = {
     "debrief": ConfigKey.DEBRIEF_API_KEY,
     "stt": ConfigKey.STT_API_KEY,
     "tts": ConfigKey.TTS_API_KEY,
+    "tts_fallback": ConfigKey.TTS_FALLBACK_API_KEY,
     "memory_llm": ConfigKey.MEMORY_LLM_API_KEY,
     "memory_embedder": ConfigKey.MEMORY_EMBEDDER_API_KEY,
     "turn_judge": ConfigKey.TURN_JUDGE_API_KEY,
@@ -104,6 +108,7 @@ ROLE_HEADER_SUFFIX: Mapping[str, str] = {
     "debrief": "Debrief",
     "stt": "Stt",
     "tts": "Tts",
+    "tts_fallback": "Tts-Fallback",
     "memory_llm": "Memory-Llm",
     "memory_embedder": "Memory-Embedder",
     "turn_judge": "Turn-Judge",
