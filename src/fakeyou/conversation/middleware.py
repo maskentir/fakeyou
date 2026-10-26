@@ -9,6 +9,7 @@ from langchain.agents.middleware import (
     ModelResponse,
     ModelRetryMiddleware,
 )
+from langchain.agents.middleware.types import ToolCallRequest
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.exceptions import ModelError
 from langchain_core.language_models import BaseChatModel
@@ -22,9 +23,10 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.messages.utils import count_tokens_approximately
+from langgraph.types import Command
 
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
-from fakeyou.meet.meet_tools import MEET_SEND_CHAT
+from fakeyou.meet.meet_tools import MEET_SEND_CHAT, MeetToolResult, render_tool_result
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 
@@ -117,6 +119,83 @@ def _tool_name(tool: object) -> str | None:
         return name if isinstance(name, str) else None
     name = getattr(tool, "name", None)
     return name if isinstance(name, str) else None
+
+
+MEET_ACTION_TOOLS = frozenset({MEET_SEND_CHAT, "meet_raise_hand", "meet_lower_hand"})
+
+
+def _meet_tools_used(messages: Sequence[AnyMessage]) -> set[str]:
+    start = 0
+    for index, message in enumerate(messages):
+        if isinstance(message, HumanMessage):
+            start = index
+    return {
+        message.name
+        for message in messages[start:]
+        if isinstance(message, ToolMessage) and message.name in MEET_ACTION_TOOLS
+    }
+
+
+class MeetActionOnceMiddleware(AgentMiddleware[Any, Any, Any]):
+    def _without_used(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
+        used = _meet_tools_used(request.messages)
+        if not used:
+            return request
+        tools = [tool for tool in request.tools if _tool_name(tool) not in used]
+        if len(tools) == len(request.tools):
+            return request
+        return request.override(tools=tools)
+
+    def _duplicate(self, request: ToolCallRequest) -> ToolMessage | None:
+        name = request.tool_call.get("name")
+        messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
+        if name not in MEET_ACTION_TOOLS or name not in _meet_tools_used(messages):
+            return None
+        return ToolMessage(
+            content=render_tool_result(
+                MeetToolResult(
+                    "duplicate",
+                    "Already queued in this turn. Do not send it again; "
+                    "give your spoken reply now or stay silent.",
+                )
+            ),
+            tool_call_id=str(request.tool_call.get("id") or ""),
+            name=str(name),
+        )
+
+    @override
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]:
+        return handler(self._without_used(request))
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        return await handler(self._without_used(request))
+
+    @override
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        duplicate = self._duplicate(request)
+        return duplicate if duplicate is not None else handler(request)
+
+    @override
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        duplicate = self._duplicate(request)
+        return duplicate if duplicate is not None else await handler(request)
 
 
 class ChatTurnToolsMiddleware(AgentMiddleware[Any, Any, Any]):

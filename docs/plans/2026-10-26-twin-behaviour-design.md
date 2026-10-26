@@ -103,8 +103,10 @@ memang butuh sesi meeting sungguhan.
    bentuknya bukan daftar kata acknowledgement. Momen dideteksi semantik: prefilter embedding memilih item
    profile/brief yang dekat, judge momen terstruktur memutuskan jenis momen dan sumbernya, kontribusi wajib
    mengutip sumber terdaftar, lalu verifier grounding memeriksa klaimnya terhadap sumber itu sebelum diucapkan.
-   Replay proaktif live (`docs/reports/2026-10-26-proactive-replay.json`): nol kontribusi salah dari jalur ini
-   di semua run; kontrol murni selalu diam.
+   Replay proaktif live (`docs/reports/2026-10-26-proactive-replay.json`): dari sepuluh skenario, enam momen
+   teridentifikasi dan keenam-enamanya berbicara dengan sumber yang benar, dan dua kontrol diam -- tapi satu
+   kontrol (p10) sempat bicara. Jadi satu kontribusi salah dari tujuh, 0,545 per jam: di bawah target roadmap
+   "salah <= 1 per jam", tapi bukan nol, dan itu yang harus dikejar berikutnya.
 5. **N -- selesai: judul saja di semua lapisan.** Layar bukan konten meeting sekarang dicuci saat disimpan ke
    timeline (`title_only`), dan tidak bisa lagi bocor lewat record JSONL, arsip frame JPG, tool lihat-layar,
    gambar pending yang dulu menempel di pesan pemicu, atau trigger perhatian. Rekaman lama yang sudah terlanjur

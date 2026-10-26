@@ -9,7 +9,9 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.meet.meet_action_ledger import MeetActionKind
 from fakeyou.observability.journal import Journal
 
-MEET_ACTION_QUEUED = "Request recorded for separate execution."
+MEET_ACTION_QUEUED = (
+    "Done. It will be delivered; do not repeat it. Continue with your spoken reply or stay silent."
+)
 MEET_SEND_CHAT = "meet_send_chat"
 
 MeetToolCode = Literal["queued", "refused", "failed", "duplicate", "rate_limited"]
@@ -91,7 +93,14 @@ def create_meet_action_tools(
             MeetActionRequest("lower_hand", tool_call_id),
         )
 
-    @tool(MEET_SEND_CHAT, description="Send a short chat message to everyone in the meeting.")
+    @tool(
+        MEET_SEND_CHAT,
+        description=(
+            "Send a short chat message to everyone in the meeting. Use it only when the "
+            "conversation is in chat or someone asked you to write in chat; never use it to "
+            "answer a spoken question, and never send the same message twice."
+        ),
+    )
     async def meet_send_chat(message: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         return _request_meet_action(
             dispatcher,

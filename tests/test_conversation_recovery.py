@@ -1,11 +1,8 @@
 from collections.abc import Callable, Sequence
 from typing import override
 
-import pytest
-
 from fakeyou.conversation.meeting_turns import build_meeting_turns
 from fakeyou.conversation.reply_planner import SpokenChunk, TurnLanguage
-from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_recovery import (
     MAX_CONSECUTIVE_TURN_FAILURES,
     TURN_FAILED_LINES,
@@ -51,18 +48,35 @@ async def test_one_failed_turn_says_a_line_and_keeps_listening() -> None:
     await loop.lifecycle.close()
 
 
-async def test_consecutive_failures_fail_the_loop_at_the_limit() -> None:
+async def test_consecutive_failures_mute_the_apology_without_failing_the_loop() -> None:
     audio = FakeReplyAudio()
-    loop = build_meeting_turns(ScriptedResponder(["fail"] * MAX_CONSECUTIVE_TURN_FAILURES))
+    loop = build_meeting_turns(ScriptedResponder(["fail"] * (MAX_CONSECUTIVE_TURN_FAILURES + 2)))
     loop.lifecycle.bind(audio)
-    for index in range(MAX_CONSECUTIVE_TURN_FAILURES - 1):
+    for index in range(MAX_CONSECUTIVE_TURN_FAILURES + 2):
         await loop.ingress.receive_final(event(f"t{index}", f"question {index}"))
         await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("last", "final question"))
 
-    with pytest.raises(ConversationError, match="conversation failed"):
-        await loop.lifecycle.wait_idle()
+    loop.lifecycle.raise_if_failed()
+    assert loop.lifecycle.phase != "failed"
     assert audio.spoken == [TURN_FAILED_LINE] * (MAX_CONSECUTIVE_TURN_FAILURES - 1)
+    await loop.lifecycle.close()
+
+
+async def test_after_the_failure_limit_the_loop_recovers_on_the_next_success() -> None:
+    audio = FakeReplyAudio()
+    outcomes = ["fail"] * MAX_CONSECUTIVE_TURN_FAILURES + ["ok"]
+    loop = build_meeting_turns(ScriptedResponder(outcomes))
+    loop.lifecycle.bind(audio)
+    for index in range(len(outcomes)):
+        await loop.ingress.receive_final(event(f"t{index}", f"question {index}"))
+        await loop.lifecycle.wait_idle()
+
+    loop.lifecycle.raise_if_failed()
+    assert loop.lifecycle.phase != "failed"
+    assert audio.spoken == [
+        *([TURN_FAILED_LINE] * (MAX_CONSECUTIVE_TURN_FAILURES - 1)),
+        f"question {MAX_CONSECUTIVE_TURN_FAILURES}",
+    ]
     await loop.lifecycle.close()
 
 

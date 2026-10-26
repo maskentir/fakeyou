@@ -228,13 +228,13 @@ async def test_whole_respond_over_the_turn_budget_is_cut_journaled_and_counted()
     assert harness.lifecycle.phase == "waiting"
 
 
-async def test_third_consecutive_whole_timeout_fails_without_a_third_line() -> None:
+async def test_third_consecutive_whole_timeout_mutes_without_failing() -> None:
     harness = Harness(FakeWholeResponder(delay=1.0), timeout=0.05)
 
     for event_id in ("f1", "f2", "f3"):
         await harness.say(event_id, "twin, are you there?")
 
-    assert harness.lifecycle.is_failed
+    assert not harness.lifecycle.is_failed
     assert harness.session.spoken == [TURN_FAILED_EN, TURN_FAILED_EN]
     assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2, 3]
 

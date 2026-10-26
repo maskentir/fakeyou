@@ -14,7 +14,6 @@ from fakeyou.conversation.conversation import MeetingResponder
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnInteraction, TurnTiming, build_meeting_turns
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
@@ -52,18 +51,16 @@ class _BuggyResponder(FakeResponder):
         raise ValueError("bug")
 
 
-async def test_responder_bug_fails_the_loop_after_the_failure_limit() -> None:
+async def test_responder_bug_keeps_listening_after_the_failure_limit() -> None:
     journal = RecordingJournal("meeting-bug")
     reporter = FaultReporter(journal=journal)
     loop = build_meeting_turns(_BuggyResponder(), diagnostics=Diagnostics(faults=reporter))
     loop.lifecycle.bind(FakeReplyAudio())
-    for index in range(MAX_CONSECUTIVE_TURN_FAILURES - 1):
+    for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
         await loop.ingress.receive_final(event(f"t{index}", "hello"))
         await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("last", "hello"))
-    with pytest.raises(ConversationError, match="conversation failed") as caught:
-        await loop.lifecycle.wait_idle()
-    assert isinstance(caught.value.__cause__, ValueError)
+    loop.lifecycle.raise_if_failed()
+    assert loop.lifecycle.phase != "failed"
     assert reporter.total() >= 1
     await loop.lifecycle.close()
 
@@ -85,7 +82,7 @@ async def test_agent_error_raises_typed_provider_fault() -> None:
     assert caught.value.__cause__ is not None
 
 
-async def test_responder_error_fails_loop_after_the_failure_limit() -> None:
+async def test_responder_error_keeps_loop_alive_after_the_failure_limit() -> None:
     class Broken:
         async def respond(
             self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
@@ -98,11 +95,9 @@ async def test_responder_error_fails_loop_after_the_failure_limit() -> None:
     loop.lifecycle.bind(FakeReplyAudio())
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
         await loop.ingress.receive_final(event(f"one-{index}"))
-        if index < MAX_CONSECUTIVE_TURN_FAILURES - 1:
-            await loop.lifecycle.wait_idle()
-    with pytest.raises(ConversationError, match="conversation failed"):
         await loop.lifecycle.wait_idle()
-    assert loop.lifecycle.phase == "failed"
+    loop.lifecycle.raise_if_failed()
+    assert loop.lifecycle.phase != "failed"
     await loop.lifecycle.close()
 
 

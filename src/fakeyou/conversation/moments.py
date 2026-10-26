@@ -13,6 +13,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.contribution import SourceRegistry
+from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
@@ -188,13 +189,22 @@ class MomentDetector:
         scored.sort(key=lambda candidate: candidate.similarity, reverse=True)
         return scored[:_MAX_CANDIDATES]
 
+    def _names_twin(self, text: str) -> bool:
+        return any(mentions_whole_phrase(text, name) for name in self.twin_names)
+
+    def _passes_gate(self, event: TranscriptEvent) -> bool:
+        if not event.finalized or not event.text.strip():
+            return False
+        if self._names_twin(event.text):
+            self._pending = None
+            return False
+        return event.id not in self._fired_events
+
     async def observe(self, event: TranscriptEvent, *, now: float) -> AttentionContext | None:
         self._recent.append((event.participant_id, event.text))
         if self._pending is not None and event.participant_id != self._pending.speaker_id:
             self._pending = None
-        if not event.finalized or not event.text.strip():
-            return None
-        if event.id in self._fired_events:
+        if not self._passes_gate(event):
             return None
         candidates = await self._candidates(event.text)
         if not candidates:
