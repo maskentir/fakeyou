@@ -102,3 +102,33 @@ def test_a_name_counts_only_as_a_whole_phrase() -> None:
     assert mentions_whole_phrase("so Rani, what now?", "Rani")
     assert not mentions_whole_phrase("Ranita said so", "Rani")
     assert not mentions_whole_phrase("anything", " ")
+
+
+@pytest.mark.parametrize("addressee", ["everyone", "unclear", "someone_else"])
+def test_a_reply_not_addressed_to_the_twin_stays_silent(addressee: str) -> None:
+    decision = decision_of(judgement(addressee=addressee, confidence=0.95), THRESHOLDS)
+
+    assert (decision.decision, decision.reason_code) == ("silent", "judge_not_addressed")
+
+
+def test_an_unfinished_or_backchannel_reply_stays_silent() -> None:
+    assert decision_of(judgement(finished=False), THRESHOLDS).decision == "silent"
+    assert decision_of(judgement(backchannel=True), THRESHOLDS).decision == "silent"
+
+
+def test_a_clarify_to_the_room_is_suppressed() -> None:
+    decision = decision_of(
+        judgement(action="clarify", addressee="everyone", confidence=0.95), THRESHOLDS
+    )
+
+    assert (decision.decision, decision.reason_code) == ("silent", "judge_not_addressed")
+
+
+def test_an_unnamed_reply_needs_the_higher_threshold() -> None:
+    assert decision_of(judgement(confidence=0.80), THRESHOLDS, named=False).decision == "silent"
+    assert decision_of(judgement(confidence=0.90), THRESHOLDS, named=False).decision == "speak"
+
+
+def test_a_named_reply_keeps_the_reply_threshold() -> None:
+    assert decision_of(judgement(confidence=0.65), THRESHOLDS, named=True).decision == "speak"
+    assert decision_of(judgement(confidence=0.65), THRESHOLDS, named=False).decision == "silent"

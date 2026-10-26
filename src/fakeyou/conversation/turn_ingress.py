@@ -131,7 +131,8 @@ class TurnIngress:
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         if judgement is None or not judgement.finished:
             return False
-        return decision_of(judgement, judging.thresholds).decision in _ADMITTED
+        verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
+        return verdict.decision in _ADMITTED
 
     async def withdraw(self, *, reason: str) -> None:
         lifecycle = self._lifecycle

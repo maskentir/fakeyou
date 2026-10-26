@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from fakeyou.conversation.participation_graph import JudgeThresholds, decision_of
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudge, TurnJudgement
+from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.observability.faults import capture_error
 
 FIXTURE = Path(__file__).parent / "fixtures" / "turn-judge.json"
@@ -43,13 +44,18 @@ def load_judge_fixture(path: Path = FIXTURE) -> JudgeFixture:
     return JudgeFixture.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def case_window(case: JudgeCase) -> JudgeWindow:
+def case_names_twin(case: JudgeCase, twin_names: tuple[str, ...]) -> bool:
+    return any(mentions_whole_phrase(case.latest.text, name) for name in twin_names)
+
+
+def case_window(case: JudgeCase, twin_names: tuple[str, ...] = ()) -> JudgeWindow:
     return JudgeWindow(
         earlier=tuple(
             JudgeLine(speaker=line.speaker, text=line.text, twin=line.by_twin)
             for line in case.earlier
         ),
         latest=JudgeLine(speaker=case.latest.speaker, text=case.latest.text),
+        names_twin=case_names_twin(case, twin_names),
     )
 
 
@@ -155,7 +161,9 @@ async def judge_cases(
     for run in range(runs):
         for case in fixture.cases:
             started = time.monotonic()
-            judgement, error = await capture_error(partial(judge.judge, case_window(case)))
+            judgement, error = await capture_error(
+                partial(judge.judge, case_window(case, fixture.twin_names))
+            )
             if judgement is None:
                 report.outcomes.append(
                     CaseOutcome(
@@ -168,7 +176,8 @@ async def judge_cases(
                     )
                 )
                 continue
-            answered = decision_of(judgement, thresholds).decision != "silent"
+            named = case_names_twin(case, fixture.twin_names)
+            answered = decision_of(judgement, thresholds, named=named).decision != "silent"
             latency_ms = (time.monotonic() - started) * 1000
             report.outcomes.append(CaseOutcome(case, run, judgement, answered, latency_ms))
     return report

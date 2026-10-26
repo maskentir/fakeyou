@@ -64,6 +64,7 @@ class TurnInteraction:
         reply=DEFAULTS.turn_judge.reply_threshold,
         clarify=DEFAULTS.turn_judge.clarify_threshold,
         barge_in=DEFAULTS.turn_judge.barge_in_threshold,
+        unnamed_reply=DEFAULTS.turn_judge.unnamed_reply_threshold,
     )
     judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
@@ -178,7 +179,11 @@ def _judging(interaction: TurnInteraction) -> TurnJudging | None:
         return None
     return TurnJudging(
         cache=JudgeCache(interaction.judge),
-        windows=WindowSource(interaction.history, interaction.judge_window_lines),
+        windows=WindowSource(
+            interaction.history,
+            interaction.judge_window_lines,
+            twin_names=tuple(dict.fromkeys((*interaction.wake_phrases, *interaction.twin_names))),
+        ),
         thresholds=interaction.judge_thresholds,
     )
 
