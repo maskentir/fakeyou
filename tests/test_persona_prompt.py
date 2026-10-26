@@ -434,6 +434,7 @@ REQUIRED_EVERY_PROMPT_CLAUSES = (
     "An answer that only agrees or only acknowledges is not an answer",
     "do not promise what will happen later",
     "carry that tone into the participant's language",
+    "Look at the meeting, the shared screen or a participant's camera only when",
 )
 
 

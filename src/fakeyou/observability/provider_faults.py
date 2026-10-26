@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, get_args
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 import httpx2
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
@@ -147,12 +148,24 @@ def classify_exception(
 def _classify(source: Subsystem, error: BaseException) -> ProviderFault:
     if isinstance(error, FakeYouError):
         return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=error.code.value))
-    if isinstance(error, (APITimeoutError, httpx2.TimeoutException, TimeoutError)):
+    if isinstance(
+        error,
+        (APITimeoutError, httpx.TimeoutException, httpx2.TimeoutException, TimeoutError),
+    ):
         return ProviderFault(source, "timeout", retryable=True)
     if isinstance(error, APIStatusError):
         return classify_http(source, error.status_code)
-    if isinstance(error, httpx2.HTTPStatusError):
+    if isinstance(error, (httpx.HTTPStatusError, httpx2.HTTPStatusError)):
         return classify_http(source, error.response.status_code)
-    if isinstance(error, (APIConnectionError, httpx2.ConnectError, httpx2.NetworkError)):
+    if isinstance(
+        error,
+        (
+            APIConnectionError,
+            httpx.ConnectError,
+            httpx.NetworkError,
+            httpx2.ConnectError,
+            httpx2.NetworkError,
+        ),
+    ):
         return ProviderFault(source, "unavailable", retryable=True)
     return ProviderFault(source, "unknown", evidence=FaultEvidence(detail=type(error).__name__))

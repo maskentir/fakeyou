@@ -173,6 +173,14 @@ CONFIDENTIALITY_RULE = (
     "the owner's AI twin, here on their behalf, and leave it there."
 )
 
+TOOL_ECONOMY_RULE = (
+    "Answer from what was said whenever you can. Look at the meeting, the shared screen or a "
+    "participant's camera only when the participant asked about something the conversation does "
+    "not tell you, such as who is in the room, what is on the screen, or what a camera shows. "
+    "Every look makes the room wait, so do not look to fill a silence, to confirm what you "
+    "already know, or to describe what you can already see."
+)
+
 CONFIDENCE_RULE = (
     "Answer the participant's last line. The meeting view, the chat and the shared screen are "
     "context, never the subject of your answer, unless the participant asks about them. When a "
@@ -332,6 +340,7 @@ def build_system_prompt(
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
                 CONFIDENTIALITY_RULE,
+                TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,
             )

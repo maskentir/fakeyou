@@ -36,7 +36,7 @@ from fakeyou.foundation.sentences import split_sentences
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
-from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 
 
 @runtime_checkable
@@ -294,6 +294,7 @@ class StreamTrace:
     on_language: Callable[[str], None] | None = None
 
 
+REPLY_STREAM_ATTEMPTS = 2
 DEFAULT_STREAM_TRACE = StreamTrace()
 
 
@@ -424,6 +425,33 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
         )
 
 
+def _reply_planner(max_sentences: int, trace: StreamTrace) -> ReplyPlanner:
+    return ReplyPlanner(
+        max_sentences=max_sentences,
+        language=trace.language,
+        on_intent=trace.on_intent,
+        on_plan=(
+            None
+            if trace.journal is None
+            else partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id)
+        ),
+        on_language=trace.on_language,
+    )
+
+
+def _record_stream_retry(state: _SentenceStream, fault: ProviderFault, attempt: int) -> None:
+    if state.journal is None:
+        return
+    state.journal.record(
+        "reply_retried",
+        source="agent",
+        request_id=state.request_id,
+        transcript_id=state.transcript_id,
+        attempt=attempt,
+        detail=fault.kind,
+    )
+
+
 async def stream_sentences(
     agent: MeetingAgent,
     messages: Sequence[BaseMessage],
@@ -441,36 +469,32 @@ async def stream_sentences(
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
-    planner = ReplyPlanner(
-        max_sentences=max_sentences,
-        language=trace.language,
-        on_intent=trace.on_intent,
-        on_plan=(
-            None
-            if trace.journal is None
-            else partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id)
-        ),
-        on_language=trace.on_language,
-    )
     mark = SpeechMark()
     marked = SPEECH_MARK.set(mark)
     try:
-        stream: AsyncIterator[Any] = agent.astream(
-            {"messages": list(messages)},
-            config=_with_callback(config, phase),
-            stream_mode="messages",
-        )
-        try:
-            async for sentence in _pump_stream(stream, state, phase, planner):
-                mark.started = True
-                yield sentence
-        finally:
-            await _close_stream_optional(stream, trace.journal)
-    except (TimeoutError, FakeYouError):
-        raise
-    except Exception as error:
-        _record_stream_failure(state, started)
-        raise classify_exception("agent", error) from error
+        for attempt in range(REPLY_STREAM_ATTEMPTS):
+            planner = _reply_planner(max_sentences, trace)
+            stream: AsyncIterator[Any] = agent.astream(
+                {"messages": list(messages)},
+                config=_with_callback(config, phase),
+                stream_mode="messages",
+            )
+            try:
+                async for sentence in _pump_stream(stream, state, phase, planner):
+                    mark.started = True
+                    yield sentence
+            except (TimeoutError, FakeYouError):
+                raise
+            except Exception as error:
+                fault = classify_exception("agent", error)
+                if attempt + 1 < REPLY_STREAM_ATTEMPTS and not mark.started and fault.retryable:
+                    _record_stream_retry(state, fault, attempt + 1)
+                    continue
+                _record_stream_failure(state, started)
+                raise fault from error
+            finally:
+                await _close_stream_optional(stream, trace.journal)
+            break
     finally:
         SPEECH_MARK.reset(marked)
 

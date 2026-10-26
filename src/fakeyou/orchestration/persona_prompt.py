@@ -22,6 +22,7 @@ from fakeyou.memory.persona import (
     PROVENANCE_RULE,
     RECALL_RULES,
     SOURCE_RULES,
+    TOOL_ECONOMY_RULE,
     PersonaProfile,
 )
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
@@ -76,6 +77,7 @@ def _prompt_parts(
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
                 CONFIDENTIALITY_RULE,
+                TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,
             )
