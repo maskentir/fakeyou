@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Annotated, Protocol, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import ValidationError
 
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.overrides import overrides_from_headers, stage_overrides
@@ -96,10 +95,7 @@ class SessionStore:
             session_file = entry / SESSION_FILE_NAME
             if not entry.is_dir() or not session_file.is_file():
                 continue
-            try:
-                snapshot = SessionSnapshot.model_validate_json(session_file.read_bytes())
-            except ValidationError:
-                continue
+            snapshot = SessionSnapshot.model_validate_json(session_file.read_bytes())
             if snapshot.owner_id == owner_id:
                 snapshots.append(snapshot)
         return sorted(snapshots, key=lambda snapshot: (snapshot.created_at, snapshot.meeting_id))

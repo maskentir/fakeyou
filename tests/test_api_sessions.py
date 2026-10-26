@@ -248,41 +248,6 @@ async def test_cross_owner_snapshot_is_a_404(api: ApiHarness) -> None:
     assert response.json()["error"]["code"] == "api.not_found"
 
 
-async def test_an_old_session_snapshot_does_not_break_the_list(api: ApiHarness) -> None:
-    mine = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()
-    old = api.settings.paths.record_dir / "old-1" / "session.json"
-    old.parent.mkdir(parents=True, exist_ok=True)
-    old.write_text(
-        json.dumps(
-            {
-                "meeting_id": "old-1",
-                "owner_id": "demo_owner",
-                "twin_id": "demo_twin",
-                "created_at": AT,
-                "phase": "ended",
-                "terminal_reason": "left_by_owner",
-                "persona": {
-                    "owner_id": "demo_owner",
-                    "twin_id": "demo_twin",
-                    "display_name": "Demo",
-                    "role": "Demo",
-                    "language": "en",
-                    "speaking_style": "Demo",
-                    "goals": [],
-                    "verified_facts": [],
-                    "vocabulary": [],
-                    "allowed_tools": ["describe_frame"],
-                    "ingest_transcripts": False,
-                },
-            }
-        )
-    )
-
-    listed = (await api.get("/v1/sessions")).json()
-
-    assert [item["meeting_id"] for item in listed] == [mine["meeting_id"]]
-
-
 async def test_list_returns_only_the_principal_sessions(api: ApiHarness) -> None:
     mine = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()
     _seed_foreign_session(api, "other-owner-1")

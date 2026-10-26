@@ -43,6 +43,18 @@ class FixedResponder(FakeResponder):
         return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
+def attention(text: str) -> TranscriptEvent:
+    return TranscriptEvent(
+        id="attention-1",
+        timestamp=datetime.now(UTC).isoformat(),
+        source="meeting_attention",
+        text=text,
+        finalized=True,
+        participant_id="unknown",
+        speaker_evidence_id=None,
+    )
+
+
 def meeting_input(event_id: str, text: str, source: EventSource) -> TranscriptEvent:
     return TranscriptEvent(
         event_id,
@@ -262,3 +274,34 @@ async def test_closing_drops_waiting_deferred_turns() -> None:
 
     assert not turns.lifecycle.deferred.pending
     assert audio.spoken == []
+
+
+async def test_the_same_attention_is_never_offered_twice() -> None:
+    turns, _ = lanes(FixedResponder("Worth saying."))
+
+    first = turns.receive_attention(
+        attention("The shared screen now shows the launch slide."), channel="voice"
+    )
+    second = turns.receive_attention(
+        attention("The shared screen now shows the launch slide."), channel="voice"
+    )
+
+    assert first is True
+    assert second is False
+    await turns.close()
+
+
+async def test_a_changed_attention_is_offered() -> None:
+    turns, _ = lanes(FixedResponder("Worth saying."))
+
+    first = turns.receive_attention(
+        attention("The shared screen now shows the launch slide."), channel="voice"
+    )
+    await settle(turns)
+    second = turns.receive_attention(
+        attention("The shared screen now shows the pricing slide."), channel="voice"
+    )
+
+    assert first is True
+    assert second is True
+    await turns.close()
