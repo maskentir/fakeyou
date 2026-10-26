@@ -332,6 +332,15 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         ("playback_dropped", False, "interrupted"),
         ("playback_finished", True, None),
     ]
+    cues = [
+        (row["event"], row["cue_text"])
+        for row in rows
+        if row.get("source") == "playback" and "cue_text" in row
+    ]
+    assert cues == [
+        ("thinking_cue_started", "Hmm…"),
+        ("thinking_cue_finished", "Hmm…"),
+    ]
     assert all(
         row["meeting_id"] == "meeting-9" and row["at"]
         for row in rows

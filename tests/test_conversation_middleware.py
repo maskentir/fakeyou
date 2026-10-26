@@ -1,8 +1,10 @@
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, override
+from typing import Any, cast, override
 
+from langchain.agents.middleware import ModelRequest, ModelResponse
+from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.exceptions import ModelAuthenticationError, ModelRateLimitError
 from langchain_core.messages import (
@@ -24,6 +26,7 @@ from fakeyou.conversation.middleware import (
     SPEECH_MARK,
     HistoryTrimMiddleware,
     OrphanToolCallMiddleware,
+    PlainReplyMiddleware,
     SpeakerAttributionMiddleware,
     SpeechMark,
     attributed,
@@ -289,3 +292,33 @@ async def test_the_meeting_agent_retries_a_rate_limited_model_once() -> None:
 
     assert model.attempts == 2
     assert result["messages"][-1].text == "Noted."
+
+
+def test_a_reply_plan_that_does_not_validate_falls_back_to_the_plain_message() -> None:
+    middleware = PlainReplyMiddleware()
+    error = StructuredOutputValidationError(
+        "ReplyPlan", ValueError("the plan has no text"), AIMessage(content="Just text.")
+    )
+
+    def handler(request: ModelRequest[Any]) -> ModelResponse[Any]:
+        del request
+        raise error
+
+    response = middleware.wrap_model_call(cast(ModelRequest[Any], None), handler)
+
+    assert response.result[0].content == "Just text."
+
+
+async def test_a_reply_plan_that_does_not_validate_falls_back_when_the_model_is_async() -> None:
+    middleware = PlainReplyMiddleware()
+    error = StructuredOutputValidationError(
+        "ReplyPlan", ValueError("the plan has no text"), AIMessage(content="Just text.")
+    )
+
+    async def handler(request: ModelRequest[Any]) -> ModelResponse[Any]:
+        del request
+        raise error
+
+    response = await middleware.awrap_model_call(cast(ModelRequest[Any], None), handler)
+
+    assert response.result[0].content == "Just text."
