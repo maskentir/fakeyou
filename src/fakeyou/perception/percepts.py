@@ -20,6 +20,9 @@ ScreenContent = Literal[
     "other",
 ]
 NOISE_CONTENT: frozenset[ScreenContent] = frozenset({"meeting_ui", "blank", "loading"})
+MEETING_CONTENT: frozenset[ScreenContent] = frozenset(
+    {"slide", "document", "spreadsheet", "diagram"}
+)
 SignalKind = Literal[
     "joined",
     "left",

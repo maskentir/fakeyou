@@ -180,3 +180,28 @@ def test_participants_resolve_by_reference_or_name() -> None:
     assert resolve_participant(snapshot, "budi") == snapshot.participants[1]
     assert resolve_participant(snapshot, "ayu") == snapshot.participants[0]
     assert resolve_participant(snapshot, "") is None
+
+
+def test_a_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1", reading("Cartesia Usage", text="1,105 credits", kind="dashboard")
+    )
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert view.screen_now is not None
+    assert view.screen_now.title == "Cartesia Usage"
+    assert view.screen_now.text is None
+    assert view.screen_now.key_points is None
+    assert view.screen_now.figures is None
+
+
+def test_a_slide_keeps_its_detail() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert view.screen_now is not None
+    assert view.screen_now.text == "Beta 17 March 2027"

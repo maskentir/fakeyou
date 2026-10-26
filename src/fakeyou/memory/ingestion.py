@@ -33,6 +33,7 @@ from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault, classify_exception
+from fakeyou.perception.percepts import MEETING_CONTENT
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     read_status,
@@ -150,6 +151,8 @@ def screen_windows(entries: Sequence[RecordEntry]) -> list[ScreenEntry]:
 def screen_episode_body(entry: ScreenEntry) -> str:
     shown_by = f" shown by {entry.presenter}" if entry.presenter else ""
     lines = [f"Shared screen titled {entry.title!r}{shown_by} ({entry.content})."]
+    if entry.content not in MEETING_CONTENT:
+        return "\n".join(lines)
     lines += [f"Key point: {point}" for point in entry.key_points]
     lines += [f"Figure: {figure}" for figure in entry.figures]
     lines += [f"Visual: {visual}" for visual in entry.visuals]
