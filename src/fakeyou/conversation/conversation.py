@@ -1,7 +1,7 @@
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Protocol, override, runtime_checkable
 from uuid import UUID
@@ -27,6 +27,7 @@ from fakeyou.conversation.reply_planner import (
     ReplyIntent,
     ReplyPlanner,
     SpokenChunk,
+    TurnLanguage,
     planned_reply,
 )
 from fakeyou.conversation.sentence_stream import SentenceStream
@@ -290,6 +291,7 @@ class StreamTrace:
     on_tool_start: Callable[[], None] = _ignore_tool_start
     on_tool_result: ToolResultCallback | None = None
     on_intent: IntentHandler | None = None
+    on_language: Callable[[str], None] | None = None
 
 
 DEFAULT_STREAM_TRACE = StreamTrace()
@@ -448,6 +450,7 @@ async def stream_sentences(
             if trace.journal is None
             else partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id)
         ),
+        on_language=trace.on_language,
     )
     mark = SpeechMark()
     marked = SPEECH_MARK.set(mark)
@@ -482,10 +485,12 @@ class MeetingResponder:
     max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
     control: ReplyControl | None = None
+    turn_language: TurnLanguage = field(default_factory=TurnLanguage)
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
             raise ValueError("max_sentences must be positive")
+        self.turn_language.language = self.language
 
     @property
     def limit(self) -> int:
@@ -531,6 +536,7 @@ class MeetingResponder:
             on_tool_start=on_tool_start,
             on_tool_result=self.on_tool_result,
             on_intent=self.on_intent,
+            on_language=self.turn_language.declare,
         )
 
     async def respond(

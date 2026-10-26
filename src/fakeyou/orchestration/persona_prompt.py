@@ -11,6 +11,8 @@ from fakeyou.memory.persona import (
     BRIEF_ONLY_PROFILE_FIELDS,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
+    CONFIDENCE_RULE,
+    CONFIDENTIALITY_RULE,
     DISCLOSURE_RULES,
     GOALS_RULE,
     IDENTITY_RULE,
@@ -39,6 +41,8 @@ class _PromptParts:
     brief_json: str = ""
     provenance: str = ""
     natural_speech: str = ""
+    confidence: str = ""
+    confidentiality: str = ""
     perception: str = ""
 
 
@@ -71,6 +75,7 @@ def _prompt_parts(
             for rule in (
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
+                CONFIDENTIALITY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,
             )
@@ -87,6 +92,8 @@ def _prompt_parts(
         ),
         provenance=PROVENANCE_RULE if recall else "",
         natural_speech=NATURAL_SPEECH_RULE,
+        confidence=CONFIDENCE_RULE,
+        confidentiality=CONFIDENTIALITY_RULE,
         perception=perception_guidance,
     )
 
@@ -113,7 +120,7 @@ def persona_prompt_sections(
         brief=parts.brief_json,
         memory_rules=_paragraphs(parts.recall, parts.provenance),
         tools=parts.perception,
-        output_rules=_paragraphs(parts.natural_speech, ENDING_RULE),
+        output_rules=_paragraphs(parts.natural_speech, parts.confidence, ENDING_RULE),
     )
 
 
@@ -142,6 +149,7 @@ def build_persona_prompt(
         f"Meeting brief JSON:\n{parts.brief_json}" if parts.brief_json else "",
         parts.provenance,
         parts.natural_speech,
+        parts.confidence,
         ENDING_RULE,
         parts.perception,
     )

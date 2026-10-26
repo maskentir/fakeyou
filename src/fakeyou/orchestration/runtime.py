@@ -241,6 +241,8 @@ class MeetingWorker:
     join_started: float | None = None
     presence: AloneClock = field(init=False)
     attention: AttentionPrefilter = field(init=False)
+    attention_screen: str | None = field(init=False, default=None)
+    attention_chat: str | None = field(init=False, default=None)
     _events_watched: bool = False
 
     def __post_init__(self) -> None:
@@ -618,19 +620,21 @@ class MeetingWorker:
             return None
         snapshot = perception.timeline.snapshot()
         screen = snapshot.current_screen
-        if screen is not None and screen.reading is not None:
-            title = screen.reading.title
-            points = screen.reading.key_points
-            detail = "; ".join(point for point in points[:2])
-            return (
-                f"The shared screen shows {title or 'a slide'}: {detail}"
-                if detail
-                else (f"The shared screen shows {title or 'a slide'}")
-            )
-        for line in reversed(snapshot.chat):
-            if not line.own:
-                return f"A participant said in chat: {line.text}"
-        return None
+        if screen is None or screen.reading is None:
+            return None
+        reading = screen.reading
+        key = f"{screen.ref}:{reading.title}"
+        if key == self.attention_screen:
+            return None
+        self.attention_screen = key
+        title = reading.title or "a slide"
+        points = reading.key_points
+        detail = "; ".join(point for point in points[:2])
+        seen = f"{title}: {detail}" if detail else title
+        return (
+            f"The shared screen now shows {seen}. "
+            "Is there anything worth saying about it? If not, stay silent."
+        )
 
     async def offer_attention(self) -> None:
         conversation = self.conversation

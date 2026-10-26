@@ -38,6 +38,7 @@ from fakeyou.conversation.middleware import (
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.participation_graph import JudgeThresholds
+from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
@@ -253,6 +254,7 @@ class _ConversationBuilder:
         self._persona = ""
         self._tool_names: frozenset[PersonaTool] = frozenset()
         self._control = ReplyControl()
+        self._turn_language = TurnLanguage(settings.speech.language)
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -362,6 +364,7 @@ class _ConversationBuilder:
             max_sentences=self._settings.conversation.max_spoken_sentences,
             history_max_tokens=self._settings.conversation.history_max_tokens,
             control=self._control,
+            turn_language=self._turn_language,
         )
 
     def build_turns(

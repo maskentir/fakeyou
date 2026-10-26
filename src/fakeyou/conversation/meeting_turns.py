@@ -12,6 +12,7 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.model_responder import ReplierStreamResponder, ReplierWholeResponder
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
+from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
@@ -84,6 +85,7 @@ class TurnGeneration:
     max_spoken_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     language: str = DEFAULTS.speech.language
     sentence_streaming: bool = DEFAULTS.conversation.sentence_streaming
+    turn_language: TurnLanguage | None = None
 
 
 DEFAULT_TURN_INTERACTION = TurnInteraction()
@@ -189,6 +191,7 @@ def build_meeting_turns(
     generation: TurnGeneration = DEFAULT_TURN_GENERATION,
     diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
 ) -> MeetingTurns:
+    language = generation.turn_language
     reply = _reply_options(replier, generation)
     lifecycle = TurnLifecycle(
         build_turn_graph(),
@@ -200,7 +203,7 @@ def build_meeting_turns(
     lifecycle.configure_recovery(
         RecoveryOptions(
             faults=diagnostics.faults,
-            language=generation.language,
+            language=generation.language if language is None else language.read,
             response_timeout_seconds=timing.response_timeout_seconds,
         )
     )
@@ -209,7 +212,11 @@ def build_meeting_turns(
     lifecycle.configure_barge_in(enabled=interaction.barge_in)
     lifecycle.configure_shadow(enabled=interaction.shadow)
     lifecycle.configure_cue(
-        thinking_cue_for(generation.language, timing.thinking_cue_after_seconds)
+        thinking_cue_for(
+            generation.language,
+            timing.thinking_cue_after_seconds,
+            None if language is None else language.read,
+        )
     )
     if interaction.on_transition is not None:
         lifecycle.observe(interaction.on_transition)

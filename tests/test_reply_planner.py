@@ -1,6 +1,11 @@
 import json
 
-from fakeyou.conversation.reply_planner import PlanRead, ReplyPlanner, planned_reply
+from fakeyou.conversation.reply_planner import (
+    PlanRead,
+    ReplyPlanner,
+    TurnLanguage,
+    planned_reply,
+)
 from fakeyou.foundation.sentences import split_sentences
 
 
@@ -168,3 +173,12 @@ def test_the_plan_is_reported_once_per_reply() -> None:
     planner.finish()
 
     assert len(reads) == 1
+
+
+def test_the_declared_language_reaches_the_turn() -> None:
+    language = TurnLanguage("en")
+    planner = ReplyPlanner(max_sentences=2, language="en", on_language=language.declare)
+
+    planner.feed(plan("Baik.", intent="answer", language="id"))
+
+    assert language.language == "id"

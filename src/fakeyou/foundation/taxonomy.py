@@ -41,6 +41,7 @@ EventVerb = Literal[
     "ingested",
     "observed",
     "opened",
+    "orphaned",
     "polled",
     "queued",
     "recorded",

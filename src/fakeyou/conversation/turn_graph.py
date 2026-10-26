@@ -35,7 +35,13 @@ from fakeyou.conversation.participation_graph import (
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import shape_sentences
-from fakeyou.conversation.thinking_cue import CueSpeaker, CueTurn, ThinkingCue, cue_when_slow
+from fakeyou.conversation.thinking_cue import (
+    CueSpeaker,
+    CueState,
+    CueTurn,
+    ThinkingCue,
+    cue_when_slow,
+)
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_judge import JudgeWindow
 from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
@@ -528,6 +534,7 @@ class SpeechRuntime:
     faults: FaultReporter | None = None
     drop_detail: Callable[[], str] | None = None
     streams: ReplyStreams = field(default_factory=ReplyStreams)
+    cue_state: CueState | None = None
 
 
 class SpeechInput(TypedDict):
@@ -731,13 +738,23 @@ async def _run_turn(
     whole = _turn_whole(runtime, batch, hook)
     streamed = whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
+    cue_state = CueState()
     context = replace(
         _speech_context(runtime, sink, scope, generations, final.id),
         responder=_turn_responder(runtime, batch, hook, request_id) if streamed else None,
         whole=whole,
         sentences=runtime.sentences,
+        cue_state=cue_state,
     )
-    cue = _start_cue(runtime, CueTurn(final.id, partial(_cue_blocker, runtime, sink, generations)))
+    cue = _start_cue(
+        runtime,
+        CueTurn(
+            final.id,
+            partial(_cue_blocker, runtime, sink, generations),
+            state=cue_state,
+            source=final.source,
+        ),
+    )
     try:
         output = await speech.ainvoke(
             SpeechInput(
@@ -749,6 +766,13 @@ async def _run_turn(
         )
     finally:
         await _settle_cue(cue)
+    if cue_state.played and not output.get("completed"):
+        runtime.journal.record(
+            "thinking_cue_orphaned",
+            source="agent",
+            transcript_id=final.id,
+            detail="no_answer",
+        )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
 

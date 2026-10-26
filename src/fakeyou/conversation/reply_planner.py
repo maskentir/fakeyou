@@ -5,6 +5,7 @@ from typing import Literal, cast, get_args
 from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, ConfigDict, Field
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.sentences import split_sentences
 
 ReplyIntent = Literal[
@@ -62,6 +63,18 @@ class ReplyPlan(BaseModel):
     )
 
 
+@dataclass(slots=True)
+class TurnLanguage:
+    language: str = DEFAULTS.speech.language
+
+    def declare(self, language: str) -> None:
+        if language in REPLY_LANGUAGES:
+            self.language = language
+
+    def read(self) -> str:
+        return self.language
+
+
 @dataclass(frozen=True, slots=True)
 class SpokenChunk:
     text: str
@@ -87,11 +100,13 @@ class ReplyPlanner:
         language: str,
         on_intent: IntentHandler | None = None,
         on_plan: PlanHandler | None = None,
+        on_language: Callable[[str], None] | None = None,
     ) -> None:
         self._max_sentences = max_sentences
         self._language = language
         self._on_intent = on_intent
         self._on_plan = on_plan
+        self._on_language = on_language
         self._raw = ""
         self._released = 0
         self._structured: bool | None = None
@@ -182,6 +197,8 @@ class ReplyPlanner:
         language = plan.get("language")
         if isinstance(language, str) and language in REPLY_LANGUAGES:
             self._declared_language = language
+            if self._on_language is not None:
+                self._on_language(language)
         intent = plan.get("intent")
         known = isinstance(intent, str) and intent in REPLY_INTENTS
         self._declared_intent = cast(ReplyIntent, intent) if known else "answer"

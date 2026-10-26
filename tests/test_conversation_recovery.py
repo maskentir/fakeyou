@@ -4,9 +4,13 @@ from typing import override
 import pytest
 
 from fakeyou.conversation.meeting_turns import build_meeting_turns
-from fakeyou.conversation.reply_planner import SpokenChunk
+from fakeyou.conversation.reply_planner import SpokenChunk, TurnLanguage
 from fakeyou.conversation.session import ConversationError
-from fakeyou.conversation.turn_recovery import MAX_CONSECUTIVE_TURN_FAILURES, TURN_FAILED_LINES
+from fakeyou.conversation.turn_recovery import (
+    MAX_CONSECUTIVE_TURN_FAILURES,
+    TURN_FAILED_LINES,
+    TurnRecovery,
+)
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
@@ -94,3 +98,19 @@ async def test_failed_turn_is_journaled_with_its_streak(journal: RecordingJourna
     ]
     assert failures == [("t1", "RuntimeError", 1), ("t2", "RuntimeError", 2)]
     await loop.lifecycle.close()
+
+
+def test_the_failure_line_follows_the_language_the_participant_used() -> None:
+    language = TurnLanguage("en")
+    recovery = TurnRecovery(
+        journal=RecordingJournal("meeting-1"),
+        faults=None,
+        language=language.read,
+        is_closed=lambda: False,
+    )
+
+    assert recovery.failed_line == TURN_FAILED_LINES["en"]
+
+    language.declare("id")
+
+    assert recovery.failed_line == TURN_FAILED_LINES["id"]
