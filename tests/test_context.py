@@ -22,7 +22,6 @@ from fakeyou.perception.view import VIEW_PREFIX
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._perception_fakes import (
     START,
-    content_block,
     keyframe,
     reading,
     shown_timeline,
@@ -76,6 +75,7 @@ def _view_of(messages: list[Any]) -> dict[str, Any]:
     observation = messages[-1]
     assert isinstance(observation, ToolMessage)
     assert observation.name == OBSERVE_MEETING
+    assert observation.additional_kwargs.get("synthetic_view") is True
     assert observation.text.startswith(VIEW_PREFIX)
     payload: dict[str, Any] = json.loads(observation.text.removeprefix(VIEW_PREFIX))
     return payload
@@ -121,7 +121,7 @@ async def test_the_view_is_never_persisted_in_the_conversation() -> None:
     assert observations[0].tool_call_id != first_id
 
 
-async def test_a_pending_screen_rides_along_as_an_image_on_the_trigger() -> None:
+async def test_a_pending_screen_sends_no_image_to_the_model() -> None:
     timeline = shown_timeline(TIMELINE)
     journal = RecordingJournal()
     agent, model = _agent(_context(timeline), [AIMessage(content="Beta is in March.")], journal)
@@ -130,9 +130,8 @@ async def test_a_pending_screen_rides_along_as_an_image_on_the_trigger() -> None
 
     [messages] = _calls(model)
     trigger = next(message for message in messages if isinstance(message, HumanMessage))
-    assert content_block(trigger, 0)["type"] == "image"
-    assert content_block(trigger, 1) == {"type": "text", "text": "When is beta?"}
-    assert journal.events("meeting_view_emitted")[0]["image_attached"] is True
+    assert trigger.content == "When is beta?"
+    assert journal.events("meeting_view_emitted")[0]["image_attached"] is False
 
 
 async def test_messages_without_a_meeting_trigger_pass_through() -> None:
@@ -188,6 +187,7 @@ async def test_the_tools_share_the_view_namespace() -> None:
 
 async def test_looking_reports_why_it_could_not_see() -> None:
     timeline = shown_timeline(TIMELINE)
+    timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
     timeline.participant("device-budi", "Budi")
     exhausted = _context(timeline, max_calls=0)
     seeing = _context(timeline, answers=("A mockup.",))
@@ -209,10 +209,41 @@ async def test_looking_reports_why_it_could_not_see() -> None:
 async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
     timeline = MeetingTimeline()
     timeline.show_screen(keyframe(slide_jpeg("Launch Timeline")), None)
+    timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
 
     result = json.loads(await _context(timeline).look_at_screen("current", "what?"))
 
     assert result == {"code": "frame_unavailable", "screen": "screen#1"}
+
+
+async def test_looking_at_a_non_meeting_screen_returns_only_its_title() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1",
+        reading("Cartesia Usage", text="Receipt 1450-6289 Rp899,900", kind="dashboard"),
+    )
+    context = _context(timeline, answers=("Receipt 1450-6289 Rp899,900",))
+
+    result = json.loads(await context.look_at_screen("current", "what was paid?"))
+
+    assert result == {
+        "code": "not_meeting_content",
+        "screen": "screen#1",
+        "title": "Cartesia Usage",
+    }
+    assert context.interpreter is not None
+    assert context.interpreter.budget.calls == 0
+
+
+async def test_looking_at_an_unread_screen_is_refused() -> None:
+    timeline = shown_timeline(TIMELINE)
+    context = _context(timeline, answers=("anything",))
+
+    result = json.loads(await context.look_at_screen("current", "what?"))
+
+    assert result == {"code": "not_meeting_content", "screen": "screen#1"}
+    assert context.interpreter is not None
+    assert context.interpreter.budget.calls == 0
 
 
 def test_the_guidance_forbids_speaking_internal_references() -> None:

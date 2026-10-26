@@ -182,3 +182,24 @@ def test_a_screen_that_is_not_meeting_content_keeps_only_its_title() -> None:
     body = screen_episode_body(dashboard)
 
     assert body == "Shared screen titled 'Cartesia Usage' shown by Rina (dashboard)."
+
+
+async def test_ingesting_a_dashboard_stores_a_title_only_episode() -> None:
+    memory = make_graphiti(episode_prefix="uuid-", edges=[])
+    dashboard = shown(
+        "screen-9",
+        "Cartesia Usage",
+        content="dashboard",
+        key_points=("1,105 credits used",),
+        figures=("1,105 credits",),
+        visuals=("usage chart",),
+        text="Receipt number 1450-6289, amount paid Rp899,900.00.",
+    )
+
+    result, _rows = await run(memory, [said(0, "Look at the usage dashboard please."), dashboard])
+
+    assert result.screen_windows == 1
+    [screen] = [episode for episode in memory.added if episode["name"] == "meeting-1:s00000"]
+    assert "Cartesia Usage" in screen["episode_body"]
+    assert "1450-6289" not in screen["episode_body"]
+    assert "Rp899,900" not in screen["episode_body"]
