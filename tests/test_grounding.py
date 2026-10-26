@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -40,10 +41,22 @@ class _Verifier:
         self.calls: list[dict[str, Any]] = []
 
     async def verify(
-        self, *, text: str, source_text: str, trigger_text: str, kind: str | None
+        self,
+        *,
+        text: str,
+        source_text: str,
+        trigger_text: str,
+        kind: str | None,
+        recent_lines: Sequence[str] = (),
     ) -> GroundingVerdict:
         self.calls.append(
-            {"text": text, "source_text": source_text, "trigger_text": trigger_text, "kind": kind}
+            {
+                "text": text,
+                "source_text": source_text,
+                "trigger_text": trigger_text,
+                "kind": kind,
+                "recent_lines": recent_lines,
+            }
         )
         if isinstance(self._verdict, Exception):
             raise self._verdict

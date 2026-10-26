@@ -1,3 +1,4 @@
+import json
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
@@ -25,6 +26,7 @@ from fakeyou.conversation.meeting_messages import (
     MeetingHistory,
     history_messages,
     last_twin_text,
+    recent_room_lines,
     request_messages,
 )
 from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
@@ -68,6 +70,18 @@ class StreamingConversationResponder(Protocol):
 ToolResultCallback = Callable[[str, str, float], None]
 MeetingAgent = Runnable[dict[str, list[BaseMessage]], dict[str, Any]]
 REPLY_CONFIG: RunnableConfig = {"recursion_limit": 30}
+
+
+def _tool_result_code(text: str) -> str | None:
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(parsed, dict):
+        code = parsed.get("code")
+        if isinstance(code, str):
+            return code
+    return None
 
 
 class _ToolActivity(AsyncCallbackHandler):
@@ -142,6 +156,9 @@ class _ToolActivity(AsyncCallbackHandler):
         text = output.text if isinstance(output, BaseMessage) else str(output)
         name, context, timing = self._running.pop(run_id)
         timing.fields["output_lines"] = len(text.splitlines())
+        code = _tool_result_code(text)
+        if code is not None:
+            timing.fields["result_code"] = code
         context.__exit__(None, None, None)
         if self._on_result is not None:
             self._on_result(name, text, timing.fields["duration_ms"])
@@ -701,6 +718,7 @@ class MeetingResponder:
                 source_text=verdict.source_text,
                 trigger_text=gate.trigger_text,
                 kind=verdict.kind,
+                recent_lines=recent_room_lines(self.history.entries()),
             )
         )
         if checked is None:

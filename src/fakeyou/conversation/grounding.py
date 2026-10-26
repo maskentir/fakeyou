@@ -16,9 +16,12 @@ _VERIFIER_RULES = (
     "cited source text. A claim that goes beyond the source, contradicts it, or invents a "
     "detail the source does not state is not grounded.\n"
     "adds_information: true only when the contribution tells the room something it does not "
-    "already have from the trigger itself. Restating, paraphrasing, agreeing with, thanking "
-    "for, or merely noticing the trigger adds nothing.\n"
-    "on_topic: true only when the contribution is about the same subject as the trigger. A true "
+    "already have from the trigger itself or from the recent room lines. Restating, "
+    "paraphrasing, agreeing with, thanking for, or merely noticing the trigger adds nothing; "
+    "repeating a fact a recent line already stated - above all an answer someone already "
+    "gave to the triggering question - adds nothing.\n"
+    "on_topic: true only when the contribution is about the same subject as the trigger and "
+    "the recent discussion. A true "
     "fact from a source about something the room is not discussing is off topic, and off topic "
     "is noise rather than information.\n"
     "confidence: how sure you are about both answers, from 0 to 1."
@@ -38,7 +41,13 @@ class GroundingVerdict(BaseModel):
 
 class GroundingVerifier(Protocol):
     async def verify(
-        self, *, text: str, source_text: str, trigger_text: str, kind: str | None
+        self,
+        *,
+        text: str,
+        source_text: str,
+        trigger_text: str,
+        kind: str | None,
+        recent_lines: Sequence[str] = (),
     ) -> GroundingVerdict: ...
 
 
@@ -55,7 +64,13 @@ class ModelGroundingVerifier:
         return self._bound
 
     async def verify(
-        self, *, text: str, source_text: str, trigger_text: str, kind: str | None
+        self,
+        *,
+        text: str,
+        source_text: str,
+        trigger_text: str,
+        kind: str | None,
+        recent_lines: Sequence[str] = (),
     ) -> GroundingVerdict:
         payload = json.dumps(
             {
@@ -63,6 +78,7 @@ class ModelGroundingVerifier:
                 "contribution": text,
                 "cited_source": source_text,
                 "trigger": trigger_text,
+                "recent_room_lines": list(recent_lines),
             },
             ensure_ascii=False,
         )

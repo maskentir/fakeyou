@@ -69,6 +69,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
+from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
@@ -198,6 +199,29 @@ def share_roster(registry: SpeakerRegistry, roster: MeetRoster) -> None:
     registry.note_audio_sources(roster.audio_sources())
 
 
+def _own_chat_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[str, str], None] | None:
+    perception = run.perception
+    if perception is None:
+        return None
+    timeline = perception.timeline
+    profile = prepared.profile
+    name = str(profile.display_name) if profile is not None else "You"
+    you = ParticipantRef(ref="you", participant_id="twin", name=name)
+
+    def sink(action_id: str, text: str) -> None:
+        timeline.add_chat(
+            IncomingChat(
+                message_id=f"twin-action-{action_id}",
+                sender=you,
+                text=text,
+                sent_at=datetime.now(UTC),
+                own=True,
+            )
+        )
+
+    return sink
+
+
 def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
@@ -208,6 +232,13 @@ def _build_join_layers(
         if prepared.request.settings.conversation.voice_labels_enabled
         and prepared.request.audio_enabled
         else None
+    )
+    run.perception = create_perception_stack(
+        prepared.request.settings,
+        journal=run.journal,
+        record=run.record,
+        screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
+        on_roster=partial(share_roster, registry),
     )
     run.meet_dispatcher = (
         MeetActionDispatcher(
@@ -220,13 +251,8 @@ def _build_join_layers(
         if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled
         else None
     )
-    run.perception = create_perception_stack(
-        prepared.request.settings,
-        journal=run.journal,
-        record=run.record,
-        screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
-        on_roster=partial(share_roster, registry),
-    )
+    if run.meet_dispatcher is not None:
+        run.meet_dispatcher.on_chat_sent = _own_chat_sink(prepared, run)
     return registry
 
 
@@ -430,6 +456,8 @@ async def _drive_join_session(
 ) -> SessionResult:
     if run.session_result is not None:
         return run.session_result
+    if run.meet_dispatcher is not None:
+        run.meet_dispatcher.on_leave = stop.set
     preflight_kwargs: dict[str, Any] = (
         {
             "preflight_hosts": preflight_hosts(

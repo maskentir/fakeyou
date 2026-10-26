@@ -1,9 +1,10 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.participation_decision import ParticipationDecision
@@ -23,11 +24,38 @@ from fakeyou.foundation.participation import (
     is_vocative,
     mentions_whole_phrase,
 )
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import capture_error
 
 _ADMITTED = frozenset({"speak", "clarify"})
+_STOP_DATA: dict[str, list[str]] = json.loads(read_package_text("stop_phrases.json"))
+_STOP_STRONG = frozenset(_STOP_DATA["strong"])
+_STOP_FILLER = frozenset(_STOP_DATA["filler"])
+_STOP_PHRASES = frozenset(_STOP_DATA["phrases"])
+_STOP_MAX_TOKENS = 6
+_OVERLAP_WINDOW_SECONDS = 20.0
+
+
+def _tokens(text: str) -> list[str]:
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.casefold())
+    return cleaned.split()
+
+
+def is_stop_command(text: str, names: Sequence[str]) -> bool:
+    tokens = _tokens(text)
+    if not tokens or len(tokens) > _STOP_MAX_TOKENS:
+        return False
+    name_tokens = {token for name in names for token in _tokens(name)}
+    tokens = [token for token in tokens if token not in name_tokens]
+    if not tokens:
+        return False
+    if " ".join(tokens) in _STOP_PHRASES:
+        return True
+    return all(token in _STOP_STRONG or token in _STOP_FILLER for token in tokens) and any(
+        token in _STOP_STRONG for token in tokens
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +103,7 @@ class TurnIngress:
         self._barge_in_judge_enabled = barge_in_judge_enabled
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
+        self._last_final: tuple[str, str, float] | None = None
 
     def configure_policy(self, options: PolicyOptions) -> None:
         if options.enabled and not self._wake_phrases:
@@ -97,6 +126,12 @@ class TurnIngress:
         output = await self._invoke_final(event, runtime)
         self._lifecycle.start_requested()
         decision: ParticipationDecision | None = output["participation"]
+        if decision is not None and decision.decision in _ADMITTED:
+            self._last_final = (
+                event.participant_id,
+                " ".join(_tokens(event.text)),
+                self._clock(),
+            )
         if decision is not None and decision.decision not in _ADMITTED:
             await self._yield_floor(event.text, decision)
         return decision
@@ -154,6 +189,11 @@ class TurnIngress:
         if lifecycle.is_closed or lifecycle.is_failed or not lifecycle.barge_in or session is None:
             return
         words = len(text.split())
+        if is_stop_command(text, (*self._addressing_names, *self._wake_phrases)):
+            if self._twin_holds_floor(session) and text != lifecycle.barge.last_interim:
+                lifecycle.barge.last_interim = text
+                await self._yield_the_floor(words, decided_by="stop_lexicon")
+            return
         if words < self._barge_in_min_words:
             return
         active = lifecycle.floor.active
@@ -169,12 +209,19 @@ class TurnIngress:
             return
         self._ask_the_judge(text, words, window)
 
+    def _twin_holds_floor(self, session: Any) -> bool:
+        active = self._lifecycle.floor.active
+        return bool(session.is_speaking or (active is not None and not active.task.done()))
+
     def _ask_the_judge(self, text: str, words: int, window: JudgeWindow | None) -> None:
-        task = asyncio.create_task(self._judge_the_barge_in(text, words, window))
+        generation = self._lifecycle.floor.generation
+        task = asyncio.create_task(self._judge_the_barge_in(text, words, window, generation))
         self._judge_tasks.add(task)
         task.add_done_callback(self._judge_tasks.discard)
 
-    async def _judge_the_barge_in(self, text: str, words: int, window: JudgeWindow | None) -> None:
+    async def _judge_the_barge_in(
+        self, text: str, words: int, window: JudgeWindow | None, generation: int
+    ) -> None:
         lifecycle = self._lifecycle
         judging = lifecycle.judging
         if judging is None:
@@ -185,10 +232,23 @@ class TurnIngress:
                 text, twin_speaking=session is not None and session.is_speaking
             )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        if generation != lifecycle.floor.generation:
+            lifecycle.journal.record(
+                "barge_in_rejected", source="agent", reason="stale_generation", words=words
+            )
+            return
         if judgement is None:
             await self._yield_the_floor(words, decided_by="judge_unavailable")
             return
         if not judge_yields_the_floor(judgement, judging.thresholds):
+            lifecycle.journal.record(
+                "barge_in_rejected",
+                source="agent",
+                reason="judge",
+                words=words,
+                addressee=judgement.addressee,
+                confidence=judgement.confidence,
+            )
             return
         await self._yield_the_floor(words, decided_by="judge")
 
@@ -209,6 +269,19 @@ class TurnIngress:
                 latch.stream_stops += 1
         await cancel_speech(lifecycle.floor, lifecycle.journal, reason="interim")
 
+    def _is_overlap_duplicate(self, event: TranscriptEvent) -> bool:
+        if self._last_final is None:
+            return False
+        participant_id, previous, admitted_at = self._last_final
+        if participant_id != event.participant_id:
+            return False
+        if self._clock() - admitted_at > _OVERLAP_WINDOW_SECONDS:
+            return False
+        current = " ".join(_tokens(event.text))
+        if min(len(previous), len(current)) < 8:
+            return False
+        return current.endswith(previous) or previous.endswith(current)
+
     def _mentioned(self, text: str) -> bool:
         names = self._addressing_names or self._wake_phrases
         return any(mentions_whole_phrase(text, name) for name in names)
@@ -216,6 +289,10 @@ class TurnIngress:
     @property
     def _rules_admission(self) -> bool:
         return bool(self._addressing_names) or self._participant_policy
+
+    def _vocative(self, text: str) -> bool:
+        names = self._wake_phrases or self._addressing_names
+        return is_vocative(text, names)
 
     def _addressed(self, text: str) -> bool:
         if self._participant_policy:
@@ -241,6 +318,14 @@ class TurnIngress:
         runtime = lifecycle.runtime
         if runtime is None or event.id in self._seen:
             return None
+        if self._is_overlap_duplicate(event):
+            lifecycle.journal.record(
+                "transcript_suppressed",
+                source="agent",
+                transcript_id=event.id,
+                reason="overlap_duplicate",
+            )
+            return None
         self._seen.add(event.id)
         lifecycle.note_final(event)
         return runtime
@@ -261,6 +346,7 @@ class TurnIngress:
                         context=ParticipationContext(
                             addressed=self._addressed(event.text),
                             others_speaking=self._others_speaking(),
+                            vocative=self._vocative(event.text),
                         ),
                         speaking_generation=self._lifecycle.floor.generation,
                         transcript_event=event,
@@ -277,12 +363,15 @@ class TurnIngress:
     async def _yield_floor(self, text: str, decision: ParticipationDecision) -> None:
         lifecycle = self._lifecycle
         session = lifecycle.session
-        if decision.backchannel or self._wake_phrases or not lifecycle.barge_in or session is None:
+        if decision.backchannel or not lifecycle.barge_in or session is None:
             return
-        if not session.is_speaking:
+        active = lifecycle.floor.active
+        if not session.is_speaking and (active is None or active.task.done()):
             return
         record_barge_in(lifecycle.journal, "final", len(text.split()))
-        await session.stop_playback()
+        if session.is_speaking:
+            await session.stop_playback()
+        await cancel_speech(lifecycle.floor, lifecycle.journal, reason="final")
 
     async def _prefetch(self, text: str) -> JudgeWindow | None:
         runtime = self._lifecycle.runtime

@@ -213,7 +213,7 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal: Recordin
     loop.lifecycle.bind(audio)
     await loop.ingress.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.ingress.handle_interim("hold on")
+    await loop.ingress.handle_interim("one moment")
     assert not responder.cancelled.is_set()
     await loop.ingress.handle_interim("please hold on a moment")
     assert responder.cancelled.is_set()

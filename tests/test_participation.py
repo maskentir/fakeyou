@@ -64,6 +64,12 @@ def test_a_backchannel_is_carried_to_the_decision() -> None:
 
 
 def test_without_a_judge_only_a_named_line_gets_a_reply() -> None:
+    assert (
+        fallback_decision(ParticipationContext(addressed=True, vocative=True)).decision == "speak"
+    )
+    assert (
+        fallback_decision(ParticipationContext(addressed=True, vocative=False)).decision == "silent"
+    )
     assert fallback_decision(ParticipationContext(addressed=True)).decision == "speak"
     assert fallback_decision(ParticipationContext(addressed=False)).decision == "silent"
 

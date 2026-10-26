@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, trim_m
 from fakeyou.foundation.speakers import UNKNOWN_PARTICIPANT, speaker_name
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.foundation.triggers import MEETING_EVENT, TriggerKind
-from fakeyou.persistence.record import RecordEntry, TranscriptEntry, TwinSpeechEntry
+from fakeyou.persistence.record import ChatEntry, RecordEntry, TranscriptEntry, TwinSpeechEntry
 
 KIND_OF_SOURCE: dict[EventSource, TriggerKind] = {
     "meeting_audio": "speech",
@@ -68,6 +68,16 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
             event.stream_id,
             event.display_claim,
         ).meeting_event()
+        if event.requests_chat:
+            spoken["requests_chat"] = True
+        if event.meet_action != "none":
+            spoken["meet_action"] = event.meet_action
+        if event.evidence_needs:
+            spoken["evidence_needs"] = list(event.evidence_needs)
+        if event.reaction_emoji is not None:
+            spoken["reaction_emoji"] = event.reaction_emoji
+        if event.turn_planned:
+            spoken["turn_planned"] = True
         if event.attention is not None:
             spoken["attention_kind"] = event.attention.kind
             spoken["attention_source_ref"] = event.attention.suggested_source_ref
@@ -107,6 +117,8 @@ def _spoken(entries: Sequence[RecordEntry], exclude: Collection[str]) -> list[Ba
     for entry in entries:
         if isinstance(entry, TranscriptEntry) and entry.id not in exclude and entry.text.strip():
             messages.append(_history_message(entry))
+        elif isinstance(entry, ChatEntry) and entry.own and entry.text.strip():
+            messages.append(AIMessage(content=f"[chat] {entry.text.strip()}"))
         elif isinstance(entry, TwinSpeechEntry) and entry.text.strip():
             last = messages[-1] if messages else None
             if isinstance(last, AIMessage):
@@ -128,8 +140,24 @@ def history_messages(
     )
 
 
-def last_twin_text(entries: Sequence[RecordEntry]) -> str | None:
-    for entry in reversed(entries):
+def recent_room_lines(entries: Sequence[RecordEntry], limit: int = 6) -> tuple[str, ...]:
+    lines: list[str] = []
+    for entry in entries:
         if isinstance(entry, TwinSpeechEntry) and entry.text.strip():
-            return entry.text.strip()
-    return None
+            lines.append(f"twin: {entry.text.strip()}")
+        elif isinstance(entry, TranscriptEntry) and entry.text.strip():
+            lines.append(entry.text.strip())
+    return tuple(lines[-limit:])
+
+
+def last_twin_text(entries: Sequence[RecordEntry]) -> str | None:
+    spoken = [
+        entry.text.strip()
+        for entry in entries
+        if isinstance(entry, TwinSpeechEntry) and entry.text.strip() and not entry.interrupted
+    ]
+    if not spoken:
+        return None
+    if len(spoken) >= 2 and spoken[-1] == spoken[-2]:
+        return None
+    return spoken[-1]

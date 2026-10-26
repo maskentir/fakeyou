@@ -24,9 +24,15 @@ FACT = "The Orchid beta launch is planned for 14 October 2026"
 
 class _Verifier:
     async def verify(
-        self, *, text: str, source_text: str, trigger_text: str, kind: str | None
+        self,
+        *,
+        text: str,
+        source_text: str,
+        trigger_text: str,
+        kind: str | None,
+        recent_lines: Sequence[str] = (),
     ) -> GroundingVerdict:
-        del text, source_text, trigger_text, kind
+        del text, source_text, trigger_text, kind, recent_lines
         return GroundingVerdict(
             grounded=True, adds_information=True, on_topic=True, confidence=0.95
         )

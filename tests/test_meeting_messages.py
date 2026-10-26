@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from fakeyou.conversation.meeting_messages import NoHistory, history_messages, request_messages
 from fakeyou.foundation.triggers import current_trigger, is_history
 from fakeyou.persistence.record import (
+    ChatEntry,
     MeetingRecord,
     RecordEntry,
     SignalEntry,
@@ -105,3 +106,22 @@ def test_a_reopened_record_remembers_what_was_said(tmp_path: Path) -> None:
     assert isinstance(
         history_messages(reopened.entries(), exclude=(), max_tokens=1000)[1], AIMessage
     )
+
+
+def test_history_shows_the_twins_own_chat_as_its_own_words() -> None:
+    own = ChatEntry(
+        at=AT,
+        ref="chat#9",
+        message_id="twin-action-1",
+        sender_id="twin",
+        sender="Harun",
+        text="The deck lands Friday.",
+        sent_at=AT,
+        own=True,
+    )
+    messages = history_messages([said("a", "When does it land?"), own], exclude=(), max_tokens=1000)
+
+    assert shape(messages) == [
+        ("HumanMessage", "When does it land?"),
+        ("AIMessage", "[chat] The deck lands Friday."),
+    ]

@@ -232,6 +232,7 @@ class MeetingWorker:
     perception_sync_watched: bool = False
     on_phase: Callable[[str], None] | None = None
     moments: MomentDetector | None = None
+    meet_dispatcher: MeetActionDispatcher | None = None
     detail: str = ""
     base: LifecycleState | None = None
     working: LifecycleState | None = None
@@ -380,6 +381,8 @@ class MeetingWorker:
     async def activate(self, state: LifecycleState) -> LifecycleUpdate:
         self.begin(state)
         self.admitted_at = self.monotonic()
+        if self.perception is not None:
+            self.perception.sensors.mark_admitted(datetime.now(UTC))
         if self.audio is None:
             await self.disable_camera_best_effort()
             self._send("activated", "policy", "guest admitted to the call")
@@ -456,6 +459,12 @@ class MeetingWorker:
         if self.phase_now() != "leaving":
             return self._commit()
         origin_detail = self.detail
+        if self.meet_dispatcher is not None and self.meet_dispatcher.left:
+            detail = "twin already left the call via meet_leave"
+            self._send("leave_sent", self.origin_attribution or "policy", detail)
+            keeps_origin = self.origin_kind in ("audio_failed", "conversation_failed")
+            self.detail = origin_detail if keeps_origin else detail
+            return self._commit()
         try:
             async with asyncio.timeout(
                 min(LEAVE_BUDGET_SECONDS, self.config.leave_timeout_seconds)
@@ -485,7 +494,7 @@ class MeetingWorker:
         try:
             async with asyncio.timeout(KNOWN_ERROR_DISMISS_SECONDS):
                 dismissed = await dismiss_known_errors(self.page)
-        except (PlaywrightError, TimeoutError, TypeError) as error:
+        except (PlaywrightError, TimeoutError, TypeError, RuntimeError) as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="dismiss_modal"))
             return
@@ -1243,6 +1252,7 @@ async def _launch_session_browser(
         perception=hooks.perception,
         on_phase=hooks.on_phase,
         moments=hooks.moments,
+        meet_dispatcher=hooks.meet_dispatcher,
     )
     context = RuntimeContext(browser=page, audio=audio, session=worker)
     try:
@@ -1366,6 +1376,19 @@ async def drive_session(
     if error is not None:
         if isinstance(error, FakeYouError):
             raise error
+        if stop_event.is_set() and (await lifecycle.read())["phase"] not in (
+            "leaving",
+            "ended",
+        ):
+            journal.record(
+                "browser_error_recorded",
+                source="runtime",
+                error=str(error),
+                error_type=type(error).__name__,
+                detail="during owner-requested teardown",
+            )
+            await lifecycle.send("owner_stopped", "owner_action")
+            return "owner requested stop"
         if isinstance(error, ConversationError):
             return await _record_conversation_failure(lifecycle, journal, error)
         return await _record_browser_failure(lifecycle, journal, error)

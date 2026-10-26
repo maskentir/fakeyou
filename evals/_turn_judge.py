@@ -30,6 +30,7 @@ class JudgeCase(BaseModel):
     latest: FixtureLine
     answer: bool
     finished: bool
+    human_participants: tuple[str, ...] | None = None
 
 
 class JudgeFixture(BaseModel):
@@ -37,6 +38,7 @@ class JudgeFixture(BaseModel):
 
     version: int
     twin_names: tuple[str, ...]
+    human_participants: tuple[str, ...] = ()
     cases: tuple[JudgeCase, ...]
 
 
@@ -48,7 +50,11 @@ def case_names_twin(case: JudgeCase, twin_names: tuple[str, ...]) -> bool:
     return any(mentions_whole_phrase(case.latest.text, name) for name in twin_names)
 
 
-def case_window(case: JudgeCase, twin_names: tuple[str, ...] = ()) -> JudgeWindow:
+def case_window(
+    case: JudgeCase,
+    twin_names: tuple[str, ...] = (),
+    human_participants: tuple[str, ...] = (),
+) -> JudgeWindow:
     return JudgeWindow(
         earlier=tuple(
             JudgeLine(speaker=line.speaker, text=line.text, twin=line.by_twin)
@@ -56,6 +62,7 @@ def case_window(case: JudgeCase, twin_names: tuple[str, ...] = ()) -> JudgeWindo
         ),
         latest=JudgeLine(speaker=case.latest.speaker, text=case.latest.text),
         names_twin=case_names_twin(case, twin_names),
+        human_participants=case.human_participants or human_participants,
     )
 
 
@@ -162,7 +169,10 @@ async def judge_cases(
         for case in fixture.cases:
             started = time.monotonic()
             judgement, error = await capture_error(
-                partial(judge.judge, case_window(case, fixture.twin_names))
+                partial(
+                    judge.judge,
+                    case_window(case, fixture.twin_names, fixture.human_participants),
+                )
             )
             if judgement is None:
                 report.outcomes.append(

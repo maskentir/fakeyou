@@ -235,3 +235,33 @@ def test_earlier_screens_are_capped_at_the_two_most_recent() -> None:
         "Product Roadmap 2027",
         "Pricing Plans",
     ]
+
+
+def test_backlog_chat_is_counted_not_shown_as_live() -> None:
+    timeline = shown_timeline(TIMELINE)
+    budi = timeline.participant("device-budi", "Budi")
+    timeline.add_chat(
+        IncomingChat(
+            message_id="old", sender=budi, text="before you joined", sent_at=START, backlog=True
+        )
+    )
+    timeline.add_chat(
+        IncomingChat(message_id="live", sender=budi, text="deck link?", sent_at=START)
+    )
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert [line.text for line in view.chat] == ["deck link?"]
+    assert view.chat_before_you_joined == 1
+
+
+def test_own_chat_lines_are_marked_from_you() -> None:
+    timeline = shown_timeline(TIMELINE)
+    you = timeline.participant("twin", "Harun")
+    timeline.add_chat(
+        IncomingChat(message_id="mine", sender=you, text="my answer", sent_at=START, own=True)
+    )
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert [(line.text, line.from_you) for line in view.chat] == [("my answer", True)]

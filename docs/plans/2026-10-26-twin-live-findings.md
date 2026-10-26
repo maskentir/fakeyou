@@ -149,3 +149,140 @@ persona ikut ke bahasa itu.
 - Barge-in memotong playback, dan turn berlanjut dengan baris yang baru.
 - Tool use beralasan: `look_at_participant` dipanggil sebelum menjawab tentang Hadi.
 - Baca layar akurat: "1,105 credits, all of which were consumed by Text-to-Speech" (memang benar di dashboard).
+
+## Addendum: sophistication iteration (live-yfv-1/2, live-ozg-1..5)
+
+Spec: `docs/plans/2026-10-26-twin-sophistication-design.md`. What live proved, newest first.
+
+- Chat lane works end to end (ozg-5, 15:48Z): a named chat line is classified
+  live, queued on the chat channel, answered in chat with correct brief content,
+  and its own echo is recorded `own=true`.
+- Voice turns no longer mirror into chat (ozg-2 onward): zero `send_chat` on
+  spoken turns; one explicit chat request produced exactly one send.
+- Meet actions are judge-stamped per turn (`meet_action`): raise hand, mute,
+  unmute, and leave each executed once when asked and were `effective`.
+- One-word "stop" yields the floor via the stop lexicon
+  (`decided_by: stop_lexicon`, ozg-5 15:53:00Z).
+- Backlog classification must not trust the protocol timestamp: in room
+  ozg-sbgx-yzb every message carries ~14:57:23.5xx, +1ms per message, minutes
+  before it was typed. Backlog is now decided by arrival within 45s of
+  admission; later lines are live and stale timestamps are replaced by the
+  observation time.
+- Reaction picker selector `button:has-text(emoji)` does not match Meet's DOM
+  (ozg-5, act_failed after 11.8s). send_reaction now falls back to an
+  aria-label selector and then a DOM text search; still unproven live.
+- The twin claimed "sudah saya berikan jempol" before the (failed) action
+  settled. Queued results no longer promise delivery, but spoken confirmation
+  still races the actuator.
+- After `meet_leave` succeeded the session lingered 37 minutes and ended as
+  browser_failure; the dispatcher now signals the session stop event on a
+  successful leave.
+- A covered dialog Close button (CloakBrowser `ActionabilityError`, not a
+  PlaywrightError) killed ozg-4 four seconds after admission; known-error
+  dismissal is now per-modal best-effort and cannot fail the session.
+- Residual: evidence tools are still called on plain greetings (bounded to two
+  results per turn, then the model must answer); actuation takes 4-13s.
+
+## Addendum: pqt round (live-ozg-5 close-out, live-pqt-1)
+
+- Stop lexicon proven live: one word "stop" yielded the floor
+  (`decided_by: stop_lexicon`, ozg-5 15:53:00Z).
+- Reactions: only the first attempt per session succeeds. Hash-matched glyphs
+  prove the same thumbs-up succeeded once and failed later, so the defect is
+  picker state, not the glyph. send_reaction now probes picker visibility
+  before toggling, retries after re-toggling, and journals a bounded picker
+  DOM snippet on failure. Unproven live.
+- Chat-origin action requests were refused ("saya tidak bisa melakukan itu
+  sendiri") because judge stamps only exist on speech turns. Chat turns may
+  now use meet_act tools; meet_send_chat stays stripped there.
+- A successful meet_leave now sets the session stop event; teardown errors
+  after an owner stop no longer flip the terminal reason to browser_failure.
+  The twin's farewell sentence can still be cancelled by the close cascade.
+- STT heard "live" for "leave" once; the Indonesian phrasing worked. Leave
+  itself was effective in 0.89s and the session ended 8s later.
+
+## Addendum: bbz rounds (live-bbz-1/2)
+
+- Reactions work back-to-back when the glyph exists in Meet's set (thumbs-up
+  twice, clap, cry, wow, laugh; user-confirmed visually, ~10-12s each).
+- The plain heart does not exist in Meet: picker buttons carry the emoji as
+  aria-label and the heart is the sparkling heart. Requested heart-family
+  glyphs now map to it in send_reaction, and the aria-label-exact strategy
+  runs first.
+- The first thumbs-up "effective" in pqt was never seen by the user: the JS
+  fallback clicked a hidden element. Reaction clicks now require visibility.
+- The reaction picker itself is a role=dialog whose text starts "Skin tone";
+  the watchdog treated the lingering picker as a blocking modal and killed
+  bbz-2 as browser_failure after the 180s manual-action TTL. The picker is
+  now closed with Escape after every react attempt and exempted in the
+  watchdog.
+- Leave by voice ends the session in ~1s via the dispatcher stop signal, but
+  a second leave attempt on the already-left page flipped the terminal reason
+  to browser_failure; leave_meeting now treats an already-out page as left.
+- Leave by chat works now that chat turns may use meet_act tools; it was not
+  re-proven live because the bbz-2 session ended on the watchdog expiry first.
+
+## Addendum: bbz-3 round
+
+- In-set reactions are consistently ~3.5s and effective back-to-back: heart
+  (via the new mapping), thumbs-down x4, clap, laugh, wow, sad, party,
+  thinking. The picker no longer kills the session.
+- Remaining failure mode is model glyph variance: when the model picks an
+  out-of-set variant (confused/laugh/disdain attempts), actuation burned
+  ~39s before honestly failing. Fixes: emoji family mapping to Meet's nine
+  glyphs (confused->thinking, laugh variants->face-with-tears, disdain->
+  thumbs-down, etc.) and a picker enumeration that fails fast when Meet
+  does not offer the requested glyph.
+- A repeated reaction requested while the previous 39s attempt was still in
+  flight queued for ~13s behind the serial action lock.
+- Voice leave actuated in 1.3s but the session still terminated as
+  browser_failure: runtime leave cleanup re-ran leave_meeting on a page the
+  twin had already left and could not prove it was out. The dispatcher now
+  records its own successful leave and cleanup trusts that fact; the
+  post-leave page ("left the meeting") is also a recognized call state.
+
+## Addendum: bbz-4 round
+
+- Twin-initiated leave now terminates cleanly: session_finished
+  `stopped_by_owner`, exit 0 (dispatcher-left fact trusted by cleanup).
+- New failure found: on English reaction requests the model passed emoji
+  names instead of glyphs and meet_react refused 3x ("A reaction must be a
+  single emoji"), after which the twin concluded it cannot react at all and
+  repeated that apology. The tool now extracts the first emoji grapheme
+  from any argument, its description enumerates Meet's nine glyphs with
+  names, and a refusal echoes the input and lists the glyphs so the model
+  can recover next turn.
+
+## Addendum: bbz-5 round
+
+- English confused and Indonesian disdain reactions are now effective on
+  the first attempt (~3.5s); the tool-boundary glyph contract works.
+- Leave again terminated cleanly (`stopped_by_owner`, exit 0).
+- New failure found: on the first leave turn the model spent both tool
+  results on evidence tools (look_at_participant, look_back_chat), so the
+  2-result budget stripped meet_leave and the twin only answered verbally;
+  the user had to repeat the request. The judge-stamped action (and
+  meet_check_action) is now exempt from the evidence budget: exactly one
+  stamped action per turn always remains callable.
+
+## Addendum: bbz-6 round (regression, fixed same round)
+
+- Every greeting turn failed at the 15s stream deadline: the first version
+  of the budget exemption also kept meet_check_action callable after the
+  budget, so the tool list never emptied and the model looped on blocked
+  tool calls instead of answering. The exemption now covers only the
+  judge-stamped action itself, exactly once; unstamped turns again end
+  with an empty tool list that forces a spoken answer.
+
+## Addendum: bbz-7 round (final proof)
+
+- Greeting answered normally again (0 turn_failed); confused reaction
+  effective in 3.5s.
+- Chat-origin leave proven live: chat line "Harun, kamu boleh leave
+  sekarang" observed, meet_leave effective in ~1s, session ended
+  `stopped_by_owner` exit 0. A parallel react call in the same turn was
+  stale-cancelled cleanly.
+- Quality nit retained: on the confused-reaction turn the spoken reply was
+  generic filler ("not quite sure what you mean") while the reaction
+  itself sent fine. Speech accompanying a queued action can still
+  contradict the action; worth a later pass on action-turn reply shaping.

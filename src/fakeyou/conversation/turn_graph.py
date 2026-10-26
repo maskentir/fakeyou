@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Hashable,
@@ -219,6 +220,20 @@ class WholeResponder(Protocol):
 
 
 ToolStartHook = Callable[[], None]
+
+
+class TurnSettler(Protocol):
+    async def __call__(self, event: TranscriptEvent, *, completed: bool) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TurnActionOutcome:
+    succeeded: bool
+    detail: str
+    state: str
+
+
+MeetActionExecutor = Callable[[TranscriptEvent], Awaitable[TurnActionOutcome | None]]
 WholeTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook], WholeResponder]
 StreamTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook, str], Responder]
 
@@ -280,6 +295,8 @@ class TurnRuntime:
     faults: FaultReporter | None = None
     chat: ChatChannel | None = None
     chat_turn: WholeTurnFactory | None = None
+    settle_turn: TurnSettler | None = None
+    meet_action_executor: MeetActionExecutor | None = None
     cue: ThinkingCue | None = None
     others_speaking: Callable[[], bool] | None = None
 
@@ -723,6 +740,70 @@ def _finish_turn(
         _move_phase(runtime, "waiting", transcript_id)
 
 
+async def _settle_turn(runtime: TurnRuntime, event: TranscriptEvent, *, completed: bool) -> None:
+    if runtime.settle_turn is not None:
+        await runtime.settle_turn(event, completed=completed)
+
+
+_MECHANICAL_ACTIONS = frozenset({"raise_hand", "lower_hand", "react", "mute", "unmute"})
+
+
+def _planned_action_ready(runtime: TurnRuntime, event: TranscriptEvent) -> bool:
+    if runtime.meet_action_executor is None or not event.turn_planned:
+        return False
+    if event.meet_action == "react" and event.reaction_emoji is None:
+        return False
+    return event.meet_action in _MECHANICAL_ACTIONS
+
+
+async def _execute_planned_action(
+    runtime: TurnRuntime, event: TranscriptEvent
+) -> TurnActionOutcome | None:
+    executor = runtime.meet_action_executor
+    if executor is None or not _planned_action_ready(runtime, event):
+        return None
+    _move_phase(runtime, "acting", event.id)
+    return await executor(event)
+
+
+def _with_action_outcome(event: TranscriptEvent, outcome: TurnActionOutcome) -> TranscriptEvent:
+    verdict = "succeeded" if outcome.succeeded else "failed"
+    return replace(
+        event,
+        text=(
+            f"{event.text}\n[System: the requested meeting action {event.meet_action} "
+            f"{verdict}: {outcome.detail}]"
+        ),
+        meet_action="none",
+        reaction_emoji=None,
+    )
+
+
+def _with_leave_pending(event: TranscriptEvent) -> TranscriptEvent:
+    return replace(
+        event,
+        text=f"{event.text}\n[System: you will leave after this reply.]",
+        meet_action="none",
+        reaction_emoji=None,
+    )
+
+
+async def _reply_batch(
+    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...]
+) -> tuple[TranscriptEvent, ...]:
+    final = batch[-1]
+    if (
+        runtime.meet_action_executor is not None
+        and final.turn_planned
+        and final.meet_action == "leave"
+    ):
+        return (*batch[:-1], _with_leave_pending(final))
+    outcome = await _execute_planned_action(runtime, final)
+    if outcome is None:
+        return batch
+    return (*batch[:-1], _with_action_outcome(final, outcome))
+
+
 async def _run_turn(
     runtime: TurnRuntime,
     speech: SpeechGraph,
@@ -735,13 +816,18 @@ async def _run_turn(
     generations = (generation, floor_generation)
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
-    whole = _turn_whole(runtime, batch, hook)
+    try:
+        reply_batch = await _reply_batch(runtime, batch)
+    except BaseException:
+        await _settle_turn(runtime, final, completed=False)
+        raise
+    whole = _turn_whole(runtime, reply_batch, hook)
     streamed = whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
     context = replace(
         _speech_context(runtime, sink, scope, generations, final.id),
-        responder=_turn_responder(runtime, batch, hook, request_id) if streamed else None,
+        responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
         whole=whole,
         sentences=runtime.sentences,
         cue_state=cue_state,
@@ -756,16 +842,26 @@ async def _run_turn(
         ),
     )
     try:
-        output = await speech.ainvoke(
-            SpeechInput(
-                transcript=final.text,
-                speaking_generation=floor_generation,
-                transcript_event=final,
-            ),
-            context=context,
-        )
-    finally:
-        await _settle_cue(cue)
+        try:
+            output = await speech.ainvoke(
+                SpeechInput(
+                    transcript=final.text,
+                    speaking_generation=floor_generation,
+                    transcript_event=final,
+                ),
+                context=context,
+            )
+        finally:
+            await _settle_cue(cue)
+    except BaseException:
+        await _settle_turn(runtime, final, completed=False)
+        raise
+    await _settle_turn(
+        runtime,
+        final,
+        completed=bool(output.get("completed") or output.get("silent"))
+        and _turn_current(runtime, generation, floor_generation),
+    )
     if cue_state.played and not output.get("completed"):
         runtime.journal.record(
             "thinking_cue_orphaned",
@@ -885,6 +981,23 @@ async def drain_turns(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingF
         _fail(runtime, error)
 
 
+async def _plan_chat_event(runtime: TurnRuntime, event: TranscriptEvent) -> TranscriptEvent:
+    judging = runtime.judging
+    if judging is None:
+        return event
+    window = judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking)
+    judgement, _error = await capture_error(partial(judging.cache.judgement, window))
+    if judgement is None:
+        return event
+    return replace(
+        event,
+        meet_action=judgement.meet_action,
+        evidence_needs=judgement.evidence,
+        reaction_emoji=judgement.reaction_emoji,
+        turn_planned=True,
+    )
+
+
 async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generation: int) -> None:
     chat, factory = runtime.chat, runtime.chat_turn
     if chat is None or factory is None:
@@ -893,22 +1006,31 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
         )
         return
     floor_generation = _floor_generation(runtime)
+    event = await _plan_chat_event(runtime, event)
     hook = tool_start_hook(runtime, generation, floor_generation, event.id)
-    reply = await _respond_within(
-        factory((event,), hook), event.text, runtime.response_timeout_seconds
-    )
-    if not _turn_current(runtime, generation, floor_generation):
-        raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
-    text = scrub_internal_refs(reply.text)
-    if not text:
-        _move_phase(runtime, "waiting", event.id)
-        return
-    _move_phase(runtime, "acting", event.id)
-    sent = await chat.send(text, transcript_id=event.id)
-    runtime.journal.record(
-        "chat_reply_finished", source="agent", transcript_id=event.id, sent=sent, chars=len(text)
-    )
-    _move_phase(runtime, "listening", event.id)
+    try:
+        reply_event = (await _reply_batch(runtime, (event,)))[-1]
+        reply = await _respond_within(
+            factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
+        )
+        if not _turn_current(runtime, generation, floor_generation):
+            raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
+        text = scrub_internal_refs(reply.text)
+        if text:
+            _move_phase(runtime, "acting", event.id)
+            sent = await chat.send(text, transcript_id=event.id)
+            runtime.journal.record(
+                "chat_reply_finished",
+                source="agent",
+                transcript_id=event.id,
+                sent=sent,
+                chars=len(text),
+            )
+    except BaseException:
+        await _settle_turn(runtime, event, completed=False)
+        raise
+    await _settle_turn(runtime, event, completed=True)
+    _move_phase(runtime, "listening" if text else "waiting", event.id)
 
 
 async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: DeferredTurn) -> bool:
@@ -977,6 +1099,16 @@ async def _admit_final(
             "transcript_suppressed", source="agent", transcript_id=final.id, reason="shadow"
         )
         return {"speaking_generation": state["speaking_generation"]}
+    verdict = state.get("participation")
+    if verdict is not None:
+        final = replace(
+            final,
+            requests_chat=final.requests_chat or verdict.requests_chat,
+            meet_action=verdict.meet_action if final.meet_action == "none" else final.meet_action,
+            evidence_needs=tuple(dict.fromkeys((*final.evidence_needs, *verdict.evidence_needs))),
+            reaction_emoji=final.reaction_emoji or verdict.reaction_emoji,
+            turn_planned=final.turn_planned or state.get("decision_source") == "judge",
+        )
     queue = runtime.queue if runtime.queue is not None else PendingFinals()
     queue.admit(final)
     _advance_admitted(runtime)

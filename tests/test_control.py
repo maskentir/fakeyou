@@ -19,8 +19,8 @@ class _History:
         return self._entries
 
 
-def _twin(text: str) -> TwinSpeechEntry:
-    return TwinSpeechEntry(at=datetime.now(UTC), text=text)
+def _twin(text: str, *, interrupted: bool = False) -> TwinSpeechEntry:
+    return TwinSpeechEntry(at=datetime.now(UTC), text=text, interrupted=interrupted)
 
 
 def _event(text: str) -> TranscriptEvent:
@@ -137,3 +137,25 @@ def test_a_stop_plan_keeps_the_acknowledgement_short() -> None:
         ).text
         == "Okay, stopping."
     )
+
+
+def test_a_repeat_plan_skips_a_sentence_that_was_cut_off() -> None:
+    responder = MeetingResponder(
+        cast(MeetingAgent, ToolCallingFakeModel(responses=[AIMessage(content="x")])),
+        _History([_twin("The launch is on 14 October.", interrupted=True)]),
+        control=ReplyControl(),
+        language="en",
+    )
+
+    assert responder.on_intent("repeat") is None
+
+
+def test_a_repeat_plan_never_replays_the_same_sentence_twice() -> None:
+    responder = MeetingResponder(
+        cast(MeetingAgent, ToolCallingFakeModel(responses=[AIMessage(content="x")])),
+        _History([_twin("The launch is on 14 October."), _twin("The launch is on 14 October.")]),
+        control=ReplyControl(),
+        language="en",
+    )
+
+    assert responder.on_intent("repeat") is None

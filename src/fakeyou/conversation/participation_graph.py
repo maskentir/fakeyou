@@ -95,11 +95,15 @@ def decision_of(
         confidence=judgement.confidence,
         reason_code=f"judge_{judgement.action}",
         backchannel=judgement.backchannel,
+        requests_chat=judgement.requests_chat,
+        meet_action=judgement.meet_action,
+        evidence_needs=judgement.evidence,
+        reaction_emoji=judgement.reaction_emoji,
     )
 
 
 def fallback_decision(context: ParticipationContext) -> ParticipationDecision:
-    if context.addressed:
+    if context.vocative or (context.vocative is None and context.addressed):
         return ParticipationDecision(decision="speak", confidence=1.0, reason_code="fallback_named")
     return ParticipationDecision(decision="silent", confidence=1.0, reason_code="fallback_unnamed")
 
@@ -114,9 +118,14 @@ def _record(
     fields: dict[str, object] = {}
     if judgement is not None:
         fields = {
+            "heard": judgement.heard,
             "addressee": judgement.addressee,
             "finished": judgement.finished,
             "backchannel": judgement.backchannel,
+            "requests_chat": judgement.requests_chat,
+            "meet_action": judgement.meet_action,
+            "evidence_needs": list(judgement.evidence),
+            "reaction_emoji": judgement.reaction_emoji,
         }
     journal.record(
         "policy_decided",

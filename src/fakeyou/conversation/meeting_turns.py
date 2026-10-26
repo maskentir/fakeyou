@@ -17,10 +17,12 @@ from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
     ChatChannel,
+    MeetActionExecutor,
     Responder,
     SentenceLimits,
     StreamTurnFactory,
     ToolStartHook,
+    TurnSettler,
     WholeResponder,
     WholeTurnFactory,
     build_turn_graph,
@@ -58,6 +60,7 @@ class TurnInteraction:
     barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
+    human_participants: Callable[[], Sequence[str]] | None = None
     judge: TurnJudge | None = None
     history: MeetingHistory = NoHistory()
     judge_thresholds: JudgeThresholds = JudgeThresholds(
@@ -69,6 +72,8 @@ class TurnInteraction:
     judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
     chat: ChatChannel | None = None
+    settle_turn: TurnSettler | None = None
+    meet_action_executor: MeetActionExecutor | None = None
     control: ReplyControl | None = None
 
 
@@ -170,6 +175,8 @@ def _deferred_options(
         ttl_seconds=timing.deferred_ttl_seconds,
         chat=interaction.chat,
         chat_turn=chat_turn,
+        settle_turn=interaction.settle_turn,
+        meet_action_executor=interaction.meet_action_executor,
         others_speaking=interaction.others_speaking,
     )
 
@@ -183,6 +190,7 @@ def _judging(interaction: TurnInteraction) -> TurnJudging | None:
             interaction.history,
             interaction.judge_window_lines,
             twin_names=tuple(dict.fromkeys((*interaction.wake_phrases, *interaction.twin_names))),
+            participants=interaction.human_participants,
         ),
         thresholds=interaction.judge_thresholds,
     )

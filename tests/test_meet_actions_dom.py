@@ -374,3 +374,139 @@ async def test_chat_readback_needs_text_and_echo_item() -> None:
         assert await observe_chat_echoed(page, "not sent yet") is False
 
     await _with_static_page(_CHAT_ECHO_PAGE, check)
+
+
+MIC_ON_XPATH = button_xpath("turn on microphone")
+MIC_OFF_XPATH = button_xpath("turn off microphone")
+REACT_XPATH = button_xpath("send a reaction")
+LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
+
+
+async def test_mute_clicks_the_microphone_toggle() -> None:
+    from fakeyou.meet.meet_actions import mute_microphone
+
+    page = meet_page([IN_CALL], visible={MIC_ON_XPATH: False})
+    clock = FakeClock()
+
+    result = await mute_microphone(page, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked == [MIC_OFF_XPATH]
+
+
+async def test_mute_is_a_noop_when_already_muted() -> None:
+    from fakeyou.meet.meet_actions import mute_microphone
+
+    page = meet_page([IN_CALL], visible={MIC_ON_XPATH: True})
+    clock = FakeClock()
+
+    result = await mute_microphone(page, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert "already" in result.detail
+    assert page.clicked == []
+
+
+async def test_unmute_clicks_the_microphone_toggle() -> None:
+    from fakeyou.meet.meet_actions import unmute_microphone
+
+    page = meet_page([IN_CALL], visible={MIC_OFF_XPATH: False})
+    clock = FakeClock()
+
+    result = await unmute_microphone(page, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked == [MIC_ON_XPATH]
+
+
+async def test_react_opens_the_picker_and_clicks_the_emoji() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    emoji = "\U0001f44d"
+    page = meet_page([IN_CALL], evaluates=[False, [emoji]])
+    clock = FakeClock()
+
+    result = await send_reaction(page, emoji, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked == [REACT_XPATH, f'button[aria-label="{emoji}"]']
+
+
+async def test_leave_clicks_the_leave_button() -> None:
+    from fakeyou.meet.meet_actions import leave_call
+
+    page = meet_page([IN_CALL])
+    clock = FakeClock()
+
+    result = await leave_call(page, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked == [LEAVE_SELECTOR]
+
+
+async def test_react_falls_back_to_a_dom_search_when_selectors_miss() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    emoji = "\U0001f44d"
+    page = meet_page(
+        [IN_CALL],
+        click_failures={f'button:has-text("{emoji}")', f'button[aria-label*="{emoji}"]'},
+        evaluates=[False, True],
+    )
+    clock = FakeClock()
+
+    result = await send_reaction(page, emoji, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked[0] == REACT_XPATH
+    assert page.evaluate_calls
+
+
+async def test_react_skips_the_toggle_when_the_picker_is_already_open() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    emoji = "\U0001f44d"
+    page = meet_page([IN_CALL], evaluates=[True, [emoji]])
+    clock = FakeClock()
+
+    result = await send_reaction(page, emoji, sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert page.clicked == [f'button[aria-label="{emoji}"]']
+
+
+async def test_react_maps_a_plain_heart_to_the_meet_heart() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    page = meet_page([IN_CALL], evaluates=[False, ["\U0001f496"]])
+    clock = FakeClock()
+
+    result = await send_reaction(page, "\u2764\ufe0f", sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert 'button[aria-label="\U0001f496"]' in page.clicked
+
+
+async def test_react_maps_a_confused_face_to_the_meet_thinking_face() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    page = meet_page([IN_CALL], evaluates=[False, ["\U0001f914"]])
+    clock = FakeClock()
+
+    result = await send_reaction(page, "\U0001f615", sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert result.succeeded
+    assert 'button[aria-label="\U0001f914"]' in page.clicked
+
+
+async def test_react_fails_fast_when_meet_does_not_offer_the_emoji() -> None:
+    from fakeyou.meet.meet_actions import send_reaction
+
+    page = meet_page([IN_CALL], evaluates=[False, ["\U0001f44d", "\U0001f496"]])
+    clock = FakeClock()
+
+    result = await send_reaction(page, "\U0001f984", sleep=clock.sleep, monotonic=clock.monotonic)
+
+    assert not result.succeeded
+    assert "does not offer" in result.detail
+    assert page.clicked == [REACT_XPATH]

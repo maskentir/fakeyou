@@ -49,6 +49,11 @@ class TranscriptEvent:
     display_claim: str | None = None
     voice_clusters: tuple[str, ...] = ()
     attention: AttentionContext | None = None
+    requests_chat: bool = False
+    meet_action: str = "none"
+    evidence_needs: tuple[str, ...] = ()
+    reaction_emoji: str | None = None
+    turn_planned: bool = False
 
 
 @dataclass(frozen=True, slots=True)

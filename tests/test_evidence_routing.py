@@ -245,3 +245,28 @@ async def test_the_chosen_route_is_journaled() -> None:
         ("small", "none"),
         ("strong", "look_at_screen"),
     ]
+
+
+@tool(description="Look at the shared screen with coded results.")
+def coded_look(question: str) -> str:
+    del question
+    return '{"code":"not_meeting_content","title":"Feed"}'
+
+
+async def test_an_unproductive_look_result_stays_on_the_light_model() -> None:
+    call = AIMessage(
+        content="",
+        tool_calls=[{"name": "coded_look", "args": {"question": "date"}, "id": "look-9"}],
+    )
+    light = ToolCallingFakeModel(responses=[call, AIMessage(content="I can only see the title.")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="strong answer")])
+    agent = create_agent(
+        model=light,
+        tools=[coded_look],
+        middleware=[EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"coded_look"}))],
+    )
+
+    result = await agent.ainvoke({"messages": [HumanMessage("Rani, what is on screen?")]})
+
+    assert result["messages"][-1].text == "I can only see the title."
+    assert not strong.seen

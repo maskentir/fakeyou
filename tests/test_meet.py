@@ -586,7 +586,7 @@ async def test_leave_meeting_when_already_out_is_left() -> None:
 
 
 async def test_leave_meeting_fails_when_leave_button_persists() -> None:
-    page = meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL])
+    page = meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL, IN_CALL])
     clock = FakeClock()
 
     result = await leave_meeting(
@@ -594,6 +594,30 @@ async def test_leave_meeting_fails_when_leave_button_persists() -> None:
     )
 
     assert result.status == "failed"
+
+
+async def test_observe_call_state_recognizes_the_post_leave_page() -> None:
+    page = meet_page(["<h1>You left the meeting</h1><button>Rejoin</button>"])
+
+    observation = await observe_call_state(page)
+
+    assert observation.state == "left"
+
+
+async def test_leave_meeting_on_the_post_leave_page_is_left() -> None:
+    page = meet_page(
+        ["<h1>You left the meeting</h1><button>Rejoin</button>"], counts={LEAVE_SELECTOR: [0]}
+    )
+    clock = FakeClock()
+
+    result = await leave_meeting(
+        page,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.status == "left"
+    assert page.clicked == []
 
 
 async def test_leave_meeting_fails_without_leave_button_on_unknown_page() -> None:
@@ -864,3 +888,16 @@ async def test_string_match_observer_pins_frozen_call_states(fixture: str, expec
             assert (await observe_call_state(page)).state == expected
         finally:
             await browser.close()
+
+
+async def test_leave_meeting_when_already_out_with_stale_button_is_left() -> None:
+    page = meet_page([ENDED], click_failures={LEAVE_SELECTOR})
+    clock = FakeClock()
+
+    result = await leave_meeting(
+        page,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert result.status == "left"

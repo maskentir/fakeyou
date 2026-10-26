@@ -159,8 +159,6 @@ MEET_INJECTION = (
             ["meet_act"],
             {"meet_raise_hand", "meet_lower_hand"},
         ),
-        (["meet_raise_hand"], ["meet_chat"], set()),
-        (["meet_raise_hand"], [], set()),
         ([], ["meet_act"], set()),
     ],
 )
@@ -180,8 +178,6 @@ def test_meet_hand_tools_bind_only_with_explicit_authority(
     ("allowed_tools", "permissions", "expected"),
     [
         (["meet_send_chat"], ["meet_chat"], {"meet_send_chat"}),
-        (["meet_send_chat"], ["meet_act"], set()),
-        (["meet_send_chat"], [], set()),
         ([], ["meet_chat"], set()),
     ],
 )
@@ -206,7 +202,9 @@ def test_brief_only_with_meet_permission_still_rejects_requested_memory(
     with pytest.raises(FakeYouError, match="brief_only") as caught:
         meeting_tool_names(loaded, meeting, memory_requested=True)
     assert caught.value.code is ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY
-    assert meeting_tool_names(loaded, meeting, memory_requested=False) == frozenset()
+    with pytest.raises(FakeYouError, match="brief permission") as missing:
+        meeting_tool_names(loaded, meeting, memory_requested=False)
+    assert missing.value.code is ErrorCode.MEETING_TOOL_PERMISSION_MISSING
 
 
 def test_meet_instructions_inside_facts_and_brief_add_no_tools(brief: MeetingBrief) -> None:
@@ -275,8 +273,6 @@ def test_unauthorized_meet_tool_call_is_refused_neutrally_without_fault(
             {"meet_raise_hand", "meet_lower_hand"},
         ),
         (["meet_send_chat"], ["meet_chat"], {"meet_send_chat"}),
-        (["meet_send_chat"], ["meet_act"], set()),
-        (["meet_raise_hand"], [], set()),
         ([], ["meet_act", "meet_chat"], set()),
     ],
 )
@@ -307,24 +303,14 @@ def test_meet_grants_bind_matching_tools_from_factory(
     assert set(bound) == expected
 
 
-def test_brief_only_meet_grants_bind_no_tools(tmp_path: Path, brief: MeetingBrief) -> None:
+def test_brief_only_with_meet_tools_is_a_join_error(brief: MeetingBrief) -> None:
     meeting = revised(brief, knowledge_scope="brief_only", permissions=["meet_act", "meet_chat"])
     loaded = profile(allowed_tools=["meet_raise_hand", "meet_lower_hand", "meet_send_chat"])
-    grants = meeting_tool_names(loaded, meeting, memory_requested=False)
-    dispatcher = MeetActionDispatcher(
-        tmp_path / "record.jsonl",
-        meeting_id="meeting-bind",
-        enabled=True,
-        chat_per_minute=3,
-    )
-    bound = [
-        tool.name
-        for tool in create_meet_action_tools(dispatcher, refuse=refuse_meet_tool)
-        if tool.name in grants
-    ]
 
-    assert grants == frozenset()
-    assert bound == []
+    with pytest.raises(FakeYouError, match="brief permission") as caught:
+        meeting_tool_names(loaded, meeting, memory_requested=False)
+
+    assert caught.value.code is ErrorCode.MEETING_TOOL_PERMISSION_MISSING
 
 
 def test_meet_tools_hide_call_identity_from_model(tmp_path: Path) -> None:
@@ -340,6 +326,11 @@ def test_meet_tools_hide_call_identity_from_model(tmp_path: Path) -> None:
         "meet_raise_hand",
         "meet_lower_hand",
         "meet_send_chat",
+        "meet_react",
+        "meet_mute",
+        "meet_unmute",
+        "meet_leave",
+        "meet_check_action",
     ]
     for tool in tools:
         parameters = convert_to_openai_tool(tool)["function"]["parameters"]
@@ -350,3 +341,25 @@ def test_meet_tools_hide_call_identity_from_model(tmp_path: Path) -> None:
     assert list(convert_to_openai_tool(tools[2])["function"]["parameters"]["properties"]) == [
         "message"
     ]
+
+
+@pytest.mark.parametrize(
+    ("allowed_tools", "permissions"),
+    [
+        (["meet_raise_hand"], ["meet_chat"]),
+        (["meet_raise_hand"], []),
+        (["meet_send_chat"], ["meet_act"]),
+        (["meet_send_chat"], []),
+        (["meet_react"], ["meet_chat"]),
+        (["meet_leave"], []),
+    ],
+)
+def test_a_persona_tool_without_its_brief_permission_is_a_join_error(
+    brief: MeetingBrief, allowed_tools: list[str], permissions: list[str]
+) -> None:
+    meeting = revised(brief, knowledge_scope="persona_memory", permissions=permissions)
+
+    with pytest.raises(FakeYouError, match="brief permission") as caught:
+        meeting_tool_names(profile(allowed_tools=allowed_tools), meeting, memory_requested=False)
+
+    assert caught.value.code is ErrorCode.MEETING_TOOL_PERMISSION_MISSING

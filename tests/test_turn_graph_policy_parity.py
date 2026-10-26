@@ -221,8 +221,7 @@ def test_policy_literals_are_in_the_graph_ingress_and_participation_source() -> 
         "others_speaking=self._others_speaking(),",
         "return self._participant_policy and signal is not None and signal()",
         "return bool(self._addressing_names) or self._participant_policy",
-        "if decision.backchannel or self._wake_phrases or not lifecycle.barge_in "
-        "or session is None:",
+        "if decision.backchannel or not lifecycle.barge_in or session is None:",
         "if lifecycle.is_closed or lifecycle.is_failed or not lifecycle.barge_in "
         "or session is None:",
     )

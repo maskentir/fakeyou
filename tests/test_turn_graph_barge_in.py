@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -297,7 +298,7 @@ async def test_final_during_speech_cancels_the_turn_and_journals_barge_in() -> N
     assert audio.spoken == ["Yes, I am here."]
 
 
-async def test_unaddressed_final_during_speech_yields_the_floor_without_cancelling() -> None:
+async def test_unaddressed_final_during_speech_yields_the_floor_and_cancels() -> None:
     journal = FakeJournal()
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
     speech = await start_speaking(lifecycle)
@@ -306,11 +307,13 @@ async def test_unaddressed_final_during_speech_yields_the_floor_without_cancelli
 
     assert decision is not None
     assert decision.decision == "silent"
-    assert barge_names(journal) == ["barge_in_detected"]
+    assert barge_names(journal) == [
+        "barge_in_detected",
+        "agent_cancel_requested",
+        "agent_cancelled",
+    ]
     assert audio.stops == 1
-    assert not speech.done()
-    speech.cancel()
-    await asyncio.gather(speech, return_exceptions=True)
+    assert await settle(speech) is False
 
 
 async def test_interim_during_speech_interrupts_and_journals_the_loop_names() -> None:
@@ -334,13 +337,59 @@ async def test_interim_below_the_minimum_words_does_not_interrupt() -> None:
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=())
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("stop now")
+    await ingress.handle_interim("yeah right")
 
     assert not speech.done()
     assert journal.names == []
     assert audio.stops == 0
     speech.cancel()
     await asyncio.gather(speech, return_exceptions=True)
+
+
+async def test_a_one_word_stop_interim_yields_the_floor_at_once() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
+    speech = await start_speaking(lifecycle)
+
+    await ingress.handle_interim("Stop.")
+
+    assert await settle(speech) is False
+    assert barge_names(journal) == [
+        "barge_in_detected",
+        "agent_cancel_requested",
+        "agent_cancelled",
+    ]
+    assert journal.fields[0]["decided_by"] == "stop_lexicon"
+    assert audio.stops == 1
+
+
+async def test_a_repeated_stop_with_the_twins_name_yields_the_floor() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
+    speech = await start_speaking(lifecycle)
+
+    await ingress.handle_interim("twin stop stop")
+
+    assert await settle(speech) is False
+    assert audio.stops == 1
+
+
+def test_talk_about_stopping_is_not_a_stop_command() -> None:
+    from fakeyou.conversation.turn_ingress import is_stop_command
+    from fakeyou.foundation.resources import read_package_text
+
+    assert is_stop_command("we should stop the rollout tomorrow", ()) is False
+    assert is_stop_command("stop", ()) is True
+    assert is_stop_command("Stop.", ()) is True
+    assert is_stop_command("stop stop enough", ()) is True
+    assert is_stop_command("twin stop", ("twin",)) is True
+    assert is_stop_command("yeah", ()) is False
+    assert is_stop_command("", ()) is False
+    phrases = json.loads(read_package_text("stop_phrases.json"))
+    for word in phrases["strong"]:
+        assert is_stop_command(word, ()) is True, word
+    for phrase in phrases["phrases"]:
+        assert is_stop_command(phrase, ()) is True, phrase
 
 
 async def test_interim_is_a_barge_in_while_only_twin_names_are_configured() -> None:
@@ -395,3 +444,18 @@ def test_journal_names_are_the_turn_graph_string_literals() -> None:
 
     for name in (*BARGE_NAMES, "sentence_dropped"):
         assert f'"{name}"' in graph_source
+
+
+async def test_a_merged_refinal_of_the_same_words_is_not_answered_twice() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, _audio = barge_ingress(journal, addressing_names=("twin",))
+
+    first = await ingress.handle_final(final_event("f1", "twin, what did you just say, repeat it"))
+    second = await ingress.handle_final(
+        final_event("f2", "stop, twin, what did you just say, repeat it")
+    )
+
+    assert first is not None
+    assert second is None
+    assert "transcript_suppressed" in journal.names
+    await lifecycle.close()

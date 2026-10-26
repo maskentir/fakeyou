@@ -14,7 +14,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 
 JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed"]
-CallState = Literal["in_call", "removed", "ended", "lobby", "unknown"]
+CallState = Literal["in_call", "removed", "ended", "lobby", "left", "unknown"]
 LeaveStatus = Literal["left", "failed"]
 
 EXPLICIT_DENIAL_MARKERS = (
@@ -72,6 +72,7 @@ class MeetSignals:
     denied: str = "can't join this"
     removed: str = "been removed"
     ended: str = "has ended"
+    left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone and camera"
 
 
@@ -455,6 +456,8 @@ async def observe_call_state(
         return CallObservation(state="removed", detail="guest was removed from the call")
     if signals.ended in content:
         return CallObservation(state="ended", detail="the call has ended")
+    if signals.left in content:
+        return CallObservation(state="left", detail="the guest already left the call")
     if _is_waiting(content):
         return CallObservation(state="lobby", detail="waiting for admission")
     if _is_in_call(content, signals):
@@ -520,6 +523,13 @@ async def toggle_control(
     return True
 
 
+async def _already_out(page: Page, signals: MeetSignals) -> LeaveResult | None:
+    observation = await observe_call_state(page, signals)
+    if observation.state in ("removed", "ended", "lobby", "left"):
+        return LeaveResult(status="left", detail=f"already out of the call: {observation.state}")
+    return None
+
+
 async def leave_meeting(
     page: Page,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
@@ -535,11 +545,9 @@ async def leave_meeting(
             status="failed", detail=f"finding the leave button failed: ({type(error).__name__})"
         )
     if found == 0:
-        observation = await observe_call_state(page, signals)
-        if observation.state in ("removed", "ended", "lobby"):
-            return LeaveResult(
-                status="left", detail=f"already out of the call: {observation.state}"
-            )
+        out = await _already_out(page, signals)
+        if out is not None:
+            return out
         return LeaveResult(status="failed", detail="leave button not found on the page")
     failure = await click_when_ready(
         partial(page.locator, f'button[aria-label="{signals.leave_call}"]'),
@@ -547,6 +555,9 @@ async def leave_meeting(
         sleep,
     )
     if failure is not None:
+        out = await _already_out(page, signals)
+        if out is not None:
+            return out
         return LeaveResult(status="failed", detail=failure)
     admitted_marker = _admitted_marker(signals)
     deadline = monotonic() + timeout_seconds

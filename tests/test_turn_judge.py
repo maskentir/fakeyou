@@ -145,3 +145,46 @@ async def test_the_model_judge_reads_its_structured_output() -> None:
     assert sent["twin_names"] == ["Rani"]
     assert sent["earlier"] == [{"speaker": "twin", "text": "Hi.", "by_twin": True}]
     assert sent["latest"] == {"speaker": "ayu", "text": "Rani, beta?"}
+
+
+async def test_the_judge_payload_names_a_sole_human_participant() -> None:
+    payload: dict[str, object] = {
+        "heard": "can you see my screen?",
+        "finished": True,
+        "backchannel": False,
+        "addressee": "twin",
+        "action": "reply",
+        "confidence": 0.9,
+    }
+
+    def respond() -> AIMessage:
+        return AIMessage(
+            content="", tool_calls=[{"name": "TurnJudgement", "args": payload, "id": "j"}]
+        )
+
+    model = ToolCallingFakeModel(responses=[respond(), respond()], seen=[])
+    judge = ModelTurnJudge(model, twin_names=("Rani",), timeout_seconds=1.0)
+
+    await judge.judge(
+        JudgeWindow(
+            earlier=(JudgeLine(speaker="ayu", text="morning"),),
+            latest=JudgeLine(speaker="ayu", text="can you see my screen?"),
+            human_participants=("ayu",),
+        )
+    )
+    sent = json.loads(model.seen[-1][-1].text)
+    assert sent["human_speakers"] == ["ayu"]
+    assert sent["human_participants"] == ["ayu"]
+    assert sent["sole_human_participant"] is True
+
+    await judge.judge(
+        JudgeWindow(
+            earlier=(JudgeLine(speaker="ayu", text="morning"),),
+            latest=JudgeLine(speaker="budi", text="can everyone see my screen?"),
+            human_participants=("ayu", "budi"),
+        )
+    )
+    sent = json.loads(model.seen[-1][-1].text)
+    assert sent["human_speakers"] == ["ayu", "budi"]
+    assert sent["human_participants"] == ["ayu", "budi"]
+    assert sent["sole_human_participant"] is False

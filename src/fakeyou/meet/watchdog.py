@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from cloakbrowser.human.actionability import ActionabilityError
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
@@ -105,7 +106,10 @@ async def dismiss_known_errors(page: Page) -> tuple[str, ...]:
         action = _known_error_action(modal.text.casefold())
         if action is None:
             continue
-        await page.locator(_dialog_button_xpath(modal.index, action)).first.click(timeout=2000)
+        try:
+            await page.locator(_dialog_button_xpath(modal.index, action)).first.click(timeout=2000)
+        except (PlaywrightError, ActionabilityError):
+            continue
         dismissed.append(modal.text)
     return tuple(dismissed)
 
@@ -202,6 +206,9 @@ class UIWatchdog:
 
     async def _handle_modal(self, modal: _Modal, now: float, events: list[WatchdogEvent]) -> None:
         if modal.fingerprint in self._handled or self._stable[modal.fingerprint] < 2:
+            return
+        if modal.text.casefold().startswith("skin tone"):
+            self._handled.add(modal.fingerprint)
             return
         action, strict = self._resolve_action(modal)
         dismissed = False

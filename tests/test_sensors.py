@@ -304,3 +304,50 @@ async def test_the_view_reports_the_protocol_camera_and_presenter() -> None:
     by_name = {person.name: person for person in view.participants}
     assert by_name["Ayu"].camera_on is True
     assert view.presenting == "Ayu"
+
+
+async def test_a_stale_protocol_timestamp_observed_late_is_live_chat() -> None:
+    sensed, timeline, _ = sensors()
+    stale = int((JOINED_MS - 120_000) * 1000)
+    early = collection_payload(
+        users=[user_info(BUDI, "Budi")],
+        chat=[chat_message("m1", BUDI, "old question", stale)],
+    )
+    late = collection_payload(
+        users=[user_info(BUDI, "Budi")],
+        chat=[chat_message("m2", BUDI, "live question", stale)],
+    )
+
+    await sensed.accept_batch(DrainBatch(messages=[message(early)]))
+    await sensed.accept_batch(DrainBatch(messages=[message(late, at_ms=JOINED_MS + 180_000)]))
+
+    lines = {line.message_id: line for line in timeline.snapshot().chat}
+    assert lines["m1"].backlog is True
+    assert lines["m2"].backlog is False
+    assert lines["m2"].sent_at >= JOINED + timedelta(seconds=170)
+
+
+async def test_the_backlog_window_runs_from_admission_not_sensor_creation() -> None:
+    sensed, timeline, _ = sensors()
+    stale = int((JOINED_MS - 120_000) * 1000)
+    admitted = JOINED + timedelta(minutes=3)
+    sensed.mark_admitted(admitted)
+    replayed = collection_payload(
+        users=[user_info(BUDI, "Budi")],
+        chat=[chat_message("m1", BUDI, "old question", stale)],
+    )
+    live = collection_payload(
+        users=[user_info(BUDI, "Budi")],
+        chat=[chat_message("m2", BUDI, "new question", stale)],
+    )
+
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(replayed, at_ms=admitted.timestamp() * 1000 + 5_000)])
+    )
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(live, at_ms=admitted.timestamp() * 1000 + 60_000)])
+    )
+
+    lines = {line.message_id: line for line in timeline.snapshot().chat}
+    assert lines["m1"].backlog is True
+    assert lines["m2"].backlog is False

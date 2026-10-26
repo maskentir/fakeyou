@@ -1,6 +1,7 @@
 {
   "version": 1,
   "twin_names": ["Rani"],
+  "human_participants": ["Ayu", "Budi"],
   "cases": [
     {"id": "j01", "kind": "named", "earlier": [], "latest": {"speaker": "Ayu", "text": "Rani, kapan launch beta-nya?"}, "answer": true, "finished": true},
     {"id": "j02", "kind": "follow_up", "earlier": [{"speaker": "Ayu", "text": "Rani, kapan launch beta-nya?"}, {"speaker": "twin", "text": "Beta rilis 14 Oktober.", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Terus yang publik kapan?"}, "answer": true, "finished": true},
@@ -36,6 +37,8 @@
     {"id": "j32", "kind": "hot_logistics", "earlier": [{"speaker": "Ayu", "text": "Rani, slide saya kelihatan?"}, {"speaker": "twin", "text": "Kelihatan, slide launch timeline.", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Shall we start?"}, "answer": false, "finished": true},
     {"id": "j33", "kind": "hot_logistics", "earlier": [{"speaker": "Ayu", "text": "Rani, slide saya kelihatan?"}, {"speaker": "twin", "text": "Kelihatan, slide launch timeline.", "by_twin": true}], "latest": {"speaker": "Budi", "text": "Ada yang punya link-nya?"}, "answer": false, "finished": true},
     {"id": "j34", "kind": "hot_control_named", "earlier": [{"speaker": "Ayu", "text": "Rani, slide saya kelihatan?"}, {"speaker": "twin", "text": "Kelihatan, slide launch timeline.", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Rani, can you see my screen?"}, "answer": true, "finished": true},
-    {"id": "j35", "kind": "hot_control_follow_up", "earlier": [{"speaker": "Ayu", "text": "Rani, slide mana yang kita pakai?"}, {"speaker": "twin", "text": "Ada dua opsi: timeline atau roadmap. Yang mana?", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Yang kedua aja."}, "answer": true, "finished": true}
+    {"id": "j35", "kind": "hot_control_follow_up", "earlier": [{"speaker": "Ayu", "text": "Rani, slide mana yang kita pakai?"}, {"speaker": "twin", "text": "Ada dua opsi: timeline atau roadmap. Yang mana?", "by_twin": true}], "latest": {"speaker": "Ayu", "text": "Yang kedua aja."}, "answer": true, "finished": true},
+    {"id": "j36", "kind": "sole_logistics", "earlier": [], "latest": {"speaker": "Ayu", "text": "Can you see my screen?"}, "answer": true, "finished": true, "human_participants": ["Ayu"]},
+    {"id": "j37", "kind": "sole_logistics", "earlier": [], "latest": {"speaker": "Ayu", "text": "Kedengeran suara saya?"}, "answer": true, "finished": true, "human_participants": ["Ayu"]}
   ]
 }

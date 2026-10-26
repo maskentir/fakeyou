@@ -67,6 +67,8 @@ def phase_for_call(obs: CallObservation, *, current: str) -> str:
         return "failed"
     if obs.state == "ended":
         return "ended"
+    if obs.state == "left":
+        return "ended"
     return current
 
 

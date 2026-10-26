@@ -56,7 +56,7 @@ from fakeyou.config.settings import (
 )
 from fakeyou.foundation.provenance import render_evidence
 from fakeyou.foundation.triggers import current_trigger
-from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED as MEET_ACTION_QUEUED
+from fakeyou.meet.meet_tools import MEET_LEAVE_SCHEDULED as MEET_LEAVE_SCHEDULED
 from fakeyou.meet.meet_tools import create_meet_action_tools as create_meet_action_tools
 from fakeyou.memory.evidence import (
     CURRENT_FACTS_FILTER as CURRENT_FACTS_FILTER,
