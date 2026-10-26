@@ -428,7 +428,7 @@ class PerceptionInterpreterSettings(Section):
 
 
 class AttentionSettings(Section):
-    enabled: bool = True
+    enabled: bool = False
     max_interjections_per_10min: int = Field(default=2, ge=0)
     floor_gap_seconds: PositiveSeconds = 1.2
     ttl_seconds: PositiveSeconds = 30.0

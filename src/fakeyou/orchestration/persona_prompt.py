@@ -8,6 +8,7 @@ from fakeyou.conversation.agent import (
 )
 from fakeyou.conversation.prompt_builder import PromptSections
 from fakeyou.memory.persona import (
+    ATTENTION_RULE,
     BRIEF_ONLY_PROFILE_FIELDS,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
@@ -77,6 +78,7 @@ def _prompt_parts(
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
                 CONFIDENTIALITY_RULE,
+                ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,

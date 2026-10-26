@@ -404,6 +404,39 @@
           }
         }
       ]
+    },
+    {
+      "id": "s20",
+      "family": "attention",
+      "title": "The same screen is never offered to the twin twice",
+      "steps": [
+        {
+          "say": "The shared screen now shows the launch slide.",
+          "speaker": "unknown",
+          "source": "meeting_attention",
+          "expect": {
+            "max_sentences": 2,
+            "allow_question": true
+          }
+        },
+        {
+          "say": "The shared screen now shows the launch slide.",
+          "speaker": "unknown",
+          "source": "meeting_attention",
+          "expect": {
+            "reply": false
+          }
+        },
+        {
+          "say": "The shared screen now shows the pricing slide.",
+          "speaker": "unknown",
+          "source": "meeting_attention",
+          "expect": {
+            "max_sentences": 2,
+            "allow_question": true
+          }
+        }
+      ]
     }
   ]
 }

@@ -632,8 +632,8 @@ class MeetingWorker:
         detail = "; ".join(point for point in points[:2])
         seen = f"{title}: {detail}" if detail else title
         return (
-            f"The shared screen now shows {seen}. "
-            "Is there anything worth saying about it? If not, stay silent."
+            f"The shared screen changed to {seen}. "
+            "Is there anything worth adding about it? If not, stay silent."
         )
 
     async def offer_attention(self) -> None:

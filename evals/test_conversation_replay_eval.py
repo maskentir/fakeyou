@@ -90,6 +90,7 @@ def test_the_fixture_loads_with_every_family_and_unique_ids() -> None:
         "floor",
         "language",
         "chat",
+        "attention",
     }
     assert scenario_profile(fixture).display_name == "Rani"
 

@@ -137,5 +137,5 @@ def test_perception_settings_defaults() -> None:
     assert settings.view_max_chars == 6000
     assert settings.retention_raw_days == 7
     assert settings.retention_text_days == 30
-    assert settings.attention.enabled is True
+    assert settings.attention.enabled is False
     assert Settings(**NO_ENV_FILE).perception == settings

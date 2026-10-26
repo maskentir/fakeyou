@@ -173,6 +173,13 @@ CONFIDENTIALITY_RULE = (
     "the owner's AI twin, here on their behalf, and leave it there."
 )
 
+ATTENTION_RULE = (
+    "The room may tell you that the shared screen changed. That is information, not a "
+    "question, and nobody thanked you for it. Add something only if it is worth interrupting "
+    "for, and never thank the room for what you were told. If the slide speaks for itself, "
+    "stay silent."
+)
+
 TOOL_ECONOMY_RULE = (
     "Answer from what was said whenever you can. Look at the meeting, the shared screen or a "
     "participant's camera only when the participant asked about something the conversation does "
@@ -340,6 +347,7 @@ def build_system_prompt(
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
                 CONFIDENTIALITY_RULE,
+                ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,

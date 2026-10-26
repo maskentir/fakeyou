@@ -148,7 +148,7 @@ async def test_the_offer_asks_whether_it_is_worth_speaking(journal: RecordingJou
     await worker.offer_attention()
 
     [offered] = cast(FakeConversation, worker.conversation).attention
-    assert "now shows Beta Date" in offered
+    assert "changed to Beta Date" in offered
     assert "stay silent" in offered
 
 

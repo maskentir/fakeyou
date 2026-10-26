@@ -294,11 +294,13 @@ async def run_scenario(
                     await _speak_and_interrupt(turns, audio, event, following.say)
                 elif step.source == "meeting_audio":
                     await turns.ingress.receive_final(event)
+                elif step.source == "meeting_attention":
+                    turns.ingress.receive_attention(event, channel="voice")
                 else:
                     turns.ingress.receive_chat(event)
                 await _settle(turns)
                 spoken = audio.turn
-                if step.source != "meeting_audio":
+                if step.source == "meeting_chat":
                     spoken = [SpokenLine(text=text, interrupted=False) for text in chat.sent]
                     chat.sent.clear()
                 outcomes.append(
