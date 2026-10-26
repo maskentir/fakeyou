@@ -709,6 +709,8 @@ class MeetingResponder:
             return drop("not_grounded")
         if not checked.adds_information:
             return drop("adds_nothing")
+        if not checked.on_topic:
+            return drop("off_topic")
         if checked.confidence < self.grounding_threshold:
             return drop("low_confidence")
         if self.journal is not None:

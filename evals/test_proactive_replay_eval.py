@@ -27,7 +27,9 @@ class _Verifier:
         self, *, text: str, source_text: str, trigger_text: str, kind: str | None
     ) -> GroundingVerdict:
         del text, source_text, trigger_text, kind
-        return GroundingVerdict(grounded=True, adds_information=True, confidence=0.95)
+        return GroundingVerdict(
+            grounded=True, adds_information=True, on_topic=True, confidence=0.95
+        )
 
 
 class _MomentJudge:

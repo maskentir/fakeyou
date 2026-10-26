@@ -18,6 +18,9 @@ _VERIFIER_RULES = (
     "adds_information: true only when the contribution tells the room something it does not "
     "already have from the trigger itself. Restating, paraphrasing, agreeing with, thanking "
     "for, or merely noticing the trigger adds nothing.\n"
+    "on_topic: true only when the contribution is about the same subject as the trigger. A true "
+    "fact from a source about something the room is not discussing is off topic, and off topic "
+    "is noise rather than information.\n"
     "confidence: how sure you are about both answers, from 0 to 1."
 )
 
@@ -29,6 +32,7 @@ class GroundingVerdict(BaseModel):
     adds_information: bool = Field(
         description="The contribution tells the room something beyond the trigger."
     )
+    on_topic: bool = Field(description="The contribution is about the same subject as the trigger.")
     confidence: float = Field(ge=0.0, le=1.0)
 
 
