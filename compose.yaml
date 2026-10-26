@@ -135,7 +135,7 @@ services:
     cpus: ${FAKEYOU_COMPOSE_WORKER_REEMBED_CPUS:-1}
 
   neo4j:
-    image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
+    image: neo4j:5.26.32-community@sha256:adaa077a3ab023015143b8f73f7076a7d053f12985f5b06f4c6a128c3a2f7240
     logging: *default-logging
     environment:
       NEO4J_AUTH: neo4j/${FAKEYOU_MEMORY__STORE__PASSWORD:?Set FAKEYOU_MEMORY__STORE__PASSWORD in .env before starting neo4j}
