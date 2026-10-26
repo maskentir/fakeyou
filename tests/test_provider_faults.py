@@ -111,11 +111,18 @@ def test_httpx2_network_errors_map_to_unavailable(error: httpx2.NetworkError) ->
     assert fault.retryable is True
 
 
-def test_httpx_v1_error_is_not_specially_classified() -> None:
-    fault = classify_exception("tts", httpx.ConnectError("legacy boom"))
+def test_the_httpx_errors_the_providers_raise_are_classified() -> None:
+    fault = classify_exception("tts", httpx.ConnectError("boom"))
 
-    assert fault.kind == "unknown"
-    assert fault.retryable is False
+    assert fault.kind == "unavailable"
+    assert fault.retryable is True
+
+
+def test_a_read_timeout_from_a_provider_is_a_retryable_timeout() -> None:
+    fault = classify_exception("agent", httpx.ReadTimeout("the model was too slow"))
+
+    assert fault.kind == "timeout"
+    assert fault.retryable is True
 
 
 def test_plain_timeout_error_maps_once() -> None:

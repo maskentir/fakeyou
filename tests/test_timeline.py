@@ -200,3 +200,40 @@ def test_screen_captures_are_journaled_without_content() -> None:
     [event] = journal.events("screen_captured")
     assert event["source"] == "perception"
     assert (event["ref"], event["change"], event["width"]) == ("screen#1", "new", 1280)
+
+
+def test_a_non_meeting_reading_is_stored_title_only() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1",
+        reading(
+            "Cartesia Usage",
+            text="Receipt 1450-6289 Rp899,900",
+            kind="dashboard",
+            key_points=("Receipt 1450-6289 Rp899,900",),
+            figures=(("amount paid", "Rp899,900"),),
+        ),
+    )
+
+    stored = timeline.snapshot().screens[0].reading
+
+    assert stored is not None
+    assert stored.title == "Cartesia Usage"
+    assert stored.content_kind == "dashboard"
+    assert stored.text == ""
+    assert stored.key_points == []
+    assert stored.figures == []
+    assert stored.visuals == []
+    assert stored.people == []
+
+
+def test_the_same_non_meeting_screen_again_merges_by_title() -> None:
+    timeline = shown_timeline(TIMELINE, PRICING)
+    timeline.read_screen(
+        "screen#1", reading("Cartesia Usage", text="Receipt 1450-6289", kind="dashboard")
+    )
+    timeline.read_screen(
+        "screen#2", reading("Cartesia Usage", text="Invoice 7777-1111", kind="dashboard")
+    )
+
+    assert [screen.ref for screen in timeline.snapshot().screens] == ["screen#1"]

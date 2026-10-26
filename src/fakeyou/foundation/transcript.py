@@ -9,6 +9,31 @@ from fakeyou.foundation.timeparse import assume_utc, parse_iso_datetime
 
 EventSource = Literal["meeting_audio", "meeting_chat", "meeting_attention"]
 
+AttentionKind = Literal[
+    "screen", "unanswered_question", "owner_task", "decision_vs_brief", "fact_opportunity"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AttentionContext:
+    kind: AttentionKind
+    trigger_text: str
+    trigger_event_id: str | None = None
+    suggested_source_ref: str | None = None
+    suggested_source: str | None = None
+    source_text: str | None = None
+
+
+def attention_line(context: AttentionContext) -> str:
+    if context.suggested_source_ref is None or context.source_text is None:
+        return context.trigger_text
+    return (
+        f"{context.trigger_text}\n"
+        f"[Nobody asked you anything. This looks like a {context.kind} moment. "
+        f"A source you know may be relevant - {context.suggested_source} "
+        f"{context.suggested_source_ref}: {context.source_text}]"
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class TranscriptEvent:
@@ -23,6 +48,7 @@ class TranscriptEvent:
     capture_ms: float = 0.0
     display_claim: str | None = None
     voice_clusters: tuple[str, ...] = ()
+    attention: AttentionContext | None = None
 
 
 @dataclass(frozen=True, slots=True)

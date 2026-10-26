@@ -99,6 +99,7 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         alone_leave_seconds=settings.meeting.alone_leave_seconds,
         attention_enabled=settings.perception.attention.enabled,
         attention_max_interjections=settings.perception.attention.max_interjections_per_10min,
+        attention=settings.perception.attention,
         preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,
         license_key=settings.browser.license_key.get_secret_value()
@@ -131,6 +132,10 @@ async def _load_join_context(
         if request.brief_path is not None:
             brief = await _load_brief(request.brief_path, config)
             meeting_tool_names(profile, brief, memory_requested=request.memory)
+            config = replace(
+                config,
+                meet_actions_enabled=bool(brief.permissions & {"meet_act", "meet_chat"}),
+            )
             meeting_context = MeetingContext(
                 schema_version="meeting_context/v1",
                 brief=brief,

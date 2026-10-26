@@ -190,9 +190,9 @@ class AnthropicReply(ReplyBase):
 class GoogleReply(ReplyBase):
     langchain_provider: ClassVar[str] = "google_genai"
     provider: Literal["google"] = "google"
-    model: str = "gemini-3.8-flash"
+    model: str = "gemini-3.1-flash-lite"
     base_url: OptionalURL = "https://generativelanguage.googleapis.com"
-    reasoning_effort: ReasoningEffort | None = "low"
+    reasoning_effort: ReasoningEffort | None = "minimal"
 
 
 ReplySettings = Annotated[
@@ -374,6 +374,7 @@ class TurnJudgeSettings(Section):
     reply_threshold: float = Field(default=0.60, gt=0, lt=1)
     clarify_threshold: float = Field(default=0.50, gt=0, lt=1)
     barge_in_threshold: float = Field(default=0.60, gt=0, lt=1)
+    unnamed_reply_threshold: float = Field(default=0.85, gt=0, lt=1)
     early_commit_enabled: bool = True
     commit_hold_seconds: float = Field(default=0.3, ge=0.0, le=3.0)
 
@@ -432,6 +433,12 @@ class AttentionSettings(Section):
     max_interjections_per_10min: int = Field(default=2, ge=0)
     floor_gap_seconds: PositiveSeconds = 1.2
     ttl_seconds: PositiveSeconds = 30.0
+    transcript_moments: bool = True
+    unanswered_seconds: PositiveSeconds = 15.0
+    owner_names: tuple[str, ...] = ()
+    moment_confidence: float = Field(default=0.8, gt=0, lt=1)
+    grounding_confidence: float = Field(default=0.7, gt=0, lt=1)
+    similarity_threshold: float = Field(default=0.15, gt=0, lt=1)
 
 
 class PerceptionSettings(Section):
@@ -445,7 +452,7 @@ class PerceptionSettings(Section):
     )
     budget_usd: float = Field(default=1.0, ge=0)
     max_calls: int = Field(default=240, ge=0)
-    view_max_chars: int = Field(default=6000, gt=0)
+    view_max_chars: int = Field(default=3000, gt=0)
     retention_raw_days: int = Field(default=7, gt=0)
     retention_text_days: int = Field(default=30, gt=0)
     attention: AttentionSettings = Field(default_factory=AttentionSettings)

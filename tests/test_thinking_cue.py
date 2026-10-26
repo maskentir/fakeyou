@@ -1,16 +1,20 @@
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from typing import override
 
 import pytest
 
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
     TurnInteraction,
     TurnTiming,
     build_meeting_turns,
 )
+from fakeyou.conversation.reply_planner import SpokenChunk, TurnLanguage
 from fakeyou.conversation.thinking_cue import THINKING_CUE_LINES, ThinkingCue, thinking_cue_for
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder
@@ -64,6 +68,14 @@ def cue_turns(
     )
     turns.lifecycle.bind(audio)
     return turns, audio
+
+
+async def settle(turns: MeetingTurns) -> None:
+    for _ in range(50):
+        await turns.lifecycle.wait_idle()
+        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+            return
+        await asyncio.sleep(0.02)
 
 
 async def answer_slowly(turns: MeetingTurns, responder: FakeResponder, gate: asyncio.Event) -> None:
@@ -152,3 +164,72 @@ def test_a_cue_needs_lines_and_a_non_negative_delay(
 ) -> None:
     with pytest.raises(ValueError, match="thinking cue"):
         ThinkingCue(lines, after_seconds)
+
+
+def test_the_cue_follows_the_language_the_participant_used() -> None:
+    language = TurnLanguage("en")
+    cue = thinking_cue_for("en", 0.5, language.read)
+    assert cue is not None
+
+    assert cue.next_line() == "Hmm."
+
+    language.declare("id")
+
+    assert cue.next_line() == "Hmm…"
+
+
+def test_the_cue_falls_back_to_its_own_lines_for_an_unknown_language() -> None:
+    language = TurnLanguage("en")
+    language.declare("id")
+    language.language = "fr"
+    cue = thinking_cue_for("en", 0.5, language.read)
+    assert cue is not None
+
+    assert cue.next_line() == "Hmm."
+
+
+class SilentResponder(FakeResponder):
+    @override
+    async def respond(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> SpokenChunk:
+        del on_tool_start
+        self.calls.append(list(events))
+        self.started.set()
+        return SpokenChunk(text="", language=DEFAULTS.speech.language)
+
+
+async def test_the_attention_lane_plays_no_cue() -> None:
+    journal = RecordingJournal()
+    gate = asyncio.Event()
+    responder = FakeResponder(gate)
+    turns, audio = cue_turns(responder, after_seconds=0.0, journal=journal)
+
+    attention = TranscriptEvent(
+        id="a1",
+        timestamp=datetime.now(UTC).isoformat(),
+        source="meeting_attention",
+        text="The shared screen now shows the launch slide.",
+        finalized=True,
+        participant_id="unknown",
+        speaker_evidence_id=None,
+    )
+    turns.ingress.receive_attention(attention, channel="voice")
+    await responder.started.wait()
+    gate.set()
+    await settle(turns)
+    await turns.close()
+
+    assert [row["reason"] for row in journal.events("thinking_cue_skipped")] == ["attention_lane"]
+    assert [kind for kind, _ in audio.timeline] == ["reply"]
+
+
+async def test_a_cue_without_an_answer_is_reported() -> None:
+    journal = RecordingJournal()
+    turns, audio = cue_turns(SilentResponder(), after_seconds=0.0, journal=journal)
+
+    await turns.ingress.handle_final(event("t1", QUESTION))
+    await turns.close()
+
+    assert [row["detail"] for row in journal.events("thinking_cue_orphaned")] == ["no_answer"]
+    assert audio.timeline == [("cue", THINKING_CUE_LINES["id"][0])]

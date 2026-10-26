@@ -417,7 +417,11 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
     settings = with_muse_fallback(settings)
     config = SimpleNamespace(
-        owner_id="o", twin_id="t", meeting_id="m", participant_policy_enabled=False
+        owner_id="o",
+        twin_id="t",
+        meeting_id="m",
+        participant_policy_enabled=False,
+        attention_enabled=False,
     )
 
     async with assembly.open_conversation(
@@ -462,7 +466,11 @@ async def test_open_conversation_wires_sentence_streaming_flag(
     monkeypatch.setattr(providers, "init_chat_model", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(assembly, "build_meeting_turns", fake_turns)
     config = SimpleNamespace(
-        owner_id="o", twin_id="t", meeting_id="m", participant_policy_enabled=False
+        owner_id="o",
+        twin_id="t",
+        meeting_id="m",
+        participant_policy_enabled=False,
+        attention_enabled=False,
     )
 
     async with assembly.open_conversation(

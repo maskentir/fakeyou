@@ -226,12 +226,13 @@ class MeetingTimeline:
             ),
             None,
         )
+        stored = reading.title_only()
         if twin is None:
-            segment = segment.model_copy(update={"reading": reading})
+            segment = segment.model_copy(update={"reading": stored})
             state.screens[ref] = segment
             self._emit(ScreenRead(segment=segment))
             return segment
-        return self._merge(segment, into=twin, reading=reading)
+        return self._merge(segment, into=twin, reading=stored)
 
     def _merge(
         self, segment: ScreenSegment, *, into: ScreenSegment, reading: ScreenReading

@@ -20,4 +20,5 @@ def test_the_turn_judge_runs_on_the_reply_model_by_default() -> None:
     assert judge.window_lines == 8
     assert judge.reply_threshold == 0.60
     assert judge.clarify_threshold == 0.50
+    assert judge.unnamed_reply_threshold == 0.85
     assert judge.timeout_seconds == 4.0

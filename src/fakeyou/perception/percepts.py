@@ -20,6 +20,9 @@ ScreenContent = Literal[
     "other",
 ]
 NOISE_CONTENT: frozenset[ScreenContent] = frozenset({"meeting_ui", "blank", "loading"})
+MEETING_CONTENT: frozenset[ScreenContent] = frozenset(
+    {"slide", "document", "spreadsheet", "diagram"}
+)
 SignalKind = Literal[
     "joined",
     "left",
@@ -79,9 +82,22 @@ class ScreenReading(Percept):
     def is_noise(self) -> bool:
         return self.content_kind in NOISE_CONTENT
 
+    @property
+    def is_meeting_content(self) -> bool:
+        return self.content_kind in MEETING_CONTENT
+
+    def title_only(self) -> "ScreenReading":
+        if self.is_meeting_content:
+            return self
+        return self.model_copy(
+            update={"text": "", "key_points": [], "figures": [], "visuals": [], "people": []}
+        )
+
     def matches(self, other: "ScreenReading") -> bool:
         if self.is_noise or other.is_noise or _folded(self.title) != _folded(other.title):
             return False
+        if not self.is_meeting_content and not other.is_meeting_content:
+            return True
         matcher = SequenceMatcher(None, _folded(self.text), _folded(other.text))
         return matcher.quick_ratio() >= SAME_CONTENT_RATIO and matcher.ratio() >= SAME_CONTENT_RATIO
 

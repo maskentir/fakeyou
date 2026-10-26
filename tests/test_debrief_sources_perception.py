@@ -154,3 +154,17 @@ def test_signals_are_never_sources(tmp_path: Path) -> None:
         DebriefValidationError, match=message_pattern(ErrorCode.DEBRIEF_NO_SPEECH_SOURCES)
     ):
         load_record_snapshot(path)
+
+
+def test_a_non_meeting_screen_contributes_only_its_title(tmp_path: Path) -> None:
+    [source] = snapshot_sources(
+        tmp_path,
+        screen(
+            content="dashboard",
+            title="Cartesia Usage",
+            text="Receipt number 1450-6289, amount paid Rp899,900.00.",
+        ),
+    )
+
+    assert source.text == "Cartesia Usage"
+    assert "1450-6289" not in source.text

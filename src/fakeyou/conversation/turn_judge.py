@@ -10,6 +10,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
+from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
 
@@ -31,13 +32,16 @@ _JUDGE_RULES = (
     "keeps the floor.\n"
     "backchannel: true when the line only acknowledges or encourages whoever holds the floor "
     "and does not take a turn of its own.\n"
-    "addressee: twin when the line is meant for the twin, by name or as a reply to what the "
-    "twin just said or asked; someone_else when it is meant for another person; everyone when "
-    "it is put to the whole room; unclear otherwise.\n"
+    "addressee: twin when the line is meant for the twin: it names the twin, answers a "
+    "question or request the twin itself just put to that speaker, or directly continues an "
+    "exchange with the twin. The twin having recently spoken, or spoken about the same "
+    "topic, is not by itself addressing. someone_else when it is meant for another person; "
+    "everyone when it is put to the whole room, including room checks such as whether a "
+    "screen is visible or a voice audible; unclear otherwise.\n"
     "action: reply when the twin should answer now; clarify when the line is meant for the "
     "twin but too unclear to answer; stay_silent otherwise, including talk between other "
-    "people, backchannels, a line that is not finished, and a question to everyone that does "
-    "not ask for something the twin can answer for its owner.\n"
+    "people, backchannels, a line that is not finished, and any question put to everyone, "
+    "even one the twin could answer.\n"
     "confidence: how sure you are about action, from 0 to 1."
 )
 
@@ -65,10 +69,11 @@ class JudgeWindow:
     earlier: tuple[JudgeLine, ...]
     latest: JudgeLine
     twin_speaking: bool = False
+    names_twin: bool = False
 
     @property
     def key(self) -> tuple[object, ...]:
-        return (self.earlier, _normalized(self.latest.text), self.twin_speaking)
+        return (self.earlier, _normalized(self.latest.text), self.twin_speaking, self.names_twin)
 
 
 class TurnJudge(Protocol):
@@ -102,15 +107,26 @@ def _spoken_lines(history: MeetingHistory, *, skip: str | None) -> list[JudgeLin
 class WindowSource:
     history: MeetingHistory
     window_lines: int
+    twin_names: tuple[str, ...] = ()
+
+    def _names_twin(self, text: str) -> bool:
+        return any(mentions_whole_phrase(text, name) for name in self.twin_names)
 
     def for_final(self, event: TranscriptEvent, *, twin_speaking: bool) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=event.id)[-self.window_lines :]
         latest = JudgeLine(speaker=spoken_by(event), text=event.text)
-        return JudgeWindow(tuple(earlier), latest, twin_speaking)
+        return JudgeWindow(
+            tuple(earlier), latest, twin_speaking, names_twin=self._names_twin(event.text)
+        )
 
     def for_interim(self, text: str, *, twin_speaking: bool) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=None)[-self.window_lines :]
-        return JudgeWindow(tuple(earlier), JudgeLine(SPEAKING_NOW, text), twin_speaking)
+        return JudgeWindow(
+            tuple(earlier),
+            JudgeLine(SPEAKING_NOW, text),
+            twin_speaking,
+            names_twin=self._names_twin(text),
+        )
 
 
 def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
@@ -123,6 +139,7 @@ def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
                 for line in window.earlier
             ],
             "latest": {"speaker": window.latest.speaker, "text": window.latest.text},
+            "latest_names_twin": window.names_twin,
         },
         ensure_ascii=False,
     )

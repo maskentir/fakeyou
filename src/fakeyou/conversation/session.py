@@ -8,7 +8,7 @@ from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 from fakeyou.config.identifiers import SessionIdField
-from fakeyou.config.settings import DEFAULTS
+from fakeyou.config.settings import DEFAULTS, AttentionSettings
 from fakeyou.conversation.state import PublicPhase
 from fakeyou.foundation.invariants import PositiveSeconds, TwinName
 from fakeyou.foundation.taxonomy import TerminalReason
@@ -131,6 +131,7 @@ class SessionConfig:
     perception_enabled: bool = False
     attention_enabled: bool = False
     attention_max_interjections: int = 2
+    attention: AttentionSettings = field(default_factory=AttentionSettings)
     resume: bool = False
 
 

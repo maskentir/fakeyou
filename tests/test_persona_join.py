@@ -220,6 +220,7 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
         f"\n\n{PERCEPTION_GUIDANCE}"
     )
     assert "recall_meeting_context" not in created["persona"]
+    assert created["agent_calls"] == 2
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
         ChatTurnToolsMiddleware,

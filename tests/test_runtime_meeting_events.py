@@ -1,15 +1,17 @@
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.runtime import MeetingWorker
-from fakeyou.perception.percepts import ChatLine, IncomingChat, ParticipantRef
+from fakeyou.perception.percepts import ChatLine, IncomingChat, ParticipantRef, ScreenSegment
 from fakeyou.perception.timeline import MeetingTimeline
 from tests._conversation_fakes import FakeConversation
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
+from tests._perception_fakes import keyframe, reading, slide_jpeg
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import session_config
 
@@ -36,6 +38,14 @@ def _worker(
         ),
     )
     return worker
+
+
+def _screen(
+    timeline: MeetingTimeline, title: str, *, key_points: Sequence[str] = (), kind: str = "slide"
+) -> ScreenSegment:
+    shown = timeline.show_screen(keyframe(slide_jpeg(title)), None)
+    timeline.read_screen(shown.segment.ref, reading(title, key_points=key_points, kind=kind))
+    return shown.segment
 
 
 async def _closed() -> None:
@@ -92,13 +102,56 @@ async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(
         clock, journal, timeline, attention_enabled=True, attention_max_interjections=1
     )
 
-    _chat(timeline, "the beta date looks wrong")
+    _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
     await worker.offer_attention()
+    _screen(timeline, "Beta Date Two", key_points=("the beta date still looks wrong",))
     await worker.offer_attention()
 
     conversation = cast(FakeConversation, worker.conversation)
     assert len(conversation.attention) == 1
     assert journal.events("attention_observed")
+
+
+async def test_the_same_screen_is_never_offered_twice(journal: RecordingJournal) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(
+        clock, journal, timeline, attention_enabled=True, attention_max_interjections=5
+    )
+
+    _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
+    await worker.offer_attention()
+    await worker.offer_attention()
+    await worker.offer_attention()
+
+    assert len(cast(FakeConversation, worker.conversation).attention) == 1
+    assert len(journal.events("attention_observed")) == 1
+
+
+async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline, attention_enabled=True)
+
+    _chat(timeline, "the beta date looks wrong")
+    await worker.offer_attention()
+
+    assert cast(FakeConversation, worker.conversation).attention == []
+
+
+async def test_the_offer_names_the_screen_without_asking_a_question(
+    journal: RecordingJournal,
+) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline, attention_enabled=True)
+
+    _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
+    await worker.offer_attention()
+
+    [offered] = cast(FakeConversation, worker.conversation).attention
+    assert "Beta Date" in offered
+    assert "?" not in offered
 
 
 async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -> None:
@@ -109,3 +162,18 @@ async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -
     await worker.offer_attention()
 
     assert cast(FakeConversation, worker.conversation).attention == []
+
+
+async def test_a_non_meeting_screen_is_offered_by_title_only(journal: RecordingJournal) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline, attention_enabled=True)
+
+    _screen(
+        timeline, "Cartesia Usage", key_points=("Receipt 1450-6289 Rp899,900",), kind="dashboard"
+    )
+    await worker.offer_attention()
+
+    [offered] = cast(FakeConversation, worker.conversation).attention
+    assert "Cartesia Usage" in offered
+    assert "1450-6289" not in offered

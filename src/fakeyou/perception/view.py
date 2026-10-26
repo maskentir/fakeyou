@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from fakeyou.perception.percepts import (
+    MEETING_CONTENT,
     PERSON_REF_PREFIX,
     SCREEN_REF_PREFIX,
     CameraGlance,
@@ -22,8 +23,9 @@ VIEW_PREFIX = (
     "screen reaches you, so never say you can see a screen, a camera or anything else it "
     "does not show:\n"
 )
-VIEW_CHAT_LINES = 20
-VIEW_SIGNALS = 12
+VIEW_CHAT_LINES = 8
+VIEW_SIGNALS = 6
+VIEW_EARLIER_SCREENS = 2
 CURRENT_SCREEN = frozenset({"", "current", "now", "this", "latest"})
 PREVIOUS_SCREEN = frozenset({"previous", "earlier", "last", "before", "prior"})
 ReadingState = Literal["ready", "pending", "unavailable"]
@@ -114,17 +116,16 @@ def _screen(segment: ScreenSegment, *, now: datetime, current: bool) -> ViewScre
     )
     if reading is None:
         return base
-    return base.model_copy(
-        update={
-            "kind": reading.content_kind,
-            "title": reading.title,
+    update: dict[str, object] = {"kind": reading.content_kind, "title": reading.title}
+    if reading.content_kind in MEETING_CONTENT:
+        update |= {
             "text": reading.text,
             "key_points": reading.key_points,
             "figures": reading.figures,
             "visuals": reading.visuals,
             "people": reading.people,
         }
-    )
+    return base.model_copy(update=update)
 
 
 def _content_screens(snapshot: TimelineSnapshot) -> list[ScreenSegment]:
@@ -200,7 +201,8 @@ def build_view(
         presenting=presenter or (snapshot.presenting.name if snapshot.presenting else None),
         screen_now=_screen(current, now=now, current=True) if current else None,
         earlier_screens=[
-            _screen(screen, now=now, current=False) for screen in _content_screens(snapshot)
+            _screen(screen, now=now, current=False)
+            for screen in _content_screens(snapshot)[:VIEW_EARLIER_SCREENS]
         ],
         chat=[_chat(line, now) for line in snapshot.chat[-VIEW_CHAT_LINES:]],
         signals=[_signal(signal, now) for signal in snapshot.signals[-VIEW_SIGNALS:]],

@@ -18,7 +18,6 @@ from fakeyou.perception.timeline import (
     ChatReceived,
     MeetingTimeline,
     ScreenRead,
-    ScreenShown,
     SignalObserved,
     TimelineEvent,
 )
@@ -30,6 +29,7 @@ def screen_fields(segment: ScreenSegment) -> ScreenFields | None:
     reading = segment.reading
     if reading is None or reading.is_noise:
         return None
+    reading = reading.title_only()
     presenter = segment.presenter
     return ScreenFields(
         ref=segment.ref,
@@ -79,9 +79,10 @@ class PerceptionArchive:
 
     def __call__(self, event: TimelineEvent) -> None:
         match event:
-            case ScreenShown(segment=segment, change="new"):
-                self._save_keyframe(segment)
             case ScreenRead(segment=segment):
+                reading = segment.reading
+                if reading is not None and reading.is_meeting_content:
+                    self._save_keyframe(segment)
                 fields = screen_fields(segment)
                 if fields is not None and self.record is not None:
                     self.record.add_screen(fields)

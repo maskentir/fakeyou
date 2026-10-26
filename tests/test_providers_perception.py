@@ -134,7 +134,7 @@ def test_perception_settings_defaults() -> None:
     assert settings.interpreter.timeout_seconds == 30.0
     assert settings.budget_usd == 1.0
     assert settings.max_calls == 240
-    assert settings.view_max_chars == 6000
+    assert settings.view_max_chars == 3000
     assert settings.retention_raw_days == 7
     assert settings.retention_text_days == 30
     assert settings.attention.enabled is True

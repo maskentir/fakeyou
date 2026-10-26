@@ -1,6 +1,12 @@
 import json
 
-from fakeyou.conversation.reply_planner import PlanRead, ReplyPlanner, planned_reply
+from fakeyou.conversation.reply_planner import (
+    PlanRead,
+    ReplyHandlers,
+    ReplyPlanner,
+    TurnLanguage,
+    planned_reply,
+)
 from fakeyou.foundation.sentences import split_sentences
 
 
@@ -123,7 +129,9 @@ def test_the_understood_line_is_never_spoken() -> None:
 
 def test_the_plan_read_is_reported_with_its_intent_and_language() -> None:
     reads: list[PlanRead] = []
-    planner = ReplyPlanner(max_sentences=2, language="id", on_plan=reads.append)
+    planner = ReplyPlanner(
+        max_sentences=2, language="id", handlers=ReplyHandlers(on_plan=reads.append)
+    )
 
     planner.feed(plan("The launch is on 14 October.", intent="answer", language="en"))
 
@@ -134,7 +142,9 @@ def test_the_plan_read_is_reported_with_its_intent_and_language() -> None:
 
 def test_a_plain_reply_is_reported_as_a_reply_without_a_plan() -> None:
     reads: list[PlanRead] = []
-    planner = ReplyPlanner(max_sentences=2, language="id", on_plan=reads.append)
+    planner = ReplyPlanner(
+        max_sentences=2, language="id", handlers=ReplyHandlers(on_plan=reads.append)
+    )
 
     planner.feed("The launch is on 14 October.")
 
@@ -148,8 +158,10 @@ def test_a_repeat_intent_is_reported_as_a_replacement() -> None:
     planner = ReplyPlanner(
         max_sentences=2,
         language="en",
-        on_intent=lambda intent: "The last line." if intent == "repeat" else None,
-        on_plan=reads.append,
+        handlers=ReplyHandlers(
+            on_intent=lambda intent: "The last line." if intent == "repeat" else None,
+            on_plan=reads.append,
+        ),
     )
 
     planner.feed(plan("Sure.", intent="repeat"))
@@ -160,7 +172,9 @@ def test_a_repeat_intent_is_reported_as_a_replacement() -> None:
 
 def test_the_plan_is_reported_once_per_reply() -> None:
     reads: list[PlanRead] = []
-    planner = ReplyPlanner(max_sentences=2, language="en", on_plan=reads.append)
+    planner = ReplyPlanner(
+        max_sentences=2, language="en", handlers=ReplyHandlers(on_plan=reads.append)
+    )
     raw = plan("The launch is on 14 October.")
 
     planner.feed(raw[:20])
@@ -168,3 +182,14 @@ def test_the_plan_is_reported_once_per_reply() -> None:
     planner.finish()
 
     assert len(reads) == 1
+
+
+def test_the_declared_language_reaches_the_turn() -> None:
+    language = TurnLanguage("en")
+    planner = ReplyPlanner(
+        max_sentences=2, language="en", handlers=ReplyHandlers(on_language=language.declare)
+    )
+
+    planner.feed(plan("Baik.", intent="answer", language="id"))
+
+    assert language.language == "id"

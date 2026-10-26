@@ -180,3 +180,58 @@ def test_participants_resolve_by_reference_or_name() -> None:
     assert resolve_participant(snapshot, "budi") == snapshot.participants[1]
     assert resolve_participant(snapshot, "ayu") == snapshot.participants[0]
     assert resolve_participant(snapshot, "") is None
+
+
+def test_a_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1", reading("Cartesia Usage", text="1,105 credits", kind="dashboard")
+    )
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert view.screen_now is not None
+    assert view.screen_now.title == "Cartesia Usage"
+    assert view.screen_now.text is None
+    assert view.screen_now.key_points is None
+    assert view.screen_now.figures is None
+
+
+def test_a_slide_keeps_its_detail() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert view.screen_now is not None
+    assert view.screen_now.text == "Beta 17 March 2027"
+
+
+def test_an_earlier_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
+    timeline = shown_timeline(TIMELINE, PRICING)
+    timeline.read_screen(
+        "screen#1", reading("Cartesia Usage", text="1,105 credits", kind="dashboard")
+    )
+    timeline.read_screen("screen#2", reading("Pricing Plans", text="Pro: 299,000 per month"))
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert [screen.title for screen in view.earlier_screens] == ["Cartesia Usage"]
+    assert view.earlier_screens[0].text is None
+    assert view.earlier_screens[0].key_points is None
+
+
+def test_earlier_screens_are_capped_at_the_two_most_recent() -> None:
+    budget = ("Budget", ["Total: 40 million"])
+    timeline = shown_timeline(TIMELINE, PRICING, ROADMAP, budget)
+    for index, title in enumerate(
+        ("Launch Timeline", "Pricing Plans", "Product Roadmap 2027", "Budget"), start=1
+    ):
+        timeline.read_screen(f"screen#{index}", reading(title, text=f"body of {title}"))
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert [screen.title for screen in view.earlier_screens] == [
+        "Product Roadmap 2027",
+        "Pricing Plans",
+    ]

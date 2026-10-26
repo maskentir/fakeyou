@@ -2,6 +2,7 @@
   "reply_model": "gemini-3.1-flash-lite",
   "runs": 9,
   "families": {
+    "attention": 1.0,
     "chat": 1.0,
     "control": 0.956,
     "floor": 1.0,

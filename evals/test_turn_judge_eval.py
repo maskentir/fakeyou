@@ -75,6 +75,7 @@ async def test_live_turn_judge_meets_the_gates(tmp_path: Path) -> None:
     thresholds = JudgeThresholds(
         reply=settings.turn_judge.reply_threshold,
         clarify=settings.turn_judge.clarify_threshold,
+        unnamed_reply=settings.turn_judge.unnamed_reply_threshold,
     )
 
     report = await judge_cases(judge, load_judge_fixture(), runs=runs, thresholds=thresholds)

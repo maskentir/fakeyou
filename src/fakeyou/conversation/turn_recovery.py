@@ -109,7 +109,7 @@ def record_drop(
 @dataclass(frozen=True, slots=True)
 class RecoveryOptions:
     faults: FaultReporter | None = None
-    language: str = DEFAULTS.speech.language
+    language: str | Callable[[], str] = DEFAULTS.speech.language
     response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
 
     def __post_init__(self) -> None:
@@ -124,13 +124,13 @@ class TurnRecovery:
         *,
         journal: JournalSink,
         faults: FaultReporter | None,
-        language: str,
+        language: str | Callable[[], str],
         is_closed: Callable[[], bool],
     ) -> None:
         self._journal = journal
         self._faults = faults
         self._is_closed = is_closed
-        self._line = TURN_FAILED_LINES[language]
+        self._language = language
         self._consecutive = 0
 
     @property
@@ -139,7 +139,8 @@ class TurnRecovery:
 
     @property
     def failed_line(self) -> str:
-        return self._line
+        language = self._language() if callable(self._language) else self._language
+        return TURN_FAILED_LINES.get(language, TURN_FAILED_LINES[DEFAULTS.speech.language])
 
     def record_success(self) -> None:
         self._consecutive = 0

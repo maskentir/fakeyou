@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "persona": "examples/persona.example.json",
+  "persona_overrides": {"display_name": "Rani", "allowed_tools": []},
+  "brief": {
+    "schema_version": "meeting_brief/v2",
+    "owner_id": "demo_owner",
+    "twin_id": "demo_twin",
+    "meeting_id": "proactive-replay",
+    "approved_facts": [{"id": "demo-date", "text": "The synthetic Orchid demo is booked for Friday."}],
+    "questions": [{"id": "vendor-needs", "text": "Which synthetic vendor input is missing?"}],
+    "objectives": [{"id": "kickoff-blocker", "text": "Find the synthetic kickoff blocker."}],
+    "permissions": ["explain_facts"],
+    "knowledge_scope": "persona_memory"
+  },
+  "scenarios": [
+    {"id": "p01", "kind": "unanswered_question", "duration_seconds": 600, "expect": {"speak": true, "kind": "unanswered_question"}, "steps": [{"say": "When does the Orchid beta launch?", "speaker": "device-ayu", "at": 0}]},
+    {"id": "p02", "kind": "unanswered_question", "duration_seconds": 600, "expect": {"speak": true, "kind": "unanswered_question"}, "steps": [{"say": "Demo Orchid-nya jadi hari apa ya?", "speaker": "device-budi", "at": 0}]},
+    {"id": "p03", "kind": "decision_vs_brief", "duration_seconds": 600, "expect": {"speak": true, "kind": "decision_vs_brief"}, "steps": [{"say": "Okay, then we move the Orchid beta launch to 20 October.", "speaker": "device-ayu", "at": 0}]},
+    {"id": "p04", "kind": "control", "duration_seconds": 600, "expect": {"speak": false}, "steps": [{"say": "Good, the demo stays on Friday as booked.", "speaker": "device-ayu", "at": 0}]},
+    {"id": "p05", "kind": "owner_task", "duration_seconds": 600, "expect": {"speak": true, "kind": "owner_task"}, "steps": [{"say": "Someone needs to update the launch checklist before tomorrow, who owns that?", "speaker": "device-budi", "at": 0}]},
+    {"id": "p06", "kind": "screen", "duration_seconds": 600, "expect": {"speak": true, "kind": "screen"}, "steps": [{"screen": {"title": "Launch Timeline", "points": ["Beta slips to 20 October"]}, "at": 0}]},
+    {"id": "p07", "kind": "control", "duration_seconds": 900, "expect": {"speak": false}, "steps": [{"say": "Traffic was awful this morning, took me an hour.", "speaker": "device-ayu", "at": 0}, {"say": "Same here, the toll road was completely stuck.", "speaker": "device-budi", "at": 20}]},
+    {"id": "p08", "kind": "control", "duration_seconds": 900, "expect": {"speak": false}, "steps": [{"say": "Habis ini makan siang di mana enaknya?", "speaker": "device-ayu", "at": 0}, {"say": "Warung sebelah kantor aja, parkirnya gampang.", "speaker": "device-budi", "at": 15}]},
+    {"id": "p09", "kind": "fact_opportunity", "duration_seconds": 600, "expect": {"speak": true, "kind": "fact_opportunity"}, "steps": [{"say": "Kita masih belum jelas siapa yang memegang checklist launching Orchid.", "speaker": "device-ayu", "at": 0}]},
+    {"id": "p10", "kind": "control", "duration_seconds": 600, "expect": {"speak": false}, "steps": [{"say": "When does the Orchid beta launch?", "speaker": "device-ayu", "at": 0}, {"say": "14 October, as planned.", "speaker": "device-budi", "at": 5}]}
+  ]
+}

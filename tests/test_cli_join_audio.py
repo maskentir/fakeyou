@@ -48,8 +48,9 @@ async def test_join_audio_builds_conversation_on_the_meeting_record(
         **kwargs: Any,
     ) -> SimpleNamespace:
         del model
-        created["tools"] = list(tools)
-        created.update(kwargs)
+        if "persona" not in created:
+            created["tools"] = list(tools)
+            created.update(kwargs)
         return SimpleNamespace(name="agent")
 
     monkeypatch.setattr(assembly, "create_meeting_agent", fake_agent)

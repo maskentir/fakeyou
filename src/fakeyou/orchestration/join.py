@@ -1,6 +1,7 @@
 import asyncio
 import shlex
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,8 +31,10 @@ from fakeyou.catalog.commands import Command
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
 from fakeyou.conversation.meeting_turns import MeetingTurns
+from fakeyou.conversation.moments import ModelMomentJudge, MomentDetector
 from fakeyou.conversation.session import MeetingAudio, MeetingConversation, SessionResult
 from fakeyou.conversation.turn_graph import ConversationPhase
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
 from fakeyou.memory.ingestion import meeting_windows
@@ -44,6 +47,7 @@ from fakeyou.orchestration.assembly import (
     AgentWiring,
     TurnBehavior,
     VoiceprintLive,
+    build_source_registry,
     open_conversation,
     open_voiceprint,
     stop_signal_handlers,
@@ -53,7 +57,11 @@ from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack, create_perception_stack
-from fakeyou.orchestration.providers import preflight_hosts
+from fakeyou.orchestration.providers import (
+    create_embedder,
+    create_turn_judge_model,
+    preflight_hosts,
+)
 from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.orchestration.transcript import (
     DrainOptions,
@@ -90,6 +98,7 @@ class _JoinRun:
     voice_activity: VoiceActivityTracker | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
     perception: PerceptionStack | None = None
+    moments: MomentDetector | None = None
     audio_factory: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
     ingest_requested: bool = False
     ingestion_outcome: str = "not_requested"
@@ -264,6 +273,36 @@ async def _open_join_conversation(
             diagnostics=Diagnostics(faults=run.faults, journal=run.journal),
         )
     )
+    await _open_moment_detector(prepared, run)
+
+
+async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
+    settings = prepared.request.settings
+    attention = settings.perception.attention
+    if run.conversation is None or not (attention.enabled and attention.transcript_moments):
+        return
+    embedder = create_embedder(settings)
+
+    async def embed_texts(texts: Sequence[str]) -> list[list[float]]:
+        assert embedder is not None
+        return await embedder.aembed_documents(list(texts))
+
+    detector = MomentDetector(
+        registry=build_source_registry(prepared.profile, prepared.brief),
+        judge=ModelMomentJudge(
+            create_turn_judge_model(settings),
+            timeout_seconds=settings.turn_judge.timeout_seconds,
+        ),
+        embed=embed_texts if embedder is not None else None,
+        twin_names=(prepared.config.twin_name,),
+        owner_names=attention.owner_names,
+        similarity_threshold=attention.similarity_threshold,
+        moment_confidence=attention.moment_confidence,
+        unanswered_seconds=attention.unanswered_seconds,
+        journal=run.journal,
+    )
+    await detector.prepare()
+    run.moments = detector
 
 
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
@@ -293,6 +332,17 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         run.record.add_twin_speech(event.text, interrupted=True)
 
 
+def _moment_observer(run: _JoinRun) -> Callable[[TranscriptEvent], Awaitable[None]] | None:
+    detector = run.moments
+    if detector is None:
+        return None
+
+    async def observe(event: TranscriptEvent) -> None:
+        await detector.observe(event, now=time.monotonic())
+
+    return observe
+
+
 def _build_audio_factory(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack, registry: SpeakerRegistry
 ) -> None:
@@ -305,6 +355,7 @@ def _build_audio_factory(
             record=run.record,
             conversation=run.conversation.ingress if run.conversation is not None else None,
             faults=run.faults,
+            on_final=_moment_observer(run),
         ),
         binder=stream_binder,
         voice_activity=run.voice_activity,
@@ -405,6 +456,7 @@ async def _drive_join_session(
                 meet_dispatcher=run.meet_dispatcher,
                 perception=run.perception,
                 on_phase=prepared.request.on_phase,
+                moments=run.moments,
                 **preflight_kwargs,
             ),
         )

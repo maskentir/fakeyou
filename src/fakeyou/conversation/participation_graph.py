@@ -31,6 +31,7 @@ class JudgeThresholds:
     reply: float
     clarify: float
     barge_in: float = 0.6
+    unnamed_reply: float = 0.85
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,16 +67,29 @@ def judge_failure_code(error: BaseException | None) -> JudgeFailureCode:
     return "judge_unavailable"
 
 
-def decision_of(judgement: TurnJudgement, thresholds: JudgeThresholds) -> ParticipationDecision:
+def _silenced(judgement: TurnJudgement, reason_code: str) -> ParticipationDecision:
+    return ParticipationDecision(
+        decision="silent",
+        confidence=judgement.confidence,
+        reason_code=reason_code,
+        backchannel=judgement.backchannel,
+    )
+
+
+def decision_of(
+    judgement: TurnJudgement, thresholds: JudgeThresholds, *, named: bool = False
+) -> ParticipationDecision:
     decision = _DECISION_OF_ACTION[judgement.action]
+    if decision != "silent":
+        if judgement.addressee != "twin":
+            return _silenced(judgement, "judge_not_addressed")
+        if judgement.backchannel or not judgement.finished:
+            return _silenced(judgement, "judge_not_finished")
     floor = {"speak": thresholds.reply, "clarify": thresholds.clarify}.get(decision)
+    if decision == "speak" and not named:
+        floor = thresholds.unnamed_reply
     if floor is not None and judgement.confidence < floor:
-        return ParticipationDecision(
-            decision="silent",
-            confidence=judgement.confidence,
-            reason_code="judge_below_threshold",
-            backchannel=judgement.backchannel,
-        )
+        return _silenced(judgement, "judge_below_threshold")
     return ParticipationDecision(
         decision=decision,
         confidence=judgement.confidence,
@@ -138,7 +152,7 @@ def build_participation_subgraph() -> CompiledStateGraph[
         judgement, error = await capture_error(partial(cache.judgement, window))
         if judgement is None:
             return _fall_back(state, context, judge_failure_code(error))
-        verdict = decision_of(judgement, context.thresholds)
+        verdict = decision_of(judgement, context.thresholds, named=state["context"].addressed)
         return _record(context.journal, state, verdict, "judge", judgement)
 
     builder = StateGraph(ParticipationState, context_schema=ParticipationRuntime)

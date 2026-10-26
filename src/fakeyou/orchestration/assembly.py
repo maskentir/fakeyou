@@ -17,13 +17,15 @@ from langchain_core.tools import BaseTool
 from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.agent import create_meeting_agent
+from fakeyou.conversation.agent import CONTRIBUTION_GUIDANCE, create_meeting_agent
+from fakeyou.conversation.contribution import SourceRegistry, source_registry
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
     MeetingResponder,
     ToolResultCallback,
 )
+from fakeyou.conversation.grounding import GroundingVerifier, ModelGroundingVerifier
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
@@ -38,6 +40,7 @@ from fakeyou.conversation.middleware import (
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.participation_graph import JudgeThresholds
+from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
@@ -236,6 +239,24 @@ def build_turn_judge(settings: Settings, twin_names: Sequence[str]) -> TurnJudge
     )
 
 
+def build_source_registry(
+    profile: PersonaProfile | None, brief: MeetingBrief | None
+) -> SourceRegistry:
+    return source_registry(
+        profile_facts=tuple(profile.verified_facts) if profile is not None else (),
+        brief_facts={item.id: item.text for item in brief.approved_facts} if brief else None,
+        brief_questions={item.id: item.text for item in brief.questions} if brief else None,
+        brief_objectives={item.id: item.text for item in brief.objectives} if brief else None,
+    )
+
+
+def build_grounding_verifier(settings: Settings) -> GroundingVerifier:
+    return ModelGroundingVerifier(
+        create_turn_judge_model(settings),
+        timeout_seconds=settings.turn_judge.timeout_seconds,
+    )
+
+
 class _ConversationBuilder:
     def __init__(
         self,
@@ -253,6 +274,7 @@ class _ConversationBuilder:
         self._persona = ""
         self._tool_names: frozenset[PersonaTool] = frozenset()
         self._control = ReplyControl()
+        self._turn_language = TurnLanguage(settings.speech.language)
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -275,7 +297,11 @@ class _ConversationBuilder:
         strong = create_strong_chat_model(self._settings)
         if strong is not None:
             self._middleware.append(
-                EvidenceRoutingMiddleware(strong, evidence_tools=EVIDENCE_TOOLS)
+                EvidenceRoutingMiddleware(
+                    strong,
+                    evidence_tools=EVIDENCE_TOOLS,
+                    journal=self._diagnostics.journal,
+                )
             )
 
     def add_fallback(self) -> None:
@@ -321,8 +347,7 @@ class _ConversationBuilder:
         if self._behavior.chat is not None:
             return self._behavior.chat
         dispatcher = self._behavior.meet_dispatcher
-        brief = self._agent.brief
-        if dispatcher is None or brief is None or "meet_chat" not in brief.permissions:
+        if dispatcher is None or "meet_send_chat" not in self._tool_names:
             return None
         return MeetChatChannel(dispatcher)
 
@@ -352,7 +377,20 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
-    def build_responder(self, agent: MeetingAgent) -> MeetingResponder:
+    def build_contributor(self, model: Any) -> Any:
+        return create_meeting_agent(
+            model,
+            tools=self._tools,
+            persona=f"{self._persona}\n\n{CONTRIBUTION_GUIDANCE}",
+            middleware=self._middleware,
+        )
+
+    def build_responder(
+        self,
+        agent: MeetingAgent,
+        contributor: Any | None = None,
+        verifier: GroundingVerifier | None = None,
+    ) -> MeetingResponder:
         return MeetingResponder(
             agent,
             self._agent.history,
@@ -362,6 +400,11 @@ class _ConversationBuilder:
             max_sentences=self._settings.conversation.max_spoken_sentences,
             history_max_tokens=self._settings.conversation.history_max_tokens,
             control=self._control,
+            turn_language=self._turn_language,
+            contributor=contributor,
+            source_registry=build_source_registry(self._agent.profile, self._agent.brief),
+            verifier=verifier,
+            grounding_threshold=self._settings.perception.attention.grounding_confidence,
         )
 
     def build_turns(
@@ -390,6 +433,7 @@ class _ConversationBuilder:
                     reply=judge_settings.reply_threshold,
                     clarify=judge_settings.clarify_threshold,
                     barge_in=judge_settings.barge_in_threshold,
+                    unnamed_reply=judge_settings.unnamed_reply_threshold,
                 ),
                 judge_window_lines=judge_settings.window_lines,
                 chat=self.chat_channel(),
@@ -426,13 +470,17 @@ async def open_conversation(
     builder.build_persona()
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
+        builder.add_memory()
         builder.add_routing()
         builder.add_fallback()
-        builder.add_memory()
         builder.add_perception()
         builder.add_meet_tools()
         builder.add_speaker_attribution()
-        responder = builder.build_responder(builder.build_agent(model))
+        responder = builder.build_responder(
+            builder.build_agent(model),
+            builder.build_contributor(model) if config.attention_enabled else None,
+            build_grounding_verifier(settings) if config.attention_enabled else None,
+        )
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled
         )

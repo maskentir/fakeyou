@@ -8,9 +8,12 @@ from fakeyou.conversation.agent import (
 )
 from fakeyou.conversation.prompt_builder import PromptSections
 from fakeyou.memory.persona import (
+    ATTENTION_RULE,
     BRIEF_ONLY_PROFILE_FIELDS,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
+    CONFIDENCE_RULE,
+    CONFIDENTIALITY_RULE,
     DISCLOSURE_RULES,
     GOALS_RULE,
     IDENTITY_RULE,
@@ -20,7 +23,9 @@ from fakeyou.memory.persona import (
     PROVENANCE_RULE,
     RECALL_RULES,
     SOURCE_RULES,
+    TOOL_ECONOMY_RULE,
     PersonaProfile,
+    profile_prompt_json,
 )
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import MeetingBrief
@@ -39,6 +44,8 @@ class _PromptParts:
     brief_json: str = ""
     provenance: str = ""
     natural_speech: str = ""
+    confidence: str = ""
+    confidentiality: str = ""
     perception: str = ""
 
 
@@ -71,6 +78,9 @@ def _prompt_parts(
             for rule in (
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
+                CONFIDENTIALITY_RULE,
+                ATTENTION_RULE,
+                TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,
             )
@@ -78,7 +88,7 @@ def _prompt_parts(
         ),
         goals=GOALS_RULE if persona_knowledge else "",
         recall=RECALL_RULES[recall_strategy] if recall else "",
-        profile_json=profile.model_dump_json(include=profile_fields, indent=2),
+        profile_json=profile_prompt_json(profile, profile_fields, with_fact_ids=persona_knowledge),
         brief_rules=BRIEF_RULES if brief is not None else "",
         brief_json=(
             brief.model_dump_json(include=BRIEF_PROMPT_FIELDS, indent=2)
@@ -87,6 +97,8 @@ def _prompt_parts(
         ),
         provenance=PROVENANCE_RULE if recall else "",
         natural_speech=NATURAL_SPEECH_RULE,
+        confidence=CONFIDENCE_RULE,
+        confidentiality=CONFIDENTIALITY_RULE,
         perception=perception_guidance,
     )
 
@@ -113,7 +125,7 @@ def persona_prompt_sections(
         brief=parts.brief_json,
         memory_rules=_paragraphs(parts.recall, parts.provenance),
         tools=parts.perception,
-        output_rules=_paragraphs(parts.natural_speech, ENDING_RULE),
+        output_rules=_paragraphs(parts.natural_speech, parts.confidence, ENDING_RULE),
     )
 
 
@@ -142,6 +154,7 @@ def build_persona_prompt(
         f"Meeting brief JSON:\n{parts.brief_json}" if parts.brief_json else "",
         parts.provenance,
         parts.natural_speech,
+        parts.confidence,
         ENDING_RULE,
         parts.perception,
     )

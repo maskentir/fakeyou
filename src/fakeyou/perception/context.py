@@ -1,20 +1,18 @@
-import asyncio
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Literal, override
 from uuid import uuid4
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.foundation.triggers import current_trigger
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.perception.interpreter import ImagePayload, PerceptionInterpreter, image_payload
-from fakeyou.perception.percepts import ScreenSegment
+from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline
 from fakeyou.perception.view import (
@@ -38,8 +36,8 @@ PERCEPTION_GUIDANCE = (
     "Talk about what you saw like a participant who watched the screen: name a screen by its "
     "title or by when it was shown, such as the timeline slide earlier, and never say internal "
     "references such as screen#3, chat#2 or person#1, ids or timestamps. Answer questions about "
-    "an earlier screen from earlier_screens. When a screen's reading is pending, its image is "
-    "attached to the participant message, so read it yourself. When the view lacks a detail "
+    "an earlier screen from earlier_screens. When a screen's reading is pending, you cannot "
+    "see it yet: answer without it or say you need a moment. When the view lacks a detail "
     "you need, call look_at_screen, or look_at_participant for someone's camera, before saying "
     "you cannot see it. Ask one short question only when you cannot tell which screen or person "
     "is meant."
@@ -48,6 +46,7 @@ LookCode = Literal[
     "ok",
     "unknown_screen",
     "unknown_participant",
+    "not_meeting_content",
     "frame_unavailable",
     "camera_unavailable",
     "budget_exhausted",
@@ -62,13 +61,6 @@ def _utc_now() -> datetime:
 
 def _look_result(code: LookCode, **fields: Any) -> str:
     return json.dumps({"code": code, **fields}, ensure_ascii=False, separators=(",", ":"))
-
-
-def _with_image(message: HumanMessage, payload: ImagePayload) -> HumanMessage:
-    blocks: list[str | dict[Any, Any]] = [payload.block()]
-    if message.text:
-        blocks.append({"type": "text", "text": message.text})
-    return message.model_copy(update={"content": blocks})
 
 
 class PerceptionContext:
@@ -97,16 +89,16 @@ class PerceptionContext:
             presenter=meeting.presenter if meeting is not None else None,
         )
 
-    def pending_screen(self) -> ScreenSegment | None:
-        current = self.timeline.snapshot().current_screen
-        if current is None or current.reading is not None:
-            return None
-        return current
-
     async def look_at_screen(self, screen: str, question: str) -> str:
         segment = resolve_screen(self.timeline.snapshot(), screen)
         if segment is None:
             return _look_result("unknown_screen", screen=screen)
+        reading = segment.reading
+        if reading is None or not reading.is_meeting_content:
+            fields: dict[str, Any] = {"screen": segment.ref}
+            if reading is not None:
+                fields["title"] = reading.title
+            return _look_result("not_meeting_content", **fields)
         data = self.timeline.keyframes.get(segment.keyframe.sha256)
         if data is None:
             return _look_result("frame_unavailable", screen=segment.ref)
@@ -184,39 +176,26 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
         if not trigger:
             return await handler(request)
         view = self._context.view()
-        messages = await self._with_pending_image(request.messages, trigger[-1])
+        messages = request.messages
         call_id = f"{OBSERVE_MEETING}-{uuid4().hex}"
         call = AIMessage(
             content="",
             tool_calls=[{"name": OBSERVE_MEETING, "args": {}, "id": call_id, "type": "tool_call"}],
         )
         observation = ToolMessage(
-            content=view.as_text(), tool_call_id=call_id, name=OBSERVE_MEETING
+            content=view.as_text(),
+            tool_call_id=call_id,
+            name=OBSERVE_MEETING,
+            additional_kwargs={"synthetic_view": True},
         )
         self._journal.record(
             "meeting_view_emitted",
             source="perception",
             refs=view.refs(),
             chars=len(observation.text),
-            image_attached=messages is not request.messages,
+            image_attached=False,
         )
         return await handler(request.override(messages=[*messages, call, observation]))
-
-    async def _with_pending_image(
-        self, messages: Sequence[AnyMessage], trigger: HumanMessage
-    ) -> Sequence[AnyMessage]:
-        pending = self._context.pending_screen()
-        if pending is None:
-            return messages
-        data = self._context.timeline.keyframes.get(pending.keyframe.sha256)
-        if data is None:
-            return messages
-        try:
-            payload = await asyncio.to_thread(image_payload, data)
-        except OSError:
-            return messages
-        hydrated = _with_image(trigger, payload)
-        return [hydrated if message is trigger else message for message in messages]
 
 
 def create_perception_middleware(

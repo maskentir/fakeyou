@@ -136,8 +136,9 @@ def test_negative_stream_latency_is_excluded_with_reasons() -> None:
     assert turn["streamed"] is True
     assert turn["agent_to_first_text_seconds"] is None
     assert turn["agent_to_first_sentence_seconds"] is None
+    assert turn["final_to_first_sentence_seconds"] is None
     assert turn["first_sentence_to_first_pcm_seconds"] == 2.4
-    assert report["evidence"]["excluded"]["negative_latency"] == 2
+    assert report["evidence"]["excluded"]["negative_latency"] == 3
 
 
 def test_report_counts_requests_with_unusable_durations_without_adding_time() -> None:
@@ -257,3 +258,23 @@ def test_streamed_synthesis_links_to_own_turn_by_transcript() -> None:
     assert second["sentence_count"] == 1
     assert second["first_sentence_to_first_pcm_seconds"] == 1.1
     assert second["speech_stopped_to_first_pcm_seconds"] == 2.3
+
+
+def test_final_to_first_sentence_and_routed_strong_are_reported() -> None:
+    rows = streamed_turn(0, "t1")
+    rows.insert(3, row(0.5, "model_route_selected", source="agent", route="strong", trigger="look"))
+    report = build_session_report(rows)
+    [turn] = report["turns"]
+
+    assert turn["final_to_first_sentence_seconds"] == 0.8
+    assert turn["routed_strong"] is True
+    assert report["latency"]["final_to_first_sentence_seconds"]["p50"] == 0.8
+
+
+def test_a_small_only_turn_is_not_routed_strong() -> None:
+    rows = streamed_turn(0, "t1")
+    rows.insert(3, row(0.5, "model_route_selected", source="agent", route="small", trigger="none"))
+    report = build_session_report(rows)
+    [turn] = report["turns"]
+
+    assert turn["routed_strong"] is False

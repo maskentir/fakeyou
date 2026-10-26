@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage
 
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
-from fakeyou.conversation.reply_planner import ReplyPlanner, planned_reply
+from fakeyou.conversation.reply_planner import ReplyHandlers, ReplyPlanner, planned_reply
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TwinSpeechEntry
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -39,7 +39,9 @@ def test_the_planner_hands_the_intent_to_the_handler() -> None:
     seen: list[str] = []
 
     planner = ReplyPlanner(
-        max_sentences=2, language="en", on_intent=lambda _intent: seen.append(_intent)
+        max_sentences=2,
+        language="en",
+        handlers=ReplyHandlers(on_intent=lambda _intent: seen.append(_intent)),
     )
     planner.feed('{"language": "en", "intent": "shorter", "text": "Okay, shorter."}')
 
@@ -49,7 +51,9 @@ def test_the_planner_hands_the_intent_to_the_handler() -> None:
 
 def test_the_planner_keeps_the_words_the_handler_returns() -> None:
     planner = ReplyPlanner(
-        max_sentences=2, language="en", on_intent=lambda _intent: "Earlier sentence."
+        max_sentences=2,
+        language="en",
+        handlers=ReplyHandlers(on_intent=lambda _intent: "Earlier sentence."),
     )
 
     assert (

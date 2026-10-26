@@ -93,8 +93,8 @@ class FakeConversation:
         return True
 
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
-        del event
-        self.attention.append(channel)
+        del channel
+        self.attention.append(event.text)
         return True
 
     def bind(self, session: MeetingAudio) -> None:

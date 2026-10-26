@@ -2,9 +2,10 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from typing import Any, cast, override
 
+import httpx
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import (
@@ -948,3 +949,38 @@ async def test_streaming_first_sentence_beats_the_whole_turn_path() -> None:
         whole.text, 6
     )
     assert streamed_first_ms < whole_first_ms
+
+
+class SlowThenAnsweringAgent:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls = 0
+
+    def astream(
+        self, payload: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any
+    ) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+        del payload, config, kwargs
+        self.calls += 1
+        return self._stream()
+
+    async def _stream(self) -> AsyncIterator[tuple[AIMessageChunk, dict[str, str]]]:
+        if self.calls == 1:
+            raise self._error
+        yield AIMessageChunk(content="Here is the answer."), {"langgraph_node": "model"}
+
+
+async def test_a_slow_model_is_asked_again_before_the_turn_dies(
+    journal: RecordingJournal,
+) -> None:
+    agent = SlowThenAnsweringAgent(httpx.ReadTimeout("the model was too slow"))
+    audio = FakeReplyAudio()
+    loop = streamed_loop(agent, audio, journal)
+
+    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.lifecycle.wait_idle()
+
+    assert audio.spoken == ["Here is the answer."]
+    [retried] = journal.events("reply_retried")
+    assert retried["attempt"] == 1
+    assert retried["detail"] == "timeout"
+    assert journal.events("turn_failed") == []

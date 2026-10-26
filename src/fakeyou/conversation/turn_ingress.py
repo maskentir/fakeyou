@@ -74,6 +74,7 @@ class TurnIngress:
         self._in_flight = False
         self._barge_in_judge_enabled = barge_in_judge_enabled
         self._judge_tasks: set[asyncio.Task[None]] = set()
+        self._last_attention: str | None = None
 
     def configure_policy(self, options: PolicyOptions) -> None:
         if options.enabled and not self._wake_phrases:
@@ -106,6 +107,11 @@ class TurnIngress:
         return self._lifecycle.defer(event, channel="chat", needs_quiet_floor=False)
 
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
+        if not event.text.strip():
+            return False
+        if event.text == self._last_attention:
+            return False
+        self._last_attention = event.text
         return self._lifecycle.defer(event, channel=channel, needs_quiet_floor=channel == "voice")
 
     async def handle_final(self, event: TranscriptEvent) -> ParticipationDecision | None:
@@ -125,7 +131,8 @@ class TurnIngress:
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         if judgement is None or not judgement.finished:
             return False
-        return decision_of(judgement, judging.thresholds).decision in _ADMITTED
+        verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
+        return verdict.decision in _ADMITTED
 
     async def withdraw(self, *, reason: str) -> None:
         lifecycle = self._lifecycle

@@ -25,6 +25,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.meet.meet_tools import MEET_SEND_CHAT
+from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 
 ORPHAN_TOOL_RESULT = "Tool call did not complete; no result is available."
@@ -182,15 +183,48 @@ class PlainReplyMiddleware(AgentMiddleware[Any, Any, Any]):
 
 
 class EvidenceRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
-    def __init__(self, strong: BaseChatModel, *, evidence_tools: frozenset[str]) -> None:
+    def __init__(
+        self,
+        strong: BaseChatModel,
+        *,
+        evidence_tools: frozenset[str],
+        journal: Journal | None = None,
+    ) -> None:
         self._strong = strong
         self._evidence_tools = evidence_tools
+        self._journal = journal or Journal("", echo=False)
+
+    def _strong_trigger(self, request: ModelRequest[Any]) -> str | None:
+        messages = request.messages
+        for message in reversed(messages):
+            if not isinstance(message, ToolMessage):
+                break
+            if message.additional_kwargs.get("synthetic_view"):
+                continue
+            if message.additional_kwargs.get("memory_prefetch"):
+                continue
+            if message.name in self._evidence_tools:
+                return message.name or "evidence_tool"
+        _, trigger = current_trigger(messages)
+        if trigger and trigger[-1].id:
+            expected = f"{trigger[-1].id}-memory"
+            for message in messages:
+                if not isinstance(message, ToolMessage) or message.id != expected:
+                    continue
+                prefetch = message.additional_kwargs.get("memory_prefetch")
+                if isinstance(prefetch, dict) and prefetch.get("outcome") == "found":
+                    return "memory_prefetch_found"
+        return None
 
     def route(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        latest = request.messages[-1] if request.messages else None
-        if not isinstance(latest, ToolMessage) or latest.name not in self._evidence_tools:
-            return request
-        if latest.additional_kwargs.get("memory_prefetch"):
+        trigger = self._strong_trigger(request)
+        self._journal.record(
+            "model_route_selected",
+            source="agent",
+            route="strong" if trigger is not None else "small",
+            trigger=trigger or "none",
+        )
+        if trigger is None:
             return request
         return request.override(model=self._strong)
 
