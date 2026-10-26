@@ -409,7 +409,7 @@ def test_invalid_provider_configuration_is_rejected(reply: dict[str, Any]) -> No
 def test_google_reply_accepts_reasoning_effort_levels_gemini_supports() -> None:
     from fakeyou.config.settings import GoogleReply
 
-    assert GoogleReply().reasoning_effort == "low"
+    assert GoogleReply().reasoning_effort == "minimal"
     assert GoogleReply(reasoning_effort="high").reasoning_effort == "high"
 
 
@@ -745,7 +745,7 @@ def test_google_reply_uses_its_own_endpoint_key_and_retry_budget(
     assert isinstance(model.base_url, str)
     assert model.google_api_key is not None
 
-    assert (model.model, model.timeout, model.max_retries) == ("gemini-3.8-flash", 15.0, 0)
+    assert (model.model, model.timeout, model.max_retries) == ("gemini-3.1-flash-lite", 15.0, 0)
     assert model.base_url.rstrip("/") == "https://generativelanguage.googleapis.com"
     assert model.google_api_key.get_secret_value() == "reply-role-key"
     assert "https://generativelanguage.googleapis.com" in preflight_hosts(settings)
@@ -766,7 +766,10 @@ def test_debrief_role_defaults_to_reply_and_otherwise_uses_its_own_model_and_key
     assert shared_model.model == "gemini-3.5-flash-lite"
 
     debrief = GoogleReply(
-        provider="google", model="gemini-3.8-flash", api_key=SecretStr("debrief-key")
+        provider="google",
+        model="gemini-3.8-flash",
+        api_key=SecretStr("debrief-key"),
+        reasoning_effort="low",
     )
     model = create_debrief_chat_model(Settings(**env_file_opt(None), reply=reply, debrief=debrief))
     assert isinstance(model, ChatGoogleGenerativeAI)

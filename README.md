@@ -206,8 +206,8 @@ The twin's replies use up to three model roles, each its own `FAKEYOU_<ROLE>__*`
 
 | Role | Used for |
 | --- | --- |
-| `reply` | Every turn, unless a role below takes it |
-| `reply_strong` | Turns answered from evidence the twin looked up itself: memory recall, the meeting view, a closer look at the screen or a camera. Prefetched memory does not count. Leave it empty to answer every turn with `reply` |
+| `reply` | Small, fast model: every model call, unless a role below takes it |
+| `reply_strong` | Large model for the call that composes an answer from evidence: a memory recall, a closer look at the screen or a camera, a meeting view the twin asked for itself, or memory prefetched for this turn that found facts. The view attached to every call does not count. Leave it empty to answer every turn with `reply` |
 | `reply_fallback` | A turn whose model call failed |
 | `turn_judge.model` | Deciding, for every line, whether it is meant for the twin and whether the twin answers. Leave it empty to judge with `reply` |
 

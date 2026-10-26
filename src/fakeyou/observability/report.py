@@ -22,6 +22,7 @@ LATENCY_STAGES = (
     "speech_stopped_to_first_pcm_seconds",
     "agent_to_first_text_seconds",
     "agent_to_first_sentence_seconds",
+    "final_to_first_sentence_seconds",
     "first_sentence_to_first_pcm_seconds",
 )
 _STAGE_BOUNDS = {
@@ -35,6 +36,7 @@ _STAGE_BOUNDS = {
 _STREAM_STAGE_BOUNDS = {
     "agent_to_first_text_seconds": ("agent_at", "first_text_at"),
     "agent_to_first_sentence_seconds": ("agent_at", "first_sentence_at"),
+    "final_to_first_sentence_seconds": ("final_at", "first_sentence_at"),
     "first_sentence_to_first_pcm_seconds": ("first_sentence_at", "first_pcm_at"),
 }
 STARTUP_MILESTONES = (
@@ -202,6 +204,7 @@ def _apply_transcript_finalized(
         "incomplete": 0,
         "sentence_count": 0,
         "streamed": False,
+        "routed_strong": False,
     }
     state.speech_stopped_at = None
 
@@ -225,6 +228,11 @@ def _apply_agent_event(state: _ReportState, row: dict[str, Any], at: datetime | 
         turn = _turn_for(state.turns, row)
         if turn is not None:
             turn["outcome"] = "cancelled" if event == "agent_cancelled" else "failed"
+
+
+def _apply_route_selected(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
+    if row.get("route") == "strong" and state.active is not None:
+        state.active["routed_strong"] = True
 
 
 def _apply_request_started(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
@@ -527,6 +535,7 @@ _ROW_HANDLERS: dict[str, _RowHandler] = {
     "agent_cancelled": _apply_agent_event,
     "agent_failed": _apply_agent_event,
     "agent_cancel_requested": _apply_agent_event,
+    "model_route_selected": _apply_route_selected,
     "request_started": _apply_request_started,
     "request_finished": _apply_request_done,
     "request_failed": _apply_request_done,
@@ -924,6 +933,7 @@ def _turn_report(turn: dict[str, Any], excluded: Counter[str]) -> dict[str, Any]
         "incomplete_request_count": turn["incomplete"],
         "sentence_count": turn["sentence_count"],
         "streamed": turn["streamed"],
+        "routed_strong": turn["routed_strong"],
     }
     for stage, (start_key, end_key) in _STAGE_BOUNDS.items():
         start, end = turn.get(start_key), turn.get(end_key)

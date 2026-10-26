@@ -5,7 +5,9 @@ from typing import Any
 
 from graphiti_core import Graphiti
 from langchain.chat_models import init_chat_model
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_openai import OpenAIEmbeddings
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -121,7 +123,7 @@ def create_perception_chat_model(settings: Settings) -> BaseChatModel:
     elif provider == "anthropic":
         role = AnthropicReply(**values)
     elif provider == "google":
-        role = GoogleReply(**values)
+        role = GoogleReply(**values, reasoning_effort="low")
     elif provider == "openai_compatible":
         if interpreter.base_url is None:
             raise FakeYouError(ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED)
@@ -159,3 +161,17 @@ async def open_persona_memory(settings: Settings) -> AsyncIterator[Graphiti]:
         except Exception as error:
             raise classify_exception("memory", error) from error
         yield memory
+
+
+def create_embedder(settings: Settings) -> Embeddings | None:
+    embedder = settings.memory.embedder
+    if embedder.api_key is None:
+        return None
+    return OpenAIEmbeddings(
+        model=embedder.model,
+        api_key=embedder.api_key,
+        base_url=embedder.resolved_base_url,
+        dimensions=embedder.dim,
+        timeout=embedder.timeout_seconds,
+        max_retries=embedder.max_retries,
+    )
