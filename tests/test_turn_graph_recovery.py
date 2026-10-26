@@ -231,7 +231,7 @@ async def test_responder_error_counts_one_failure_and_records_a_fault() -> None:
     assert harness.lifecycle.phase == "waiting"
 
 
-async def test_third_consecutive_failure_fails_the_conversation_without_the_line() -> None:
+async def test_third_consecutive_failure_mutes_the_line_without_failing() -> None:
     harness = Harness(failing_chunks)
 
     for event_id in ("f1", "f2", "f3"):
@@ -239,7 +239,7 @@ async def test_third_consecutive_failure_fails_the_conversation_without_the_line
 
     assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2, 3]
     assert harness.session.spoken == [TURN_FAILED_EN, TURN_FAILED_EN]
-    assert harness.lifecycle.is_failed is True
+    assert harness.lifecycle.is_failed is False
 
 
 async def test_a_successful_turn_resets_the_consecutive_count() -> None:

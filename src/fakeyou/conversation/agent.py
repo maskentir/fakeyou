@@ -9,7 +9,11 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
-from fakeyou.conversation.middleware import PlainReplyMiddleware, create_reply_retry_middleware
+from fakeyou.conversation.middleware import (
+    MeetActionOnceMiddleware,
+    PlainReplyMiddleware,
+    create_reply_retry_middleware,
+)
 from fakeyou.conversation.reply_planner import ReplyPlan
 
 MEETING_GUIDANCE = (
@@ -80,6 +84,7 @@ def create_meeting_agent(
         system_prompt=persona,
         middleware=[
             *middleware,
+            MeetActionOnceMiddleware(),
             ToolCallLimitMiddleware(run_limit=MAX_TOOL_CALLS_PER_TURN),
             create_reply_retry_middleware(),
             PlainReplyMiddleware(),

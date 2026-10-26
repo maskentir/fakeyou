@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import time
 import traceback
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import classify_exception
 
 MAX_CONSECUTIVE_TURN_FAILURES = 3
+FAILURE_APOLOGY_COOLDOWN_SECONDS = 60.0
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 TURN_FAILED_LINES: dict[str, str] = json.loads(read_package_text("spoken_lines.json"))[
     "turn_failed"
@@ -126,12 +128,15 @@ class TurnRecovery:
         faults: FaultReporter | None,
         language: str | Callable[[], str],
         is_closed: Callable[[], bool],
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._journal = journal
         self._faults = faults
         self._is_closed = is_closed
         self._language = language
+        self._clock = clock
         self._consecutive = 0
+        self._apology_muted_until = 0.0
 
     @property
     def consecutive_failures(self) -> int:
@@ -142,8 +147,13 @@ class TurnRecovery:
         language = self._language() if callable(self._language) else self._language
         return TURN_FAILED_LINES.get(language, TURN_FAILED_LINES[DEFAULTS.speech.language])
 
+    @property
+    def should_apologize(self) -> bool:
+        return self._clock() >= self._apology_muted_until
+
     def record_success(self) -> None:
         self._consecutive = 0
+        self._apology_muted_until = 0.0
 
     def record_failure(self, error: Exception, transcript_id: str) -> bool:
         self._consecutive += 1
@@ -155,8 +165,10 @@ class TurnRecovery:
             consecutive=self._consecutive,
             **raised_where(error),
         )
-        if self._is_closed() or self._consecutive >= MAX_CONSECUTIVE_TURN_FAILURES:
+        if self._is_closed():
             return True
+        if self._consecutive >= MAX_CONSECUTIVE_TURN_FAILURES:
+            self._apology_muted_until = self._clock() + FAILURE_APOLOGY_COOLDOWN_SECONDS
         if self._faults is not None:
             self._faults.record(classify_exception("agent", error))
         return False

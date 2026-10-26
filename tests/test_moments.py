@@ -49,7 +49,14 @@ def _event(event_id: str, text: str, participant: str = "device-ayu") -> Transcr
 
 def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> MomentDetector:
     registry = source_registry(profile_facts=[FACT])
-    embedder = _Embedder({FACT: [1.0, 0.0], QUESTION: [0.95, 0.05], "unrelated": [0.0, 1.0]})
+    embedder = _Embedder(
+        {
+            FACT: [1.0, 0.0],
+            QUESTION: [0.95, 0.05],
+            f"Rani Twin, {QUESTION.lower()}": [0.95, 0.05],
+            "unrelated": [0.0, 1.0],
+        }
+    )
     return MomentDetector(
         registry=registry,
         judge=judge if judge is not None else _Judge(judgement),
@@ -73,6 +80,30 @@ async def test_an_unanswered_question_fires_only_after_the_wait() -> None:
     assert context is not None
     assert context.kind == "unanswered_question"
     assert context.suggested_source_ref == "fact-0"
+    assert detector.poll(now=200.0) is None
+
+
+async def test_a_line_naming_the_twin_is_left_to_the_normal_lane() -> None:
+    judgement = MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge=judge)
+    await detector.prepare()
+
+    named = await detector.observe(_event("t1", f"Rani Twin, {QUESTION.lower()}"), now=100.0)
+
+    assert named is None
+    assert judge.calls == 0
+    assert detector.poll(now=200.0) is None
+
+
+async def test_a_line_naming_the_twin_cancels_a_pending_question() -> None:
+    detector = _detector(
+        MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+    )
+    await detector.prepare()
+    await detector.observe(_event("t1", QUESTION), now=100.0)
+    await detector.observe(_event("t2", "Rani Twin, please answer that"), now=105.0)
+
     assert detector.poll(now=200.0) is None
 
 

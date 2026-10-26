@@ -838,6 +838,8 @@ async def recover_turn(
     _move_phase(runtime, "waiting", transcript_id)
     if not _bound(runtime) or _admitted_count(runtime) != generation:
         return
+    if not recovery.should_apologize:
+        return
     speaker = runtime.speaker
     _, speech_error = await capture_error(lambda: speaker.speak(recovery.failed_line))
     if speech_error is not None:

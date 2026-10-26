@@ -155,6 +155,7 @@ class TurnLifecycle:
         self._responder = responder
         self._judging = judging
         self._control: ReplyControl | None = None
+        self._clock = clock
         self._options = RecoveryOptions()
         self._recovery = self._build_recovery()
         self._reply = ReplyOptions()
@@ -166,7 +167,6 @@ class TurnLifecycle:
         self._deferred = DeferredTurns()
         self._deferred_options = DeferredOptions()
         self._quiet = QuietFloor(clock=clock)
-        self._clock = clock
         self._wakeup: asyncio.TimerHandle | None = None
         self._admitted = AdmittedFinals()
         self._barge = BargeLatch()
@@ -285,6 +285,7 @@ class TurnLifecycle:
             faults=self._options.faults,
             language=self._options.language,
             is_closed=lambda: self._closed,
+            clock=self._clock,
         )
 
     def _refresh_runtime(self) -> None:
