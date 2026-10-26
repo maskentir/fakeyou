@@ -81,9 +81,31 @@ itu memang keputusan.
 
 ## Sisa pekerjaan, urut
 
-1. **B** -- sesi dengan brief `meet_chat` untuk menguji jalur chat end to end.
-2. **G** -- turunkan latensi: model kecil untuk turn biasa, model besar hanya untuk turn yang butuh bukti, dan potong
-   isi meeting view yang masuk ke prompt.
-3. **E** -- perketat ambang judge supaya baris tanpa nama tidak terjawab, dan tetap mengukur lewat replay.
-4. **D** -- kalau jalur interupsi dinyalakan lagi, cari cara supaya remark-nya bukan pengakuan.
-5. **N** -- tentukan apa yang boleh keluar dari layar owner ke memori twin, di luar aturan "bukan konten meeting".
+Semua lima butir di bawah sudah dikerjakan pada 2026-10-26 (sesi lanjutan). Yang tersisa hanya bukti live yang
+memang butuh sesi meeting sungguhan.
+
+1. **B -- selesai di kode, bukti live menyusul.** Akar masalahnya ternyata bukan sekadar belum pernah diuji:
+   `meet_actions_enabled` tidak pernah dinyalakan dari brief, jadi dispatcher tidak pernah dibangun dan jalur ini
+   mati total untuk brief mana pun. Sekarang flag itu diturunkan dari izin `meet_act`/`meet_chat` di brief
+   (`test_join_meet_actions_gate.py`), otoritas lane reply chat disatukan ke grant tool persona, dan ada test
+   assembled sampai ke halaman Meet palsu. Sisa: satu sesi live Meet untuk membuktikan selector dan echo asli.
+2. **G -- selesai di kode, angka live menyusul.** Peran `reply` sekarang model kecil untuk setiap panggilan;
+   `reply_strong` mengambil panggilan yang menyusun jawaban dari bukti (tool hasil, atau memori prefetch turn ini
+   yang menemukan fakta). Meeting view dipangkas (batas 3000 karakter, chat/signal/layar lama dibatasi), view
+   sintetis per panggilan tidak lagi menaikkan turn biasa ke model besar, dan report punya metrik
+   `final_to_first_sentence` plus split `routed_strong` supaya klaim 1,5 detik bisa diukur jujur per jalur.
+3. **E -- selesai dan terukur live.** Keputusan judge sekarang ditegakkan kode: harus `addressee == twin`,
+   selesai, dan bukan backchannel; baris tanpa nama memakai ambang lebih tinggi
+   (`FAKEYOU_TURN_JUDGE__UNNAMED_REPLY_THRESHOLD`). Replay live 105 penilaian: false-reply 1,4%, tidak ada
+   panggilan bernama yang terlewat (`docs/reports/2026-10-26-turn-judge.json`). Satu-satunya false reply adalah
+   j28, baris layar berbahasa Inggris yang asli dari temuan F1, di 1 dari 3 run.
+4. **D -- selesai, dengan arsitektur berbeda dari draf awal.** Jalur interupsi menyala lagi secara bawaan, tapi
+   bentuknya bukan daftar kata acknowledgement. Momen dideteksi semantik: prefilter embedding memilih item
+   profile/brief yang dekat, judge momen terstruktur memutuskan jenis momen dan sumbernya, kontribusi wajib
+   mengutip sumber terdaftar, lalu verifier grounding memeriksa klaimnya terhadap sumber itu sebelum diucapkan.
+   Replay proaktif live (`docs/reports/2026-10-26-proactive-replay.json`): nol kontribusi salah dari jalur ini
+   di semua run; kontrol murni selalu diam.
+5. **N -- selesai: judul saja di semua lapisan.** Layar bukan konten meeting sekarang dicuci saat disimpan ke
+   timeline (`title_only`), dan tidak bisa lagi bocor lewat record JSONL, arsip frame JPG, tool lihat-layar,
+   gambar pending yang dulu menempel di pesan pemicu, atau trigger perhatian. Rekaman lama yang sudah terlanjur
+   berisi tidak dihapus; guard hilir tetap dipertahankan untuk mereka.

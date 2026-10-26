@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -142,6 +142,7 @@ class TranscriptSinks:
     record: MeetingRecord
     conversation: TurnIngress | None = None
     faults: FaultReporter | None = None
+    on_final: Callable[[TranscriptEvent], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +308,11 @@ class TranscriptDrain:
         conversation = self._sinks.conversation
         if winner is not None and conversation is not None:
             await conversation.receive_final(by_id[winner.event_id])
+        on_final = self._sinks.on_final
+        if on_final is not None:
+            for event in emitted:
+                if event.finalized:
+                    await on_final(event)
 
     async def _drain_ordered(self) -> None:
         emitted: list[TranscriptEvent] = []

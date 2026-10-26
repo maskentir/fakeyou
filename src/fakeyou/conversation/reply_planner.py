@@ -6,6 +6,15 @@ from langchain_core.utils.json import parse_partial_json
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.contribution import (
+    ContributionClaim,
+    ContributionGate,
+    ContributionKind,
+    ContributionSource,
+    GateOutcome,
+    GateVerdict,
+    validate_contribution,
+)
 from fakeyou.foundation.sentences import split_sentences
 
 ReplyIntent = Literal[
@@ -61,6 +70,30 @@ class ReplyPlan(BaseModel):
             "the other one. One or two short sentences. Empty when the intent is silent."
         )
     )
+    contribution_kind: ContributionKind | None = Field(
+        default=None,
+        description=(
+            "Only when nobody asked you anything (a proactive contribution): fact adds a known "
+            "fact the room lacks, correction fixes something the room or screen just stated that "
+            "conflicts with a known fact, question asks a brief question that unblocks the "
+            "discussion. Leave unset for ordinary replies."
+        ),
+    )
+    contribution_source: ContributionSource | None = Field(
+        default=None,
+        description=(
+            "Where a proactive contribution comes from: profile (owner profile verified facts), "
+            "brief (meeting brief approved facts, questions or objectives), or memory (recalled "
+            "earlier-meeting evidence)."
+        ),
+    )
+    source_ref: str | None = Field(
+        default=None,
+        description=(
+            "The id of the brief item used (brief), fact-<n> for the n-th profile verified fact "
+            "(profile), or the recalled fact id (memory). Required with contribution_kind."
+        ),
+    )
 
 
 @dataclass(slots=True)
@@ -87,9 +120,21 @@ class PlanRead:
     intent: ReplyIntent
     language: str
     replaced: bool
+    kind: str | None = None
+    source: str | None = None
+    source_ref: str | None = None
+    gate: GateOutcome = "n/a"
+    gate_reason: str = ""
 
 
 PlanHandler = Callable[[PlanRead], None]
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyHandlers:
+    on_intent: IntentHandler | None = None
+    on_plan: PlanHandler | None = None
+    on_language: Callable[[str], None] | None = None
 
 
 class ReplyPlanner:
@@ -98,15 +143,17 @@ class ReplyPlanner:
         *,
         max_sentences: int,
         language: str,
-        on_intent: IntentHandler | None = None,
-        on_plan: PlanHandler | None = None,
-        on_language: Callable[[str], None] | None = None,
+        handlers: ReplyHandlers | None = None,
+        contribution_gate: ContributionGate | None = None,
     ) -> None:
         self._max_sentences = max_sentences
         self._language = language
-        self._on_intent = on_intent
-        self._on_plan = on_plan
-        self._on_language = on_language
+        resolved = handlers if handlers is not None else ReplyHandlers()
+        self._on_intent = resolved.on_intent
+        self._on_plan = resolved.on_plan
+        self._on_language = resolved.on_language
+        self._gate = contribution_gate
+        self._verdict: GateVerdict | None = None
         self._raw = ""
         self._released = 0
         self._structured: bool | None = None
@@ -117,6 +164,10 @@ class ReplyPlanner:
         self._short_spoken = False
         self._spoken = 0
         self._reported = False
+
+    @property
+    def verdict(self) -> GateVerdict | None:
+        return self._verdict
 
     @property
     def intent(self) -> ReplyIntent:
@@ -180,6 +231,8 @@ class ReplyPlanner:
             if not body:
                 return ""
             self._structured = body.startswith(JSON_START)
+        if self._gate is not None:
+            return self._release_gated(final=final)
         if not self._structured:
             self._report(structured=False)
             return self._take_text(self._raw)
@@ -188,6 +241,43 @@ class ReplyPlanner:
             return ""
         text = self._replacement if self._replacement is not None else plan.get("text")
         return self._take_text(text) if isinstance(text, str) else ""
+
+    def _release_gated(self, *, final: bool) -> str:
+        if not final:
+            return ""
+        gate = self._gate
+        assert gate is not None
+        plan = parse_partial_json(self._raw.lstrip()) if self._structured else None
+        if not isinstance(plan, dict):
+            self._verdict = validate_contribution(
+                ContributionClaim(structured=False, intent="answer", text=self._raw), gate
+            )
+            self._declared_intent = "silent"
+            self._report(structured=False)
+            return ""
+        self._read_plan(plan, final=True)
+        raw_text = plan.get("text")
+        text = self._replacement if self._replacement is not None else raw_text
+        text = text if isinstance(text, str) else ""
+        kind = plan.get("contribution_kind")
+        source = plan.get("contribution_source")
+        source_ref = plan.get("source_ref")
+        self._verdict = validate_contribution(
+            ContributionClaim(
+                structured=True,
+                intent=self.intent,
+                text=text,
+                kind=kind if isinstance(kind, str) else None,
+                source=source if isinstance(source, str) else None,
+                source_ref=source_ref if isinstance(source_ref, str) else None,
+            ),
+            gate,
+        )
+        self._report(structured=True)
+        if not self._verdict.passed:
+            self._declared_intent = "silent"
+            return ""
+        return self._take_text(text)
 
     def _read_plan(self, plan: dict[str, object], *, final: bool) -> bool:
         if self._declared_intent is not None:
@@ -210,13 +300,24 @@ class ReplyPlanner:
     def _report(self, *, structured: bool) -> None:
         if self._reported or self._on_plan is None:
             return
+        if self._gate is not None and self._verdict is None:
+            return
         self._reported = True
+        verdict = self._verdict
+        gate: GateOutcome = "n/a"
+        if verdict is not None:
+            gate = "drop" if not verdict.passed else ("pass" if verdict.kind else "n/a")
         self._on_plan(
             PlanRead(
                 structured=structured,
                 intent=self.intent,
                 language=self.language,
                 replaced=self._replacement is not None,
+                kind=verdict.kind if verdict is not None else None,
+                source=verdict.source if verdict is not None else None,
+                source_ref=verdict.source_ref if verdict is not None else None,
+                gate=gate,
+                gate_reason=verdict.reason if verdict is not None else "",
             )
         )
 
@@ -232,8 +333,14 @@ def planned_reply(
     max_sentences: int,
     language: str,
     on_intent: IntentHandler | None = None,
+    contribution_gate: ContributionGate | None = None,
 ) -> SpokenChunk:
-    planner = ReplyPlanner(max_sentences=max_sentences, language=language, on_intent=on_intent)
+    planner = ReplyPlanner(
+        max_sentences=max_sentences,
+        language=language,
+        handlers=ReplyHandlers(on_intent=on_intent),
+        contribution_gate=contribution_gate,
+    )
     content = planner.feed(text) + planner.finish()
     if planner.silent:
         return SpokenChunk(text="", language=planner.language)

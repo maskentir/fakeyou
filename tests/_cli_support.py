@@ -227,10 +227,12 @@ async def join_persona_conversation(
             "create_graphiti_memory",
             lambda _config, **_kwargs: pytest.fail("graphiti must stay closed without --memory"),
         )
-    created: dict[str, Any] = {}
+    created: dict[str, Any] = {"agent_calls": 0}
 
     def recording_agent(agent_model: Any, **kwargs: Any) -> Any:
-        created.update(kwargs)
+        created["agent_calls"] += 1
+        if created["agent_calls"] == 1:
+            created.update(kwargs)
         return create_meeting_agent(agent_model, **kwargs)
 
     monkeypatch.setattr(assembly, "create_meeting_agent", recording_agent)

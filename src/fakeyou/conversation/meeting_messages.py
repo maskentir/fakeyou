@@ -58,23 +58,27 @@ def spoken_by(line: TranscriptEvent | TranscriptEntry) -> str:
 
 
 def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
-    return [
-        HumanMessage(
-            content=event.text,
-            id=event.id,
-            additional_kwargs={
-                MEETING_EVENT: _Spoken(
-                    event.source,
-                    event.timestamp,
-                    event.participant_id,
-                    event.speaker_evidence_id,
-                    event.stream_id,
-                    event.display_claim,
-                ).meeting_event()
-            },
+    messages: list[HumanMessage] = []
+    for event in events:
+        spoken = _Spoken(
+            event.source,
+            event.timestamp,
+            event.participant_id,
+            event.speaker_evidence_id,
+            event.stream_id,
+            event.display_claim,
+        ).meeting_event()
+        if event.attention is not None:
+            spoken["attention_kind"] = event.attention.kind
+            spoken["attention_source_ref"] = event.attention.suggested_source_ref
+        messages.append(
+            HumanMessage(
+                content=event.text,
+                id=event.id,
+                additional_kwargs={MEETING_EVENT: spoken},
+            )
         )
-        for event in events
-    ]
+    return messages
 
 
 def _history_message(entry: TranscriptEntry) -> HumanMessage:

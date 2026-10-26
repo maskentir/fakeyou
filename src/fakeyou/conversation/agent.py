@@ -49,6 +49,18 @@ SPOKEN_LANGUAGE_GUIDANCE = {
         "casual answer rather than a formal one."
     ),
 }
+CONTRIBUTION_GUIDANCE = (
+    "Nobody asked you anything. The room is carrying on without you, and the line you were "
+    "given is information, not a question. You are not answering anyone. Add something only if "
+    "you have something the room does not have: a fact from the owner profile or the meeting "
+    "brief, something you know from an earlier meeting, or a question that unblocks the "
+    "discussion. Never thank the room, never say that you see or notice what is on the screen, "
+    "and never narrate the screen. When you do add something, declare its contribution_kind, "
+    "contribution_source and source_ref so the claim can be checked against that source, "
+    "and use the answer intent for the contribution itself. "
+    "If you have nothing to add, set the intent to silent and say nothing at all."
+)
+
 MAX_TOOL_CALLS_PER_TURN = 4
 DEFAULT_PERSONA = f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE['id']}\n\n{ENDING_RULE}"
 

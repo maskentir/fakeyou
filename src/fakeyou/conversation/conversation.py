@@ -13,7 +13,14 @@ from langchain_core.runnables import Runnable, RunnableConfig
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.contribution import (
+    ContributionGate,
+    GateVerdict,
+    SourceRegistry,
+    memory_refs_from_evidence,
+)
 from fakeyou.conversation.control import ReplyControl
+from fakeyou.conversation.grounding import GroundingVerifier
 from fakeyou.conversation.meeting_messages import (
     MeetingHistory,
     history_messages,
@@ -24,6 +31,7 @@ from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
     PlanRead,
+    ReplyHandlers,
     ReplyIntent,
     ReplyPlanner,
     SpokenChunk,
@@ -34,7 +42,7 @@ from fakeyou.conversation.sentence_stream import SentenceStream
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import split_sentences
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.observability.faults import ConsumerSink, guard_consumer
+from fakeyou.observability.faults import ConsumerSink, capture_error, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 
@@ -292,9 +300,11 @@ class StreamTrace:
     on_tool_result: ToolResultCallback | None = None
     on_intent: IntentHandler | None = None
     on_language: Callable[[str], None] | None = None
+    contribution_gate: ContributionGate | None = None
 
 
 REPLY_STREAM_ATTEMPTS = 2
+_RECALL_TOOL = "recall_meeting_context"
 DEFAULT_STREAM_TRACE = StreamTrace()
 
 
@@ -388,7 +398,23 @@ def _record_reply_plan(
         intent=plan.intent,
         language=plan.language,
         replaced=plan.replaced,
+        kind=plan.kind,
+        plan_source=plan.source,
+        source_ref=plan.source_ref,
+        gate=plan.gate,
+        gate_reason=plan.gate_reason,
     )
+    if plan.gate == "drop":
+        journal.record(
+            "contribution_dropped",
+            source="agent",
+            request_id=request_id,
+            transcript_id=transcript_id,
+            reason=plan.gate_reason,
+            kind=plan.kind,
+            plan_source=plan.source,
+            source_ref=plan.source_ref,
+        )
 
 
 def _record_reply_text(state: _SentenceStream, reply: str) -> None:
@@ -429,13 +455,18 @@ def _reply_planner(max_sentences: int, trace: StreamTrace) -> ReplyPlanner:
     return ReplyPlanner(
         max_sentences=max_sentences,
         language=trace.language,
-        on_intent=trace.on_intent,
-        on_plan=(
-            None
-            if trace.journal is None
-            else partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id)
+        handlers=ReplyHandlers(
+            on_intent=trace.on_intent,
+            on_plan=(
+                None
+                if trace.journal is None
+                else partial(
+                    _record_reply_plan, trace.journal, trace.request_id, trace.transcript_id
+                )
+            ),
+            on_language=trace.on_language,
         ),
-        on_language=trace.on_language,
+        contribution_gate=trace.contribution_gate,
     )
 
 
@@ -510,6 +541,10 @@ class MeetingResponder:
     history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
     control: ReplyControl | None = None
     turn_language: TurnLanguage = field(default_factory=TurnLanguage)
+    contributor: MeetingAgent | None = None
+    source_registry: SourceRegistry = field(default_factory=SourceRegistry)
+    verifier: GroundingVerifier | None = None
+    grounding_threshold: float = 0.7
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
@@ -546,38 +581,159 @@ class MeetingResponder:
             return last_twin_text(self.history.entries())
         return None
 
+    def _is_attention(self, events: Sequence[TranscriptEvent]) -> bool:
+        if not events:
+            return False
+        last = events[-1]
+        return last.attention is not None or last.source == "meeting_attention"
+
+    def _agent_for(self, events: Sequence[TranscriptEvent]) -> MeetingAgent:
+        if self.contributor is not None and self._is_attention(events):
+            return self.contributor
+        return self.agent
+
+    def _gate_for(
+        self, events: Sequence[TranscriptEvent], memory_refs: dict[str, str]
+    ) -> ContributionGate | None:
+        if not self._is_attention(events):
+            return None
+        last = events[-1]
+        trigger = last.attention.trigger_text if last.attention is not None else last.text
+        return ContributionGate(
+            registry=self.source_registry,
+            trigger_text=trigger,
+            memory_refs=lambda: memory_refs,
+        )
+
     def _trace(
         self,
         events: Sequence[TranscriptEvent],
         on_tool_start: Callable[[], None],
         request_id: str = "",
     ) -> StreamTrace:
+        memory_refs: dict[str, str] = {}
+        downstream = self.on_tool_result
+
+        def on_tool_result(name: str, text: str, duration_ms: float) -> None:
+            if name == _RECALL_TOOL:
+                memory_refs.update(memory_refs_from_evidence(text))
+            if downstream is not None:
+                downstream(name, text, duration_ms)
+
         return StreamTrace(
             language=self.language,
             journal=self.journal,
             request_id=request_id,
             transcript_id=events[-1].id if events else None,
             on_tool_start=on_tool_start,
-            on_tool_result=self.on_tool_result,
+            on_tool_result=on_tool_result,
             on_intent=self.on_intent,
             on_language=self.turn_language.declare,
+            contribution_gate=self._gate_for(events, memory_refs),
         )
 
     async def respond(
         self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
     ) -> SpokenChunk:
+        trace = self._trace(events, on_tool_start)
         reply = await invoke_reply(
-            self.agent,
+            self._agent_for(events),
             self.messages(events),
             REPLY_CONFIG,
-            trace=self._trace(events, on_tool_start),
+            trace=trace,
         )
-        return planned_reply(
-            reply,
-            max_sentences=self.limit,
+        if trace.contribution_gate is None:
+            return planned_reply(
+                reply,
+                max_sentences=self.limit,
+                language=self.language,
+                on_intent=self.on_intent,
+            )
+        return await self._respond_gated(reply, trace)
+
+    async def _respond_gated(self, reply: str, trace: StreamTrace) -> SpokenChunk:
+        reads: list[PlanRead] = []
+        planner = ReplyPlanner(
+            max_sentences=1,
             language=self.language,
-            on_intent=self.on_intent,
+            handlers=ReplyHandlers(
+                on_intent=self.on_intent,
+                on_plan=reads.append,
+                on_language=self.turn_language.declare,
+            ),
+            contribution_gate=trace.contribution_gate,
         )
+        content = planner.feed(reply) + planner.finish()
+        for read in reads:
+            _record_reply_plan(self.journal, trace.request_id, trace.transcript_id, read)
+        empty = SpokenChunk(text="", language=planner.language)
+        if planner.silent or not content.strip():
+            return empty
+        spoken: list[str] = []
+        for sentence in split_sentences(content, language=planner.language):
+            spoken.extend(planner.take_sentence(sentence))
+        spoken.extend(planner.finish_sentences())
+        chunk = SpokenChunk(text=" ".join(spoken), language=planner.language)
+        if not chunk.text:
+            return empty
+        if await self._verified(chunk, planner.verdict, trace):
+            return chunk
+        return empty
+
+    async def _verified(
+        self, chunk: SpokenChunk, verdict: GateVerdict | None, trace: StreamTrace
+    ) -> bool:
+        empty = SpokenChunk(text="", language=chunk.language)
+
+        def drop(reason: str) -> bool:
+            self._dropped(empty, trace, reason)
+            return False
+
+        gate = trace.contribution_gate
+        if verdict is None or verdict.source_text is None or gate is None:
+            return drop("missing_verdict")
+        if self.verifier is None:
+            return drop("verifier_unavailable")
+        checked, error = await capture_error(
+            partial(
+                self.verifier.verify,
+                text=chunk.text,
+                source_text=verdict.source_text,
+                trigger_text=gate.trigger_text,
+                kind=verdict.kind,
+            )
+        )
+        if checked is None:
+            return drop("verifier_failed")
+        if not checked.grounded:
+            return drop("not_grounded")
+        if not checked.adds_information:
+            return drop("adds_nothing")
+        if checked.confidence < self.grounding_threshold:
+            return drop("low_confidence")
+        if self.journal is not None:
+            self.journal.record(
+                "contribution_verified",
+                source="agent",
+                request_id=trace.request_id,
+                transcript_id=trace.transcript_id,
+                kind=verdict.kind,
+                plan_source=verdict.source,
+                source_ref=verdict.source_ref,
+                confidence=checked.confidence,
+            )
+        return True
+
+    def _dropped(self, empty: SpokenChunk, trace: StreamTrace, reason: str) -> SpokenChunk:
+        if self.journal is not None:
+            self.journal.record(
+                "contribution_dropped",
+                source="agent",
+                request_id=trace.request_id,
+                transcript_id=trace.transcript_id,
+                reason=reason,
+            )
+        return empty
 
     def stream_sentences(
         self,
@@ -586,13 +742,22 @@ class MeetingResponder:
         *,
         request_id: str,
     ) -> AsyncIterator[SpokenChunk]:
+        if self._is_attention(events):
+            return self._stream_gated(events, on_tool_start)
         return stream_sentences(
-            self.agent,
+            self._agent_for(events),
             self.messages(events),
             REPLY_CONFIG,
             max_sentences=self.limit,
             trace=self._trace(events, on_tool_start, request_id),
         )
+
+    async def _stream_gated(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> AsyncIterator[SpokenChunk]:
+        chunk = await self.respond(events, on_tool_start)
+        if chunk.text:
+            yield chunk
 
 
 def cap_spoken_reply(

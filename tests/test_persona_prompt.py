@@ -285,7 +285,7 @@ def test_known_fact_rule_matches_the_scope(
 
 
 @pytest.mark.parametrize("scope", ["brief_only", "persona_memory"])
-def test_brief_prompt_renders_brief_texts_without_identifiers(
+def test_brief_prompt_renders_item_ids_but_no_system_identifiers(
     demo_profile: PersonaProfile, brief: MeetingBrief, scope: str
 ) -> None:
     prompt = scoped_prompt(demo_profile, brief, scope)
@@ -293,9 +293,9 @@ def test_brief_prompt_renders_brief_texts_without_identifiers(
 
     for text in (*brief.agenda, *(item.text for item in items)):
         assert json.dumps(text, ensure_ascii=False) in prompt
+    for item in items:
+        assert json.dumps(item.id) in prompt
     for identifier in (
-        *(json.dumps(item.id) for item in items),
-        '"id"',
         brief.owner_id,
         brief.twin_id,
         brief.meeting_id,

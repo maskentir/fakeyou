@@ -25,6 +25,7 @@ from fakeyou.memory.persona import (
     SOURCE_RULES,
     TOOL_ECONOMY_RULE,
     PersonaProfile,
+    profile_prompt_json,
 )
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import MeetingBrief
@@ -87,7 +88,7 @@ def _prompt_parts(
         ),
         goals=GOALS_RULE if persona_knowledge else "",
         recall=RECALL_RULES[recall_strategy] if recall else "",
-        profile_json=profile.model_dump_json(include=profile_fields, indent=2),
+        profile_json=profile_prompt_json(profile, profile_fields, with_fact_ids=persona_knowledge),
         brief_rules=BRIEF_RULES if brief is not None else "",
         brief_json=(
             brief.model_dump_json(include=BRIEF_PROMPT_FIELDS, indent=2)

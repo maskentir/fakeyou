@@ -49,9 +49,9 @@ PROMPT_PROFILE_FIELDS = {
 BRIEF_ONLY_PROFILE_FIELDS = PROMPT_PROFILE_FIELDS - {"goals", "verified_facts"}
 BRIEF_PROMPT_FIELDS: dict[str, Any] = {
     "agenda": True,
-    "objectives": {"__all__": {"text"}},
-    "approved_facts": {"__all__": {"text"}},
-    "questions": {"__all__": {"text"}},
+    "objectives": {"__all__": {"id", "text"}},
+    "approved_facts": {"__all__": {"id", "text"}},
+    "questions": {"__all__": {"id", "text"}},
     "permissions": True,
 }
 IDENTITY_RULE = (
@@ -328,6 +328,16 @@ async def load_operator_persona(identity: OperatorIdentity, settings: Settings) 
         raise FakeYouError(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=error.strerror) from None
 
 
+def profile_prompt_json(profile: PersonaProfile, fields: set[str], *, with_fact_ids: bool) -> str:
+    dump = profile.model_dump(include=fields)
+    if with_fact_ids:
+        dump["verified_facts"] = [
+            {"id": f"fact-{index}", "text": text}
+            for index, text in enumerate(profile.verified_facts)
+        ]
+    return json.dumps(dump, indent=2, default=str)
+
+
 def build_system_prompt(
     profile: PersonaProfile,
     *,
@@ -360,7 +370,8 @@ def build_system_prompt(
     if recall:
         sections.append(RECALL_RULES[recall_strategy])
     sections.append(
-        "Owner profile JSON:\n" + profile.model_dump_json(include=profile_fields, indent=2)
+        "Owner profile JSON:\n"
+        + profile_prompt_json(profile, profile_fields, with_fact_ids=persona_knowledge)
     )
     if brief is not None:
         sections.append(BRIEF_RULES)

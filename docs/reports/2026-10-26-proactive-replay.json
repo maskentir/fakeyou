@@ -1,0 +1,104 @@
+{
+ "offers": 5,
+ "spoken": 7,
+ "wrong": 1,
+ "missed": 0,
+ "wrong_per_hour": 0.545,
+ "control_wrong": 1,
+ "outcomes": [
+  {
+   "scenario": "p01",
+   "kind": "unanswered_question",
+   "expected_speak": true,
+   "offers": 0,
+   "spoken": [
+    "The Orchid beta launch is planned for 14 October 2026."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p02",
+   "kind": "unanswered_question",
+   "expected_speak": true,
+   "offers": 1,
+   "spoken": [
+    "Demo Orchid dijadwalkan pada hari Jumat."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p03",
+   "kind": "decision_vs_brief",
+   "expected_speak": true,
+   "offers": 1,
+   "spoken": [
+    "The Orchid beta launch is currently planned for 14 October 2026, so Rani would need to confirm any date change."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p04",
+   "kind": "control",
+   "expected_speak": false,
+   "offers": 0,
+   "spoken": [],
+   "failures": []
+  },
+  {
+   "scenario": "p05",
+   "kind": "owner_task",
+   "expected_speak": true,
+   "offers": 1,
+   "spoken": [
+    "Rani is the owner of the Orchid launch checklist."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p06",
+   "kind": "screen",
+   "expected_speak": true,
+   "offers": 1,
+   "spoken": [
+    "For the record, the project plan still notes the Orchid beta launch for 14 October 2026."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p07",
+   "kind": "control",
+   "expected_speak": false,
+   "offers": 0,
+   "spoken": [],
+   "failures": []
+  },
+  {
+   "scenario": "p08",
+   "kind": "control",
+   "expected_speak": false,
+   "offers": 0,
+   "spoken": [],
+   "failures": []
+  },
+  {
+   "scenario": "p09",
+   "kind": "fact_opportunity",
+   "expected_speak": true,
+   "offers": 1,
+   "spoken": [
+    "Rani yang memegang checklist untuk peluncuran Orchid tersebut."
+   ],
+   "failures": []
+  },
+  {
+   "scenario": "p10",
+   "kind": "control",
+   "expected_speak": false,
+   "offers": 0,
+   "spoken": [
+    "The Orchid beta launch is planned for 14 October 2026."
+   ],
+   "failures": []
+  }
+ ]
+}

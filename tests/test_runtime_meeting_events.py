@@ -41,10 +41,10 @@ def _worker(
 
 
 def _screen(
-    timeline: MeetingTimeline, title: str, *, key_points: Sequence[str] = ()
+    timeline: MeetingTimeline, title: str, *, key_points: Sequence[str] = (), kind: str = "slide"
 ) -> ScreenSegment:
     shown = timeline.show_screen(keyframe(slide_jpeg(title)), None)
-    timeline.read_screen(shown.segment.ref, reading(title, key_points=key_points))
+    timeline.read_screen(shown.segment.ref, reading(title, key_points=key_points, kind=kind))
     return shown.segment
 
 
@@ -139,7 +139,9 @@ async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> 
     assert cast(FakeConversation, worker.conversation).attention == []
 
 
-async def test_the_offer_asks_whether_it_is_worth_speaking(journal: RecordingJournal) -> None:
+async def test_the_offer_names_the_screen_without_asking_a_question(
+    journal: RecordingJournal,
+) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(clock, journal, timeline, attention_enabled=True)
@@ -148,8 +150,8 @@ async def test_the_offer_asks_whether_it_is_worth_speaking(journal: RecordingJou
     await worker.offer_attention()
 
     [offered] = cast(FakeConversation, worker.conversation).attention
-    assert "changed to Beta Date" in offered
-    assert "stay silent" in offered
+    assert "Beta Date" in offered
+    assert "?" not in offered
 
 
 async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -> None:
@@ -160,3 +162,18 @@ async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -
     await worker.offer_attention()
 
     assert cast(FakeConversation, worker.conversation).attention == []
+
+
+async def test_a_non_meeting_screen_is_offered_by_title_only(journal: RecordingJournal) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline, attention_enabled=True)
+
+    _screen(
+        timeline, "Cartesia Usage", key_points=("Receipt 1450-6289 Rp899,900",), kind="dashboard"
+    )
+    await worker.offer_attention()
+
+    [offered] = cast(FakeConversation, worker.conversation).attention
+    assert "Cartesia Usage" in offered
+    assert "1450-6289" not in offered

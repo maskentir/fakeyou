@@ -25,6 +25,7 @@ from fakeyou.audio.voice_activity import (
     load_voice_activity_script,
 )
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.conversation.moments import MomentDetector
 from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
@@ -48,7 +49,7 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
 )
 from fakeyou.foundation.taxonomy import TerminalReason
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, attention_line
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
     DEFAULT_MEET_SIGNALS,
@@ -230,6 +231,7 @@ class MeetingWorker:
     perception_drain: PerceptionDrain | None = None
     perception_sync_watched: bool = False
     on_phase: Callable[[str], None] | None = None
+    moments: MomentDetector | None = None
     detail: str = ""
     base: LifecycleState | None = None
     working: LifecycleState | None = None
@@ -614,7 +616,7 @@ class MeetingWorker:
         self.page.on("response", self.perception.sensors.on_response)
         self.perception_sync_watched = True
 
-    def attention_trigger(self) -> str | None:
+    def attention_trigger(self) -> AttentionContext | None:
         perception = self.perception
         if perception is None:
             return None
@@ -628,13 +630,45 @@ class MeetingWorker:
             return None
         self.attention_screen = key
         title = reading.title or "a slide"
-        points = reading.key_points
+        points = reading.key_points if reading.is_meeting_content else []
         detail = "; ".join(point for point in points[:2])
         seen = f"{title}: {detail}" if detail else title
-        return (
-            f"The shared screen changed to {seen}. "
-            "Is there anything worth adding about it? If not, stay silent."
+        return AttentionContext(
+            kind="screen",
+            trigger_text=f"The shared screen is now {seen}.",
+            trigger_event_id=screen.ref,
         )
+
+    def _deliver_attention(self, context: AttentionContext, *, source: str) -> bool:
+        conversation = self.conversation
+        if conversation is None or not self.config.attention_enabled:
+            return False
+        if conversation.is_busy:
+            return False
+        now = self.monotonic()
+        if not self.attention.allow(now):
+            return False
+        self.attention.take(now)
+        self.record(
+            "attention_observed",
+            source=source,
+            chars=len(context.trigger_text),
+            kind=context.kind,
+        )
+        conversation.receive_attention(
+            TranscriptEvent(
+                id=f"attention-{now:.3f}",
+                timestamp=datetime.now(UTC).isoformat(),
+                source="meeting_attention",
+                text=attention_line(context),
+                finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
+                attention=context,
+            ),
+            channel="voice",
+        )
+        return True
 
     async def offer_attention(self) -> None:
         conversation = self.conversation
@@ -645,23 +679,15 @@ class MeetingWorker:
         now = self.monotonic()
         if not self.attention.allow(now):
             return
+        if self.moments is not None:
+            due = self.moments.take_ready(now=now)
+            if due is not None:
+                self._deliver_attention(due, source="agent")
+                return
         trigger = self.attention_trigger()
         if trigger is None:
             return
-        self.attention.take(now)
-        self.record("attention_observed", source="perception", chars=len(trigger))
-        conversation.receive_attention(
-            TranscriptEvent(
-                id=f"attention-{now:.0f}",
-                timestamp=datetime.now(UTC).isoformat(),
-                source="meeting_attention",
-                text=trigger,
-                finalized=True,
-                participant_id="unknown",
-                speaker_evidence_id=None,
-            ),
-            channel="voice",
-        )
+        self._deliver_attention(trigger, source="perception")
 
     def watch_meeting_events(self) -> None:
         perception = self.perception
@@ -1033,6 +1059,7 @@ class SessionWiring:
     meet_dispatcher: MeetActionDispatcher | None = None
     perception: PerceptionStack | None = None
     on_phase: Callable[[str], None] | None = None
+    moments: MomentDetector | None = None
 
 
 _PreflightFactory = Callable[[], Coroutine[Any, Any, list[ProbeResult]]]
@@ -1215,6 +1242,7 @@ async def _launch_session_browser(
         voice_activity=hooks.voice_activity,
         perception=hooks.perception,
         on_phase=hooks.on_phase,
+        moments=hooks.moments,
     )
     context = RuntimeContext(browser=page, audio=audio, session=worker)
     try:
