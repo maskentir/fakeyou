@@ -1,10 +1,10 @@
+from fakeyou.session.numbers import numbers_in
 from fakeyou.session.speech import (
     BookEntry,
     FactBook,
     SpeechAct,
     check_act,
     check_sentence,
-    numbers_in,
 )
 
 OBJECTIVE = "Find out whether the vendor can deliver the integration before the end of the quarter"
@@ -72,3 +72,22 @@ def test_a_contribution_must_cite_and_a_question_must_come_from_the_brief() -> N
 
 def test_numbers_are_compared_by_their_written_form() -> None:
     assert numbers_in("At 10:30, 2.5 million, and 14/10.") == frozenset({"10:30", "2.5", "14/10"})
+
+
+def test_a_number_spoken_as_words_is_not_treated_as_invented() -> None:
+    book = FactBook(heard="the number is fifty", entries={})
+
+    assert check_sentence("The number is 50.", SpeechAct(), book) == "pass"
+    assert check_sentence("The number is 42.", SpeechAct(), book) == "invented_number"
+
+
+def test_a_compound_number_in_words_is_read_as_one_number() -> None:
+    book = FactBook(heard="the line forty two", entries={})
+
+    assert check_sentence("Line 42.", SpeechAct(), book) == "pass"
+
+
+def test_a_small_number_word_is_not_a_quantity_claim() -> None:
+    book = FactBook(heard="hello", entries={})
+
+    assert check_sentence("One. Two. Three.", SpeechAct(), book) == "pass"

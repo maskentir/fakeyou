@@ -74,7 +74,8 @@
     },
     "speech": {
       "owner_commitment": "I can't decide that here, so I'll take it back and confirm.",
-      "unsure": "I'm not sure about that, so I'd rather not guess."
+      "unsure": "I'm not sure about that, so I'd rather not guess.",
+      "evidence_unavailable": "I can't see that right now."
     }
   },
   "id": {
@@ -152,7 +153,8 @@
     },
     "speech": {
       "owner_commitment": "Itu belum bisa saya putuskan di sini, nanti saya konfirmasi dulu.",
-      "unsure": "Saya belum yakin soal itu, jadi saya tidak mau menebak."
+      "unsure": "Saya belum yakin soal itu, jadi saya tidak mau menebak.",
+      "evidence_unavailable": "Saya belum bisa melihatnya sekarang."
     }
   }
 }

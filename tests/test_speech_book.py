@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from fakeyou.conversation.contribution import source_registry
 from fakeyou.conversation.reply_planner import SpeechGate, planned_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
+from fakeyou.session.speech import SpeechAct, check_act
 
 TRIGGER = "The shared screen changed to Launch Timeline: beta slips to 20 October"
 REGISTRY = source_registry(
@@ -136,3 +137,30 @@ def test_observations_are_kept_per_turn_and_memory_across_turns() -> None:
     assert evidence.observed("t1") == "Meeting view: Q3 revenue 4.2 million"
     assert evidence.observed("t2") == ""
     assert evidence.memory() == {"m1": "one", "m2": "two"}
+
+
+def test_a_reply_without_a_citation_is_refused_when_the_evidence_failed() -> None:
+    source = BookSource(REGISTRY, EVERYTHING)
+    book = fact_book(
+        source,
+        heard="can you see my screen",
+        observed="",
+        memory={},
+        evidence_failed=True,
+    )
+
+    assert check_act(SpeechAct(), book) == "evidence_unavailable"
+    assert check_act(SpeechAct(cites=("demo-date",)), book) == "pass"
+
+
+def test_a_reply_with_a_citation_survives_a_failed_lookup() -> None:
+    source = BookSource(REGISTRY, EVERYTHING)
+    book = fact_book(
+        source,
+        heard="what is the pilot budget",
+        observed="",
+        memory={},
+        evidence_failed=True,
+    )
+
+    assert check_act(SpeechAct(cites=("demo-date",)), book) == "pass"

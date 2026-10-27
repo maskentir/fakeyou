@@ -107,7 +107,7 @@ def render(proposition: Proposition, locale: str) -> str:
             return str(pack["unknown"][proposition.question])
 
 
-SpeechLine = Literal["owner_commitment", "unsure"]
+SpeechLine = Literal["owner_commitment", "unsure", "evidence_unavailable"]
 
 
 def speech_line(line: SpeechLine, locale: str) -> str:

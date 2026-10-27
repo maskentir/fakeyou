@@ -183,10 +183,12 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
         *,
         journal: Journal | None = None,
         on_observed: Callable[[str, str], None] | None = None,
+        on_evidence: Callable[[str, tuple[str, ...]], None] | None = None,
     ) -> None:
         self._context = context
         self._journal = journal or Journal("", echo=False)
         self._on_observed = on_observed
+        self._on_evidence = on_evidence
 
     @override
     async def awrap_model_call(
@@ -209,6 +211,11 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
             image_attached=False,
         )
         evidence = await gather_evidence(self._context, trigger[-1])
+        if self._on_evidence is not None and trigger[-1].id:
+            codes = tuple(
+                str(result.get("code")) for result in evidence.values() if isinstance(result, dict)
+            )
+            self._on_evidence(trigger[-1].id, codes)
         if evidence:
             content = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
             appended.extend(_synthetic(MEETING_EVIDENCE, content, "meeting_evidence"))
@@ -242,5 +249,8 @@ def create_perception_middleware(
     *,
     journal: Journal | None = None,
     on_observed: Callable[[str, str], None] | None = None,
+    on_evidence: Callable[[str, tuple[str, ...]], None] | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
-    return PerceptionContextMiddleware(context, journal=journal, on_observed=on_observed)
+    return PerceptionContextMiddleware(
+        context, journal=journal, on_observed=on_observed, on_evidence=on_evidence
+    )

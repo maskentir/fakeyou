@@ -618,6 +618,7 @@ class MeetingResponder:
             heard=heard,
             observed=self.evidence.observed(transcript_id),
             memory=self.evidence.memory(),
+            evidence_failed=self.evidence.evidence_failed(transcript_id),
         )
 
     def _trace(

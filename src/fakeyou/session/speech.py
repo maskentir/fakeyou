@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fakeyou.session.facts import Disclosure, Namespace
+from fakeyou.session.numbers import claimed_numbers, numbers_in
 
 SpeechVerdict = Literal[
     "pass",
@@ -14,10 +15,10 @@ SpeechVerdict = Literal[
     "owner_commitment",
     "uncited_contribution",
     "question_not_in_brief",
+    "evidence_unavailable",
 ]
 ContributionKind = Literal["none", "fact", "correction", "question"]
 DISCLOSURE_SHINGLE_WORDS = 6
-_NUMBER = re.compile(r"\d+(?:[.,:/]\d+)*")
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
@@ -35,6 +36,7 @@ class FactBook:
     entries: Mapping[str, BookEntry] = field(default_factory=dict)
     heard: str = ""
     internal: tuple[str, ...] = ()
+    evidence_failed: bool = False
 
     def with_entries(self, entries: Iterable[BookEntry]) -> "FactBook":
         merged = dict(self.entries)
@@ -49,10 +51,6 @@ class SpeechAct:
     contribution: ContributionKind = "none"
 
 
-def numbers_in(text: str) -> frozenset[str]:
-    return frozenset(match.group().rstrip(".,:/") for match in _NUMBER.finditer(text))
-
-
 def _shingles(text: str) -> frozenset[tuple[str, ...]]:
     words = [word.casefold() for word in _WORD.findall(text)]
     size = DISCLOSURE_SHINGLE_WORDS
@@ -62,6 +60,8 @@ def _shingles(text: str) -> frozenset[tuple[str, ...]]:
 def check_act(act: SpeechAct, book: FactBook) -> SpeechVerdict:
     if act.commits_owner:
         return "owner_commitment"
+    if book.evidence_failed and not act.cites:
+        return "evidence_unavailable"
     for fact_id in act.cites:
         entry = book.entries.get(fact_id)
         if entry is None:
@@ -86,7 +86,7 @@ def check_sentence(sentence: str, act: SpeechAct, book: FactBook) -> SpeechVerdi
             *(book.entries[fact_id].text for fact_id in act.cites if fact_id in book.entries),
         ]
     )
-    if not numbers_in(sentence) <= numbers_in(grounded):
+    if not claimed_numbers(sentence) <= numbers_in(grounded):
         return "invented_number"
     spoken = _shingles(sentence)
     if spoken and any(spoken & _shingles(instruction) for instruction in book.internal):

@@ -932,6 +932,26 @@ walau meeting-nya selesai normal. Sekarang kegagalan audio dicek terhadap
 state call lebih dulu, jadi call yang berakhir dilaporkan sebagai
 `ended_by_host`, dan detail akhir sesi masuk ke journal dan report.
 
+Sesi `live-oue-4` (multi-human, 27 menit) menjalankan skenario nyata dan
+menemukan tiga cacat lagi, semuanya diperbaiki:
+
+- Twin mengucapkan JSON mentah. Model kadang menjawab tanpa mengikuti
+  skema `ReplyPlan`, sehingga raw-nya diucapkan apa adanya dan percobaan
+  berikutnya mengucapkan JSON. Raw berbentuk JSON kini tidak pernah
+  diucapkan; teksnya diambil dari field `text` bila ada.
+- Chat ditolak. Aturan persona dibaca model sebagai "twin tidak boleh
+  mengirim chat". Aturan kewenangan sekarang menyebut brief sebagai
+  satu-satunya sumber, dan chat yang terkonfirmasi masuk history sebagai
+ sebagai pesan sendiri.
+- Jawaban tentang layar dikarang. Evidence `screen` gagal
+  (`unknown_screen`) tapi model tetap bilang "tidak terlihat dari
+  gambar". Sekarang evidence yang gagal membuat jawaban tanpa kutipan
+  ditolak dan diganti kalimat "belum bisa melihatnya".
+- Angka yang diucapkan sebagai kata ("lima puluh", "forty two") dulu
+  dianggap karangan. `session.numbers` membaca kata angka dari
+  `number_vocabulary.json`; angka kecil satu digit tidak dihitung karena
+  sering dipakai sebagai kata ganti.
+
 ## Validation matrix
 
 Acceptance tidak cukup dengan unit test hijau. Setiap invariant memiliki

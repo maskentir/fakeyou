@@ -330,6 +330,7 @@ class _ConversationBuilder:
                 perception,
                 journal=self._diagnostics.journal,
                 on_observed=self._evidence.note_observed,
+                on_evidence=self._evidence.note_evidence,
             )
         )
 
