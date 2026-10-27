@@ -1,0 +1,18 @@
+{
+  "grounding": [
+    {
+      "heard": "budgetnya seratus dua puluh juta",
+      "pass": ["Budget 120 juta.", "It is 120000000."],
+      "invented": ["Budget 150 juta.", "It is 20 juta."]
+    },
+    {
+      "heard": "salah satu vendor",
+      "pass": [],
+      "invented": ["Budget 1 juta."]
+    }
+  ],
+  "phrases": {
+    "text": "dua ratus juta, seribu.",
+    "runs": [["dua", "ratus", "juta"], ["dua", "ratus"], ["seribu"]]
+  }
+}

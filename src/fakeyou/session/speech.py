@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -22,6 +22,7 @@ DISCLOSURE_SHINGLE_WORDS = 6
 SPOKEN_NUMBER_LANGUAGES = ("id", "en")
 _NUMBER = re.compile(r"\d+(?:[.,:/]\d+)*")
 _WORD = re.compile(r"\w+", re.UNICODE)
+_TOKEN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,17 +57,50 @@ def numbers_in(text: str) -> frozenset[str]:
     return frozenset(match.group().rstrip(".,:/") for match in _NUMBER.finditer(text))
 
 
-def _words(text: str) -> str:
-    words = _WORD.findall(text.casefold().replace("-", " "))
-    return f" {' '.join(word for word in words if word != 'and')} "
+def _words(text: str, pattern: re.Pattern[str] = _WORD) -> tuple[str, ...]:
+    words = pattern.findall(text.casefold().replace("-", " "))
+    return tuple(word for word in words if word != "and")
 
 
-def _said_in_words(number: str, spoken: str) -> bool:
-    if not number.isdigit():
-        return False
-    return any(
-        _words(num2words(int(number), lang=language)) in spoken
-        for language in SPOKEN_NUMBER_LANGUAGES
+def _spelled(number: int, language: str) -> tuple[str, ...]:
+    return _words(num2words(number, lang=language))
+
+
+_SCALE_WORDS = frozenset(
+    _spelled(10**power, language)[-1]
+    for language in SPOKEN_NUMBER_LANGUAGES
+    for power in (3, 6, 9, 12)
+)
+_NUMBER_WORDS = _SCALE_WORDS | frozenset(
+    word
+    for language in SPOKEN_NUMBER_LANGUAGES
+    for number in range(1001)
+    for word in _spelled(number, language)
+)
+_PRONOUN_NUMBERS = frozenset(_spelled(1, language) for language in SPOKEN_NUMBER_LANGUAGES)
+
+
+def _number_runs(words: tuple[str, ...]) -> Iterator[tuple[str, ...]]:
+    run: list[str] = []
+    for word in (*words, ""):
+        if word in _NUMBER_WORDS:
+            run.append(word)
+            continue
+        while run and tuple(run) not in _PRONOUN_NUMBERS:
+            yield tuple(run)
+            if run[-1] not in _SCALE_WORDS:
+                break
+            run.pop()
+        run = []
+
+
+def spoken_numbers(text: str) -> frozenset[tuple[str, ...]]:
+    return frozenset(_number_runs(_words(text, _TOKEN)))
+
+
+def _said_in_words(number: str, spoken: frozenset[tuple[str, ...]]) -> bool:
+    return number.isdigit() and any(
+        _spelled(int(number), language) in spoken for language in SPOKEN_NUMBER_LANGUAGES
     )
 
 
@@ -104,7 +138,7 @@ def check_sentence(sentence: str, act: SpeechAct, book: FactBook) -> SpeechVerdi
         ]
     )
     written = numbers_in(grounded)
-    spoken = _words(grounded)
+    spoken = spoken_numbers(grounded)
     if any(
         number not in written and not _said_in_words(number, spoken)
         for number in numbers_in(sentence)

@@ -1,3 +1,9 @@
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
 from fakeyou.session.speech import (
     BookEntry,
     FactBook,
@@ -5,8 +11,12 @@ from fakeyou.session.speech import (
     check_act,
     check_sentence,
     numbers_in,
+    spoken_numbers,
 )
 
+SPOKEN_NUMBERS = json.loads(
+    (Path(__file__).parent / "fixtures" / "spoken-numbers.json").read_text(encoding="utf-8")
+)
 OBJECTIVE = "Find out whether the vendor can deliver the integration before the end of the quarter"
 BOOK = FactBook(
     entries={
@@ -87,14 +97,32 @@ def test_a_compound_number_in_words_is_read_as_one_number() -> None:
     assert check_sentence("Line 42.", SpeechAct(), book) == "pass"
 
 
-def test_an_indonesian_number_heard_in_words_grounds_its_digits() -> None:
-    book = FactBook(heard="budgetnya seratus dua puluh juta", entries={})
+def test_a_number_inside_a_longer_spoken_number_is_not_grounded() -> None:
+    book = FactBook(heard="we have fifty-five days", entries={})
 
-    assert check_sentence("Budget 120 juta.", SpeechAct(), book) == "pass"
-    assert check_sentence("Budget 150 juta.", SpeechAct(), book) == "invented_number"
+    assert check_sentence("We have 55 days.", SpeechAct(), book) == "pass"
+    assert check_sentence("We have 5 days.", SpeechAct(), book) == "invented_number"
 
 
-def test_a_small_number_word_is_not_a_quantity_claim() -> None:
-    book = FactBook(heard="hello", entries={})
+def test_one_used_as_a_pronoun_does_not_ground_a_digit() -> None:
+    book = FactBook(heard="no one approved it", entries={})
 
-    assert check_sentence("One. Two. Three.", SpeechAct(), book) == "pass"
+    assert check_sentence("Budget 1 million.", SpeechAct(), book) == "invented_number"
+
+
+@pytest.mark.parametrize("case", SPOKEN_NUMBERS["grounding"], ids=lambda case: case["heard"])
+def test_numbers_heard_in_indonesian_words_ground_only_their_own_digits(
+    case: dict[str, Any],
+) -> None:
+    book = FactBook(heard=case["heard"], entries={})
+
+    assert all(check_sentence(line, SpeechAct(), book) == "pass" for line in case["pass"])
+    assert all(
+        check_sentence(line, SpeechAct(), book) == "invented_number" for line in case["invented"]
+    )
+
+
+def test_spoken_numbers_split_at_punctuation() -> None:
+    phrases = SPOKEN_NUMBERS["phrases"]
+
+    assert spoken_numbers(phrases["text"]) == {tuple(run) for run in phrases["runs"]}
