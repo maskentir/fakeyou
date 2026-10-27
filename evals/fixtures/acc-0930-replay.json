@@ -8,7 +8,7 @@
       ],
       "turns": [
         {"say": "Rani Twin kapan beta launch or chill", "must_mention": ["14 oktober"]},
-        {"say": "demo customer old shield jadinya hari apa", "expects_recall": true, "must_mention": ["jumat"]},
+        {"say": "demo customer old shield jadinya hari apa", "must_mention": ["jumat"]},
         {"say": "Berapa harga lisensi orchid per user?", "must_mention_any": ["belum", "cek", "tanya", "konfirmasi"], "must_not_mention": ["rp", "juta", "$"]},
         {"say": "Siapa yang pegang checklist launch orchid?", "must_mention": ["rani"]},
         {"say": "Terus keputusan kontraknya harus lewat dia juga.", "must_mention": ["rani"], "must_mention_any": ["tertulis", "persetujuan", "approval"]},
@@ -24,7 +24,7 @@
         "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Digital twin said that PIC kickoff vendor Orchid adalah Budi."
       ],
       "turns": [
-        {"say": "yang sebelumnya, kickoff vendor or kilt diputuskan kapan dan siapa PIC-nya?", "expects_recall": true, "must_mention": ["selasa", "budi"], "must_mention_any": ["meeting", "rapat", "dibahas"]},
+        {"say": "yang sebelumnya, kickoff vendor or kilt diputuskan kapan dan siapa PIC-nya?", "must_mention": ["selasa", "budi"], "must_mention_any": ["meeting", "rapat", "dibahas"]},
         {"say": "itu sudah disetujui Rani.", "must_mention_any": ["belum", "konfirmasi", "cek", "pastikan"]}
       ]
     }

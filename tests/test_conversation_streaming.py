@@ -34,15 +34,11 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
-from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import (
     FakeResponder,
-    ScriptedJudge,
     ToolCallingFakeModel,
-    judged,
-    recall_call,
 )
 from tests._conversation_support import AgentT, callback_handlers, event
 from tests._error_support import message_pattern
@@ -382,38 +378,6 @@ async def test_streamed_reply_marks_answer_text_after_tool_end(journal: Recordin
     assert audio.spoken == ["The demo is on Friday."]
     order = [json.loads(line)["event"] for line in journal.lines]
     assert order.index("answer_text_emitted") > order.index("tool_finished")
-    await loop.lifecycle.close()
-
-
-async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal) -> None:
-    from langchain_core.tools import tool
-
-    @tool(description="Search long-term meeting memory for relevant context.")
-    async def recall_meeting_context(query: str) -> str:
-        del query
-        raise RuntimeError("graph down")
-
-    agent = create_meeting_agent(
-        ToolCallingFakeModel(
-            responses=[
-                recall_call({"query": "demo"}, id="call-1"),
-                AIMessage(content="I do not know the answer. Sorry about that."),
-            ]
-        ),
-        tools=[recall_meeting_context],
-        checkpointer=InMemorySaver(),
-        middleware=[create_recall_error_middleware(None)],
-    )
-    audio = FakeReplyAudio()
-    judge = ScriptedJudge(lambda _window: judged("reply", evidence=("memory",)))
-    loop = streamed_loop(agent, audio, journal, judge=judge, wake_phrases=["Rani"])
-    await loop.ingress.receive_final(event("t1", "Rani, when is demo"))
-    await loop.lifecycle.wait_idle()
-    assert audio.spoken == ["I do not know the answer.", "Sorry about that."]
-    assert "Meeting memory is unavailable" not in " ".join(audio.spoken)
-    [failed] = journal.events("tool_failed")
-    assert (failed["tool"], failed["transcript_id"]) == ("recall_meeting_context", "t1")
-    assert journal.events("agent_finished") != []
     await loop.lifecycle.close()
 
 

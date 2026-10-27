@@ -30,7 +30,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
                 "memory": [],
                 "turns": [
                     {"say": "When is the beta launch?", "must_mention": ["14 october"]},
-                    {"say": "Price?", "must_not_mention": ["million"], "expects_recall": True},
+                    {"say": "Price?", "must_not_mention": ["million"]},
                 ],
             }
         ],
@@ -45,7 +45,6 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
     assert score.rate("must_mention") == 1.0
     assert score.rate("must_not_mention") == 0.0
     assert score.rate("no_trailing_question") == 0.5
-    assert score.rate("recall_called") == 0.0
     assert score.summary()["turns"] == 2
 
 

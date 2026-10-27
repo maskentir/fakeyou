@@ -1,6 +1,5 @@
 import hashlib
 import json
-from functools import partial
 from pathlib import Path
 
 import pytest
@@ -28,12 +27,11 @@ from evals._trust import (
     contract_model,
     load_trust_fixture,
     rated_pairs,
-    strategy_settings,
 )
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
+from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
 from fakeyou.memory.persona import persona_digest
 from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
 from fakeyou.persistence.brief import brief_digest
@@ -75,7 +73,7 @@ def test_brief_corpus_defines_12_categories() -> None:
             assert turn["contract_reply"].strip()
             assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
         final = str(case["turns"][-1]["contract_reply"])
-        aids = score_brief_aids(case, final, [], [])
+        aids = score_brief_aids(case, final, [])
         assert all(aids.values()), (case["id"], aids)
     scopes = {case_brief(fixture, case).knowledge_scope for case in cases}
     assert scopes == {"brief_only", "persona_memory"}
@@ -88,11 +86,9 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
     fixture = load_brief_fixture()
     profile = fixture_profile(fixture)
     target = brief_artifact_dir(tmp_path)
-    settings = strategy_settings("tool").model_copy(
+    settings = Settings().model_copy(
         update={
-            "conversation": strategy_settings("tool").conversation.model_copy(
-                update={"sentence_streaming": False}
-            )
+            "conversation": Settings().conversation.model_copy(update={"sentence_streaming": False})
         }
     )
     score = await replay_briefs(
@@ -123,22 +119,15 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
     briefs = {case["id"]: case_brief(fixture, case) for case in fixture["cases"]}
     for turn in score.turns:
         case = by_id[turn["case_id"]]
-        assert "remember_meeting_fact" not in turn["tools_bound"]
-        assert turn["model_calls"] == (2 if case["needs_recall"] else 1)
+        assert turn["model_calls"] == 1
         assert turn["spoken"] == turn["reply"]
-        if briefs[turn["case_id"]].knowledge_scope == "brief_only":
-            assert turn["tools_bound"] == []
-            assert turn["tool_trajectory"] == []
+        assert turn["tool_trajectory"] == []
         if case["needs_recall"]:
-            assert turn["tools_bound"] == ["recall_meeting_context"]
-            assert [call["name"] for call in turn["tool_trajectory"]] == ["recall_meeting_context"]
-            assert turn["tool_trajectory"][0]["output"] == RECALL_EMPTY_RESULT
+            assert turn["memory_prefetch"][-1]["outcome"] == "empty"
     for turn in score.rated_turns():
         case = by_id[turn["case_id"]]
         assert turn["reply"] == case["turns"][-1]["contract_reply"]
-        assert turn["aids"] == score_brief_aids(
-            case, turn["reply"], turn["tools_bound"], turn["tool_trajectory"]
-        )
+        assert turn["aids"] == score_brief_aids(case, turn["reply"], turn["tool_trajectory"])
         assert all(turn["aids"][name] for name in AID_CHECKS)
     markers = [str(marker).lower() for marker in fixture["persona_markers"]]
     prompts = json.loads((target / "prompts.json").read_text(encoding="utf-8"))
@@ -175,7 +164,7 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
     assert manifest["brief_sha256"] == {
         case_id: brief_digest(brief) for case_id, brief in briefs.items()
     }
-    assert manifest["model_calls"] == score.model_calls() == 45
+    assert manifest["model_calls"] == score.model_calls() == 42
     assert manifest["recall_calls"] == score.recall_calls() == BRIEF_RUNS
     assert manifest["latency"]["n"] == 42
     secrets = [
@@ -193,11 +182,9 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
     memory_case = load_trust_fixture()["cases"][0]
     case = next(case for case in fixture["cases"] if case["needs_recall"])
     case = {**case, "memory": memory_case["memory"]}
-    settings = strategy_settings("tool").model_copy(
+    settings = Settings().model_copy(
         update={
-            "conversation": strategy_settings("tool").conversation.model_copy(
-                update={"sentence_streaming": False}
-            )
+            "conversation": Settings().conversation.model_copy(update={"sentence_streaming": False})
         }
     )
     settings = settings.model_copy(
@@ -211,7 +198,8 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
         contract_model, {**fixture, "cases": [case]}, 1, options=ReplayOptions(settings=settings)
     )
     assert score.turns[0]["exception"] is None
-    evidence = json.loads(score.turns[0]["tool_trajectory"][0]["output"])
+    prefetched = score.turns[0]["memory_prefetch"][-1]["output"]
+    evidence = json.loads(prefetched.removeprefix(PREFETCH_EVIDENCE_PREFIX))
     assert len(evidence["facts"]) == 1
     assert score.candidate["unchanged"] is True
 
@@ -282,10 +270,10 @@ async def test_live_brief_replay_captures_36_rated_pairs(tmp_path: Path) -> None
 async def test_contract_brief_prefetch_follows_scope() -> None:
     fixture = load_brief_fixture()
     score = await replay_briefs(
-        partial(contract_model, recall_tool=False),
+        contract_model,
         fixture,
         1,
-        options=ReplayOptions(settings=strategy_settings("prefetch")),
+        options=ReplayOptions(settings=Settings()),
     )
     by_id = {case["id"]: case for case in fixture["cases"]}
     briefs = {case["id"]: case_brief(fixture, case) for case in fixture["cases"]}
@@ -296,10 +284,7 @@ async def test_contract_brief_prefetch_follows_scope() -> None:
             case["memory_requested"]
         )
         assert turn["model_calls"] == 1
-        assert turn["tools_bound"] == []
         assert bool(turn["memory_prefetch"]) is memory
-        if not memory:
-            assert turn["tools_bound"] == []
-            assert turn["tool_trajectory"] == []
+        assert turn["tool_trajectory"] == []
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)

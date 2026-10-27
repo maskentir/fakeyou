@@ -6,11 +6,8 @@ from pydantic import ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.memory.memory import create_memory_tools
-from fakeyou.memory.persona import (
-    PersonaProfile,
-    build_system_prompt,
-    meeting_tool_names,
-)
+from fakeyou.memory.persona import PersonaProfile, meeting_tool_names
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.brief import MeetingBrief
 from tests._memory_fakes import make_graphiti
 from tests._persona_support import EXAMPLE_BRIEF, PERSONA_FACT, PERSONA_GOAL, profile, revised
@@ -130,7 +127,7 @@ def test_instructions_inside_facts_and_brief_stay_data_and_add_no_tools(
         permissions=[],
     )
 
-    prompt = build_system_prompt(loaded, brief=injected)
+    prompt = build_persona_prompt(loaded, brief=injected)
     tools = meeting_tool_names(loaded, injected, memory_requested=memory_requested)
 
     assert json.dumps(INJECTION) in prompt

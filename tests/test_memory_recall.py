@@ -1,8 +1,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta, timezone
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from graphiti_core.nodes import EpisodicNode
@@ -12,10 +11,9 @@ import fakeyou.memory.memory as memory_module
 from fakeyou.config.settings import DEFAULTS, RecallSettings
 from fakeyou.memory import owner_notes
 from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
-from fakeyou.memory.memory import create_memory_tools, create_recall_error_middleware
+from fakeyou.memory.memory import create_memory_tools
 from tests._memory_fakes import make_graphiti
 from tests._memory_support import fake_episode, recall_tool
-from tests._persistence_fakes import RecordingJournal
 
 
 async def test_recall_caps_results(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -351,13 +349,7 @@ async def test_recall_returns_empty_when_no_evidence_survives(
     assert await recall.ainvoke({"query": "note fact"}) == RECALL_EMPTY_RESULT
 
 
-async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
-    monkeypatch: pytest.MonkeyPatch, journal: RecordingJournal
-) -> None:
-    from langchain.agents.middleware import ToolCallRequest
-
-    from fakeyou.observability.faults import FaultReporter
-
+async def test_recall_status_lookup_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     moment = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
     stored = {
         "note-a": fake_episode("note-a", "team_alpha", owner_notes.OWNER_NOTE_SOURCE, moment),
@@ -375,21 +367,9 @@ async def test_recall_status_lookup_failure_raises_for_unavailable_middleware(
     monkeypatch.setattr(memory_module, "read_note_states", broken_states)
     memory = make_graphiti(facts=["Live note fact."], episodes={"Live note fact.": ["note-a"]})
     [recall] = create_memory_tools(memory, group_id="team_alpha")
-    middleware = create_recall_error_middleware(FaultReporter(journal=journal))
 
     with pytest.raises(RuntimeError, match="status store offline"):
         await recall.ainvoke({"query": "note fact"})
-    assert middleware.on_error is not None
-    assert (
-        middleware.on_error(
-            RuntimeError("status store offline"),
-            cast(
-                ToolCallRequest,
-                SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"}),
-            ),
-        )
-        == memory_module.RECALL_UNAVAILABLE_RESULT
-    )
 
 
 async def test_recall_batches_episode_and_status_lookups(
@@ -431,29 +411,6 @@ async def test_recall_batches_episode_and_status_lookups(
     ]
     assert episode_calls == [["meet-a", "note-a"]]
     assert state_calls == [["note-a"]]
-
-
-def test_recall_error_middleware_returns_unknown_and_records_fault(
-    journal: RecordingJournal,
-) -> None:
-    from langchain.agents.middleware import ToolCallRequest
-
-    from fakeyou.observability.faults import FaultReporter
-
-    lines = journal.lines
-    faults = FaultReporter(journal=journal)
-    middleware = create_recall_error_middleware(faults)
-    request = cast(
-        ToolCallRequest,
-        SimpleNamespace(tool_call={"name": "recall_meeting_context", "id": "c1"}),
-    )
-
-    assert middleware.on_error is not None
-    content = middleware.on_error(RuntimeError("secret detail"), request)
-
-    assert content == memory_module.RECALL_UNAVAILABLE_RESULT
-    assert faults.total() == 1
-    assert "secret detail" not in lines[0]
 
 
 async def test_recall_times_out_with_its_configured_budget() -> None:

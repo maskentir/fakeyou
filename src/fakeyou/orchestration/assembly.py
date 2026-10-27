@@ -47,21 +47,17 @@ from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
-from fakeyou.foundation.capabilities import EVIDENCE_TOOLS as REGISTRY_EVIDENCE_TOOLS
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
 from fakeyou.memory.memory import (
     create_memory_prefetch_middleware,
-    create_memory_tools,
-    create_recall_error_middleware,
 )
 from fakeyou.memory.persona import (
     PersonaProfile,
     PersonaTool,
     meeting_tool_names,
-    memory_wiring,
 )
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -84,8 +80,6 @@ from fakeyou.session.identity import PresenceFact
 from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
-
-EVIDENCE_TOOLS = REGISTRY_EVIDENCE_TOOLS
 
 
 @dataclass(slots=True)
@@ -296,7 +290,6 @@ class _ConversationBuilder:
         self._persona = build_persona_prompt(
             profile,
             brief=self._agent.brief,
-            recall_strategy=self._settings.memory.recall.strategy,
             language=self._settings.speech.language,
             perception=self._agent.perception is not None,
         )
@@ -305,11 +298,7 @@ class _ConversationBuilder:
         strong = create_strong_chat_model(self._settings)
         if strong is not None:
             self._middleware.append(
-                EvidenceRoutingMiddleware(
-                    strong,
-                    evidence_tools=EVIDENCE_TOOLS,
-                    journal=self._diagnostics.journal,
-                )
+                EvidenceRoutingMiddleware(strong, journal=self._diagnostics.journal)
             )
 
     def add_fallback(self) -> None:
@@ -320,27 +309,16 @@ class _ConversationBuilder:
     def add_memory(self) -> None:
         profile = self._agent.profile
         graphiti = self._agent.graphiti
-        if graphiti is None or profile is None or not self._tool_names:
+        if graphiti is None or profile is None or "recall_meeting_context" not in self._tool_names:
             return
-        bound, prefetch = memory_wiring(self._tool_names, self._settings.memory.recall.strategy)
-        if prefetch:
-            self._middleware.append(
-                create_memory_prefetch_middleware(
-                    graphiti,
-                    group_id=profile.memory_group,
-                    recall=self._settings.memory.recall,
-                    diag=self._diagnostics,
-                )
+        self._middleware.append(
+            create_memory_prefetch_middleware(
+                graphiti,
+                group_id=profile.memory_group,
+                recall=self._settings.memory.recall,
+                diag=self._diagnostics,
             )
-        if bound:
-            self._tools.extend(
-                tool
-                for tool in create_memory_tools(
-                    graphiti, group_id=profile.memory_group, recall=self._settings.memory.recall
-                )
-                if tool.name in bound
-            )
-            self._middleware.append(create_recall_error_middleware(self._diagnostics.faults))
+        )
 
     def add_perception(self) -> None:
         perception = self._agent.perception
@@ -486,9 +464,9 @@ async def open_conversation(
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
         builder.add_memory()
+        builder.add_perception()
         builder.add_routing()
         builder.add_fallback()
-        builder.add_perception()
         builder.add_speaker_attribution()
         responder = builder.build_responder(
             builder.build_agent(model),

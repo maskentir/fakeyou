@@ -8,13 +8,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import (
-    LOOK_AT_PARTICIPANT,
-    LOOK_AT_SCREEN,
     OBSERVE_MEETING,
     PERCEPTION_GUIDANCE,
     PerceptionContext,
     create_perception_middleware,
-    create_perception_tools,
 )
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import IncomingChat
@@ -36,13 +33,11 @@ PRICING = ("Pricing Plans", ["Starter: 99,000 per month", "Pro: 299,000 per mont
 THREAD = {"configurable": {"thread_id": "thread"}}
 
 
-def _participant(text: str, message_id: str, *, evidence: tuple[str, ...] = ()) -> HumanMessage:
+def _participant(text: str, message_id: str) -> HumanMessage:
     return HumanMessage(
         content=text,
         id=message_id,
-        additional_kwargs={
-            "meeting_event": {"participant_id": "unknown", "evidence_needs": list(evidence)}
-        },
+        additional_kwargs={"meeting_event": {"participant_id": "unknown", "evidence_needs": []}},
     )
 
 
@@ -146,48 +141,6 @@ async def test_messages_without_a_meeting_trigger_pass_through() -> None:
     assert not any(isinstance(message, ToolMessage) for message in messages)
 
 
-async def test_the_model_can_look_closer_at_an_earlier_screen() -> None:
-    timeline = shown_timeline(TIMELINE, PRICING)
-    timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
-    look = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": LOOK_AT_SCREEN,
-                "args": {"screen": "previous", "question": "Which color is beta?"},
-                "id": "look-1",
-                "type": "tool_call",
-            }
-        ],
-    )
-    context = _context(timeline, answers=("Beta is marked in orange.",))
-    agent, model = _agent(context, [look, AIMessage(content="It is orange.")])
-
-    result = await agent.ainvoke(
-        {"messages": [_participant("Beta color?", "t1", evidence=("screen",))]}, THREAD
-    )
-
-    looked = next(
-        message
-        for message in result["messages"]
-        if isinstance(message, ToolMessage) and message.name == LOOK_AT_SCREEN
-    )
-    assert json.loads(looked.text) == {
-        "code": "ok",
-        "answer": "Beta is marked in orange.",
-        "screen": "screen#1",
-    }
-    second_call = _calls(model)[1]
-    assert isinstance(second_call[-1], ToolMessage)
-    assert second_call[-1].name == OBSERVE_MEETING
-
-
-async def test_the_tools_share_the_view_namespace() -> None:
-    tools = {tool.name: tool for tool in create_perception_tools(_context(MeetingTimeline()))}
-
-    assert set(tools) == {LOOK_AT_SCREEN, LOOK_AT_PARTICIPANT, "look_back_chat"}
-
-
 async def test_looking_reports_why_it_could_not_see() -> None:
     timeline = shown_timeline(TIMELINE)
     timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
@@ -267,9 +220,8 @@ async def test_look_back_chat_returns_only_pre_join_lines() -> None:
         )
     )
     timeline.add_chat(IncomingChat(message_id="new", sender=budi, text="live one", sent_at=START))
-    tools = {tool.name: tool for tool in create_perception_tools(_context(timeline))}
 
-    result = json.loads(await tools["look_back_chat"].ainvoke({}))
+    result = json.loads(_context(timeline).backlog_chat())
 
     assert result["code"] == "ok"
     assert [line["text"] for line in result["lines"]] == ["asked before you joined"]

@@ -6,12 +6,11 @@ from collections.abc import (
     Coroutine,
     Hashable,
     Mapping,
-    Sequence,
 )
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict, get_args
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -19,11 +18,6 @@ from langgraph.runtime import Runtime
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.conversation.memory_prefetch import (
-    MemoryPrefetch,
-    prefetch_memory_evidence,
-    retain_evidence,
-)
 from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
     DecisionSource,
@@ -58,7 +52,6 @@ from fakeyou.conversation.turn_recovery import (
 )
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.provenance import MemoryEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
@@ -448,12 +441,10 @@ class TurnGraphState(TypedDict):
     admission: NotRequired[Admission]
     delivered: NotRequired[tuple[str, ...]]
     judge_window: NotRequired[JudgeWindow | None]
-    memory_evidence: Annotated[list[MemoryEvidence], retain_evidence]
 
 
 TurnRoute = Literal["speak", "end", "failed"]
-IngestRoute = Literal["speak", "participation", "prefetch_memory", "refresh"]
-FINAL_BRANCHES: tuple[IngestRoute, ...] = ("participation", "prefetch_memory")
+IngestRoute = Literal["speak", "participation", "refresh"]
 ParticipationGraph = CompiledStateGraph[
     ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
 ]
@@ -469,13 +460,6 @@ def route_after_ingest(state: TurnGraphState) -> IngestRoute:
     if state.get("admission") == "admit":
         return "speak"
     return "participation"
-
-
-def route_with_prefetch(state: TurnGraphState) -> IngestRoute | Sequence[IngestRoute]:
-    route = route_after_ingest(state)
-    if state["event"].kind == "final":
-        return FINAL_BRANCHES
-    return route
 
 
 def route_after_participation(state: TurnGraphState) -> TurnRoute:
@@ -1280,7 +1264,6 @@ async def record_turn_failure(state: TurnGraphState, runtime: Runtime[TurnRuntim
 
 @dataclass(frozen=True, slots=True)
 class _TurnNodes:
-    prefetch: MemoryPrefetch | None
     participation_graph: ParticipationGraph
     speech_graph: SpeechGraph
 
@@ -1291,21 +1274,6 @@ class _TurnNodes:
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
         return await _participate(state, runtime.context, self.participation_graph)
-
-    async def prefetch_memory(
-        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
-    ) -> dict[str, list[MemoryEvidence]]:
-        if self.prefetch is None:
-            return {}
-        context = runtime.context
-        evidence = await prefetch_memory_evidence(
-            self.prefetch,
-            state["transcript_text"],
-            journal=context.journal,
-            transcript_id=state["event"].event_id,
-            faults=context.faults,
-        )
-        return {"memory_evidence": [evidence]}
 
     async def speak(
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
@@ -1321,11 +1289,9 @@ class _TurnNodes:
 
 def build_turn_graph(
     *,
-    memory_prefetch: MemoryPrefetch | None = None,
     participation: ParticipationGraph | None = None,
 ) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
     nodes = _TurnNodes(
-        prefetch=memory_prefetch,
         participation_graph=(
             build_participation_subgraph() if participation is None else participation
         ),
@@ -1341,10 +1307,7 @@ def build_turn_graph(
     builder.add_edge("refresh", END)
     builder.add_edge("failed", END)
     builder.add_edge("speak", END)
-    if memory_prefetch is None:
-        _route_participation_directly(builder)
-    else:
-        _fan_out_prefetch(builder, nodes)
+    _route_participation_directly(builder)
     return builder.compile()
 
 
@@ -1359,23 +1322,6 @@ def _route_participation_directly(builder: TurnGraphBuilder) -> None:
         {"speak": "speak", "participation": "participation", "refresh": "refresh"},
     )
     builder.add_conditional_edges("participation", route_after_participation, _DECISION_ROUTES)
-
-
-def _fan_out_prefetch(builder: TurnGraphBuilder, nodes: _TurnNodes) -> None:
-    builder.add_node("prefetch_memory", nodes.prefetch_memory)
-    builder.add_node("gather", gather_branches)
-    builder.add_conditional_edges(
-        "ingest",
-        route_with_prefetch,
-        {
-            "speak": "speak",
-            "participation": "participation",
-            "prefetch_memory": "prefetch_memory",
-            "refresh": "refresh",
-        },
-    )
-    builder.add_edge(list(FINAL_BRANCHES), "gather")
-    builder.add_conditional_edges("gather", route_after_participation, _DECISION_ROUTES)
 
 
 class _RecordingSink:

@@ -10,7 +10,6 @@ from langchain.agents.middleware import (
     ModelResponse,
     ModelRetryMiddleware,
 )
-from langchain.agents.middleware.types import ToolCallRequest
 from langchain.agents.structured_output import StructuredOutputValidationError
 from langchain_core.exceptions import ModelError
 from langchain_core.language_models import BaseChatModel
@@ -24,10 +23,8 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.messages.utils import count_tokens_approximately
-from langgraph.types import Command
 
-from fakeyou.foundation.capabilities import ONCE_PER_TURN_TOOLS
-from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
+from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 
@@ -122,120 +119,6 @@ def _tool_name(tool: object) -> str | None:
     return name if isinstance(name, str) else None
 
 
-MAX_EVIDENCE_RESULTS_PER_TURN = 2
-_TOOLS_BY_EVIDENCE_NEED: dict[str, frozenset[str]] = {
-    "screen": frozenset({"look_at_screen"}),
-    "participant": frozenset({"look_at_participant"}),
-    "chat_history": frozenset({"look_back_chat"}),
-    "memory": frozenset({"recall_meeting_context"}),
-}
-_PLANNED_TOOLS = frozenset(tool for tools in _TOOLS_BY_EVIDENCE_NEED.values() for tool in tools)
-
-
-def _turn_messages(messages: Sequence[AnyMessage]) -> Sequence[AnyMessage]:
-    start = 0
-    for index, message in enumerate(messages):
-        if isinstance(message, HumanMessage):
-            start = index
-    return messages[start:]
-
-
-def _evidence_results(messages: Sequence[AnyMessage]) -> list[ToolMessage]:
-    return [
-        message
-        for message in _turn_messages(messages)
-        if isinstance(message, ToolMessage)
-        and message.name in _PLANNED_TOOLS
-        and not message.additional_kwargs.get("synthetic_view")
-        and not message.additional_kwargs.get("memory_prefetch")
-    ]
-
-
-def _planned_evidence(messages: Sequence[AnyMessage]) -> frozenset[str]:
-    _, trigger = current_trigger(messages)
-    event = meeting_event_of(trigger[-1]) if trigger else None
-    needs = event.get("evidence_needs") if event is not None else None
-    if not isinstance(needs, Sequence) or isinstance(needs, str):
-        return frozenset()
-    return frozenset(
-        tool
-        for need in needs
-        if isinstance(need, str)
-        for tool in _TOOLS_BY_EVIDENCE_NEED.get(need, frozenset())
-    )
-
-
-def _evidence_allowed(tool_name: str | None, messages: Sequence[AnyMessage]) -> bool:
-    if tool_name not in _PLANNED_TOOLS:
-        return True
-    results = _evidence_results(messages)
-    if len(results) >= MAX_EVIDENCE_RESULTS_PER_TURN:
-        return False
-    if tool_name in ONCE_PER_TURN_TOOLS and tool_name in {result.name for result in results}:
-        return False
-    _, trigger = current_trigger(messages)
-    kind = trigger_kind(trigger[-1]) if trigger else None
-    if kind in ("speech", "chat"):
-        return tool_name in _planned_evidence(messages)
-    return kind in ("attention", None)
-
-
-class PlannedEvidenceMiddleware(AgentMiddleware[Any, Any, Any]):
-    def _allowed_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        tools = [
-            tool for tool in request.tools if _evidence_allowed(_tool_name(tool), request.messages)
-        ]
-        if len(tools) == len(request.tools):
-            return request
-        return request.override(tools=tools)
-
-    def _refused(self, request: ToolCallRequest) -> ToolMessage | None:
-        name = request.tool_call.get("name")
-        messages = request.state.get("messages", []) if isinstance(request.state, dict) else []
-        if _evidence_allowed(str(name), messages):
-            return None
-        return ToolMessage(
-            content="That evidence is not available in this turn. "
-            "Answer with what you already have or say you are not sure.",
-            tool_call_id=str(request.tool_call.get("id") or ""),
-            name=str(name),
-        )
-
-    @override
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any]:
-        return handler(self._allowed_tools(request))
-
-    @override
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any]:
-        return await handler(self._allowed_tools(request))
-
-    @override
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        refused = self._refused(request)
-        return refused if refused is not None else handler(request)
-
-    @override
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        refused = self._refused(request)
-        return refused if refused is not None else await handler(request)
-
-
 def attributed(message: AnyMessage) -> AnyMessage:
     event = meeting_event_of(message)
     speaker = event.get("speaker") if event is not None else None
@@ -283,56 +166,22 @@ class PlainReplyMiddleware(AgentMiddleware[Any, Any, Any]):
             return ModelResponse(result=[error.ai_message])
 
 
-def _result_code(message: ToolMessage) -> str | None:
-    try:
-        parsed = json.loads(message.text)
-    except (TypeError, ValueError):
-        return None
-    if isinstance(parsed, dict):
-        code = parsed.get("code")
-        if isinstance(code, str):
-            return code
-    return None
-
-
-_UNPRODUCTIVE_CODES = frozenset(
-    {
-        "not_meeting_content",
-        "frame_unavailable",
-        "camera_unavailable",
-        "unknown_participant",
-        "unknown_screen",
-        "budget_exhausted",
-        "look_failed",
-        "refused",
-        "duplicate",
-        "failed",
-    }
-)
-
-
 class EvidenceRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
-    def __init__(
-        self,
-        strong: BaseChatModel,
-        *,
-        evidence_tools: frozenset[str],
-        journal: Journal | None = None,
-    ) -> None:
+    def __init__(self, strong: BaseChatModel, *, journal: Journal | None = None) -> None:
         self._strong = strong
-        self._evidence_tools = evidence_tools
         self._journal = journal or Journal("", echo=False)
 
     def _evidence_trigger(self, message: ToolMessage) -> str | None:
-        if message.additional_kwargs.get("synthetic_view"):
+        if not message.additional_kwargs.get("meeting_evidence"):
             return None
-        if message.additional_kwargs.get("memory_prefetch"):
+        try:
+            results = json.loads(message.text)
+        except ValueError:
             return None
-        if message.name not in self._evidence_tools:
-            return None
-        if _result_code(message) in _UNPRODUCTIVE_CODES:
-            return None
-        return message.name or "evidence_tool"
+        found = isinstance(results, dict) and any(
+            isinstance(result, dict) and result.get("code") == "ok" for result in results.values()
+        )
+        return "meeting_evidence" if found else None
 
     def _strong_trigger(self, request: ModelRequest[Any]) -> str | None:
         messages = request.messages

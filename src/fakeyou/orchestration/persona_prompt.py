@@ -1,12 +1,11 @@
 from dataclasses import dataclass
 
-from fakeyou.config.settings import DEFAULTS, RecallStrategy
+from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.agent import (
     ENDING_RULE,
     MEETING_GUIDANCE,
     SPOKEN_LANGUAGE_GUIDANCE,
 )
-from fakeyou.conversation.prompt_builder import PromptSections
 from fakeyou.memory.persona import (
     ATTENTION_RULE,
     BRIEF_ONLY_PROFILE_FIELDS,
@@ -21,7 +20,7 @@ from fakeyou.memory.persona import (
     NATURAL_SPEECH_RULE,
     PROMPT_PROFILE_FIELDS,
     PROVENANCE_RULE,
-    RECALL_RULES,
+    RECALL_RULE,
     SOURCE_RULES,
     TOOL_ECONOMY_RULE,
     PersonaProfile,
@@ -57,7 +56,6 @@ def _prompt_parts(
     profile: PersonaProfile | None,
     *,
     brief: MeetingBrief | None,
-    recall_strategy: RecallStrategy,
     language: str,
     perception: bool,
 ) -> _PromptParts:
@@ -87,7 +85,7 @@ def _prompt_parts(
             if rule
         ),
         goals=GOALS_RULE if persona_knowledge else "",
-        recall=RECALL_RULES[recall_strategy] if recall else "",
+        recall=RECALL_RULE if recall else "",
         profile_json=profile_prompt_json(profile, profile_fields, with_fact_ids=persona_knowledge),
         brief_rules=BRIEF_RULES if brief is not None else "",
         brief_json=(
@@ -103,44 +101,16 @@ def _prompt_parts(
     )
 
 
-def persona_prompt_sections(
-    profile: PersonaProfile | None,
-    *,
-    brief: MeetingBrief | None = None,
-    recall_strategy: RecallStrategy = "tool",
-    language: str = DEFAULTS.speech.language,
-    perception: bool = False,
-) -> PromptSections:
-    parts = _prompt_parts(
-        profile,
-        brief=brief,
-        recall_strategy=recall_strategy,
-        language=language,
-        perception=perception,
-    )
-    return PromptSections(
-        role=_paragraphs(*parts.role),
-        authority=_paragraphs(parts.authority, parts.goals, parts.brief_rules),
-        persona=parts.profile_json,
-        brief=parts.brief_json,
-        memory_rules=_paragraphs(parts.recall, parts.provenance),
-        tools=parts.perception,
-        output_rules=_paragraphs(parts.natural_speech, parts.confidence, ENDING_RULE),
-    )
-
-
 def build_persona_prompt(
     profile: PersonaProfile | None,
     *,
     brief: MeetingBrief | None = None,
-    recall_strategy: RecallStrategy = "tool",
     language: str = DEFAULTS.speech.language,
     perception: bool = False,
 ) -> str:
     parts = _prompt_parts(
         profile,
         brief=brief,
-        recall_strategy=recall_strategy,
         language=language,
         perception=perception,
     )

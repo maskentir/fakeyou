@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
 from fakeyou.config.identifiers import SessionId
-from fakeyou.config.settings import RecallSettings, RecallStrategy
+from fakeyou.config.settings import RecallSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.memory.evidence import (
@@ -28,7 +28,7 @@ from fakeyou.memory.memory import (
     create_memory_prefetch_middleware,
     create_memory_tools,
 )
-from fakeyou.memory.persona import RECALL_RULES, PersonaProfile, PersonaTool, memory_wiring
+from fakeyou.memory.persona import RECALL_RULE, PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.brief import MeetingBrief
@@ -37,7 +37,6 @@ from tests._memory_fakes import make_graphiti
 
 GROUP = "team_alpha"
 EXAMPLE_BRIEF = Path(__file__).resolve().parent.parent / "examples/meeting-brief.example.json"
-RECALL = frozenset({"recall_meeting_context"})
 
 
 class Faults:
@@ -75,7 +74,9 @@ def participant(text: str, message_id: str) -> HumanMessage:
     return HumanMessage(
         content=text,
         id=message_id,
-        additional_kwargs={"meeting_event": {"participant_id": "unknown"}},
+        additional_kwargs={
+            "meeting_event": {"participant_id": "unknown", "evidence_needs": ["memory"]}
+        },
     )
 
 
@@ -458,30 +459,6 @@ async def test_fallback_retry_reuses_the_prefetched_evidence_of_the_turn(
     assert evidence_messages(primary_sent) == [evidence]
 
 
-@pytest.mark.parametrize(
-    ("names", "strategy", "expected"),
-    [
-        (RECALL, "tool", (RECALL, False)),
-        (RECALL, "prefetch", (frozenset(), True)),
-        (frozenset(), "tool", (frozenset(), False)),
-        (frozenset(), "prefetch", (frozenset(), False)),
-    ],
-)
-def test_memory_wiring_binds_tools_and_prefetch_per_strategy(
-    names: frozenset[PersonaTool],
-    strategy: RecallStrategy,
-    expected: tuple[frozenset[PersonaTool], bool],
-) -> None:
-    assert memory_wiring(names, strategy) == expected
-
-
-def strategy_settings(settings: Any, strategy: str) -> Any:
-    recall = settings.memory.recall.model_copy(update={"strategy": strategy})
-    return settings.model_copy(
-        update={"memory": settings.memory.model_copy(update={"recall": recall})}
-    )
-
-
 async def opened_agent(
     settings: Any, monkeypatch: pytest.MonkeyPatch, **options: Any
 ) -> dict[str, Any]:
@@ -520,28 +497,14 @@ async def opened_agent(
     return created
 
 
-@pytest.mark.parametrize(
-    ("strategy", "tools", "prefetch"),
-    [
-        ("tool", ["recall_meeting_context"], False),
-        ("prefetch", [], True),
-    ],
-)
-async def test_open_conversation_wires_memory_by_recall_strategy(
-    settings: Any,
-    monkeypatch: pytest.MonkeyPatch,
-    strategy: RecallStrategy,
-    tools: list[str],
-    *,
-    prefetch: bool,
+async def test_open_conversation_prefetches_memory_without_tools(
+    settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    created = await opened_agent(
-        strategy_settings(settings, strategy), monkeypatch, graphiti=make_graphiti()
-    )
+    created = await opened_agent(settings, monkeypatch, graphiti=make_graphiti())
 
-    assert created["tools"] == tools
-    assert ("_MemoryPrefetchMiddleware" in created["middleware"]) is prefetch
-    assert RECALL_RULES[strategy] in created["persona"]
+    assert created["tools"] == []
+    assert "_MemoryPrefetchMiddleware" in created["middleware"]
+    assert RECALL_RULE in created["persona"]
 
 
 async def test_brief_only_conversation_gets_no_memory_with_prefetch(
@@ -549,7 +512,7 @@ async def test_brief_only_conversation_gets_no_memory_with_prefetch(
 ) -> None:
     brief = MeetingBrief.model_validate_json(EXAMPLE_BRIEF.read_bytes())
     created = await opened_agent(
-        strategy_settings(settings, "prefetch"),
+        settings,
         monkeypatch,
         brief=brief.model_copy(
             update={

@@ -799,18 +799,27 @@ visible effect atau klaim sukses untuk `unknown`.
 Gate: count/attendance tidak pasti menghasilkan range atau unknown;
 perubahan screen setelah fact diambil membuat fact invalid.
 
-### PR 4b: Evidence service
+### PR 4b: Evidence service (selesai)
 
-- Typed evidence queries untuk screen, participant, chat history, dan memory
-  dijalankan sebelum reply sesuai plan, hasilnya masuk sebagai FactSet.
-- Dihapus: evidence tools pada reply agent, `EvidenceRoutingMiddleware`,
-  `PlannedEvidenceMiddleware`, synthetic `observe_meeting` view, jalur
-  prefetch turn-graph yang tidak di-wire, dan timeline sebagai sumber
-  keputusan.
+- Reply agent meeting tidak lagi memegang tool apa pun. `gather_evidence`
+  menjalankan look screen, look participant (hanya peserta yang disebut
+  namanya), dan chat history sesuai `evidence_needs` plan sebelum reply,
+  lalu menyuntikkan hasilnya sebagai `meeting_evidence` dengan kode per
+  query.
+- Memory hanya lewat prefetch dan hanya bila plan meminta `memory`
+  (attention dan turn tanpa judge tetap prefetch). Tool recall hanya tersisa
+  untuk chat API owner di luar meeting.
+- Routing ke strong model dipertahankan, tetapi pemicunya hasil evidence
+  step (`ok`) atau memory `found`, bukan tool call.
+- Dihapus: look tools, `PlannedEvidenceMiddleware`, registry capability,
+  strategi recall `tool`, `prompt_builder`, jalur prefetch turn-graph yang
+  tidak di-wire, dan prompt legacy `build_system_prompt`.
+- Timeline masih sumber view dan pemicu proactive; keputusan proactive
+  pindah ke kernel di PR 5.
 
-Gate: pertanyaan state tidak memanggil free-form composer; fact stale atau
-incomplete menghasilkan unknown atau range; reply tidak dapat memanggil tool
-evidence.
+Gate: reply tidak dapat memanggil tool evidence; evidence yang tidak
+direncanakan tidak dijalankan; memory tidak dicari untuk turn yang tidak
+membutuhkannya.
 
 ### PR 5: Speech contract
 

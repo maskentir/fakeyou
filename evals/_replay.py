@@ -12,9 +12,9 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.tools import BaseTool, tool
 
 from evals._shared import REPLAY_EVIDENCE, sanitized_role
+from evals._trust import build_case_memory, case_storage
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
@@ -25,9 +25,10 @@ from fakeyou.conversation.conversation import (
     stream_sentences,
 )
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.evidence import RECALL_EMPTY_RESULT
-from fakeyou.memory.persona import PersonaProfile, build_system_prompt
+from fakeyou.memory.memory import create_memory_prefetch_middleware
+from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import capture_error
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.record import MeetingRecord
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,9 +37,9 @@ REPLAY_RUNS = 3
 REQUIRED_PASS_RATE = 0.9
 MAX_TRAILING_QUESTION_RATE = 0.2
 REPLY_LATENCY_BUDGET_SECONDS = 4.0
+REPLAY_MEMORY_EPISODE = "replay-memory"
 REQUIRED_CHECKS = (
     "answered",
-    "recall_called",
     "must_mention",
     "must_mention_any",
     "must_not_mention",
@@ -83,18 +84,23 @@ class ReplayScore:
         }
 
 
-def recall_tool(facts: list[str]) -> BaseTool:
-    @tool(description="Search long-term meeting memory for relevant context.")
-    def recall_meeting_context(query: str) -> str:
-        del query
-        return "\n".join(facts) if facts else RECALL_EMPTY_RESULT
+def session_memory(facts: list[str], group_id: str) -> tuple[Any, dict[str, Any], dict[str, str]]:
+    spec = {
+        "facts": facts,
+        "episodes": dict.fromkeys(facts, [REPLAY_MEMORY_EPISODE]),
+        "stored": {
+            REPLAY_MEMORY_EPISODE: {
+                "group": "own",
+                "label": "Replay memory",
+                "source_at": "2026-09-30T10:18:00+00:00",
+            }
+        },
+        "match": "any",
+    }
+    return build_case_memory({"memory": spec}, group_id)
 
-    return recall_meeting_context
 
-
-def score_turn(
-    score: ReplayScore, turn: dict[str, Any], reply: str, *, recalled: bool
-) -> dict[str, bool]:
+def score_turn(score: ReplayScore, turn: dict[str, Any], reply: str) -> dict[str, bool]:
     spoken = cap_spoken_reply(reply).lower()
     outcome: dict[str, bool] = {}
     outcome["answered"] = bool(spoken.strip())
@@ -103,9 +109,6 @@ def score_turn(
     score.add("within_two_sentences", passed=outcome["within_two_sentences"])
     outcome["no_trailing_question"] = not spoken.rstrip().endswith("?")
     score.add("no_trailing_question", passed=outcome["no_trailing_question"])
-    if turn.get("expects_recall"):
-        outcome["recall_called"] = recalled
-        score.add("recall_called", passed=recalled)
     required = turn.get("must_mention", [])
     if required:
         outcome["must_mention"] = all(phrase in spoken for phrase in required)
@@ -143,76 +146,85 @@ async def _collect_sentences(
     return bool(sentences)
 
 
+@dataclass(frozen=True, slots=True)
+class _SessionRun:
+    profile: PersonaProfile
+    score: ReplayScore
+    run: int
+    streaming: bool
+    prompt_builder: Callable[[PersonaProfile], str]
+
+
+async def _replay_session(
+    model: BaseChatModel, session: dict[str, Any], context: _SessionRun
+) -> None:
+    profile, score, run = context.profile, context.score, context.run
+    memory, stored, states = session_memory(session["memory"], profile.memory_group)
+    with case_storage(memory, stored, states), TemporaryDirectory() as folder:
+        agent = create_meeting_agent(
+            model,
+            persona=context.prompt_builder(profile),
+            middleware=[create_memory_prefetch_middleware(memory, group_id=profile.memory_group)],
+        )
+        record = MeetingRecord(Path(folder) / "record.jsonl")
+        responder = (
+            MeetingResponder(agent, record, language=profile.language, max_sentences=2)
+            if context.streaming
+            else MeetingResponder(agent, record)
+        )
+        for index, turn in enumerate(session["turns"]):
+            event = TranscriptEvent(
+                id=f"{session['meeting_id']}-{run}-{index}",
+                timestamp=datetime.now(UTC).isoformat(),
+                source="meeting_audio",
+                text=turn["say"],
+                finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
+                evidence_needs=REPLAY_EVIDENCE,
+            )
+            record.add_transcript(event)
+            started = time.monotonic()
+            if context.streaming:
+                sentences: list[str] = []
+                streamed, _ = await capture_error(
+                    partial(_collect_sentences, responder, event, sentences, score, started)
+                )
+                reply = " ".join(sentences) if streamed else ""
+            else:
+                answered, _ = await capture_error(partial(responder.respond, [event], lambda: None))
+                reply = answered.text if answered else ""
+            latency = time.monotonic() - started
+            record.add_twin_speech(reply)
+            score.latencies.append(latency)
+            score.replies.append(reply)
+            outcome = score_turn(score, turn, reply)
+            score.turns.append(
+                {
+                    "meeting_id": session["meeting_id"],
+                    "run_index": run,
+                    "turn_index": index,
+                    "latency_seconds": latency,
+                    "checks": outcome,
+                }
+            )
+        record.close()
+
+
 async def replay(
     model_factory: Callable[[], BaseChatModel],
     fixture: dict[str, Any],
     runs: int,
     *,
     streaming: bool = False,
-    prompt_builder: Callable[[PersonaProfile], str] = build_system_prompt,
+    prompt_builder: Callable[[PersonaProfile], str] = build_persona_prompt,
 ) -> ReplayScore:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
     score = ReplayScore()
     for run in range(runs):
+        context = _SessionRun(profile, score, run, streaming, prompt_builder)
         for session in fixture["sessions"]:
-            agent = create_meeting_agent(
-                model_factory(),
-                tools=[recall_tool(session["memory"])],
-                persona=prompt_builder(profile),
-            )
-            folder = TemporaryDirectory()
-            record = MeetingRecord(Path(folder.name) / "record.jsonl")
-            responder = (
-                MeetingResponder(agent, record, language=profile.language, max_sentences=2)
-                if streaming
-                else MeetingResponder(agent, record)
-            )
-            for index, turn in enumerate(session["turns"]):
-                calls: list[None] = []
-                event = TranscriptEvent(
-                    id=f"{session['meeting_id']}-{run}-{index}",
-                    timestamp=datetime.now(UTC).isoformat(),
-                    source="meeting_audio",
-                    text=turn["say"],
-                    finalized=True,
-                    participant_id="unknown",
-                    speaker_evidence_id=None,
-                    evidence_needs=REPLAY_EVIDENCE,
-                )
-
-                def _note_tool_start(calls: list[None] = calls) -> None:
-                    calls.append(None)
-
-                record.add_transcript(event)
-                started = time.monotonic()
-                if streaming:
-                    sentences: list[str] = []
-                    streamed, _ = await capture_error(
-                        partial(_collect_sentences, responder, event, sentences, score, started)
-                    )
-                    reply = " ".join(sentences) if streamed else ""
-                else:
-                    answered, _ = await capture_error(
-                        partial(responder.respond, [event], _note_tool_start)
-                    )
-                    reply = answered.text if answered else ""
-                latency = time.monotonic() - started
-                record.add_twin_speech(reply)
-                score.latencies.append(latency)
-                score.replies.append(reply)
-                outcome = score_turn(score, turn, reply, recalled=bool(calls))
-                score.turns.append(
-                    {
-                        "meeting_id": session["meeting_id"],
-                        "run_index": run,
-                        "turn_index": index,
-                        "latency_seconds": latency,
-                        "recall_called": bool(calls),
-                        "checks": outcome,
-                    }
-                )
-            record.close()
-            folder.cleanup()
+            await _replay_session(model_factory(), session, context)
     return score
 
 

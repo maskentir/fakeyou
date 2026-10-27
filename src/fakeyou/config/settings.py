@@ -322,13 +322,9 @@ class EmbedderSettings(EndpointSettings):
     max_retries: int = Field(default=2, ge=0)
 
 
-RecallStrategy = Literal["tool", "prefetch"]
-
-
 class RecallSettings(Section):
     result_limit: int = Field(default=5, gt=0)
     timeout_seconds: PositiveSeconds = 15.0
-    strategy: RecallStrategy = "prefetch"
 
     @property
     def search_limit(self) -> int:

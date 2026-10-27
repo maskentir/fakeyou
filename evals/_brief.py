@@ -41,14 +41,9 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import cap_spoken_reply
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.persona import (
-    PersonaProfile,
-    build_system_prompt,
-    meeting_tool_names,
-    memory_wiring,
-    persona_digest,
-)
+from fakeyou.memory.persona import PersonaProfile, meeting_tool_names, persona_digest
 from fakeyou.observability.faults import capture_error
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.brief import MeetingBrief, brief_digest
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "brief-scenarios.json"
@@ -95,7 +90,7 @@ AID_CHECKS = (
     "answered",
     "within_two_sentences",
     "question_budget",
-    "tools_within_scope",
+    "no_tool_calls",
     "allow_present",
     "forbid_absent",
 )
@@ -144,12 +139,7 @@ class BriefScore(TrustScore):
         return sum(int(turn.get("model_calls", 0)) for turn in self.turns)
 
     def recall_calls(self) -> int:
-        return sum(
-            1
-            for turn in self.turns
-            for call in turn.get("tool_trajectory", [])
-            if call["name"] == "recall_meeting_context"
-        )
+        return sum(1 for turn in self.turns if turn.get("memory_prefetch"))
 
 
 def load_brief_fixture(path: Path = FIXTURE) -> dict[str, Any]:
@@ -170,7 +160,7 @@ def brief_artifact_dir(fallback: Path) -> Path:
 
 
 def score_brief_aids(
-    case: dict[str, Any], reply: str, tools_bound: list[str], trajectory: list[dict[str, Any]]
+    case: dict[str, Any], reply: str, trajectory: list[dict[str, Any]]
 ) -> dict[str, bool]:
     aids = case["aids"]
     questions = reply.count("?")
@@ -178,7 +168,7 @@ def score_brief_aids(
         "answered": bool(reply.strip()),
         "within_two_sentences": cap_spoken_reply(reply) == reply.strip(),
         "question_budget": questions == 1 if case["expect"] == "ask" else questions <= 1,
-        "tools_within_scope": all(call["name"] in tools_bound for call in trajectory),
+        "no_tool_calls": not trajectory,
         "allow_present": all(token_present(str(token), reply) for token in aids["allow"]),
         "forbid_absent": all(not token_present(str(token), reply) for token in aids["forbid"]),
     }
@@ -205,25 +195,19 @@ async def replay_briefs(
     for case in fixture["cases"]:
         brief = case_brief(fixture, case)
         names = meeting_tool_names(profile, brief, memory_requested=case["memory_requested"])
-        strategy = settings.memory.recall.strategy
-        bound, prefetch = memory_wiring(names, strategy)
-        persona = build_system_prompt(
-            profile.model_copy(update={"allowed_tools": names}),
-            brief=brief,
-            recall_strategy=strategy,
+        prefetch = "recall_meeting_context" in names
+        persona = build_persona_prompt(
+            profile.model_copy(update={"allowed_tools": names}), brief=brief
         )
         with ExitStack() as storage:
             memory = None
             if case["memory_requested"]:
                 memory, stored, states = build_case_memory(case, group_id)
                 storage.enter_context(case_storage(memory, stored, states))
-            tools_bound: list[str] = sorted(bound)
             score.prompts[case["id"]] = {
                 "knowledge_scope": brief.knowledge_scope,
                 "permissions": sorted(brief.permissions),
                 "memory_requested": case["memory_requested"],
-                "tools_bound": tools_bound,
-                "recall_strategy": strategy,
                 "memory_prefetch": prefetch,
                 "brief_sha256": brief_digest(brief),
                 "system_prompt": persona,
@@ -289,7 +273,6 @@ async def replay_briefs(
                                     settings.conversation.max_spoken_sentences,
                                     settings.speech.language,
                                 ),
-                                "tools_bound": tools_bound,
                                 "tool_trajectory": calls,
                                 "tool_results": counter.tool_results[seen_results:],
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
@@ -297,9 +280,7 @@ async def replay_briefs(
                                 "model_calls": counter.calls - seen_calls,
                                 "latency_seconds": latency,
                                 "exception": error,
-                                "aids": score_brief_aids(case, reply, tools_bound, calls)
-                                if rated
-                                else {},
+                                "aids": score_brief_aids(case, reply, calls) if rated else {},
                             }
                         )
     score.candidate = finish_candidate(candidate)
