@@ -49,6 +49,7 @@ def test_ingestion_names_voice_labels_as_unverified() -> None:
     entry = TranscriptEntry.model_validate(
         {
             "at": "2026-10-05T10:00:00+00:00",
+            "seq": 1,
             "id": "t1",
             "spoken_at": "2026-10-05T10:00:00+00:00",
             "source": "meeting_audio",

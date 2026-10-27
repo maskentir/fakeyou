@@ -456,6 +456,7 @@ async def test_debrief_cites_a_shared_screen(record_path: Path) -> None:
         handle.write(
             ScreenEntry(
                 at=AT,
+                seq=2,
                 ref="screen-1",
                 shown_at=AT,
                 sha256="ab" * 32,

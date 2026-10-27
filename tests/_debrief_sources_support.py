@@ -15,6 +15,7 @@ def transcript(**changes: Any) -> dict[str, Any]:
     return {
         "kind": "transcript",
         "at": "2026-10-03T12:00:00Z",
+        "seq": 1,
         "id": "entry-1",
         "spoken_at": "12:00:00",
         "source": "caption",
@@ -28,6 +29,7 @@ def screen(**changes: Any) -> dict[str, Any]:
     return {
         "kind": "screen",
         "at": "2026-10-03T12:00:05Z",
+        "seq": 1,
         "ref": "screen-1",
         "shown_at": "2026-10-03T12:00:03Z",
         "sha256": "ab" * 32,
@@ -47,6 +49,7 @@ def chat(**changes: Any) -> dict[str, Any]:
     return {
         "kind": "chat",
         "at": "2026-10-03T12:00:09Z",
+        "seq": 1,
         "ref": "chat-1",
         "message_id": "message-1",
         "sender_id": "devices/8",

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from itertools import count
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -16,11 +17,13 @@ from fakeyou.persistence.record import (
 from tests._conversation_support import event
 
 AT = datetime(2026, 10, 24, tzinfo=UTC)
+RECORD_ORDER = count(1)
 
 
 def said(entry_id: str, text: str) -> TranscriptEntry:
     return TranscriptEntry(
         at=AT,
+        seq=next(RECORD_ORDER),
         id=entry_id,
         spoken_at=AT.isoformat(),
         source="meeting_audio",
@@ -31,7 +34,7 @@ def said(entry_id: str, text: str) -> TranscriptEntry:
 
 
 def replied(text: str, *, interrupted: bool = False) -> TwinSpeechEntry:
-    return TwinSpeechEntry(at=AT, text=text, interrupted=interrupted)
+    return TwinSpeechEntry(at=AT, seq=next(RECORD_ORDER), text=text, interrupted=interrupted)
 
 
 def shape(messages: list[BaseMessage]) -> list[tuple[str, str]]:
@@ -80,7 +83,12 @@ def test_history_keeps_the_newest_lines_and_opens_on_a_person() -> None:
 
 def test_history_ignores_entries_that_are_not_spoken() -> None:
     signal = SignalEntry(
-        at=AT, signal="joined", participant_id="p1", participant="Ayu", observed_at=AT
+        at=AT,
+        seq=next(RECORD_ORDER),
+        signal="joined",
+        participant_id="p1",
+        participant="Ayu",
+        observed_at=AT,
     )
 
     assert history_messages([signal, replied("Hi.")], exclude=(), max_tokens=1000) == []
@@ -111,6 +119,7 @@ def test_a_reopened_record_remembers_what_was_said(tmp_path: Path) -> None:
 def test_history_shows_the_twins_own_chat_as_its_own_words() -> None:
     own = ChatEntry(
         at=AT,
+        seq=next(RECORD_ORDER),
         ref="chat#9",
         message_id="twin-action-1",
         sender_id="twin",

@@ -880,15 +880,23 @@ PCM atau chat keluar.
 Gate: mode degradasi menolak side effect yang benar; recovery tidak pernah
 melanjutkan command lama; long-session replay bounded dan deterministik.
 
-### PR 7: Record v4
+### PR 7: Record v4 (selesai)
 
-- `MeetingRecord` v4 dengan `kernel_seq`, causation, dan correlation sebagai
-  satu-satunya semantic history; kernel adalah satu-satunya writer.
-- Dihapus: writer v3, reader v3, dan duplikasi history di lifecycle serta
-  moment detector.
+- `MeetingRecord` v4: setiap entry membawa `seq` monotonic yang ditetapkan
+  record dan berlanjut setelah resume, serta `causation_id`; header dan
+  resume membawa `attempt_id` yang sama dengan session attempt kernel.
+- Twin speech mencatat transcript pemicunya sebagai causation, karena
+  `PlaybackEvent` kini membawa `Utterance(transcript_id, sentence_index)`;
+  kernel memakai id yang sama untuk utterance playback.
+- Dihapus: reader/writer v3, `ToolResultEntry`, `add_tool_result`, dan
+  callback hasil tool yang tidak lagi punya pemanggil.
+- Belum: record ditulis oleh writer adapter yang sama (transcript drain,
+  playback, perception archive), bukan oleh kernel sebagai satu-satunya
+  writer. `kernel_seq` belum ada di entry; korelasi memakai `seq` record dan
+  causation id. Debrief masih memberi id twin speech berdasarkan nomor baris.
 
-Gate: replay record v4 mereproduksi keputusan dari normalized port events;
-debrief dan ingestion membaca v4.
+Gate: seq berlanjut setelah resume, header selain v4 ditolak, causation
+twin speech menunjuk transcript pemicunya.
 
 ### PR 8: Live validation
 

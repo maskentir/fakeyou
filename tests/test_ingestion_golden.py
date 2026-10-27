@@ -11,7 +11,7 @@ from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.memory.ingestion import MeetingScope, ingest_corrections
 from fakeyou.persistence.layout import CORRECTION_LABELS_FILE_NAME
 from fakeyou.persistence.record import TranscriptEntry
-from tests._ingestion_support import START, correction_record, run, said
+from tests._ingestion_support import RECORD_ORDER, START, correction_record, run, said
 from tests._memory_fakes import make_graphiti
 
 FIXTURE = json.loads(
@@ -27,6 +27,7 @@ def golden_meeting_entries() -> list[TranscriptEntry]:
         said(1, "Joko will present the spending summary for this quarter."),
         TranscriptEntry(
             at=START + timedelta(seconds=70),
+            seq=next(RECORD_ORDER),
             id="golden-spoken",
             spoken_at=spoken.isoformat(),
             source="meeting_audio",

@@ -65,7 +65,6 @@ class StreamingConversationResponder(Protocol):
     ) -> AsyncIterator[SpokenChunk]: ...
 
 
-ToolResultCallback = Callable[[str, str, float], None]
 MeetingAgent = Runnable[dict[str, list[BaseMessage]], dict[str, Any]]
 REPLY_CONFIG: RunnableConfig = {"recursion_limit": 30}
 
@@ -89,13 +88,11 @@ class _ToolActivity(AsyncCallbackHandler):
         self,
         on_start: Callable[[], None],
         journal: Journal | None,
-        on_result: ToolResultCallback | None = None,
         *,
         transcript_id: str | None = None,
     ) -> None:
         self._on_start = on_start
         self._journal = journal
-        self._on_result = on_result
         self._transcript_id = transcript_id
         self._running: dict[
             UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
@@ -152,14 +149,12 @@ class _ToolActivity(AsyncCallbackHandler):
     @override
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         text = output.text if isinstance(output, BaseMessage) else str(output)
-        name, context, timing = self._running.pop(run_id)
+        _name, context, timing = self._running.pop(run_id)
         timing.fields["output_lines"] = len(text.splitlines())
         code = _tool_result_code(text)
         if code is not None:
             timing.fields["result_code"] = code
         context.__exit__(None, None, None)
-        if self._on_result is not None:
-            self._on_result(name, text, timing.fields["duration_ms"])
 
     @override
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
@@ -172,11 +167,10 @@ class _StreamPhase(_ToolActivity):
         self,
         on_start: Callable[[], None],
         journal: Journal | None,
-        on_result: ToolResultCallback | None = None,
         *,
         transcript_id: str | None = None,
     ) -> None:
-        super().__init__(on_start, journal, on_result, transcript_id=transcript_id)
+        super().__init__(on_start, journal, transcript_id=transcript_id)
         self.pending = 0
         self.boundary = 0
         self._counted: set[UUID] = set()
@@ -312,7 +306,6 @@ class StreamTrace:
     request_id: str = ""
     transcript_id: str | None = None
     on_tool_start: Callable[[], None] = _ignore_tool_start
-    on_tool_result: ToolResultCallback | None = None
     on_intent: IntentHandler | None = None
     on_language: Callable[[str], None] | None = None
     speech_gate: SpeechGate | None = None
@@ -338,9 +331,7 @@ async def invoke_reply(
     *,
     trace: StreamTrace = DEFAULT_STREAM_TRACE,
 ) -> str:
-    activity = _ToolActivity(
-        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
-    )
+    activity = _ToolActivity(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     try:
         result = await agent.ainvoke(
             {"messages": list(messages)}, config=_with_callback(config, activity)
@@ -518,9 +509,7 @@ async def stream_sentences(
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
     started = time.monotonic()
-    phase = _StreamPhase(
-        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
-    )
+    phase = _StreamPhase(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
@@ -559,7 +548,6 @@ class MeetingResponder:
     agent: MeetingAgent
     history: MeetingHistory
     journal: Journal | None = None
-    on_tool_result: ToolResultCallback | None = None
     language: str = DEFAULTS.speech.language
     max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
@@ -644,7 +632,6 @@ class MeetingResponder:
             request_id=request_id,
             transcript_id=events[-1].id if events else None,
             on_tool_start=on_tool_start,
-            on_tool_result=self.on_tool_result,
             on_intent=self.on_intent,
             on_language=self.turn_language.declare,
             speech_gate=SpeechGate(

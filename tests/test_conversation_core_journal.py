@@ -280,7 +280,7 @@ async def test_cancelled_tool_run_keeps_transcript_without_content(
     assert "a late answer" not in body
 
 
-async def test_responder_reports_tool_results_to_journal_and_callback(
+async def test_responder_reports_tool_results_to_journal(
     journal: RecordingJournal,
 ) -> None:
 
@@ -294,24 +294,12 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
             "From Google Meet m1 transcript on 2026-09-23 03:10 UTC: Budi is the PIC"
         )
 
-    results: list[tuple[str, str, float]] = []
     agent = create_meeting_agent(_recall_then_reply(), tools=[recall_meeting_context])
-    responder = MeetingResponder(
-        agent,
-        NoHistory(),
-        journal=journal,
-        on_tool_result=lambda *result: results.append(result),
-    )
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     reply = await responder.respond([memory_event("one")], lambda: None)
     assert reply.text == "The demo is on Friday."
 
-    [(tool_name, output, duration_ms)] = results
-    assert tool_name == "recall_meeting_context"
-    assert (
-        output.splitlines()[0] == "From owner note on 2026-09-30 06:40 UTC: The demo is on Friday"
-    )
-    assert duration_ms >= 0
     [finished] = journal.events("tool_finished")
     assert finished["tool"] == "recall_meeting_context"
     assert finished["output_lines"] == 2

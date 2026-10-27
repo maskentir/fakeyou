@@ -105,9 +105,12 @@ class KernelPort:
         self._call: CallState | None = None
 
     @classmethod
-    def for_meeting(cls, meeting_id: str, journal: Journal | None = None) -> "KernelPort":
+    def for_meeting(
+        cls, meeting_id: str, journal: Journal | None = None, attempt_id: str | None = None
+    ) -> "KernelPort":
         return cls(
-            SessionKernel(session_id=meeting_id, attempt_id=uuid.uuid4().hex), journal=journal
+            SessionKernel(session_id=meeting_id, attempt_id=attempt_id or uuid.uuid4().hex),
+            journal=journal,
         )
 
     def modes(self) -> frozenset[Mode]:
@@ -252,6 +255,7 @@ class KernelPort:
         phase = _PLAYBACK_PHASES.get(event.kind)
         if phase is None or event.cue:
             return
+        utterance = event.utterance
         if phase == "started":
             self._clip += 1
             self._playing = event.text
@@ -264,8 +268,12 @@ class KernelPort:
         self.observe(
             "playback",
             PlaybackObserved(
-                utterance_id=f"clip-{self._clip}", sentence_index=0, phase=phase, text=event.text
+                utterance_id=utterance.transcript_id or f"clip-{self._clip}",
+                sentence_index=utterance.sentence_index or 0,
+                phase=phase,
+                text=event.text,
             ),
+            correlation_id=utterance.transcript_id,
         )
 
     def owner(self, command: OwnerCommand) -> None:

@@ -326,7 +326,6 @@ async def replay_trust(
                 ) as responder:
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
-                        seen_results = len(counter.tool_results)
                         seen_prefetch = len(counter.prefetch)
                         seen_usage = len(counter.usage)
                         seen_calls = counter.calls
@@ -372,7 +371,6 @@ async def replay_trust(
                                     settings.speech.language,
                                 ),
                                 "tool_trajectory": calls,
-                                "tool_results": counter.tool_results[seen_results:],
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
                                 "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,

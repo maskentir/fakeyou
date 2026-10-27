@@ -1,6 +1,7 @@
 import asyncio
 import shlex
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
 from dataclasses import dataclass
@@ -152,7 +153,9 @@ def _open_join_resources(
     resources.callback(journal.close)
     faults = FaultReporter(journal=journal)
     ingest_requested, ingestion_outcome, record_error = _write_pending_status(prepared, faults)
-    record = MeetingRecord(prepared.record_path, faults=faults, journal=journal)
+    record = MeetingRecord(
+        prepared.record_path, faults=faults, journal=journal, attempt_id=uuid.uuid4().hex
+    )
     resources.callback(record.close)
     if resuming:
         attempt = _resume_attempt(prepared.record_path)
@@ -222,7 +225,9 @@ def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
     registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
-    run.kernel = KernelPort.for_meeting(prepared.config.meeting_id, journal=run.journal)
+    run.kernel = KernelPort.for_meeting(
+        prepared.config.meeting_id, journal=run.journal, attempt_id=run.record.attempt_id
+    )
     run.voiceprint_live = resources.enter_context(open_voiceprint(prepared.request.settings))
     run.voice_activity = (
         VoiceActivityTracker(registry=registry)
@@ -284,7 +289,6 @@ async def _open_join_conversation(
                 ],
                 twin_names=[prepared.config.twin_name],
                 barge_in=prepared.request.barge_in,
-                on_tool_result=run.record.add_tool_result,
                 commands=run.commands,
                 kernel=run.kernel,
                 others_speaking=(
@@ -350,10 +354,12 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         run.speaking = event.text
     elif event.kind == "playback_finished":
         run.speaking = None
-        run.record.add_twin_speech(event.text)
+        run.record.add_twin_speech(event.text, causation_id=event.utterance.transcript_id)
     elif event.kind == "playback_dropped" and event.text == run.speaking:
         run.speaking = None
-        run.record.add_twin_speech(event.text, interrupted=True)
+        run.record.add_twin_speech(
+            event.text, interrupted=True, causation_id=event.utterance.transcript_id
+        )
 
 
 def _moment_observer(run: _JoinRun) -> Callable[[TranscriptEvent], Awaitable[None]] | None:

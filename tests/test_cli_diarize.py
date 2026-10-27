@@ -57,7 +57,9 @@ def _write_session(
 ) -> tuple[Path, Path]:
     record_path = meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text('{"kind": "resume", "at": "2026-10-08T00:00:00+00:00", "attempt": 1}\n')
+    record_path.write_text(
+        '{"kind": "resume", "at": "2026-10-08T00:00:00+00:00", "seq": 1, "attempt": 1}\n'
+    )
     audio_dir = record_path.parent / "audio"
     slots = {
         str(slot): {
@@ -371,6 +373,7 @@ def _show_line(index: int, capture_ms: float) -> str:
         {
             "kind": "transcript",
             "at": "2026-10-08T00:00:00+00:00",
+            "seq": index + 1,
             "id": f"event-{index}",
             "spoken_at": "2026-10-08T00:00:00+00:00",
             "source": "meeting_audio",
@@ -596,6 +599,7 @@ def _claimed_line(index: int, capture_ms: float, claim: str | None) -> str:
         {
             "kind": "transcript",
             "at": "2026-10-08T00:00:00+00:00",
+            "seq": index + 1,
             "id": f"event-{index}",
             "spoken_at": "2026-10-08T00:00:00+00:00",
             "source": "meeting_audio",

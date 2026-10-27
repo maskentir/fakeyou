@@ -23,7 +23,6 @@ from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
     MeetingResponder,
-    ToolResultCallback,
 )
 from fakeyou.conversation.grounding import GroundingVerifier, ModelGroundingVerifier
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
@@ -227,7 +226,6 @@ class TurnBehavior:
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
     barge_in: bool = False
-    on_tool_result: ToolResultCallback | None = None
     commands: MeetCommands | None = None
     kernel: KernelPort | None = None
     others_speaking: Callable[[], bool] | None = None
@@ -415,7 +413,6 @@ class _ConversationBuilder:
             agent,
             self._agent.history,
             journal=self._diagnostics.journal,
-            on_tool_result=self._behavior.on_tool_result,
             language=self._settings.speech.language,
             max_sentences=self._settings.conversation.max_spoken_sentences,
             history_max_tokens=self._settings.conversation.history_max_tokens,
