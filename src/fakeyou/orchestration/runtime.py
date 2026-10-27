@@ -185,6 +185,13 @@ class MonitorScan:
 _LIVE_PHASES: tuple[PublicPhase, ...] = ("admitted", "active")
 
 
+class _CallEnded(Exception):
+    def __init__(self, kind: LifecycleEventKind, detail: str) -> None:
+        self.kind = kind
+        self.detail = detail
+        super().__init__(detail)
+
+
 @dataclass
 class MeetingWorker:
     config: SessionConfig
@@ -371,6 +378,16 @@ class MeetingWorker:
             return await self._finish_audio_failure("conversation_failed", _failure_detail(error))
         except MeetingAudioError as error:
             return await self._finish_audio_failure("audio_failed", _failure_detail(error))
+
+    async def _call_ended_outcome(self) -> tuple[LifecycleEventKind, str] | None:
+        observation = await observe_call_state(self.page, self.signals)
+        if observation.state == "removed":
+            return ("removed", observation.detail)
+        if observation.state == "ended":
+            return ("meeting_ended", observation.detail)
+        if observation.state == "left":
+            return ("leave_sent", observation.detail)
+        return None
 
     async def _finish_audio_failure(self, kind: LifecycleEventKind, detail: str) -> LifecycleUpdate:
         audio = self.audio
@@ -817,16 +834,21 @@ class MeetingWorker:
             self.capture_drain.raise_if_failed()
         if self.audio is None:
             return
-        self.audio.raise_if_failed()
-        if not isinstance(self.audio, SupportsMaintenance):
-            return
-        await until_stopped(
-            self.audio.maintenance_tick(
-                is_busy=self.conversation is not None and self.conversation.is_busy,
-                remote_participants=remote_participants,
-            ),
-            self.stop,
-        )
+        try:
+            self.audio.raise_if_failed()
+            if isinstance(self.audio, SupportsMaintenance):
+                await until_stopped(
+                    self.audio.maintenance_tick(
+                        is_busy=self.conversation is not None and self.conversation.is_busy,
+                        remote_participants=remote_participants,
+                    ),
+                    self.stop,
+                )
+        except MeetingAudioError as error:
+            ended = await self._call_ended_outcome()
+            if ended is not None:
+                raise _CallEnded(*ended) from error
+            raise
 
     async def check_presence(self, scan: MonitorScan) -> tuple[int | None, str | None]:
         now = self.monotonic()
@@ -995,7 +1017,10 @@ class MeetingWorker:
             remote, finished = await self.check_presence(scan)
             if finished is not None:
                 return finished
-            await self._service_audio(remote)
+            try:
+                await self._service_audio(remote)
+            except _CallEnded as ended:
+                return await self.finish(ended.kind, "host_action", ended.detail)
             now = self.monotonic()
             if now >= scan.next_scan:
                 finished, recheck = await self._scan_once(watchdog, scan, now)

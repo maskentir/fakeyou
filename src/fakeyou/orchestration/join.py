@@ -579,6 +579,7 @@ def _finalize_join_record(prepared: PreparedJoin, run: _JoinRun, result: Session
         phase=result.phase,
         terminal_reason=result.terminal_reason,
         exit_code=run.exit_code,
+        detail=result.detail or None,
     )
     try:
         run.record.close()

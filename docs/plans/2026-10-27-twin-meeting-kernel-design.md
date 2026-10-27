@@ -925,6 +925,13 @@ brief diucapkan utuh, komitmen anggaran ditolak, dan leave tanpa
 - Judge eval: `EVAL_JUDGE_PROVIDER` memilih Gemini (default), Muse, atau
   OpenAI untuk eval persona.
 
+Sesi `live-oue-3` (multi-human nyata) membuktikan twin diam pada 20 turn
+percakapan yang bukan padanya, dan menemukan bug kedua: saat call berakhir,
+sumber mic ikut mati dan pipeline audio dilaporkan `audio_failure` (exit 1)
+walau meeting-nya selesai normal. Sekarang kegagalan audio dicek terhadap
+state call lebih dulu, jadi call yang berakhir dilaporkan sebagai
+`ended_by_host`, dan detail akhir sesi masuk ke journal dan report.
+
 ## Validation matrix
 
 Acceptance tidak cukup dengan unit test hijau. Setiap invariant memiliki
