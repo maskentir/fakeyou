@@ -944,8 +944,15 @@ masing-masing pada subsystem penyebab:
   di-shield dan selalu settle; teardown menunggu command yang masih
   berjalan.
 - Leave yang diizinkan hilang saat salam penutup terpotong. Leave sekarang
-  barrier terminal: plan yang menyertakan leave selalu menjalankannya
-  setelah reply, apa pun hasil reply.
+  berjalan begitu salam penutup mulai diucapkan, walau terpotong; reply
+  yang gagal atau didahului baris baru sebelum mulai bicara tidak membuat
+  twin pergi diam-diam, dan `chat_then_leave` hanya pergi setelah chat
+  terkirim.
+- Chat sendiri hanya dianggap terkirim bila jumlah kemunculan teksnya di
+  panel chat bertambah sejak sebelum dikirim, jadi teks yang sudah ada di
+  chat tidak bisa mengonfirmasi pesan yang tidak pernah terkirim.
+- Look vision dibatasi 6 detik dan dijalankan paralel, sehingga evidence
+  tidak pernah menahan turn tanpa batas.
 - Presenter dan judul layar selalu dijawab "tidak ada yang share" karena
   `ScreenObserved` tidak pernah masuk kernel. Presenter sekarang
   diturunkan dari endpoint presentasi di roster kernel, judul dari
@@ -953,8 +960,10 @@ masing-masing pada subsystem penyebab:
   dijawab unknown, bukan "tidak ada".
 - Angka yang terdengar sebagai kata ("seratus dua puluh juta") dianggap
   karangan saat diucapkan sebagai digit. Grounding angka sekarang
-  membandingkan digit atau bentuk kata dari `num2words` (id dan en),
-  tanpa parser buatan sendiri; vocabulary keyword STT tidak berubah.
+  membandingkan digit atau bentuk kata dari `num2words` (id dan en) pada
+  frasa angka utuh, jadi "lima" di dalam "lima puluh lima" tidak dihitung
+  dan "satu"/"one" sendirian tidak dianggap angka karena juga kata ganti;
+  tanpa parser buatan sendiri, vocabulary keyword STT tidak berubah.
 - Judge eval memakai konfigurasi sendiri (`EVAL_JUDGE_*`), tidak pernah
   meminjam key model reply, dan eval persona gagal bila judge sama
   dengan model reply yang dinilai.
