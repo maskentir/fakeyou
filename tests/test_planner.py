@@ -74,7 +74,7 @@ def test_notes_never_report_an_unconfirmed_action_as_done() -> None:
     plan = TurnPlan("p", "action_then_speech", output="speech", action=MeetAction("react", "x"))
 
     cases: tuple[tuple[CommandState, str], ...] = (
-        ("effect_observed", "React is done and the meeting confirmed it."),
+        ("effect_observed", "React is done;"),
         ("effect_unobserved", "do not say anyone saw it"),
         ("unknown", "not sure it went through"),
         ("failed_after_boundary", "React did not happen."),

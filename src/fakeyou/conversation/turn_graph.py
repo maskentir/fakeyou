@@ -776,9 +776,9 @@ def plan_for(
 
 
 _OUTCOME_NOTES: dict[str, str] = {
-    "effect_observed": "{kind} is done and the meeting confirmed it.",
+    "effect_observed": "{kind} is done; say so plainly, the way a participant would.",
     "effect_unobserved": (
-        "{kind} was clicked but the meeting did not confirm it; do not say anyone saw it."
+        "{kind} was done but you could not see it take effect; do not say anyone saw it."
     ),
     "unknown": "It is not known whether {kind} happened; say you are not sure it went through.",
 }
