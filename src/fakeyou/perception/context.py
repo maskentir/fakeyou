@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
@@ -25,6 +26,7 @@ from fakeyou.perception.view import (
 OBSERVE_MEETING = "observe_meeting"
 MEETING_EVIDENCE = "meeting_evidence"
 LOOK_NEEDS = frozenset({"screen", "participant", "chat_history"})
+LOOK_TIMEOUT_SECONDS = 6.0
 PERCEPTION_GUIDANCE = (
     "What you see: every request ends with a system-provided observe_meeting result that starts "
     "with 'Meeting view'. It is what you see in the meeting right now: the shared screen with "
@@ -131,8 +133,9 @@ class PerceptionContext:
         if self.interpreter is None:
             return _look_result("budget_exhausted", **subject)
         try:
-            answer = await self.interpreter.answer(data, question)
-        except (ProviderFault, FakeYouError, OSError) as error:
+            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
+                answer = await self.interpreter.answer(data, question)
+        except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
             return _look_result("look_failed", error_type=type(error).__name__, **subject)
         if answer is None:
             return _look_result("budget_exhausted", **subject)
@@ -156,26 +159,23 @@ def _mentioned(snapshot: TimelineSnapshot, text: str) -> str | None:
     )
 
 
+async def _look_for(context: PerceptionContext, need: str, question: str) -> str:
+    if need == "screen":
+        return await context.look_at_screen("current", question)
+    if need == "participant":
+        name = _mentioned(context.timeline.snapshot(), question)
+        if name is None:
+            return _look_result("unknown_participant", participant="")
+        return await context.look_at_participant(name, question)
+    return context.backlog_chat()
+
+
 async def gather_evidence(
     context: PerceptionContext, question: str, needs: Sequence[str]
 ) -> dict[str, Any]:
-    results: dict[str, Any] = {}
-    for need in needs:
-        if need not in LOOK_NEEDS:
-            continue
-        if need == "screen":
-            raw = await context.look_at_screen("current", question)
-        elif need == "participant":
-            name = _mentioned(context.timeline.snapshot(), question)
-            raw = (
-                await context.look_at_participant(name, question)
-                if name is not None
-                else _look_result("unknown_participant", participant="")
-            )
-        else:
-            raw = context.backlog_chat()
-        results[need] = json.loads(raw)
-    return results
+    planned = [need for need in dict.fromkeys(needs) if need in LOOK_NEEDS]
+    looks = await asyncio.gather(*(_look_for(context, need, question) for need in planned))
+    return {need: json.loads(raw) for need, raw in zip(planned, looks, strict=True)}
 
 
 class MeetingEvidence:

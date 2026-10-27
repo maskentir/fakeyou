@@ -1,8 +1,12 @@
+import asyncio
 from datetime import timedelta
+from typing import cast
 
+import pytest
 from langchain_core.messages import HumanMessage
 
 from fakeyou.memory.memory import memory_planned
+from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import PerceptionContext, gather_evidence
 from fakeyou.perception.interpreter import PerceptionInterpreter
@@ -79,3 +83,28 @@ def test_memory_is_searched_only_when_the_plan_asks_for_it() -> None:
     assert memory_planned(trigger("Good morning")) is False
     assert memory_planned(trigger("Morning", kind="chat")) is False
     assert memory_planned(trigger("Screen changed", kind="attention")) is True
+
+
+class StalledInterpreter:
+    async def answer(self, image: bytes, question: str) -> str | None:
+        del image, question
+        await asyncio.sleep(5.0)
+        return "too late"
+
+
+async def test_a_stalled_look_reports_failure_instead_of_holding_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(context_module, "LOOK_TIMEOUT_SECONDS", 0.01)
+    stalled = PerceptionContext(
+        read_timeline(),
+        cast(PerceptionInterpreter, StalledInterpreter()),
+        max_chars=6000,
+        clock=lambda: START + timedelta(minutes=2),
+    )
+
+    evidence = await gather_evidence(stalled, "When is beta?", ("screen", "chat_history"))
+
+    assert evidence["screen"]["code"] == "look_failed"
+    assert evidence["screen"]["error_type"] == "TimeoutError"
+    assert evidence["chat_history"]["code"] == "ok"
