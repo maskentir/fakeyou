@@ -23,7 +23,7 @@ from fakeyou.meet.meet_action_ledger import (
     reconcile_ledger,
 )
 from fakeyou.meet.meet_actions import MeetActionResult
-from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.meet.meet_tools import create_meet_action_tools
 from fakeyou.memory.persona import refuse_meet_tool
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.persistence.ingestion_status import RecordLockError, record_lock
@@ -651,9 +651,12 @@ async def test_double_delivery_retry_then_restart_actuates_exactly_once(
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
     tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
-    queued = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-double"))
+    settled = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-double"))
 
-    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
+    result = json.loads(tool_text(settled))
+    assert result["code"] == "succeeded"
+    assert result["state"] == "observed_done"
+    assert result["action_id"] == "call-e2e-double"
     await dispatcher.drain()
     dispatcher.request("raise_hand", action_id="call-e2e-double")
     dispatcher.request("raise_hand", action_id="call-e2e-double")
@@ -803,3 +806,54 @@ async def test_observe_comes_from_readback_not_act_result(tmp_path: Path) -> Non
     assert intent is not None
     assert intent.state != "observed_done"
     assert intent.observed_after is False
+
+
+async def test_finished_actions_journal_their_phase_timings(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-phases" / "record.jsonl"
+    journal = RecordingJournal("meeting-phases")
+    observations = [False, True]
+
+    async def observe() -> bool:
+        return observations.pop(0) if observations else True
+
+    async def act() -> MeetActionResult:
+        return MeetActionResult(outcome="succeeded", detail="chat typed")
+
+    result = await execute_meet_action(
+        record,
+        address=MeetActionAddress(meeting_id="meeting-phases", tool_call_id="call-p"),
+        call=MeetActionCall(kind="send_chat", params="hello", chars=5),
+        effects=MeetActionEffects(act, observe),
+        journal=journal,
+    )
+
+    assert result.succeeded
+    finished = journal.events("meet_action_finished")
+    assert len(finished) == 1
+    assert finished[0]["act_ms"] >= 0
+    assert finished[0]["observe_ms"] >= 0
+    assert finished[0]["queue_ms"] >= 0
+
+
+async def test_a_failed_act_keeps_its_detail_in_the_journal(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-detail" / "record.jsonl"
+    journal = RecordingJournal("meeting-detail")
+
+    async def observe() -> bool:
+        return False
+
+    async def act() -> MeetActionResult:
+        return MeetActionResult(outcome="failed", detail="chat input never appeared")
+
+    result = await execute_meet_action(
+        record,
+        address=MeetActionAddress(meeting_id="meeting-detail", tool_call_id="call-d"),
+        call=MeetActionCall(kind="send_chat", params="hello", chars=5),
+        effects=MeetActionEffects(act, observe),
+        journal=journal,
+    )
+
+    assert result.outcome == "failed"
+    assert "chat input never appeared" in result.detail
+    failed = journal.events("meet_action_failed")
+    assert failed[0]["detail"] == "chat input never appeared"

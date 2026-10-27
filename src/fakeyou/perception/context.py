@@ -104,6 +104,19 @@ class PerceptionContext:
             return _look_result("frame_unavailable", screen=segment.ref)
         return await self._look(data, question, subject={"screen": segment.ref})
 
+    def backlog_chat(self, limit: int = 20) -> str:
+        now = self.clock()
+        lines = [
+            {
+                "sender": line.sender.name,
+                "text": line.text,
+                "seconds_ago": max(0, round((now - line.sent_at).total_seconds())),
+            }
+            for line in self.timeline.snapshot().chat
+            if line.backlog
+        ]
+        return _look_result("ok", lines=lines[-limit:])
+
     async def look_at_participant(self, participant: str, question: str) -> str:
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
@@ -127,16 +140,6 @@ class PerceptionContext:
 
 def create_perception_tools(context: PerceptionContext) -> list[BaseTool]:
     @tool(
-        OBSERVE_MEETING,
-        description=(
-            "Return what you currently see in the meeting: the shared screen, earlier screens, "
-            "chat, raised hands, reactions and participants."
-        ),
-    )
-    async def observe_meeting() -> str:
-        return context.view().as_text()
-
-    @tool(
         LOOK_AT_SCREEN,
         description=(
             "Look closely at a shared screen to answer a detailed question that the meeting view "
@@ -157,7 +160,17 @@ def create_perception_tools(context: PerceptionContext) -> list[BaseTool]:
     async def look_at_participant(participant: str, question: str) -> str:
         return await context.look_at_participant(participant, question)
 
-    return [observe_meeting, look_at_screen, look_at_participant]
+    @tool(
+        "look_back_chat",
+        description=(
+            "Read chat messages that were sent before you joined. Use only when someone "
+            "asks about earlier chat; never answer that backlog unprompted."
+        ),
+    )
+    async def look_back_chat() -> str:
+        return context.backlog_chat()
+
+    return [look_at_screen, look_at_participant, look_back_chat]
 
 
 class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):

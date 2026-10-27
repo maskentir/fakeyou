@@ -27,7 +27,9 @@ from fakeyou.persistence.lease import LeaseError, file_lease, leased
 
 MAX_ACTION_ATTEMPTS = 3
 
-MeetActionKind = Literal["raise_hand", "lower_hand", "send_chat"]
+MeetActionKind = Literal[
+    "raise_hand", "lower_hand", "send_chat", "react", "mute", "unmute", "leave"
+]
 ActionState = Literal["requested", "acted", "observed_done", "refused", "failed"]
 
 TERMINAL_ACTION_STATES = frozenset({"observed_done", "refused", "failed"})
@@ -304,6 +306,26 @@ class _MeetActionExecutor:
         self._action_id = action_id
         self._started = started
         self._effects = effects
+        self._act_ms = 0.0
+        self._observe_ms = 0.0
+        self._queue_ms = 0.0
+
+    def note_queue_wait(self) -> None:
+        self._queue_ms = self._elapsed_ms()
+
+    def _phases(self) -> dict[str, float]:
+        return {
+            "act_ms": self._act_ms,
+            "observe_ms": self._observe_ms,
+            "queue_ms": self._queue_ms,
+        }
+
+    async def _observe(self) -> bool:
+        started = time.monotonic()
+        try:
+            return await self._effects.observe()
+        finally:
+            self._observe_ms += (time.monotonic() - started) * 1000
 
     def _elapsed_ms(self) -> float:
         return (time.monotonic() - self._started) * 1000
@@ -333,7 +355,7 @@ class _MeetActionExecutor:
 
     async def read_before(self, intent: ActionIntent) -> tuple[ActionIntent, bool]:
         if intent.observed_before is None:
-            before = await self._effects.observe()
+            before = await self._observe()
             intent = self._ledger.mark(self._action_id, intent.state, observed_before=before)
             self._ledger.save()
             return intent, before
@@ -355,6 +377,7 @@ class _MeetActionExecutor:
                 observed=True,
                 attempts=marked.attempt,
                 duration_ms=self._elapsed_ms(),
+                **self._phases(),
             )
         return LedgerResult(
             action_id=self._action_id,
@@ -373,6 +396,8 @@ class _MeetActionExecutor:
                 reason=reason,
                 attempts=marked.attempt,
                 duration_ms=self._elapsed_ms(),
+                detail=detail,
+                **self._phases(),
             )
         return LedgerResult(
             action_id=self._action_id,
@@ -404,7 +429,7 @@ class _MeetActionExecutor:
             attempt += 1
             intent = self._ledger.mark(intent.action_id, intent.state, attempt=attempt)
             self._ledger.save()
-            if await self._effects.observe():
+            if await self._observe():
                 return self.adopt_effective(intent)
             return intent, attempt
         if fault.retryable:
@@ -417,10 +442,10 @@ class _MeetActionExecutor:
         if effect.refused:
             return self.refuse(intent, "not_admitted", "not admitted to the call")
         if effect.failed:
-            return self.record_failure(intent, "act_failed", "act reported failure")
+            return self.record_failure(intent, "act_failed", effect.detail)
         intent = self._ledger.mark(intent.action_id, "acted", attempt=attempt)
         self._ledger.save()
-        after = await self._effects.observe()
+        after = await self._observe()
         intent = self._ledger.mark(intent.action_id, intent.state, observed_after=after)
         self._ledger.save()
         if after:
@@ -436,7 +461,11 @@ class _MeetActionExecutor:
                 )
 
             async def act() -> MeetActionResult:
-                return await self._effects.act()
+                act_started = time.monotonic()
+                try:
+                    return await self._effects.act()
+                finally:
+                    self._act_ms += (time.monotonic() - act_started) * 1000
 
             effect, error = await capture_error(act)
             if isinstance(error, ProviderFault):
@@ -468,6 +497,7 @@ async def execute_meet_action(
             if duplicate is not None:
                 return duplicate
             executor = _MeetActionExecutor(ledger, journal, action_id, started, effects)
+            executor.note_queue_wait()
             intent = executor.record_intent(existing, address, call)
             intent, before = await executor.read_before(intent)
             if before:

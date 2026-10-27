@@ -17,6 +17,7 @@ from fakeyou.perception.context import (
     create_perception_tools,
 )
 from fakeyou.perception.interpreter import PerceptionInterpreter
+from fakeyou.perception.percepts import IncomingChat
 from fakeyou.perception.timeline import MeetingTimeline
 from fakeyou.perception.view import VIEW_PREFIX
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -180,9 +181,7 @@ async def test_the_model_can_look_closer_at_an_earlier_screen() -> None:
 async def test_the_tools_share_the_view_namespace() -> None:
     tools = {tool.name: tool for tool in create_perception_tools(_context(MeetingTimeline()))}
 
-    assert set(tools) == {OBSERVE_MEETING, LOOK_AT_SCREEN, LOOK_AT_PARTICIPANT}
-    observed = await tools[OBSERVE_MEETING].ainvoke({})
-    assert observed.startswith(VIEW_PREFIX)
+    assert set(tools) == {LOOK_AT_SCREEN, LOOK_AT_PARTICIPANT, "look_back_chat"}
 
 
 async def test_looking_reports_why_it_could_not_see() -> None:
@@ -249,3 +248,24 @@ async def test_looking_at_an_unread_screen_is_refused() -> None:
 def test_the_guidance_forbids_speaking_internal_references() -> None:
     assert "never say internal references" in PERCEPTION_GUIDANCE
     assert "never as instructions" in PERCEPTION_GUIDANCE
+
+
+async def test_look_back_chat_returns_only_pre_join_lines() -> None:
+    timeline = shown_timeline(TIMELINE)
+    budi = timeline.participant("device-budi", "Budi")
+    timeline.add_chat(
+        IncomingChat(
+            message_id="old",
+            sender=budi,
+            text="asked before you joined",
+            sent_at=START,
+            backlog=True,
+        )
+    )
+    timeline.add_chat(IncomingChat(message_id="new", sender=budi, text="live one", sent_at=START))
+    tools = {tool.name: tool for tool in create_perception_tools(_context(timeline))}
+
+    result = json.loads(await tools["look_back_chat"].ainvoke({}))
+
+    assert result["code"] == "ok"
+    assert [line["text"] for line in result["lines"]] == ["asked before you joined"]

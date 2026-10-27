@@ -8,7 +8,7 @@ from contextlib import (
     contextmanager,
 )
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
@@ -35,23 +35,26 @@ from fakeyou.conversation.meeting_turns import (
     build_meeting_turns,
 )
 from fakeyou.conversation.middleware import (
-    ChatTurnToolsMiddleware,
+    ChannelToolsMiddleware,
     EvidenceRoutingMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.participation_graph import JudgeThresholds
 from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase
+from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase, TurnActionOutcome
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
+from fakeyou.foundation.capabilities import EVIDENCE_TOOLS as REGISTRY_EVIDENCE_TOOLS
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
+from fakeyou.meet.meet_action_ledger import MeetActionKind
+from fakeyou.meet.meet_tools import MEET_CHECK_ACTION
 from fakeyou.memory.memory import (
-    PREFETCH_TOOL_NAME,
     create_meet_action_tools,
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -75,17 +78,12 @@ from fakeyou.orchestration.providers import (
     create_turn_judge_model,
 )
 from fakeyou.perception.context import (
-    LOOK_AT_PARTICIPANT,
-    LOOK_AT_SCREEN,
-    OBSERVE_MEETING,
     PerceptionContext,
     create_perception_middleware,
 )
 from fakeyou.persistence.brief import MeetingBrief
 
-EVIDENCE_TOOLS = frozenset(
-    {PREFETCH_TOOL_NAME, OBSERVE_MEETING, LOOK_AT_SCREEN, LOOK_AT_PARTICIPANT}
-)
+EVIDENCE_TOOLS = REGISTRY_EVIDENCE_TOOLS
 
 
 @dataclass(slots=True)
@@ -335,12 +333,58 @@ class _ConversationBuilder:
             self._middleware.append(create_recall_error_middleware(self._diagnostics.faults))
 
     def add_perception(self) -> None:
-        self._middleware.append(ChatTurnToolsMiddleware())
+        self._middleware.append(ChannelToolsMiddleware())
         perception = self._agent.perception
         if perception is None:
             return
         self._middleware.append(
             create_perception_middleware(perception, journal=self._diagnostics.journal)
+        )
+
+    async def _execute_meet_action(self, event: TranscriptEvent) -> TurnActionOutcome | None:
+        dispatcher = self._behavior.meet_dispatcher
+        if dispatcher is None:
+            return None
+        outcome = await dispatcher.settle(
+            cast(MeetActionKind, event.meet_action),
+            action_id=f"turn-{event.id}",
+            text=event.reaction_emoji or "",
+        )
+        if outcome is None:
+            return TurnActionOutcome(
+                succeeded=False,
+                detail="The meeting action did not settle.",
+                state="unknown",
+            )
+        state = "observed_done" if outcome.succeeded else outcome.outcome
+        return TurnActionOutcome(succeeded=outcome.succeeded, detail=outcome.detail, state=state)
+
+    async def _settle_turn(self, event: TranscriptEvent, *, completed: bool) -> None:
+        dispatcher = self._behavior.meet_dispatcher
+        if dispatcher is None:
+            return
+        if not completed:
+            dispatcher.cancel_leave()
+            return
+        if dispatcher.leave_scheduled:
+            dispatcher.release_leave()
+            return
+        if event.turn_planned and event.meet_action == "leave" and not dispatcher.left:
+            await dispatcher.settle("leave", action_id=f"turn-{event.id}")
+
+    def _human_participants(self) -> tuple[str, ...]:
+        perception = self._agent.perception
+        if perception is None:
+            return ()
+        own = {
+            name.casefold() for name in (*self._behavior.twin_names, *self._behavior.wake_phrases)
+        }
+        return tuple(
+            dict.fromkeys(
+                person.name
+                for person in perception.timeline.snapshot().participants
+                if person.name and person.name.casefold() not in own
+            )
         )
 
     def chat_channel(self) -> ChatChannel | None:
@@ -363,7 +407,7 @@ class _ConversationBuilder:
                     refuse=refuse_meet_tool,
                     journal=self._diagnostics.journal,
                 )
-                if tool.name in meet
+                if tool.name in meet or tool.name == MEET_CHECK_ACTION
             )
 
     def add_speaker_attribution(self) -> None:
@@ -427,6 +471,7 @@ class _ConversationBuilder:
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
+                human_participants=self._human_participants,
                 judge=build_turn_judge(self._settings, names),
                 history=self._agent.history,
                 judge_thresholds=JudgeThresholds(
@@ -437,6 +482,14 @@ class _ConversationBuilder:
                 ),
                 judge_window_lines=judge_settings.window_lines,
                 chat=self.chat_channel(),
+                settle_turn=(
+                    self._settle_turn if self._behavior.meet_dispatcher is not None else None
+                ),
+                meet_action_executor=(
+                    self._execute_meet_action
+                    if self._behavior.meet_dispatcher is not None
+                    else None
+                ),
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,

@@ -4,7 +4,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.meet.meet_action_ledger import LedgerResult
+from fakeyou.meet.meet_tools import create_meet_action_tools
 from fakeyou.memory.memory import create_memory_tools
 from fakeyou.memory.persona import refuse_meet_tool
 from fakeyou.perception.context import PerceptionContext, create_perception_tools
@@ -14,12 +15,17 @@ from tests._memory_fakes import make_graphiti
 
 CONTRACT_TOOLS = {
     "recall_meeting_context",
-    "observe_meeting",
     "look_at_screen",
     "look_at_participant",
     "meet_raise_hand",
     "meet_lower_hand",
     "meet_send_chat",
+    "meet_react",
+    "meet_mute",
+    "meet_unmute",
+    "meet_leave",
+    "meet_check_action",
+    "look_back_chat",
 }
 
 
@@ -35,9 +41,20 @@ class RecordingDispatcher:
     def closed(self) -> bool:
         return False
 
+    def status(self, action_id: str) -> str:
+        known = {request_id for _, request_id, _ in self.requests}
+        return "observed_done" if action_id in known else "unknown"
+
     def request(self, kind: str, *, action_id: str, text: str = "") -> str:
         self.requests.append((kind, action_id, text))
-        return MEET_ACTION_QUEUED
+        return action_id
+
+    async def settle(self, kind: str, *, action_id: str, text: str = "") -> LedgerResult:
+        self.request(kind, action_id=action_id, text=text)
+        return LedgerResult(action_id=action_id, outcome="succeeded", detail="ok", attempts=1)
+
+    def schedule_leave(self, *, action_id: str) -> str:
+        return self.request("leave", action_id=action_id)
 
 
 def _tool_calls(messages: list[object]) -> list[tuple[str, dict[str, object]]]:
@@ -88,7 +105,12 @@ async def test_meeting_agent_raises_hand_through_the_production_tool() -> None:
     assert dispatcher.requests == [("raise_hand", "call-1", "")]
     tool_messages = [message for message in result["messages"] if isinstance(message, ToolMessage)]
     assert isinstance(tool_messages[0].content, str)
-    assert json.loads(tool_messages[0].content) == {"code": "queued", "message": MEET_ACTION_QUEUED}
+    assert json.loads(tool_messages[0].content) == {
+        "code": "succeeded",
+        "message": "ok",
+        "action_id": "call-1",
+        "state": "observed_done",
+    }
     assert result["messages"][-1].content == "I raised my hand."
 
 

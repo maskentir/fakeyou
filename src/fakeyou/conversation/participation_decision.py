@@ -18,6 +18,11 @@ class ParticipationDecision(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     reason_code: str = Field(min_length=1)
     backchannel: bool = False
+    requests_chat: bool = False
+    meet_action: str = "none"
+    evidence_needs: tuple[str, ...] = ()
+    reaction_emoji: str | None = None
+    action_only: bool = False
 
 
 def to_participation_action(decision: ParticipationDecision) -> ParticipationAction:

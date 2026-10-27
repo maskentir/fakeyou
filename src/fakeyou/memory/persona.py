@@ -27,8 +27,14 @@ PersonaTool = Literal[
     "meet_raise_hand",
     "meet_lower_hand",
     "meet_send_chat",
+    "meet_react",
+    "meet_mute",
+    "meet_unmute",
+    "meet_leave",
 ]
-MEET_HAND_TOOLS = frozenset({"meet_raise_hand", "meet_lower_hand"})
+MEET_ACT_TOOLS = frozenset(
+    {"meet_raise_hand", "meet_lower_hand", "meet_react", "meet_mute", "meet_unmute", "meet_leave"}
+)
 MEET_CHAT_TOOLS = frozenset({"meet_send_chat"})
 PersonaLanguage = Literal["id", "en"]
 AiDisclosure = Literal["when_asked", "upfront"]
@@ -386,17 +392,38 @@ def build_system_prompt(
     return "\n\n".join(sections)
 
 
+def _require_brief_permissions(profile: PersonaProfile, brief: MeetingBrief) -> None:
+    for tools, permission in ((MEET_CHAT_TOOLS, "meet_chat"), (MEET_ACT_TOOLS, "meet_act")):
+        requested = sorted(profile.allowed_tools & tools)
+        if requested and permission not in brief.permissions:
+            raise FakeYouError(
+                ErrorCode.MEETING_TOOL_PERMISSION_MISSING,
+                tool=requested[0],
+                permission=permission,
+            )
+    if brief.knowledge_scope == "brief_only":
+        requested = sorted(profile.allowed_tools & (MEET_ACT_TOOLS | MEET_CHAT_TOOLS))
+        if requested:
+            raise FakeYouError(
+                ErrorCode.MEETING_TOOL_PERMISSION_MISSING,
+                tool=requested[0],
+                permission="non-brief_only scope",
+            )
+
+
 def meeting_tool_names(
     profile: PersonaProfile, brief: MeetingBrief | None, *, memory_requested: bool
 ) -> frozenset[PersonaTool]:
     if memory_requested and brief is not None and brief.knowledge_scope == "brief_only":
         raise FakeYouError(ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY)
+    if brief is not None:
+        _require_brief_permissions(profile, brief)
     names: frozenset[PersonaTool] = frozenset()
     if memory_requested:
-        names |= profile.allowed_tools - MEET_HAND_TOOLS - MEET_CHAT_TOOLS
+        names |= profile.allowed_tools - MEET_ACT_TOOLS - MEET_CHAT_TOOLS
     if brief is not None and brief.knowledge_scope != "brief_only":
         if "meet_act" in brief.permissions:
-            names |= profile.allowed_tools & MEET_HAND_TOOLS
+            names |= profile.allowed_tools & MEET_ACT_TOOLS
         if "meet_chat" in brief.permissions:
             names |= profile.allowed_tools & MEET_CHAT_TOOLS
     return names

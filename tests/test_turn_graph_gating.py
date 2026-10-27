@@ -32,6 +32,7 @@ from tests._conversation_fakes import judged
 
 TWIN_REPLY = "Yes, I am here."
 POLICY_FIELDS = {
+    "heard",
     "transcript_id",
     "action",
     "reason",
@@ -41,6 +42,12 @@ POLICY_FIELDS = {
     "finished",
     "backchannel",
     "source",
+    "requests_chat",
+    "meet_action",
+    "evidence_needs",
+    "reaction_emoji",
+    "action_only",
+    "logistics_check",
 }
 
 

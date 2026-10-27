@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -15,6 +15,19 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
 
 JudgeAction = Literal["reply", "clarify", "stay_silent"]
+MeetAction = Literal["none", "raise_hand", "lower_hand", "react", "mute", "unmute", "leave"]
+EvidenceNeed = Literal["screen", "participant", "chat_history", "memory", "action_status"]
+ReactionEmoji = Literal[
+    "\U0001f496",
+    "\U0001f44d",
+    "\U0001f44e",
+    "\U0001f389",
+    "\U0001f44f",
+    "\U0001f602",
+    "\U0001f62e",
+    "\U0001f622",
+    "\U0001f914",
+]
 Addressee = Literal["twin", "someone_else", "everyone", "unclear"]
 SPEAKING_NOW = "speaking now"
 JUDGE_CONCURRENCY = 4
@@ -32,16 +45,44 @@ _JUDGE_RULES = (
     "keeps the floor.\n"
     "backchannel: true when the line only acknowledges or encourages whoever holds the floor "
     "and does not take a turn of its own.\n"
+    "logistics_check: true when the line only checks meeting readiness or connection, "
+    "such as whether a screen is visible, a voice is audible, or the meeting can start.\n"
     "addressee: twin when the line is meant for the twin: it names the twin, answers a "
     "question or request the twin itself just put to that speaker, or directly continues an "
-    "exchange with the twin. The twin having recently spoken, or spoken about the same "
+    "exchange with the twin, or it is an imperative aimed at whoever is currently "
+    "speaking (stop, wait, say that again) while twin_is_speaking is true. The twin "
+    "having recently spoken, or spoken about the same "
     "topic, is not by itself addressing. someone_else when it is meant for another person; "
     "everyone when it is put to the whole room, including room checks such as whether a "
-    "screen is visible or a voice audible; unclear otherwise.\n"
+    "screen is visible, a voice audible, or the meeting should start. A room check is "
+    "everyone even immediately after the twin spoke, unless sole_human_participant is "
+    "true, in which case that sole participant's logistics check is for the twin; "
+    "unclear otherwise.\n"
     "action: reply when the twin should answer now; clarify when the line is meant for the "
     "twin but too unclear to answer; stay_silent otherwise, including talk between other "
-    "people, backchannels, a line that is not finished, and any question put to everyone, "
-    "even one the twin could answer.\n"
+    "people, backchannels, a line that is not finished, and any question put to everyone "
+    "while sole_human_participant is false, even one the twin could answer. When "
+    "sole_human_participant is true, a logistics check from that participant is for "
+    "the twin.\n"
+    "meet_action: when the speaker asks the twin itself to perform one meeting action "
+    "(raise or lower its hand, send a reaction, mute or unmute itself, leave the call), "
+    "name it; otherwise none. Talking about an action, or asking someone else to do it, "
+    "is none.\n"
+    "action_only: true when a requested meeting action or chat send is the line's only "
+    "request and nothing else needs a spoken answer.\n"
+    "requests_chat: true when the speaker asks the twin to write or send something "
+    "in the meeting chat. Merely mentioning chat, or a chat message existing, is not "
+    "a request.\n"
+    "evidence: only the evidence the latest line needs beyond the conversation already "
+    "shown. Use screen when the answer depends on what is being shared or shown; "
+    "participant only when it depends on a specific participant's camera or appearance, "
+    "not who is attending or how many people are present; chat_history "
+    "when it asks about earlier chat; memory when it asks about the owner's earlier "
+    "facts, preferences or meetings; action_status when it asks whether an earlier "
+    "meeting action was delivered. Leave it empty for greetings, action requests, and "
+    "answers available from the conversation.\n"
+    "reaction_emoji: when meet_action is react, the closest of Meet's reaction glyphs; "
+    "otherwise null.\n"
     "confidence: how sure you are about action, from 0 to 1."
 )
 
@@ -52,9 +93,31 @@ class TurnJudgement(BaseModel):
     heard: str = Field(description="The latest line as the speaker most likely meant it.")
     finished: bool = Field(description="The speaker has completed the turn.")
     backchannel: bool = Field(description="The line only acknowledges whoever holds the floor.")
+    logistics_check: bool = Field(
+        default=False, description="The line only checks meeting readiness or connection."
+    )
     addressee: Addressee
     action: JudgeAction
     confidence: float = Field(ge=0.0, le=1.0)
+    requests_chat: bool = Field(
+        default=False, description="The speaker asks the twin to write in the meeting chat."
+    )
+    meet_action: MeetAction = Field(
+        default="none",
+        description="A meeting action the speaker asks the twin itself to perform.",
+    )
+    action_only: bool = Field(
+        default=False,
+        description="Whether the requested action is the line's only request.",
+    )
+    evidence: tuple[EvidenceNeed, ...] = Field(
+        default=(),
+        description="Evidence required before the twin can answer the latest line.",
+    )
+    reaction_emoji: ReactionEmoji | None = Field(
+        default=None,
+        description="The Meet reaction glyph when the requested action is react.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,10 +133,17 @@ class JudgeWindow:
     latest: JudgeLine
     twin_speaking: bool = False
     names_twin: bool = False
+    human_participants: tuple[str, ...] = ()
 
     @property
     def key(self) -> tuple[object, ...]:
-        return (self.earlier, _normalized(self.latest.text), self.twin_speaking, self.names_twin)
+        return (
+            self.earlier,
+            _normalized(self.latest.text),
+            self.twin_speaking,
+            self.names_twin,
+            self.human_participants,
+        )
 
 
 class TurnJudge(Protocol):
@@ -108,15 +178,25 @@ class WindowSource:
     history: MeetingHistory
     window_lines: int
     twin_names: tuple[str, ...] = ()
+    participants: Callable[[], Sequence[str]] | None = None
 
     def _names_twin(self, text: str) -> bool:
         return any(mentions_whole_phrase(text, name) for name in self.twin_names)
+
+    def _human_participants(self) -> tuple[str, ...]:
+        if self.participants is None:
+            return ()
+        return tuple(dict.fromkeys(name for name in self.participants() if name))
 
     def for_final(self, event: TranscriptEvent, *, twin_speaking: bool) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=event.id)[-self.window_lines :]
         latest = JudgeLine(speaker=spoken_by(event), text=event.text)
         return JudgeWindow(
-            tuple(earlier), latest, twin_speaking, names_twin=self._names_twin(event.text)
+            tuple(earlier),
+            latest,
+            twin_speaking,
+            names_twin=self._names_twin(event.text),
+            human_participants=self._human_participants(),
         )
 
     def for_interim(self, text: str, *, twin_speaking: bool) -> JudgeWindow:
@@ -126,14 +206,29 @@ class WindowSource:
             JudgeLine(SPEAKING_NOW, text),
             twin_speaking,
             names_twin=self._names_twin(text),
+            human_participants=self._human_participants(),
         )
 
 
+def _human_speakers(window: JudgeWindow) -> list[str]:
+    speakers = {
+        line.speaker for line in window.earlier if not line.twin and line.speaker != SPEAKING_NOW
+    }
+    latest = window.latest
+    if not latest.twin and latest.speaker != SPEAKING_NOW:
+        speakers.add(latest.speaker)
+    return sorted(speakers)
+
+
 def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
+    humans = _human_speakers(window)
     return json.dumps(
         {
             "twin_names": list(twin_names),
             "twin_is_speaking": window.twin_speaking,
+            "human_speakers": humans,
+            "human_participants": list(window.human_participants),
+            "sole_human_participant": len(window.human_participants) == 1,
             "earlier": [
                 {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
                 for line in window.earlier

@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
+from cloakbrowser.human.actionability import ActionabilityError
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.meet import (
     NAME_FIELD_ATTEMPTS,
-    TYPE_DELAY_MS,
     ToggleSelectors,
     click_when_ready,
     observe_call_state,
@@ -38,6 +38,10 @@ class MeetActionSignals:
     lower_hand: str = "lower hand"
     chat: str = "chat"
     pin_message: str = "pin message"
+    reactions: str = "send a reaction"
+    mic_on: str = "turn on microphone"
+    mic_off: str = "turn off microphone"
+    leave_call: str = "Leave call"
 
 
 DEFAULT_MEET_ACTION_SIGNALS = MeetActionSignals()
@@ -111,6 +115,31 @@ class HandPrefixes:
     toggle_prefix: str
 
 
+@dataclass(frozen=True, slots=True)
+class ToggleSpec:
+    desired_prefix: str
+    toggle_prefix: str
+    state: str
+    label: str
+
+
+async def _set_toggle_state(
+    page: Page,
+    spec: ToggleSpec,
+    sleep: Callable[[float], Awaitable[None]],
+    monotonic: Callable[[], float],
+) -> MeetActionResult:
+    gate = await _refused_unless_admitted(page)
+    if gate is not None:
+        return gate
+    desired = _button_prefix_selector(spec.desired_prefix)
+    toggle = _button_prefix_selector(spec.toggle_prefix)
+    if await _settled_visible(page, desired, spec.label, sleep, monotonic):
+        return MeetActionResult(outcome="succeeded", detail=f"{spec.label} already {spec.state}")
+    await toggle_control(page, ToggleSelectors(desired, toggle), spec.label, spec.state, sleep)
+    return MeetActionResult(outcome="succeeded", detail=f"{spec.label} {spec.state}")
+
+
 async def _set_hand_state(
     page: Page,
     prefixes: HandPrefixes,
@@ -118,15 +147,296 @@ async def _set_hand_state(
     sleep: Callable[[float], Awaitable[None]],
     monotonic: Callable[[], float],
 ) -> MeetActionResult:
+    spec = ToggleSpec(prefixes.desired_prefix, prefixes.toggle_prefix, state, "hand")
+    return await _set_toggle_state(page, spec, sleep, monotonic)
+
+
+async def mute_microphone(
+    page: Page,
+    signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> MeetActionResult:
+    return await _set_toggle_state(
+        page, ToggleSpec(signals.mic_on, signals.mic_off, "muted", "microphone"), sleep, monotonic
+    )
+
+
+async def unmute_microphone(
+    page: Page,
+    signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> MeetActionResult:
+    return await _set_toggle_state(
+        page,
+        ToggleSpec(signals.mic_off, signals.mic_on, "unmuted", "microphone"),
+        sleep,
+        monotonic,
+    )
+
+
+async def observe_muted(
+    page: Page, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
+) -> bool:
+    return await _readback_visible(page, _button_prefix_selector(signals.mic_on))
+
+
+async def observe_unmuted(
+    page: Page, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
+) -> bool:
+    return await _readback_visible(page, _button_prefix_selector(signals.mic_off))
+
+
+_REACTION_CLICK_JS = """emoji => {
+    const candidates = document.querySelectorAll('button, [role="button"]');
+    for (const el of candidates) {
+        const label = el.getAttribute('aria-label') || '';
+        const alt = el.querySelector('img')?.alt || '';
+        const matches =
+            (el.textContent || '').includes(emoji) || label.includes(emoji) || alt.includes(emoji);
+        if (matches && el.getClientRects().length > 0) {
+            el.click();
+            return true;
+        }
+    }
+    return false;
+}"""
+
+
+_HEART_FAMILY = frozenset(
+    {
+        "\u2764",
+        "\u2764\ufe0f",
+        "\u2665",
+        "\u2665\ufe0f",
+        "\U0001f497",
+        "\U0001f493",
+        "\U0001f495",
+        "\U0001f49e",
+        "\U0001f498",
+        "\U0001f49d",
+        "\U0001f9e1",
+        "\U0001f49b",
+        "\U0001f49a",
+        "\U0001f499",
+        "\U0001f49c",
+        "\U0001f5a4",
+        "\U0001f90d",
+        "\U0001f90e",
+        "\U0001f60d",
+    }
+)
+_MEET_HEART = "\U0001f496"
+
+_EMOJI_FAMILIES: dict[str, str] = (
+    {
+        member: "\U0001f914"
+        for member in (
+            "\U0001f615",
+            "\U0001f616",
+            "\U0001f928",
+            "\U0001f9d0",
+            "\U0001f636\u200d\U0001f32b\ufe0f",
+            "\U0001f62c",
+        )
+    }
+    | {
+        member: "\U0001f622"
+        for member in (
+            "\U0001f62d",
+            "\U0001f641",
+            "\u2639\ufe0f",
+            "\U0001f614",
+            "\U0001f61e",
+            "\U0001f625",
+        )
+    }
+    | {
+        member: "\U0001f62e"
+        for member in (
+            "\U0001f62f",
+            "\U0001f631",
+            "\U0001f632",
+            "\U0001f92f",
+            "\U0001f633",
+            "\U0001f62e\u200d\U0001f4a8",
+        )
+    }
+    | {
+        member: "\U0001f602"
+        for member in (
+            "\U0001f923",
+            "\U0001f606",
+            "\U0001f605",
+            "\U0001f604",
+            "\U0001f600",
+            "\U0001f601",
+            "\U0001f60a",
+            "\U0001f642",
+        )
+    }
+    | {member: "\U0001f389" for member in ("\U0001f973", "\U0001f38a", "\U0001f525")}
+    | {
+        member: "\U0001f44f"
+        for member in ("\U0001f64c", "\U0001faf6", "\U0001f44f\U0001f3fb", "\U0001f44f\U0001f3fe")
+    }
+    | {member: "\U0001f44e" for member in ("\U0001f60f", "\U0001f644", "\U0001f612", "\U0001f624")}
+)
+
+
+def _meet_emoji(emoji: str) -> str:
+    cleaned = emoji.strip()
+    if cleaned in _HEART_FAMILY:
+        return _MEET_HEART
+    return _EMOJI_FAMILIES.get(cleaned, cleaned)
+
+
+async def _click_reaction_emoji(
+    page: Page, emoji: str, sleep: Callable[[float], Awaitable[None]]
+) -> tuple[str | None, str | None]:
+    failure = await click_when_ready(
+        partial(page.locator, f'button[aria-label="{emoji}"]'), "reaction emoji", sleep
+    )
+    if failure is None:
+        return None, "aria-label"
+    failure = await click_when_ready(
+        partial(page.locator, f'button:has-text("{emoji}")'), "reaction emoji", sleep
+    )
+    if failure is None:
+        return None, "has-text"
+    try:
+        clicked = await page.evaluate(_REACTION_CLICK_JS, emoji)
+    except (PlaywrightError, ActionabilityError):
+        return failure, None
+    return (None, "dom-search") if clicked is True else (failure, None)
+
+
+_REACTION_VISIBLE_JS = """emoji => {
+    const candidates = document.querySelectorAll('button, [role="button"]');
+    for (const el of candidates) {
+        const label = el.getAttribute('aria-label') || '';
+        const matches = (el.textContent || '').includes(emoji) || label.includes(emoji);
+        if (matches && el.getClientRects().length > 0) return true;
+    }
+    return false;
+}"""
+
+_PICKER_SNIPPET_JS = """() => {
+    const root = document.querySelector('[role="dialog"][aria-label="Send a reaction"]');
+    if (!root) return 'no picker dialog';
+    const parts = [];
+    for (const el of root.querySelectorAll('button, [role="button"], img')) {
+        const label = el.getAttribute('aria-label') || '';
+        const alt = el.getAttribute('alt') || '';
+        const text = (el.textContent || '').trim().slice(0, 20);
+        const vis = el.getClientRects().length > 0;
+        parts.push(el.tagName + '|aria=' + label + '|alt=' + alt + '|text=' + text + '|vis=' + vis);
+        if (parts.length >= 16) break;
+    }
+    return parts.join(' ; ').slice(0, 900);
+}"""
+
+
+async def _emoji_picker_open(page: Page, emoji: str) -> bool:
+    try:
+        visible = await page.evaluate(_REACTION_VISIBLE_JS, emoji)
+    except (PlaywrightError, ActionabilityError):
+        return False
+    return visible is True
+
+
+_PICKER_EMOJIS_JS = """() => {
+    const labels = [];
+    for (const el of document.querySelectorAll('button[aria-label]')) {
+        const label = (el.getAttribute('aria-label') || '').trim();
+        const pictograph = /\\p{Extended_Pictographic}/u.test(label);
+        if (label.length <= 8 && pictograph && el.getClientRects().length > 0) {
+            labels.push(label);
+        }
+    }
+    return labels;
+}"""
+
+
+async def _picker_emojis(page: Page) -> list[str]:
+    try:
+        raw = await page.evaluate(_PICKER_EMOJIS_JS)
+    except (PlaywrightError, ActionabilityError):
+        return []
+    return [str(item) for item in raw] if isinstance(raw, list) else []
+
+
+async def _picker_snippet(page: Page) -> str:
+    try:
+        raw = await page.evaluate(_PICKER_SNIPPET_JS)
+    except (PlaywrightError, ActionabilityError):
+        return ""
+    return " ".join(str(raw).split()) if raw else ""
+
+
+async def send_reaction(
+    page: Page,
+    emoji: str,
+    signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> MeetActionResult:
+    del monotonic
     gate = await _refused_unless_admitted(page)
     if gate is not None:
         return gate
-    desired = _button_prefix_selector(prefixes.desired_prefix)
-    toggle = _button_prefix_selector(prefixes.toggle_prefix)
-    if await _settled_visible(page, desired, "hand", sleep, monotonic):
-        return MeetActionResult(outcome="succeeded", detail=f"hand already {state}")
-    await toggle_control(page, ToggleSelectors(desired, toggle), "hand", state, sleep)
-    return MeetActionResult(outcome="succeeded", detail=f"hand {state}")
+    emoji = _meet_emoji(emoji)
+    picker = partial(page.locator, _button_prefix_selector(signals.reactions))
+    if not await _emoji_picker_open(page, emoji):
+        failure = await click_when_ready(picker, "reactions button", sleep)
+        if failure is not None:
+            return MeetActionResult(
+                outcome="failed", detail=f"opening the reaction picker failed: {failure}"
+            )
+    try:
+        available = await _picker_emojis(page)
+        if available and emoji not in available:
+            return MeetActionResult(
+                outcome="failed",
+                detail=f"Meet does not offer that reaction (available: {' '.join(available)})",
+            )
+        failure, strategy = await _click_reaction_emoji(page, emoji, sleep)
+        if failure is not None and not available:
+            await click_when_ready(picker, "reactions button", sleep)
+            failure, strategy = await _click_reaction_emoji(page, emoji, sleep)
+        if failure is not None:
+            snippet = await _picker_snippet(page)
+            detail = f"picking the reaction failed: {failure}"
+            if snippet:
+                detail = f"{detail}; picker candidates: {snippet}"
+            return MeetActionResult(outcome="failed", detail=detail)
+        return MeetActionResult(outcome="succeeded", detail=f"reaction sent via {strategy}")
+    finally:
+        try:
+            await page.keyboard.press("Escape")
+        except (PlaywrightError, ActionabilityError):
+            pass
+
+
+async def leave_call(
+    page: Page,
+    signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> MeetActionResult:
+    del monotonic
+    gate = await _refused_unless_admitted(page)
+    if gate is not None:
+        return gate
+    failure = await click_when_ready(
+        partial(page.locator, f'button[aria-label="{signals.leave_call}"]'),
+        "leave button",
+        sleep,
+    )
+    if failure is not None:
+        return MeetActionResult(outcome="failed", detail=f"clicking leave failed: {failure}")
+    return MeetActionResult(outcome="succeeded", detail="leave clicked")
 
 
 async def raise_hand(
@@ -223,7 +533,7 @@ async def send_chat(
             detail=f"focusing the chat input failed: {failure} (chars={chars})",
         )
     try:
-        await page.keyboard.type(text, delay=TYPE_DELAY_MS)
+        await page.keyboard.insert_text(text)
         await page.keyboard.press("Enter")
     except PlaywrightError as error:
         return MeetActionResult(

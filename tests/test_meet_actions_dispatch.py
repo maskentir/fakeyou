@@ -11,9 +11,14 @@ from fakeyou.catalog.errors import ErrorCode
 from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
-from fakeyou.meet.meet_action_ledger import LedgerError, MeetActionLedger, actions_path
+from fakeyou.meet.meet_action_ledger import (
+    LedgerError,
+    LedgerResult,
+    MeetActionLedger,
+    actions_path,
+)
 from fakeyou.meet.meet_actions import MeetActionResult, lower_hand, raise_hand, send_chat
-from fakeyou.meet.meet_tools import MEET_ACTION_QUEUED, create_meet_action_tools
+from fakeyou.meet.meet_tools import create_meet_action_tools
 from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
 from fakeyou.memory.persona import (
     MEET_REFUSAL_TEXT,
@@ -53,9 +58,9 @@ async def test_send_chat_tool_refuses_invalid_messages(tmp_path: Path) -> None:
         tool_call("meet_send_chat", "call-tool-2", {"message": PREFETCH_EVIDENCE_PREFIX + "{}"})
     )
 
-    assert MEET_ACTION_QUEUED not in tool_text(long)
+    assert '"code":"succeeded"' not in tool_text(long)
     assert "500" in tool_text(long)
-    assert MEET_ACTION_QUEUED not in tool_text(evidence)
+    assert '"code":"succeeded"' not in tool_text(evidence)
     assert "evidence" in tool_text(evidence)
     assert long.status == "success"
     assert evidence.status == "success"
@@ -103,14 +108,27 @@ async def test_flag_off_by_default_and_bound_tools_refuse_without_execution(
         "meet_raise_hand",
         "meet_lower_hand",
         "meet_send_chat",
+        "meet_react",
+        "meet_mute",
+        "meet_unmute",
+        "meet_leave",
+        "meet_check_action",
     ]
     raised = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-flag-1"))
     sent = await tools[2].ainvoke(
         tool_call("meet_send_chat", "call-flag-2", {"message": CHAT_TEXT})
     )
 
-    assert json.loads(tool_text(raised)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
-    assert json.loads(tool_text(sent)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
+    assert json.loads(tool_text(raised)) == {
+        "code": "refused",
+        "message": MEET_REFUSAL_TEXT,
+        "action_id": "call-flag-1",
+    }
+    assert json.loads(tool_text(sent)) == {
+        "code": "refused",
+        "message": MEET_REFUSAL_TEXT,
+        "action_id": "call-flag-2",
+    }
     await dispatcher.drain()
     assert page.clicked == []
     assert page.typed == []
@@ -156,22 +174,22 @@ async def test_stale_generation_and_closed_requests_cancel_without_dom_touch(
     closed = await closed_tools[0].ainvoke(tool_call("meet_raise_hand", "call-stale-3"))
     await dispatcher.drain()
 
-    assert json.loads(tool_text(closed)) == {"code": "refused", "message": MEET_REFUSAL_TEXT}
+    assert json.loads(tool_text(closed)) == {
+        "code": "refused",
+        "message": MEET_REFUSAL_TEXT,
+        "action_id": "call-stale-3",
+    }
     assert journal.events("meet_action_requested") == []
 
 
-async def test_meet_tool_call_schedules_async_without_sync_side_effects(
+async def test_dispatcher_request_schedules_async_without_sync_side_effects(
     tmp_path: Path,
 ) -> None:
     journal = RecordingJournal("meeting-async")
     dispatcher, record = task5_dispatcher(tmp_path, "meeting-async", journal=journal)
-    tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
-    queued = await tools[2].ainvoke(
-        tool_call("meet_send_chat", "call-async-1", {"message": CHAT_TEXT})
-    )
+    dispatcher.request("send_chat", action_id="call-async-1", text=CHAT_TEXT)
 
-    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
     assert journal.events() == []
     assert actions_path(record).exists() is False
     page = meet_page([IN_CALL, ECHO_CONTENT, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
@@ -326,9 +344,12 @@ async def test_meet_raise_hand_end_to_end_observed_success(tmp_path: Path) -> No
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
     tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
-    queued = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-raise"))
+    settled = await tools[0].ainvoke(tool_call("meet_raise_hand", "call-e2e-raise"))
 
-    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
+    result = json.loads(tool_text(settled))
+    assert result["code"] == "succeeded"
+    assert result["state"] == "observed_done"
+    assert result["action_id"] == "call-e2e-raise"
     await dispatcher.drain()
     dispatcher.close()
 
@@ -364,11 +385,14 @@ async def test_meet_chat_end_to_end_observed_success_without_content_leak(
     dispatcher.bind_page(page, sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event())
     tools = create_meet_action_tools(dispatcher, refuse=refuse_meet_tool, journal=journal)
 
-    queued = await tools[2].ainvoke(
+    settled = await tools[2].ainvoke(
         tool_call("meet_send_chat", "call-e2e-chat", {"message": CHAT_TEXT})
     )
 
-    assert json.loads(tool_text(queued)) == {"code": "queued", "message": MEET_ACTION_QUEUED}
+    result = json.loads(tool_text(settled))
+    assert result["code"] == "succeeded"
+    assert result["state"] == "observed_done"
+    assert result["action_id"] == "call-e2e-chat"
     await dispatcher.drain()
     dispatcher.close()
 
@@ -524,7 +548,18 @@ class _RecordingDispatcher:
 
     def request(self, kind: str, *, action_id: str, text: str = "") -> str:
         self.requests.append((kind, action_id, text))
-        return MEET_ACTION_QUEUED
+        return action_id
+
+    async def settle(self, kind: str, *, action_id: str, text: str = "") -> LedgerResult:
+        self.request(kind, action_id=action_id, text=text)
+        return LedgerResult(action_id=action_id, outcome="succeeded", detail="ok", attempts=1)
+
+    def schedule_leave(self, *, action_id: str) -> str:
+        return self.request("leave", action_id=action_id)
+
+    def status(self, action_id: str) -> str:
+        known = {request_id for _, request_id, _ in self.requests}
+        return "observed_done" if action_id in known else "unknown"
 
 
 def _refuse_all(tool_name: str, *, journal: object | None) -> str:
@@ -538,17 +573,18 @@ def test_meet_tools_keep_contract_names_and_args() -> None:
         "meet_raise_hand",
         "meet_lower_hand",
         "meet_send_chat",
+        "meet_react",
+        "meet_mute",
+        "meet_unmute",
+        "meet_leave",
+        "meet_check_action",
     ]
     chat = tools[2]
     assert set(chat.args) == {"message"}
     assert set(tools[0].args) == set()
-
-
-def test_no_mute_tool_in_meeting_inventory() -> None:
-    names = [
-        tool.name for tool in create_meet_action_tools(_RecordingDispatcher(), refuse=_refuse_all)
-    ]
-    assert names == ["meet_raise_hand", "meet_lower_hand", "meet_send_chat"]
+    by_name = {tool.name: tool for tool in tools}
+    assert set(by_name["meet_react"].args) == {"emoji"}
+    assert set(by_name["meet_check_action"].args) == {"action_id"}
 
 
 def test_tool_result_is_named_json_with_model_text_separate() -> None:

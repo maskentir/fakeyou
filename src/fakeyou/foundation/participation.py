@@ -7,6 +7,7 @@ from dataclasses import dataclass
 class ParticipationContext:
     addressed: bool
     others_speaking: bool = False
+    vocative: bool | None = None
 
 
 _VOCATIVE_BOUNDARY = frozenset({" ", ",", ".", "!", "?", ";", ":"})

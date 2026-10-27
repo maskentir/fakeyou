@@ -20,7 +20,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.conversation.middleware import (
-    ChatTurnToolsMiddleware,
+    ChannelToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.memory.persona import (
@@ -223,7 +223,7 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     assert created["agent_calls"] == 2
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChatTurnToolsMiddleware,
+        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -265,7 +265,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
     assert [type(item) for item in created["middleware"]] == [
         ToolErrorMiddleware,
-        ChatTurnToolsMiddleware,
+        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -426,7 +426,7 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChatTurnToolsMiddleware,
+        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]

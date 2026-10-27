@@ -366,3 +366,25 @@ async def test_participant_count_bug_propagates(page: MagicMock) -> None:
 
     with pytest.raises(ValueError, match="bug"):
         await read_participant_count(cast(Page, page))
+
+
+async def test_dismiss_survives_a_covered_close_button(page: MagicMock) -> None:
+    from cloakbrowser.human.actionability import ElementNotReceivingEventsError
+
+    dialog = show_dialog(page, CAMERA_NOT_FOUND_DIALOG)
+    dialog.button.click = AsyncMock(side_effect=ElementNotReceivingEventsError("covered"))
+
+    assert await dismiss_known_errors(cast(Page, page)) == ()
+
+
+async def test_the_reaction_picker_is_not_a_blocking_modal(
+    page: MagicMock, observe: AsyncMock
+) -> None:
+    show_dialog(page, "Skin tone")
+    watchdog = UIWatchdog(cast(Page, page), observe=observe)
+
+    await watchdog.check()
+    result = await watchdog.check()
+    result = await watchdog.check()
+
+    assert [event.kind for event in result.events] == []

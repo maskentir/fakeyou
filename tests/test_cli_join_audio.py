@@ -17,7 +17,7 @@ from fakeyou.conversation.conversation import (
     MeetingResponder,
 )
 from fakeyou.conversation.meeting_turns import MeetingTurns
-from fakeyou.conversation.middleware import ChatTurnToolsMiddleware, SpeakerAttributionMiddleware
+from fakeyou.conversation.middleware import ChannelToolsMiddleware, SpeakerAttributionMiddleware
 from fakeyou.conversation.session import SessionResult
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
@@ -66,7 +66,7 @@ async def test_join_audio_builds_conversation_on_the_meeting_record(
     assert "checkpointer" not in created
     assert created["persona"] == f"{DEFAULT_PERSONA}\n\n{PERCEPTION_GUIDANCE}"
     assert [type(item) for item in created["middleware"]] == [
-        ChatTurnToolsMiddleware,
+        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]

@@ -4,6 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast, override
 
+import pytest
+
+from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
@@ -76,19 +79,18 @@ def test_the_chat_channel_is_wired_when_the_brief_allows_chat(
     assert isinstance(builder.chat_channel(), MeetChatChannel)
 
 
-def test_without_the_chat_permission_there_is_no_chat_channel(
+def test_without_the_chat_permission_the_assembly_is_a_join_error(
     settings: Settings, tmp_path: Path
 ) -> None:
-    builder = _builder(
-        settings,
-        tmp_path,
-        AgentWiring(
-            profile=profile(allowed_tools=["meet_send_chat"]),
-            brief=_brief("explain_facts"),
-        ),
-    )
-
-    assert builder.chat_channel() is None
+    with pytest.raises(FakeYouError, match="brief permission"):
+        _builder(
+            settings,
+            tmp_path,
+            AgentWiring(
+                profile=profile(allowed_tools=["meet_send_chat"]),
+                brief=_brief("explain_facts"),
+            ),
+        )
 
 
 def test_without_a_brief_there_is_no_chat_channel(settings: Settings, tmp_path: Path) -> None:
@@ -97,17 +99,18 @@ def test_without_a_brief_there_is_no_chat_channel(settings: Settings, tmp_path: 
     assert builder.chat_channel() is None
 
 
-def test_a_brief_only_brief_gets_no_chat_channel(settings: Settings, tmp_path: Path) -> None:
-    builder = _builder(
-        settings,
-        tmp_path,
-        AgentWiring(
-            profile=profile(allowed_tools=["meet_send_chat"]),
-            brief=_brief("meet_chat", knowledge_scope="brief_only"),
-        ),
-    )
-
-    assert builder.chat_channel() is None
+def test_a_brief_only_brief_with_a_chat_tool_is_a_join_error(
+    settings: Settings, tmp_path: Path
+) -> None:
+    with pytest.raises(FakeYouError, match="brief permission"):
+        _builder(
+            settings,
+            tmp_path,
+            AgentWiring(
+                profile=profile(allowed_tools=["meet_send_chat"]),
+                brief=_brief("meet_chat", knowledge_scope="brief_only"),
+            ),
+        )
 
 
 def test_a_persona_without_the_chat_tool_gets_no_chat_channel(

@@ -36,6 +36,8 @@ PERCEPTION_ASSIGN_JS = (
 )
 PERCEPTION_POLL_SECONDS = 0.5
 BACKLOG_GRACE = timedelta(seconds=2)
+BACKLOG_WINDOW = timedelta(seconds=45)
+_PLAUSIBLE_SKEW = timedelta(seconds=120)
 UNKNOWN_SENDER = "Someone"
 Clock = Callable[[], datetime]
 
@@ -109,6 +111,7 @@ class PerceptionSensors:
         self.heartbeats = 0
         self.frames_seen = 0
         self._audio_outputs: set[tuple[str, str]] = set()
+        self._admitted_at: datetime | None = None
 
     async def accept_batch(self, batch: DrainBatch) -> None:
         for message in batch.messages:
@@ -202,8 +205,22 @@ class PerceptionSensors:
             if change.kind == "left":
                 self.timeline.leave(change.device_id)
 
+    def mark_admitted(self, at: datetime) -> None:
+        if self._admitted_at is None:
+            self._admitted_at = at
+
+    def _classify_chat(self, chat: MeetChatMessage, at: datetime) -> tuple[datetime, bool]:
+        parsed = chat.sent_at
+        anchor = self._admitted_at if self._admitted_at is not None else self._joined_at
+        early = at <= anchor + BACKLOG_WINDOW
+        if early and parsed is not None and parsed < anchor - BACKLOG_GRACE:
+            return parsed, True
+        if parsed is not None and at - _PLAUSIBLE_SKEW <= parsed <= at + _PLAUSIBLE_SKEW:
+            return parsed, False
+        return at, False
+
     def _accept_chat(self, chat: MeetChatMessage, at: datetime) -> None:
-        sent_at = chat.sent_at or at
+        sent_at, backlog = self._classify_chat(chat, at)
         sender = self._person(chat.device_id)
         if not sender.name:
             sender = sender.model_copy(update={"name": UNKNOWN_SENDER})
@@ -214,7 +231,7 @@ class PerceptionSensors:
                 text=chat.text,
                 sent_at=sent_at,
                 own=chat.device_id in self.roster.own_device_ids,
-                backlog=sent_at < self._joined_at - BACKLOG_GRACE,
+                backlog=backlog,
             )
         )
 

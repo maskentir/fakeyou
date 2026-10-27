@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -40,10 +41,22 @@ class _Verifier:
         self.calls: list[dict[str, Any]] = []
 
     async def verify(
-        self, *, text: str, source_text: str, trigger_text: str, kind: str | None
+        self,
+        *,
+        text: str,
+        source_text: str,
+        trigger_text: str,
+        kind: str | None,
+        recent_lines: Sequence[str] = (),
     ) -> GroundingVerdict:
         self.calls.append(
-            {"text": text, "source_text": source_text, "trigger_text": trigger_text, "kind": kind}
+            {
+                "text": text,
+                "source_text": source_text,
+                "trigger_text": trigger_text,
+                "kind": kind,
+                "recent_lines": recent_lines,
+            }
         )
         if isinstance(self._verdict, Exception):
             raise self._verdict
@@ -82,7 +95,9 @@ def _responder(verifier: _Verifier | None, journal: RecordingJournal) -> Meeting
 
 async def test_a_grounded_contribution_is_spoken() -> None:
     journal = RecordingJournal()
-    verifier = _Verifier(GroundingVerdict(grounded=True, adds_information=True, confidence=0.9))
+    verifier = _Verifier(
+        GroundingVerdict(grounded=True, adds_information=True, on_topic=True, confidence=0.9)
+    )
     chunk = await _responder(verifier, journal).respond([_attention()], lambda: None)
 
     assert chunk.text == "The beta actually launches on 14 October."
@@ -94,9 +109,18 @@ async def test_a_grounded_contribution_is_spoken() -> None:
 @pytest.mark.parametrize(
     ("verdict", "reason"),
     [
-        (GroundingVerdict(grounded=False, adds_information=True, confidence=0.9), "not_grounded"),
-        (GroundingVerdict(grounded=True, adds_information=False, confidence=0.9), "adds_nothing"),
-        (GroundingVerdict(grounded=True, adds_information=True, confidence=0.4), "low_confidence"),
+        (
+            GroundingVerdict(grounded=False, adds_information=True, on_topic=True, confidence=0.9),
+            "not_grounded",
+        ),
+        (
+            GroundingVerdict(grounded=True, adds_information=False, on_topic=True, confidence=0.9),
+            "adds_nothing",
+        ),
+        (
+            GroundingVerdict(grounded=True, adds_information=True, on_topic=True, confidence=0.4),
+            "low_confidence",
+        ),
         (RuntimeError("down"), "verifier_failed"),
     ],
 )
@@ -120,7 +144,9 @@ async def test_without_a_verifier_the_lane_fails_closed() -> None:
 
 async def test_the_streaming_path_verifies_before_speaking() -> None:
     journal = RecordingJournal()
-    verifier = _Verifier(GroundingVerdict(grounded=True, adds_information=True, confidence=0.9))
+    verifier = _Verifier(
+        GroundingVerdict(grounded=True, adds_information=True, on_topic=True, confidence=0.9)
+    )
     responder = _responder(verifier, journal)
 
     chunks = [

@@ -77,9 +77,15 @@ def _silenced(judgement: TurnJudgement, reason_code: str) -> ParticipationDecisi
 
 
 def decision_of(
-    judgement: TurnJudgement, thresholds: JudgeThresholds, *, named: bool = False
+    judgement: TurnJudgement,
+    thresholds: JudgeThresholds,
+    *,
+    named: bool = False,
+    sole_human_participant: bool = False,
 ) -> ParticipationDecision:
     decision = _DECISION_OF_ACTION[judgement.action]
+    if judgement.logistics_check and not named and not sole_human_participant:
+        return _silenced(judgement, "judge_room_check")
     if decision != "silent":
         if judgement.addressee != "twin":
             return _silenced(judgement, "judge_not_addressed")
@@ -95,11 +101,16 @@ def decision_of(
         confidence=judgement.confidence,
         reason_code=f"judge_{judgement.action}",
         backchannel=judgement.backchannel,
+        requests_chat=judgement.requests_chat,
+        meet_action=judgement.meet_action,
+        evidence_needs=judgement.evidence,
+        reaction_emoji=judgement.reaction_emoji,
+        action_only=judgement.action_only,
     )
 
 
 def fallback_decision(context: ParticipationContext) -> ParticipationDecision:
-    if context.addressed:
+    if context.vocative or (context.vocative is None and context.addressed):
         return ParticipationDecision(decision="speak", confidence=1.0, reason_code="fallback_named")
     return ParticipationDecision(decision="silent", confidence=1.0, reason_code="fallback_unnamed")
 
@@ -114,9 +125,16 @@ def _record(
     fields: dict[str, object] = {}
     if judgement is not None:
         fields = {
+            "heard": judgement.heard,
             "addressee": judgement.addressee,
             "finished": judgement.finished,
             "backchannel": judgement.backchannel,
+            "requests_chat": judgement.requests_chat,
+            "meet_action": judgement.meet_action,
+            "evidence_needs": list(judgement.evidence),
+            "reaction_emoji": judgement.reaction_emoji,
+            "action_only": judgement.action_only,
+            "logistics_check": judgement.logistics_check,
         }
     journal.record(
         "policy_decided",
@@ -152,7 +170,12 @@ def build_participation_subgraph() -> CompiledStateGraph[
         judgement, error = await capture_error(partial(cache.judgement, window))
         if judgement is None:
             return _fall_back(state, context, judge_failure_code(error))
-        verdict = decision_of(judgement, context.thresholds, named=state["context"].addressed)
+        verdict = decision_of(
+            judgement,
+            context.thresholds,
+            named=state["context"].addressed,
+            sole_human_participant=len(window.human_participants) == 1,
+        )
         return _record(context.journal, state, verdict, "judge", judgement)
 
     builder = StateGraph(ParticipationState, context_schema=ParticipationRuntime)

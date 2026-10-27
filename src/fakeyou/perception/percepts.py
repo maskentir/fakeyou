@@ -33,6 +33,7 @@ SignalKind = Literal[
     "reaction",
     "camera_on",
     "camera_off",
+    "own_action",
 ]
 SAME_CONTENT_RATIO = 0.85
 SCREEN_REF_PREFIX = "screen#"

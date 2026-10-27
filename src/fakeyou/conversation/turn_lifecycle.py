@@ -22,6 +22,7 @@ from fakeyou.conversation.turn_graph import (
     BargeLatch,
     ChatChannel,
     ConversationPhase,
+    MeetActionExecutor,
     Responder,
     SentenceLimits,
     SpeechFloor,
@@ -29,6 +30,7 @@ from fakeyou.conversation.turn_graph import (
     TurnGraphState,
     TurnInput,
     TurnRuntime,
+    TurnSettler,
     WholeResponder,
     WholeTurnFactory,
     build_speech_graph,
@@ -85,6 +87,8 @@ class DeferredOptions:
     ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
     chat: ChatChannel | None = None
     chat_turn: WholeTurnFactory | None = None
+    settle_turn: TurnSettler | None = None
+    meet_action_executor: MeetActionExecutor | None = None
     others_speaking: Callable[[], bool] | None = None
 
 
@@ -321,6 +325,8 @@ class TurnLifecycle:
             faults=self._options.faults,
             chat=self._deferred_options.chat,
             chat_turn=self._deferred_options.chat_turn,
+            settle_turn=self._deferred_options.settle_turn,
+            meet_action_executor=self._deferred_options.meet_action_executor,
             cue=self._cue,
             others_speaking=self._deferred_options.others_speaking,
         )

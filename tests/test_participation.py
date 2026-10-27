@@ -28,6 +28,14 @@ def judgement(**changes: object) -> TurnJudgement:
     return TurnJudgement.model_validate(values | changes)
 
 
+def test_a_room_check_needs_a_name_or_the_sole_human_participant() -> None:
+    check = judgement(logistics_check=True, confidence=1.0)
+
+    assert decision_of(check, THRESHOLDS).reason_code == "judge_room_check"
+    assert decision_of(check, THRESHOLDS, named=True).decision == "speak"
+    assert decision_of(check, THRESHOLDS, sole_human_participant=True).decision == "speak"
+
+
 def test_a_confident_reply_is_spoken() -> None:
     decision = decision_of(judgement(), THRESHOLDS)
 
@@ -64,6 +72,12 @@ def test_a_backchannel_is_carried_to_the_decision() -> None:
 
 
 def test_without_a_judge_only_a_named_line_gets_a_reply() -> None:
+    assert (
+        fallback_decision(ParticipationContext(addressed=True, vocative=True)).decision == "speak"
+    )
+    assert (
+        fallback_decision(ParticipationContext(addressed=True, vocative=False)).decision == "silent"
+    )
     assert fallback_decision(ParticipationContext(addressed=True)).decision == "speak"
     assert fallback_decision(ParticipationContext(addressed=False)).decision == "silent"
 

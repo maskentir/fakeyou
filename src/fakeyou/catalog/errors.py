@@ -53,6 +53,7 @@ class ErrorCode(StrEnum):
     MEETING_PERSONA_LANGUAGE_MISMATCH = "meeting.persona_language_mismatch"
     MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST = "meeting.memory_requires_recall_or_ingest"
     MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY = "meeting.memory_not_allowed_brief_only"
+    MEETING_TOOL_PERMISSION_MISSING = "meeting.tool_permission_missing"
     MEETING_AUDIO_REQUIRES_WORKER = "meeting.audio_requires_worker"
     MEETING_BRIEF_UNREADABLE = "meeting.brief_unreadable"
     MEETING_BRIEF_SCOPE_MISMATCH = "meeting.brief_scope_mismatch"
@@ -382,6 +383,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY: ErrorSpec(
         "--memory is not allowed with a brief_only meeting brief", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.MEETING_TOOL_PERMISSION_MISSING: ErrorSpec(
+        "persona tool {tool} requires the {permission} brief permission",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.MEETING_AUDIO_REQUIRES_WORKER: ErrorSpec(
         "--audio requires the Linux audio worker; use " + Command.COMPOSE_WORKER_SESSIONS,

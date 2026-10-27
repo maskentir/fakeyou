@@ -159,6 +159,7 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.MEETING_LINK_INVALID,
         ErrorCode.MEETING_LOBBY_TIMEOUT_NOT_POSITIVE,
         ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY,
+        ErrorCode.MEETING_TOOL_PERMISSION_MISSING,
         ErrorCode.MEETING_MEMORY_REQUIRES_CONVERSE,
         ErrorCode.MEETING_MEMORY_REQUIRES_PERSONA,
         ErrorCode.MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST,

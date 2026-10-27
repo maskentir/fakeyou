@@ -46,6 +46,12 @@ class FakeKeyboard:
         if text in self._page.type_failures:
             raise PlaywrightError(f"typing failed: {text}")
 
+    async def insert_text(self, text: str) -> None:
+        await self.type(text)
+
+    async def press(self, key: str) -> None:
+        self._page.typed.append(f"key:{key}")
+
 
 class FakeLocator:
     def __init__(self, page: FakePage, selector: str) -> None:
