@@ -26,6 +26,7 @@ from fakeyou.conversation.turn_graph import (
     Responder,
     SentenceLimits,
     SpeechFloor,
+    StateSpeech,
     StreamTurnFactory,
     TurnGraphState,
     TurnInput,
@@ -88,6 +89,7 @@ class DeferredOptions:
     chat_turn: WholeTurnFactory | None = None
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
+    state_speech: StateSpeech | None = None
     others_speaking: Callable[[], bool] | None = None
 
 
@@ -326,6 +328,7 @@ class TurnLifecycle:
             chat_turn=self._deferred_options.chat_turn,
             planning=self._deferred_options.planning,
             commands=self._deferred_options.commands,
+            state_speech=self._deferred_options.state_speech,
             plans=self._plans,
             cue=self._cue,
             others_speaking=self._deferred_options.others_speaking,

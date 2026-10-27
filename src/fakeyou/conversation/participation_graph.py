@@ -106,6 +106,7 @@ def decision_of(
         evidence_needs=judgement.evidence,
         reaction_emoji=judgement.reaction_emoji,
         action_only=judgement.action_only,
+        state_question=judgement.state_question,
     )
 
 
@@ -135,6 +136,7 @@ def _record(
             "reaction_emoji": judgement.reaction_emoji,
             "action_only": judgement.action_only,
             "logistics_check": judgement.logistics_check,
+            "state_question": judgement.state_question,
         }
     journal.record(
         "policy_decided",

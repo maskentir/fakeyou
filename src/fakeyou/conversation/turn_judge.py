@@ -17,7 +17,10 @@ from fakeyou.session.identity import PresenceFact
 
 JudgeAction = Literal["reply", "clarify", "stay_silent"]
 MeetAction = Literal["none", "raise_hand", "lower_hand", "react", "mute", "unmute", "leave"]
-EvidenceNeed = Literal["screen", "participant", "chat_history", "memory", "action_status"]
+EvidenceNeed = Literal["screen", "participant", "chat_history", "memory"]
+StateQuestionField = Literal[
+    "none", "attendance", "participant_count", "presenter", "screen_title", "own_action_status"
+]
 ReactionEmoji = Literal[
     "\U0001f496",
     "\U0001f44d",
@@ -81,9 +84,14 @@ _JUDGE_RULES = (
     "participant only when it depends on a specific participant's camera or appearance, "
     "not who is attending or how many people are present; chat_history "
     "when it asks about earlier chat; memory when it asks about the owner's earlier "
-    "facts, preferences or meetings; action_status when it asks whether an earlier "
-    "meeting action was delivered. Leave it empty for greetings, action requests, and "
-    "answers available from the conversation.\n"
+    "facts, preferences or meetings. Leave it empty for greetings, action requests, state "
+    "questions, and answers available from the conversation.\n"
+    "state_question: when the latest line asks only about meeting state the system can read "
+    "directly, name it: attendance for who is here, participant_count for how many people "
+    "are here, presenter for who is presenting, screen_title for what is being shared by "
+    "name, own_action_status for whether the twin's own earlier meeting action or chat "
+    "message went through; otherwise none. A question about what shared content says or "
+    "means is not a state question; use evidence screen for it.\n"
     "reaction_emoji: when meet_action is react, the closest of Meet's reaction glyphs; "
     "otherwise null.\n"
     "confidence: how sure you are about action, from 0 to 1."
@@ -116,6 +124,10 @@ class TurnJudgement(BaseModel):
     evidence: tuple[EvidenceNeed, ...] = Field(
         default=(),
         description="Evidence required before the twin can answer the latest line.",
+    )
+    state_question: StateQuestionField = Field(
+        default="none",
+        description="Meeting state the latest line asks about, answered without the model.",
     )
     reaction_emoji: ReactionEmoji | None = Field(
         default=None,

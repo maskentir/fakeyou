@@ -41,6 +41,7 @@ from fakeyou.conversation.middleware import (
 from fakeyou.conversation.participation_graph import JudgeThresholds
 from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.conversation.state_speech import locale_of, render
 from fakeyou.conversation.turn_graph import CommandPort, ConversationPhase, PlannedTurn
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
@@ -51,7 +52,6 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
-from fakeyou.meet.meet_tools import create_action_status_tool
 from fakeyou.memory.memory import (
     create_memory_prefetch_middleware,
     create_memory_tools,
@@ -79,6 +79,7 @@ from fakeyou.perception.context import (
 )
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.session.commands import CommandOutcome
+from fakeyou.session.facts import StateQuestion, state_fact
 from fakeyou.session.identity import PresenceFact
 from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
@@ -368,10 +369,14 @@ class _ConversationBuilder:
             actor=actor.device_id or actor.kind,
         )
 
-    def add_action_status(self) -> None:
+    def _state_speech(self, question: StateQuestion) -> str | None:
+        kernel = self._behavior.kernel
+        locale = locale_of(self._settings.speech.language)
+        if kernel is None or locale is None:
+            return None
         commands = self._behavior.commands
-        if commands is not None:
-            self._tools.append(create_action_status_tool(commands.recent))
+        actions = commands.recent() if commands is not None else ()
+        return render(state_fact(question, kernel.state, actions).proposition, locale)
 
     def add_speaker_attribution(self) -> None:
         self._middleware.append(SpeakerAttributionMiddleware())
@@ -446,6 +451,7 @@ class _ConversationBuilder:
                 judge_window_lines=judge_settings.window_lines,
                 planning=self._plan,
                 commands=self._behavior.commands,
+                state_speech=self._state_speech,
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
@@ -483,7 +489,6 @@ async def open_conversation(
         builder.add_routing()
         builder.add_fallback()
         builder.add_perception()
-        builder.add_action_status()
         builder.add_speaker_attribution()
         responder = builder.build_responder(
             builder.build_agent(model),

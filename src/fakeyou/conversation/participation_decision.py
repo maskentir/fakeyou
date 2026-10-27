@@ -23,6 +23,7 @@ class ParticipationDecision(BaseModel):
     evidence_needs: tuple[str, ...] = ()
     reaction_emoji: str | None = None
     action_only: bool = False
+    state_question: str = "none"
 
 
 def to_participation_action(decision: ParticipationDecision) -> ParticipationAction:

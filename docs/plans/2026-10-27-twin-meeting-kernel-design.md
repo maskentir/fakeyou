@@ -784,15 +784,33 @@ Gate: tabel otorisasi property-based, transisi command/plan, dan fake
 browser crash-injection sebelum/sesudah click dan Enter tanpa duplicate
 visible effect atau klaim sukses untuk `unknown`.
 
-### PR 4: Evidence service dan state speech
+### PR 4a: State speech (selesai)
 
-- Typed evidence queries, `FactSet`, dan deterministic renderer untuk
-  roster, presenter, screen title, mic/hand, action status.
+- Judge mengeluarkan `state_question` (attendance, participant_count,
+  presenter, screen_title, own_action_status) yang mengalir lewat intent ke
+  `TurnPlan.state_question`.
+- `session.facts` menjawab pertanyaan state dari kernel dan outcome command
+  sebagai `Fact` bertipe dengan namespace, modality, dan revision;
+  `conversation.state_speech` merender dari locale pack
+  `state_speech.json` (en, id) tanpa LLM. Bahasa tanpa pack jatuh ke reply
+  biasa.
+- Dihapus: tool `meet_check_action` dan evidence need `action_status`.
+
+Gate: count/attendance tidak pasti menghasilkan range atau unknown;
+perubahan screen setelah fact diambil membuat fact invalid.
+
+### PR 4b: Evidence service
+
+- Typed evidence queries untuk screen, participant, chat history, dan memory
+  dijalankan sebelum reply sesuai plan, hasilnya masuk sebagai FactSet.
 - Dihapus: evidence tools pada reply agent, `EvidenceRoutingMiddleware`,
-  synthetic `observe_meeting` view, dan timeline sebagai sumber keputusan.
+  `PlannedEvidenceMiddleware`, synthetic `observe_meeting` view, jalur
+  prefetch turn-graph yang tidak di-wire, dan timeline sebagai sumber
+  keputusan.
 
 Gate: pertanyaan state tidak memanggil free-form composer; fact stale atau
-incomplete menghasilkan unknown atau range.
+incomplete menghasilkan unknown atau range; reply tidak dapat memanggil tool
+evidence.
 
 ### PR 5: Speech contract
 

@@ -23,17 +23,12 @@ def recall_meeting_context(query: str) -> str:
     return query
 
 
-@tool(description="List recent actions.")
-def meet_check_action() -> str:
-    return "[]"
-
-
 @tool(description="Say the time.")
 def clock() -> str:
     return "noon"
 
 
-TOOLS = [look_at_screen, look_back_chat, recall_meeting_context, meet_check_action, clock]
+TOOLS = [look_at_screen, look_back_chat, recall_meeting_context, clock]
 
 
 class ToolRecordingModel(ToolCallingFakeModel):
@@ -70,13 +65,12 @@ async def test_a_spoken_turn_without_planned_evidence_gets_none() -> None:
 
 
 async def test_a_chat_turn_follows_its_plan_too() -> None:
-    bound = await bound_tools("chat", evidence_needs=["chat_history", "action_status"])
+    bound = await bound_tools("chat", evidence_needs=["chat_history"])
 
-    assert bound == ["look_back_chat", "meet_check_action", "clock"]
+    assert bound == ["look_back_chat", "clock"]
 
 
-async def test_a_proactive_turn_may_look_but_not_report_actions() -> None:
+async def test_a_proactive_turn_may_use_every_evidence_tool() -> None:
     bound = await bound_tools("attention")
 
-    assert "meet_check_action" not in bound
-    assert {"look_at_screen", "look_back_chat", "recall_meeting_context"} <= set(bound)
+    assert set(bound) == {"look_at_screen", "look_back_chat", "recall_meeting_context", "clock"}

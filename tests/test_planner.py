@@ -167,3 +167,41 @@ def test_a_chat_sender_on_the_roster_is_the_actor() -> None:
     assert kernel.actor("m1").device_id == "dev-ayu"
     assert kernel.actor("m2").kind == "unattributed"
     assert kernel.actor("missing").kind == "unattributed"
+
+
+class RecordingSpeaker:
+    is_speaking = False
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    async def speak(self, utterance: str, **_kwargs: object) -> None:
+        self.spoken.append(utterance)
+
+    async def stop_playback(self) -> None:
+        return None
+
+
+async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> None:
+    speaker = RecordingSpeaker()
+    answers = {"participant_count": "Besides me, there are 2 people here."}
+    planned = PlannedTurn(
+        TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
+    )
+    state_runtime = TurnRuntime(
+        speaker=speaker, journal=RecordingJournal(), state_speech=answers.get
+    )
+
+    answered = await turn_graph.answer_state(state_runtime, event("How many are here?"), planned, 0)
+
+    assert answered is True
+    assert speaker.spoken == ["Besides me, there are 2 people here."]
+
+
+async def test_without_a_locale_pack_the_state_question_falls_back_to_the_reply() -> None:
+    planned = PlannedTurn(TurnPlan("p", "speech_only", output="speech", state_question="presenter"))
+    state_runtime = TurnRuntime(
+        speaker=RecordingSpeaker(), journal=RecordingJournal(), state_speech=lambda _question: None
+    )
+
+    assert await turn_graph.answer_state(state_runtime, event("Who presents?"), planned, 0) is False

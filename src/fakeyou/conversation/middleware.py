@@ -28,7 +28,6 @@ from langgraph.types import Command
 
 from fakeyou.foundation.capabilities import ONCE_PER_TURN_TOOLS
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
-from fakeyou.meet.meet_tools import MEET_CHECK_ACTION
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
 
@@ -129,7 +128,6 @@ _TOOLS_BY_EVIDENCE_NEED: dict[str, frozenset[str]] = {
     "participant": frozenset({"look_at_participant"}),
     "chat_history": frozenset({"look_back_chat"}),
     "memory": frozenset({"recall_meeting_context"}),
-    "action_status": frozenset({MEET_CHECK_ACTION}),
 }
 _PLANNED_TOOLS = frozenset(tool for tools in _TOOLS_BY_EVIDENCE_NEED.values() for tool in tools)
 
@@ -179,9 +177,7 @@ def _evidence_allowed(tool_name: str | None, messages: Sequence[AnyMessage]) -> 
     kind = trigger_kind(trigger[-1]) if trigger else None
     if kind in ("speech", "chat"):
         return tool_name in _planned_evidence(messages)
-    if kind == "attention":
-        return tool_name != MEET_CHECK_ACTION
-    return kind is None
+    return kind in ("attention", None)
 
 
 class PlannedEvidenceMiddleware(AgentMiddleware[Any, Any, Any]):

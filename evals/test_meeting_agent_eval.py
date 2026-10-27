@@ -2,7 +2,6 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.meet.meet_tools import create_action_status_tool
 from fakeyou.memory.memory import create_memory_tools
 from fakeyou.perception.context import PerceptionContext, create_perception_tools
 from fakeyou.perception.timeline import MeetingTimeline
@@ -13,7 +12,6 @@ CONTRACT_TOOLS = {
     "recall_meeting_context",
     "look_at_screen",
     "look_at_participant",
-    "meet_check_action",
     "look_back_chat",
 }
 
@@ -29,12 +27,11 @@ def _tool_calls(messages: list[object]) -> list[tuple[str, dict[str, object]]]:
 
 def test_production_factories_expose_exactly_the_contract_tools() -> None:
     memory_tools = create_memory_tools(make_graphiti(), group_id="team_alpha")
-    status_tool = create_action_status_tool(tuple)
     perception_tools = create_perception_tools(
         PerceptionContext(MeetingTimeline(), None, max_chars=6000)
     )
 
-    exposed = {tool.name for tool in [*memory_tools, status_tool, *perception_tools]}
+    exposed = {tool.name for tool in [*memory_tools, *perception_tools]}
 
     assert exposed == CONTRACT_TOOLS
 

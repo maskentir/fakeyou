@@ -1,0 +1,150 @@
+{
+  "en": {
+    "join": {
+      "pair": "{first} and {last}",
+      "list": "{rest}, and {last}"
+    },
+    "attendance": {
+      "complete": "I can see {names} here.",
+      "partial": "I can see {names}, but I may not see everyone yet.",
+      "partial_unnamed": "I can see {names} and {unnamed} more I can't put a name to.",
+      "nobody": "I don't see anyone else here right now.",
+      "unnamed_only": "Someone is here, but I can't tell who yet."
+    },
+    "participant_count": {
+      "exact_one": "Besides me, there is one person here.",
+      "exact": "Besides me, there are {count} people here.",
+      "none": "There's nobody else here besides me.",
+      "at_least": "There are at least {count} people besides me, but I can't confirm the exact number.",
+      "at_least_one": "There is at least one person besides me, but I can't confirm the exact number."
+    },
+    "presenter": {
+      "named": "{name} is presenting.",
+      "unnamed": "Someone is presenting, but I can't tell who.",
+      "nobody": "Nobody is presenting right now."
+    },
+    "screen_title": {
+      "titled": "The shared screen is {title}.",
+      "untitled": "A screen is being shared, but I can't read its title.",
+      "nobody": "Nothing is being shared right now."
+    },
+    "own_action_status": {
+      "effect_observed": "Yes, my {action} went through.",
+      "effect_unobserved": "I {action_past}, but the meeting didn't confirm it.",
+      "unknown": "I'm not sure my {action} went through.",
+      "not_done": "My {action} didn't go through.",
+      "pending": "My {action} is still in progress."
+    },
+    "actions": {
+      "raise_hand": [
+        "hand raise",
+        "raised my hand"
+      ],
+      "lower_hand": [
+        "hand lower",
+        "lowered my hand"
+      ],
+      "react": [
+        "reaction",
+        "sent a reaction"
+      ],
+      "mute": [
+        "mute",
+        "muted myself"
+      ],
+      "unmute": [
+        "unmute",
+        "unmuted myself"
+      ],
+      "send_chat": [
+        "chat message",
+        "sent the chat message"
+      ],
+      "leave": [
+        "leave",
+        "left"
+      ]
+    },
+    "unknown": {
+      "attendance": "I can't tell who is here right now.",
+      "participant_count": "I can't confirm how many people are here right now.",
+      "presenter": "I can't tell who is presenting right now.",
+      "screen_title": "I can't see the shared screen right now.",
+      "own_action_status": "I haven't done any meeting actions yet."
+    }
+  },
+  "id": {
+    "join": {
+      "pair": "{first} dan {last}",
+      "list": "{rest}, dan {last}"
+    },
+    "attendance": {
+      "complete": "Yang saya lihat ada {names}.",
+      "partial": "Yang saya lihat ada {names}, tapi mungkin belum semua terlihat.",
+      "partial_unnamed": "Yang saya lihat ada {names}, dan {unnamed} lagi yang belum bisa saya kenali.",
+      "nobody": "Saya tidak melihat orang lain di sini sekarang.",
+      "unnamed_only": "Ada orang di sini, tapi saya belum bisa tahu siapa."
+    },
+    "participant_count": {
+      "exact_one": "Selain saya, ada satu orang di sini.",
+      "exact": "Selain saya, ada {count} orang di sini.",
+      "none": "Selain saya, tidak ada orang lain di sini.",
+      "at_least": "Selain saya, setidaknya ada {count} orang, tapi saya belum bisa memastikan jumlah pastinya.",
+      "at_least_one": "Selain saya, setidaknya ada satu orang, tapi saya belum bisa memastikan jumlah pastinya."
+    },
+    "presenter": {
+      "named": "{name} sedang presentasi.",
+      "unnamed": "Ada yang sedang presentasi, tapi saya tidak tahu siapa.",
+      "nobody": "Sekarang tidak ada yang presentasi."
+    },
+    "screen_title": {
+      "titled": "Layar yang dibagikan adalah {title}.",
+      "untitled": "Ada layar yang dibagikan, tapi judulnya tidak bisa saya baca.",
+      "nobody": "Sekarang tidak ada layar yang dibagikan."
+    },
+    "own_action_status": {
+      "effect_observed": "Ya, {action} saya sudah berhasil.",
+      "effect_unobserved": "Saya sudah {action_past}, tapi meeting belum mengonfirmasinya.",
+      "unknown": "Saya belum yakin {action} saya berhasil.",
+      "not_done": "{action} saya tidak berhasil.",
+      "pending": "{action} saya masih diproses."
+    },
+    "actions": {
+      "raise_hand": [
+        "angkat tangan",
+        "mengangkat tangan"
+      ],
+      "lower_hand": [
+        "turunkan tangan",
+        "menurunkan tangan"
+      ],
+      "react": [
+        "reaksi",
+        "mengirim reaksi"
+      ],
+      "mute": [
+        "mute",
+        "mematikan mikrofon"
+      ],
+      "unmute": [
+        "unmute",
+        "menyalakan mikrofon"
+      ],
+      "send_chat": [
+        "pesan chat",
+        "mengirim pesan chat"
+      ],
+      "leave": [
+        "keluar",
+        "keluar"
+      ]
+    },
+    "unknown": {
+      "attendance": "Saya belum bisa tahu siapa saja yang ada di sini sekarang.",
+      "participant_count": "Saya belum bisa memastikan berapa orang di sini sekarang.",
+      "presenter": "Saya belum bisa tahu siapa yang sedang presentasi.",
+      "screen_title": "Saya belum bisa melihat layar yang dibagikan.",
+      "own_action_status": "Saya belum melakukan aksi apa pun di meeting ini."
+    }
+  }
+}

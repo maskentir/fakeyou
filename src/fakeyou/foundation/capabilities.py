@@ -14,7 +14,6 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability("look_at_screen", once_per_turn=True, evidence=True),
     Capability("look_at_participant", once_per_turn=True, evidence=True),
     Capability("look_back_chat", once_per_turn=True),
-    Capability("meet_check_action", once_per_turn=True),
 )
 
 _BY_TOOL = {capability.tool: capability for capability in CAPABILITIES}

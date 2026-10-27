@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import (
     Answer,
     ChatRequest,
@@ -61,6 +62,7 @@ class TurnPlan:
     action: MeetAction | None = None
     leave: bool = False
     clarify: bool = False
+    state_question: StateQuestion | None = None
     refusals: tuple[Refusal, ...] = ()
     silence_reason: str | None = None
 
@@ -84,6 +86,7 @@ def _with_output(
         output="chat" if chat else "speech",
         evidence=evidence,
         clarify=isinstance(output, Clarify),
+        state_question=output.state if isinstance(output, Answer) else None,
     )
 
 

@@ -65,6 +65,7 @@ from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.perception.scrub import scrub_internal_refs
 from fakeyou.session.commands import CommandOutcome, CommandSpec
+from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
@@ -241,6 +242,9 @@ class TurnPlanning(Protocol):
     ) -> PlannedTurn: ...
 
 
+StateSpeech = Callable[[StateQuestion], str | None]
+
+
 class CommandPort(Protocol):
     async def run(
         self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
@@ -301,6 +305,7 @@ class TurnRuntime:
     chat_turn: WholeTurnFactory | None = None
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
+    state_speech: StateSpeech | None = None
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
     cue: ThinkingCue | None = None
     others_speaking: Callable[[], bool] | None = None
@@ -765,6 +770,7 @@ def reading_of(verdict: ParticipationDecision) -> Reading:
         action_only=verdict.action_only,
         requests_chat=verdict.requests_chat,
         evidence=verdict.evidence_needs,
+        state_question=verdict.state_question,
     )
 
 
@@ -874,6 +880,44 @@ async def act_first(
     return plan.template == "silent", outcome
 
 
+async def answer_state(
+    runtime: TurnRuntime, final: TranscriptEvent, planned: PlannedTurn, generation: int
+) -> bool:
+    question = planned.plan.state_question
+    if question is None or runtime.state_speech is None:
+        return False
+    text = runtime.state_speech(question)
+    if text is None:
+        return False
+    runtime.journal.record(
+        "state_answer_selected",
+        source="agent",
+        transcript_id=final.id,
+        question=question,
+        output=planned.plan.output,
+    )
+    if planned.plan.output == "chat":
+        if runtime.commands is not None:
+            _move_phase(runtime, "acting", final.id)
+            await runtime.commands.run(
+                CommandSpec("send_chat", text),
+                plan_id=planned.plan.plan_id,
+                ordinal=2,
+                actor=planned.actor,
+            )
+        _move_phase(runtime, "listening", final.id)
+        return True
+    if not _admission_current(runtime, generation):
+        return True
+    _move_phase(runtime, "queued", final.id)
+    language = runtime.sentences.language if runtime.sentences is not None else None
+    await runtime.speaker.speak(text, transcript_id=final.id, language=language)
+    if runtime.note_spoken is not None:
+        runtime.note_spoken(text)
+    _move_phase(runtime, "listening", final.id)
+    return True
+
+
 async def _run_turn(
     runtime: TurnRuntime,
     speech: SpeechGraph,
@@ -888,6 +932,8 @@ async def _run_turn(
     if done:
         if _admission_current(runtime, generation):
             _move_phase(runtime, "waiting", final.id)
+        return
+    if await answer_state(runtime, final, planned, generation):
         return
     if planned.plan.output == "chat":
         await _deliver_chat(runtime, final, planned, generation, outcome)
@@ -1067,6 +1113,7 @@ async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading
         reaction_emoji=judgement.reaction_emoji,
         action_only=judgement.action_only,
         evidence=judgement.evidence,
+        state_question=judgement.state_question,
     )
 
 
@@ -1119,6 +1166,8 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
     done, outcome = await act_first(runtime, event, planned)
     if done:
         _move_phase(runtime, "waiting", event.id)
+        return
+    if await answer_state(runtime, event, planned, generation):
         return
     await _deliver_chat(runtime, event, planned, generation, outcome)
 

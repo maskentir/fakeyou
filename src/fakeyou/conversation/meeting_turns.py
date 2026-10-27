@@ -19,6 +19,7 @@ from fakeyou.conversation.turn_graph import (
     CommandPort,
     Responder,
     SentenceLimits,
+    StateSpeech,
     StreamTurnFactory,
     ToolStartHook,
     TurnPlanning,
@@ -73,6 +74,7 @@ class TurnInteraction:
     shadow: bool = False
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
+    state_speech: StateSpeech | None = None
     control: ReplyControl | None = None
 
 
@@ -175,6 +177,7 @@ def _deferred_options(
         chat_turn=chat_turn,
         planning=interaction.planning,
         commands=interaction.commands,
+        state_speech=interaction.state_speech,
         others_speaking=interaction.others_speaking,
     )
 
