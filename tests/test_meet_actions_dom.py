@@ -34,6 +34,7 @@ from tests._meet_support import (
 
 ECHO_ITEM_XPATH = button_xpath("pin message")
 TEXT_WITHOUT_PIN = IN_CALL + f"<div>{CHAT_TEXT}</div>"
+PIN_BUTTON = '<button aria-label="Pin message"></button>'
 
 
 async def test_raise_hand_noop_when_already_raised() -> None:
@@ -97,8 +98,8 @@ async def test_hand_click_retries_three_times_with_fresh_locator() -> None:
     assert locate_calls.count(RAISE_XPATH) == 3
 
 
-async def test_send_chat_opens_panel_types_and_succeeds_on_echo() -> None:
-    page = meet_page([IN_CALL, ECHO_CONTENT], visible={CHAT_INPUT_XPATH: False})
+async def test_send_chat_opens_panel_types_and_presses_enter() -> None:
+    page = meet_page([IN_CALL], visible={CHAT_INPUT_XPATH: False})
     clock = FakeClock()
     pressed = with_enter(page)
 
@@ -109,31 +110,6 @@ async def test_send_chat_opens_panel_types_and_succeeds_on_echo() -> None:
     assert page.typed == [CHAT_TEXT]
     assert pressed == ["Enter"]
     assert CHAT_TEXT not in result.detail
-
-
-async def test_send_chat_fails_without_echo_and_never_resends() -> None:
-    page = meet_page([IN_CALL] + [IN_CALL] * 11)
-    clock = FakeClock()
-    pressed = with_enter(page)
-
-    result = await send_chat(page, CHAT_TEXT, sleep=clock.sleep, monotonic=clock.monotonic)
-
-    assert result.failed
-    assert "not observed" in result.detail
-    assert CHAT_TEXT not in result.detail
-    assert page.typed == [CHAT_TEXT]
-    assert pressed == ["Enter"]
-
-
-async def test_send_chat_fails_when_pin_item_missing() -> None:
-    page = meet_page([IN_CALL] + [TEXT_WITHOUT_PIN] * 11, counts={ECHO_ITEM_XPATH: [0] * 11})
-    clock = FakeClock()
-    with_enter(page)
-
-    result = await send_chat(page, CHAT_TEXT, sleep=clock.sleep, monotonic=clock.monotonic)
-
-    assert result.failed
-    assert page.typed == [CHAT_TEXT]
 
 
 async def test_send_chat_rejects_empty_text_without_touching_dom() -> None:
@@ -210,16 +186,6 @@ def _explode_locator(page: FakePage, method: str, selector: str | None = None) -
     page_any.locator = exploding
 
 
-async def test_send_chat_echo_count_bug_propagates() -> None:
-    page = meet_page([IN_CALL] + [ECHO_CONTENT] * 12, visible={CHAT_INPUT_XPATH: False})
-    clock = FakeClock()
-    with_enter(page)
-    _explode_locator(page, "count")
-
-    with pytest.raises(KeyError, match="locator bug"):
-        await send_chat(page, CHAT_TEXT, sleep=clock.sleep, monotonic=clock.monotonic)
-
-
 async def test_send_chat_panel_wait_bug_propagates() -> None:
     page = meet_page([IN_CALL], visible={CHAT_INPUT_XPATH: False})
     clock = FakeClock()
@@ -246,28 +212,28 @@ async def test_send_chat_typing_bug_propagates() -> None:
         await send_chat(page, CHAT_TEXT, sleep=clock.sleep, monotonic=clock.monotonic)
 
 
-async def test_echo_wait_bounds_each_content_read(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_chat_echo_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(meet_actions_module, "_ECHO_READ_TIMEOUT_SECONDS", 0.01)
-    page = meet_page([IN_CALL] + [IN_CALL] * 11)
-    reads = 0
+    page = meet_page([IN_CALL])
 
     async def content() -> str:
-        nonlocal reads
-        reads += 1
-        if reads == 1:
-            return IN_CALL
         await asyncio.sleep(5.0)
-        return IN_CALL
+        return ECHO_CONTENT
 
     monkeypatch.setattr(page, "content", content)
-    with_enter(page)
-    clock = FakeClock()
     started = time.monotonic()
 
-    result = await send_chat(page, CHAT_TEXT, sleep=clock.sleep, monotonic=clock.monotonic)
-
-    assert result.failed
+    assert await observe_chat_echoed(page, CHAT_TEXT) is False
     assert time.monotonic() - started < 2.0
+
+
+async def test_chat_echo_matches_text_the_page_escaped() -> None:
+    echoed = (
+        IN_CALL + '<div>Q&amp;A at 3 &lt;now&gt;<button aria-label="Pin message"></button></div>'
+    )
+
+    assert await observe_chat_echoed(meet_page([echoed]), "Q&A at 3 <now>") is True
+    assert await observe_chat_echoed(meet_page([TEXT_WITHOUT_PIN]), "Q&A at 3") is False
 
 
 _RAISED_HAND_PAGE = '<button aria-label="Lower hand"></button>'
