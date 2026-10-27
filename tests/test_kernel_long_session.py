@@ -66,9 +66,7 @@ MAKERS: tuple[tuple[Maker, float], ...] = (
         5,
     ),
     (
-        lambda _rng, index, device: ScreenObserved(
-            presenter_device_id=device, title=f"slide {index % 40}"
-        ),
+        lambda _rng, index, _device: ScreenObserved(title=f"slide {index % 40}"),
         6,
     ),
     (lambda rng, _index, _device: ParticipantCountObserved(remote=rng.randint(0, 12)), 6),

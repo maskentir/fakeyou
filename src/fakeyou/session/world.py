@@ -69,7 +69,6 @@ class TrackState:
 
 @dataclass(frozen=True, slots=True)
 class ScreenState:
-    presenter_device_id: str | None
     title: str | None
     reading_ref: str | None
     meeting_content: bool
@@ -173,6 +172,20 @@ def _append(
     return (*lines, line)[-keep:]
 
 
+def presenter_device(world: WorldState) -> str | None:
+    endpoints = world.endpoints
+    for endpoint in endpoints.values():
+        parent = endpoints.get(endpoint.parent_device_id or "")
+        if (
+            endpoint.presence == "present"
+            and parent is not None
+            and not endpoint.current_user
+            and not parent.current_user
+        ):
+            return parent.device_id
+    return None
+
+
 def _roster(state: SessionState, observation: RosterObserved) -> SessionState:
     endpoints = dict(state.world.endpoints)
     for endpoint in observation.endpoints:
@@ -189,6 +202,8 @@ def _roster(state: SessionState, observation: RosterObserved) -> SessionState:
         endpoints=endpoints,
         roster_synced=state.world.roster_synced or observation.synced,
     )
+    if presenter_device(world) != presenter_device(state.world):
+        return _changed(state, replace(state, world=world), "presence", "screen")
     return _changed(state, replace(state, world=world), "presence")
 
 
@@ -286,7 +301,6 @@ def _chat(state: SessionState, seq: int, observation: ChatObserved, limits: Limi
 def _screen(state: SessionState, seq: int, observation: ScreenObserved) -> SessionState:
     current = state.world.screen
     screen = ScreenState(
-        presenter_device_id=observation.presenter_device_id,
         title=observation.title,
         reading_ref=observation.reading_ref,
         meeting_content=observation.meeting_content,

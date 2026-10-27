@@ -45,7 +45,7 @@ observations = st.one_of(
         track_id=st.none() | ids,
     ),
     st.builds(ChatObserved, message_id=ids, device_id=ids, text=ids, own=st.booleans()),
-    st.builds(ScreenObserved, presenter_device_id=st.none() | ids, title=st.none() | ids),
+    st.builds(ScreenObserved, title=st.none() | ids),
     st.builds(
         CallStateObserved,
         state=st.sampled_from(["in_call", "in_call", "in_call", "left"]),

@@ -30,6 +30,12 @@ from fakeyou.session.world import SessionState, reduce
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
 TWIN = Endpoint(device_id="dev-twin", display_name="Rani", present=True, current_user=True)
 AYU = Endpoint(device_id="dev-ayu", display_name="Ayu", present=True)
+AYU_SCREEN = Endpoint(
+    device_id="dev-ayu-screen", display_name="Ayu", present=True, parent_device_id="dev-ayu"
+)
+TWIN_SCREEN = Endpoint(
+    device_id="dev-twin-screen", display_name="Rani", present=True, parent_device_id="dev-twin"
+)
 BUDI = Endpoint(device_id="dev-budi", display_name="Budi", present=True)
 IN_CALL = CallStateObserved(state="in_call", browser_epoch=1)
 
@@ -94,11 +100,11 @@ def test_a_stale_protocol_answers_unknown_instead_of_empty() -> None:
 def test_a_screen_change_before_speech_invalidates_the_fact() -> None:
     sharing = replay(
         IN_CALL,
-        RosterObserved(endpoints=(TWIN, AYU), synced=True),
-        ScreenObserved(presenter_device_id="dev-ayu", title="Q4 roadmap"),
+        RosterObserved(endpoints=(TWIN, AYU, AYU_SCREEN), synced=True),
+        ScreenObserved(title="Q4 roadmap"),
     )
     fact = state_fact("screen_title", sharing)
-    changed = replay(ScreenObserved(presenter_device_id="dev-ayu", title="Budget"), state=sharing)
+    changed = replay(ScreenObserved(title="Budget"), state=sharing)
 
     assert fact.proposition == ScreenTitle("Q4 roadmap", sharing=True)
     assert still_valid(fact, sharing) is True
@@ -173,3 +179,40 @@ def test_every_locale_renders_every_state() -> None:
 
 def test_only_languages_with_a_pack_get_state_speech() -> None:
     assert (locale_of("id-ID"), locale_of("en"), locale_of("ja")) == ("id", "en", None)
+
+
+def test_the_presenter_comes_from_the_roster_before_any_screen_is_read() -> None:
+    state = replay(IN_CALL, RosterObserved(endpoints=(TWIN, AYU, AYU_SCREEN), synced=True))
+
+    assert state_fact("presenter", state).proposition == Presenter("Ayu", presenting=True)
+    assert state_fact("screen_title", state).proposition == ScreenTitle(None, sharing=True)
+
+
+def test_a_stopped_share_ends_presenting_and_invalidates_the_answer() -> None:
+    sharing = replay(
+        IN_CALL,
+        RosterObserved(endpoints=(TWIN, AYU, AYU_SCREEN), synced=True),
+        ScreenObserved(title="Q4 roadmap"),
+    )
+    fact = state_fact("presenter", sharing)
+    stopped = replay(
+        RosterObserved(endpoints=(AYU_SCREEN.model_copy(update={"present": False}),)),
+        state=sharing,
+    )
+
+    assert still_valid(fact, stopped) is False
+    assert state_fact("presenter", stopped).proposition == Presenter(None, presenting=False)
+    assert state_fact("screen_title", stopped).proposition == ScreenTitle(None, sharing=False)
+
+
+def test_the_twins_own_share_is_not_someone_presenting() -> None:
+    state = replay(IN_CALL, RosterObserved(endpoints=(TWIN, AYU, TWIN_SCREEN), synced=True))
+
+    assert state_fact("presenter", state).proposition == Presenter(None, presenting=False)
+
+
+def test_an_unsynced_roster_cannot_say_nobody_is_presenting() -> None:
+    state = replay(IN_CALL, RosterObserved(endpoints=(TWIN, AYU)))
+
+    assert state_fact("presenter", state).proposition == Unknown("presenter", "stale_source")
+    assert state_fact("screen_title", state).proposition == Unknown("screen_title", "stale_source")

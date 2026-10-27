@@ -110,14 +110,14 @@ from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.orchestration.presence import PROTOCOL_STALE_SECONDS, AloneClock
 from fakeyou.perception.attention import AttentionPrefilter
-from fakeyou.perception.percepts import ChatLine
+from fakeyou.perception.percepts import ChatLine, ScreenSegment
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
     DEFAULT_PERCEPTION_SCHEDULE,
     PerceptionDrain,
     load_perception_script,
 )
-from fakeyou.perception.timeline import ChatReceived, TimelineEvent
+from fakeyou.perception.timeline import ChatReceived, ScreenRead, ScreenShown, TimelineEvent
 
 
 @asynccontextmanager
@@ -686,6 +686,15 @@ class MeetingWorker:
     def _on_timeline_event(self, event: TimelineEvent) -> None:
         if isinstance(event, ChatReceived):
             self._on_chat_line(event.line)
+        elif isinstance(event, ScreenShown | ScreenRead):
+            self._on_screen(event.segment)
+
+    def _on_screen(self, segment: ScreenSegment) -> None:
+        perception = self.perception
+        if self.kernel is None or perception is None:
+            return
+        if segment.ref == perception.timeline.snapshot().current_ref:
+            self.kernel.screen(segment)
 
     def _on_chat_line(self, line: ChatLine) -> None:
         if self.kernel is not None:

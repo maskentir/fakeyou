@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.runtime import MeetingWorker
 from fakeyou.perception.percepts import ChatLine, IncomingChat, ParticipantRef, ScreenSegment
 from fakeyou.perception.timeline import MeetingTimeline
@@ -177,3 +178,23 @@ async def test_a_non_meeting_screen_is_offered_by_title_only(journal: RecordingJ
     [offered] = cast(FakeConversation, worker.conversation).attention
     assert "Cartesia Usage" in offered
     assert "1450-6289" not in offered
+
+
+async def test_the_current_screen_reading_reaches_the_kernel(journal: RecordingJournal) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline)
+    worker.kernel = KernelPort.for_meeting("meeting-9")
+    worker.watch_meeting_events()
+
+    shown = timeline.show_screen(keyframe(slide_jpeg("Q4 roadmap")), None)
+    worker.kernel.drain()
+    pending = worker.kernel.state.world.screen
+    timeline.read_screen(shown.segment.ref, reading("Q4 roadmap"))
+    worker.kernel.drain()
+
+    assert pending is not None
+    assert pending.title is None
+    screen = worker.kernel.state.world.screen
+    assert screen is not None
+    assert (screen.title, screen.reading_ref) == ("Q4 roadmap", shown.segment.ref)
