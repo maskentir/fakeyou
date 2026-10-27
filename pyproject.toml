@@ -59,6 +59,7 @@ constraint-dependencies = [
 dev = [
     "deepeval==4.2.6",
     "deptry>=0.25,<1",
+    "hypothesis>=6.140,<7",
     "import-linter>=2.15,<3",
     "mypy>=1.18,<2",
     "pytest>=8,<10",
@@ -173,6 +174,26 @@ mypy_path = "typings"
 
 [tool.importlinter]
 root_package = "fakeyou"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "session kernel stays free of adapters and providers"
+type = "forbidden"
+source_modules = ["fakeyou.session"]
+forbidden_modules = [
+    "fakeyou.observability",
+    "fakeyou.persistence",
+    "fakeyou.db",
+    "langchain",
+    "langchain_core",
+    "langgraph",
+    "playwright",
+    "graphiti_core",
+    "openai",
+    "google",
+    "httpx",
+    "sqlalchemy",
+]
 
 [[tool.importlinter.contracts]]
 name = "catalog never imports cli or db"
@@ -230,6 +251,7 @@ layers = [
     "fakeyou.persistence",
     "fakeyou.db",
     "fakeyou.observability",
+    "fakeyou.session",
     "fakeyou.config",
     "fakeyou.catalog",
     "fakeyou.foundation",
