@@ -898,12 +898,32 @@ melanjutkan command lama; long-session replay bounded dan deterministik.
 Gate: seq berlanjut setelah resume, header selain v4 ditolak, causation
 twin speech menunjuk transcript pemicunya.
 
-### PR 8: Live validation
+### PR 8: Live validation (s underway)
 
 Sesi live solo dan multi-human dengan scorecard terhadap threshold beku
 PR 0. Trigger stop: satu unauthorized action, duplicate visible effect,
 factual state claim tanpa fact, atau disclosure internal. Kegagalan
 diperbaiki pada subsystem penyebab, bukan dengan mode fallback.
+
+Sesi live `live-oue-1` (solo, 13:03-13:08 UTC) membuktikan enam dari
+sembilan skenario: roster dan jumlah orang dijawab renderer tanpa LLM,
+reaksi tidak diklaim terlihat, angkat dan turun tangan terkonfirmasi, fact
+brief diucapkan utuh, komitmen anggaran ditolak, dan leave tanpa
+`meet_leave` ditolak. Empat temuan diperbaiki di
+`fix/kernel-live-findings`:
+
+- Chat: model menulis kalimat penolakan, dan verifikasi echo lewat
+  `kernel_seq` tidak pernah sampai karena echo protocol tidak masuk
+  timeline. Verifikasi sekarang memakai DOM readback (`dom_echo`), chat
+  terkonfirmasi masuk history, dan persona menyatakan bahwa pesan chat
+  ditulis sistem apa adanya.
+- Bahasa: state speech memakai locale statis, sekarang memakai bahasa
+  yang declare judge untuk turn itu.
+- `own_action_status`: judge tidak mengenali "tadi kamu sudah angkat
+  tangan belum?" sebagai pertanyaan status aksi; aturannya diperjelas dan
+  judge sekarang melaporkan bahasa baris.
+- Judge eval: `EVAL_JUDGE_PROVIDER` memilih Gemini (default), Muse, atau
+  OpenAI untuk eval persona.
 
 ## Validation matrix
 
