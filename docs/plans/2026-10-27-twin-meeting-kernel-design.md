@@ -898,59 +898,66 @@ melanjutkan command lama; long-session replay bounded dan deterministik.
 Gate: seq berlanjut setelah resume, header selain v4 ditolak, causation
 twin speech menunjuk transcript pemicunya.
 
-### PR 8: Live validation (s underway)
+### PR 8: Live validation (berjalan)
 
 Sesi live solo dan multi-human dengan scorecard terhadap threshold beku
 PR 0. Trigger stop: satu unauthorized action, duplicate visible effect,
 factual state claim tanpa fact, atau disclosure internal. Kegagalan
 diperbaiki pada subsystem penyebab, bukan dengan mode fallback.
 
-Sesi live `live-oue-1` (solo, 13:03-13:08 UTC) membuktikan enam dari
-sembilan skenario: roster dan jumlah orang dijawab renderer tanpa LLM,
-reaksi tidak diklaim terlihat, angkat dan turun tangan terkonfirmasi, fact
-brief diucapkan utuh, komitmen anggaran ditolak, dan leave tanpa
-`meet_leave` ditolak. Empat temuan diperbaiki di
-`fix/kernel-live-findings`:
+Sesi `live-oue-1` (solo) membuktikan enam dari sembilan skenario: roster
+dan jumlah orang dijawab renderer tanpa LLM, reaksi tidak diklaim
+terlihat, angkat dan turun tangan terkonfirmasi, fact brief diucapkan
+utuh, komitmen anggaran ditolak, dan leave tanpa `meet_leave` ditolak.
+Sesi `live-oue-3` (multi-human) membuktikan twin diam pada 20 turn yang
+bukan untuknya. Sesi `live-oue-4` (multi-human, 27 menit) menjalankan
+skenario nyata. Temuan dan perbaikannya di `fix/kernel-live-findings`,
+masing-masing pada subsystem penyebab:
 
-- Chat: model menulis kalimat penolakan, dan verifikasi echo lewat
-  `kernel_seq` tidak pernah sampai karena echo protocol tidak masuk
-  timeline. Verifikasi sekarang memakai DOM readback (`dom_echo`), chat
-  terkonfirmasi masuk history, dan persona menyatakan bahwa pesan chat
-  ditulis sistem apa adanya.
-- Bahasa: state speech memakai locale statis, sekarang memakai bahasa
-  yang declare judge untuk turn itu.
-- `own_action_status`: judge tidak mengenali "tadi kamu sudah angkat
-  tangan belum?" sebagai pertanyaan status aksi; aturannya diperjelas dan
-  judge sekarang melaporkan bahasa baris.
-- Judge eval: `EVAL_JUDGE_PROVIDER` memilih Gemini (default), Muse, atau
-  OpenAI untuk eval persona.
-
-Sesi `live-oue-3` (multi-human nyata) membuktikan twin diam pada 20 turn
-percakapan yang bukan padanya, dan menemukan bug kedua: saat call berakhir,
-sumber mic ikut mati dan pipeline audio dilaporkan `audio_failure` (exit 1)
-walau meeting-nya selesai normal. Sekarang kegagalan audio dicek terhadap
-state call lebih dulu, jadi call yang berakhir dilaporkan sebagai
-`ended_by_host`, dan detail akhir sesi masuk ke journal dan report.
-
-Sesi `live-oue-4` (multi-human, 27 menit) menjalankan skenario nyata dan
-menemukan tiga cacat lagi, semuanya diperbaiki:
-
-- Twin mengucapkan JSON mentah. Model kadang menjawab tanpa mengikuti
-  skema `ReplyPlan`, sehingga raw-nya diucapkan apa adanya dan percobaan
-  berikutnya mengucapkan JSON. Raw berbentuk JSON kini tidak pernah
-  diucapkan; teksnya diambil dari field `text` bila ada.
-- Chat ditolak. Aturan persona dibaca model sebagai "twin tidak boleh
-  mengirim chat". Aturan kewenangan sekarang menyebut brief sebagai
-  satu-satunya sumber, dan chat yang terkonfirmasi masuk history sebagai
- sebagai pesan sendiri.
-- Jawaban tentang layar dikarang. Evidence `screen` gagal
-  (`unknown_screen`) tapi model tetap bilang "tidak terlihat dari
-  gambar". Sekarang evidence yang gagal membuat jawaban tanpa kutipan
-  ditolak dan diganti kalimat "belum bisa melihatnya".
-- Angka yang diucapkan sebagai kata ("lima puluh", "forty two") dulu
-  dianggap karangan. `session.numbers` membaca kata angka dari
-  `number_vocabulary.json`; angka kecil satu digit tidak dihitung karena
-  sering dipakai sebagai kata ganti.
+- Chat ditolak dan tidak terverifikasi. Persona membaca aturan sebagai
+  "twin tidak boleh mengirim chat"; aturan kewenangan sekarang menyebut
+  brief sebagai satu-satunya sumber. Meet tidak meng-echo chat sendiri
+  lewat protocol, jadi `send_chat` hanya mengetik dan mengirim, lalu
+  runner memverifikasi lewat DOM readback (`dom_echo`), sama seperti
+  toggle diverifikasi lewat readback. Chat sendiri yang terkonfirmasi
+  masuk history lewat satu jalur (timeline, atau record bila perception
+  mati), bukan ditulis dua kali ke kernel.
+- Bahasa state speech sekarang mengikuti bahasa baris yang dilaporkan
+  judge, bukan locale statis; judge juga mengenali pertanyaan status aksi
+  sendiri (`own_action_status`).
+- JSON mentah terucap. Penyebabnya bukan model yang melanggar skema:
+  vision interpreter dipanggil di dalam node model agent (middleware
+  perception), sehingga token jawaban look ikut ter-stream sebagai
+  kalimat pertama reply. Evidence yang direncanakan sekarang dikumpulkan
+  turn layer sebelum reply (`EvidencePort`), dibawa di event, dan
+  middleware hanya menyisipkannya. Ini juga menghapus look ganda setiap
+  kali agent memanggil model lebih dari sekali. Turn yang tidak dinilai
+  judge tidak lagi memicu look vision.
+- `audio_failure` di akhir `live-oue-3` bukan karena call berakhir:
+  rotasi STT karena keyword berubah antre menunggu ruangan sepi, ruangan
+  tidak pernah sepi selama 120 detik, dan deadline langsung menggagalkan
+  sesi. Sekarang reconnect yang menunggu terlalu lama dijalankan paksa
+  (audio yang menunggu tetap dikirim), dan sesi hanya gagal bila
+  reconnect itu sendiri gagal tiga kali.
+- Command yang sudah lewat boundary ikut ter-cancel saat barge-in,
+  sehingga ledger tertahan di `dispatching`. Eksekusi command sekarang
+  di-shield dan selalu settle; teardown menunggu command yang masih
+  berjalan.
+- Leave yang diizinkan hilang saat salam penutup terpotong. Leave sekarang
+  barrier terminal: plan yang menyertakan leave selalu menjalankannya
+  setelah reply, apa pun hasil reply.
+- Presenter dan judul layar selalu dijawab "tidak ada yang share" karena
+  `ScreenObserved` tidak pernah masuk kernel. Presenter sekarang
+  diturunkan dari endpoint presentasi di roster kernel, judul dari
+  reading layar yang sedang tampil, dan roster yang belum sinkron
+  dijawab unknown, bukan "tidak ada".
+- Angka yang terdengar sebagai kata ("seratus dua puluh juta") dianggap
+  karangan saat diucapkan sebagai digit. Grounding angka sekarang
+  membandingkan digit atau bentuk kata dari `num2words` (id dan en),
+  tanpa parser buatan sendiri; vocabulary keyword STT tidak berubah.
+- Judge eval memakai konfigurasi sendiri (`EVAL_JUDGE_*`), tidak pernah
+  meminjam key model reply, dan eval persona gagal bila judge sama
+  dengan model reply yang dinilai.
 
 ## Validation matrix
 
