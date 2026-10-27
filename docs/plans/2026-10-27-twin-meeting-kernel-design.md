@@ -1,9 +1,13 @@
 # Twin Meeting Kernel Design
 
-Status: design review selesai, belum diimplementasikan.
+Status: PR 0 selesai, implementasi kernel berjalan.
 Tanggal: 2026-10-27.
 Keputusan: arah meeting kernel diterima, tetapi rencana awal wajib memakai
 revisi dalam dokumen ini sebelum implementasi dimulai.
+Revisi 2026-10-27: breaking change diizinkan dan tidak ada backward
+compatibility. Kernel menggantikan engine lama langsung; tidak ada mode
+`legacy`/`shadow`, tidak ada expand-contract record, dan setiap PR
+menghapus jalur lama yang ia gantikan.
 
 ## Verdict
 
@@ -213,15 +217,13 @@ Satu model event logis tidak berarti satu file untuk semua data:
 - **Replay bundle:** test harness merekam normalized input/output pada port.
   Production journal yang redacted dan rotating tidak dianggap replay source.
 
-Tidak ada dual-write permanen antara event store baru dan record lama.
-Apabila replay membuktikan record v4 tidak cukup, PR yang sama harus memilih
-satu canonical semantic log dan menghapus representasi duplikatnya.
+Tidak ada dual-write antara event store baru dan record lama. Apabila
+replay membuktikan record v4 tidak cukup, PR yang sama harus memilih satu
+canonical semantic log dan menghapus representasi duplikatnya.
 
-Selama expand-contract, sesi `legacy` menulis record v3 dan sesi `kernel`
-menulis record v4. Reader mendukung keduanya; sequence v3 disintesis dari
-urutan baris dan ditandai sebagai legacy, bukan dipakai untuk keputusan
-live. Setelah deletion, production hanya menulis v4 dan reader v3 tetap
-read-only untuk debrief/ingestion historis.
+Record v4 menggantikan v3 tanpa reader kompatibilitas. Record v3 yang sudah
+ada tidak dibaca oleh debrief/ingestion baru; meeting lama yang masih perlu
+diproses diselesaikan sebelum upgrade.
 
 ## Projection state
 
@@ -697,169 +699,114 @@ membaca mode yang sama sehingga ucapan twin konsisten dengan perilaku.
 
 ## Migrasi per PR
 
-Migrasi memakai strangler pattern pada boundary port. Mode sesi dipilih
-sekali saat join sebagai `legacy`, `shadow`, atau `kernel`, lalu tidak
-berubah di tengah session attempt. Tidak ada flag per subsystem yang dapat
-membuat kombinasi setengah lama dan setengah baru. Rollback selalu berarti
-sesi berikutnya kembali ke `legacy`; command yang sudah melewati boundary
-tidak pernah dipindahkan antar-engine.
+Breaking change diizinkan dan tidak ada backward compatibility. Tidak ada
+mode `legacy`/`shadow`/`kernel`, tidak ada flag per subsystem, dan tidak ada
+dual-write. Setiap PR mengganti satu subsystem secara utuh, menghapus kode
+lama yang digantikannya pada PR yang sama, dan tetap meninggalkan twin yang
+dapat join, mendengar, menjawab, dan leave. Rollback berarti revert commit
+atau kembali ke release sebelumnya, bukan mode runtime.
 
-Persistence mengikuti expand-contract per sesi: sesi `legacy` menulis schema
-lama, sesi `kernel` menulis schema baru, dan reader mendukung keduanya
-selama soak. Tidak ada dual-write dalam satu sesi. Writer lama dihapus
-hanya setelah old engine dihapus; reader historis boleh tetap read-only.
+Karena tidak ada parallel run, characterization corpus PR 0 adalah satu-satunya
+pembanding perilaku. Skenario `preserve` harus tetap lolos; skenario
+`intentional_change` diubah ke target kernel pada PR yang membuatnya
+executable, bukan dibiarkan memakai outcome lama.
 
-### PR 0: Characterization dan replay ports
+### PR 0: Characterization (selesai)
 
-- Tambahkan sanitized scenario fixtures pada boundary STT, perception,
-  browser, model, memory, dan playback.
-- Rekam baseline keputusan saat ini sebagai intent/plan/command/speech
-  classes, bukan exact text.
-- Klasifikasikan setiap baseline sebagai `preserve`,
-  `intentional_change`, atau `known_bug_not_parity`. Klaim sukses palsu,
-  roster karangan, dan action tanpa otorisasi tidak menjadi parity target.
-- Tambahkan stage latency, mismatch taxonomy, dan branch/fault coverage
-  untuk decision, roster, timeline, dan action-ledger transitions.
-- Evaluasi mutation runner untuk modul keputusan murni. Bila tidak diadopsi,
-  surviving branch gaps harus dicatat dan ditutup dengan fault tables.
-- Tetapkan stage budgets, rollback thresholds, dan scorecard kernel dari
-  baseline.
-- Belum ada perubahan perilaku production.
+- Corpus `evals/fixtures/kernel-scenarios.json`, characterization test, dan
+  baseline report `docs/reports/2026-10-27-kernel-characterization.md`.
+- Rollback threshold dan scorecard dibekukan dari artefak terukur.
 
-Gate: replay deterministik tanpa provider live; baseline report dapat
-mereproduksi kegagalan historis bbz/bmn pada level keputusan dan
-menyebutkan perubahan perilaku yang memang disengaja.
+### PR 1: Kernel core (selesai)
 
-### PR 1: Branch-by-abstraction seam
+- `fakeyou.session.contracts`: envelope dan observation typed.
+- `fakeyou.session.world`: reducer murni untuk projection world, dialogue,
+  agenda, dan health dengan revision per domain.
+- `fakeyou.session.kernel`: single-writer, dedupe, late detection, bounded
+  mailbox dengan control lane dan drop hanya untuk input ephemeral.
+- Import-linter mengunci `session` di atas `config` dan melarang adapter
+  serta SDK provider.
 
-- Perkenalkan port untuk turn decision, world view, evidence, Meet action
-  dispatch, dan speech/chat delivery.
-- Semua caller production melewati port tersebut, tetapi implementasinya
-  masih mendelegasikan persis ke legacy engine.
-- Tambahkan session mode selection dan correlation IDs tanpa mengaktifkan
-  kernel.
+Gate: property tests untuk determinisme, duplicate, bound, revision monoton,
+terminal barrier, dan late event.
 
-Gate: characterization suite tidak berubah hasil; PR ini adalah no-op
-perilaku yang dapat di-rollback sendiri.
+### PR 2: Kernel sebagai sumber world dan identity
 
-### PR 2: Session contracts dan kernel shadow
+- Adapter STT, sensors, speaker registry, watchdog, playback, dan owner
+  control mengirim observation ke kernel per session attempt.
+- `session.identity` membangun evidence edges dan `PresenceFact`; judge
+  window membaca certainty/range dari kernel.
+- Dihapus: `sole_human_participant` dari daftar nama, roster kedua di
+  kernel lama, dan penulisan state keputusan langsung ke timeline.
 
-- Tambahkan `fakeyou.session` contracts, mailbox, ordering, dan projections.
-- Adapter menerjemahkan event production ke observation kernel.
-- Kernel berjalan sebagai parallel run `shadow`: ia menghitung intent,
-  plan, dan hypothetical commands, tetapi legacy tetap melayani sesi dan
-  kernel tidak dispatch command.
-- Divergence dicatat dengan taxonomy `preserve`, `intentional_change`,
-  `kernel_bug`, dan `legacy_bug`.
+Gate: skenario sync parsial, shared mic, multi-device, duplicate display
+name, overlap, stale source, dan epoch baru tidak pernah menghasilkan exact
+count atau sole responder palsu; `k-p3` dan `k-r2` berpindah ke outcome
+kernel.
 
-Gate: property tests membuktikan reducer deterministik, bounded, dan
-idempotent untuk duplicate event. Tidak ada divergence yang membuat kernel
-lebih permisif untuk side effect, factual speech, atau disclosure.
+### PR 3: Intent, authorization, finite planner, command lifecycle
 
-### PR 3: Identity dan presence projection
+- `TurnJudgement` diganti discriminated `Intent`; observation dan keputusan
+  tidak lagi dicampur di `TranscriptEvent`.
+- Policy actor x channel x permission x risk; brief memecah `meet_leave`.
+- Finite templates dan command state machine dengan irreversible boundary,
+  browser epoch, dan verification strength di action ledger.
+- Dihapus: Meet tools pada reply agent, `MeetActionOnceMiddleware`, planned
+  executor/settler khusus di assembly, `schedule_leave`, dan default
+  `authorized=True` di ledger.
 
-- Migrasikan roster, stream, CSRC, voice track, DOM count, dan chat sender
-  menjadi evidence edges.
-- Judge menerima certainty/range, bukan daftar nama sebagai fakta pasti.
-- Production roster lama menjadi adapter input selama shadow parity.
-
-Gate: scenario sync parsial, shared mic, multi-device, duplicate display
-name, overlap, dan stale source tidak pernah menghasilkan exact count atau
-sole responder palsu.
-
-### PR 4: Authorization dan finite planner untuk Meet actions
-
-- Pecah permission leave, tambahkan actor/risk policy, dan finite templates.
-- Planned Meet actions pada mode `kernel` berjalan melalui command
-  lifecycle baru; mode `legacy` tetap utuh untuk rollback.
-- Action ledger menyimpan boundary, browser epoch, verification strength,
-  dan parameter reference yang aman.
-- Special-case mechanical action dan scheduled leave tidak lagi dipakai
-  mode `kernel`, tetapi belum dihapus sebelum soak selesai.
-
-Gate: fake browser crash-injection pada sebelum/sesudah click dan Enter
-membuktikan tidak ada duplicate visible effect dan tidak ada klaim sukses
+Gate: tabel otorisasi lengkap dan fake browser crash-injection sebelum/
+sesudah click dan Enter tanpa duplicate visible effect atau klaim sukses
 untuk `unknown`.
 
-### PR 5: Evidence service dan state speech
+### PR 4: Evidence service dan state speech
 
-- Tambahkan typed evidence queries dan `FactSet`.
-- Roster, presenter, screen title, mic/hand, dan action status dijawab oleh
-  deterministic renderer.
-- Planned turn tidak lagi mengekspos evidence tools ke reply LLM.
+- Typed evidence queries, `FactSet`, dan deterministic renderer untuk
+  roster, presenter, screen title, mic/hand, action status.
+- Dihapus: evidence tools pada reply agent, `EvidenceRoutingMiddleware`,
+  dan synthetic `observe_meeting` view.
 
-Gate: pertanyaan state tidak memanggil free-form factual composer; fact
-yang stale/incomplete menghasilkan unknown atau range.
+Gate: pertanyaan state tidak memanggil free-form composer; fact stale atau
+incomplete menghasilkan unknown atau range.
 
-### PR 6: Speech contract
+### PR 5: Speech contract
 
-- Tambahkan `SpeechBrief`, `SpeechAct`, fact-bound claims, capability facts,
-  dan sentence commit gate untuk semua channel.
-- Proactive contribution memakai kontrak yang sama, bukan gate terpisah.
-- Mode `kernel` tidak lagi memakai jalur planned reply yang mencampur
-  evidence, action, dan speech dalam satu agent loop; jalur legacy tetap
-  tersedia hanya untuk rollback sampai deletion gate.
+- `SpeechBrief`, `SpeechAct`, fact-bound claims, capability facts, dan
+  sentence commit gate untuk speech dan chat.
+- Proactive contribution memakai kontrak yang sama.
+- Dihapus: reply agent loop yang mencampur evidence, action, dan speech,
+  serta `ContributionGate` terpisah.
 
-Gate: adversarial speech fixtures membuktikan namespace leakage, invented
-names/numbers, action overclaim, owner commitment, dan brief disclosure
-ditolak sebelum PCM/chat keluar.
+Gate: adversarial speech fixtures untuk namespace leakage, invented
+names/numbers, action overclaim, owner commitment, dan brief disclosure.
 
-### PR 7: Scheduler, health, dan recovery
+### PR 6: Scheduler, health, dan recovery
 
-- Tambahkan resource leases, inherited deadlines, priority lanes, degraded
-  modes, dan restart reconciliation.
+- Resource leases, inherited deadlines, priority lanes, degraded modes, dan
+  restart reconciliation.
 - Interim speculation hanya untuk read-only work.
-- Long-session synthetic replay membuktikan bounded memory dan latency.
+- Dihapus: lane dan floor state yang dimutasi banyak pemilik di
+  turn lifecycle/graph.
 
-Gate: fault injection untuk judge/model timeout, browser epoch change,
-perception stale, TTS failure, memory unavailable, dan process restart
-menghasilkan mode degradasi yang benar tanpa side effect liar.
+Gate: fault injection judge/model timeout, browser epoch change,
+perception stale, TTS failure, memory unavailable, dan process restart.
 
-### PR 8: Incremental cutover
+### PR 7: Record v4
 
-Urutan traffic shift bersifat per sesi dan tidak dapat dilompati:
-deterministic replay, live `shadow`, controlled solo `kernel`, controlled
-multi-human `kernel`, lalu `kernel` sebagai default. Mode dipilih saat join
-dan tercatat pada session context.
+- `MeetingRecord` v4 dengan `kernel_seq`, causation, dan correlation sebagai
+  satu-satunya semantic history; kernel adalah satu-satunya writer.
+- Dihapus: writer v3, reader v3, dan duplikasi history di lifecycle serta
+  moment detector.
 
-Rollback trigger ditetapkan sebelum ramp:
+Gate: replay record v4 mereproduksi keputusan dari normalized port events;
+debrief dan ingestion membaca v4.
 
-- Satu unauthorized action, duplicate visible effect, factual state claim
-  tanpa fact, atau disclosure internal langsung menghentikan ramp.
-- False reply, missed named, unknown-action rate, atau stage p95 melewati
-  threshold beku PR 0 pada jendela evaluasi yang ditetapkan di PR tersebut.
-- Session terminal reason memburuk menjadi failure yang disebabkan kernel.
-- Divergence `kernel_bug` yang belum terklasifikasi muncul pada live shadow.
+### PR 8: Live validation
 
-Rollback mengembalikan sesi berikutnya ke `legacy`. Ia tidak membatalkan
-command yang sudah melewati boundary dan tidak menulis ulang record sesi
-yang sudah berjalan.
-
-Gate: full repo checks, live model evals, fake browser contract suite,
-satu sesi live solo, satu sesi live multi-human, dan scorecard tidak
-regresi dari baseline beku.
-
-### PR 9: Soak dan deletion
-
-Old engine hanya dihapus setelah mode `kernel` bersih pada soak yang
-mencakup kasus lambat: sesi panjang, reconnect/browser epoch change,
-restart, multi-human, provider degraded, screen/chat, barge-in, dan leave.
-Jumlah sesi serta durasi minimum dibekukan pada PR 0 dari ketersediaan live
-testing; satu sesi solo dan satu sesi multi-human saja tidak cukup untuk
-deletion.
-
-- Hapus free Meet/evidence tools dari planned path, executor/settler
-  callbacks khusus, derivasi sole participant dari daftar nama, writer
-  schema lama, dan mode transisi.
-- Unplanned fallback yang tersisa harus dinyatakan sebagai capability
-  terpisah dengan policy sama; ia tidak boleh menjadi jalur diam-diam
-  menuju tool bebas.
-- Reader record historis boleh tetap read-only, tetapi tidak ada writer
-  atau decision path legacy yang tersisa.
-
-Gate: tidak ada severe invariant violation selama soak, rollback trigger
-tidak terpicu, dan characterization yang berstatus `preserve` tetap lolos
-atau perubahan disengaja sudah dicatat sebagai behavior change terpisah.
+Sesi live solo dan multi-human dengan scorecard terhadap threshold beku
+PR 0. Trigger stop: satu unauthorized action, duplicate visible effect,
+factual state claim tanpa fact, atau disclosure internal. Kegagalan
+diperbaiki pada subsystem penyebab, bukan dengan mode fallback.
 
 ## Validation matrix
 
@@ -922,6 +869,9 @@ Skenario adversarial minimum:
   yang sudah terbukti.
 - **Feature flags permanen per subsystem:** menciptakan matriks perilaku
   yang tidak teruji dan mempertahankan patchwork.
+- **Strangler dengan mode legacy/shadow/kernel:** ditolak pada revisi
+  2026-10-27 karena backward compatibility tidak dibutuhkan; dua engine
+  paralel hanya menambah kode transisi yang harus dihapus lagi.
 
 ## Risiko yang tidak dapat dihilangkan desain
 
@@ -943,10 +893,10 @@ model menjadi selalu benar.
 
 ## Kill criteria
 
-Implementasi tidak boleh cutover bila salah satu kondisi berikut terjadi:
+PR tidak boleh di-merge bila salah satu kondisi berikut terjadi:
 
-- Shadow kernel menaikkan false reply atau missed named melewati threshold
-  beku pada PR 0.
+- Replay atau live eval menaikkan false reply atau missed named melewati
+  threshold beku pada PR 0.
 - Identity projection tetap harus menebak exact count agar fitur dasar
   dapat bekerja.
 - Planner membutuhkan template atau graph bebas baru untuk skenario umum
@@ -955,7 +905,8 @@ Implementasi tidak boleh cutover bila salah satu kondisi berikut terjadi:
 - Speech gate hanya dapat bekerja dengan memeriksa teks bebas setelah
   model menulis, tanpa structured claims untuk source-grounded speech.
 - Replay tidak dapat mereproduksi keputusan dari normalized port events.
-- Cutover membutuhkan dual-write atau feature-flag combination permanen.
+- Penggantian subsystem membutuhkan dual-write, feature flag, atau jalur
+  lama yang dipertahankan.
 
 Jika kill criterion terpicu, pekerjaan berhenti pada subsystem tersebut
 dan desain direvisi sebelum PR berikutnya. Kegagalan itu tidak ditutup
@@ -963,13 +914,11 @@ dengan prompt rule, wordlist, atau special case baru.
 
 ## Readiness
 
-Desain ini siap dieksekusi mulai PR 0. Tidak ada keputusan produk yang
+Desain ini dieksekusi berurutan mulai PR 0. Tidak ada keputusan produk yang
 menunggu user. Nilai threshold, stage budget, dan calibration ditetapkan
 dari baseline PR 0 dan dibekukan sebagai test/eval contracts, bukan dipilih
 dari intuisi saat implementasi.
 
-Urutan eksekusi tidak boleh dilompati: characterization mendahului seam;
-seam mendahului shadow; shadow mendahului identity; identity mendahului
-planner; planner mendahului speech cutover; deletion hanya terjadi setelah
-incremental cutover dan soak lolos.
-
+Urutan eksekusi tidak boleh dilompati: characterization, kernel core,
+world/identity, planner dan command, evidence, speech, scheduler, record,
+lalu live validation. Setiap PR menghapus jalur lama yang digantikannya.
