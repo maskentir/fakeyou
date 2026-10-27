@@ -1,4 +1,3 @@
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, cast, get_args
@@ -149,20 +148,6 @@ class ReplyHandlers:
     on_plan: PlanHandler | None = None
     on_language: Callable[[str], None] | None = None
     on_gate: Callable[[SpeechVerdict, SpeechAct], None] | None = None
-
-
-def _plain_text(raw: str) -> str:
-    body = raw.strip()
-    if not body.startswith(JSON_START):
-        return raw
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-    text = parsed.get("text")
-    return text if isinstance(text, str) else ""
 
 
 def _act_of(plan: dict[str, object]) -> SpeechAct:
@@ -323,9 +308,6 @@ class ReplyPlanner:
         if self._blocked == "owner_commitment":
             self._spoken += 1
             return [speech_line("owner_commitment", locale)]
-        if self._blocked == "evidence_unavailable":
-            self._spoken += 1
-            return [speech_line("evidence_unavailable", locale)]
         if gate.proactive:
             return []
         self._spoken += 1
@@ -338,11 +320,10 @@ class ReplyPlanner:
                 return ""
             self._structured = body.startswith(JSON_START)
         if not self._structured:
-            spoken = _plain_text(self._raw)
             if self._act is None:
                 self._act = SpeechAct()
             self._report(structured=False)
-            return self._take_text(spoken)
+            return self._take_text(self._raw)
         plan = parse_partial_json(self._raw.lstrip())
         if not isinstance(plan, dict):
             if final and self._act is None:

@@ -12,9 +12,9 @@ from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.invariants import TwinName
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.speakers import TWIN_SPEAKER
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
-from fakeyou.session.numbers import keyword_table
 
 PersonaTool = Literal["recall_meeting_context"]
 PersonaLanguage = Literal["id", "en"]
@@ -330,8 +330,11 @@ def persona_digest(profile: PersonaProfile) -> str:
     return canonical_json_digest(profile.model_dump(mode="json"), compact=True)
 
 
+_NUMBER_VOCABULARY: dict[str, list[str]] = json.loads(read_package_text("number_vocabulary.json"))
+
+
 def number_keywords(language: str) -> tuple[str, ...]:
-    return keyword_table(language)
+    return tuple(_NUMBER_VOCABULARY.get(language, ()))
 
 
 def speech_keywords(profile: PersonaProfile, twin_name: str) -> tuple[str, ...]:

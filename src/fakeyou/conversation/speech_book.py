@@ -14,7 +14,6 @@ KEPT_MEMORY_FACTS = 64
 class TurnEvidence:
     _observed: OrderedDict[str, list[str]] = field(default_factory=OrderedDict)
     _memory: OrderedDict[str, str] = field(default_factory=OrderedDict)
-    _evidence: OrderedDict[str, bool] = field(default_factory=OrderedDict)
 
     def note_observed(self, transcript_id: str, text: str) -> None:
         self._observed.setdefault(transcript_id, []).append(text)
@@ -27,15 +26,6 @@ class TurnEvidence:
             self._memory.move_to_end(fact_id)
         while len(self._memory) > KEPT_MEMORY_FACTS:
             self._memory.popitem(last=False)
-
-    def note_evidence(self, transcript_id: str, codes: tuple[str, ...]) -> None:
-        available = all(code == "ok" for code in codes)
-        self._evidence[transcript_id] = available
-        self._evidence.move_to_end(transcript_id)
-        _bound(self._evidence)
-
-    def evidence_failed(self, transcript_id: str) -> bool:
-        return self._evidence.get(transcript_id) is False
 
     def observed(self, transcript_id: str) -> str:
         return "\n".join(self._observed.get(transcript_id, ()))
@@ -77,16 +67,10 @@ def _entries(source: BookSource, memory: Mapping[str, str]) -> Iterator[BookEntr
 
 
 def fact_book(
-    source: BookSource,
-    *,
-    heard: str,
-    observed: str,
-    memory: Mapping[str, str],
-    evidence_failed: bool = False,
+    source: BookSource, *, heard: str, observed: str, memory: Mapping[str, str]
 ) -> FactBook:
     return FactBook(
         entries={entry.fact_id: entry for entry in _entries(source, memory)},
         heard=f"{heard}\n{observed}".strip(),
         internal=tuple(source.registry.objectives.values()),
-        evidence_failed=evidence_failed,
     )

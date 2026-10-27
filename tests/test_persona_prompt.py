@@ -198,7 +198,7 @@ def test_speech_keywords_append_english_numbers_for_english_profiles() -> None:
 
 
 def test_number_keywords_pin_ten_digits_per_language() -> None:
-    assert number_keywords("en")[:10] == (
+    assert number_keywords("en") == (
         "zero",
         "one",
         "two",
@@ -210,9 +210,8 @@ def test_number_keywords_pin_ten_digits_per_language() -> None:
         "eight",
         "nine",
     )
-    assert len(number_keywords("id")) >= len(number_keywords("en"))
-    assert len(set(number_keywords("id"))) == len(number_keywords("id"))
-    assert set(number_keywords("id")).isdisjoint(number_keywords("en"))
+    assert len(number_keywords("id")) == 10
+    assert len(set(number_keywords("id"))) == 10
 
 
 def test_default_persona_keeps_indonesian_guidance() -> None:

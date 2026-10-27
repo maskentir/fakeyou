@@ -193,19 +193,3 @@ def test_the_declared_language_reaches_the_turn() -> None:
     planner.feed(plan("Baik.", intent="answer", language="id"))
 
     assert language.language == "id"
-
-
-def test_a_raw_json_reply_is_never_spoken() -> None:
-    raw = '{"understood": "hi", "language": "en", "intent": "answer", "text": "Hello there."}'
-
-    planned = planned_reply(raw, max_sentences=2, language="en")
-
-    assert planned.text == "Hello there."
-
-
-def test_a_raw_json_without_text_stays_silent() -> None:
-    raw = '{"understood": "hi", "language": "en", "intent": "answer"}'
-
-    planned = planned_reply(raw, max_sentences=2, language="en")
-
-    assert planned.text == ""
