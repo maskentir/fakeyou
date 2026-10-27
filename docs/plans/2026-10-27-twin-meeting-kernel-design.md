@@ -1,0 +1,975 @@
+# Twin Meeting Kernel Design
+
+Status: design review selesai, belum diimplementasikan.
+Tanggal: 2026-10-27.
+Keputusan: arah meeting kernel diterima, tetapi rencana awal wajib memakai
+revisi dalam dokumen ini sebelum implementasi dimulai.
+
+## Verdict
+
+Desain awal sudah benar pada satu hal mendasar: LLM tidak boleh menjadi pusat
+sequencing, otoritas side effect, dan sumber fakta meeting. Namun desain awal
+belum cukup solid karena masih menyisakan lima celah struktural:
+
+1. Command DAG generik terlalu bebas untuk perilaku turn yang sebenarnya
+   terbatas dan bisa menciptakan kompleksitas scheduler baru.
+2. Identity ledger dapat salah menggabungkan device, voice track, peserta,
+   dan identitas orang sungguhan.
+3. Intent dari peserta belum dipisahkan dari otorisasi untuk bertindak.
+4. Claim gate berbasis nama/angka tidak dapat membuktikan parafrase bebas.
+5. Event log mentah dapat menjadi sumber kebenaran kedua, membebani hot path,
+   dan menyimpan data yang seharusnya ephemeral.
+
+Desain final menutup celah tersebut dengan actor kernel single-writer, finite
+turn-plan templates, identity hypothesis graph, authorization policy, speech
+contract per kelas klaim, dan durability bertingkat.
+
+## Tujuan
+
+Twin harus dapat:
+
+- Berpartisipasi hanya ketika memang diajak atau ketika policy proaktif yang
+  ketat mengizinkan.
+- Menjalankan perintah meeting secara mekanis, idempotent, dan terobservasi.
+- Menjawab dari fakta yang punya provenance, modality, freshness, dan izin
+  disclosure.
+- Mengatakan tidak tahu ketika evidence tidak lengkap.
+- Tetap hidup serta fail closed ketika model, browser, STT, TTS, atau
+  perception mengalami gangguan.
+- Menjelaskan setiap keputusan dari event, snapshot, plan, dan outcome yang
+  dapat direplay pada boundary adapter.
+
+## Non-goals
+
+- Mengganti Google Meet browser guest dengan API baru.
+- Mengklaim identitas dunia nyata peserta hanya dari display name.
+- Menjamin exactly-once pada browser UI; targetnya at-most-once visible
+  effect dan outcome `unknown` yang jujur.
+- Membuat planner generik untuk workflow arbitrer.
+- Memberi twin kewenangan membuat komitmen, persetujuan, atau keputusan baru
+  atas nama owner di luar brief.
+- Menyimpan seluruh audio, frame, interim STT, dan DOM mentah sebagai event
+  permanen.
+
+## Fondasi yang dipertahankan
+
+Refactor tidak membuang bagian yang sudah terbukti:
+
+- [MeetingRecord](../../src/fakeyou/persistence/record.py:227) tetap menjadi
+  semantic meeting history, ditambah envelope sequence dan causation.
+- [MeetActionLedger](../../src/fakeyou/meet/meet_action_ledger.py:45) tetap
+  menjadi write-ahead ledger untuk side effect Meet.
+- [MeetingTimeline](../../src/fakeyou/perception/timeline.py:60) menjadi bahan
+  projection world state, bukan lagi registry mutable yang diubah banyak
+  pemilik.
+- [SpeakerRegistry](../../src/fakeyou/identity/identity.py:70) tetap menjadi
+  producer evidence voice track dan verified enrollment.
+- [FactEvidence](../../src/fakeyou/foundation/provenance.py:73) tetap menjadi
+  provenance untuk memory dan tidak dicampur dengan fakta meeting live.
+- [MeetingBrief](../../src/fakeyou/persistence/brief.py:37) tetap menjadi
+  sumber approved facts, questions, objectives, dan permissions.
+- Stop playback tetap mempunyai fast path di luar planner karena menghentikan
+  suara tidak boleh menunggu antrean turn.
+
+## Invariant
+
+Invariant berikut adalah kontrak yang harus dibuktikan oleh test, bukan
+sekadar pedoman prompt:
+
+1. Hanya `SessionKernel` yang mengubah world, dialogue, agenda, dan plan
+   state. Adapter hanya mengirim observation atau command result.
+2. State kernel hanya berisi data serializable. Task, page, stream, dan
+   async iterator hidup di runtime adapter.
+3. Setiap side effect berasal dari command yang sudah diautorisasi dan
+   dicatat sebelum melewati irreversible boundary.
+4. LLM tidak dapat memilih browser tool, evidence tool, atau urutan command
+   pada planned path.
+5. Fakta yang diucapkan selalu membawa provenance, modality, snapshot
+   sequence, validity, dan disclosure class.
+6. Ketidaklengkapan roster menghasilkan range atau `unknown`, bukan hitungan
+   atau nama pasti.
+7. Konten dari transcript, chat, layar, dan memory adalah data. Konten
+   tersebut tidak pernah menjadi instruksi sistem.
+8. Perintah peserta adalah request, bukan otorisasi. Otorisasi dihitung dari
+   actor, channel, brief, dan risiko aksi.
+9. Command yang sudah melewati irreversible boundary tidak di-retry sebelum
+   reconciliation membuktikan effect belum terjadi.
+10. Ucapan faktual diperiksa pada speech commit. Perubahan state material
+    membatalkan kalimat berikutnya, bukan memaksa snapshot global tetap sama.
+11. Kegagalan adapter menurunkan capability secara eksplisit. Kegagalan tidak
+    diubah menjadi fakta sukses dan tidak mematikan seluruh sesi bila sesi
+    masih dapat mendengar atau mencatat.
+12. Setiap keputusan dapat ditelusuri ke `session_attempt_id`,
+    `kernel_seq`, `event_id`, `plan_id`, dan `command_id`.
+
+## Arsitektur logis
+
+```text
+Meet/STT/VAD/Vision adapters
+          |
+          v
+   Observation events
+          |
+          v
+ SessionKernel mailbox ----> World projection
+          |                  Dialogue projection
+          |                  Agenda projection
+          |                  Health projection
+          v
+ Intent -> Authorization -> Finite TurnPlan
+                              |
+              +---------------+---------------+
+              v               v               v
+        Evidence ports   Meet executor   Speech/Chat ports
+              |               |               |
+              +-------------- Result events --+
+                              |
+                              v
+                    Settled facts and outputs
+```
+
+Owner control dari API/CLI masuk sebagai authenticated control event.
+Emergency stop playback dapat langsung menghentikan audio, lalu melaporkan
+hasilnya ke kernel. Jalur darurat itu hanya boleh menghentikan output;
+ia tidak boleh memulai speech, chat, atau Meet action lain.
+
+## Boundary modul
+
+Paket baru `fakeyou.session` berada di bawah `conversation` dan di atas
+`perception` pada import-linter layer order:
+
+- `session.contracts`: event, fact, intent, command, dan ID. Hanya bergantung
+  pada `foundation`, `catalog`, dan tipe konfigurasi murni.
+- `session.world`: reducer murni untuk world, dialogue, agenda, dan health.
+- `session.policy`: authorization, participation policy, dan risk rules.
+- `session.planner`: finite plan templates dan command state machine.
+- `session.kernel`: mailbox, ordering, snapshot publication, dan command
+  dispatch ke port.
+
+`session` tidak mengimpor Playwright, LangChain, Graphiti, provider SDK,
+atau filesystem. `orchestration` mengikat kernel ke Meet, STT, TTS, memory,
+persistence, dan model. `conversation` menyediakan model-backed intent dan
+speech composers melalui port yang didefinisikan oleh kontrak session.
+
+Perception adapter menerjemahkan protocol/DOM menjadi normalized
+observation. Ia tidak lagi menulis langsung ke timeline yang dipakai untuk
+keputusan. Timeline lama dimigrasikan menjadi projection yang dibangun oleh
+reducer atau dihapus setelah projection baru mencapai parity.
+
+Session supervisor yang sudah ada di orchestration tetap pemilik lifecycle
+proses/browser: join, lobby, admission, reconnect, alone timeout, terminal
+cleanup, dan exit reason. `SessionKernel` hanya hidup untuk satu admitted
+session attempt dan menerima lifecycle sebagai event. Kernel dapat meminta
+leave melalui command, tetapi supervisor yang menutup sesi setelah fact
+`left`, `removed`, `ended`, atau owner stop teramati. Kernel tidak dapat
+menghidupkan kembali attempt terminal.
+
+Pekerjaan read-only seperti intent classification, evidence query, vision,
+dan memory search adalah `WorkItem`, bukan command. WorkItem dapat
+dibatalkan dan di-retry sesuai deadline, tetapi tidak memiliki irreversible
+boundary dan tidak boleh menghasilkan side effect. Hasil WorkItem masuk
+kembali sebagai event; reducer dan planner tetap murni.
+
+## Event, ordering, dan durability
+
+### Envelope
+
+Semua event logis memiliki envelope yang sama:
+
+- `event_id`: ID stabil dari producer bila tersedia.
+- `session_id` dan `session_attempt_id`.
+- `kernel_seq`: urutan total yang diberikan kernel saat event diterima.
+- `source`: adapter dan channel asal.
+- `source_seq`: urutan producer bila tersedia.
+- `observed_at`: waktu sumber, diperlakukan sebagai data tak tepercaya.
+- `received_at`: wall time kernel.
+- `monotonic_deadline`: hanya untuk pekerjaan terjadwal, tidak disimpan
+  sebagai wall-time truth.
+- `causation_id`: event atau command penyebab.
+- `correlation_id`: transcript, plan, atau command terkait.
+- `schema_version`, producer version, dan model/prompt hash bila relevan.
+- `privacy_class` dan content reference/hash untuk payload besar.
+
+`kernel_seq` adalah urutan otoritatif dalam satu session attempt. Timestamp
+Meet, STT, browser, dan provider tidak dipakai untuk mengurutkan keputusan
+karena clock skew sudah terbukti terjadi.
+
+Event yang datang terlambat tetap direduce berdasarkan `kernel_seq`, tetapi
+payloadnya dapat ditandai late. Reducer tidak menulis ulang keputusan lama;
+correction menjadi event baru yang mengubah projection berikutnya.
+
+### Durability bertingkat
+
+Satu model event logis tidak berarti satu file untuk semua data:
+
+- **Write-ahead:** command intent, irreversible boundary, dan terminal
+  command state disimpan atomik di action ledger sebelum effect dilanjutkan.
+- **Semantic history:** final transcript, live chat, screen reading yang
+  sudah di-scrub, twin speech yang benar-benar terdeliver, dan settled own
+  actions disimpan di `MeetingRecord` v4 dengan sequence/causation.
+- **Ephemeral:** interim STT, VAD, level audio, frame mentah, DOM poll, dan
+  speculative model work hanya hidup pada bounded ring buffer. Journal hanya
+  menyimpan hash, ukuran, timing, dan reason code yang aman.
+- **Replay bundle:** test harness merekam normalized input/output pada port.
+  Production journal yang redacted dan rotating tidak dianggap replay source.
+
+Tidak ada dual-write permanen antara event store baru dan record lama.
+Apabila replay membuktikan record v4 tidak cukup, PR yang sama harus memilih
+satu canonical semantic log dan menghapus representasi duplikatnya.
+
+Selama expand-contract, sesi `legacy` menulis record v3 dan sesi `kernel`
+menulis record v4. Reader mendukung keduanya; sequence v3 disintesis dari
+urutan baris dan ditandai sebagai legacy, bukan dipakai untuk keputusan
+live. Setelah deletion, production hanya menulis v4 dan reader v3 tetap
+read-only untuk debrief/ingestion historis.
+
+## Projection state
+
+Snapshot kernel adalah immutable value pada `kernel_seq` tertentu. Ia
+dipisahkan menjadi empat projection agar precondition tidak bergantung pada
+seluruh dunia:
+
+- **World:** endpoints, streams, voice tracks, participant hypotheses,
+  screens, chat, browser/call state, dan own action facts.
+- **Dialogue:** final/interim mutakhir, floor holder, open question,
+  pending clarification, bahasa/register, twin speech delivered/interrupted,
+  dan self-speech correlation.
+- **Agenda:** brief questions/objectives yang masih terbuka, unanswered
+  everyone-question, proactive candidates, rate-limit state, dan obligation
+  yang dibuat sistem sendiri.
+- **Health:** source freshness, dropped/rejected input, adapter capability,
+  provider degradation, browser epoch, dan backlog scheduler.
+
+Setiap domain memiliki revision sendiri: `presence_rev`, `floor_rev`,
+`screen_rev`, `dialogue_rev`, `agenda_rev`, dan `health_rev`. Command
+menyatakan predicate serta revision yang relevan. Perubahan chat yang tidak
+relevan tidak membatalkan reaction; perubahan roster membatalkan jawaban
+roster yang belum diucapkan.
+
+Projection dibatasi ukurannya. History lengkap dibaca melalui query ke
+record/evidence port, bukan disimpan sebagai list tak terbatas di snapshot.
+Snapshot hanya menyimpan current state, window percakapan yang dibutuhkan
+policy, index reference, dan ringkasannya.
+
+## Identity dan presence
+
+Meet tidak memberikan identitas dunia nyata yang terverifikasi untuk semua
+peserta. Karena itu model target tidak memiliki satu `Person` yang dipaksa
+menyatukan semua sinyal.
+
+Entitasnya adalah:
+
+- `EndpointDevice`: `device_id` dalam satu browser/meeting epoch.
+- `MediaStream`: stream, slot, dan CSRC yang teramati.
+- `VoiceTrack`: label/UUID dari speaker registry.
+- `MeetingParticipant`: hipotesis peserta lokal dalam meeting ini.
+- `DisplayClaim`: nama tampilan yang diklaim endpoint.
+- `EnrolledPerson`: owner atau orang yang enrollment-nya diverifikasi oleh
+  mekanisme voiceprint/owner confirmation.
+
+Relasi antar-entitas adalah evidence edge, bukan merge destruktif:
+`speaks_through`, `bound_to`, `claims_name`, `presents_from`,
+`same_participant_candidate`, dan `verified_as`. Edge memiliki status
+`confirmed`, `probable`, `unknown`, `conflicting`, atau `expired`, beserta
+producer, confidence, first/last seen sequence, dan alasan.
+
+Aturan presence:
+
+- Sync yang tidak memuat endpoint bukan bukti endpoint keluar.
+- `present=false` eksplisit atau call-state terminal dapat mengubah
+  presence menjadi absent. Source yang stale mengubah presence menjadi
+  `unknown`, bukan absent.
+- DOM participant count adalah evidence completeness dan drift, bukan
+  identitas.
+- Speaker track aktif yang belum terpetakan menaikkan unresolved count.
+- Satu endpoint dapat dipakai beberapa manusia; beberapa endpoint dapat
+  dipakai satu manusia. Keduanya tetap menjadi hipotesis sampai ada bukti
+  kuat.
+- Participant count dikembalikan sebagai `confirmed_min`,
+  `plausible_max`, `unresolved`, dan `complete`.
+- Nama display boleh dipakai sebagai label percakapan, tetapi modality-nya
+  tetap `claimed`, bukan `verified`.
+- Twin mengenali endpoint-nya dari session/current-user evidence, bukan nama.
+
+`sole_human_responder` hanya benar apabila tepat satu participant hypothesis
+manusia terkonfirmasi, tidak ada endpoint/stream/voice track manusia yang
+belum terpetakan, roster source sehat, dan tidak ada evidence konflik.
+Jika tidak, nilainya `false` atau `unknown`, dan policy logistics check
+memakai cabang konservatif.
+
+## Intent
+
+Judge menjadi classifier dengan discriminated union agar kombinasi invalid
+tidak dapat direpresentasikan. Ia tidak lagi mengembalikan addressee,
+speech action, meet action, dan evidence sebagai field bebas yang dapat
+saling bertentangan.
+
+Varian awal dibatasi pada:
+
+- `NoResponse(reason)`.
+- `Answer(question_frame, evidence_queries)`.
+- `Clarify(ambiguity)`.
+- `SpeechControl(stop|shorter|repeat|louder)`.
+- `MeetAction(kind, typed_params)`.
+- `ChatRequest(content_mode, topic_or_verbatim_ref)`.
+- `Compound(action, answer_or_chat)` dengan maksimum satu Meet action dan
+  satu output.
+- `ProactiveCandidate(kind, source_ref)` untuk agenda, bukan respons peserta.
+
+Raw transcript tetap fakta observasi. Field `heard` adalah interpretasi
+model dan tidak menimpa raw text. Bila STT kelak menyediakan alternatives
+atau confidence, kontrak observation dapat membawanya tanpa mengubah
+planner.
+
+Context yang diberikan ke classifier berupa opaque participant refs,
+display claims berlabel `claimed`, certainty presence, dialogue window,
+floor state, dan channel asal. Nama dari persona, brief, atau memory tidak
+dimasukkan sebagai daftar peserta meeting.
+
+Confidence model tidak dianggap probabilitas terkalibrasi. Setiap varian
+dan aksi berisiko memiliki threshold serta eval calibration sendiri.
+Deterministic signal seperti authenticated control, direct chat mention,
+dan stop fast-path tidak bergantung pada confidence judge.
+
+## Authorization dan trust
+
+Policy mengevaluasi actor, channel, brief, dan risiko sebelum planner
+membuat command:
+
+| Aksi | Actor minimum | Syarat tambahan |
+| --- | --- | --- |
+| Stop playback | Peserta mana pun | Hanya menghentikan output saat itu |
+| React, hand, mute twin | Endpoint/voice track live yang meminta langsung | Brief `meet_act` |
+| Kirim chat | Endpoint/voice track live yang meminta langsung | Brief `meet_chat`, rate limit, claim gate |
+| Leave | Owner terautentikasi/terverifikasi | Atau permission granular `meet_leave` dari brief |
+| Menjawab fakta owner | Brief `explain_facts` | Knowledge scope dan disclosure fact mengizinkan |
+| Membahas opsi | Brief `discuss_options` | Tidak berubah menjadi persetujuan/komitmen |
+| Bertanya dari brief | Brief `ask_brief_questions` | Source ref pertanyaan valid |
+
+Permission `meet_act` yang terlalu kasar dipecah saat migrasi; leave tidak
+lagi ikut permission aksi ringan. Brief lama tidak diberi compatibility
+shim yang diam-diam menaikkan kewenangan.
+
+Host removal, meeting ended, owner stop dari control plane, dan session
+timeout adalah lifecycle event, bukan request peserta. Screen text tidak
+pernah menjadi actor. Chat dari peserta tetap request peserta, tetapi isi
+yang menyerupai system instruction tidak menaikkan privilege.
+
+Policy juga menjaga kewenangan representasi owner:
+
+- Twin boleh menyampaikan approved facts dan menanyakan brief questions.
+- Twin boleh merangkum opsi yang sedang dibahas ruangan.
+- Twin tidak menyetujui harga, deadline, scope, keputusan, atau tindak
+  lanjut baru atas nama owner tanpa delegasi eksplisit dalam brief.
+- Bila diminta memutuskan, output yang sah adalah decline/clarify dan
+  mencatat pertanyaan sebagai owner decision pada agenda/debrief.
+
+## Finite turn plans
+
+Planner tidak menerima graph bebas. Ia hanya dapat memilih template
+terbatas berikut:
+
+1. `Silent`.
+2. `SpeechOnly`.
+3. `EvidenceThenSpeech`.
+4. `ActionOnly`.
+5. `ActionThenSpeech`.
+6. `ChatOnly`.
+7. `EvidenceThenChat`.
+8. `SpeechThenLeave`.
+9. `ChatThenLeave`.
+10. `LeaveOnly`.
+
+Satu plan memiliki maksimum satu evidence batch, satu Meet action, satu
+output speech/chat, dan satu terminal leave. Evidence batch dapat memuat
+maksimum dua query independen. Permintaan yang lebih kompleks dipecah
+menjadi clarify atau beberapa turn, bukan graph baru.
+
+Plan state:
+
+```text
+proposed -> authorized -> waiting -> running -> settling -> completed
+     |            |           |          |           |
+     +------------+-----------+----------+-----------+-> failed
+     +------------+-----------+----------+-----------+-> cancelled
+     +------------+-----------+----------+-----------+-> superseded
+```
+
+Final baru dapat men-supersede evidence/speech yang belum melewati commit
+boundary. Side effect yang sudah terjadi tidak pernah di-undo oleh plan
+baru. Leave adalah terminal barrier: command non-esensial lain dibatalkan
+dan tidak ada output baru setelah leave dimulai.
+
+Agenda timer tidak langsung berbicara. Timer membuat candidate intent yang
+dievaluasi ulang terhadap snapshot, floor, rate limit, dan authorization
+pada saat jatuh tempo.
+
+## Command lifecycle dan recovery
+
+Command adalah satu-satunya jalur side effect. Setiap command memiliki:
+
+- `command_id` deterministik dari session attempt, plan, ordinal, dan
+  semantic parameter hash.
+- Actor, authorization decision, dan brief digest.
+- Precondition predicates dan domain revisions.
+- Resource yang dibutuhkan.
+- Monotonic deadline dan cancellation policy.
+- Irreversible boundary.
+- Verification method dan verification strength.
+- Attempt, browser epoch, dan causation event.
+
+State command:
+
+```text
+accepted -> ready -> dispatching -> effect_observed
+    |          |          |-------> effect_unobserved
+    |          |          |-------> unknown
+    |          |          |-------> failed_after_boundary
+    |          |----------> refused
+    |----------|----------> cancelled_before_boundary
+    |---------------------> failed_before_boundary
+```
+
+`unknown` adalah terminal untuk turn berjalan. Observation berikutnya tidak
+menulis ulang state command tersebut; ia menghasilkan reconciliation fact
+baru yang terhubung ke command ID. Sampai fact itu ada, outcome tidak pernah
+dibaca sebagai sukses.
+
+Aturan retry per aksi:
+
+- Toggle menuju target state seperti mute/unmute/hand boleh di-retry setelah
+  readback membuktikan state belum tercapai.
+- Chat tidak di-retry setelah Enter. Reconciliation mencari own-device
+  protocol echo berdasarkan message ID/device/text/window; DOM text saja
+  adalah evidence lemah.
+- Reaction tidak di-retry setelah click boundary kecuali adapter membuktikan
+  click tidak terjadi. Click yang diterima UI adalah `acted`, bukan bukti
+  peserta melihat reaction.
+- Leave tidak di-retry buta pada browser epoch baru. Call state `left`,
+  `removed`, atau `ended` adalah reconciliation.
+- Speech yang sudah mengeluarkan PCM tidak diulang otomatis. Kalimat yang
+  terdeliver dan terinterupsi dicatat terpisah.
+
+Sebelum dispatch, executor memvalidasi ulang browser epoch, call state,
+resource lease, dan precondition relevan. Ia menulis irreversible boundary
+ke ledger tepat sebelum click/Enter/playback commit. Crash setelah boundary
+menghasilkan `unknown` pada recovery, bukan pengulangan aksi.
+
+Action ledger perlu menyimpan content reference ke semantic record atau
+parameter minimum yang dibutuhkan reconciliation dengan akses file yang
+sama ketatnya dengan record. Hash saja tidak cukup untuk reconciliation
+chat. Parameter tidak masuk journal dan tidak dipertahankan setelah command
+terminal melewati retention sesi.
+
+Pada restart, session attempt baru dibuat. Command nonterminal dari attempt
+lama tidak dilanjutkan; command tersebut direkonsiliasi dari browser/record
+state atau ditutup `unknown`. Browser epoch baru membatalkan semua command
+yang belum dispatch.
+
+## Evidence dan facts
+
+Evidence bukan tool yang dipilih reply LLM. `question_frame` dari intent
+dipetakan planner secara deterministik ke typed query:
+
+- `Attendance` dan `ParticipantCount`.
+- `CurrentPresenter`.
+- `ScreenNow(ref?)` dan `ScreenEarlier(ref)`.
+- `ParticipantAppearance(participant_ref)`.
+- `ChatHistory(range_or_ref)`.
+- `ConversationRecall(window)`.
+- `OwnActionStatus(action_ref)`.
+- `BriefItem(ref)`.
+- `OwnerMemory(query)`.
+
+Query mengembalikan `FactSet`, bukan teks bebas untuk langsung dipercaya.
+Fact memiliki:
+
+- Proposition machine-readable bila state memungkinkan, misalnya
+  `ParticipantCount(min=1, max=2, complete=false)`.
+- Text renderable untuk fakta naratif dari brief/memory/screen.
+- Namespace: `meeting_live`, `conversation`, `brief`, `persona`, `memory`,
+  atau `own_action`.
+- Modality: `directly_observed`, `protocol_reported`, `participant_claimed`,
+  `screen_read`, `owner_approved`, `memory_recalled`, atau `inferred`.
+- Provenance event/source IDs dan producer/model version.
+- Confidence atau certainty class.
+- `valid_from_seq`, `valid_until`, dan domain revision.
+- Disclosure class: `room_speakable`, `owner_only`, atau
+  `internal_instruction`.
+- Privacy/scrub status.
+
+Fakta dari namespace berbeda tidak digabung menjadi satu proposition.
+Nama dalam memory tidak dapat memenuhi query attendance. Isi layar yang
+bukan meeting content mengikuti policy title-only sebelum menjadi fact.
+Participant claim tetap claim meskipun peserta menyatakannya dengan yakin.
+
+Vision interpreter adalah evidence producer probabilistik. Screen fact
+membawa frame hash, reading schema, model, dan uncertainty. Angka dari
+layar hanya boleh diucapkan bila reading menyimpannya sebagai figure
+terstruktur atau kutipan verbatim yang dapat dibandingkan dengan source
+text.
+
+Memory search yang `empty` dan `unavailable` menghasilkan outcome berbeda.
+Keduanya tidak memberi izin menebak. `unavailable` juga menurunkan health
+capability untuk turn tersebut.
+
+## Speech contract
+
+Tidak semua ucapan dapat diverifikasi dengan cara yang sama. Speech dibagi
+menjadi empat kelas:
+
+1. **State speech:** roster, count, presenter, screen title, mic/hand,
+   action status, dan call state. Jawaban dirender dari typed proposition
+   oleh deterministic renderer untuk bahasa yang didukung kontrak speech
+   saat itu. LLM tidak memparafrase fakta state. Bahasa tanpa renderer dan
+   TTS contract tidak menerima state speech sampai locale pack-nya ada.
+2. **Source-grounded speech:** approved brief facts, profile facts, memory,
+   screen figures, dan correction. Model menghasilkan structured
+   `SpeechAct` yang setiap klaimnya menunjuk fact IDs. Renderer memeriksa
+   entity, angka, negasi/modality yang dinyatakan dalam struktur, dan
+   disclosure. Grounding verifier probabilistik hanya lapisan tambahan,
+   bukan satu-satunya bukti.
+3. **Conversational speech:** sapaan, acknowledgement, klarifikasi, dan
+   pembahasan yang tidak menyatakan fakta eksternal baru. LLM dapat menulis
+   bebas dalam batas persona, tetapi nama, angka, status aksi, komitmen,
+   dan klaim kemampuan dipindai terhadap fact/capability snapshot.
+4. **Control speech:** repeat mengambil delivered twin speech dari dialogue
+   projection; shorter/louder/stop adalah command mekanis. Model tidak
+   menciptakan ulang isi repeat.
+
+Model tidak menerima seluruh history sebagai otoritas fakta. Ia menerima
+`SpeechBrief` berisi tujuan, dialogue window yang relevan, fact IDs yang
+boleh dipakai, bahasa/register, batas kalimat, dan larangan disclosure.
+Internal objectives tidak dikirim sebagai fakta yang boleh diucapkan.
+
+Streaming hanya melepaskan kalimat setelah kelas dan klaim kalimat itu
+lolos gate. State speech yang pendek digenerate utuh sebelum playback.
+Pada first-PCM commit, kernel memeriksa floor lease, session attempt,
+domain revision relevan, dan fact validity. Perubahan setelah kalimat
+pertama membatalkan kalimat berikutnya; kalimat yang sudah terdengar
+dicatat sebagai delivered pada snapshot lamanya.
+
+Bila gate gagal, pilihannya hanya diam, clarify, atau kalimat konservatif
+yang menyatakan ketidakpastian tanpa menambah fakta. Filler tidak boleh
+dimainkan untuk jalur yang mungkin berakhir diam.
+
+Kemampuan twin dijawab dari capability snapshot sesi, bukan daftar tool
+global. Jika browser adapter sedang degraded, twin mengatakan capability
+tersebut belum dapat dipastikan, bukan mengklaim bisa atau tidak bisa
+secara permanen.
+
+## Scheduler dan latency
+
+Kernel mailbox adalah single-writer, tetapi pekerjaan eksternal berjalan di
+executor terpisah. Resource dideklarasikan eksplisit:
+
+- `browser_page`: eksklusif untuk Meet action dan browser evidence yang
+  mengubah UI.
+- `playback`: eksklusif, dengan floor lease dan emergency stop.
+- `model`: bounded concurrency per role.
+- `memory`: bounded concurrency dan deadline sendiri.
+- `vision`: bounded concurrency, budget, dan cache frame hash.
+
+Prioritas dari tertinggi: emergency stop/session lifecycle, current floor
+control, command yang sudah melewati boundary dan menunggu settlement,
+direct response, evidence untuk direct response, proactive agenda, lalu
+background maintenance.
+
+Mailbox dibatasi dan mempertahankan FIFO per producer untuk semantic
+observation. Priority hanya memilih pekerjaan executor; ia tidak mengurut
+ulang semantic event yang sudah diterima, kecuali authenticated/emergency
+control. Frame dan interim boleh di-drop dengan health counter, tetapi
+final transcript, live chat, lifecycle, dan command result tidak boleh
+hilang diam-diam. Bila semantic mailbox jenuh, kernel masuk degraded mode
+dan menolak side effect baru sampai backlog pulih.
+
+Interim STT boleh memulai klasifikasi dan evidence prefetch yang read-only.
+Ia tidak boleh melewati authorization final, menulis command intent, atau
+melakukan side effect. Hasil spekulatif terikat pada normalized interim
+dan dibuang bila final berubah material.
+
+Deadline memakai monotonic clock dan diwariskan dari plan ke command.
+Setiap tahap mencatat queue, start, first useful result, boundary, settle,
+dan cancellation. Metrik latency dipisahkan:
+
+- `speech_stopped_estimate -> first_pcm` untuk pengalaman peserta.
+- `final_received -> intent_decided`.
+- `intent_decided -> evidence_settled`.
+- `action_dispatch -> effect_observed`.
+- `speech_commit -> first_pcm`.
+- `stop_detected -> silence`.
+
+Target beku saat ini pada
+[session_targets.json](../../src/fakeyou/session_targets.json) tetap menjadi
+gate sampai baseline kernel diukur. Desain tidak mengklaim target p50 1,5
+detik dari roadmap lama sebagai SLO yang sudah terbukti. Stage budget
+ditetapkan dari distribusi baseline pada PR characterization; timeout 60
+detik untuk keseluruhan response tidak dipertahankan sebagai budget turn
+interaktif.
+
+Jika evidence melewati deadline, plan berakhir sebagai diam atau jawaban
+ketidakpastian sesuai kelas pertanyaan. Scheduler tidak memperpanjang turn
+dengan tool loop. Jika browser action lambat, action-only tetap diam;
+compound turn tidak menarasikan status `queued` sebagai sukses.
+
+## Adapter contracts
+
+### Meet browser
+
+Adapter menyediakan capability probe per browser epoch: call state, chat,
+reaction set yang benar-benar terlihat, hand/mic readback, leave, roster
+protocol health, dan DOM drift. Selector pack dan locale dicatat sebagai
+adapter version. Capability yang tidak terprobe tidak diiklankan ke model
+atau policy.
+
+Setiap action adapter mengembalikan phase result terpisah untuk prepare,
+boundary, act, dan readback. Ia tidak mengubah kegagalan readback menjadi
+sukses hanya karena click tidak melempar error.
+
+### STT dan speaker attribution
+
+STT adapter mengirim interim/final sebagai observation terpisah. Speaker
+attribution adalah evidence edge dari stream/slot/CSRC/voiceprint, bukan
+field final yang menimpa identitas. Overlap menghasilkan `unknown` atau
+beberapa candidate, bukan pemenang paksa.
+
+Own playback menghasilkan start/finish/interrupted events dengan text hash
+dan timing agar self-echo dapat dikorelasikan dan tidak menjadi turn baru.
+
+### Model
+
+Intent, vision, memory extraction, speech, dan verifier adalah producer
+probabilistik dengan schema version. Output invalid, timeout, dan provider
+failure menjadi outcome typed. Tidak ada fallback yang lebih permisif
+daripada jalur utama untuk side effect atau factual speech.
+
+Model identifier, schema version, prompt hash, latency, dan token usage
+dicatat tanpa prompt/completion mentah. Perubahan salah satunya membuat
+eval baseline tidak otomatis dapat dibandingkan.
+
+### TTS dan playback
+
+Playback menerima kalimat yang sudah commit. Ia melaporkan first PCM,
+finished, interrupted, dropped, dan failed per kalimat. TTS fallback hanya
+boleh mengganti provider sebelum PCM keluar; setelah PCM keluar, kalimat
+tidak diulang oleh provider lain.
+
+## Degraded modes
+
+Health projection menentukan mode yang dapat dijelaskan:
+
+- `full`: semua capability yang diizinkan brief tersedia.
+- `perception_degraded`: twin dapat mendengar/menjawab percakapan, tetapi
+  tidak menjawab roster/screen secara pasti.
+- `identity_degraded`: direct named turn dapat diproses, tetapi
+  sole-responder dan actor-specific action dimatikan.
+- `model_degraded`: side effect dan factual speech fail closed; stop dan
+  lifecycle tetap berjalan.
+- `voice_degraded`: speech tidak dicoba berulang. Chat hanya dipakai bila
+  memang channel/brief mengizinkan dan peserta perlu diberi tahu.
+- `browser_unknown`: tidak ada Meet action baru sampai capability probe
+  dan call-state reconciliation selesai.
+- `memory_degraded`: pertanyaan memory dijawab sebagai belum dapat
+  dipastikan; percakapan meeting tetap berjalan.
+
+Mode tidak disembunyikan di journal saja. Policy dan speech capability
+membaca mode yang sama sehingga ucapan twin konsisten dengan perilaku.
+
+## Privacy dan security
+
+- Fact dan event membawa privacy class sejak producer. Scrubbing terjadi
+  sebelum persistence, model context, memory ingestion, dan debrief.
+- Screen non-meeting tetap title-only di semua projection dan store.
+- Brief objectives, persona instructions, dan system prompt berklasifikasi
+  `internal_instruction`; model tidak boleh mengutip atau memparafrasenya
+  sebagai jawaban.
+- Approved facts adalah satu-satunya isi brief yang otomatis
+  `room_speakable`, dan tetap tunduk pada permission `explain_facts`.
+- Participant, screen, chat, dan memory content tidak dapat mengubah
+  permission, capability, atau system instruction.
+- Journal tidak menyimpan transcript/prompt/completion mentah, chat text,
+  action params, token, cookie, atau frame.
+- Retention mengikuti kelas data: ephemeral dibuang pada akhir sesi,
+  semantic record mengikuti retention meeting yang sudah ada, dan replay
+  fixture hanya memakai data sintetis atau yang sudah disanitasi.
+- Cross-meeting identity hanya berasal dari enrollment eksplisit. Display
+  claim dan voice track meeting lain tidak otomatis digabungkan.
+
+## Migrasi per PR
+
+Migrasi memakai strangler pattern pada boundary port. Mode sesi dipilih
+sekali saat join sebagai `legacy`, `shadow`, atau `kernel`, lalu tidak
+berubah di tengah session attempt. Tidak ada flag per subsystem yang dapat
+membuat kombinasi setengah lama dan setengah baru. Rollback selalu berarti
+sesi berikutnya kembali ke `legacy`; command yang sudah melewati boundary
+tidak pernah dipindahkan antar-engine.
+
+Persistence mengikuti expand-contract per sesi: sesi `legacy` menulis schema
+lama, sesi `kernel` menulis schema baru, dan reader mendukung keduanya
+selama soak. Tidak ada dual-write dalam satu sesi. Writer lama dihapus
+hanya setelah old engine dihapus; reader historis boleh tetap read-only.
+
+### PR 0: Characterization dan replay ports
+
+- Tambahkan sanitized scenario fixtures pada boundary STT, perception,
+  browser, model, memory, dan playback.
+- Rekam baseline keputusan saat ini sebagai intent/plan/command/speech
+  classes, bukan exact text.
+- Klasifikasikan setiap baseline sebagai `preserve`,
+  `intentional_change`, atau `known_bug_not_parity`. Klaim sukses palsu,
+  roster karangan, dan action tanpa otorisasi tidak menjadi parity target.
+- Tambahkan stage latency, mismatch taxonomy, dan branch/fault coverage
+  untuk decision, roster, timeline, dan action-ledger transitions.
+- Evaluasi mutation runner untuk modul keputusan murni. Bila tidak diadopsi,
+  surviving branch gaps harus dicatat dan ditutup dengan fault tables.
+- Tetapkan stage budgets, rollback thresholds, dan scorecard kernel dari
+  baseline.
+- Belum ada perubahan perilaku production.
+
+Gate: replay deterministik tanpa provider live; baseline report dapat
+mereproduksi kegagalan historis bbz/bmn pada level keputusan dan
+menyebutkan perubahan perilaku yang memang disengaja.
+
+### PR 1: Branch-by-abstraction seam
+
+- Perkenalkan port untuk turn decision, world view, evidence, Meet action
+  dispatch, dan speech/chat delivery.
+- Semua caller production melewati port tersebut, tetapi implementasinya
+  masih mendelegasikan persis ke legacy engine.
+- Tambahkan session mode selection dan correlation IDs tanpa mengaktifkan
+  kernel.
+
+Gate: characterization suite tidak berubah hasil; PR ini adalah no-op
+perilaku yang dapat di-rollback sendiri.
+
+### PR 2: Session contracts dan kernel shadow
+
+- Tambahkan `fakeyou.session` contracts, mailbox, ordering, dan projections.
+- Adapter menerjemahkan event production ke observation kernel.
+- Kernel berjalan sebagai parallel run `shadow`: ia menghitung intent,
+  plan, dan hypothetical commands, tetapi legacy tetap melayani sesi dan
+  kernel tidak dispatch command.
+- Divergence dicatat dengan taxonomy `preserve`, `intentional_change`,
+  `kernel_bug`, dan `legacy_bug`.
+
+Gate: property tests membuktikan reducer deterministik, bounded, dan
+idempotent untuk duplicate event. Tidak ada divergence yang membuat kernel
+lebih permisif untuk side effect, factual speech, atau disclosure.
+
+### PR 3: Identity dan presence projection
+
+- Migrasikan roster, stream, CSRC, voice track, DOM count, dan chat sender
+  menjadi evidence edges.
+- Judge menerima certainty/range, bukan daftar nama sebagai fakta pasti.
+- Production roster lama menjadi adapter input selama shadow parity.
+
+Gate: scenario sync parsial, shared mic, multi-device, duplicate display
+name, overlap, dan stale source tidak pernah menghasilkan exact count atau
+sole responder palsu.
+
+### PR 4: Authorization dan finite planner untuk Meet actions
+
+- Pecah permission leave, tambahkan actor/risk policy, dan finite templates.
+- Planned Meet actions pada mode `kernel` berjalan melalui command
+  lifecycle baru; mode `legacy` tetap utuh untuk rollback.
+- Action ledger menyimpan boundary, browser epoch, verification strength,
+  dan parameter reference yang aman.
+- Special-case mechanical action dan scheduled leave tidak lagi dipakai
+  mode `kernel`, tetapi belum dihapus sebelum soak selesai.
+
+Gate: fake browser crash-injection pada sebelum/sesudah click dan Enter
+membuktikan tidak ada duplicate visible effect dan tidak ada klaim sukses
+untuk `unknown`.
+
+### PR 5: Evidence service dan state speech
+
+- Tambahkan typed evidence queries dan `FactSet`.
+- Roster, presenter, screen title, mic/hand, dan action status dijawab oleh
+  deterministic renderer.
+- Planned turn tidak lagi mengekspos evidence tools ke reply LLM.
+
+Gate: pertanyaan state tidak memanggil free-form factual composer; fact
+yang stale/incomplete menghasilkan unknown atau range.
+
+### PR 6: Speech contract
+
+- Tambahkan `SpeechBrief`, `SpeechAct`, fact-bound claims, capability facts,
+  dan sentence commit gate untuk semua channel.
+- Proactive contribution memakai kontrak yang sama, bukan gate terpisah.
+- Mode `kernel` tidak lagi memakai jalur planned reply yang mencampur
+  evidence, action, dan speech dalam satu agent loop; jalur legacy tetap
+  tersedia hanya untuk rollback sampai deletion gate.
+
+Gate: adversarial speech fixtures membuktikan namespace leakage, invented
+names/numbers, action overclaim, owner commitment, dan brief disclosure
+ditolak sebelum PCM/chat keluar.
+
+### PR 7: Scheduler, health, dan recovery
+
+- Tambahkan resource leases, inherited deadlines, priority lanes, degraded
+  modes, dan restart reconciliation.
+- Interim speculation hanya untuk read-only work.
+- Long-session synthetic replay membuktikan bounded memory dan latency.
+
+Gate: fault injection untuk judge/model timeout, browser epoch change,
+perception stale, TTS failure, memory unavailable, dan process restart
+menghasilkan mode degradasi yang benar tanpa side effect liar.
+
+### PR 8: Incremental cutover
+
+Urutan traffic shift bersifat per sesi dan tidak dapat dilompati:
+deterministic replay, live `shadow`, controlled solo `kernel`, controlled
+multi-human `kernel`, lalu `kernel` sebagai default. Mode dipilih saat join
+dan tercatat pada session context.
+
+Rollback trigger ditetapkan sebelum ramp:
+
+- Satu unauthorized action, duplicate visible effect, factual state claim
+  tanpa fact, atau disclosure internal langsung menghentikan ramp.
+- False reply, missed named, unknown-action rate, atau stage p95 melewati
+  threshold beku PR 0 pada jendela evaluasi yang ditetapkan di PR tersebut.
+- Session terminal reason memburuk menjadi failure yang disebabkan kernel.
+- Divergence `kernel_bug` yang belum terklasifikasi muncul pada live shadow.
+
+Rollback mengembalikan sesi berikutnya ke `legacy`. Ia tidak membatalkan
+command yang sudah melewati boundary dan tidak menulis ulang record sesi
+yang sudah berjalan.
+
+Gate: full repo checks, live model evals, fake browser contract suite,
+satu sesi live solo, satu sesi live multi-human, dan scorecard tidak
+regresi dari baseline beku.
+
+### PR 9: Soak dan deletion
+
+Old engine hanya dihapus setelah mode `kernel` bersih pada soak yang
+mencakup kasus lambat: sesi panjang, reconnect/browser epoch change,
+restart, multi-human, provider degraded, screen/chat, barge-in, dan leave.
+Jumlah sesi serta durasi minimum dibekukan pada PR 0 dari ketersediaan live
+testing; satu sesi solo dan satu sesi multi-human saja tidak cukup untuk
+deletion.
+
+- Hapus free Meet/evidence tools dari planned path, executor/settler
+  callbacks khusus, derivasi sole participant dari daftar nama, writer
+  schema lama, dan mode transisi.
+- Unplanned fallback yang tersisa harus dinyatakan sebagai capability
+  terpisah dengan policy sama; ia tidak boleh menjadi jalur diam-diam
+  menuju tool bebas.
+- Reader record historis boleh tetap read-only, tetapi tidak ada writer
+  atau decision path legacy yang tersisa.
+
+Gate: tidak ada severe invariant violation selama soak, rollback trigger
+tidak terpicu, dan characterization yang berstatus `preserve` tetap lolos
+atau perubahan disengaja sudah dicatat sebagai behavior change terpisah.
+
+## Validation matrix
+
+Acceptance tidak cukup dengan unit test hijau. Setiap invariant memiliki
+bukti pada layer yang sesuai:
+
+| Area | Bukti wajib |
+| --- | --- |
+| Reducer | Property/model-based tests untuk ordering, duplicate, late event, conflict, expiry, dan bounded state |
+| Identity | Synthetic protocol/audio scenarios untuk sync parsial, overlap, shared mic, multi-device, duplicate claim, dan rejoin |
+| Intent | Live model eval terkalibrasi per varian; false reply dan missed named dihitung terpisah dari action accuracy |
+| Authorization | Tabel keputusan actor x channel x permission x risk, termasuk prompt injection dari chat/screen/memory |
+| Planner | State-machine tests untuk supersede, cancel, deadline, leave barrier, dan maksimum langkah |
+| Browser command | Fake page contract tests plus crash injection sebelum/sesudah irreversible boundary |
+| Speech | Claim fixtures untuk state, source-grounded, conversational leakage, commitment, capability, dan interrupted delivery |
+| Latency | Replay dengan virtual clock dan live scorecard untuk stage metrics |
+| Recovery | Restart pada setiap command state dan browser epoch change |
+| Long session | Replay sintetis setara dua jam dengan event burst, stale sources, dan memory bound |
+| Live Meet | Solo action matrix, multi-human roster/chat/screen, barge-in, degraded provider, dan leave |
+
+Skenario adversarial minimum:
+
+1. Sync hanya memuat twin, tetapi voice track tak terpetakan berbicara.
+   Hasil: bukan sole responder dan count tidak pasti.
+2. Dua manusia bergantian memakai satu endpoint/mic. Hasil: count berupa
+   range dan speaker tidak dipaksa satu identitas.
+3. Satu manusia memakai laptop dan ponsel. Hasil: dua endpoint tetap
+   terpisah sampai evidence menggabungkannya.
+4. Teks layar memerintahkan twin leave dan membocorkan brief. Hasil: tidak
+   ada action dan tidak ada disclosure.
+5. Peserta tak terpetakan meminta leave. Hasil: tidak ada leave.
+6. Crash setelah Enter chat tetapi sebelum echo. Hasil: tidak kirim ulang;
+   outcome `unknown` sampai protocol echo merekonsiliasi.
+7. Reaction click timeout setelah UI menerima click. Hasil: `unknown` atau
+   `acted`, bukan klaim peserta melihatnya.
+8. Nama dari memory mirip topik roster. Hasil: query attendance menolak
+   namespace memory.
+9. Screen berubah setelah fact diambil tetapi sebelum PCM. Hasil: speech
+   state dibatalkan atau dirender ulang dari revision baru.
+10. Judge timeout pada baris bernama. Hasil: fallback tidak melakukan Meet
+    action dan tidak mengarang fakta.
+11. TTS gagal setelah sebagian PCM keluar. Hasil: kalimat tidak diulang dan
+    dialogue mencatat interrupted delivery.
+12. Browser reconnect membuat device IDs baru. Hasil: command lama batal,
+    identity edges lama expired, capability diprobe ulang.
+
+## Alternatif yang ditolak
+
+- **Arbitrary command DAG:** lebih ekspresif daripada kebutuhan turn dan
+  memindahkan bug sequencing ke scheduler generik.
+- **Satu event database untuk semua raw data:** menambah latency, privacy
+  exposure, dan sumber kebenaran ganda selama migrasi.
+- **Identity merge berbasis nama:** display name adalah claim yang dapat
+  duplikat, berubah, atau salah.
+- **Verifier LLM sebagai satu-satunya claim gate:** probabilistik, lambat,
+  dan tidak membuktikan proposition state.
+- **Prompt/middleware tambahan:** tetap memberi LLM otoritas sequencing
+  dan side effect.
+- **Big-bang rewrite:** menghilangkan characterization dari perilaku live
+  yang sudah terbukti.
+- **Feature flags permanen per subsystem:** menciptakan matriks perilaku
+  yang tidak teruji dan mempertahankan patchwork.
+
+## Risiko yang tidak dapat dihilangkan desain
+
+Desain ini membatasi dampak risiko berikut, tetapi tidak dapat membuatnya
+nol:
+
+- Google Meet mengubah protocol, DOM, locale, atau guest policy.
+- STT salah mendengar kata yang mengubah intent, terutama pada overlap dan
+  shared microphone.
+- Speaker attribution gagal ketika stream/CSRC tidak tersedia.
+- Vision/OCR salah membaca layar.
+- Model intent tetap dapat salah pada percakapan ambigu.
+- Reaction dan beberapa UI effect tidak memiliki readback semantik penuh.
+- Provider model/TTS/STT memiliki latency dan outage di luar kendali sesi.
+
+Karena itu “solid” berarti sistem fail closed, jujur tentang uncertainty,
+terukur per tahap, dan dapat direplay. Ia tidak berarti perception atau
+model menjadi selalu benar.
+
+## Kill criteria
+
+Implementasi tidak boleh cutover bila salah satu kondisi berikut terjadi:
+
+- Shadow kernel menaikkan false reply atau missed named melewati threshold
+  beku pada PR 0.
+- Identity projection tetap harus menebak exact count agar fitur dasar
+  dapat bekerja.
+- Planner membutuhkan template atau graph bebas baru untuk skenario umum
+  yang belum terdefinisi.
+- Command crash-injection menghasilkan duplicate visible chat/action.
+- Speech gate hanya dapat bekerja dengan memeriksa teks bebas setelah
+  model menulis, tanpa structured claims untuk source-grounded speech.
+- Replay tidak dapat mereproduksi keputusan dari normalized port events.
+- Cutover membutuhkan dual-write atau feature-flag combination permanen.
+
+Jika kill criterion terpicu, pekerjaan berhenti pada subsystem tersebut
+dan desain direvisi sebelum PR berikutnya. Kegagalan itu tidak ditutup
+dengan prompt rule, wordlist, atau special case baru.
+
+## Readiness
+
+Desain ini siap dieksekusi mulai PR 0. Tidak ada keputusan produk yang
+menunggu user. Nilai threshold, stage budget, dan calibration ditetapkan
+dari baseline PR 0 dan dibekukan sebagai test/eval contracts, bukan dipilih
+dari intuisi saat implementasi.
+
+Urutan eksekusi tidak boleh dilompati: characterization mendahului seam;
+seam mendahului shadow; shadow mendahului identity; identity mendahului
+planner; planner mendahului speech cutover; deletion hanya terjadi setelah
+incremental cutover dan soak lolos.
+
