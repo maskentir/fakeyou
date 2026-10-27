@@ -236,7 +236,17 @@ async def test_join_persona_memory_prefetches_only_profile_scoped_recall(
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     fact = "Orchid beta launch is planned for 14 October 2026"
     graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
-    model = replying("Orchid launches on 14 October.")
+    model = replying(
+        json.dumps(
+            {
+                "understood": "When does Orchid launch?",
+                "language": "en",
+                "intent": "answer",
+                "cites": ["edge-0"],
+                "text": "Orchid launches on 14 October.",
+            }
+        )
+    )
     episode = SimpleNamespace(
         uuid="meet-1",
         group_id=profile.memory_group,
@@ -299,6 +309,7 @@ async def test_join_persona_memory_prefetches_only_profile_scoped_recall(
     assert payload["schema"] == "memory_evidence/v1"
     assert [item["text"] for item in payload["facts"]] == [fact]
     assert payload["facts"][0]["sources"][0]["label"] == "Google Meet meeting-9 transcript"
+    assert payload["facts"][0]["fact_ids"] == ["edge-0"]
     assert graphiti.added == []
     assert audio.spoken == ["Orchid launches on 14 October."]
     assert outcome["phase"] == "listening"

@@ -1,6 +1,7 @@
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from evals._prompt_ab import PromptVariant, compare_variants, prompt_digest, replay_variants
+from evals._shared import cited_reply
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -34,7 +35,9 @@ async def test_variants_reach_the_model_and_score_separately() -> None:
     created: list[ToolCallingFakeModel] = []
 
     def factory() -> ToolCallingFakeModel:
-        replies: list[BaseMessage] = [AIMessage(content="The beta launch is on 14 October 2026.")]
+        replies: list[BaseMessage] = [
+            AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "fact-0"))
+        ]
         model = ToolCallingFakeModel(responses=replies)
         created.append(model)
         return model

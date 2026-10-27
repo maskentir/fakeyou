@@ -1,4 +1,5 @@
 import gc
+import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -125,3 +126,16 @@ def sanitized_role(role: dict[str, Any]) -> dict[str, Any]:
 
 def token_present(token: str, text: str) -> bool:
     return re.search(r"\b" + re.escape(token) + r"\b", text, re.IGNORECASE) is not None
+
+
+def cited_reply(text: str, *cites: str, language: str = "en", contribution: str = "none") -> str:
+    return json.dumps(
+        {
+            "understood": "",
+            "language": language,
+            "intent": "answer",
+            "contribution": contribution,
+            "cites": list(cites),
+            "text": text,
+        }
+    )

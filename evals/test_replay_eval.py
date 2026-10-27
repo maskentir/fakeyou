@@ -15,6 +15,7 @@ from evals._replay import (
     source_commit,
     write_replay_artifacts,
 )
+from evals._shared import cited_reply
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.orchestration.providers import create_chat_model
@@ -36,7 +37,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
         ],
     }
     replies: list[BaseMessage] = [
-        AIMessage(content="The beta launch is on 14 October 2026."),
+        AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "fact-0")),
         AIMessage(content="Five million?"),
     ]
 
@@ -62,7 +63,9 @@ async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
         ],
     }
     replies: list[BaseMessage] = [
-        AIMessage(content="The beta launch is on 14 October 2026. See you there.")
+        AIMessage(
+            content=cited_reply("The beta launch is on 14 October 2026. See you there.", "fact-0")
+        )
     ]
 
     score = await replay(

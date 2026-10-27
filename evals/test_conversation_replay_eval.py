@@ -143,7 +143,11 @@ async def test_replay_grades_replies_silence_and_cut_offs_through_the_real_turn_
         family="recall",
         title="contract",
         steps=(
-            Step(say="Rani, when is the beta launch?", speaker="speaker-a", expect=Expectation()),
+            Step(
+                say="Rani, is the beta launch still on 14 October?",
+                speaker="speaker-a",
+                expect=Expectation(),
+            ),
             Step(say="Budi, have you eaten?", speaker="speaker-b", expect=Expectation(reply=False)),
             Step(say="Rani, explain the plan.", speaker="speaker-a", cut_after=1),
             Step(

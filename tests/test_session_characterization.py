@@ -1,18 +1,14 @@
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, get_args
+from typing import Literal, cast, get_args
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from fakeyou.conversation.contribution import (
-    ContributionClaim,
-    ContributionGate,
-    SourceRegistry,
-    validate_contribution,
-)
+from fakeyou.conversation.contribution import SourceRegistry
 from fakeyou.conversation.participation_graph import JudgeThresholds, decision_of
+from fakeyou.conversation.speech_book import BookSource, fact_book
 from fakeyou.conversation.turn_judge import TurnJudgement
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
@@ -28,6 +24,7 @@ from fakeyou.session.identity import PresenceFact, presence
 from fakeyou.session.intent import Answer, Compound, Intent, MeetAction
 from fakeyou.session.planner import TurnPlan, plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Actor, Grant, Permission, authorize
+from fakeyou.session.speech import ContributionKind, SpeechAct, check_act, check_sentence
 from fakeyou.session.world import SessionState, reduce
 
 FIXTURE = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "kernel-scenarios.json"
@@ -233,32 +230,34 @@ def _optional_string(value: object) -> str | None:
 
 
 @pytest.mark.parametrize("scenario", executable("contribution_gate"), ids=lambda item: item.id)
-def test_contribution_gate_characterization(scenario: Scenario) -> None:
+def test_contributions_pass_the_speech_gate_as_the_target_says(scenario: Scenario) -> None:
     registry_data = scenario.given["registry"]
     assert isinstance(registry_data, dict)
     questions = registry_data.get("brief_questions", [])
     assert isinstance(questions, list)
+    brief = _string_map(registry_data.get("brief", {}))
     registry = SourceRegistry(
-        brief=_string_map(registry_data.get("brief", {})),
-        brief_questions=frozenset(str(item) for item in questions),
+        facts={ref: text for ref, text in brief.items() if ref not in questions},
+        questions={ref: text for ref, text in brief.items() if ref in questions},
         profile=_string_map(registry_data.get("profile", {})),
     )
-    gate = ContributionGate(registry=registry, trigger_text="trigger")
-    claim_data = scenario.given["claim"]
-    assert isinstance(claim_data, dict)
-    claim = ContributionClaim(
-        structured=bool(claim_data["structured"]),
-        intent=str(claim_data["intent"]),
-        text=str(claim_data["text"]),
-        kind=_optional_string(claim_data.get("kind")),
-        source=_optional_string(claim_data.get("source")),
-        source_ref=_optional_string(claim_data.get("source_ref")),
+    book = fact_book(
+        BookSource(registry, frozenset({"explain_facts", "ask_brief_questions"})),
+        heard="trigger",
+        observed="",
+        memory={},
     )
-    verdict = validate_contribution(claim, gate)
+    claim = scenario.given["claim"]
+    assert isinstance(claim, dict)
+    act = SpeechAct(
+        cites=tuple(ref for ref in (_optional_string(claim.get("source_ref")),) if ref),
+        contribution=cast(ContributionKind, claim["kind"]),
+    )
+    verdict = check_act(act, book)
+    if verdict == "pass":
+        verdict = check_sentence(str(claim["text"]), act, book)
 
-    assert verdict.passed == scenario.current["passed"]
-    assert verdict.reason == scenario.current["reason"]
-    assert scenario.current["outcome"] == ("pass" if verdict.passed else "drop")
+    assert ("pass" if verdict == "pass" else "drop") == scenario.target["outcome"]
 
 
 def _planned(intent: Intent, actor: Actor, permissions: frozenset[Permission]) -> TurnPlan:
@@ -295,10 +294,10 @@ PR3_PLANS: dict[str, Callable[[], bool]] = {
 
 @pytest.mark.parametrize(
     "scenario",
-    [scenario for scenario in executable("catalog") if scenario.executable_in == "PR3"],
+    [scenario for scenario in executable("catalog") if scenario.executable_in in ("PR3", "PR5")],
     ids=lambda item: item.id,
 )
-def test_pr3_catalog_scenarios_are_executable(scenario: Scenario) -> None:
+def test_catalog_scenarios_of_finished_prs_are_executable(scenario: Scenario) -> None:
     if scenario.proof is not None:
         path, name = scenario.proof.split("::")
         source = (FIXTURE.parent.parent.parent / path).read_text(encoding="utf-8")

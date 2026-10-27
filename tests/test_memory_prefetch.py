@@ -198,9 +198,9 @@ async def test_found_evidence_sends_compact_sources_and_keeps_full_render_in_kwa
 
     [evidence] = evidence_messages(model_calls(model)[0])
     assert "unverified: may or may not be the owner or any named person" in evidence.text
+    assert '"fact_ids"' in evidence.text
     for dropped in (
         "episode_id",
-        "fact_ids",
         "speaker_verified",
         "time_granularity",
         "recorded_at",

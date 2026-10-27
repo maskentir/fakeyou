@@ -17,17 +17,13 @@ from evals._shared import REPLAY_EVIDENCE, sanitized_role
 from evals._trust import build_case_memory, case_storage
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.conversation.conversation import (
-    REPLY_CONFIG,
-    MeetingResponder,
-    StreamTrace,
-    cap_spoken_reply,
-    stream_sentences,
-)
+from fakeyou.conversation.conversation import MeetingResponder, cap_spoken_reply
+from fakeyou.conversation.speech_book import BookSource, TurnEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.memory import create_memory_prefetch_middleware
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import capture_error
+from fakeyou.orchestration.assembly import build_source_registry
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.record import MeetingRecord
 
@@ -133,13 +129,7 @@ async def _collect_sentences(
     score: ReplayScore,
     started: float,
 ) -> bool:
-    async for sentence in stream_sentences(
-        responder.agent,
-        responder.messages([event]),
-        REPLY_CONFIG,
-        max_sentences=responder.max_sentences,
-        trace=StreamTrace(language=responder.language, request_id=event.id, transcript_id=event.id),
-    ):
+    async for sentence in responder.stream_sentences([event], lambda: None, request_id=event.id):
         if not sentences:
             score.first_sentence_latencies.append(time.monotonic() - started)
         sentences.append(sentence.text)
@@ -160,17 +150,30 @@ async def _replay_session(
 ) -> None:
     profile, score, run = context.profile, context.score, context.run
     memory, stored, states = session_memory(session["memory"], profile.memory_group)
+    evidence = TurnEvidence()
     with case_storage(memory, stored, states), TemporaryDirectory() as folder:
         agent = create_meeting_agent(
             model,
             persona=context.prompt_builder(profile),
-            middleware=[create_memory_prefetch_middleware(memory, group_id=profile.memory_group)],
+            middleware=[
+                create_memory_prefetch_middleware(
+                    memory, group_id=profile.memory_group, on_refs=evidence.note_memory
+                )
+            ],
         )
         record = MeetingRecord(Path(folder) / "record.jsonl")
+        book_source = BookSource(registry=build_source_registry(profile, None))
         responder = (
-            MeetingResponder(agent, record, language=profile.language, max_sentences=2)
+            MeetingResponder(
+                agent,
+                record,
+                language=profile.language,
+                max_sentences=2,
+                book_source=book_source,
+                evidence=evidence,
+            )
             if context.streaming
-            else MeetingResponder(agent, record)
+            else MeetingResponder(agent, record, book_source=book_source, evidence=evidence)
         )
         for index, turn in enumerate(session["turns"]):
             event = TranscriptEvent(

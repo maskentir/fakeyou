@@ -71,6 +71,10 @@
       "presenter": "I can't tell who is presenting right now.",
       "screen_title": "I can't see the shared screen right now.",
       "own_action_status": "I haven't done any meeting actions yet."
+    },
+    "speech": {
+      "owner_commitment": "I can't decide that here, so I'll take it back and confirm.",
+      "unsure": "I'm not sure about that, so I'd rather not guess."
     }
   },
   "id": {
@@ -145,6 +149,10 @@
       "presenter": "Saya belum bisa tahu siapa yang sedang presentasi.",
       "screen_title": "Saya belum bisa melihat layar yang dibagikan.",
       "own_action_status": "Saya belum melakukan aksi apa pun di meeting ini."
+    },
+    "speech": {
+      "owner_commitment": "Itu belum bisa saya putuskan di sini, nanti saya konfirmasi dulu.",
+      "unsure": "Saya belum yakin soal itu, jadi saya tidak mau menebak."
     }
   }
 }

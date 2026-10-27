@@ -22,11 +22,8 @@ from evals._shared import sanitized_role
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import (
-    REPLY_CONFIG,
     MeetingResponder,
-    StreamTrace,
     ToolResultCallback,
-    stream_sentences,
 )
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.digest import canonical_json_digest
@@ -409,18 +406,8 @@ async def stream_with_deadline(
     sentences: list[str] = []
     first_latency = 0.0
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
-        async for sentence in stream_sentences(
-            responder.agent,
-            responder.messages([event]),
-            REPLY_CONFIG,
-            max_sentences=responder.max_sentences,
-            trace=StreamTrace(
-                language=responder.language,
-                journal=responder.journal,
-                request_id=request_id,
-                transcript_id=event.id,
-                on_tool_result=responder.on_tool_result,
-            ),
+        async for sentence in responder.stream_sentences(
+            [event], lambda: None, request_id=request_id
         ):
             if not sentences:
                 first_latency = time.monotonic() - started

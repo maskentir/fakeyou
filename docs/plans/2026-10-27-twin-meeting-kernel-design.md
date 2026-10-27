@@ -821,16 +821,37 @@ Gate: reply tidak dapat memanggil tool evidence; evidence yang tidak
 direncanakan tidak dijalankan; memory tidak dicari untuk turn yang tidak
 membutuhkannya.
 
-### PR 5: Speech contract
+### PR 5: Speech contract (selesai)
 
-- `SpeechBrief`, `SpeechAct`, fact-bound claims, capability facts, dan
-  sentence commit gate untuk speech dan chat.
-- Proactive contribution memakai kontrak yang sama.
-- Dihapus: reply agent loop yang mencampur evidence, action, dan speech,
-  serta `ContributionGate` terpisah.
+- `ReplyPlan` menjadi SpeechAct: `contribution`, `cites`, dan `commits_owner`
+  ditempatkan sebelum `text`. Bila model menulis `text` lebih dulu, kalimat
+  ditahan sampai `cites` terbaca; tidak ada kalimat yang dilepas sebelum
+  aktanya diperiksa.
+- `FactBook` per turn: brief facts (`explain_facts`), brief questions
+  (`ask_brief_questions`), profile dan memory facts (bukan `brief_only`),
+  dengan memory refs dari prefetch dan teks yang teramati (view, evidence,
+  dialog) sebagai korpus heard. Objective brief hanya menjadi instruksi
+  internal.
+- Gate per kalimat sebelum PCM/chat untuk speech, chat, dan proactive:
+  angka harus ada di fact yang dikutip atau yang terdengar, kutipan harus ada
+  dan boleh diucapkan, overlap enam kata dengan instruksi internal ditolak.
+  `commits_owner` diganti kalimat decline deterministik; penolakan lain
+  tanpa kalimat terucap diganti kalimat "belum yakin" deterministik;
+  proactive yang gagal tetap diam.
+- Proactive wajib `contribution` dan kutipan; pertanyaan harus mengutip
+  brief question; verifier grounding tetap lapisan tambahan atas teks fact
+  yang dikutip.
+- Dihapus: `ContributionGate`, `validate_contribution`, dan field
+  `contribution_kind/source/source_ref`. Bug lama ikut tertutup: kontribusi
+  dari memory kini bisa mengutip fact yang diprefetch.
+- Batasan yang disengaja: tidak ada pemindaian nama berbasis huruf kapital
+  karena rawan salah tolak; klaim roster sudah deterministik sejak PR 4a.
+  Angka yang diucapkan sebagai kata tidak terdeteksi oleh pemeriksaan
+  angka.
 
-Gate: adversarial speech fixtures untuk namespace leakage, invented
-names/numbers, action overclaim, owner commitment, dan brief disclosure.
+Gate: invented number, kutipan yang tidak ada atau owner_only, owner
+commitment, kebocoran objective, dan kontribusi tanpa kutipan ditolak sebelum
+PCM atau chat keluar.
 
 ### PR 6: Scheduler, health, dan recovery
 

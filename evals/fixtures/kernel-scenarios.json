@@ -251,7 +251,7 @@
       "given": {"summary": "A memory fact names a person who is not in the meeting; the question asks attendance."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "namespace_rejected"},
-      "executable_in": "PR5"
+      "executable_in": "PR5", "proof": "tests/test_facts.py::test_attendance_is_a_claim_from_the_meeting_namespace_only"
     },
     {
       "id": "k-s2",
@@ -261,7 +261,7 @@
       "given": {"summary": "A participant asks the twin to approve a new deadline for the owner."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "decline_needs_owner"},
-      "executable_in": "PR5"
+      "executable_in": "PR5", "proof": "tests/test_speech_book.py::test_an_owner_commitment_becomes_a_deterministic_decline"
     },
     {
       "id": "k-l1",

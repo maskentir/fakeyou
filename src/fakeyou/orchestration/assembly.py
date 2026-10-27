@@ -41,6 +41,7 @@ from fakeyou.conversation.middleware import (
 from fakeyou.conversation.participation_graph import JudgeThresholds
 from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.conversation.speech_book import BookSource, TurnEvidence
 from fakeyou.conversation.state_speech import locale_of, render
 from fakeyou.conversation.turn_graph import CommandPort, ConversationPhase, PlannedTurn
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
@@ -277,6 +278,7 @@ class _ConversationBuilder:
         self._tool_names: frozenset[PersonaTool] = frozenset()
         self._control = ReplyControl()
         self._turn_language = TurnLanguage(settings.speech.language)
+        self._evidence = TurnEvidence()
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -317,6 +319,7 @@ class _ConversationBuilder:
                 group_id=profile.memory_group,
                 recall=self._settings.memory.recall,
                 diag=self._diagnostics,
+                on_refs=self._evidence.note_memory,
             )
         )
 
@@ -325,7 +328,11 @@ class _ConversationBuilder:
         if perception is None:
             return
         self._middleware.append(
-            create_perception_middleware(perception, journal=self._diagnostics.journal)
+            create_perception_middleware(
+                perception,
+                journal=self._diagnostics.journal,
+                on_observed=self._evidence.note_observed,
+            )
         )
 
     def _grant(self) -> Grant:
@@ -375,6 +382,14 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
+    def _book_source(self) -> BookSource:
+        brief = self._agent.brief
+        return BookSource(
+            registry=build_source_registry(self._agent.profile, brief),
+            permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
+            persona_knowledge=brief is None or brief.knowledge_scope != "brief_only",
+        )
+
     def build_responder(
         self,
         agent: MeetingAgent,
@@ -392,7 +407,8 @@ class _ConversationBuilder:
             control=self._control,
             turn_language=self._turn_language,
             contributor=contributor,
-            source_registry=build_source_registry(self._agent.profile, self._agent.brief),
+            book_source=self._book_source(),
+            evidence=self._evidence,
             verifier=verifier,
             grounding_threshold=self._settings.perception.attention.grounding_confidence,
         )

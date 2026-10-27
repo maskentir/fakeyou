@@ -2,7 +2,7 @@ import asyncio
 import json
 import sys
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -52,6 +52,7 @@ from fakeyou.config.settings import (
     RecallSettings,
     require_secret,
 )
+from fakeyou.conversation.contribution import memory_refs_from_evidence
 from fakeyou.foundation.provenance import render_evidence
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.memory.evidence import (
@@ -370,7 +371,9 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         group_id: str,
         recall: RecallSettings,
         diag: Diagnostics = DEFAULT_DIAGNOSTICS,
+        on_refs: Callable[[Mapping[str, str]], None] | None = None,
     ) -> None:
+        self._on_refs = on_refs
         self._memory = memory
         self._group_id = group_id
         self._recall = recall
@@ -477,6 +480,8 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             else:
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + slim
                 evidence_full = full
+                if self._on_refs is not None:
+                    self._on_refs(memory_refs_from_evidence(slim))
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
         self._sequence += 1
         tool_call_id = (
@@ -517,12 +522,14 @@ def create_memory_prefetch_middleware(
     group_id: str,
     recall: RecallSettings = DEFAULTS.memory.recall,
     diag: Diagnostics = DEFAULT_DIAGNOSTICS,
+    on_refs: Callable[[Mapping[str, str]], None] | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
         memory,
         group_id=group_id,
         recall=recall,
         diag=diag,
+        on_refs=on_refs,
     )
 
 

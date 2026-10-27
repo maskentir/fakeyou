@@ -10,6 +10,7 @@ from fakeyou.conversation.contribution import memory_refs_from_evidence, source_
 from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
 from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.meeting_messages import NoHistory
+from fakeyou.conversation.speech_book import BookSource
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
 from tests._persistence_fakes import RecordingJournal
 
@@ -18,10 +19,9 @@ PLAN = json.dumps(
         "understood": "screen changed",
         "language": "en",
         "intent": "answer",
+        "contribution": "correction",
+        "cites": ["fact-0"],
         "text": "The beta actually launches on 14 October.",
-        "contribution_kind": "correction",
-        "contribution_source": "profile",
-        "source_ref": "fact-0",
     }
 )
 
@@ -86,8 +86,10 @@ def _responder(verifier: _Verifier | None, journal: RecordingJournal) -> Meeting
         NoHistory(),
         journal=journal,
         language="en",
-        source_registry=source_registry(
-            profile_facts=["The Orchid beta launch is planned for 14 October 2026"]
+        book_source=BookSource(
+            registry=source_registry(
+                profile_facts=["The Orchid beta launch is planned for 14 October 2026"]
+            )
         ),
         verifier=verifier,
     )
@@ -103,7 +105,8 @@ async def test_a_grounded_contribution_is_spoken() -> None:
     assert chunk.text == "The beta actually launches on 14 October."
     assert verifier.calls[0]["source_text"].endswith("14 October 2026")
     assert journal.events("contribution_verified")
-    assert journal.events("reply_plan_observed")[0]["gate"] == "pass"
+    observed = journal.events("reply_plan_observed")[0]
+    assert (observed["contribution"], observed["cites"]) == ("correction", ["fact-0"])
 
 
 @pytest.mark.parametrize(

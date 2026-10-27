@@ -177,9 +177,16 @@ async def gather_evidence(context: PerceptionContext, trigger: HumanMessage) -> 
 
 
 class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
-    def __init__(self, context: PerceptionContext, *, journal: Journal | None = None) -> None:
+    def __init__(
+        self,
+        context: PerceptionContext,
+        *,
+        journal: Journal | None = None,
+        on_observed: Callable[[str, str], None] | None = None,
+    ) -> None:
         self._context = context
         self._journal = journal or Journal("", echo=False)
+        self._on_observed = on_observed
 
     @override
     async def awrap_model_call(
@@ -211,6 +218,11 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
                 needs=sorted(evidence),
                 codes=[str(result.get("code")) for result in evidence.values()],
             )
+        trigger_id = trigger[-1].id
+        if self._on_observed is not None and trigger_id:
+            for message in appended:
+                if isinstance(message, ToolMessage):
+                    self._on_observed(trigger_id, message.text)
         return await handler(request.override(messages=[*request.messages, *appended]))
 
 
@@ -226,6 +238,9 @@ def _synthetic(name: str, content: str, flag: str) -> tuple[AIMessage, ToolMessa
 
 
 def create_perception_middleware(
-    context: PerceptionContext, *, journal: Journal | None = None
+    context: PerceptionContext,
+    *,
+    journal: Journal | None = None,
+    on_observed: Callable[[str, str], None] | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
-    return PerceptionContextMiddleware(context, journal=journal)
+    return PerceptionContextMiddleware(context, journal=journal, on_observed=on_observed)

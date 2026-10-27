@@ -23,6 +23,7 @@ from evals._shared import (
     REPLAY_EVIDENCE,
     ArtifactMeta,
     ReplayOptions,
+    cited_reply,
     sanitized_role,
     token_present,
 )
@@ -266,9 +267,17 @@ def score_aids(case: dict[str, Any], reply: str, *, recalled: bool) -> dict[str,
     }
 
 
+def _contract_content(turn: dict[str, Any]) -> str:
+    reply = str(turn["contract_reply"])
+    cites = turn.get("contract_cites")
+    if cites is None:
+        return reply
+    return cited_reply(reply, *map(str, cites), language="id")
+
+
 def contract_model(case: dict[str, Any]) -> ToolCallingFakeModel:
     responses: list[BaseMessage] = [
-        AIMessage(content=str(turn["contract_reply"])) for turn in case["turns"]
+        AIMessage(content=_contract_content(turn)) for turn in case["turns"]
     ]
     return ToolCallingFakeModel(responses=responses)
 

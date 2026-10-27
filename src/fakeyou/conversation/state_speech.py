@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.session.commands import TERMINAL_COMMAND_STATES, CommandState
@@ -105,3 +105,10 @@ def render(proposition: Proposition, locale: str) -> str:
             return _own_action(pack, proposition)
         case Unknown():
             return str(pack["unknown"][proposition.question])
+
+
+SpeechLine = Literal["owner_commitment", "unsure"]
+
+
+def speech_line(line: SpeechLine, locale: str) -> str:
+    return str(_PACKS[locale]["speech"][line])

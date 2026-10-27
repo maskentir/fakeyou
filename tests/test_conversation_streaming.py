@@ -231,7 +231,7 @@ async def test_the_declared_language_reaches_the_speaker(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="id")
-    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.ingress.receive_final(event("t1", "Is the launch still on 14 October?"))
     await loop.lifecycle.wait_idle()
     assert audio.spoken == ["The launch is on 14 October."]
     assert audio.languages == ["en"]
@@ -278,7 +278,7 @@ async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="en")
-    await loop.ingress.receive_final(event("t1", "hello"))
+    await loop.ingress.receive_final(event("t1", "Is the launch still on 14 October?"))
     await loop.lifecycle.wait_idle()
     assert audio.spoken == ["The launch is on 14 October."]
     assert "intent" not in " ".join(audio.spoken)
