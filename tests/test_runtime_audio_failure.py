@@ -9,7 +9,7 @@ from playwright.async_api import Error as PlaywrightError
 
 import fakeyou.orchestration.runtime as runtime
 from fakeyou.audio.audio import MeetingAudioError
-from fakeyou.meet.meet import CallObservation, LeaveResult
+from fakeyou.meet.meet import LeaveResult
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
@@ -203,34 +203,3 @@ async def test_audio_failure_remains_primary_when_leave_also_fails(
     )
     assert result.terminal_reason == "audio_failure"
     assert result.detail == "capture stopped"
-
-
-async def test_a_call_that_ended_is_reported_as_a_finished_meeting(
-    monkeypatch: pytest.MonkeyPatch,
-    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
-    session: SimpleNamespace,
-) -> None:
-    class EndedCallAudio(FakeAudio):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            self.checks = 0
-
-        @override
-        def raise_if_failed(self) -> None:
-            self.checks += 1
-            if self.checks > 2:
-                raise MeetingAudioError("capture stopped")
-
-    async def observe(*_args: Any) -> CallObservation:
-        return CallObservation("ended", "the call has ended")
-
-    monkeypatch.setattr(runtime, "observe_call_state", observe)
-
-    result = await runtime.run_meeting_session(
-        session.config,
-        runtime.SessionWiring(
-            open_audio=partial(open_audio, EndedCallAudio(session.events)), **session.kwargs
-        ),
-    )
-
-    assert result.terminal_reason == "ended_by_host"

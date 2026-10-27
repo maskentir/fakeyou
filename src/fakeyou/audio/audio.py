@@ -73,7 +73,7 @@ from fakeyou.transcription.muse import KeywordSource, MuseClient, MuseDeps, Muse
 
 STOP_DEADLINE_SECONDS = 8.0
 STT_START_TIMEOUT_SECONDS = 25.0
-RECONNECT_DEADLINE_SECONDS = 120.0
+RECONNECT_QUIET_WAIT_SECONDS = 120.0
 STT_ROTATION_LEAD_SECONDS = 600.0
 
 
@@ -409,20 +409,18 @@ class MeetingAudioSession:
             or stamp - self._last_reconnect_at >= self._reconnect_delay
         )
 
+    def _waited_for_quiet(self, stamp: float) -> bool:
+        return (
+            self._reconnect_since is not None
+            and stamp - self._reconnect_since >= RECONNECT_QUIET_WAIT_SECONDS
+        )
+
     def _reconnect_ready(self, stamp: float, *, is_busy: bool) -> bool:
-        if self._reconnect_state != "queued":
+        if self._reconnect_state != "queued" or self._stopping:
             return False
-        if self._reconnect_since is not None and stamp - self._reconnect_since >= (
-            RECONNECT_DEADLINE_SECONDS
-        ):
-            self._reconnect_state = "exhausted"
-            self.fail("STT reconnect deadline exceeded")
-            self.raise_if_failed()
-        if self._stopping:
+        urgent = stt_socket_dead(self._stt) or self._waited_for_quiet(stamp)
+        if not urgent and not self._quiet_for_reconnect(stamp, is_busy=is_busy):
             return False
-        if not stt_socket_dead(self._stt):
-            if not self._quiet_for_reconnect(stamp, is_busy=is_busy):
-                return False
         return self._backoff_elapsed(stamp)
 
     def _note_reconnect_failure(self, error: BaseException) -> None:
