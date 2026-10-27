@@ -21,7 +21,7 @@ from fakeyou.session.contracts import (
     TranscriptObserved,
 )
 from fakeyou.session.identity import PresenceFact, presence
-from fakeyou.session.intent import Answer, Compound, Intent, MeetAction
+from fakeyou.session.intent import Answer, Compound, Intent, MeetAction, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Actor, Grant, Permission, authorize
 from fakeyou.session.speech import ContributionKind, SpeechAct, check_act, check_sentence
@@ -266,7 +266,25 @@ def _planned(intent: Intent, actor: Actor, permissions: frozenset[Permission]) -
 
 
 EVERY_PERMISSION: frozenset[Permission] = frozenset(get_args(Permission))
-PR3_PLANS: dict[str, Callable[[], bool]] = {
+FINISHED_PRS = frozenset({"PR3", "PR5", "PR6"})
+
+
+def _fallback_plan() -> TurnPlan:
+    authorization = authorize(
+        intent_of(Reading("speak", "fallback_named")),
+        actor=Actor("participant", "dev-ayu"),
+        channel="speech",
+        grant=Grant(EVERY_PERMISSION),
+    )
+    return plan_turn(authorization, channel="speech", plan_id="corpus")
+
+
+CATALOG_PLANS: dict[str, Callable[[], bool]] = {
+    "k-l1": lambda: (
+        _fallback_plan().action is None
+        and not _fallback_plan().leave
+        and _fallback_plan().evidence == ()
+    ),
     "k-a1": lambda: (
         not _planned(Compound(MeetAction("leave"), Answer()), UNATTRIBUTED, EVERY_PERMISSION).leave
     ),
@@ -294,7 +312,7 @@ PR3_PLANS: dict[str, Callable[[], bool]] = {
 
 @pytest.mark.parametrize(
     "scenario",
-    [scenario for scenario in executable("catalog") if scenario.executable_in in ("PR3", "PR5")],
+    [scenario for scenario in executable("catalog") if scenario.executable_in in FINISHED_PRS],
     ids=lambda item: item.id,
 )
 def test_catalog_scenarios_of_finished_prs_are_executable(scenario: Scenario) -> None:
@@ -303,4 +321,4 @@ def test_catalog_scenarios_of_finished_prs_are_executable(scenario: Scenario) ->
         source = (FIXTURE.parent.parent.parent / path).read_text(encoding="utf-8")
         assert f"def {name}(" in source
         return
-    assert PR3_PLANS[scenario.id]()
+    assert CATALOG_PLANS[scenario.id]()

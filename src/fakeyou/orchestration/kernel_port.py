@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
 from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudge, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRow
+from fakeyou.observability.journal import Journal
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.contracts import (
     AudioStreamObserved,
@@ -28,6 +30,7 @@ from fakeyou.session.contracts import (
     TranscriptObserved,
     VoiceTrackObserved,
 )
+from fakeyou.session.health import Mode, modes, side_effects_allowed
 from fakeyou.session.identity import PresenceFact, attribute, presence
 from fakeyou.session.kernel import Mailbox, SessionKernel
 from fakeyou.session.policy import UNATTRIBUTED, Actor
@@ -85,21 +88,47 @@ class KernelPort:
         mailbox: Mailbox | None = None,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        journal: Journal | None = None,
     ) -> None:
         self._kernel = kernel
+        self._journal = journal
+        self._modes: frozenset[Mode] = frozenset()
+        self._health: dict[Source, SourceStatus] = {}
+        kernel.subscribe(self._note_modes)
         self._mailbox = mailbox or Mailbox()
         self._clock = clock
         self._browser_epoch = 0
         self._clip = 0
         self._interims = 0
         self._playing: str | None = None
-        self._protocol: SourceStatus | None = None
         self._dom_remote: int | None = None
         self._call: CallState | None = None
 
     @classmethod
-    def for_meeting(cls, meeting_id: str) -> "KernelPort":
-        return cls(SessionKernel(session_id=meeting_id, attempt_id=uuid.uuid4().hex))
+    def for_meeting(cls, meeting_id: str, journal: Journal | None = None) -> "KernelPort":
+        return cls(
+            SessionKernel(session_id=meeting_id, attempt_id=uuid.uuid4().hex), journal=journal
+        )
+
+    def modes(self) -> frozenset[Mode]:
+        return modes(self._kernel.state)
+
+    def side_effects_allowed(self) -> bool:
+        return side_effects_allowed(self.modes())
+
+    def _note_modes(self, state: SessionState, _event: SessionEvent) -> None:
+        current = modes(state)
+        if current == self._modes:
+            return
+        previous, self._modes = self._modes, current
+        if self._journal is not None:
+            self._journal.record(
+                "session_mode_transitioned",
+                source="runtime",
+                entered=sorted(current - previous),
+                left=sorted(previous - current),
+                kernel_seq=state.seq,
+            )
 
     @property
     def attempt_id(self) -> str:
@@ -111,6 +140,8 @@ class KernelPort:
 
     def actor(self, source_id: str) -> Actor:
         state = self._kernel.state
+        if "identity_degraded" in modes(state):
+            return UNATTRIBUTED
         for line in reversed(state.dialogue.lines):
             if line.source_id != source_id:
                 continue
@@ -206,11 +237,16 @@ class KernelPort:
         self.observe("meet_dom", ParticipantCountObserved(remote=remote))
 
     def protocol_health(self, *, available: bool) -> None:
-        status: SourceStatus = "healthy" if available else "stale"
-        if status == self._protocol:
+        self.source_health("meet_protocol", "healthy" if available else "stale")
+
+    def memory_outcome(self, outcome: str) -> None:
+        self.source_health("memory", "down" if outcome == "unavailable" else "healthy")
+
+    def source_health(self, source: Source, status: SourceStatus) -> None:
+        if self._health.get(source) == status:
             return
-        self._protocol = status
-        self.observe("meet_protocol", SourceHealthObserved(source="meet_protocol", status=status))
+        self._health[source] = status
+        self.observe(source, SourceHealthObserved(source=source, status=status))
 
     def playback(self, event: PlaybackEvent) -> None:
         phase = _PLAYBACK_PHASES.get(event.kind)
@@ -224,6 +260,7 @@ class KernelPort:
             self._playing = None
         elif phase in ("finished", "failed"):
             self._playing = None
+        self.source_health("playback", "down" if phase == "failed" else "healthy")
         self.observe(
             "playback",
             PlaybackObserved(
@@ -233,3 +270,18 @@ class KernelPort:
 
     def owner(self, command: OwnerCommand) -> None:
         self.observe("owner_control", OwnerControlObserved(command=command))
+
+
+class HealthReportingJudge:
+    def __init__(self, judge: TurnJudge, port: KernelPort) -> None:
+        self._judge = judge
+        self._port = port
+
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        try:
+            judgement = await self._judge.judge(window)
+        except Exception:
+            self._port.source_health("model", "down")
+            raise
+        self._port.source_health("model", "healthy")
+        return judgement

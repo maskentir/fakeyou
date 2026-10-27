@@ -853,16 +853,32 @@ Gate: invented number, kutipan yang tidak ada atau owner_only, owner
 commitment, kebocoran objective, dan kontribusi tanpa kutipan ditolak sebelum
 PCM atau chat keluar.
 
-### PR 6: Scheduler, health, dan recovery
+### PR 6: Health, degraded modes, dan recovery (selesai)
 
-- Resource leases, inherited deadlines, priority lanes, degraded modes, dan
-  restart reconciliation.
-- Interim speculation hanya untuk read-only work.
-- Dihapus: lane dan floor state yang dimutasi banyak pemilik di
-  turn lifecycle/graph.
+- `session.health.modes` menurunkan mode dari projection health kernel:
+  `browser_unknown`, `perception_degraded`, `identity_degraded`,
+  `model_degraded`, `voice_degraded`, `memory_degraded`, dan
+  `backlog_saturated` (mailbox jenuh). Transisi mode dicatat di journal
+  `session_mode_transitioned`.
+- Sumber health diisi oleh judge (`HealthReportingJudge`), outcome prefetch
+  memory, playback, dan protocol heartbeat.
+- Side effect baru ditolak pada `browser_unknown`, `model_degraded`, dan
+  `backlog_saturated`; `identity_degraded` membuat presence tidak pernah
+  complete dan actor tidak teratribusi.
+- Recovery: command attempt lama ditutup `unknown` atau
+  `cancelled_before_boundary`; browser epoch baru membatalkan command yang
+  belum dispatch dan mengekspirasi device/stream; judge timeout tidak
+  menghasilkan aksi dan reply tetap melewati speech gate.
+- Replay sintetis setara dua jam membuktikan state bounded dan replay
+  deterministik.
+- Ditunda dengan sengaja: rewrite lane/floor/barge-in di turn
+  lifecycle/graph ke resource lease dan inherited deadline. Jalur itu hanya
+  dapat dibuktikan pada sesi live; menulis ulang tanpa validasi live
+  menambah risiko regresi playback dan barge-in. Dikerjakan setelah PR 8
+  memberi baseline live.
 
-Gate: fault injection judge/model timeout, browser epoch change,
-perception stale, TTS failure, memory unavailable, dan process restart.
+Gate: mode degradasi menolak side effect yang benar; recovery tidak pernah
+melanjutkan command lama; long-session replay bounded dan deterministik.
 
 ### PR 7: Record v4
 

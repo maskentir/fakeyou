@@ -1,10 +1,14 @@
+import pytest
+
 from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRow
-from fakeyou.orchestration.kernel_port import KernelPort
+from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.world import TWIN, Ref
+from tests._persistence_fakes import RecordingJournal
 
 
 def port() -> KernelPort:
@@ -147,3 +151,69 @@ def test_own_and_backlog_chat_are_kept_as_dialogue() -> None:
 
     lines = kernel.state.dialogue.lines
     assert (lines[0].speaker, lines[1].backlog) == (TWIN, True)
+
+
+class FailingJudge:
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        raise TimeoutError(window.latest.text)
+
+
+class AnsweringJudge:
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        return TurnJudgement(
+            heard=window.latest.text,
+            finished=True,
+            backchannel=False,
+            addressee="twin",
+            action="reply",
+            confidence=0.9,
+        )
+
+
+WINDOW = JudgeWindow(earlier=(), latest=JudgeLine(speaker="ayu", text="Rani?"))
+
+
+async def test_a_failing_judge_puts_the_session_in_model_degraded_mode() -> None:
+    journal = RecordingJournal()
+    kernel = KernelPort.for_meeting("meeting-9", journal=journal)
+    joined(kernel)
+
+    with pytest.raises(TimeoutError):
+        await HealthReportingJudge(FailingJudge(), kernel).judge(WINDOW)
+    kernel.drain()
+
+    assert kernel.modes() == frozenset({"model_degraded"})
+    assert kernel.side_effects_allowed() is False
+
+    await HealthReportingJudge(AnsweringJudge(), kernel).judge(WINDOW)
+    kernel.drain()
+
+    assert kernel.modes() == frozenset()
+    transitions = journal.events("session_mode_transitioned")
+    assert [(row["entered"], row["left"]) for row in transitions][-2:] == [
+        (["model_degraded"], []),
+        ([], ["model_degraded"]),
+    ]
+
+
+def test_unavailable_memory_and_failed_playback_are_degraded_modes() -> None:
+    kernel = port()
+    joined(kernel)
+    kernel.memory_outcome("unavailable")
+    kernel.playback(PlaybackEvent("playback_started", "Hi."))
+    kernel.playback(PlaybackEvent("playback_failed", "Hi."))
+    kernel.drain()
+
+    assert kernel.modes() == frozenset({"memory_degraded", "voice_degraded"})
+
+
+def test_degraded_identity_attributes_nobody() -> None:
+    kernel = port()
+    joined(kernel)
+    kernel.chat(
+        message_id="m1", device_id="dev-ayu", text="Rani, hand up", own=False, backlog=False
+    )
+    kernel.source_health("speaker_registry", "down")
+    kernel.drain()
+
+    assert kernel.actor("m1").kind == "unattributed"

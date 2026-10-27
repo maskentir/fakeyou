@@ -190,7 +190,14 @@ def presence(state: SessionState) -> PresenceFact:
         status: PresenceStatus = "not_in_call"
     elif protocol in UNHEALTHY:
         status = "stale"
-    elif world.roster_synced and twin and unresolved == 0 and shared_endpoints == 0 and not drift:
+    elif (
+        world.roster_synced
+        and twin
+        and state.health.sources.get("speaker_registry") not in UNHEALTHY
+        and unresolved == 0
+        and shared_endpoints == 0
+        and not drift
+    ):
         status = "complete"
     else:
         status = "incomplete"

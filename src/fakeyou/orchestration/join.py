@@ -222,7 +222,7 @@ def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
     registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
-    run.kernel = KernelPort.for_meeting(prepared.config.meeting_id)
+    run.kernel = KernelPort.for_meeting(prepared.config.meeting_id, journal=run.journal)
     run.voiceprint_live = resources.enter_context(open_voiceprint(prepared.request.settings))
     run.voice_activity = (
         VoiceActivityTracker(registry=registry)

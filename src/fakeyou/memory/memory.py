@@ -355,6 +355,9 @@ def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanM
     return query
 
 
+PrefetchListener = Callable[[str, Mapping[str, str]], None]
+
+
 def memory_planned(trigger: AnyMessage) -> bool:
     if trigger_kind(trigger) not in ("speech", "chat"):
         return True
@@ -371,9 +374,9 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         group_id: str,
         recall: RecallSettings,
         diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-        on_refs: Callable[[Mapping[str, str]], None] | None = None,
+        on_prefetch: PrefetchListener | None = None,
     ) -> None:
-        self._on_refs = on_refs
+        self._on_prefetch = on_prefetch
         self._memory = memory
         self._group_id = group_id
         self._recall = recall
@@ -480,9 +483,10 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             else:
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + slim
                 evidence_full = full
-                if self._on_refs is not None:
-                    self._on_refs(memory_refs_from_evidence(slim))
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
+        if self._on_prefetch is not None:
+            refs = memory_refs_from_evidence(content.removeprefix(PREFETCH_EVIDENCE_PREFIX))
+            self._on_prefetch(outcome, refs if outcome == "found" else {})
         self._sequence += 1
         tool_call_id = (
             f"{transcript_id}-memory-recall" if transcript_id else f"memory-recall-{self._sequence}"
@@ -522,14 +526,14 @@ def create_memory_prefetch_middleware(
     group_id: str,
     recall: RecallSettings = DEFAULTS.memory.recall,
     diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-    on_refs: Callable[[Mapping[str, str]], None] | None = None,
+    on_prefetch: PrefetchListener | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
         memory,
         group_id=group_id,
         recall=recall,
         diag=diag,
-        on_refs=on_refs,
+        on_prefetch=on_prefetch,
     )
 
 

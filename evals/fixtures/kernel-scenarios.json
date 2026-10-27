@@ -281,7 +281,7 @@
       "given": {"summary": "The session restarts with a nonterminal command from the previous attempt."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "reconcile_or_unknown_never_resume"},
-      "executable_in": "PR6"
+      "executable_in": "PR6", "proof": "tests/test_commands.py::test_a_restart_closes_a_dispatched_command_as_unknown"
     },
     {
       "id": "k-rc2",
@@ -291,7 +291,7 @@
       "given": {"summary": "The browser reconnects and every device id changes."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "commands_cancelled_capability_reprobed"},
-      "executable_in": "PR6"
+      "executable_in": "PR6", "proof": "tests/test_commands.py::test_a_new_browser_epoch_cancels_before_the_boundary"
     },
     {
       "id": "k-ls1",
@@ -301,7 +301,7 @@
       "given": {"summary": "A synthetic two-hour event stream with bursts and stale sources replays through the kernel."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "bounded_state_deterministic_replay"},
-      "executable_in": "PR6"
+      "executable_in": "PR6", "proof": "tests/test_kernel_long_session.py::test_a_two_hour_meeting_stays_bounded_and_replays_identically"
     },
     {
       "id": "k-lm1",

@@ -157,7 +157,9 @@ async def _replay_session(
             persona=context.prompt_builder(profile),
             middleware=[
                 create_memory_prefetch_middleware(
-                    memory, group_id=profile.memory_group, on_refs=evidence.note_memory
+                    memory,
+                    group_id=profile.memory_group,
+                    on_prefetch=lambda _outcome, refs: evidence.note_memory(refs),
                 )
             ],
         )

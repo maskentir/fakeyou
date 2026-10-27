@@ -62,7 +62,7 @@ from fakeyou.memory.persona import (
 )
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.orchestration.kernel_port import KernelPort
+from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
     create_chat_model,
@@ -319,7 +319,7 @@ class _ConversationBuilder:
                 group_id=profile.memory_group,
                 recall=self._settings.memory.recall,
                 diag=self._diagnostics,
-                on_refs=self._evidence.note_memory,
+                on_prefetch=self._note_prefetch,
             )
         )
 
@@ -338,9 +338,12 @@ class _ConversationBuilder:
     def _grant(self) -> Grant:
         brief = self._agent.brief
         commands = self._behavior.commands
+        kernel = self._behavior.kernel
         return Grant(
             permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
-            browser_available=commands is not None and commands.available,
+            browser_available=commands is not None
+            and commands.available
+            and (kernel is None or kernel.side_effects_allowed()),
         )
 
     def _plan(self, event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
@@ -381,6 +384,18 @@ class _ConversationBuilder:
             persona=f"{self._persona}\n\n{CONTRIBUTION_GUIDANCE}",
             middleware=self._middleware,
         )
+
+    def _note_prefetch(self, outcome: str, refs: Mapping[str, str]) -> None:
+        self._evidence.note_memory(refs)
+        if self._behavior.kernel is not None:
+            self._behavior.kernel.memory_outcome(outcome)
+
+    def _judge(self, names: Sequence[str]) -> TurnJudge | None:
+        judge = build_turn_judge(self._settings, names)
+        kernel = self._behavior.kernel
+        if judge is None or kernel is None:
+            return judge
+        return HealthReportingJudge(judge, kernel)
 
     def _book_source(self) -> BookSource:
         brief = self._agent.brief
@@ -434,7 +449,7 @@ class _ConversationBuilder:
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
                 presence=self._behavior.presence,
-                judge=build_turn_judge(self._settings, names),
+                judge=self._judge(names),
                 history=self._agent.history,
                 judge_thresholds=JudgeThresholds(
                     reply=judge_settings.reply_threshold,
