@@ -8,14 +8,13 @@ from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 
 from evals._replay import (
-    FIXTURE,
     ReplayScore,
     load_fixture,
     replay,
     write_replay_artifacts,
 )
 from fakeyou.config.settings import CompatibleReply, Settings
-from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from tests._conversation_fakes import ToolCallingFakeModel
 
 
 class StepClock:
@@ -39,7 +38,6 @@ def test_replay_artifacts_mask_role_credentials(tmp_path: Path, settings: Settin
             "run_index": 0,
             "turn_index": 0,
             "latency_seconds": 1.0,
-            "recall_called": False,
             "checks": {"answered": True},
         }
     )
@@ -84,7 +82,6 @@ def test_replay_artifacts_sanitize_url_and_extra_body(tmp_path: Path, settings: 
             "run_index": 0,
             "turn_index": 0,
             "latency_seconds": 0.5,
-            "recall_called": False,
             "checks": {"answered": True},
         }
     )
@@ -124,7 +121,6 @@ def test_replay_artifact_records_sample_counts_and_fixture_hash(
                 "run_index": 0,
                 "turn_index": 0,
                 "latency_seconds": 0.4,
-                "recall_called": False,
                 "checks": {"answered": True},
             },
             {
@@ -132,7 +128,6 @@ def test_replay_artifact_records_sample_counts_and_fixture_hash(
                 "run_index": 0,
                 "turn_index": 1,
                 "latency_seconds": 0.6,
-                "recall_called": False,
                 "checks": {"answered": False},
             },
         ]
@@ -151,7 +146,6 @@ def test_replay_artifact_records_sample_counts_and_fixture_hash(
     assert summary["fixture_sha256"] == hashlib.sha256(payload.encode()).hexdigest()
     assert summary["samples"]["answered"] == 2
     assert summary["samples"]["must_mention"] == 1
-    assert summary["samples"]["recall_called"] == 0
     assert summary["gates"]["answered"]["samples"] == 2
     assert summary["runs"] == 1
     assert summary["turns"] == 2
@@ -177,7 +171,6 @@ async def test_replay_records_per_turn_results_with_controlled_clock(
     assert first["run_index"] == 0
     assert first["turn_index"] == 0
     assert first["latency_seconds"] == 0.5
-    assert first["recall_called"] is False
     assert first["checks"]["answered"] is True
     assert score.summary()["turns"] == expected_turns
 
@@ -209,51 +202,3 @@ async def test_replay_counts_stable_when_reply_empty(monkeypatch: pytest.MonkeyP
     assert score.turns[0]["checks"]["answered"] is False
     assert score.turns[1]["checks"]["answered"] is True
     assert score.rate("answered") == 0.5
-
-
-async def test_replay_counts_stable_when_recall_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    from langchain_core.tools import tool
-
-    import evals._replay as replay_module
-
-    def failing_tool(facts: list[str]) -> Any:
-        del facts
-
-        @tool(description="Search long-term meeting memory for relevant context.")
-        def recall_meeting_context(query: str) -> str:
-            del query
-            raise RuntimeError("recall unavailable")
-
-        return recall_meeting_context
-
-    monkeypatch.setattr(replay_module, "recall_tool", failing_tool)
-    monkeypatch.setattr(replay_module, "time", StepClock(3000.0, 0.25))
-    fixture: dict[str, Any] = {
-        "persona": "examples/persona.example.json",
-        "sessions": [
-            {
-                "meeting_id": "stable",
-                "memory": ["Some prior fact."],
-                "turns": [
-                    {"say": "Alpha prompt", "expects_recall": True},
-                    {"say": "Beta prompt"},
-                ],
-            }
-        ],
-    }
-    score = await replay(
-        lambda: ToolCallingFakeModel(
-            responses=[
-                recall_call({"query": "alpha"}),
-                AIMessage(content="Fallback reply here."),
-                AIMessage(content="Second reply here."),
-            ]
-        ),
-        fixture,
-        runs=1,
-    )
-    assert len(score.latencies) == 2
-    assert len(score.turns) == 2
-    assert len(score.replies) == 2
-    assert score.turns[0]["recall_called"] is True
-    assert FIXTURE.exists()

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, override
@@ -179,12 +180,23 @@ class ParticipantObserver(PollingLoop):
         )
         self._page = page
         self._on_poll = on_poll
+        self._sampled = asyncio.Event()
+
+    @override
+    async def start(self) -> None:
+        await super().start()
+        with suppress(TimeoutError):
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                await self._sampled.wait()
 
     @override
     async def _poll_once(self) -> None:
         started = self._monotonic()
         self.polls += 1
-        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
-            raw = await self._page.evaluate(OBSERVE_JS)
-        if _is_observation(raw):
-            await asyncio.to_thread(self._on_poll, raw, started * 1000.0)
+        try:
+            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+                raw = await self._page.evaluate(OBSERVE_JS)
+            if _is_observation(raw):
+                await asyncio.to_thread(self._on_poll, raw, started * 1000.0)
+        finally:
+            self._sampled.set()

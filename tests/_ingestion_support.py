@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from itertools import count
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -14,6 +15,7 @@ from fakeyou.observability.journal import Journal
 from fakeyou.persistence.record import ScreenEntry, TranscriptEntry
 
 START = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+RECORD_ORDER = count(1)
 
 
 CORRECTED_AT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
@@ -22,6 +24,7 @@ CORRECTED_AT = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
 def said(seconds: float, text: str, participant_id: str = "unknown") -> TranscriptEntry:
     return TranscriptEntry(
         at=START + timedelta(seconds=seconds),
+        seq=next(RECORD_ORDER),
         id=f"t{seconds}",
         spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
         source="meeting_audio",
@@ -34,6 +37,7 @@ def said(seconds: float, text: str, participant_id: str = "unknown") -> Transcri
 def shown(ref: str, title: str, **changes: Any) -> ScreenEntry:
     fields: dict[str, Any] = {
         "at": START,
+        "seq": next(RECORD_ORDER),
         "ref": ref,
         "shown_at": START,
         "sha256": "cd" * 32,
@@ -96,6 +100,7 @@ def correction_record(tmp_path: Path, speaker: str = "Harun") -> Path:
     entries = [
         TranscriptEntry(
             at=START + timedelta(seconds=seconds),
+            seq=index + 1,
             id=f"c{index}",
             spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
             source="meeting_audio",

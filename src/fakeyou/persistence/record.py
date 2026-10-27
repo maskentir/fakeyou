@@ -16,19 +16,25 @@ from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.layout import MeetingDir
 
 RECORD_SYNC_INTERVAL = 20
-RECORD_VERSION = 3
+RECORD_VERSION = 4
 _TAIL_BLOCK_BYTES = 8192
 
 
-class _Entry(BaseModel):
+class _Stamped(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     at: AwareDatetime
 
 
-class RecordHeader(_Entry):
+class _Entry(_Stamped):
+    seq: int = Field(ge=1)
+    causation_id: str | None = None
+
+
+class RecordHeader(_Stamped):
     kind: Literal["header"] = "header"
-    v: Literal[3] = 3
+    v: Literal[4] = 4
+    attempt_id: str | None = None
 
 
 class TranscriptEntry(_Entry):
@@ -52,16 +58,10 @@ class TwinSpeechEntry(_Entry):
     interrupted: bool = False
 
 
-class ToolResultEntry(_Entry):
-    kind: Literal["tool_result"] = "tool_result"
-    tool: str
-    output: str
-    duration_ms: float
-
-
 class ResumeEntry(_Entry):
     kind: Literal["resume"] = "resume"
     attempt: int
+    attempt_id: str | None = None
 
 
 class PerceptFields(BaseModel):
@@ -115,13 +115,7 @@ class SignalEntry(_Entry, SignalFields):
 
 
 RecordEntry = Annotated[
-    TranscriptEntry
-    | TwinSpeechEntry
-    | ToolResultEntry
-    | ResumeEntry
-    | ScreenEntry
-    | ChatEntry
-    | SignalEntry,
+    TranscriptEntry | TwinSpeechEntry | ResumeEntry | ScreenEntry | ChatEntry | SignalEntry,
     Field(discriminator="kind"),
 ]
 _RECORD_ENTRY = TypeAdapter[RecordEntry](RecordEntry)
@@ -232,6 +226,7 @@ class MeetingRecord:
         faults: FaultReporter | None = None,
         journal: Journal | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        attempt_id: str | None = None,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         dropped = _drop_torn_tail(path)
@@ -252,6 +247,16 @@ class MeetingRecord:
         }
         self._screens: dict[str, ScreenFields] = {}
         self._closed = False
+        self._attempt_id = attempt_id
+        self._seq = max((entry.seq for entry in self._entries), default=0)
+
+    @property
+    def attempt_id(self) -> str | None:
+        return self._attempt_id
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
 
     def add_transcript(self, event: TranscriptEvent) -> None:
         if not event.finalized or not event.text.strip() or event.id in self._seen:
@@ -260,6 +265,7 @@ class MeetingRecord:
         self._append(
             TranscriptEntry(
                 at=self._now(),
+                seq=self._next_seq(),
                 id=event.id,
                 spoken_at=event.timestamp,
                 source=event.source,
@@ -276,32 +282,44 @@ class MeetingRecord:
     def entries(self) -> tuple[RecordEntry, ...]:
         return tuple(self._entries)
 
-    def add_twin_speech(self, text: str, *, interrupted: bool = False) -> None:
+    def add_twin_speech(
+        self, text: str, *, interrupted: bool = False, causation_id: str | None = None
+    ) -> None:
         if text.strip():
-            self._append(TwinSpeechEntry(at=self._now(), text=text, interrupted=interrupted))
-
-    def add_tool_result(self, tool: str, output: str, duration_ms: float) -> None:
-        self._append(
-            ToolResultEntry(at=self._now(), tool=tool, output=output, duration_ms=duration_ms)
-        )
+            self._append(
+                TwinSpeechEntry(
+                    at=self._now(),
+                    seq=self._next_seq(),
+                    causation_id=causation_id,
+                    text=text,
+                    interrupted=interrupted,
+                )
+            )
 
     def add_resume(self, *, attempt: int) -> None:
-        self._append(ResumeEntry(at=self._now(), attempt=attempt))
+        self._append(
+            ResumeEntry(
+                at=self._now(),
+                seq=self._next_seq(),
+                attempt=attempt,
+                attempt_id=self._attempt_id,
+            )
+        )
 
     def add_screen(self, fields: ScreenFields) -> None:
         if not fields.ref.strip() or self._screens.get(fields.ref) == fields:
             return
         self._screens[fields.ref] = fields
-        self._append(ScreenEntry(at=self._now(), **fields.model_dump()))
+        self._append(ScreenEntry(at=self._now(), seq=self._next_seq(), **fields.model_dump()))
 
     def add_chat(self, fields: ChatFields) -> None:
         if not fields.text.strip() or fields.message_id in self._seen_chat:
             return
         self._seen_chat.add(fields.message_id)
-        self._append(ChatEntry(at=self._now(), **fields.model_dump()))
+        self._append(ChatEntry(at=self._now(), seq=self._next_seq(), **fields.model_dump()))
 
     def add_signal(self, fields: SignalFields) -> None:
-        self._append(SignalEntry(at=self._now(), **fields.model_dump()))
+        self._append(SignalEntry(at=self._now(), seq=self._next_seq(), **fields.model_dump()))
 
     def close(self) -> None:
         if self._closed:
@@ -317,7 +335,8 @@ class MeetingRecord:
         self._entries.append(entry)
         line = entry.model_dump_json() + "\n"
         if self._header_pending:
-            line = RecordHeader(at=entry.at).model_dump_json() + "\n" + line
+            header = RecordHeader(at=entry.at, attempt_id=self._attempt_id)
+            line = header.model_dump_json() + "\n" + line
         try:
             self._file.write(line)
             self._file.flush()

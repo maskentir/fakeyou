@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-from functools import partial
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,6 @@ from evals._trust import (
     rated_pairs,
     replay_trust,
     score_aids,
-    strategy_settings,
     write_trust_artifacts,
 )
 from fakeyou.catalog.errors import FakeYouError
@@ -34,7 +32,7 @@ async def test_contract_replay_captures_87_rated_pairs_and_writes_artifacts(
     fixture = load_trust_fixture()
     raw_target = os.environ.get("TRUST_ARTIFACT_DIR", "")
     target = Path(raw_target) if raw_target else tmp_path
-    _base_settings = strategy_settings("tool")
+    _base_settings = Settings()
     settings = _base_settings.model_copy(
         update={
             "conversation": _base_settings.conversation.model_copy(
@@ -68,7 +66,7 @@ async def test_contract_replay_captures_87_rated_pairs_and_writes_artifacts(
     by_id = {case["id"]: case for case in fixture["cases"]}
     for turn in score.rated_turns():
         case = by_id[turn["case_id"]]
-        assert turn["recall_called"] is case["needs_recall"]
+        assert turn["recall_called"] is True
         assert turn["aids"] == score_aids(case, turn["reply"], recalled=turn["recall_called"])
         assert all(turn["aids"][name] for name in AID_CHECKS)
     manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
@@ -129,7 +127,7 @@ async def test_contract_turns_record_token_usage_per_model_call() -> None:
         contract_model,
         {**fixture, "cases": fixture["cases"][:1]},
         1,
-        options=ReplayOptions(settings=strategy_settings("tool")),
+        options=ReplayOptions(settings=Settings()),
     )
     assert len(score.turns[0]["token_usage"]) == score.turns[0]["model_calls"]
 
@@ -137,16 +135,15 @@ async def test_contract_turns_record_token_usage_per_model_call() -> None:
 async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() -> None:
     fixture = load_trust_fixture()
     score = await replay_trust(
-        partial(contract_model, recall_tool=False),
+        contract_model,
         fixture,
         1,
-        options=ReplayOptions(settings=strategy_settings("prefetch")),
+        options=ReplayOptions(settings=Settings()),
     )
     assert all(turn["exception"] is None for turn in score.turns)
     by_id = {case["id"]: case for case in fixture["cases"]}
     for turn in score.turns:
         assert turn["model_calls"] == 1
-        assert turn["tools_bound"] == []
         assert len(turn["memory_prefetch"]) == turn["turn_index"] + 1
         assert turn["memory_prefetch"][-1]["query"].endswith(turn["input"])
         assert all(entry["outcome"] in {"found", "empty"} for entry in turn["memory_prefetch"])
@@ -157,5 +154,4 @@ async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() ->
             assert prior_turn["contract_reply"] in turn["memory_prefetch"][-1]["query"]
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)
-    assert {prompt["recall_strategy"] for prompt in score.prompts.values()} == {"prefetch"}
     assert {prompt["memory_prefetch"] for prompt in score.prompts.values()} == {True}

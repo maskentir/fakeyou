@@ -1,14 +1,12 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from typing import Any, Self, cast
 
 import pytest
 from playwright.async_api import Page
 
 import fakeyou.meet.meet_actions as meet_actions_module
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet_actions import (
     MeetActionSignals,
@@ -19,9 +17,6 @@ from fakeyou.meet.meet_actions import (
     raise_hand,
     send_chat,
 )
-from fakeyou.memory.memory import PREFETCH_EVIDENCE_PREFIX
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher
-from tests._error_support import message_pattern
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import IN_CALL, FakePage, meet_page
 from tests._meet_support import (
@@ -34,66 +29,11 @@ from tests._meet_support import (
     LOWER_XPATH,
     RAISE_XPATH,
     button_xpath,
-    task5_dispatcher,
     with_enter,
 )
-from tests._persistence_fakes import RecordingJournal
 
 ECHO_ITEM_XPATH = button_xpath("pin message")
 TEXT_WITHOUT_PIN = IN_CALL + f"<div>{CHAT_TEXT}</div>"
-
-
-async def test_send_chat_rejects_overlong_messages(tmp_path: Path) -> None:
-    journal = RecordingJournal("meeting-chat")
-    dispatcher, _record = task5_dispatcher(tmp_path, "meeting-chat", journal=journal)
-
-    with pytest.raises(FakeYouError, match=message_pattern(ErrorCode.MEET_CHAT_TOO_LONG)) as error:
-        dispatcher.request("send_chat", action_id="call-long-1", text="x" * 501)
-
-    assert error.value.code is ErrorCode.MEET_CHAT_TOO_LONG
-    assert journal.events("meet_action_rejected")[0]["reason"] == "chat_too_long"
-
-
-async def test_send_chat_rejects_memory_evidence_prefix(tmp_path: Path) -> None:
-    journal = RecordingJournal("meeting-chat")
-    dispatcher, _record = task5_dispatcher(tmp_path, "meeting-chat", journal=journal)
-
-    with pytest.raises(
-        FakeYouError,
-        match=message_pattern(ErrorCode.MEET_CHAT_EVIDENCE_REJECTED),
-    ) as error:
-        dispatcher.request(
-            "send_chat", action_id="call-evidence-1", text=PREFETCH_EVIDENCE_PREFIX + "{}"
-        )
-
-    assert error.value.code is ErrorCode.MEET_CHAT_EVIDENCE_REJECTED
-    assert journal.events("meet_action_rejected")[0]["reason"] == "chat_evidence_rejected"
-
-
-async def test_send_chat_enforces_per_minute_rate(tmp_path: Path) -> None:
-    journal = RecordingJournal("meeting-chat")
-    record = tmp_path / "meeting-chat" / "record.jsonl"
-    dispatcher = MeetActionDispatcher(
-        record, meeting_id="meeting-chat", enabled=True, journal=journal, chat_per_minute=2
-    )
-    clock = FakeClock()
-    dispatcher.bind_page(
-        meet_page([IN_CALL]),
-        sleep=clock.sleep,
-        monotonic=clock.monotonic,
-        stop=asyncio.Event(),
-    )
-
-    dispatcher.request("send_chat", action_id="call-rate-1", text="one")
-    dispatcher.request("send_chat", action_id="call-rate-2", text="two")
-    with pytest.raises(
-        FakeYouError, match=message_pattern(ErrorCode.MEET_CHAT_RATE_LIMITED)
-    ) as error:
-        dispatcher.request("send_chat", action_id="call-rate-3", text="three")
-    assert error.value.code is ErrorCode.MEET_CHAT_RATE_LIMITED
-    clock.now += 61.0
-    dispatcher.request("send_chat", action_id="call-rate-4", text="four")
-    dispatcher.close()
 
 
 async def test_raise_hand_noop_when_already_raised() -> None:

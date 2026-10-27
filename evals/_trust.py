@@ -19,7 +19,14 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 
 import fakeyou.memory.memory as memory_module
-from evals._shared import ArtifactMeta, ReplayOptions, sanitized_role, token_present
+from evals._shared import (
+    REPLAY_EVIDENCE,
+    ArtifactMeta,
+    ReplayOptions,
+    cited_reply,
+    sanitized_role,
+    token_present,
+)
 from evals.runtime_evidence import (
     ModelCallCounter,
     ResponderContext,
@@ -35,15 +42,10 @@ from fakeyou.conversation.conversation import cap_spoken_reply
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.timeparse import require_iso_datetime
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.persona import (
-    PersonaProfile,
-    build_system_prompt,
-    meeting_tool_names,
-    memory_wiring,
-    persona_digest,
-)
+from fakeyou.memory.persona import PersonaProfile, meeting_tool_names, persona_digest
 from fakeyou.observability.faults import capture_error
-from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from tests._conversation_fakes import ToolCallingFakeModel
 from tests._memory_fakes import make_graphiti
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -265,12 +267,18 @@ def score_aids(case: dict[str, Any], reply: str, *, recalled: bool) -> dict[str,
     }
 
 
-def contract_model(case: dict[str, Any], *, recall_tool: bool = True) -> ToolCallingFakeModel:
-    responses: list[BaseMessage] = []
-    for turn in case["turns"]:
-        if recall_tool and case.get("needs_recall", False):
-            responses.append(recall_call({"query": str(turn["say"])}))
-        responses.append(AIMessage(content=str(turn["contract_reply"])))
+def _contract_content(turn: dict[str, Any]) -> str:
+    reply = str(turn["contract_reply"])
+    cites = turn.get("contract_cites")
+    if cites is None:
+        return reply
+    return cited_reply(reply, *map(str, cites), language="id")
+
+
+def contract_model(case: dict[str, Any]) -> ToolCallingFakeModel:
+    responses: list[BaseMessage] = [
+        AIMessage(content=_contract_content(turn)) for turn in case["turns"]
+    ]
     return ToolCallingFakeModel(responses=responses)
 
 
@@ -288,11 +296,8 @@ async def replay_trust(
     candidate["persona_sha256"] = persona_digest(profile)
     candidate["fixture_payload_sha256"] = canonical_json_digest(fixture, compact=True)
     names = meeting_tool_names(profile, None, memory_requested=True)
-    strategy = settings.memory.recall.strategy
-    bound, prefetch = memory_wiring(names, strategy)
-    persona = build_system_prompt(
-        profile.model_copy(update={"allowed_tools": names}), recall_strategy=strategy
-    )
+    prefetch = "recall_meeting_context" in names
+    persona = build_persona_prompt(profile.model_copy(update={"allowed_tools": names}))
     group_id = profile.memory_group
     score = TrustScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
@@ -301,8 +306,6 @@ async def replay_trust(
             score.prompts[case["id"]] = {
                 "system_prompt": persona,
                 "prompt_sha256": hashlib.sha256(persona.encode("utf-8")).hexdigest(),
-                "tools_bound": sorted(bound),
-                "recall_strategy": strategy,
                 "memory_prefetch": prefetch,
             }
             for run in range(runs):
@@ -323,7 +326,6 @@ async def replay_trust(
                 ) as responder:
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
-                        seen_results = len(counter.tool_results)
                         seen_prefetch = len(counter.prefetch)
                         seen_usage = len(counter.usage)
                         seen_calls = counter.calls
@@ -335,6 +337,7 @@ async def replay_trust(
                             finalized=True,
                             participant_id="unknown",
                             speaker_evidence_id=None,
+                            evidence_needs=REPLAY_EVIDENCE,
                         )
                         started = time.monotonic()
                         answered, failure = await capture_error(
@@ -367,9 +370,7 @@ async def replay_trust(
                                     settings.conversation.max_spoken_sentences,
                                     settings.speech.language,
                                 ),
-                                "tools_bound": sorted(bound),
                                 "tool_trajectory": calls,
-                                "tool_results": counter.tool_results[seen_results:],
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
                                 "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,
@@ -428,14 +429,6 @@ class EvalDelayedModel(ToolCallingFakeModel):
             self.cancelled = True
             raise
         return await super()._agenerate(*args, **kwargs)
-
-
-def strategy_settings(strategy: str) -> Settings:
-    settings = Settings()
-    recall = settings.memory.recall.model_copy(update={"strategy": strategy})
-    return settings.model_copy(
-        update={"memory": settings.memory.model_copy(update={"recall": recall})}
-    )
 
 
 def judge_available() -> bool:

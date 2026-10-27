@@ -128,6 +128,7 @@ def _transcript_line(index: int, capture_ms: float) -> str:
         {
             "kind": "transcript",
             "at": "2026-10-08T00:00:00+00:00",
+            "seq": index + 1,
             "id": f"event-{index}",
             "spoken_at": "2026-10-08T00:00:00+00:00",
             "source": "meeting_audio",

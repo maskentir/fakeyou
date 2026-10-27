@@ -80,30 +80,33 @@ def test_record_snapshot_reads_once_even_if_file_changes(
     assert snapshot.sources[0].text == "Please ask the owner about the new deadline."
 
 
-def test_twin_ids_count_all_raw_lines_and_tool_output_is_not_a_source(tmp_path: Path) -> None:
-    twin = {"kind": "twin_speech", "at": "2026-10-03T12:00:01Z", "text": "I will ask the owner."}
-    tool = {
-        "kind": "tool_result",
-        "at": "2026-10-03T12:00:02Z",
-        "tool": "lookup",
-        "output": "This is not spoken evidence.",
-        "duration_ms": 1.0,
+def test_twin_ids_count_all_raw_lines(tmp_path: Path) -> None:
+    twin = {
+        "kind": "twin_speech",
+        "at": "2026-10-03T12:00:01Z",
+        "seq": 2,
+        "text": "I will ask the owner.",
     }
     path = tmp_path / "record.jsonl"
-    path.write_bytes(b"\n" + encoded(transcript()) + b" \t\n" + encoded(tool, twin))
+    path.write_bytes(b"\n" + encoded(transcript()) + b" \t\n" + encoded(twin))
 
     sources = load_record_snapshot(path).sources
 
-    assert [entry.id for entry in sources] == ["transcript:entry-1", "twin_speech:5"]
+    assert [entry.id for entry in sources] == ["transcript:entry-1", "twin_speech:4"]
     assert sources[1].kind == "twin"
     assert sources[1].participant_id == "twin"
     assert sources[1].at == datetime(2026, 10, 3, 12, 0, 1, tzinfo=UTC)
     assert sources[1].text == "I will ask the owner."
 
 
-def test_v3_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path: Path) -> None:
-    header = {"kind": "header", "v": 3, "at": "2026-10-03T12:00:00Z"}
-    twin = {"kind": "twin_speech", "at": "2026-10-03T12:00:01Z", "text": "I will ask the owner."}
+def test_v4_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path: Path) -> None:
+    header = {"kind": "header", "v": 4, "at": "2026-10-03T12:00:00Z"}
+    twin = {
+        "kind": "twin_speech",
+        "at": "2026-10-03T12:00:01Z",
+        "seq": 2,
+        "text": "I will ask the owner.",
+    }
     path = tmp_path / "record.jsonl"
     path.write_bytes(encoded(header, transcript(), twin))
 
@@ -114,7 +117,7 @@ def test_v3_header_line_is_not_a_source_but_still_counts_as_a_raw_line(tmp_path:
 
 def test_malformed_current_header_is_an_invalid_line(tmp_path: Path) -> None:
     path = tmp_path / "record.jsonl"
-    path.write_bytes(encoded({"kind": "header", "v": 3}, transcript()))
+    path.write_bytes(encoded({"kind": "header", "v": 4}, transcript()))
 
     with pytest.raises(
         DebriefValidationError, match=message_pattern(ErrorCode.DEBRIEF_RECORD_INVALID_LINE)
@@ -124,7 +127,7 @@ def test_malformed_current_header_is_an_invalid_line(tmp_path: Path) -> None:
     assert caught.value.code is ErrorCode.DEBRIEF_RECORD_INVALID_LINE
 
 
-@pytest.mark.parametrize("version", [2, 4])
+@pytest.mark.parametrize("version", [2, 3, 5])
 def test_header_with_another_version_is_unsupported(tmp_path: Path, version: int) -> None:
     path = tmp_path / "record.jsonl"
     path.write_bytes(
@@ -209,16 +212,7 @@ def test_corrupt_record_is_wrapped_without_transcript_input(
         b"",
         b"\n \t\r\n",
         encoded(transcript(text=" \t ")),
-        encoded({"kind": "twin_speech", "at": "2026-10-03T12:00:00Z", "text": "  "}),
-        encoded(
-            {
-                "kind": "tool_result",
-                "at": "2026-10-03T12:00:00Z",
-                "tool": "lookup",
-                "output": PRIVATE_MARKER,
-                "duration_ms": 1.0,
-            }
-        ),
+        encoded({"kind": "twin_speech", "at": "2026-10-03T12:00:00Z", "seq": 1, "text": "  "}),
     ],
 )
 def test_empty_or_unusable_records_are_rejected(tmp_path: Path, raw: bytes) -> None:

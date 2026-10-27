@@ -76,6 +76,7 @@ def debrief_run(
     record_path.write_text(
         TranscriptEntry(
             at=datetime(2026, 10, 3, tzinfo=UTC),
+            seq=1,
             id="t1",
             spoken_at="2026-10-03T00:00:00+00:00",
             source="meeting_audio",
@@ -532,6 +533,7 @@ async def test_debrief_renders_display_claim_as_unverified_speaker_label(
     record_path.write_text(
         TranscriptEntry(
             at=datetime(2026, 10, 3, tzinfo=UTC),
+            seq=1,
             id="t1",
             spoken_at="2026-10-03T00:00:00+00:00",
             source="meeting_audio",

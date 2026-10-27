@@ -91,7 +91,8 @@
       "turns": [
         {
           "say": "Kapan kickoff Orchid?",
-          "contract_reply": "Kickoff Orchid dilaksanakan tanggal 9 Oktober."
+          "contract_reply": "Kickoff Orchid dilaksanakan tanggal 9 Oktober.",
+          "contract_cites": ["edge-0"]
         }
       ],
       "memory": {
@@ -622,7 +623,8 @@
       "turns": [
         {
           "say": "Kapan beta launch Orchid?",
-          "contract_reply": "Beta launch Orchid direncanakan tanggal 14 Oktober 2026."
+          "contract_reply": "Beta launch Orchid direncanakan tanggal 14 Oktober 2026.",
+          "contract_cites": ["fact-0"]
         }
       ],
       "memory": {"facts": []},

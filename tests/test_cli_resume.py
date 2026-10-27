@@ -59,11 +59,11 @@ def seed_unfinished_session(settings: Settings) -> None:
     record = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(
-        '{"kind": "transcript", "at": "2026-10-05T02:00:00+00:00",'
+        '{"kind": "transcript", "at": "2026-10-05T02:00:00+00:00", "seq": 1,'
         ' "id": "t1", "spoken_at": "2026-10-05T02:00:00+00:00",'
         ' "source": "meeting_audio", "text": "Hello.",'
         ' "participant_id": "unknown", "speaker_evidence_id": null}\n'
-        '{"kind": "twin_speech", "at": "2026-10-05T02:00:05+00:00",'
+        '{"kind": "twin_speech", "at": "2026-10-05T02:00:05+00:00", "seq": 2,'
         ' "text": "Hi there."}\n',
         encoding="utf-8",
     )

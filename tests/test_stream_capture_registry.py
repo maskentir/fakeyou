@@ -177,6 +177,7 @@ def test_record_stores_stream_id(tmp_path: Path) -> None:
     unslotted = {
         "kind": "transcript",
         "at": "2026-10-06T01:00:02+00:00",
+        "seq": 2,
         "id": "event-unslotted",
         "spoken_at": "2026-10-06T01:00:02+00:00",
         "source": "meeting_audio",

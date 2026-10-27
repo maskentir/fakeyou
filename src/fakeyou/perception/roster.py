@@ -74,6 +74,13 @@ class MeetRoster:
     def own_device_ids(self) -> frozenset[str]:
         return frozenset(device for device, user in self._users.items() if user.current_user)
 
+    def users(self) -> tuple[MeetUser, ...]:
+        return tuple(self._users.values())
+
+    @property
+    def synced(self) -> bool:
+        return self._synced
+
     def user(self, device_id: str) -> MeetUser | None:
         return self._users.get(device_id)
 

@@ -30,7 +30,7 @@ def _scrub_process_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_invalid_configuration_reports_config_invalid_with_exit_two(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / ".env").write_text("FAKEYOU_MEMORY__RECALL__STRATEGY=hybrid\n")
+    (tmp_path / ".env").write_text("FAKEYOU_MEMORY__RECALL__RESULT_LIMIT=0\n")
     monkeypatch.chdir(tmp_path)
     _scrub_process_configuration(monkeypatch)
     monkeypatch.setattr(sys, "argv", ["fakeyou", "db", "status"])
@@ -38,7 +38,7 @@ def test_invalid_configuration_reports_config_invalid_with_exit_two(
         main()
     assert caught.value.code == ExitCode.INPUT_REJECTED
     err = capsys.readouterr().err
-    assert "fakeyou: error: invalid configuration: memory.recall.strategy" in err
+    assert "fakeyou: error: invalid configuration: memory.recall.result_limit" in err
 
 
 def test_unknown_configuration_key_reports_through_main(

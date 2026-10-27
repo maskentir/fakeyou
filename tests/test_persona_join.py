@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 from graphiti_core.nodes import EpisodicNode
-from langchain.agents.middleware import ToolErrorMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import SecretStr
 
@@ -20,17 +19,17 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.conversation.middleware import (
-    ChannelToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
+from fakeyou.memory.evidence import PREFETCH_UNAVAILABLE_EVIDENCE
 from fakeyou.memory.persona import (
     OperatorIdentity,
     PersonaProfile,
-    build_system_prompt,
     memory_group_for,
     require_persona_group,
 )
-from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from fakeyou.perception.context import PerceptionContextMiddleware
 from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import (
     MEET_LINK,
@@ -45,20 +44,20 @@ from tests._cli_support import (
     write_persona,
     write_record,
 )
-from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
 from tests._error_support import message_pattern
 from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 from tests._runtime_fakes import SessionRun
 
 
-def recall_then_reply(reply: str) -> ToolCallingFakeModel:
-    return ToolCallingFakeModel(
-        responses=[
-            recall_call({"query": "Orchid launch"}, id="call-1"),
-            AIMessage(content=reply),
-        ]
-    )
+def judge_needs_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", evidence=("memory",)))
+    monkeypatch.setattr(assembly, "build_turn_judge", lambda *_args, **_kwargs: judge)
+
+
+def replying(reply: str) -> ToolCallingFakeModel:
+    return ToolCallingFakeModel(responses=[AIMessage(content=reply)])
 
 
 async def test_join_persona_requires_converse(
@@ -216,28 +215,38 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
 
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     assert created["persona"] == (
-        f"{build_system_prompt(profile.model_copy(update={'allowed_tools': frozenset()}))}"
-        f"\n\n{PERCEPTION_GUIDANCE}"
+        build_persona_prompt(
+            profile.model_copy(update={"allowed_tools": frozenset()}), perception=True
+        )
     )
     assert "recall_meeting_context" not in created["persona"]
     assert created["agent_calls"] == 2
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
     assert audio.spoken == ["Hello."]
 
 
-async def test_join_persona_memory_exposes_only_profile_scoped_recall(
+async def test_join_persona_memory_prefetches_only_profile_scoped_recall(
     join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     fact = "Orchid beta launch is planned for 14 October 2026"
     graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
-    model = recall_then_reply("Orchid launches on 14 October.")
+    model = replying(
+        json.dumps(
+            {
+                "understood": "When does Orchid launch?",
+                "language": "en",
+                "intent": "answer",
+                "cites": ["edge-0"],
+                "text": "Orchid launches on 14 October.",
+            }
+        )
+    )
     episode = SimpleNamespace(
         uuid="meet-1",
         group_id=profile.memory_group,
@@ -262,22 +271,21 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         join=join,
     )
 
-    assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
-    assert [type(item) for item in created["middleware"]] == [
-        ToolErrorMiddleware,
-        ChannelToolsMiddleware,
-        PerceptionContextMiddleware,
-        SpeakerAttributionMiddleware,
+    assert created["tools"] == []
+    assert [type(item).__name__ for item in created["middleware"]] == [
+        "_MemoryPrefetchMiddleware",
+        PerceptionContextMiddleware.__name__,
+        SpeakerAttributionMiddleware.__name__,
     ]
     assert graphiti.searched == [
         {
-            "query": "Orchid launch",
+            "query": "Rani Twin, when does Orchid launch?",
             "group_ids": [profile.memory_group],
             "num_results": DEFAULTS.memory.recall.search_limit,
             "search_filter": memory_module.CURRENT_FACTS_FILTER,
         },
         {
-            "query": "Orchid launch",
+            "query": "Rani Twin, when does Orchid launch?",
             "group_ids": [profile.memory_group],
             "num_results": DEFAULTS.memory.recall.search_limit,
         },
@@ -296,12 +304,12 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
         for m in model.seen[-1]
         if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
     ]
-    [content] = [m.content for m in tool_results]
-    assert isinstance(content, str)
-    payload = json.loads(content)
+    [content] = [m.text for m in tool_results]
+    payload = json.loads(content.removeprefix(memory_module.PREFETCH_EVIDENCE_PREFIX))
     assert payload["schema"] == "memory_evidence/v1"
     assert [item["text"] for item in payload["facts"]] == [fact]
-    assert payload["facts"][0]["sources"][0]["episode_id"] == "meet-1"
+    assert payload["facts"][0]["sources"][0]["label"] == "Google Meet meeting-9 transcript"
+    assert payload["facts"][0]["fact_ids"] == ["edge-0"]
     assert graphiti.added == []
     assert audio.spoken == ["Orchid launches on 14 October."]
     assert outcome["phase"] == "listening"
@@ -315,9 +323,9 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     graphiti = make_graphiti(search_error=RuntimeError("neo4j went away"))
-    model = recall_then_reply("I don't know yet, I'll check with Rani.")
+    model = replying("I don't know yet, I'll check with Rani.")
 
     _created, audio, outcome = await join_persona_conversation(
         tmp_path,
@@ -334,7 +342,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
         for m in model.seen[-1]
         if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
     ]
-    assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
+    assert [m.content for m in tool_results] == [PREFETCH_UNAVAILABLE_EVIDENCE]
     assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"
     outcome["conversation"].raise_if_failed()
@@ -350,8 +358,9 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
 async def test_join_stop_during_recall_cancels_without_late_reply(
     join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    judge_needs_memory(monkeypatch)
     graphiti = make_graphiti(search_gate=asyncio.Event())
-    model = recall_then_reply("A late answer.")
+    model = replying("A late answer.")
 
     _created, audio, outcome = await join_persona_conversation(
         tmp_path,
@@ -426,7 +435,6 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -457,9 +465,9 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     graphiti = make_graphiti(search_gate=asyncio.Event())
-    model = recall_then_reply("I don't know yet, I'll check with Rani.")
+    model = replying("I don't know yet, I'll check with Rani.")
     settings.memory.recall.timeout_seconds = 0.01
 
     _created, audio, outcome = await join_persona_conversation(
@@ -477,7 +485,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
         for m in model.seen[-1]
         if isinstance(m, ToolMessage) and m.name == "recall_meeting_context"
     ]
-    assert [m.content for m in tool_results] == [memory_module.RECALL_UNAVAILABLE_RESULT]
+    assert [m.content for m in tool_results] == [PREFETCH_UNAVAILABLE_EVIDENCE]
     assert graphiti.search_cancelled.is_set()
     assert audio.spoken == ["I don't know yet, I'll check with Rani."]
     assert outcome["phase"] == "listening"

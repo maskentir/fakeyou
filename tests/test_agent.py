@@ -20,17 +20,17 @@ def test_default_persona_instructs_casual_spoken_indonesian() -> None:
     assert "casual spoken Indonesian" in DEFAULT_PERSONA
 
 
-def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
+async def test_agent_keeps_conversations_isolated_by_thread_id() -> None:
     model = ToolCallingFakeModel(
         responses=[AIMessage(content="first"), AIMessage(content="second")]
     )
     agent = create_meeting_agent(model, checkpointer=InMemorySaver())
 
-    first = agent.invoke(
+    first = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "alpha"}]},
         {"configurable": {"thread_id": "thread-a"}},
     )
-    second = agent.invoke(
+    second = await agent.ainvoke(
         {"messages": [{"role": "user", "content": "beta"}]},
         {"configurable": {"thread_id": "thread-b"}},
     )

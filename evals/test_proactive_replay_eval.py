@@ -74,10 +74,9 @@ async def test_the_replay_runs_detector_to_speech_offline(
             "understood": "question",
             "language": "en",
             "intent": "answer",
+            "contribution": "fact",
+            "cites": ["fact-0"],
             "text": "The beta launches on 14 October.",
-            "contribution_kind": "fact",
-            "contribution_source": "profile",
-            "source_ref": "fact-0",
         }
     )
     model = ToolCallingFakeModel(responses=[AIMessage(content=plan)])

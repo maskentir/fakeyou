@@ -11,8 +11,13 @@ from fakeyou.conversation.meeting_turns import (
     build_meeting_turns,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
+from fakeyou.conversation.turn_graph import PlannedTurn
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.session.commands import CommandOutcome, CommandSpec
+from fakeyou.session.intent import Reading, intent_of
+from fakeyou.session.planner import plan_turn
+from fakeyou.session.policy import Actor, Channel, Grant, authorize
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder
 from tests._conversation_support import event
@@ -25,9 +30,20 @@ class FakeChat:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    async def send(self, text: str, *, transcript_id: str) -> bool:
-        self.sent.append((text, transcript_id))
-        return True
+    async def run(
+        self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
+    ) -> CommandOutcome:
+        self.sent.append((spec.text, actor))
+        return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, "effect_observed")
+
+
+def chat_permitted(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+    actor = Actor("participant", event.participant_id)
+    authorization = authorize(
+        intent_of(reading), actor=actor, channel=channel, grant=Grant(frozenset({"meet_chat"}))
+    )
+    plan = plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}")
+    return PlannedTurn(plan, actor=event.participant_id)
 
 
 class FixedResponder(FakeResponder):
@@ -100,7 +116,8 @@ async def settle(turns: MeetingTurns) -> None:
 async def test_a_chat_that_names_the_twin_is_answered_in_chat() -> None:
     chat = FakeChat()
     turns, audio = lanes(
-        FixedResponder("Here is the deck link."), interaction=interaction(chat=chat)
+        FixedResponder("Here is the deck link."),
+        interaction=interaction(commands=chat, planning=chat_permitted),
     )
 
     accepted = turns.ingress.receive_chat(
@@ -109,14 +126,17 @@ async def test_a_chat_that_names_the_twin_is_answered_in_chat() -> None:
     await settle(turns)
 
     assert accepted
-    assert chat.sent == [("Here is the deck link.", "c1")]
+    assert chat.sent == [("Here is the deck link.", "device-budi")]
     assert audio.spoken == []
     await turns.close()
 
 
 async def test_the_runtime_can_hand_a_chat_line_to_the_meeting_turns() -> None:
     chat = FakeChat()
-    turns, _ = lanes(FixedResponder("Here is the deck link."), interaction=interaction(chat=chat))
+    turns, _ = lanes(
+        FixedResponder("Here is the deck link."),
+        interaction=interaction(commands=chat, planning=chat_permitted),
+    )
 
     accepted = turns.receive_chat(
         meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
@@ -124,7 +144,7 @@ async def test_the_runtime_can_hand_a_chat_line_to_the_meeting_turns() -> None:
     await settle(turns)
 
     assert accepted
-    assert chat.sent == [("Here is the deck link.", "c1")]
+    assert chat.sent == [("Here is the deck link.", "device-budi")]
     await turns.close()
 
 
@@ -144,7 +164,7 @@ async def test_the_runtime_can_offer_attention_to_the_meeting_turns() -> None:
 async def test_a_chat_that_does_not_name_the_twin_is_left_alone() -> None:
     chat = FakeChat()
     responder = FakeResponder()
-    turns, _ = lanes(responder, interaction=interaction(chat=chat))
+    turns, _ = lanes(responder, interaction=interaction(commands=chat, planning=chat_permitted))
 
     accepted = turns.ingress.receive_chat(
         meeting_input("c1", "anyone has the deck?", "meeting_chat")
@@ -160,19 +180,22 @@ async def test_a_chat_that_does_not_name_the_twin_is_left_alone() -> None:
 async def test_chat_replies_never_carry_internal_references() -> None:
     chat = FakeChat()
     turns, _ = lanes(
-        FixedResponder("The roadmap [screen#3] starts in Q1."), interaction=interaction(chat=chat)
+        FixedResponder("The roadmap [screen#3] starts in Q1."),
+        interaction=interaction(commands=chat, planning=chat_permitted),
     )
 
     turns.ingress.receive_chat(meeting_input("c1", f"{TWIN} when does it start?", "meeting_chat"))
     await settle(turns)
 
-    assert chat.sent == [("The roadmap starts in Q1.", "c1")]
+    assert chat.sent == [("The roadmap starts in Q1.", "device-budi")]
     await turns.close()
 
 
 async def test_without_a_chat_channel_the_reply_is_dropped_not_spoken() -> None:
     journal = RecordingJournal()
-    turns, audio = lanes(FixedResponder("Sure."), journal=journal)
+    turns, audio = lanes(
+        FixedResponder("Sure."), journal=journal, interaction=interaction(planning=chat_permitted)
+    )
 
     turns.ingress.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
     await settle(turns)

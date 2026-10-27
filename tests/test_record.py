@@ -15,11 +15,11 @@ from fakeyou.persistence.record import (
     ChatEntry,
     ChatFields,
     MeetingRecord,
+    ResumeEntry,
     ScreenEntry,
     ScreenFields,
     SignalEntry,
     SignalFields,
-    ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
     load_meeting_record,
@@ -59,21 +59,17 @@ def test_record_path_is_one_directory_per_meeting(tmp_path: Path) -> None:
     )
 
 
-def test_record_roundtrips_transcripts_twin_speech_and_tool_results(tmp_path: Path) -> None:
+def test_record_roundtrips_transcripts_and_twin_speech(tmp_path: Path) -> None:
     record = open_record(tmp_path)
 
     record.add_transcript(transcript(0, "When is the Orchid demo?", participant_id="Speaker A"))
-    record.add_twin_speech("The demo is Friday at two in the afternoon.")
-    record.add_tool_result(
-        "recall_meeting_context",
-        "From owner note on 2026-09-29 08:00 UTC: The demo is on Friday",
-        812.5,
-    )
+    record.add_twin_speech("The demo is Friday at two in the afternoon.", causation_id="event-0")
     record.close()
 
     assert load_meeting_record(meeting_record_path(tmp_path, SessionId("meeting-1"))) == [
         TranscriptEntry(
             at=NOW,
+            seq=1,
             id="event-0",
             spoken_at="2026-09-30T10:00:00+00:00",
             source="meeting_audio",
@@ -81,12 +77,11 @@ def test_record_roundtrips_transcripts_twin_speech_and_tool_results(tmp_path: Pa
             participant_id="Speaker A",
             speaker_evidence_id=None,
         ),
-        TwinSpeechEntry(at=NOW, text="The demo is Friday at two in the afternoon."),
-        ToolResultEntry(
+        TwinSpeechEntry(
             at=NOW,
-            tool="recall_meeting_context",
-            output="From owner note on 2026-09-29 08:00 UTC: The demo is on Friday",
-            duration_ms=812.5,
+            seq=2,
+            causation_id="event-0",
+            text="The demo is Friday at two in the afternoon.",
         ),
     ]
 
@@ -209,15 +204,33 @@ def test_record_syncs_every_interval_before_close(
 
 
 def test_record_roundtrips_a_resume_marker(tmp_path: Path) -> None:
-    from fakeyou.persistence.record import ResumeEntry
-
     record = open_record(tmp_path)
     record.add_transcript(transcript(0))
     record.add_resume(attempt=2)
     record.close()
 
     entries = load_meeting_record(meeting_record_path(tmp_path, SessionId("meeting-1")))
-    assert entries[-1] == ResumeEntry(at=NOW, attempt=2)
+    assert entries[-1] == ResumeEntry(at=NOW, seq=2, attempt=2)
+
+
+def test_seq_continues_after_a_resume_reopens_the_record(tmp_path: Path) -> None:
+    first = open_record(tmp_path, attempt_id="attempt-1")
+    first.add_transcript(transcript(0))
+    first.add_twin_speech("Okay.", causation_id="event-0")
+    first.close()
+    second = open_record(tmp_path, attempt_id="attempt-2")
+    second.add_resume(attempt=2)
+    second.add_transcript(transcript(1))
+    second.close()
+    path = meeting_record_path(tmp_path, SessionId("meeting-1"))
+
+    entries = load_meeting_record(path)
+
+    assert [entry.seq for entry in entries] == [1, 2, 3, 4]
+    assert entries[2] == ResumeEntry(at=NOW, seq=3, attempt=2, attempt_id="attempt-2")
+    header = read_record_header(path)
+    assert header is not None
+    assert header.attempt_id == "attempt-1"
 
 
 def test_record_close_finalizes_and_second_close_is_safe(tmp_path: Path) -> None:
@@ -346,9 +359,9 @@ def test_record_roundtrips_screen_chat_and_signal_entries(tmp_path: Path) -> Non
     path = meeting_record_path(tmp_path, SessionId("meeting-1"))
 
     assert load_meeting_record(path) == [
-        ScreenEntry(at=NOW, **screen().model_dump()),
-        ChatEntry(at=NOW, **chat(own=True, backlog=True).model_dump()),
-        SignalEntry(at=NOW, **signal.model_dump()),
+        ScreenEntry(at=NOW, seq=1, **screen().model_dump()),
+        ChatEntry(at=NOW, seq=2, **chat(own=True, backlog=True).model_dump()),
+        SignalEntry(at=NOW, seq=3, **signal.model_dump()),
     ]
     kinds = [json.loads(line)["kind"] for line in path.read_text(encoding="utf-8").splitlines()]
     assert kinds == ["header", "screen", "chat", "signal"]
@@ -417,6 +430,7 @@ def test_record_keeps_every_signal_in_order(tmp_path: Path) -> None:
 def test_repaired_order_is_stable_and_pure() -> None:
     first = TranscriptEntry(
         at=NOW,
+        seq=2,
         id="a",
         spoken_at="t",
         source="s",
@@ -428,6 +442,7 @@ def test_repaired_order_is_stable_and_pure() -> None:
     )
     second = TranscriptEntry(
         at=NOW,
+        seq=1,
         id="b",
         spoken_at="t",
         source="s",
@@ -443,7 +458,7 @@ def test_repaired_order_is_stable_and_pure() -> None:
     assert [entry.id for entry in entries] == ["b", "a"]
 
 
-def test_new_record_starts_with_a_v3_header(tmp_path: Path) -> None:
+def test_new_record_starts_with_a_v4_header(tmp_path: Path) -> None:
     record = open_record(tmp_path)
     record.add_transcript(transcript(1, voice_clusters=("cluster-a",)))
     record.close()
@@ -451,8 +466,9 @@ def test_new_record_starts_with_a_v3_header(tmp_path: Path) -> None:
 
     assert json.loads(path.read_text(encoding="utf-8").splitlines()[0]) == {
         "kind": "header",
-        "v": 3,
         "at": "2026-09-30T10:00:00Z",
+        "v": 4,
+        "attempt_id": None,
     }
     entries = load_meeting_record(path)
     assert isinstance(entries[0], TranscriptEntry)
@@ -460,14 +476,15 @@ def test_new_record_starts_with_a_v3_header(tmp_path: Path) -> None:
     assert "visual_refs" not in json.loads(path.read_text(encoding="utf-8").splitlines()[1])
     header = read_record_header(path)
     assert header is not None
-    assert header.v == RECORD_VERSION == 3
+    assert header.v == RECORD_VERSION == 4
 
 
-def test_v1_record_still_loads_with_empty_clusters(tmp_path: Path) -> None:
+def test_headerless_record_still_loads_with_empty_clusters(tmp_path: Path) -> None:
     path = meeting_record_path(tmp_path, SessionId("meeting-1"))
     path.parent.mkdir(parents=True)
-    v1_entry = TranscriptEntry(
+    entry = TranscriptEntry(
         at=NOW,
+        seq=1,
         id="e1",
         spoken_at=NOW.isoformat(),
         source="meeting_audio",
@@ -475,7 +492,7 @@ def test_v1_record_still_loads_with_empty_clusters(tmp_path: Path) -> None:
         participant_id="unknown",
         speaker_evidence_id=None,
     )
-    path.write_text(v1_entry.model_dump_json(exclude={"voice_clusters"}) + "\n", encoding="utf-8")
+    path.write_text(entry.model_dump_json(exclude={"voice_clusters"}) + "\n", encoding="utf-8")
 
     loaded = load_meeting_record(path)
 
@@ -484,10 +501,10 @@ def test_v1_record_still_loads_with_empty_clusters(tmp_path: Path) -> None:
     assert loaded[0].voice_clusters == ()
 
 
-def test_reopened_v1_record_is_never_given_a_header(tmp_path: Path) -> None:
+def test_reopened_headerless_record_is_never_given_a_header(tmp_path: Path) -> None:
     path = meeting_record_path(tmp_path, SessionId("meeting-1"))
     path.parent.mkdir(parents=True)
-    path.write_text(TwinSpeechEntry(at=NOW, text="Earlier.").model_dump_json() + "\n")
+    path.write_text(TwinSpeechEntry(at=NOW, seq=1, text="Earlier.").model_dump_json() + "\n")
 
     record = open_record(tmp_path)
     record.add_twin_speech("Later.")
@@ -497,7 +514,7 @@ def test_reopened_v1_record_is_never_given_a_header(tmp_path: Path) -> None:
     assert [entry.kind for entry in load_meeting_record(path)] == ["twin_speech", "twin_speech"]
 
 
-def test_reopened_v3_record_keeps_one_header(tmp_path: Path) -> None:
+def test_reopened_v4_record_keeps_one_header(tmp_path: Path) -> None:
     first = open_record(tmp_path)
     first.add_twin_speech("One.")
     first.close()
@@ -512,31 +529,32 @@ def test_reopened_v3_record_keeps_one_header(tmp_path: Path) -> None:
     assert len(load_meeting_record(path)) == 2
 
 
-def test_empty_record_has_no_header_and_a_malformed_v3_header_is_rejected(
+def test_empty_record_has_no_header_and_a_malformed_v4_header_is_rejected(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "record.jsonl"
     path.write_text("", encoding="utf-8")
     assert read_record_header(path) is None
 
-    path.write_text('{"kind": "header", "v": 3}\n')
+    path.write_text('{"kind": "header", "v": 4}\n')
     with pytest.raises(ValueError, match="validation error"):
         read_record_header(path)
     with pytest.raises(ValueError, match="validation error"):
         load_meeting_record(path)
 
 
-@pytest.mark.parametrize("version", [2, 4, None])
+@pytest.mark.parametrize("version", [2, 3, 5, None])
 def test_header_with_another_version_is_unsupported(tmp_path: Path, version: int | None) -> None:
     path = meeting_record_path(tmp_path, SessionId("meeting-1"))
     path.parent.mkdir(parents=True)
     header = json.dumps({"kind": "header", "v": version, "at": "2026-09-30T10:00:00Z"})
-    path.write_text(header + "\n" + TwinSpeechEntry(at=NOW, text="Hi.").model_dump_json() + "\n")
+    entry = TwinSpeechEntry(at=NOW, seq=1, text="Hi.")
+    path.write_text(header + "\n" + entry.model_dump_json() + "\n")
 
     with pytest.raises(FakeYouError, match=f"version {version} is not supported") as error:
         read_record_header(path)
     assert error.value.code is ErrorCode.RECORD_VERSION_UNSUPPORTED
-    with pytest.raises(FakeYouError, match="this build reads version 3"):
+    with pytest.raises(FakeYouError, match="this build reads version 4"):
         load_meeting_record(path)
     with pytest.raises(FakeYouError, match="not supported"):
         open_record(tmp_path)
@@ -549,7 +567,7 @@ def test_torn_tail_after_a_header_is_dropped_but_the_header_is_not_an_entry(
     path = tmp_path / "meeting-1" / "record.jsonl"
     path.parent.mkdir(parents=True)
     path.write_text(
-        '{"kind": "header", "v": 3, "at": "2026-09-30T10:00:00Z"}\n{"kind": "twin_sp',
+        '{"kind": "header", "v": 4, "at": "2026-09-30T10:00:00Z"}\n{"kind": "twin_sp',
         encoding="utf-8",
     )
     journal = RecordingJournal()

@@ -43,6 +43,7 @@ def write_fixture_record(target: Path, fixture: dict[str, Any]) -> Path:
             moment = base + timedelta(seconds=int(utterance["offset_seconds"]))
             entry = TranscriptEntry(
                 at=moment,
+                seq=counter + 1,
                 id=f"u{counter:02d}",
                 spoken_at=moment.isoformat(),
                 source="meeting_audio",

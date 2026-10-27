@@ -64,15 +64,6 @@ from fakeyou.meet.meet import (
     observe_call_state,
     request_guest_join,
 )
-from fakeyou.meet.meet_action_ledger import (
-    MeetActionKind,
-)
-from fakeyou.meet.meet_actions import (
-    MeetActionSignals,
-    observe_chat_echoed,
-    observe_hand_lowered,
-    observe_hand_raised,
-)
 from fakeyou.meet.participant_observer import (
     DEFAULT_PARTICIPANT_SCHEDULE,
     QUERY_METHOD_MINING,
@@ -96,6 +87,8 @@ from fakeyou.observability.provider_faults import (
     classify_exception,
     trim_detail,
 )
+from fakeyou.orchestration.commands import CommandRunner
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.lifecycle import (
     CheckpointDegradation,
     DegradingCheckpointer,
@@ -113,7 +106,6 @@ from fakeyou.orchestration.lifecycle import (
     meeting_thread_id,
     resume_lifecycle,
 )
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.orchestration.presence import PROTOCOL_STALE_SECONDS, AloneClock
@@ -181,21 +173,6 @@ DOM_PRESENCE_FRESH_SECONDS = 30.0
 KNOWN_ERROR_DISMISS_SECONDS = 5.0
 
 
-async def _readback_effect(
-    kind: MeetActionKind,
-    page: Page,
-    text: str,
-    signals: MeetActionSignals,
-    *,
-    acted: bool,
-) -> bool:
-    if kind == "send_chat":
-        return acted and await observe_chat_echoed(page, text, signals)
-    if kind == "raise_hand":
-        return await observe_hand_raised(page, signals)
-    return await observe_hand_lowered(page, signals)
-
-
 @dataclass(slots=True)
 class MonitorScan:
     next_scan: float
@@ -232,7 +209,8 @@ class MeetingWorker:
     perception_sync_watched: bool = False
     on_phase: Callable[[str], None] | None = None
     moments: MomentDetector | None = None
-    meet_dispatcher: MeetActionDispatcher | None = None
+    commands: CommandRunner | None = None
+    kernel: KernelPort | None = None
     detail: str = ""
     base: LifecycleState | None = None
     working: LifecycleState | None = None
@@ -459,8 +437,8 @@ class MeetingWorker:
         if self.phase_now() != "leaving":
             return self._commit()
         origin_detail = self.detail
-        if self.meet_dispatcher is not None and self.meet_dispatcher.left:
-            detail = "twin already left the call via meet_leave"
+        if self.commands is not None and self.commands.left:
+            detail = "twin already left the call on request"
             self._send("leave_sent", self.origin_attribution or "policy", detail)
             keeps_origin = self.origin_kind in ("audio_failed", "conversation_failed")
             self.detail = origin_detail if keeps_origin else detail
@@ -710,6 +688,14 @@ class MeetingWorker:
             self._on_chat_line(event.line)
 
     def _on_chat_line(self, line: ChatLine) -> None:
+        if self.kernel is not None:
+            self.kernel.chat(
+                message_id=line.ref,
+                device_id=line.sender.participant_id,
+                text=line.text,
+                own=line.own,
+                backlog=line.backlog,
+            )
         conversation = self.conversation
         if conversation is None or line.own or line.backlog:
             return
@@ -811,6 +797,8 @@ class MeetingWorker:
             await self.close_participant_observer()
 
     async def _poll_stop(self, deadline: float) -> str | None:
+        if self.commands is not None and self.commands.left:
+            return await self.finish("leave_requested", "policy", "twin left the call on request")
         if self.stop.is_set():
             return await self.finish("owner_stopped", "owner_action", "owner requested stop")
         if self.monotonic() >= deadline:
@@ -849,6 +837,9 @@ class MeetingWorker:
         )
         perception = self.perception
         sensors = perception.sensors if perception is not None else None
+        if self.kernel is not None:
+            self.kernel.dom_remote(dom)
+            self.kernel.protocol_health(available=self._protocol_available())
         was_drifting = self.presence.drifting
         reading = self.presence.observe(
             now,
@@ -941,6 +932,11 @@ class MeetingWorker:
 
     async def apply_observation(self, checked: WatchdogCheck) -> str | None:
         observation = checked.observation
+        if self.kernel is not None and observation.state != "unknown":
+            self.kernel.call_state(
+                observation.state,
+                new_epoch=observation.state == "in_call" and self.disconnected_from is not None,
+            )
         if observation.state in ("removed", "ended"):
             kind: LifecycleEventKind = (
                 "removed" if observation.state == "removed" else "meeting_ended"
@@ -1065,10 +1061,11 @@ class SessionWiring:
     preflight_hosts: tuple[str, ...] | None = None
     preflight_budget_seconds: float | None = None
     voice_activity: VoiceActivityTracker | None = None
-    meet_dispatcher: MeetActionDispatcher | None = None
+    commands: CommandRunner | None = None
     perception: PerceptionStack | None = None
     on_phase: Callable[[str], None] | None = None
     moments: MomentDetector | None = None
+    kernel: KernelPort | None = None
 
 
 _PreflightFactory = Callable[[], Coroutine[Any, Any, list[ProbeResult]]]
@@ -1222,8 +1219,8 @@ async def _launch_session_browser(
         detail = "owner stopped browser startup"
         await lifecycle.send("owner_stopped", "owner_action")
         return detail
-    if hooks.meet_dispatcher is not None and config.meet_actions_enabled:
-        hooks.meet_dispatcher.bind_page(
+    if hooks.commands is not None and config.meet_actions_enabled:
+        hooks.commands.bind_page(
             page, sleep=hooks.sleep, monotonic=hooks.monotonic, stop=stop_event
         )
     journal = _resolve_journal(hooks, config)
@@ -1252,14 +1249,15 @@ async def _launch_session_browser(
         perception=hooks.perception,
         on_phase=hooks.on_phase,
         moments=hooks.moments,
-        meet_dispatcher=hooks.meet_dispatcher,
+        kernel=hooks.kernel,
+        commands=hooks.commands,
     )
     context = RuntimeContext(browser=page, audio=audio, session=worker)
     try:
         await _run_lifecycle(lifecycle, context)
     finally:
-        if hooks.meet_dispatcher is not None:
-            hooks.meet_dispatcher.close()
+        if hooks.commands is not None:
+            hooks.commands.close()
     return worker.detail or "session ended"
 
 

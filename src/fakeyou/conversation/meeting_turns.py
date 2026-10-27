@@ -16,13 +16,13 @@ from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
-    ChatChannel,
-    MeetActionExecutor,
+    CommandPort,
     Responder,
     SentenceLimits,
+    StateSpeech,
     StreamTurnFactory,
     ToolStartHook,
-    TurnSettler,
+    TurnPlanning,
     WholeResponder,
     WholeTurnFactory,
     build_turn_graph,
@@ -46,6 +46,7 @@ from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
+from fakeyou.session.identity import PresenceFact
 
 MeetingReplier = ConversationResponder | StreamingConversationResponder
 
@@ -60,7 +61,7 @@ class TurnInteraction:
     barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
-    human_participants: Callable[[], Sequence[str]] | None = None
+    presence: Callable[[], PresenceFact] | None = None
     judge: TurnJudge | None = None
     history: MeetingHistory = NoHistory()
     judge_thresholds: JudgeThresholds = JudgeThresholds(
@@ -71,9 +72,9 @@ class TurnInteraction:
     )
     judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
-    chat: ChatChannel | None = None
-    settle_turn: TurnSettler | None = None
-    meet_action_executor: MeetActionExecutor | None = None
+    planning: TurnPlanning | None = None
+    commands: CommandPort | None = None
+    state_speech: StateSpeech | None = None
     control: ReplyControl | None = None
 
 
@@ -173,10 +174,10 @@ def _deferred_options(
     return DeferredOptions(
         quiet_gap_seconds=timing.quiet_gap_seconds,
         ttl_seconds=timing.deferred_ttl_seconds,
-        chat=interaction.chat,
         chat_turn=chat_turn,
-        settle_turn=interaction.settle_turn,
-        meet_action_executor=interaction.meet_action_executor,
+        planning=interaction.planning,
+        commands=interaction.commands,
+        state_speech=interaction.state_speech,
         others_speaking=interaction.others_speaking,
     )
 
@@ -190,7 +191,7 @@ def _judging(interaction: TurnInteraction) -> TurnJudging | None:
             interaction.history,
             interaction.judge_window_lines,
             twin_names=tuple(dict.fromkeys((*interaction.wake_phrases, *interaction.twin_names))),
-            participants=interaction.human_participants,
+            presence=interaction.presence,
         ),
         thresholds=interaction.judge_thresholds,
     )

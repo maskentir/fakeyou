@@ -8,7 +8,7 @@ from contextlib import (
     contextmanager,
 )
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Protocol
 
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
@@ -23,7 +23,6 @@ from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
     MeetingResponder,
-    ToolResultCallback,
 )
 from fakeyou.conversation.grounding import GroundingVerifier, ModelGroundingVerifier
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
@@ -35,41 +34,34 @@ from fakeyou.conversation.meeting_turns import (
     build_meeting_turns,
 )
 from fakeyou.conversation.middleware import (
-    ChannelToolsMiddleware,
     EvidenceRoutingMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.participation_graph import JudgeThresholds
 from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.conversation.turn_graph import ChatChannel, ConversationPhase, TurnActionOutcome
+from fakeyou.conversation.speech_book import BookSource, TurnEvidence
+from fakeyou.conversation.state_speech import locale_of, render
+from fakeyou.conversation.turn_graph import CommandPort, ConversationPhase, PlannedTurn
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
 from fakeyou.db.voiceprint_store import VoiceprintRepository, VoiceprintStore
-from fakeyou.foundation.capabilities import EVIDENCE_TOOLS as REGISTRY_EVIDENCE_TOOLS
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifact
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
-from fakeyou.meet.meet_action_ledger import MeetActionKind
-from fakeyou.meet.meet_tools import MEET_CHECK_ACTION
 from fakeyou.memory.memory import (
-    create_meet_action_tools,
     create_memory_prefetch_middleware,
-    create_memory_tools,
-    create_recall_error_middleware,
 )
 from fakeyou.memory.persona import (
     PersonaProfile,
     PersonaTool,
     meeting_tool_names,
-    memory_wiring,
-    refuse_meet_tool,
 )
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher, MeetChatChannel
+from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
     create_chat_model,
@@ -82,8 +74,12 @@ from fakeyou.perception.context import (
     create_perception_middleware,
 )
 from fakeyou.persistence.brief import MeetingBrief
-
-EVIDENCE_TOOLS = REGISTRY_EVIDENCE_TOOLS
+from fakeyou.session.commands import CommandOutcome
+from fakeyou.session.facts import StateQuestion, state_fact
+from fakeyou.session.identity import PresenceFact
+from fakeyou.session.intent import Reading, intent_of
+from fakeyou.session.planner import plan_turn
+from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
 
 
 @dataclass(slots=True)
@@ -217,16 +213,23 @@ class AgentWiring:
 DEFAULT_AGENT_WIRING = AgentWiring()
 
 
+class MeetCommands(CommandPort, Protocol):
+    @property
+    def available(self) -> bool: ...
+
+    def recent(self) -> tuple[CommandOutcome, ...]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class TurnBehavior:
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None]
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
     barge_in: bool = False
-    on_tool_result: ToolResultCallback | None = None
-    meet_dispatcher: MeetActionDispatcher | None = None
-    chat: ChatChannel | None = None
+    commands: MeetCommands | None = None
+    kernel: KernelPort | None = None
     others_speaking: Callable[[], bool] | None = None
+    presence: Callable[[], PresenceFact] | None = None
 
 
 def build_turn_judge(settings: Settings, twin_names: Sequence[str]) -> TurnJudge | None:
@@ -273,6 +276,7 @@ class _ConversationBuilder:
         self._tool_names: frozenset[PersonaTool] = frozenset()
         self._control = ReplyControl()
         self._turn_language = TurnLanguage(settings.speech.language)
+        self._evidence = TurnEvidence()
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -286,7 +290,6 @@ class _ConversationBuilder:
         self._persona = build_persona_prompt(
             profile,
             brief=self._agent.brief,
-            recall_strategy=self._settings.memory.recall.strategy,
             language=self._settings.speech.language,
             perception=self._agent.perception is not None,
         )
@@ -295,11 +298,7 @@ class _ConversationBuilder:
         strong = create_strong_chat_model(self._settings)
         if strong is not None:
             self._middleware.append(
-                EvidenceRoutingMiddleware(
-                    strong,
-                    evidence_tools=EVIDENCE_TOOLS,
-                    journal=self._diagnostics.journal,
-                )
+                EvidenceRoutingMiddleware(strong, journal=self._diagnostics.journal)
             )
 
     def add_fallback(self) -> None:
@@ -310,105 +309,60 @@ class _ConversationBuilder:
     def add_memory(self) -> None:
         profile = self._agent.profile
         graphiti = self._agent.graphiti
-        if graphiti is None or profile is None or not self._tool_names:
+        if graphiti is None or profile is None or "recall_meeting_context" not in self._tool_names:
             return
-        bound, prefetch = memory_wiring(self._tool_names, self._settings.memory.recall.strategy)
-        if prefetch:
-            self._middleware.append(
-                create_memory_prefetch_middleware(
-                    graphiti,
-                    group_id=profile.memory_group,
-                    recall=self._settings.memory.recall,
-                    diag=self._diagnostics,
-                )
+        self._middleware.append(
+            create_memory_prefetch_middleware(
+                graphiti,
+                group_id=profile.memory_group,
+                recall=self._settings.memory.recall,
+                diag=self._diagnostics,
+                on_prefetch=self._note_prefetch,
             )
-        if bound:
-            self._tools.extend(
-                tool
-                for tool in create_memory_tools(
-                    graphiti, group_id=profile.memory_group, recall=self._settings.memory.recall
-                )
-                if tool.name in bound
-            )
-            self._middleware.append(create_recall_error_middleware(self._diagnostics.faults))
+        )
 
     def add_perception(self) -> None:
-        self._middleware.append(ChannelToolsMiddleware())
         perception = self._agent.perception
         if perception is None:
             return
         self._middleware.append(
-            create_perception_middleware(perception, journal=self._diagnostics.journal)
+            create_perception_middleware(
+                perception,
+                journal=self._diagnostics.journal,
+                on_observed=self._evidence.note_observed,
+            )
         )
 
-    async def _execute_meet_action(self, event: TranscriptEvent) -> TurnActionOutcome | None:
-        dispatcher = self._behavior.meet_dispatcher
-        if dispatcher is None:
+    def _grant(self) -> Grant:
+        brief = self._agent.brief
+        commands = self._behavior.commands
+        kernel = self._behavior.kernel
+        return Grant(
+            permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
+            browser_available=commands is not None
+            and commands.available
+            and (kernel is None or kernel.side_effects_allowed()),
+        )
+
+    def _plan(self, event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+        kernel = self._behavior.kernel
+        actor = kernel.actor(event.id) if kernel is not None else UNATTRIBUTED
+        authorization = authorize(
+            intent_of(reading), actor=actor, channel=channel, grant=self._grant()
+        )
+        return PlannedTurn(
+            plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}"),
+            actor=actor.device_id or actor.kind,
+        )
+
+    def _state_speech(self, question: StateQuestion) -> str | None:
+        kernel = self._behavior.kernel
+        locale = locale_of(self._settings.speech.language)
+        if kernel is None or locale is None:
             return None
-        outcome = await dispatcher.settle(
-            cast(MeetActionKind, event.meet_action),
-            action_id=f"turn-{event.id}",
-            text=event.reaction_emoji or "",
-        )
-        if outcome is None:
-            return TurnActionOutcome(
-                succeeded=False,
-                detail="The meeting action did not settle.",
-                state="unknown",
-            )
-        state = "observed_done" if outcome.succeeded else outcome.outcome
-        return TurnActionOutcome(succeeded=outcome.succeeded, detail=outcome.detail, state=state)
-
-    async def _settle_turn(self, event: TranscriptEvent, *, completed: bool) -> None:
-        dispatcher = self._behavior.meet_dispatcher
-        if dispatcher is None:
-            return
-        if not completed:
-            dispatcher.cancel_leave()
-            return
-        if dispatcher.leave_scheduled:
-            dispatcher.release_leave()
-            return
-        if event.turn_planned and event.meet_action == "leave" and not dispatcher.left:
-            await dispatcher.settle("leave", action_id=f"turn-{event.id}")
-
-    def _human_participants(self) -> tuple[str, ...]:
-        perception = self._agent.perception
-        if perception is None:
-            return ()
-        own = {
-            name.casefold() for name in (*self._behavior.twin_names, *self._behavior.wake_phrases)
-        }
-        return tuple(
-            dict.fromkeys(
-                person.name
-                for person in perception.timeline.snapshot().participants
-                if person.name and person.name.casefold() not in own
-            )
-        )
-
-    def chat_channel(self) -> ChatChannel | None:
-        if self._behavior.chat is not None:
-            return self._behavior.chat
-        dispatcher = self._behavior.meet_dispatcher
-        if dispatcher is None or "meet_send_chat" not in self._tool_names:
-            return None
-        return MeetChatChannel(dispatcher)
-
-    def add_meet_tools(self) -> None:
-        if self._agent.profile is None or self._behavior.meet_dispatcher is None:
-            return
-        meet = self._tool_names - {"recall_meeting_context"}
-        if meet:
-            self._tools.extend(
-                tool
-                for tool in create_meet_action_tools(
-                    self._behavior.meet_dispatcher,
-                    refuse=refuse_meet_tool,
-                    journal=self._diagnostics.journal,
-                )
-                if tool.name in meet or tool.name == MEET_CHECK_ACTION
-            )
+        commands = self._behavior.commands
+        actions = commands.recent() if commands is not None else ()
+        return render(state_fact(question, kernel.state, actions).proposition, locale)
 
     def add_speaker_attribution(self) -> None:
         self._middleware.append(SpeakerAttributionMiddleware())
@@ -429,6 +383,26 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
+    def _note_prefetch(self, outcome: str, refs: Mapping[str, str]) -> None:
+        self._evidence.note_memory(refs)
+        if self._behavior.kernel is not None:
+            self._behavior.kernel.memory_outcome(outcome)
+
+    def _judge(self, names: Sequence[str]) -> TurnJudge | None:
+        judge = build_turn_judge(self._settings, names)
+        kernel = self._behavior.kernel
+        if judge is None or kernel is None:
+            return judge
+        return HealthReportingJudge(judge, kernel)
+
+    def _book_source(self) -> BookSource:
+        brief = self._agent.brief
+        return BookSource(
+            registry=build_source_registry(self._agent.profile, brief),
+            permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
+            persona_knowledge=brief is None or brief.knowledge_scope != "brief_only",
+        )
+
     def build_responder(
         self,
         agent: MeetingAgent,
@@ -439,14 +413,14 @@ class _ConversationBuilder:
             agent,
             self._agent.history,
             journal=self._diagnostics.journal,
-            on_tool_result=self._behavior.on_tool_result,
             language=self._settings.speech.language,
             max_sentences=self._settings.conversation.max_spoken_sentences,
             history_max_tokens=self._settings.conversation.history_max_tokens,
             control=self._control,
             turn_language=self._turn_language,
             contributor=contributor,
-            source_registry=build_source_registry(self._agent.profile, self._agent.brief),
+            book_source=self._book_source(),
+            evidence=self._evidence,
             verifier=verifier,
             grounding_threshold=self._settings.perception.attention.grounding_confidence,
         )
@@ -471,8 +445,8 @@ class _ConversationBuilder:
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
-                human_participants=self._human_participants,
-                judge=build_turn_judge(self._settings, names),
+                presence=self._behavior.presence,
+                judge=self._judge(names),
                 history=self._agent.history,
                 judge_thresholds=JudgeThresholds(
                     reply=judge_settings.reply_threshold,
@@ -481,15 +455,9 @@ class _ConversationBuilder:
                     unnamed_reply=judge_settings.unnamed_reply_threshold,
                 ),
                 judge_window_lines=judge_settings.window_lines,
-                chat=self.chat_channel(),
-                settle_turn=(
-                    self._settle_turn if self._behavior.meet_dispatcher is not None else None
-                ),
-                meet_action_executor=(
-                    self._execute_meet_action
-                    if self._behavior.meet_dispatcher is not None
-                    else None
-                ),
+                planning=self._plan,
+                commands=self._behavior.commands,
+                state_speech=self._state_speech,
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,
@@ -524,10 +492,9 @@ async def open_conversation(
     model = create_chat_model(settings)
     async with TeardownStack(faults=diagnostics.faults) as resources:
         builder.add_memory()
+        builder.add_perception()
         builder.add_routing()
         builder.add_fallback()
-        builder.add_perception()
-        builder.add_meet_tools()
         builder.add_speaker_attribution()
         responder = builder.build_responder(
             builder.build_agent(model),

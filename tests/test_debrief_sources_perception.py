@@ -142,6 +142,7 @@ def test_signals_are_never_sources(tmp_path: Path) -> None:
             {
                 "kind": "signal",
                 "at": "2026-10-03T12:00:00Z",
+                "seq": 1,
                 "signal": "hand_raised",
                 "participant_id": "devices/8",
                 "participant": "Budi",

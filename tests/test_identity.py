@@ -9,6 +9,8 @@ DISPLAY_CLAIM_RENDER_READERS = frozenset(
     {
         "persistence/record.py",
         "conversation/meeting_messages.py",
+        "conversation/turn_judge.py",
+        "session/facts.py",
         "debrief/debrief.py",
         "debrief/debrief_sources.py",
         "diarization/correction_labels.py",

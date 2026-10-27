@@ -11,7 +11,6 @@ def _passing_payload(tmp_path: Path) -> dict[str, Any]:
     score = ReplayScore()
     for name in (
         "answered",
-        "recall_called",
         "must_mention",
         "must_mention_any",
         "must_not_mention",

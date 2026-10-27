@@ -83,7 +83,7 @@ def test_compact_render_drops_metadata_but_keeps_identity_longhand() -> None:
     payload = json.loads(render_evidence(facts, result_limit=5, excluded={}, compact=True))
     assert payload["schema"] == "memory_evidence/v1"
     assert payload["facts"][0]["text"] == "Orchid demo moves to Friday."
-    assert "fact_ids" not in payload["facts"][0]
+    assert payload["facts"][0]["fact_ids"] == ["a"]
     sources = payload["facts"][0]["sources"]
     assert sources[0] == {
         "kind": "owner_note",

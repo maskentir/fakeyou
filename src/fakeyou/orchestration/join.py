@@ -1,6 +1,7 @@
 import asyncio
 import shlex
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
-from fakeyou.meet.meet_action_ledger import LedgerResult, MeetActionKind
+from fakeyou.meet.command_ledger import CommandRecord
 from fakeyou.memory.ingestion import meeting_windows
 from fakeyou.memory.persona import speech_keywords
 from fakeyou.observability.diagnostics import Diagnostics
@@ -53,10 +54,11 @@ from fakeyou.orchestration.assembly import (
     open_voiceprint,
     stop_signal_handlers,
 )
+from fakeyou.orchestration.commands import CommandRunner
 from fakeyou.orchestration.join_context import PreparedJoin, guard_join, prepare_join
 from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.perception import PerceptionStack, create_perception_stack
 from fakeyou.orchestration.providers import (
     create_embedder,
@@ -70,7 +72,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
-from fakeyou.perception.percepts import IncomingChat, ParticipantRef
+from fakeyou.perception.percepts import ParticipantRef
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
@@ -98,7 +100,7 @@ class _JoinRun:
     conversation: MeetingTurns | None = None
     voiceprint_live: VoiceprintLive | None = None
     voice_activity: VoiceActivityTracker | None = None
-    meet_dispatcher: MeetActionDispatcher | None = None
+    commands: CommandRunner | None = None
     perception: PerceptionStack | None = None
     moments: MomentDetector | None = None
     audio_factory: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
@@ -108,6 +110,7 @@ class _JoinRun:
     exit_code: ExitCode = ExitCode.FAILURE
     final_exit: ExitCode = ExitCode.FAILURE
     speaking: str | None = None
+    kernel: KernelPort | None = None
 
 
 def _write_pending_status(
@@ -150,7 +153,9 @@ def _open_join_resources(
     resources.callback(journal.close)
     faults = FaultReporter(journal=journal)
     ingest_requested, ingestion_outcome, record_error = _write_pending_status(prepared, faults)
-    record = MeetingRecord(prepared.record_path, faults=faults, journal=journal)
+    record = MeetingRecord(
+        prepared.record_path, faults=faults, journal=journal, attempt_id=uuid.uuid4().hex
+    )
     resources.callback(record.close)
     if resuming:
         attempt = _resume_attempt(prepared.record_path)
@@ -193,53 +198,25 @@ async def _open_join_memory(
         )
 
 
-def share_roster(registry: SpeakerRegistry, roster: MeetRoster) -> None:
+def share_roster(registry: SpeakerRegistry, kernel: KernelPort, roster: MeetRoster) -> None:
+    kernel.roster(roster)
     people = roster.people()
     registry.update_roster(people)
     registry.note_roster({"id": device, "name": name} for device, name in people.items() if name)
     registry.note_audio_sources(roster.audio_sources())
 
 
-def _own_chat_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[str, str], None] | None:
+def _own_action_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[CommandRecord], None]:
     perception = run.perception
-    if perception is None:
-        return None
-    timeline = perception.timeline
     profile = prepared.profile
     name = str(profile.display_name) if profile is not None else "You"
     you = ParticipantRef(ref="you", participant_id="twin", name=name)
 
-    def sink(action_id: str, text: str) -> None:
-        timeline.add_chat(
-            IncomingChat(
-                message_id=f"twin-action-{action_id}",
-                sender=you,
-                text=text,
-                sent_at=datetime.now(UTC),
-                own=True,
-            )
-        )
-
-    return sink
-
-
-def _own_action_sink(
-    prepared: PreparedJoin, run: _JoinRun
-) -> Callable[[MeetActionKind, str, str, LedgerResult], None] | None:
-    perception = run.perception
-    if perception is None:
-        return None
-    timeline = perception.timeline
-    profile = prepared.profile
-    name = str(profile.display_name) if profile is not None else "You"
-    you = ParticipantRef(ref="you", participant_id="twin", name=name)
-
-    def sink(kind: MeetActionKind, action_id: str, text: str, outcome: LedgerResult) -> None:
-        del action_id
-        detail = (
-            f"{kind} {text} {outcome.outcome}" if kind == "react" else f"{kind} {outcome.outcome}"
-        )
-        timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
+    def sink(record: CommandRecord) -> None:
+        if perception is None or record.kind == "send_chat":
+            return
+        detail = f"{record.kind} {record.text} {record.state}".replace("  ", " ")
+        perception.timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
 
     return sink
 
@@ -248,6 +225,9 @@ def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
     registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
+    run.kernel = KernelPort.for_meeting(
+        prepared.config.meeting_id, journal=run.journal, attempt_id=run.record.attempt_id
+    )
     run.voiceprint_live = resources.enter_context(open_voiceprint(prepared.request.settings))
     run.voice_activity = (
         VoiceActivityTracker(registry=registry)
@@ -260,22 +240,18 @@ def _build_join_layers(
         journal=run.journal,
         record=run.record,
         screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
-        on_roster=partial(share_roster, registry),
+        on_roster=partial(share_roster, registry, run.kernel),
     )
-    run.meet_dispatcher = (
-        MeetActionDispatcher(
+    if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled:
+        run.commands = CommandRunner(
             prepared.record_path,
             meeting_id=prepared.config.meeting_id,
-            enabled=prepared.config.meet_actions_enabled,
+            kernel=run.kernel,
             chat_per_minute=prepared.request.settings.conversation.meet_chat_per_minute,
             journal=run.journal,
         )
-        if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled
-        else None
-    )
-    if run.meet_dispatcher is not None:
-        run.meet_dispatcher.on_chat_sent = _own_chat_sink(prepared, run)
-        run.meet_dispatcher.on_action_settled = _own_action_sink(prepared, run)
+        run.commands.on_settled = _own_action_sink(prepared, run)
+        run.commands.recover()
     return registry
 
 
@@ -313,11 +289,12 @@ async def _open_join_conversation(
                 ],
                 twin_names=[prepared.config.twin_name],
                 barge_in=prepared.request.barge_in,
-                on_tool_result=run.record.add_tool_result,
-                meet_dispatcher=run.meet_dispatcher,
+                commands=run.commands,
+                kernel=run.kernel,
                 others_speaking=(
                     run.voice_activity.others_speaking if run.voice_activity is not None else None
                 ),
+                presence=run.kernel.presence if run.kernel is not None else None,
             ),
             diagnostics=Diagnostics(faults=run.faults, journal=run.journal),
         )
@@ -355,6 +332,8 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
 
 
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
+    if run.kernel is not None:
+        run.kernel.playback(event)
     if run.voice_activity is not None:
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
     if event.cue:
@@ -375,10 +354,12 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         run.speaking = event.text
     elif event.kind == "playback_finished":
         run.speaking = None
-        run.record.add_twin_speech(event.text)
+        run.record.add_twin_speech(event.text, causation_id=event.utterance.transcript_id)
     elif event.kind == "playback_dropped" and event.text == run.speaking:
         run.speaking = None
-        run.record.add_twin_speech(event.text, interrupted=True)
+        run.record.add_twin_speech(
+            event.text, interrupted=True, causation_id=event.utterance.transcript_id
+        )
 
 
 def _moment_observer(run: _JoinRun) -> Callable[[TranscriptEvent], Awaitable[None]] | None:
@@ -405,6 +386,7 @@ def _build_audio_factory(
             conversation=run.conversation.ingress if run.conversation is not None else None,
             faults=run.faults,
             on_final=_moment_observer(run),
+            kernel=run.kernel,
         ),
         binder=stream_binder,
         voice_activity=run.voice_activity,
@@ -479,8 +461,6 @@ async def _drive_join_session(
 ) -> SessionResult:
     if run.session_result is not None:
         return run.session_result
-    if run.meet_dispatcher is not None:
-        run.meet_dispatcher.on_leave = stop.set
     preflight_kwargs: dict[str, Any] = (
         {
             "preflight_hosts": preflight_hosts(
@@ -504,10 +484,11 @@ async def _drive_join_session(
                 faults=run.faults,
                 journal=run.journal,
                 voice_activity=run.voice_activity,
-                meet_dispatcher=run.meet_dispatcher,
+                commands=run.commands,
                 perception=run.perception,
                 on_phase=prepared.request.on_phase,
                 moments=run.moments,
+                kernel=run.kernel,
                 **preflight_kwargs,
             ),
         )
@@ -640,6 +621,8 @@ async def run_join_session(request: JoinRequest, ports: JoinPorts) -> JoinOutcom
                     )
                     await _open_join_memory(prepared, run, resources, ports)
                     registry = _build_join_layers(prepared, run, resources)
+                    if run.kernel is not None:
+                        await resources.enter_async_context(run.kernel.running())
                     run.journal.record(
                         "signal_handlers_bound",
                         source="cli",

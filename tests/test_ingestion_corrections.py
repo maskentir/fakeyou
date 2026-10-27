@@ -457,6 +457,7 @@ def correction_record_three(tmp_path: Path) -> Path:
     entries = [
         TranscriptEntry(
             at=START + timedelta(seconds=seconds),
+            seq=index + 1,
             id=f"m{index}",
             spoken_at=(START + timedelta(seconds=seconds)).isoformat(),
             source="meeting_audio",

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from itertools import count
 from typing import cast
 
 from langchain_core.messages import AIMessage
@@ -10,6 +11,8 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TwinSpeechEntry
 from tests._conversation_fakes import ToolCallingFakeModel
 
+RECORD_ORDER = count(1)
+
 
 class _History:
     def __init__(self, entries: list[TwinSpeechEntry]) -> None:
@@ -20,7 +23,9 @@ class _History:
 
 
 def _twin(text: str, *, interrupted: bool = False) -> TwinSpeechEntry:
-    return TwinSpeechEntry(at=datetime.now(UTC), text=text, interrupted=interrupted)
+    return TwinSpeechEntry(
+        at=datetime.now(UTC), seq=next(RECORD_ORDER), text=text, interrupted=interrupted
+    )
 
 
 def _event(text: str) -> TranscriptEvent:

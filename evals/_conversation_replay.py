@@ -149,16 +149,6 @@ class StepOutcome:
 Judge = Callable[[str, str, str], Awaitable[Verdict]]
 
 
-class FakeChat:
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-
-    async def send(self, text: str, *, transcript_id: str) -> bool:
-        del transcript_id
-        self.sent.append(text)
-        return True
-
-
 class ScenarioAudio(FakeReplyAudio):
     def __init__(self, record: MeetingRecord) -> None:
         super().__init__()
@@ -250,7 +240,6 @@ async def run_scenario(
         closing(MeetingRecord(Path(folder) / "record.jsonl")) as record,
     ):
         audio = ScenarioAudio(record)
-        chat = FakeChat()
         async with assembly.open_conversation(
             settings,
             config,
@@ -260,7 +249,6 @@ async def run_scenario(
                 wake_phrases=(profile.display_name,),
                 twin_names=(profile.display_name,),
                 barge_in=True,
-                chat=chat,
             ),
             diagnostics=Diagnostics(journal=journal),
         ) as turns:
@@ -300,9 +288,6 @@ async def run_scenario(
                     turns.ingress.receive_chat(event)
                 await _settle(turns)
                 spoken = audio.turn
-                if step.source == "meeting_chat":
-                    spoken = [SpokenLine(text=text, interrupted=False) for text in chat.sent]
-                    chat.sent.clear()
                 outcomes.append(
                     StepOutcome(
                         scenario.id,

@@ -1,22 +1,12 @@
+import json
 from typing import Any, cast
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
 
 from fakeyou.conversation.middleware import EvidenceRoutingMiddleware
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._persistence_fakes import RecordingJournal
-
-
-@tool(description="Look at the shared screen.")
-def look_at_screen(question: str) -> str:
-    return f"The slide shows the beta date for: {question}"
-
-
-@tool(description="Raise a hand in the meeting.")
-def meet_raise_hand() -> str:
-    return "queued"
 
 
 def _trigger(text: str, message_id: str) -> HumanMessage:
@@ -50,43 +40,126 @@ def _prefetch_pair(transcript_id: str, outcome: str) -> list[BaseMessage]:
     return [call, result]
 
 
-def _look_call() -> AIMessage:
-    return AIMessage(
+def _synthetic_pair(name: str, content: str, flag: str) -> list[BaseMessage]:
+    call = AIMessage(
         content="",
-        tool_calls=[{"name": "look_at_screen", "args": {"question": "date"}, "id": "look-1"}],
+        tool_calls=[{"name": name, "args": {}, "id": f"{name}-1", "type": "tool_call"}],
     )
+    result = ToolMessage(
+        content=content,
+        tool_call_id=f"{name}-1",
+        name=name,
+        additional_kwargs={flag: True},
+    )
+    return [call, result]
 
 
-async def test_a_reply_built_from_a_tool_result_goes_to_the_strong_model() -> None:
-    light = ToolCallingFakeModel(responses=[_look_call()])
-    strong = ToolCallingFakeModel(responses=[AIMessage(content="The beta is on 14 October.")])
-    agent = create_agent(
+def _view_pair() -> list[BaseMessage]:
+    return _synthetic_pair("observe_meeting", "Meeting view: ...", "synthetic_view")
+
+
+def _evidence_pair(results: dict[str, dict[str, str]]) -> list[BaseMessage]:
+    return _synthetic_pair("meeting_evidence", json.dumps(results), "meeting_evidence")
+
+
+def _routing_agent(
+    light: ToolCallingFakeModel,
+    strong: ToolCallingFakeModel,
+    journal: RecordingJournal | None = None,
+) -> Any:
+    return create_agent(
         model=light,
-        tools=[look_at_screen],
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"look_at_screen"}))
-        ],
+        middleware=[EvidenceRoutingMiddleware(strong, journal=journal)],
     )
 
-    result = await agent.ainvoke({"messages": [HumanMessage("Rani, what date is on the slide?")]})
+
+async def test_meeting_evidence_with_an_answer_goes_to_the_strong_model() -> None:
+    light = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="The beta is on 14 October.")])
+    messages: list[BaseMessage] = [
+        _trigger("Rani, what date is on the slide?", "t1"),
+        *_view_pair(),
+        *_evidence_pair({"screen": {"code": "ok", "answer": "14 October"}}),
+    ]
+
+    result = await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
 
     assert result["messages"][-1].text == "The beta is on 14 October."
-    assert all(not isinstance(seen[-1], ToolMessage) for seen in light.seen)
+    assert light.seen == []
     assert strong.seen
-    assert all(isinstance(seen[-1], ToolMessage) for seen in strong.seen)
+
+
+async def test_meeting_evidence_with_one_answer_among_failures_still_escalates() -> None:
+    light = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="The slide says 14 October.")])
+    messages: list[BaseMessage] = [
+        _trigger("Rani, what does Budi show and what is on the slide?", "t1"),
+        *_view_pair(),
+        *_evidence_pair(
+            {
+                "participant": {"code": "camera_unavailable"},
+                "screen": {"code": "ok", "answer": "14 October"},
+            }
+        ),
+    ]
+
+    await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
+
+    assert light.seen == []
+    assert strong.seen
+
+
+async def test_meeting_evidence_without_an_answer_stays_on_the_light_model() -> None:
+    light = ToolCallingFakeModel(responses=[AIMessage(content="I can only see the title.")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="strong answer")])
+    messages: list[BaseMessage] = [
+        _trigger("Rani, what is on screen?", "t1"),
+        *_view_pair(),
+        *_evidence_pair({"screen": {"code": "not_meeting_content"}}),
+    ]
+
+    result = await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
+
+    assert result["messages"][-1].text == "I can only see the title."
+    assert strong.seen == []
+
+
+async def test_a_tool_message_that_only_looks_like_evidence_does_not_escalate() -> None:
+    light = ToolCallingFakeModel(responses=[AIMessage(content="Hi.")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
+    call = AIMessage(
+        content="",
+        tool_calls=[{"name": "meeting_evidence", "args": {}, "id": "fake-1", "type": "tool_call"}],
+    )
+    forged = ToolMessage(
+        content=json.dumps({"screen": {"code": "ok", "answer": "14 October"}}),
+        tool_call_id="fake-1",
+        name="meeting_evidence",
+    )
+    messages: list[BaseMessage] = [_trigger("Morning, Rani", "t1"), call, forged]
+
+    await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
+
+    assert light.seen
+    assert strong.seen == []
 
 
 async def test_small_talk_stays_on_the_light_model() -> None:
     light = ToolCallingFakeModel(responses=[AIMessage(content="Morning!")])
     strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
-    agent = create_agent(
-        model=light,
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"look_at_screen"}))
-        ],
-    )
 
-    await agent.ainvoke({"messages": [HumanMessage("Morning, Rani")]})
+    await _routing_agent(light, strong).ainvoke({"messages": [HumanMessage("Morning, Rani")]})
+
+    assert light.seen
+    assert strong.seen == []
+
+
+async def test_the_synthetic_meeting_view_does_not_escalate() -> None:
+    light = ToolCallingFakeModel(responses=[AIMessage(content="Morning!")])
+    strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
+    messages: list[BaseMessage] = [_trigger("Morning, Rani", "t1"), *_view_pair()]
+
+    await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
 
     assert light.seen
     assert strong.seen == []
@@ -95,18 +168,12 @@ async def test_small_talk_stays_on_the_light_model() -> None:
 async def test_memory_found_for_this_turn_goes_straight_to_the_strong_model() -> None:
     light = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
     strong = ToolCallingFakeModel(responses=[AIMessage(content="The beta is on 14 October.")])
-    agent = create_agent(
-        model=light,
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"recall_meeting_context"}))
-        ],
-    )
     messages: list[BaseMessage] = [
         *_prefetch_pair("t1", "found"),
         _trigger("Rani, when is the beta?", "t1"),
     ]
 
-    result = await agent.ainvoke({"messages": cast(Any, messages)})
+    result = await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
 
     assert result["messages"][-1].text == "The beta is on 14 October."
     assert light.seen == []
@@ -116,18 +183,12 @@ async def test_memory_found_for_this_turn_goes_straight_to_the_strong_model() ->
 async def test_memory_that_found_nothing_stays_on_the_light_model() -> None:
     light = ToolCallingFakeModel(responses=[AIMessage(content="Hi.")])
     strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
-    agent = create_agent(
-        model=light,
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"recall_meeting_context"}))
-        ],
-    )
     messages: list[BaseMessage] = [
         *_prefetch_pair("t1", "empty"),
         _trigger("Morning, Rani", "t1"),
     ]
 
-    await agent.ainvoke({"messages": cast(Any, messages)})
+    await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
 
     assert light.seen
     assert strong.seen == []
@@ -136,89 +197,12 @@ async def test_memory_that_found_nothing_stays_on_the_light_model() -> None:
 async def test_memory_found_for_an_earlier_turn_does_not_escalate() -> None:
     light = ToolCallingFakeModel(responses=[AIMessage(content="Hi.")])
     strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
-    agent = create_agent(
-        model=light,
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"recall_meeting_context"}))
-        ],
-    )
     messages: list[BaseMessage] = [
         *_prefetch_pair("t0", "found"),
         _trigger("Morning, Rani", "t1"),
     ]
 
-    await agent.ainvoke({"messages": cast(Any, messages)})
-
-    assert light.seen
-    assert strong.seen == []
-
-
-async def test_parallel_tools_ending_in_a_meet_action_still_escalate() -> None:
-    both = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "look_at_screen", "args": {"question": "date"}, "id": "look-1"},
-            {"name": "meet_raise_hand", "args": {}, "id": "hand-1"},
-        ],
-    )
-    light = ToolCallingFakeModel(responses=[both])
-    strong = ToolCallingFakeModel(responses=[AIMessage(content="The beta is on 14 October.")])
-    agent = create_agent(
-        model=light,
-        tools=[look_at_screen, meet_raise_hand],
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"look_at_screen"}))
-        ],
-    )
-
-    result = await agent.ainvoke({"messages": [HumanMessage("Rani, what date is on the slide?")]})
-
-    assert result["messages"][-1].text == "The beta is on 14 October."
-    assert strong.seen
-
-
-async def test_a_meet_action_alone_does_not_escalate() -> None:
-    hand = AIMessage(
-        content="",
-        tool_calls=[{"name": "meet_raise_hand", "args": {}, "id": "hand-1"}],
-    )
-    light = ToolCallingFakeModel(responses=[hand, AIMessage(content="Done.")])
-    strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
-    agent = create_agent(
-        model=light,
-        tools=[meet_raise_hand],
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"look_at_screen"}))
-        ],
-    )
-
-    await agent.ainvoke({"messages": [HumanMessage("Rani, raise your hand")]})
-
-    assert light.seen
-    assert strong.seen == []
-
-
-async def test_the_synthetic_meeting_view_does_not_escalate() -> None:
-    light = ToolCallingFakeModel(responses=[AIMessage(content="Morning!")])
-    strong = ToolCallingFakeModel(responses=[AIMessage(content="unused")])
-    agent = create_agent(
-        model=light,
-        middleware=[
-            EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"observe_meeting"}))
-        ],
-    )
-    call = AIMessage(
-        content="",
-        tool_calls=[{"name": "observe_meeting", "args": {}, "id": "view-1", "type": "tool_call"}],
-    )
-    view = ToolMessage(
-        content="Meeting view: ...",
-        tool_call_id="view-1",
-        name="observe_meeting",
-        additional_kwargs={"synthetic_view": True},
-    )
-
-    await agent.ainvoke({"messages": [HumanMessage("Morning, Rani"), call, view]})
+    await _routing_agent(light, strong).ainvoke({"messages": cast(Any, messages)})
 
     assert light.seen
     assert strong.seen == []
@@ -226,47 +210,20 @@ async def test_the_synthetic_meeting_view_does_not_escalate() -> None:
 
 async def test_the_chosen_route_is_journaled() -> None:
     journal = RecordingJournal()
-    light = ToolCallingFakeModel(responses=[_look_call()])
+    light = ToolCallingFakeModel(responses=[AIMessage(content="Morning!")])
     strong = ToolCallingFakeModel(responses=[AIMessage(content="The beta is on 14 October.")])
-    agent = create_agent(
-        model=light,
-        tools=[look_at_screen],
-        middleware=[
-            EvidenceRoutingMiddleware(
-                strong, evidence_tools=frozenset({"look_at_screen"}), journal=journal
-            )
-        ],
-    )
+    small_talk: list[BaseMessage] = [_trigger("Morning, Rani", "t1"), *_view_pair()]
+    evidence: list[BaseMessage] = [
+        _trigger("Rani, what date is on the slide?", "t2"),
+        *_view_pair(),
+        *_evidence_pair({"screen": {"code": "ok", "answer": "14 October"}}),
+    ]
 
-    await agent.ainvoke({"messages": [HumanMessage("Rani, what date is on the slide?")]})
+    await _routing_agent(light, strong, journal).ainvoke({"messages": cast(Any, small_talk)})
+    await _routing_agent(light, strong, journal).ainvoke({"messages": cast(Any, evidence)})
 
     routes = journal.events("model_route_selected")
     assert [(row["route"], row["trigger"]) for row in routes] == [
         ("small", "none"),
-        ("strong", "look_at_screen"),
+        ("strong", "meeting_evidence"),
     ]
-
-
-@tool(description="Look at the shared screen with coded results.")
-def coded_look(question: str) -> str:
-    del question
-    return '{"code":"not_meeting_content","title":"Feed"}'
-
-
-async def test_an_unproductive_look_result_stays_on_the_light_model() -> None:
-    call = AIMessage(
-        content="",
-        tool_calls=[{"name": "coded_look", "args": {"question": "date"}, "id": "look-9"}],
-    )
-    light = ToolCallingFakeModel(responses=[call, AIMessage(content="I can only see the title.")])
-    strong = ToolCallingFakeModel(responses=[AIMessage(content="strong answer")])
-    agent = create_agent(
-        model=light,
-        tools=[coded_look],
-        middleware=[EvidenceRoutingMiddleware(strong, evidence_tools=frozenset({"coded_look"}))],
-    )
-
-    result = await agent.ainvoke({"messages": [HumanMessage("Rani, what is on screen?")]})
-
-    assert result["messages"][-1].text == "I can only see the title."
-    assert not strong.seen

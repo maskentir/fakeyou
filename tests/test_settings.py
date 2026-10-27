@@ -13,7 +13,6 @@ from fakeyou.config.settings import (
     DEFAULTS,
     IdentitySettings,
     MeetingSettings,
-    MemorySettings,
     Settings,
     STTSettings,
     require_secret,
@@ -151,12 +150,6 @@ def test_cli_entry_exports_the_embedding_dimension_before_graphiti_loads(
         check=True,
     )
     assert result.stdout.splitlines()[-1] == expected
-
-
-def test_recall_strategy_defaults_to_prefetch_and_rejects_unknown_values() -> None:
-    assert Settings(**env_file_opt(None)).memory.recall.strategy == "prefetch"
-    with pytest.raises(ValueError, match="Input should be 'tool' or 'prefetch'"):
-        MemorySettings.model_validate({"recall": {"strategy": "hybrid"}})
 
 
 def test_vad_defaults_mirror_the_vad_params_defaults() -> None:

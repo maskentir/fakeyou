@@ -132,7 +132,9 @@ def test_lifecycle_event_kinds_end_with_a_past_participle(kind: str) -> None:
 
 @pytest.mark.parametrize("reason", sorted(get_args(TerminalReason)))
 def test_terminal_reasons_belong_to_one_family(reason: str) -> None:
-    assert re.fullmatch(r"[a-z]+_failure|[a-z_]+_by_(owner|host|platform)|[a-z_]+_reached", reason)
+    assert re.fullmatch(
+        r"[a-z]+_failure|[a-z_]+_by_(owner|host|platform|participant)|[a-z_]+_reached", reason
+    )
 
 
 def test_lifecycle_attributions_name_who_acted() -> None:

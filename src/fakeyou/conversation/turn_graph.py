@@ -2,17 +2,15 @@ import asyncio
 import time
 from collections.abc import (
     AsyncIterator,
-    Awaitable,
     Callable,
     Coroutine,
     Hashable,
     Mapping,
-    Sequence,
 )
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -20,11 +18,6 @@ from langgraph.runtime import Runtime
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.conversation.memory_prefetch import (
-    MemoryPrefetch,
-    prefetch_memory_evidence,
-    retain_evidence,
-)
 from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
     DecisionSource,
@@ -59,12 +52,16 @@ from fakeyou.conversation.turn_recovery import (
 )
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.provenance import MemoryEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.perception.scrub import scrub_internal_refs
+from fakeyou.session.commands import CommandOutcome, CommandSpec
+from fakeyou.session.facts import StateQuestion
+from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
+from fakeyou.session.planner import TurnPlan, plan_turn
+from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
 
 
 class Speaker(Protocol):
@@ -222,20 +219,29 @@ class WholeResponder(Protocol):
 ToolStartHook = Callable[[], None]
 
 
-class TurnSettler(Protocol):
-    async def __call__(self, event: TranscriptEvent, *, completed: bool) -> None: ...
+WholeTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook], WholeResponder]
+StreamTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook, str], Responder]
 
 
 @dataclass(frozen=True, slots=True)
-class TurnActionOutcome:
-    succeeded: bool
-    detail: str
-    state: str
+class PlannedTurn:
+    plan: TurnPlan
+    actor: str = "unattributed"
 
 
-MeetActionExecutor = Callable[[TranscriptEvent], Awaitable[TurnActionOutcome | None]]
-WholeTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook], WholeResponder]
-StreamTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook, str], Responder]
+class TurnPlanning(Protocol):
+    def __call__(
+        self, event: TranscriptEvent, reading: Reading, channel: Channel
+    ) -> PlannedTurn: ...
+
+
+StateSpeech = Callable[[StateQuestion], str | None]
+
+
+class CommandPort(Protocol):
+    async def run(
+        self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
+    ) -> CommandOutcome: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,10 +259,6 @@ class BargeLatch:
     def rearm(self) -> None:
         self.interrupted = False
         self.last_interim = None
-
-
-class ChatChannel(Protocol):
-    async def send(self, text: str, *, transcript_id: str) -> bool: ...
 
 
 class TurnScheduler(Protocol):
@@ -293,10 +295,11 @@ class TurnRuntime:
     note_spoken: Callable[[str], None] | None = None
     shadow: bool = False
     faults: FaultReporter | None = None
-    chat: ChatChannel | None = None
     chat_turn: WholeTurnFactory | None = None
-    settle_turn: TurnSettler | None = None
-    meet_action_executor: MeetActionExecutor | None = None
+    planning: TurnPlanning | None = None
+    commands: CommandPort | None = None
+    state_speech: StateSpeech | None = None
+    plans: dict[str, PlannedTurn] = field(default_factory=dict)
     cue: ThinkingCue | None = None
     others_speaking: Callable[[], bool] | None = None
 
@@ -438,12 +441,10 @@ class TurnGraphState(TypedDict):
     admission: NotRequired[Admission]
     delivered: NotRequired[tuple[str, ...]]
     judge_window: NotRequired[JudgeWindow | None]
-    memory_evidence: Annotated[list[MemoryEvidence], retain_evidence]
 
 
 TurnRoute = Literal["speak", "end", "failed"]
-IngestRoute = Literal["speak", "participation", "prefetch_memory", "refresh"]
-FINAL_BRANCHES: tuple[IngestRoute, ...] = ("participation", "prefetch_memory")
+IngestRoute = Literal["speak", "participation", "refresh"]
 ParticipationGraph = CompiledStateGraph[
     ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
 ]
@@ -459,13 +460,6 @@ def route_after_ingest(state: TurnGraphState) -> IngestRoute:
     if state.get("admission") == "admit":
         return "speak"
     return "participation"
-
-
-def route_with_prefetch(state: TurnGraphState) -> IngestRoute | Sequence[IngestRoute]:
-    route = route_after_ingest(state)
-    if state["event"].kind == "final":
-        return FINAL_BRANCHES
-    return route
 
 
 def route_after_participation(state: TurnGraphState) -> TurnRoute:
@@ -746,68 +740,166 @@ def _finish_turn(
         _move_phase(runtime, "waiting", transcript_id)
 
 
-async def _settle_turn(runtime: TurnRuntime, event: TranscriptEvent, *, completed: bool) -> None:
-    if runtime.settle_turn is not None:
-        await runtime.settle_turn(event, completed=completed)
+_NO_GRANT = Grant(frozenset())
+MAX_PENDING_PLANS = 32
+UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = get_args(EvidenceNeed)
 
 
-_MECHANICAL_ACTIONS = frozenset({"raise_hand", "lower_hand", "react", "mute", "unmute"})
+def reading_of(verdict: ParticipationDecision) -> Reading:
+    return Reading(
+        decision=verdict.decision,
+        reason=verdict.reason_code,
+        meet_action=verdict.meet_action,
+        reaction_emoji=verdict.reaction_emoji,
+        action_only=verdict.action_only,
+        requests_chat=verdict.requests_chat,
+        evidence=verdict.evidence_needs,
+        state_question=verdict.state_question,
+    )
 
 
-def _planned_action_ready(runtime: TurnRuntime, event: TranscriptEvent) -> bool:
-    if runtime.meet_action_executor is None or not event.turn_planned:
-        return False
-    if event.meet_action == "react" and event.reaction_emoji is None:
-        return False
-    return event.meet_action in _MECHANICAL_ACTIONS
+def plan_for(
+    runtime: TurnRuntime, event: TranscriptEvent, reading: Reading, channel: Channel
+) -> PlannedTurn:
+    if runtime.planning is not None:
+        return runtime.planning(event, reading, channel)
+    authorization = authorize(
+        intent_of(reading), actor=UNATTRIBUTED, channel=channel, grant=_NO_GRANT
+    )
+    return PlannedTurn(plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}"))
 
 
-async def _execute_planned_action(
-    runtime: TurnRuntime, event: TranscriptEvent
-) -> TurnActionOutcome | None:
-    executor = runtime.meet_action_executor
-    if executor is None or not _planned_action_ready(runtime, event):
+_OUTCOME_NOTES: dict[str, str] = {
+    "effect_observed": "{kind} is done and the meeting confirmed it.",
+    "effect_unobserved": (
+        "{kind} was clicked but the meeting did not confirm it; do not say anyone saw it."
+    ),
+    "unknown": "It is not known whether {kind} happened; say you are not sure it went through.",
+}
+_REFUSAL_NOTES: dict[str, str] = {
+    "unattributed_actor": (
+        "You did not {what} because the request could not be tied to a participant in this "
+        "call; say so briefly."
+    ),
+    "not_permitted": "You are not permitted to {what} in this meeting; decline briefly.",
+    "chat_not_permitted": "You may not write in the meeting chat; answer by voice instead.",
+    "browser_unavailable": "You cannot {what} right now because the meeting controls are "
+    "unavailable; say so briefly.",
+}
+
+
+def plan_notes(plan: TurnPlan, outcome: CommandOutcome | None) -> tuple[str, ...]:
+    notes = [
+        _REFUSAL_NOTES[refusal.reason].format(what=refusal.what.replace("_", " "))
+        for refusal in plan.refusals
+    ]
+    if outcome is not None:
+        kind = outcome.kind.replace("_", " ")
+        template = _OUTCOME_NOTES.get(outcome.state, "{kind} did not happen.")
+        notes.append(template.format(kind=kind[0].upper() + kind[1:]))
+    if plan.leave:
+        notes.append("You will leave the call right after this reply.")
+    if plan.clarify and not plan.refusals:
+        notes.append("Ask one short question about which of the requests to do first.")
+    return tuple(notes)
+
+
+def for_reply(
+    event: TranscriptEvent, plan: TurnPlan, outcome: CommandOutcome | None
+) -> TranscriptEvent:
+    notes = plan_notes(plan, outcome)
+    text = f"{event.text}\n[System: {' '.join(notes)}]" if notes else event.text
+    return replace(event, text=text, evidence_needs=plan.evidence)
+
+
+async def _run_action(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
+    action, commands = planned.plan.action, runtime.commands
+    if action is None or commands is None:
         return None
-    _move_phase(runtime, "acting", event.id)
-    return await executor(event)
-
-
-def _with_action_outcome(event: TranscriptEvent, outcome: TurnActionOutcome) -> TranscriptEvent:
-    verdict = "succeeded" if outcome.succeeded else "failed"
-    return replace(
-        event,
-        text=(
-            f"{event.text}\n[System: the requested meeting action {event.meet_action} "
-            f"{verdict}: {outcome.detail}]"
-        ),
-        meet_action="none",
-        reaction_emoji=None,
+    return await commands.run(
+        CommandSpec(action.kind, action.emoji or ""),
+        plan_id=planned.plan.plan_id,
+        ordinal=0,
+        actor=planned.actor,
     )
 
 
-def _with_leave_pending(event: TranscriptEvent) -> TranscriptEvent:
-    return replace(
-        event,
-        text=f"{event.text}\n[System: you will leave after this reply.]",
-        meet_action="none",
-        reaction_emoji=None,
+async def _leave(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
+    if not planned.plan.leave or runtime.commands is None:
+        return None
+    return await runtime.commands.run(
+        CommandSpec("leave"), plan_id=planned.plan.plan_id, ordinal=1, actor=planned.actor
     )
 
 
-async def _reply_batch(
-    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...]
-) -> tuple[tuple[TranscriptEvent, ...], TurnActionOutcome | None]:
-    final = batch[-1]
-    if (
-        runtime.meet_action_executor is not None
-        and final.turn_planned
-        and final.meet_action == "leave"
-    ):
-        return (*batch[:-1], _with_leave_pending(final)), None
-    outcome = await _execute_planned_action(runtime, final)
-    if outcome is None:
-        return batch, None
-    return (*batch[:-1], _with_action_outcome(final, outcome)), outcome
+def _record_plan(runtime: TurnRuntime, event_id: str, planned: PlannedTurn) -> None:
+    plan = planned.plan
+    runtime.journal.record(
+        "plan_selected",
+        source="agent",
+        transcript_id=event_id,
+        plan_id=plan.plan_id,
+        template=plan.template,
+        output=plan.output,
+        evidence=list(plan.evidence),
+        action=plan.action.kind if plan.action is not None else None,
+        leave=plan.leave,
+        refusals=[f"{refusal.what}:{refusal.reason}" for refusal in plan.refusals],
+        actor=planned.actor,
+    )
+
+
+async def act_first(
+    runtime: TurnRuntime, final: TranscriptEvent, planned: PlannedTurn
+) -> tuple[bool, CommandOutcome | None]:
+    plan = planned.plan
+    if plan.action is not None and runtime.commands is not None:
+        _move_phase(runtime, "acting", final.id)
+    outcome = await _run_action(runtime, planned)
+    if plan.template == "leave_only":
+        await _leave(runtime, planned)
+        return True, outcome
+    if plan.action_only and (outcome is None or not outcome.not_done) and not plan.refusals:
+        return True, outcome
+    return plan.template == "silent", outcome
+
+
+async def answer_state(
+    runtime: TurnRuntime, final: TranscriptEvent, planned: PlannedTurn, generation: int
+) -> bool:
+    question = planned.plan.state_question
+    if question is None or runtime.state_speech is None:
+        return False
+    text = runtime.state_speech(question)
+    if text is None:
+        return False
+    runtime.journal.record(
+        "state_answer_selected",
+        source="agent",
+        transcript_id=final.id,
+        question=question,
+        output=planned.plan.output,
+    )
+    if planned.plan.output == "chat":
+        if runtime.commands is not None:
+            _move_phase(runtime, "acting", final.id)
+            await runtime.commands.run(
+                CommandSpec("send_chat", text),
+                plan_id=planned.plan.plan_id,
+                ordinal=2,
+                actor=planned.actor,
+            )
+        _move_phase(runtime, "listening", final.id)
+        return True
+    if not _admission_current(runtime, generation):
+        return True
+    _move_phase(runtime, "queued", final.id)
+    language = runtime.sentences.language if runtime.sentences is not None else None
+    await runtime.speaker.speak(text, transcript_id=final.id, language=language)
+    if runtime.note_spoken is not None:
+        runtime.note_spoken(text)
+    _move_phase(runtime, "listening", final.id)
+    return True
 
 
 async def _run_turn(
@@ -818,21 +910,26 @@ async def _run_turn(
     generation: int,
 ) -> None:
     final = batch[-1]
+    judged = runtime.plans.pop(final.id, None)
+    planned = judged or plan_for(runtime, final, Reading("speak", "unjudged"), "speech")
+    done, outcome = await act_first(runtime, final, planned)
+    if done:
+        if _admission_current(runtime, generation):
+            _move_phase(runtime, "waiting", final.id)
+        return
+    if await answer_state(runtime, final, planned, generation):
+        return
+    if planned.plan.output == "chat":
+        await _deliver_chat(runtime, final, planned, generation, outcome)
+        return
+    reply_event = for_reply(final, planned.plan, outcome)
+    if judged is None:
+        reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
+    reply_batch = (*batch[:-1], reply_event)
     floor_generation = _floor_generation(runtime)
     generations = (generation, floor_generation)
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
-    try:
-        reply_batch, action_outcome = await _reply_batch(runtime, batch)
-    except BaseException:
-        await _settle_turn(runtime, final, completed=False)
-        raise
-    if action_outcome is not None and action_outcome.succeeded and final.action_only:
-        completed = _admission_current(runtime, generation)
-        await _settle_turn(runtime, final, completed=completed)
-        if completed:
-            _move_phase(runtime, "waiting", final.id)
-        return
     whole = _turn_whole(runtime, reply_batch, hook)
     streamed = whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
@@ -854,26 +951,16 @@ async def _run_turn(
         ),
     )
     try:
-        try:
-            output = await speech.ainvoke(
-                SpeechInput(
-                    transcript=final.text,
-                    speaking_generation=floor_generation,
-                    transcript_event=final,
-                ),
-                context=context,
-            )
-        finally:
-            await _settle_cue(cue)
-    except BaseException:
-        await _settle_turn(runtime, final, completed=False)
-        raise
-    await _settle_turn(
-        runtime,
-        final,
-        completed=bool(output.get("completed") or output.get("silent"))
-        and _admission_current(runtime, generation),
-    )
+        output = await speech.ainvoke(
+            SpeechInput(
+                transcript=final.text,
+                speaking_generation=floor_generation,
+                transcript_event=final,
+            ),
+            context=context,
+        )
+    finally:
+        await _settle_cue(cue)
     if cue_state.played and not output.get("completed"):
         runtime.journal.record(
             "thinking_cue_orphaned",
@@ -883,6 +970,8 @@ async def _run_turn(
         )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
+    if output.get("completed") and _admission_current(runtime, generation):
+        await _leave(runtime, planned)
 
 
 def _start_cue(runtime: TurnRuntime, turn: CueTurn) -> asyncio.Task[None] | None:
@@ -993,62 +1082,78 @@ async def drain_turns(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingF
         _fail(runtime, error)
 
 
-async def _plan_chat_event(runtime: TurnRuntime, event: TranscriptEvent) -> TranscriptEvent:
+async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading:
     judging = runtime.judging
     if judging is None:
-        return event
+        return Reading("speak", "chat_named")
     window = judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking)
     judgement, _error = await capture_error(partial(judging.cache.judgement, window))
     if judgement is None:
-        return event
-    return replace(
-        event,
+        return Reading("speak", "chat_named")
+    return Reading(
+        decision="speak",
+        reason="chat_named",
         meet_action=judgement.meet_action,
-        evidence_needs=judgement.evidence,
         reaction_emoji=judgement.reaction_emoji,
         action_only=judgement.action_only,
-        turn_planned=True,
+        evidence=judgement.evidence,
+        state_question=judgement.state_question,
     )
 
 
-async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generation: int) -> None:
-    chat, factory = runtime.chat, runtime.chat_turn
-    if chat is None or factory is None:
+async def _deliver_chat(
+    runtime: TurnRuntime,
+    event: TranscriptEvent,
+    planned: PlannedTurn,
+    generation: int,
+    outcome: CommandOutcome | None,
+) -> None:
+    factory, commands = runtime.chat_turn, runtime.commands
+    if factory is None or commands is None:
         runtime.journal.record(
             "chat_reply_dropped", source="agent", transcript_id=event.id, reason="no_chat_channel"
         )
         return
     floor_generation = _floor_generation(runtime)
-    event = await _plan_chat_event(runtime, event)
     hook = tool_start_hook(runtime, generation, floor_generation, event.id)
-    try:
-        reply_batch, action_outcome = await _reply_batch(runtime, (event,))
-        reply_event = reply_batch[-1]
-        if action_outcome is not None and action_outcome.succeeded and event.action_only:
-            await _settle_turn(runtime, event, completed=True)
-            _move_phase(runtime, "waiting", event.id)
-            return
-        reply = await _respond_within(
-            factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
+    reply_event = for_reply(event, planned.plan, outcome)
+    reply = await _respond_within(
+        factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
+    )
+    if not _turn_current(runtime, generation, floor_generation):
+        raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
+    text = scrub_internal_refs(reply.text)
+    sent: CommandOutcome | None = None
+    if text:
+        _move_phase(runtime, "acting", event.id)
+        sent = await commands.run(
+            CommandSpec("send_chat", text),
+            plan_id=planned.plan.plan_id,
+            ordinal=2,
+            actor=planned.actor,
         )
-        if not _turn_current(runtime, generation, floor_generation):
-            raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
-        text = scrub_internal_refs(reply.text)
-        if text:
-            _move_phase(runtime, "acting", event.id)
-            sent = await chat.send(text, transcript_id=event.id)
-            runtime.journal.record(
-                "chat_reply_finished",
-                source="agent",
-                transcript_id=event.id,
-                sent=sent,
-                chars=len(text),
-            )
-    except BaseException:
-        await _settle_turn(runtime, event, completed=False)
-        raise
-    await _settle_turn(runtime, event, completed=True)
+        runtime.journal.record(
+            "chat_reply_finished",
+            source="agent",
+            transcript_id=event.id,
+            state=sent.state,
+            chars=len(text),
+        )
+    if sent is not None and not sent.not_done:
+        await _leave(runtime, planned)
     _move_phase(runtime, "listening" if text else "waiting", event.id)
+
+
+async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generation: int) -> None:
+    planned = plan_for(runtime, event, await _chat_reading(runtime, event), "chat")
+    _record_plan(runtime, event.id, planned)
+    done, outcome = await act_first(runtime, event, planned)
+    if done:
+        _move_phase(runtime, "waiting", event.id)
+        return
+    if await answer_state(runtime, event, planned, generation):
+        return
+    await _deliver_chat(runtime, event, planned, generation, outcome)
 
 
 async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: DeferredTurn) -> bool:
@@ -1119,15 +1224,13 @@ async def _admit_final(
         return {"speaking_generation": state["speaking_generation"]}
     verdict = state.get("participation")
     if verdict is not None:
-        final = replace(
-            final,
-            requests_chat=final.requests_chat or verdict.requests_chat,
-            meet_action=verdict.meet_action if final.meet_action == "none" else final.meet_action,
-            evidence_needs=tuple(dict.fromkeys((*final.evidence_needs, *verdict.evidence_needs))),
-            reaction_emoji=final.reaction_emoji or verdict.reaction_emoji,
-            action_only=final.action_only or verdict.action_only,
-            turn_planned=final.turn_planned or state.get("decision_source") == "judge",
-        )
+        planned = plan_for(runtime, final, reading_of(verdict), "speech")
+        _record_plan(runtime, final.id, planned)
+        if planned.plan.template == "silent":
+            return {"speaking_generation": state["speaking_generation"]}
+        runtime.plans[final.id] = planned
+        for stale in list(runtime.plans)[:-MAX_PENDING_PLANS]:
+            del runtime.plans[stale]
     queue = runtime.queue if runtime.queue is not None else PendingFinals()
     queue.admit(final)
     _advance_admitted(runtime)
@@ -1161,7 +1264,6 @@ async def record_turn_failure(state: TurnGraphState, runtime: Runtime[TurnRuntim
 
 @dataclass(frozen=True, slots=True)
 class _TurnNodes:
-    prefetch: MemoryPrefetch | None
     participation_graph: ParticipationGraph
     speech_graph: SpeechGraph
 
@@ -1172,21 +1274,6 @@ class _TurnNodes:
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
         return await _participate(state, runtime.context, self.participation_graph)
-
-    async def prefetch_memory(
-        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
-    ) -> dict[str, list[MemoryEvidence]]:
-        if self.prefetch is None:
-            return {}
-        context = runtime.context
-        evidence = await prefetch_memory_evidence(
-            self.prefetch,
-            state["transcript_text"],
-            journal=context.journal,
-            transcript_id=state["event"].event_id,
-            faults=context.faults,
-        )
-        return {"memory_evidence": [evidence]}
 
     async def speak(
         self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
@@ -1202,11 +1289,9 @@ class _TurnNodes:
 
 def build_turn_graph(
     *,
-    memory_prefetch: MemoryPrefetch | None = None,
     participation: ParticipationGraph | None = None,
 ) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
     nodes = _TurnNodes(
-        prefetch=memory_prefetch,
         participation_graph=(
             build_participation_subgraph() if participation is None else participation
         ),
@@ -1222,10 +1307,7 @@ def build_turn_graph(
     builder.add_edge("refresh", END)
     builder.add_edge("failed", END)
     builder.add_edge("speak", END)
-    if memory_prefetch is None:
-        _route_participation_directly(builder)
-    else:
-        _fan_out_prefetch(builder, nodes)
+    _route_participation_directly(builder)
     return builder.compile()
 
 
@@ -1240,23 +1322,6 @@ def _route_participation_directly(builder: TurnGraphBuilder) -> None:
         {"speak": "speak", "participation": "participation", "refresh": "refresh"},
     )
     builder.add_conditional_edges("participation", route_after_participation, _DECISION_ROUTES)
-
-
-def _fan_out_prefetch(builder: TurnGraphBuilder, nodes: _TurnNodes) -> None:
-    builder.add_node("prefetch_memory", nodes.prefetch_memory)
-    builder.add_node("gather", gather_branches)
-    builder.add_conditional_edges(
-        "ingest",
-        route_with_prefetch,
-        {
-            "speak": "speak",
-            "participation": "participation",
-            "prefetch_memory": "prefetch_memory",
-            "refresh": "refresh",
-        },
-    )
-    builder.add_edge(list(FINAL_BRANCHES), "gather")
-    builder.add_conditional_edges("gather", route_after_participation, _DECISION_ROUTES)
 
 
 class _RecordingSink:

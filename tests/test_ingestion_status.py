@@ -786,10 +786,10 @@ def test_finish_ingest_reports_failure_when_the_status_cannot_be_written(
 
 def test_finalized_prefix_ignores_the_torn_tail(tmp_path: Path) -> None:
     path = tmp_path / "record.jsonl"
-    path.write_bytes(b'{"kind": "header", "v": 3}\n{"kind": "transcript"')
+    path.write_bytes(b'{"kind": "header", "v": 4}\n{"kind": "transcript"')
     digest, count = finalized_prefix(path)
-    assert count == len(b'{"kind": "header", "v": 3}\n')
-    assert digest == sha256(b'{"kind": "header", "v": 3}\n').hexdigest()
+    assert count == len(b'{"kind": "header", "v": 4}\n')
+    assert digest == sha256(b'{"kind": "header", "v": 4}\n').hexdigest()
 
 
 def test_grown_record_keeps_the_stored_prefix_valid(tmp_path: Path) -> None:

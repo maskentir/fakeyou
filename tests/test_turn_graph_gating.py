@@ -48,6 +48,7 @@ POLICY_FIELDS = {
     "reaction_emoji",
     "action_only",
     "logistics_check",
+    "state_question",
 }
 
 

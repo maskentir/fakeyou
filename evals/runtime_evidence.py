@@ -22,11 +22,7 @@ from evals._shared import sanitized_role
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.conversation import (
-    REPLY_CONFIG,
     MeetingResponder,
-    StreamTrace,
-    ToolResultCallback,
-    stream_sentences,
 )
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.digest import canonical_json_digest
@@ -209,7 +205,6 @@ class ModelCallCounter(AsyncCallbackHandler):
     def __init__(self) -> None:
         self.calls = 0
         self.trajectory: list[dict[str, Any]] = []
-        self.tool_results: list[dict[str, Any]] = []
         self.prefetch: list[dict[str, Any]] = []
         self.usage: list[dict[str, Any] | None] = []
         self.running: dict[Any, tuple[dict[str, Any], float]] = {}
@@ -286,13 +281,6 @@ class ModelCallCounter(AsyncCallbackHandler):
         self.usage.append(dict(meta) if meta else None)
 
 
-def record_tool_results(trajectory: list[dict[str, Any]]) -> ToolResultCallback:
-    def record(name: str, output: str, duration_ms: float) -> None:
-        trajectory.append({"name": name, "output": output, "duration_ms": duration_ms})
-
-    return record
-
-
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ResponderContext:
     settings: Settings
@@ -343,7 +331,6 @@ async def _open_native_conversation(
             behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
                 wake_phrases=(profile.display_name,),
-                on_tool_result=record_tool_results(context.counter.tool_results),
             ),
         ) as conversation:
             responder = conversation.responder
@@ -409,18 +396,8 @@ async def stream_with_deadline(
     sentences: list[str] = []
     first_latency = 0.0
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
-        async for sentence in stream_sentences(
-            responder.agent,
-            responder.messages([event]),
-            REPLY_CONFIG,
-            max_sentences=responder.max_sentences,
-            trace=StreamTrace(
-                language=responder.language,
-                journal=responder.journal,
-                request_id=request_id,
-                transcript_id=event.id,
-                on_tool_result=responder.on_tool_result,
-            ),
+        async for sentence in responder.stream_sentences(
+            [event], lambda: None, request_id=request_id
         ):
             if not sentences:
                 first_latency = time.monotonic() - started

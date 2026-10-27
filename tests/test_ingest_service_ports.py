@@ -136,7 +136,8 @@ async def test_grown_record_after_a_terminal_ingest_is_not_record_changed(
     assert first.record_bytes == record_path.stat().st_size
     with record_path.open("a", encoding="utf-8") as handle:
         handle.write(
-            '{"kind": "twin_speech", "at": "2026-09-30T10:05:00Z", "text": "One more thing."}\n'
+            '{"kind": "twin_speech", "at": "2026-09-30T10:05:00Z", "seq": 99, '
+            '"text": "One more thing."}\n'
         )
 
     succeeded = await run_recorded_ingest(request, access=access, ports=_ports(published))

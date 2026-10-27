@@ -11,23 +11,21 @@ from fakeyou.memory.ingestion import episode_name, extraction_instructions, meet
 from fakeyou.memory.memory import meeting_saga
 from fakeyou.persistence.record import (
     RecordEntry,
-    ToolResultEntry,
     TranscriptEntry,
     TwinSpeechEntry,
 )
-from tests._ingestion_support import START, run, said, shown
+from tests._ingestion_support import RECORD_ORDER, START, run, said, shown
 from tests._memory_fakes import make_graphiti
 
 
 def twin(seconds: float, text: str) -> TwinSpeechEntry:
-    return TwinSpeechEntry(at=START + timedelta(seconds=seconds), text=text)
+    return TwinSpeechEntry(at=START + timedelta(seconds=seconds), seq=next(RECORD_ORDER), text=text)
 
 
-def test_windows_mix_speakers_in_record_order_and_skip_tool_results() -> None:
+def test_windows_mix_speakers_in_record_order() -> None:
     entries: list[RecordEntry] = [
         twin(0, "How about moving the demo to Thursday?"),
         said(2, "Okay,\n agreed."),
-        ToolResultEntry(at=START, tool="recall_meeting_context", output="x", duration_ms=1),
         said(3, "The budget is fine.", participant_id="Speaker A"),
     ]
 
@@ -140,6 +138,7 @@ async def test_ingest_uses_spoken_time_as_the_window_source_time() -> None:
     entries = [
         TranscriptEntry(
             at=START,
+            seq=next(RECORD_ORDER),
             id="late-record",
             spoken_at=spoken.isoformat(),
             source="meeting_audio",
@@ -161,6 +160,7 @@ async def test_ingest_falls_back_to_record_time_for_invalid_spoken_time() -> Non
     entries = [
         TranscriptEntry(
             at=START,
+            seq=next(RECORD_ORDER),
             id="bad-clock",
             spoken_at="not-a-timestamp",
             source="meeting_audio",
@@ -170,6 +170,7 @@ async def test_ingest_falls_back_to_record_time_for_invalid_spoken_time() -> Non
         ),
         TranscriptEntry(
             at=START,
+            seq=next(RECORD_ORDER),
             id="naive-clock",
             spoken_at="2026-09-30T09:00:00",
             source="meeting_audio",

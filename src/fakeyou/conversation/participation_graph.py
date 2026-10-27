@@ -81,10 +81,10 @@ def decision_of(
     thresholds: JudgeThresholds,
     *,
     named: bool = False,
-    sole_human_participant: bool = False,
+    sole_human_responder: bool = False,
 ) -> ParticipationDecision:
     decision = _DECISION_OF_ACTION[judgement.action]
-    if judgement.logistics_check and not named and not sole_human_participant:
+    if judgement.logistics_check and not named and not sole_human_responder:
         return _silenced(judgement, "judge_room_check")
     if decision != "silent":
         if judgement.addressee != "twin":
@@ -106,6 +106,7 @@ def decision_of(
         evidence_needs=judgement.evidence,
         reaction_emoji=judgement.reaction_emoji,
         action_only=judgement.action_only,
+        state_question=judgement.state_question,
     )
 
 
@@ -135,6 +136,7 @@ def _record(
             "reaction_emoji": judgement.reaction_emoji,
             "action_only": judgement.action_only,
             "logistics_check": judgement.logistics_check,
+            "state_question": judgement.state_question,
         }
     journal.record(
         "policy_decided",
@@ -174,7 +176,7 @@ def build_participation_subgraph() -> CompiledStateGraph[
             judgement,
             context.thresholds,
             named=state["context"].addressed,
-            sole_human_participant=len(window.human_participants) == 1,
+            sole_human_responder=window.sole_human_responder,
         )
         return _record(context.journal, state, verdict, "judge", judgement)
 

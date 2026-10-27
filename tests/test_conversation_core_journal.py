@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any, cast, override
 
 import pytest
@@ -126,8 +127,16 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
     await loop.ingress.receive_final(event("one"))
     await loop.lifecycle.wait_idle()
     assert responder.journal is None
-    assert [json.loads(line)["event"] for line in lines] == ["agent_started", "agent_finished"]
+    assert [json.loads(line)["event"] for line in lines] == [
+        "plan_selected",
+        "agent_started",
+        "agent_finished",
+    ]
     await loop.lifecycle.close()
+
+
+def memory_event(event_id: str) -> TranscriptEvent:
+    return replace(event(event_id, "When is the demo?"), evidence_needs=("memory",))
 
 
 def _recall_then_reply() -> ToolCallingFakeModel:
@@ -155,7 +164,7 @@ async def test_responder_journals_tool_failures(
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     with pytest.raises(ProviderFault):
-        await responder.respond([event("one", "When is the demo?")], lambda: None)
+        await responder.respond([memory_event("one")], lambda: None)
 
     [failed] = [json.loads(line) for line in lines if '"tool_failed"' in line]
     assert (failed["tool"], failed["error"]) == ("recall_meeting_context", "RuntimeError")
@@ -181,7 +190,7 @@ async def test_model_and_tool_events_carry_their_transcript(journal: RecordingJo
     )
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
-    first = await responder.respond([event("t1", "When is the demo?")], lambda: None)
+    first = await responder.respond([memory_event("t1")], lambda: None)
     second = await responder.respond([event("t2", "What time?")], lambda: None)
     assert first.text == "The demo is on Friday."
     assert second.text == "Tuesday at ten."
@@ -255,9 +264,7 @@ async def test_cancelled_tool_run_keeps_transcript_without_content(
         tools=[recall_meeting_context],
     )
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
-    task = asyncio.create_task(
-        responder.respond([event("t1", "When is the demo?")], lambda: begun.set())
-    )
+    task = asyncio.create_task(responder.respond([memory_event("t1")], lambda: begun.set()))
 
     assert await asyncio.wait_for(begun.wait(), 10)
     task.cancel()
@@ -273,7 +280,7 @@ async def test_cancelled_tool_run_keeps_transcript_without_content(
     assert "a late answer" not in body
 
 
-async def test_responder_reports_tool_results_to_journal_and_callback(
+async def test_responder_reports_tool_results_to_journal(
     journal: RecordingJournal,
 ) -> None:
 
@@ -287,24 +294,12 @@ async def test_responder_reports_tool_results_to_journal_and_callback(
             "From Google Meet m1 transcript on 2026-09-23 03:10 UTC: Budi is the PIC"
         )
 
-    results: list[tuple[str, str, float]] = []
     agent = create_meeting_agent(_recall_then_reply(), tools=[recall_meeting_context])
-    responder = MeetingResponder(
-        agent,
-        NoHistory(),
-        journal=journal,
-        on_tool_result=lambda *result: results.append(result),
-    )
+    responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
-    reply = await responder.respond([event("one", "When is the demo?")], lambda: None)
+    reply = await responder.respond([memory_event("one")], lambda: None)
     assert reply.text == "The demo is on Friday."
 
-    [(tool_name, output, duration_ms)] = results
-    assert tool_name == "recall_meeting_context"
-    assert (
-        output.splitlines()[0] == "From owner note on 2026-09-30 06:40 UTC: The demo is on Friday"
-    )
-    assert duration_ms >= 0
     [finished] = journal.events("tool_finished")
     assert finished["tool"] == "recall_meeting_context"
     assert finished["output_lines"] == 2

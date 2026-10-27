@@ -207,8 +207,6 @@ def _render_fact_entry(entry: _OrderedEntry, *, compact: bool) -> dict[str, obje
             "speaker_identity": source.speaker_identity,
         }
         rendered_sources.append(rendered_source)
-    if compact:
-        return {"text": text, "sources": rendered_sources}
     return {"fact_ids": list(fact_ids), "text": text, "sources": rendered_sources}
 
 

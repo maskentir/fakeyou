@@ -59,6 +59,7 @@ def record_path(tmp_path: Path) -> Path:
             {
                 "kind": "transcript",
                 "at": AT.isoformat(),
+                "seq": 1,
                 "id": "e1",
                 "spoken_at": "12:00:00",
                 "source": "caption",

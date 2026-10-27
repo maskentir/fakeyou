@@ -14,7 +14,6 @@ from evals._trust import (
     contract_model,
     load_trust_fixture,
     replay_trust,
-    strategy_settings,
 )
 from fakeyou.config.settings import Settings
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -85,13 +84,14 @@ async def test_trust_native_recall_failure_becomes_unavailable_evidence(
         contract_model,
         {**fixture, "cases": [case]},
         1,
-        options=ReplayOptions(settings=strategy_settings("tool")),
+        options=ReplayOptions(settings=Settings()),
     )
     turn = score.turns[0]
     assert turn["exception"] is None
     assert turn["recall_called"] is True
-    assert "unavailable" in turn["tool_trajectory"][0]["output"]
-    assert turn["model_calls"] == 2
+    assert turn["memory_prefetch"][-1]["outcome"] == "unavailable"
+    assert turn["tool_trajectory"] == []
+    assert turn["model_calls"] == 1
 
 
 async def test_trust_recall_deadline_records_cancelled_attempt_as_unavailable(
@@ -108,7 +108,7 @@ async def test_trust_recall_deadline_records_cancelled_attempt_as_unavailable(
         return memory, stored, states
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", blocked_memory)
-    settings = strategy_settings("tool")
+    settings = Settings()
     settings = settings.model_copy(
         update={
             "memory": settings.memory.model_copy(
@@ -127,12 +127,11 @@ async def test_trust_recall_deadline_records_cancelled_attempt_as_unavailable(
     turn = score.turns[0]
     assert turn["exception"] is None
     assert turn["recall_called"] is True
-    assert "unavailable" in turn["tool_trajectory"][0]["output"]
-    assert turn["tool_trajectory"][0]["exception"].startswith("TimeoutError:")
+    assert turn["memory_prefetch"][-1]["outcome"] == "unavailable"
     assert memories[0].search_cancelled.is_set()
 
 
-async def test_failed_recall_after_success_records_current_middleware_result(
+async def test_failed_recall_after_success_records_current_prefetch_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = load_trust_fixture()
@@ -161,13 +160,13 @@ async def test_failed_recall_after_success_records_current_middleware_result(
         contract_model,
         {**fixture, "cases": [case]},
         1,
-        options=ReplayOptions(settings=strategy_settings("tool")),
+        options=ReplayOptions(settings=Settings()),
     )
-    assert '"facts"' in score.turns[0]["tool_trajectory"][0]["output"]
-    assert "unavailable" in score.turns[1]["tool_trajectory"][0]["output"]
+    assert score.turns[0]["memory_prefetch"][-1]["outcome"] == "found"
+    assert score.turns[1]["memory_prefetch"][-1]["outcome"] == "unavailable"
 
 
-async def test_trust_profile_disallows_recall_in_native_prompt_and_toolset(
+async def test_trust_profile_disallows_recall_in_native_prompt_and_prefetch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,9 +179,9 @@ async def test_trust_profile_disallows_recall_in_native_prompt_and_toolset(
     score = await replay_trust(
         contract_model, {**fixture, "persona": "persona.json", "cases": [case]}, 1
     )
-    assert score.turns[0]["tools_bound"] == []
+    assert score.turns[0]["memory_prefetch"] == []
     assert score.turns[0]["tool_trajectory"] == []
-    assert score.prompts[case["id"]]["tools_bound"] == []
+    assert score.prompts[case["id"]]["memory_prefetch"] is False
     assert "recall_meeting_context" not in score.prompts[case["id"]]["system_prompt"]
 
 

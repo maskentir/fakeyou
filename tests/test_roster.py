@@ -1,5 +1,6 @@
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.orchestration.join import share_roster
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.perception.meet_protocol import DeviceOutput, MeetUser
 from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
 
@@ -135,8 +136,10 @@ def test_the_speaker_registry_names_voices_from_the_meet_roster() -> None:
     roster = roster_with_people()
     roster.apply_outputs([audio(AYU, "111"), audio(BUDI, "222")])
     registry = SpeakerRegistry()
+    kernel = KernelPort.for_meeting("meeting-9")
 
-    share_roster(registry, roster)
+    share_roster(registry, kernel, roster)
+    kernel.drain()
     ayu = registry.resolve_csrcs(frozenset({111}))
     budi = registry.resolve_csrcs(frozenset({222}))
 
@@ -145,6 +148,8 @@ def test_the_speaker_registry_names_voices_from_the_meet_roster() -> None:
     assert (ayu.device, ayu.display_claim, ayu.status) == (AYU, "Ayu", "confirmed")
     assert (budi.device, budi.display_claim) == (BUDI, "Budi")
     assert ayu.label != budi.label
+    assert kernel.state.world.streams == {"csrc:111": AYU, "csrc:222": BUDI}
+    assert set(kernel.state.world.endpoints) >= {AYU, BUDI}
 
 
 def test_meeting_state_reports_people_presenter_and_cameras() -> None:

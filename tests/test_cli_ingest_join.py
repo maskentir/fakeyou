@@ -35,7 +35,6 @@ from tests._memory_fakes import make_graphiti
 async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings.memory.recall.strategy = "tool"
     from fakeyou.persistence.ingestion_status import read_status, status_path
 
     graphiti = make_graphiti()
@@ -79,7 +78,7 @@ async def test_join_defers_ingest_then_memory_ingest_writes_episode(
     assert episode["name"] == "meeting-9:w00000"
     assert episode["group_id"] == profile.memory_group
     assert episode["saga"] == "meeting:meeting-9"
-    assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
+    assert created["tools"] == []
 
 
 async def test_join_without_ingest_permission_never_writes_memory(

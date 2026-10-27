@@ -14,12 +14,6 @@ from langchain_core.runnables import Runnable, RunnableConfig
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.contribution import (
-    ContributionGate,
-    GateVerdict,
-    SourceRegistry,
-    memory_refs_from_evidence,
-)
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.grounding import GroundingVerifier
 from fakeyou.conversation.meeting_messages import (
@@ -32,21 +26,25 @@ from fakeyou.conversation.meeting_messages import (
 from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
+    PlanHandler,
     PlanRead,
     ReplyHandlers,
     ReplyIntent,
     ReplyPlanner,
+    SpeechGate,
     SpokenChunk,
     TurnLanguage,
     planned_reply,
 )
 from fakeyou.conversation.sentence_stream import SentenceStream
+from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import split_sentences
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, capture_error, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
+from fakeyou.session.speech import FactBook, SpeechAct, SpeechVerdict
 
 
 @runtime_checkable
@@ -67,7 +65,6 @@ class StreamingConversationResponder(Protocol):
     ) -> AsyncIterator[SpokenChunk]: ...
 
 
-ToolResultCallback = Callable[[str, str, float], None]
 MeetingAgent = Runnable[dict[str, list[BaseMessage]], dict[str, Any]]
 REPLY_CONFIG: RunnableConfig = {"recursion_limit": 30}
 
@@ -91,13 +88,11 @@ class _ToolActivity(AsyncCallbackHandler):
         self,
         on_start: Callable[[], None],
         journal: Journal | None,
-        on_result: ToolResultCallback | None = None,
         *,
         transcript_id: str | None = None,
     ) -> None:
         self._on_start = on_start
         self._journal = journal
-        self._on_result = on_result
         self._transcript_id = transcript_id
         self._running: dict[
             UUID, tuple[str, AbstractContextManager[JournalTiming], JournalTiming]
@@ -154,14 +149,12 @@ class _ToolActivity(AsyncCallbackHandler):
     @override
     async def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
         text = output.text if isinstance(output, BaseMessage) else str(output)
-        name, context, timing = self._running.pop(run_id)
+        _name, context, timing = self._running.pop(run_id)
         timing.fields["output_lines"] = len(text.splitlines())
         code = _tool_result_code(text)
         if code is not None:
             timing.fields["result_code"] = code
         context.__exit__(None, None, None)
-        if self._on_result is not None:
-            self._on_result(name, text, timing.fields["duration_ms"])
 
     @override
     async def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
@@ -174,11 +167,10 @@ class _StreamPhase(_ToolActivity):
         self,
         on_start: Callable[[], None],
         journal: Journal | None,
-        on_result: ToolResultCallback | None = None,
         *,
         transcript_id: str | None = None,
     ) -> None:
-        super().__init__(on_start, journal, on_result, transcript_id=transcript_id)
+        super().__init__(on_start, journal, transcript_id=transcript_id)
         self.pending = 0
         self.boundary = 0
         self._counted: set[UUID] = set()
@@ -314,14 +306,12 @@ class StreamTrace:
     request_id: str = ""
     transcript_id: str | None = None
     on_tool_start: Callable[[], None] = _ignore_tool_start
-    on_tool_result: ToolResultCallback | None = None
     on_intent: IntentHandler | None = None
     on_language: Callable[[str], None] | None = None
-    contribution_gate: ContributionGate | None = None
+    speech_gate: SpeechGate | None = None
 
 
 REPLY_STREAM_ATTEMPTS = 2
-_RECALL_TOOL = "recall_meeting_context"
 DEFAULT_STREAM_TRACE = StreamTrace()
 
 
@@ -341,9 +331,7 @@ async def invoke_reply(
     *,
     trace: StreamTrace = DEFAULT_STREAM_TRACE,
 ) -> str:
-    activity = _ToolActivity(
-        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
-    )
+    activity = _ToolActivity(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     try:
         result = await agent.ainvoke(
             {"messages": list(messages)}, config=_with_callback(config, activity)
@@ -391,6 +379,8 @@ async def _pump_stream(
         for sentence in sentences:
             yield sentence
         if state.check_cap():
+            for line in planner.finish_sentences():
+                yield SpokenChunk(text=line, language=planner.language)
             return
     tail = state.flush()
     if tail is not None:
@@ -415,23 +405,29 @@ def _record_reply_plan(
         intent=plan.intent,
         language=plan.language,
         replaced=plan.replaced,
-        kind=plan.kind,
-        plan_source=plan.source,
-        source_ref=plan.source_ref,
-        gate=plan.gate,
-        gate_reason=plan.gate_reason,
+        contribution=plan.contribution,
+        cites=list(plan.cites),
     )
-    if plan.gate == "drop":
-        journal.record(
-            "contribution_dropped",
-            source="agent",
-            request_id=request_id,
-            transcript_id=transcript_id,
-            reason=plan.gate_reason,
-            kind=plan.kind,
-            plan_source=plan.source,
-            source_ref=plan.source_ref,
-        )
+
+
+def _record_speech_rejected(
+    journal: Journal | None,
+    request_id: str,
+    transcript_id: str | None,
+    verdict: SpeechVerdict,
+    act: SpeechAct,
+) -> None:
+    if journal is None:
+        return
+    journal.record(
+        "speech_rejected",
+        source="agent",
+        request_id=request_id,
+        transcript_id=transcript_id,
+        reason=verdict,
+        contribution=act.contribution,
+        cites=list(act.cites),
+    )
 
 
 def _record_reply_text(state: _SentenceStream, reply: str) -> None:
@@ -468,22 +464,24 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
         )
 
 
+def _handlers(trace: StreamTrace, on_plan: PlanHandler | None = None) -> ReplyHandlers:
+    return ReplyHandlers(
+        on_intent=trace.on_intent,
+        on_plan=on_plan
+        or partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id),
+        on_language=trace.on_language,
+        on_gate=partial(
+            _record_speech_rejected, trace.journal, trace.request_id, trace.transcript_id
+        ),
+    )
+
+
 def _reply_planner(max_sentences: int, trace: StreamTrace) -> ReplyPlanner:
     return ReplyPlanner(
         max_sentences=max_sentences,
         language=trace.language,
-        handlers=ReplyHandlers(
-            on_intent=trace.on_intent,
-            on_plan=(
-                None
-                if trace.journal is None
-                else partial(
-                    _record_reply_plan, trace.journal, trace.request_id, trace.transcript_id
-                )
-            ),
-            on_language=trace.on_language,
-        ),
-        contribution_gate=trace.contribution_gate,
+        handlers=_handlers(trace),
+        speech_gate=trace.speech_gate,
     )
 
 
@@ -511,9 +509,7 @@ async def stream_sentences(
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
     started = time.monotonic()
-    phase = _StreamPhase(
-        trace.on_tool_start, trace.journal, trace.on_tool_result, transcript_id=trace.transcript_id
-    )
+    phase = _StreamPhase(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal
     )
@@ -552,14 +548,14 @@ class MeetingResponder:
     agent: MeetingAgent
     history: MeetingHistory
     journal: Journal | None = None
-    on_tool_result: ToolResultCallback | None = None
     language: str = DEFAULTS.speech.language
     max_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     history_max_tokens: int = DEFAULTS.conversation.history_max_tokens
     control: ReplyControl | None = None
     turn_language: TurnLanguage = field(default_factory=TurnLanguage)
     contributor: MeetingAgent | None = None
-    source_registry: SourceRegistry = field(default_factory=SourceRegistry)
+    book_source: BookSource = field(default_factory=BookSource)
+    evidence: TurnEvidence = field(default_factory=TurnEvidence)
     verifier: GroundingVerifier | None = None
     grounding_threshold: float = 0.7
 
@@ -609,17 +605,19 @@ class MeetingResponder:
             return self.contributor
         return self.agent
 
-    def _gate_for(
-        self, events: Sequence[TranscriptEvent], memory_refs: dict[str, str]
-    ) -> ContributionGate | None:
-        if not self._is_attention(events):
-            return None
-        last = events[-1]
-        trigger = last.attention.trigger_text if last.attention is not None else last.text
-        return ContributionGate(
-            registry=self.source_registry,
-            trigger_text=trigger,
-            memory_refs=lambda: memory_refs,
+    def _book(self, events: Sequence[TranscriptEvent]) -> FactBook:
+        transcript_id = events[-1].id if events else ""
+        heard = "\n".join(
+            (
+                *recent_room_lines(self.history.entries(), limit=12),
+                *(event.text for event in events),
+            )
+        )
+        return fact_book(
+            self.book_source,
+            heard=heard,
+            observed=self.evidence.observed(transcript_id),
+            memory=self.evidence.memory(),
         )
 
     def _trace(
@@ -628,25 +626,17 @@ class MeetingResponder:
         on_tool_start: Callable[[], None],
         request_id: str = "",
     ) -> StreamTrace:
-        memory_refs: dict[str, str] = {}
-        downstream = self.on_tool_result
-
-        def on_tool_result(name: str, text: str, duration_ms: float) -> None:
-            if name == _RECALL_TOOL:
-                memory_refs.update(memory_refs_from_evidence(text))
-            if downstream is not None:
-                downstream(name, text, duration_ms)
-
         return StreamTrace(
             language=self.language,
             journal=self.journal,
             request_id=request_id,
             transcript_id=events[-1].id if events else None,
             on_tool_start=on_tool_start,
-            on_tool_result=on_tool_result,
             on_intent=self.on_intent,
             on_language=self.turn_language.declare,
-            contribution_gate=self._gate_for(events, memory_refs),
+            speech_gate=SpeechGate(
+                partial(self._book, tuple(events)), proactive=self._is_attention(events)
+            ),
         )
 
     async def respond(
@@ -659,26 +649,25 @@ class MeetingResponder:
             REPLY_CONFIG,
             trace=trace,
         )
-        if trace.contribution_gate is None:
+        if not self._is_attention(events):
             return planned_reply(
                 reply,
                 max_sentences=self.limit,
                 language=self.language,
-                on_intent=self.on_intent,
+                handlers=_handlers(trace),
+                speech_gate=trace.speech_gate,
             )
-        return await self._respond_gated(reply, trace)
+        return await self._respond_gated(reply, trace, events)
 
-    async def _respond_gated(self, reply: str, trace: StreamTrace) -> SpokenChunk:
+    async def _respond_gated(
+        self, reply: str, trace: StreamTrace, events: Sequence[TranscriptEvent]
+    ) -> SpokenChunk:
         reads: list[PlanRead] = []
         planner = ReplyPlanner(
             max_sentences=1,
             language=self.language,
-            handlers=ReplyHandlers(
-                on_intent=self.on_intent,
-                on_plan=reads.append,
-                on_language=self.turn_language.declare,
-            ),
-            contribution_gate=trace.contribution_gate,
+            handlers=_handlers(trace, on_plan=reads.append),
+            speech_gate=trace.speech_gate,
         )
         content = planner.feed(reply) + planner.finish()
         for read in reads:
@@ -691,14 +680,18 @@ class MeetingResponder:
             spoken.extend(planner.take_sentence(sentence))
         spoken.extend(planner.finish_sentences())
         chunk = SpokenChunk(text=" ".join(spoken), language=planner.language)
-        if not chunk.text:
+        if not chunk.text or planner.blocked is not None or planner.act is None:
             return empty
-        if await self._verified(chunk, planner.verdict, trace):
+        if await self._verified(chunk, planner.act, trace, events):
             return chunk
         return empty
 
     async def _verified(
-        self, chunk: SpokenChunk, verdict: GateVerdict | None, trace: StreamTrace
+        self,
+        chunk: SpokenChunk,
+        act: SpeechAct,
+        trace: StreamTrace,
+        events: Sequence[TranscriptEvent],
     ) -> bool:
         empty = SpokenChunk(text="", language=chunk.language)
 
@@ -706,18 +699,19 @@ class MeetingResponder:
             self._dropped(empty, trace, reason)
             return False
 
-        gate = trace.contribution_gate
-        if verdict is None or verdict.source_text is None or gate is None:
-            return drop("missing_verdict")
+        gate = trace.speech_gate
+        if gate is None or not act.cites:
+            return drop("missing_citation")
         if self.verifier is None:
             return drop("verifier_unavailable")
-        checked, error = await capture_error(
+        last = events[-1]
+        checked, _error = await capture_error(
             partial(
                 self.verifier.verify,
                 text=chunk.text,
-                source_text=verdict.source_text,
-                trigger_text=gate.trigger_text,
-                kind=verdict.kind,
+                source_text=" ".join(gate.book.entries[fact_id].text for fact_id in act.cites),
+                trigger_text=last.attention.trigger_text if last.attention else last.text,
+                kind=act.contribution,
                 recent_lines=recent_room_lines(self.history.entries()),
             )
         )
@@ -737,9 +731,8 @@ class MeetingResponder:
                 source="agent",
                 request_id=trace.request_id,
                 transcript_id=trace.transcript_id,
-                kind=verdict.kind,
-                plan_source=verdict.source,
-                source_ref=verdict.source_ref,
+                kind=act.contribution,
+                cites=list(act.cites),
                 confidence=checked.confidence,
             )
         return True

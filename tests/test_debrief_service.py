@@ -48,6 +48,7 @@ def _seed_meeting(settings: Settings, meeting_id: str, profile: PersonaProfile) 
     record_path.write_text(
         TranscriptEntry(
             at=datetime(2026, 10, 3, tzinfo=UTC),
+            seq=1,
             id="t1",
             spoken_at="2026-10-03T00:00:00+00:00",
             source="meeting_audio",

@@ -11,8 +11,8 @@ from langchain_core.outputs import ChatResult
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.memory.persona import PersonaProfile, build_system_prompt
-from fakeyou.perception.context import PERCEPTION_GUIDANCE
+from fakeyou.memory.persona import PersonaProfile
+from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.brief import read_meeting_context
 from fakeyou.persistence.record import load_meeting_record, meeting_record_path
 from tests._audio_fakes import FakeReplyAudio
@@ -62,7 +62,7 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     second_prompt = second_model.seen[0][0].content
     assert second_prompt == (
-        f"{build_system_prompt(profile, brief=meeting_brief(**second))}\n\n{PERCEPTION_GUIDANCE}"
+        build_persona_prompt(profile, brief=meeting_brief(**second), perception=True)
     )
     assert BRIEF_FACT not in second_prompt
     assert second_fact not in first_model.seen[0][0].content
@@ -91,7 +91,7 @@ async def test_join_briefs_stay_isolated_per_meeting_and_resume_in_one_checkpoin
     assert "Rani Twin, first meeting question?" in retry_history
     assert "Rani Twin, second meeting question?" not in retry_history
     assert retry_model.seen[0][0].content == (
-        f"{build_system_prompt(profile, brief=meeting_brief())}\n\n{PERCEPTION_GUIDANCE}"
+        build_persona_prompt(profile, brief=meeting_brief(), perception=True)
     )
 
 
