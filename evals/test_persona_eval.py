@@ -7,7 +7,7 @@ import pytest
 from deepeval.evaluate import assert_test
 from deepeval.metrics import GEval
 from deepeval.metrics.base_metric import BaseMetric
-from deepeval.models import OpenAIModel
+from deepeval.models import DeepEvalBaseLLM, GeminiModel, OpenAIModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -33,7 +33,33 @@ PERSONA_FIXTURE = json.loads(
 )
 LIVE_SCENARIOS: dict[str, dict[str, str]] = PERSONA_FIXTURE["scenarios"]
 RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
-JUDGE_MODEL = "gpt-4.1-mini"
+
+
+def judge_model() -> DeepEvalBaseLLM | None:
+    if JUDGE_PROVIDER == "gemini":
+        key = os.environ.get("FAKEYOU_REPLY__API_KEY", "")
+        if not key.strip():
+            return None
+        return GeminiModel(model=JUDGE_MODEL, api_key=key, temperature=0)
+    key = os.environ.get("EVAL_JUDGE_API_KEY", "")
+    if not key.strip():
+        return None
+    if JUDGE_PROVIDER == "muse":
+        base_url = os.environ.get("FAKEYOU_MEMORY__LLM__BASE_URL", "")
+        if not base_url.strip():
+            return None
+        return OpenAIModel(
+            model=os.environ.get("FAKEYOU_MEMORY__LLM__MODEL", "muse-spark-1.2"),
+            api_key=key,
+            base_url=base_url,
+            temperature=0,
+        )
+    return OpenAIModel(model=OPENAI_JUDGE_MODEL, api_key=key, temperature=0)
+
+
+JUDGE_PROVIDER = os.environ.get("EVAL_JUDGE_PROVIDER", "gemini")
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gemini-3.1-flash-lite")
+OPENAI_JUDGE_MODEL = "gpt-4.1-mini"
 
 
 def participant_asks(text: str) -> HumanMessage:
@@ -119,8 +145,8 @@ KNOWN_MODEL_LIMITATIONS = {
 )
 async def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
-    api_key = os.environ.get("EVAL_JUDGE_API_KEY", "")
-    if not api_key.strip():
+    judge = judge_model()
+    if judge is None:
         pytest.skip("set EVAL_JUDGE_API_KEY to run the live persona judge")
     model = create_chat_model(settings)
     live = LIVE_SCENARIOS[scenario]
@@ -140,7 +166,7 @@ async def test_live_persona_quality(scenario: str) -> None:
             SingleTurnParams.ACTUAL_OUTPUT,
             SingleTurnParams.CONTEXT,
         ],
-        model=OpenAIModel(model=JUDGE_MODEL, api_key=api_key, temperature=0),
+        model=judge,
         threshold=0.7,
         async_mode=False,
     )

@@ -355,9 +355,9 @@ class _ConversationBuilder:
             actor=actor.device_id or actor.kind,
         )
 
-    def _state_speech(self, question: StateQuestion) -> str | None:
+    def _state_speech(self, question: StateQuestion, language: str | None) -> str | None:
         kernel = self._behavior.kernel
-        locale = locale_of(self._settings.speech.language)
+        locale = locale_of(language or self._settings.speech.language)
         if kernel is None or locale is None:
             return None
         commands = self._behavior.commands

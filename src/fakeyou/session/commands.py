@@ -16,7 +16,7 @@ CommandState = Literal[
     "cancelled_before_boundary",
     "failed_before_boundary",
 ]
-Verification = Literal["readback", "protocol_echo", "acted_only"]
+Verification = Literal["readback", "dom_echo", "acted_only"]
 TOGGLES: frozenset[CommandKind] = frozenset({"raise_hand", "lower_hand", "mute", "unmute"})
 MAX_TOGGLE_ATTEMPTS = 3
 TERMINAL_COMMAND_STATES: frozenset[CommandState] = frozenset(
@@ -52,7 +52,7 @@ class CommandSpec:
         if self.kind in TOGGLES:
             return "readback"
         if self.kind == "send_chat":
-            return "protocol_echo"
+            return "dom_echo"
         return "acted_only"
 
 

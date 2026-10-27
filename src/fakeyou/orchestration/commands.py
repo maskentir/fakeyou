@@ -15,6 +15,7 @@ from fakeyou.meet.meet_actions import (
     leave_call,
     lower_hand,
     mute_microphone,
+    observe_chat_echoed,
     observe_hand_lowered,
     observe_hand_raised,
     observe_muted,
@@ -37,12 +38,12 @@ from fakeyou.session.commands import (
     CommandState,
     command_id,
 )
-from fakeyou.session.world import TWIN
 
 MEET_CHAT_MAX_CHARS = 500
 CHAT_WINDOW_SECONDS = 60.0
 ECHO_TIMEOUT_SECONDS = 6.0
 ECHO_POLL_SECONDS = 0.25
+TWIN_DEVICE = "twin"
 
 
 @dataclass(slots=True)
@@ -206,7 +207,6 @@ class CommandRunner:
         return self._finish(record, "failed_after_boundary", "target_state_not_reached")
 
     async def _once(self, record: CommandRecord, binding: _Binding) -> CommandRecord:
-        since = self._kernel.state.seq
         record = self._boundary(record)
         result, error = await capture_error(partial(self._act, record.spec, binding))
         if error is not None:
@@ -215,9 +215,18 @@ class CommandRunner:
         if not result.succeeded:
             return self._finish(record, "failed_after_boundary", result.detail)
         if record.kind == "send_chat":
-            echoed = await self._echoed(record.text, since, binding)
+            echoed = await self._echoed(record.text, binding)
             state: CommandState = "effect_observed" if echoed else "unknown"
-            return self._finish(record, state, "protocol_echo" if echoed else "no_echo")
+            if echoed:
+                self._kernel.chat(
+                    message_id=record.command_id,
+                    device_id=TWIN_DEVICE,
+                    text=record.text,
+                    own=True,
+                    backlog=False,
+                )
+                self._kernel.drain()
+            return self._finish(record, state, "dom_echo" if echoed else "no_echo")
         finished = self._finish(record, "effect_unobserved", "acted")
         if record.kind == "leave":
             self._left = True
@@ -233,16 +242,14 @@ class CommandRunner:
             )
         return moved
 
-    async def _echoed(self, text: str, since: int, binding: _Binding) -> bool:
+    async def _echoed(self, text: str, binding: _Binding) -> bool:
         deadline = binding.monotonic() + self.echo_timeout_seconds
-        wanted = " ".join(text.split())
         while True:
-            for line in reversed(self._kernel.state.dialogue.lines):
-                if line.seq <= since:
-                    break
-                if line.speaker == TWIN and line.channel == "chat":
-                    if " ".join(line.text.split()) == wanted:
-                        return True
+            echoed, error = await capture_error(
+                partial(observe_chat_echoed, binding.page, text, self._signals)
+            )
+            if echoed and error is None:
+                return True
             if binding.monotonic() >= deadline or binding.stop.is_set():
                 return False
             await binding.sleep(ECHO_POLL_SECONDS)

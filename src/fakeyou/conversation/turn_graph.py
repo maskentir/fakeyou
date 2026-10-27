@@ -60,7 +60,7 @@ from fakeyou.perception.scrub import scrub_internal_refs
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
-from fakeyou.session.planner import TurnPlan, plan_turn
+from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
 
 
@@ -235,7 +235,7 @@ class TurnPlanning(Protocol):
     ) -> PlannedTurn: ...
 
 
-StateSpeech = Callable[[StateQuestion], str | None]
+StateSpeech = Callable[[StateQuestion, str | None], str | None]
 
 
 class CommandPort(Protocol):
@@ -755,6 +755,7 @@ def reading_of(verdict: ParticipationDecision) -> Reading:
         requests_chat=verdict.requests_chat,
         evidence=verdict.evidence_needs,
         state_question=verdict.state_question,
+        language=verdict.language,
     )
 
 
@@ -762,11 +763,13 @@ def plan_for(
     runtime: TurnRuntime, event: TranscriptEvent, reading: Reading, channel: Channel
 ) -> PlannedTurn:
     if runtime.planning is not None:
-        return runtime.planning(event, reading, channel)
+        planned = runtime.planning(event, reading, channel)
+        return replace(planned, plan=with_language(planned.plan, reading.language))
     authorization = authorize(
         intent_of(reading), actor=UNATTRIBUTED, channel=channel, grant=_NO_GRANT
     )
-    return PlannedTurn(plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}"))
+    plan = plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}")
+    return PlannedTurn(with_language(plan, reading.language))
 
 
 _OUTCOME_NOTES: dict[str, str] = {
@@ -797,6 +800,11 @@ def plan_notes(plan: TurnPlan, outcome: CommandOutcome | None) -> tuple[str, ...
         kind = outcome.kind.replace("_", " ")
         template = _OUTCOME_NOTES.get(outcome.state, "{kind} did not happen.")
         notes.append(template.format(kind=kind[0].upper() + kind[1:]))
+    if plan.output == "chat":
+        notes.append(
+            "Your reply is posted in the meeting chat exactly as you write it: write only the "
+            "message, and if the participant dictated the words, write exactly those words."
+        )
     if plan.leave:
         notes.append("You will leave the call right after this reply.")
     if plan.clarify and not plan.refusals:
@@ -870,7 +878,7 @@ async def answer_state(
     question = planned.plan.state_question
     if question is None or runtime.state_speech is None:
         return False
-    text = runtime.state_speech(question)
+    text = runtime.state_speech(question, planned.plan.language)
     if text is None:
         return False
     runtime.journal.record(
@@ -1098,6 +1106,7 @@ async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading
         action_only=judgement.action_only,
         evidence=judgement.evidence,
         state_question=judgement.state_question,
+        language=judgement.language,
     )
 
 

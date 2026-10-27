@@ -20,6 +20,7 @@ class FakeMeet:
         self.kernel = kernel
         self.calls: list[str] = []
         self.hand = False
+        self.sent: list[str] = []
         self.reach_hand = True
         self.echo = True
         self.raise_on: set[str] = set()
@@ -38,16 +39,11 @@ class FakeMeet:
         self.calls.append("send_chat")
         if "send_chat" in self.raise_on:
             raise RuntimeError("crashed after enter")
-        if self.echo:
-            self.kernel.chat(
-                message_id=f"m{len(self.calls)}",
-                device_id="dev-twin",
-                text=text,
-                own=True,
-                backlog=False,
-            )
-            self.kernel.drain()
+        self.sent.append(text)
         return DONE
+
+    async def observe_chat_echoed(self, _page: object, text: str, *_args: object) -> bool:
+        return self.echo and text in self.sent
 
     async def send_reaction(self, *_args: object) -> MeetActionResult:
         self.calls.append("react")
@@ -89,7 +85,15 @@ def kernel() -> KernelPort:
 @pytest.fixture
 def meet(kernel: KernelPort, monkeypatch: pytest.MonkeyPatch) -> FakeMeet:
     fake = FakeMeet(kernel)
-    for name in ("raise_hand", "observe_hand_raised", "send_chat", "send_reaction", "leave_call"):
+    names = (
+        "raise_hand",
+        "observe_hand_raised",
+        "send_chat",
+        "send_reaction",
+        "leave_call",
+        "observe_chat_echoed",
+    )
+    for name in names:
         monkeypatch.setattr(runner_module, name, getattr(fake, name))
     return fake
 
@@ -152,7 +156,7 @@ async def test_a_crashed_toggle_click_is_settled_by_readback(
     assert len(meet.calls) == 3
 
 
-async def test_a_chat_is_confirmed_by_its_protocol_echo(
+async def test_a_chat_is_confirmed_by_its_dom_echo(
     tmp_path: Path, kernel: KernelPort, meet: FakeMeet
 ) -> None:
     state = await run(runner_for(tmp_path, kernel), CommandSpec("send_chat", "Deck is up."))
@@ -226,7 +230,7 @@ async def test_a_new_browser_epoch_cancels_before_the_boundary(
         plan_id="p1",
         actor="dev-ayu",
         browser_epoch=1,
-        verification="protocol_echo",
+        verification="dom_echo",
         text=spec.text,
     )
     CommandLedger(record_path(tmp_path), "meeting-9").accept(stale)
@@ -274,7 +278,7 @@ async def test_a_restart_closes_a_dispatched_command_as_unknown(
                 plan_id=plan_id,
                 actor="dev-ayu",
                 browser_epoch=1,
-                verification="protocol_echo",
+                verification="dom_echo",
                 text=spec.text,
             )
         )
@@ -292,3 +296,25 @@ async def test_a_restart_closes_a_dispatched_command_as_unknown(
     }
     assert meet.calls == []
     assert runner_for(tmp_path, restarted).recover() == ()
+
+
+@pytest.mark.usefixtures("meet")
+async def test_a_confirmed_chat_is_recorded_as_own_history(
+    tmp_path: Path, kernel: KernelPort
+) -> None:
+    runner = CommandRunner(
+        tmp_path / "meeting-9" / "record.jsonl",
+        meeting_id="meeting-9",
+        kernel=kernel,
+        chat_per_minute=5,
+    )
+    clock = Clock()
+    runner.bind_page(
+        cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
+    )
+
+    await runner.run(
+        CommandSpec("send_chat", "Deck is up."), plan_id="p1", ordinal=0, actor="dev-ayu"
+    )
+
+    assert [line.text for line in kernel.state.dialogue.lines] == ["Deck is up."]

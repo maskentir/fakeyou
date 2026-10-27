@@ -107,6 +107,7 @@ def decision_of(
         reaction_emoji=judgement.reaction_emoji,
         action_only=judgement.action_only,
         state_question=judgement.state_question,
+        language=judgement.language,
     )
 
 

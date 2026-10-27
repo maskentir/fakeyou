@@ -185,12 +185,14 @@ class RecordingSpeaker:
 async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> None:
     speaker = RecordingSpeaker()
     answers = {"participant_count": "Besides me, there are 2 people here."}
+
+    def speech(question: str, _language: str | None) -> str | None:
+        return answers.get(question)
+
     planned = PlannedTurn(
         TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
     )
-    state_runtime = TurnRuntime(
-        speaker=speaker, journal=RecordingJournal(), state_speech=answers.get
-    )
+    state_runtime = TurnRuntime(speaker=speaker, journal=RecordingJournal(), state_speech=speech)
 
     answered = await turn_graph.answer_state(state_runtime, event("How many are here?"), planned, 0)
 
@@ -201,7 +203,36 @@ async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> N
 async def test_without_a_locale_pack_the_state_question_falls_back_to_the_reply() -> None:
     planned = PlannedTurn(TurnPlan("p", "speech_only", output="speech", state_question="presenter"))
     state_runtime = TurnRuntime(
-        speaker=RecordingSpeaker(), journal=RecordingJournal(), state_speech=lambda _question: None
+        speaker=RecordingSpeaker(),
+        journal=RecordingJournal(),
+        state_speech=lambda _question, _language: None,
     )
 
     assert await turn_graph.answer_state(state_runtime, event("Who presents?"), planned, 0) is False
+
+
+async def test_the_state_answer_follows_the_language_of_the_turn() -> None:
+    speaker = RecordingSpeaker()
+    answers = {"participant_count": "Besides me, there are 2 people here."}
+    planned = PlannedTurn(
+        TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
+    )
+    state_runtime = TurnRuntime(
+        speaker=speaker,
+        journal=RecordingJournal(),
+        state_speech=lambda question, _language: answers.get(question),
+    )
+
+    assert (
+        await turn_graph.answer_state(state_runtime, event("How many are here?"), planned, 0)
+        is True
+    )
+    assert speaker.spoken == ["Besides me, there are 2 people here."]
+
+
+def test_the_plan_carries_the_declared_language() -> None:
+    reading = Reading("speak", "judge_reply", language="id")
+
+    planned = plan_for(runtime(), event("How many are here?"), reading, "speech")
+
+    assert planned.plan.language == "id"
