@@ -42,13 +42,13 @@ def profile_recall_tools(memory: MagicMock) -> list[BaseTool]:
     ]
 
 
-def test_persona_prompt_reaches_model_as_system_message() -> None:
+async def test_persona_prompt_reaches_model_as_system_message() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="The beta launch is on 14 October.")])
     agent = create_meeting_agent(
         model, persona=build_system_prompt(EXAMPLE_PROFILE), checkpointer=InMemorySaver()
     )
 
-    agent.invoke(
+    await agent.ainvoke(
         {"messages": [{"role": "user", "content": "When is the Orchid beta launch?"}]},
         {"configurable": {"thread_id": "persona-prompt"}},
     )
@@ -164,7 +164,7 @@ KNOWN_MODEL_LIMITATIONS = {
         for name in sorted(LIVE_SCENARIOS)
     ],
 )
-def test_live_persona_quality(scenario: str) -> None:
+async def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
     api_key = os.environ.get("EVAL_JUDGE_API_KEY", "")
     if not api_key.strip():
@@ -175,7 +175,7 @@ def test_live_persona_quality(scenario: str) -> None:
     recalled_context: str = PERSONA_FIXTURE["contexts"][live["context"]]
 
     @tool(description="Search long-term meeting memory for relevant context.")
-    def recall_meeting_context(query: str) -> str:
+    async def recall_meeting_context(query: str) -> str:
         del query
         return recalled_context
 
@@ -185,7 +185,7 @@ def test_live_persona_quality(scenario: str) -> None:
         persona=build_system_prompt(EXAMPLE_PROFILE),
         checkpointer=InMemorySaver(),
     )
-    result = agent.invoke(
+    result = await agent.ainvoke(
         {"messages": [{"role": "user", "content": question}]},
         {"configurable": {"thread_id": f"live-persona-{scenario}"}, "recursion_limit": 8},
     )

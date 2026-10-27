@@ -20,17 +20,17 @@ from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.conversation.turn_graph import (
     BargeLatch,
-    ChatChannel,
+    CommandPort,
     ConversationPhase,
-    MeetActionExecutor,
+    PlannedTurn,
     Responder,
     SentenceLimits,
     SpeechFloor,
     StreamTurnFactory,
     TurnGraphState,
     TurnInput,
+    TurnPlanning,
     TurnRuntime,
-    TurnSettler,
     WholeResponder,
     WholeTurnFactory,
     build_speech_graph,
@@ -85,10 +85,9 @@ class ReplyOptions:
 class DeferredOptions:
     quiet_gap_seconds: float = DEFAULTS.perception.attention.floor_gap_seconds
     ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
-    chat: ChatChannel | None = None
     chat_turn: WholeTurnFactory | None = None
-    settle_turn: TurnSettler | None = None
-    meet_action_executor: MeetActionExecutor | None = None
+    planning: TurnPlanning | None = None
+    commands: CommandPort | None = None
     others_speaking: Callable[[], bool] | None = None
 
 
@@ -155,6 +154,7 @@ class TurnLifecycle:
         self._barge_in = True
         self._shadow = False
         self._cue: ThinkingCue | None = None
+        self._plans: dict[str, PlannedTurn] = {}
         self._journal = journal
         self._responder = responder
         self._judging = judging
@@ -323,10 +323,10 @@ class TurnLifecycle:
             note_spoken=self._note_spoken,
             shadow=self._shadow,
             faults=self._options.faults,
-            chat=self._deferred_options.chat,
             chat_turn=self._deferred_options.chat_turn,
-            settle_turn=self._deferred_options.settle_turn,
-            meet_action_executor=self._deferred_options.meet_action_executor,
+            planning=self._deferred_options.planning,
+            commands=self._deferred_options.commands,
+            plans=self._plans,
             cue=self._cue,
             others_speaking=self._deferred_options.others_speaking,
         )

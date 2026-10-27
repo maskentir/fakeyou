@@ -36,11 +36,13 @@ PRICING = ("Pricing Plans", ["Starter: 99,000 per month", "Pro: 299,000 per mont
 THREAD = {"configurable": {"thread_id": "thread"}}
 
 
-def _participant(text: str, message_id: str) -> HumanMessage:
+def _participant(text: str, message_id: str, *, evidence: tuple[str, ...] = ()) -> HumanMessage:
     return HumanMessage(
         content=text,
         id=message_id,
-        additional_kwargs={"meeting_event": {"participant_id": "unknown"}},
+        additional_kwargs={
+            "meeting_event": {"participant_id": "unknown", "evidence_needs": list(evidence)}
+        },
     )
 
 
@@ -161,7 +163,9 @@ async def test_the_model_can_look_closer_at_an_earlier_screen() -> None:
     context = _context(timeline, answers=("Beta is marked in orange.",))
     agent, model = _agent(context, [look, AIMessage(content="It is orange.")])
 
-    result = await agent.ainvoke({"messages": [_participant("Beta color?", "t1")]}, THREAD)
+    result = await agent.ainvoke(
+        {"messages": [_participant("Beta color?", "t1", evidence=("screen",))]}, THREAD
+    )
 
     looked = next(
         message

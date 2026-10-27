@@ -11,7 +11,6 @@ from langchain_core.outputs import ChatResult
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.middleware import (
-    ChannelToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.memory.persona import PersonaProfile, build_system_prompt, persona_digest
@@ -74,7 +73,6 @@ async def test_join_brief_only_snapshots_context_before_the_agent_runs(
     assert observed == [True]
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]

@@ -749,20 +749,40 @@ name, overlap, stale source, dan epoch baru tidak pernah menghasilkan exact
 count atau sole responder palsu; `k-p3` dan `k-r2` berpindah ke outcome
 kernel.
 
-### PR 3: Intent, authorization, finite planner, command lifecycle
+### PR 3: Intent, authorization, finite planner, command lifecycle (selesai)
 
-- `TurnJudgement` diganti discriminated `Intent`; observation dan keputusan
-  tidak lagi dicampur di `TranscriptEvent`.
-- Policy actor x channel x permission x risk; brief memecah `meet_leave`.
-- Finite templates dan command state machine dengan irreversible boundary,
-  browser epoch, dan verification strength di action ledger.
-- Dihapus: Meet tools pada reply agent, `MeetActionOnceMiddleware`, planned
-  executor/settler khusus di assembly, `schedule_leave`, dan default
-  `authorized=True` di ledger.
+- `session.intent` memetakan output judge secara deterministik ke union
+  `NoResponse | Answer | Clarify | ChatRequest | MeetAction | Compound`;
+  `TranscriptEvent` tidak lagi membawa field keputusan kecuali
+  `evidence_needs` (dihapus di PR 4).
+- `session.policy.authorize` memakai actor dari atribusi kernel (endpoint
+  atau voice track live), channel, permission brief, dan ketersediaan
+  browser. Brief memiliki `meet_leave` terpisah dari `meet_act`.
+- `session.planner` hanya menghasilkan sepuluh template. Aksi plus balasan
+  chat tidak punya template dan turun menjadi satu pertanyaan klarifikasi.
+  Action-only yang gagal, ditolak, atau dibatalkan diucapkan sebagai
+  penolakan singkat; yang berhasil, tidak teramati, atau `unknown` tetap
+  diam.
+- `session.commands` + `meet.command_ledger` + `orchestration.commands`:
+  boundary ditulis sebelum click/Enter, toggle hanya di-retry selagi
+  readback membuktikan target belum tercapai, chat diverifikasi lewat echo
+  protocol own-device di kernel, react dan leave paling tinggi
+  `effect_unobserved`, dan restart menutup command attempt lama menjadi
+  `unknown` atau `cancelled_before_boundary`.
+- Reply menerima catatan `[System: ...]` dari state command, bukan klaim
+  sukses; `unknown` dan `effect_unobserved` tidak boleh diucapkan sebagai
+  terlihat atau selesai.
+- Leave yang diminta peserta berakhir sebagai `left_by_participant`, bukan
+  `stopped_by_owner`.
+- Dihapus: Meet tools pada reply agent, `MeetActionOnceMiddleware`,
+  `ChannelToolsMiddleware`, `MeetActionDispatcher`, `MeetChatChannel`,
+  ledger v1, `schedule_leave`/settler, dan persona tool meet_*.
+- Belum ada: owner terverifikasi lewat suara sebagai actor; leave peserta
+  tetap memerlukan `meet_leave`.
 
-Gate: tabel otorisasi lengkap dan fake browser crash-injection sebelum/
-sesudah click dan Enter tanpa duplicate visible effect atau klaim sukses
-untuk `unknown`.
+Gate: tabel otorisasi property-based, transisi command/plan, dan fake
+browser crash-injection sebelum/sesudah click dan Enter tanpa duplicate
+visible effect atau klaim sukses untuk `unknown`.
 
 ### PR 4: Evidence service dan state speech
 

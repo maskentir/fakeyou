@@ -49,6 +49,7 @@ LifecycleEventKind = Literal[
     "blocked",
     "lobby_timed_out",
     "owner_stopped",
+    "leave_requested",
     "browser_failed",
     "audio_failed",
     "conversation_failed",
@@ -101,6 +102,7 @@ def _edges() -> dict[tuple[PublicPhase, str], _Transition]:
     leaving = _Transition("leaving", effect="leave_requested")
     add(_LIVE, "participants_left", replace(leaving, pending="alone_limit_reached"))
     add(_LIVE, "owner_stopped", replace(leaving, pending="stopped_by_owner"))
+    add(_LIVE, "leave_requested", replace(leaving, pending="left_by_participant"))
     add(_LIVE, "duration_reached", replace(leaving, pending="duration_limit_reached"))
     add(_LIVE, "removed", _Transition("ended", reason="removed_by_host"))
     add(_LIVE, "meeting_ended", _Transition("ended", reason="ended_by_host"))

@@ -27,4 +27,5 @@ TERMINAL_EXIT_CODES: Mapping[TerminalReason, ExitCode] = {
     "lobby_timeout_reached": ExitCode.SUCCESS,
     "duration_limit_reached": ExitCode.SUCCESS,
     "alone_limit_reached": ExitCode.SUCCESS,
+    "left_by_participant": ExitCode.SUCCESS,
 }

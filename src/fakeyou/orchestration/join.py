@@ -37,7 +37,7 @@ from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
-from fakeyou.meet.meet_action_ledger import LedgerResult, MeetActionKind
+from fakeyou.meet.command_ledger import CommandRecord
 from fakeyou.memory.ingestion import meeting_windows
 from fakeyou.memory.persona import speech_keywords
 from fakeyou.observability.diagnostics import Diagnostics
@@ -53,11 +53,11 @@ from fakeyou.orchestration.assembly import (
     open_voiceprint,
     stop_signal_handlers,
 )
+from fakeyou.orchestration.commands import CommandRunner
 from fakeyou.orchestration.join_context import PreparedJoin, guard_join, prepare_join
 from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.kernel_port import KernelPort
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack, create_perception_stack
 from fakeyou.orchestration.providers import (
     create_embedder,
@@ -71,7 +71,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
-from fakeyou.perception.percepts import IncomingChat, ParticipantRef
+from fakeyou.perception.percepts import ParticipantRef
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
@@ -99,7 +99,7 @@ class _JoinRun:
     conversation: MeetingTurns | None = None
     voiceprint_live: VoiceprintLive | None = None
     voice_activity: VoiceActivityTracker | None = None
-    meet_dispatcher: MeetActionDispatcher | None = None
+    commands: CommandRunner | None = None
     perception: PerceptionStack | None = None
     moments: MomentDetector | None = None
     audio_factory: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
@@ -203,46 +203,17 @@ def share_roster(registry: SpeakerRegistry, kernel: KernelPort, roster: MeetRost
     registry.note_audio_sources(roster.audio_sources())
 
 
-def _own_chat_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[str, str], None] | None:
+def _own_action_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[CommandRecord], None]:
     perception = run.perception
-    if perception is None:
-        return None
-    timeline = perception.timeline
     profile = prepared.profile
     name = str(profile.display_name) if profile is not None else "You"
     you = ParticipantRef(ref="you", participant_id="twin", name=name)
 
-    def sink(action_id: str, text: str) -> None:
-        timeline.add_chat(
-            IncomingChat(
-                message_id=f"twin-action-{action_id}",
-                sender=you,
-                text=text,
-                sent_at=datetime.now(UTC),
-                own=True,
-            )
-        )
-
-    return sink
-
-
-def _own_action_sink(
-    prepared: PreparedJoin, run: _JoinRun
-) -> Callable[[MeetActionKind, str, str, LedgerResult], None] | None:
-    perception = run.perception
-    if perception is None:
-        return None
-    timeline = perception.timeline
-    profile = prepared.profile
-    name = str(profile.display_name) if profile is not None else "You"
-    you = ParticipantRef(ref="you", participant_id="twin", name=name)
-
-    def sink(kind: MeetActionKind, action_id: str, text: str, outcome: LedgerResult) -> None:
-        del action_id
-        detail = (
-            f"{kind} {text} {outcome.outcome}" if kind == "react" else f"{kind} {outcome.outcome}"
-        )
-        timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
+    def sink(record: CommandRecord) -> None:
+        if perception is None or record.kind == "send_chat":
+            return
+        detail = f"{record.kind} {record.text} {record.state}".replace("  ", " ")
+        perception.timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
 
     return sink
 
@@ -266,20 +237,16 @@ def _build_join_layers(
         screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
         on_roster=partial(share_roster, registry, run.kernel),
     )
-    run.meet_dispatcher = (
-        MeetActionDispatcher(
+    if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled:
+        run.commands = CommandRunner(
             prepared.record_path,
             meeting_id=prepared.config.meeting_id,
-            enabled=prepared.config.meet_actions_enabled,
+            kernel=run.kernel,
             chat_per_minute=prepared.request.settings.conversation.meet_chat_per_minute,
             journal=run.journal,
         )
-        if prepared.config.meet_actions_enabled and prepared.request.conversation_enabled
-        else None
-    )
-    if run.meet_dispatcher is not None:
-        run.meet_dispatcher.on_chat_sent = _own_chat_sink(prepared, run)
-        run.meet_dispatcher.on_action_settled = _own_action_sink(prepared, run)
+        run.commands.on_settled = _own_action_sink(prepared, run)
+        run.commands.recover()
     return registry
 
 
@@ -318,7 +285,8 @@ async def _open_join_conversation(
                 twin_names=[prepared.config.twin_name],
                 barge_in=prepared.request.barge_in,
                 on_tool_result=run.record.add_tool_result,
-                meet_dispatcher=run.meet_dispatcher,
+                commands=run.commands,
+                kernel=run.kernel,
                 others_speaking=(
                     run.voice_activity.others_speaking if run.voice_activity is not None else None
                 ),
@@ -487,8 +455,6 @@ async def _drive_join_session(
 ) -> SessionResult:
     if run.session_result is not None:
         return run.session_result
-    if run.meet_dispatcher is not None:
-        run.meet_dispatcher.on_leave = stop.set
     preflight_kwargs: dict[str, Any] = (
         {
             "preflight_hosts": preflight_hosts(
@@ -512,7 +478,7 @@ async def _drive_join_session(
                 faults=run.faults,
                 journal=run.journal,
                 voice_activity=run.voice_activity,
-                meet_dispatcher=run.meet_dispatcher,
+                commands=run.commands,
                 perception=run.perception,
                 on_phase=prepared.request.on_phase,
                 moments=run.moments,

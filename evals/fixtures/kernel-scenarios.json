@@ -231,7 +231,7 @@
       "given": {"summary": "Process crashes after chat Enter but before the own-device echo."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "unknown_no_resend"},
-      "executable_in": "PR3"
+      "executable_in": "PR3", "proof": "tests/test_commands.py::test_a_crash_after_enter_is_unknown_and_never_resent"
     },
     {
       "id": "k-b2",
@@ -241,7 +241,7 @@
       "given": {"summary": "Reaction click times out after the UI accepted the click."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "acted_not_seen_claim"},
-      "executable_in": "PR3"
+      "executable_in": "PR3", "proof": "tests/test_commands.py::test_a_reaction_click_is_acted_but_never_claimed_seen"
     },
     {
       "id": "k-s1",

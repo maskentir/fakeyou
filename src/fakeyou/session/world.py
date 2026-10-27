@@ -95,6 +95,7 @@ class DialogueLine:
     channel: Channel
     speaker: Ref
     text: str
+    source_id: str | None = None
     backlog: bool = False
     utterance_id: str | None = None
     sentence_index: int | None = None
@@ -243,7 +244,13 @@ def _transcript(
     newly_heard = (
         world.heard.keys() != state.world.heard.keys() or world.tracks != state.world.tracks
     )
-    line = DialogueLine(seq=seq, channel="speech", speaker=ref, text=observation.text)
+    line = DialogueLine(
+        seq=seq,
+        channel="speech",
+        speaker=ref,
+        text=observation.text,
+        source_id=observation.transcript_id,
+    )
     updated = replace(
         dialogue,
         lines=_append(dialogue.lines, line, limits.dialogue_lines),
@@ -267,6 +274,7 @@ def _chat(state: SessionState, seq: int, observation: ChatObserved, limits: Limi
         channel="chat",
         speaker=TWIN if observation.own else Ref("device", observation.device_id),
         text=observation.text,
+        source_id=observation.message_id,
         backlog=observation.backlog,
     )
     dialogue = replace(

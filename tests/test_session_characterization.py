@@ -1,6 +1,7 @@
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,9 @@ from fakeyou.session.contracts import (
     TranscriptObserved,
 )
 from fakeyou.session.identity import PresenceFact, presence
+from fakeyou.session.intent import Answer, Compound, Intent, MeetAction
+from fakeyou.session.planner import TurnPlan, plan_turn
+from fakeyou.session.policy import UNATTRIBUTED, Actor, Grant, Permission, authorize
 from fakeyou.session.world import SessionState, reduce
 
 FIXTURE = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "kernel-scenarios.json"
@@ -75,6 +79,7 @@ class Scenario(Frozen):
     current: dict[str, object] = Field(default_factory=dict)
     target: dict[str, object] = Field(default_factory=dict)
     executable_in: str | None = None
+    proof: str | None = None
 
 
 class KernelScenarios(Frozen):
@@ -254,3 +259,49 @@ def test_contribution_gate_characterization(scenario: Scenario) -> None:
     assert verdict.passed == scenario.current["passed"]
     assert verdict.reason == scenario.current["reason"]
     assert scenario.current["outcome"] == ("pass" if verdict.passed else "drop")
+
+
+def _planned(intent: Intent, actor: Actor, permissions: frozenset[Permission]) -> TurnPlan:
+    authorization = authorize(intent, actor=actor, channel="speech", grant=Grant(permissions))
+    return plan_turn(authorization, channel="speech", plan_id="corpus")
+
+
+EVERY_PERMISSION: frozenset[Permission] = frozenset(get_args(Permission))
+PR3_PLANS: dict[str, Callable[[], bool]] = {
+    "k-a1": lambda: (
+        not _planned(Compound(MeetAction("leave"), Answer()), UNATTRIBUTED, EVERY_PERMISSION).leave
+    ),
+    "k-a2": lambda: (
+        not _planned(MeetAction("leave"), UNATTRIBUTED, frozenset({"meet_act", "meet_chat"})).leave
+    ),
+    "k-pl1": lambda: (
+        _planned(
+            Compound(MeetAction("react", "\U0001f44d"), Answer()),
+            Actor("participant", "dev-ayu"),
+            EVERY_PERMISSION,
+        ).template
+        == "action_then_speech"
+    ),
+    "k-pl2": lambda: (
+        _planned(
+            Compound(MeetAction("leave"), Answer(("screen", "memory"))),
+            Actor("participant", "dev-ayu"),
+            EVERY_PERMISSION,
+        ).evidence
+        == ()
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [scenario for scenario in executable("catalog") if scenario.executable_in == "PR3"],
+    ids=lambda item: item.id,
+)
+def test_pr3_catalog_scenarios_are_executable(scenario: Scenario) -> None:
+    if scenario.proof is not None:
+        path, name = scenario.proof.split("::")
+        source = (FIXTURE.parent.parent.parent / path).read_text(encoding="utf-8")
+        assert f"def {name}(" in source
+        return
+    assert PR3_PLANS[scenario.id]()

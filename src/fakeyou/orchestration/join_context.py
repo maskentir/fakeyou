@@ -134,7 +134,9 @@ async def _load_join_context(
             meeting_tool_names(profile, brief, memory_requested=request.memory)
             config = replace(
                 config,
-                meet_actions_enabled=bool(brief.permissions & {"meet_act", "meet_chat"}),
+                meet_actions_enabled=bool(
+                    brief.permissions & {"meet_act", "meet_chat", "meet_leave"}
+                ),
             )
             meeting_context = MeetingContext(
                 schema_version="meeting_context/v1",

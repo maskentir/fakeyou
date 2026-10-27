@@ -10,8 +10,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.conversation.middleware import (
-    MeetActionOnceMiddleware,
     PlainReplyMiddleware,
+    PlannedEvidenceMiddleware,
     create_reply_retry_middleware,
 )
 from fakeyou.conversation.reply_planner import ReplyPlan
@@ -84,7 +84,7 @@ def create_meeting_agent(
         system_prompt=persona,
         middleware=[
             *middleware,
-            MeetActionOnceMiddleware(),
+            PlannedEvidenceMiddleware(),
             ToolCallLimitMiddleware(run_limit=MAX_TOOL_CALLS_PER_TURN),
             create_reply_retry_middleware(),
             PlainReplyMiddleware(),

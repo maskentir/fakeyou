@@ -12,7 +12,13 @@ from typing import Any, cast, override
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from evals._shared import ArtifactMeta, ReplayOptions, sanitized_role, token_present
+from evals._shared import (
+    REPLAY_EVIDENCE,
+    ArtifactMeta,
+    ReplayOptions,
+    sanitized_role,
+    token_present,
+)
 from evals._trust import (
     TrustScore,
     build_case_memory,
@@ -253,6 +259,7 @@ async def replay_briefs(
                             finalized=True,
                             participant_id="unknown",
                             speaker_evidence_id=None,
+                            evidence_needs=REPLAY_EVIDENCE,
                         )
                         started = time.monotonic()
                         answered, failure = await capture_error(

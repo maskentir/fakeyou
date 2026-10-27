@@ -1,9 +1,4 @@
-from pathlib import Path
-from typing import Any
-
-from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from tests._meet_browser_fakes import IN_CALL, FakePage
-from tests._persistence_fakes import RecordingJournal
 
 
 def button_xpath(prefix: str) -> str:
@@ -63,26 +58,3 @@ def with_enter(page: FakePage) -> list[str]:
 
     page.keyboard.press = press
     return pressed
-
-
-def tool_call(name: str, call_id: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {"args": args or {}, "name": name, "type": "tool_call", "id": call_id}
-
-
-def tool_text(output: object) -> str:
-    content = getattr(output, "content", output)
-    return content if isinstance(content, str) else str(content)
-
-
-def task5_dispatcher(
-    tmp_path: Path,
-    meeting_id: str,
-    *,
-    enabled: bool = True,
-    journal: RecordingJournal | None = None,
-) -> tuple[MeetActionDispatcher, Path]:
-    record = tmp_path / meeting_id / "record.jsonl"
-    dispatcher = MeetActionDispatcher(
-        record, meeting_id=meeting_id, enabled=enabled, journal=journal, chat_per_minute=3
-    )
-    return dispatcher, record

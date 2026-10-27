@@ -17,7 +17,12 @@ from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
 
 BriefPermission = Literal[
-    "explain_facts", "discuss_options", "ask_brief_questions", "meet_act", "meet_chat"
+    "explain_facts",
+    "discuss_options",
+    "ask_brief_questions",
+    "meet_act",
+    "meet_chat",
+    "meet_leave",
 ]
 KnowledgeScope = Literal["brief_only", "persona_memory"]
 BriefText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]

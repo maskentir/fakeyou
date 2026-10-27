@@ -256,22 +256,6 @@
       ]
     },
     {
-      "id": "s13",
-      "family": "chat",
-      "title": "Chat yang menyebut twin dijawab di chat",
-      "steps": [
-        {
-          "say": "Rani, bisa kirim link deck-nya?",
-          "speaker": "speaker-a",
-          "claim": "Ayu",
-          "source": "meeting_chat",
-          "expect": {
-            "max_sentences": 2
-          }
-        }
-      ]
-    },
-    {
       "id": "s14",
       "family": "chat",
       "title": "Chat biasa tidak dijawab twin",

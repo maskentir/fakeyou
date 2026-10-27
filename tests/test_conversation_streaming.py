@@ -37,7 +37,13 @@ from fakeyou.conversation.meeting_turns import (
 from fakeyou.memory.memory import create_recall_error_middleware
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
-from tests._conversation_fakes import FakeResponder, ToolCallingFakeModel, recall_call
+from tests._conversation_fakes import (
+    FakeResponder,
+    ScriptedJudge,
+    ToolCallingFakeModel,
+    judged,
+    recall_call,
+)
 from tests._conversation_support import AgentT, callback_handlers, event
 from tests._error_support import message_pattern
 from tests._persistence_fakes import RecordingJournal
@@ -145,6 +151,7 @@ def streamed_loop(
         "barge_in",
         "barge_in_min_words",
         "participant_policy_enabled",
+        "judge",
     )
     timing_keys = ("response_timeout_seconds", "clock")
     generation_keys = (
@@ -398,8 +405,9 @@ async def test_streamed_reply_survives_recall_failure(journal: RecordingJournal)
         middleware=[create_recall_error_middleware(None)],
     )
     audio = FakeReplyAudio()
-    loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "when is demo"))
+    judge = ScriptedJudge(lambda _window: judged("reply", evidence=("memory",)))
+    loop = streamed_loop(agent, audio, journal, judge=judge, wake_phrases=["Rani"])
+    await loop.ingress.receive_final(event("t1", "Rani, when is demo"))
     await loop.lifecycle.wait_idle()
     assert audio.spoken == ["I do not know the answer.", "Sorry about that."]
     assert "Meeting memory is unavailable" not in " ".join(audio.spoken)

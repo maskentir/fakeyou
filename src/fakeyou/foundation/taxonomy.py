@@ -73,6 +73,7 @@ TerminalReason = Literal[
     "lobby_timeout_reached",
     "duration_limit_reached",
     "alone_limit_reached",
+    "left_by_participant",
 ]
 ProviderFaultKind = Literal[
     "payment_required",

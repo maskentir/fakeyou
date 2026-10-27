@@ -19,7 +19,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 
 import fakeyou.memory.memory as memory_module
-from evals._shared import ArtifactMeta, ReplayOptions, sanitized_role, token_present
+from evals._shared import (
+    REPLAY_EVIDENCE,
+    ArtifactMeta,
+    ReplayOptions,
+    sanitized_role,
+    token_present,
+)
 from evals.runtime_evidence import (
     ModelCallCounter,
     ResponderContext,
@@ -335,6 +341,7 @@ async def replay_trust(
                             finalized=True,
                             participant_id="unknown",
                             speaker_evidence_id=None,
+                            evidence_needs=REPLAY_EVIDENCE,
                         )
                         started = time.monotonic()
                         answered, failure = await capture_error(

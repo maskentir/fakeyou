@@ -16,13 +16,12 @@ from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
-    ChatChannel,
-    MeetActionExecutor,
+    CommandPort,
     Responder,
     SentenceLimits,
     StreamTurnFactory,
     ToolStartHook,
-    TurnSettler,
+    TurnPlanning,
     WholeResponder,
     WholeTurnFactory,
     build_turn_graph,
@@ -72,9 +71,8 @@ class TurnInteraction:
     )
     judge_window_lines: int = DEFAULTS.turn_judge.window_lines
     shadow: bool = False
-    chat: ChatChannel | None = None
-    settle_turn: TurnSettler | None = None
-    meet_action_executor: MeetActionExecutor | None = None
+    planning: TurnPlanning | None = None
+    commands: CommandPort | None = None
     control: ReplyControl | None = None
 
 
@@ -174,10 +172,9 @@ def _deferred_options(
     return DeferredOptions(
         quiet_gap_seconds=timing.quiet_gap_seconds,
         ttl_seconds=timing.deferred_ttl_seconds,
-        chat=interaction.chat,
         chat_turn=chat_turn,
-        settle_turn=interaction.settle_turn,
-        meet_action_executor=interaction.meet_action_executor,
+        planning=interaction.planning,
+        commands=interaction.commands,
         others_speaking=interaction.others_speaking,
     )
 

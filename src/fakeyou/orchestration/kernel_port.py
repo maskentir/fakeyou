@@ -28,8 +28,9 @@ from fakeyou.session.contracts import (
     TranscriptObserved,
     VoiceTrackObserved,
 )
-from fakeyou.session.identity import PresenceFact, presence
+from fakeyou.session.identity import PresenceFact, attribute, presence
 from fakeyou.session.kernel import Mailbox, SessionKernel
+from fakeyou.session.policy import UNATTRIBUTED, Actor
 from fakeyou.session.world import SessionState
 
 _PLAYBACK_PHASES: dict[str, PlaybackPhase] = {
@@ -101,8 +102,26 @@ class KernelPort:
         return cls(SessionKernel(session_id=meeting_id, attempt_id=uuid.uuid4().hex))
 
     @property
+    def attempt_id(self) -> str:
+        return self._kernel.attempt_id
+
+    @property
     def state(self) -> SessionState:
         return self._kernel.state
+
+    def actor(self, source_id: str) -> Actor:
+        state = self._kernel.state
+        for line in reversed(state.dialogue.lines):
+            if line.source_id != source_id:
+                continue
+            attribution = attribute(state, line.speaker)
+            if attribution.device_id is not None and attribution.status in (
+                "confirmed",
+                "probable",
+            ):
+                return Actor("participant", attribution.device_id)
+            return UNATTRIBUTED
+        return UNATTRIBUTED
 
     def presence(self) -> PresenceFact:
         return presence(self._kernel.state)

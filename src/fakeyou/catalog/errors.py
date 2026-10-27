@@ -34,9 +34,6 @@ class ErrorCode(StrEnum):
     VOICEPRINT_EXTRA_MISSING = "voiceprint.extra_missing"
     CHAT_THREAD_INVALID = "chat.thread_invalid"
     CHAT_FAILED = "chat.failed"
-    MEET_CHAT_TOO_LONG = "meet_chat.too_long"
-    MEET_CHAT_RATE_LIMITED = "meet_chat.rate_limited"
-    MEET_CHAT_EVIDENCE_REJECTED = "meet_chat.evidence_rejected"
     MEETING_LINK_INVALID = "meeting.link_invalid"
     MEETING_LOBBY_TIMEOUT_NOT_POSITIVE = "meeting.lobby_timeout_not_positive"
     MEETING_DURATION_NOT_POSITIVE = "meeting.duration_not_positive"
@@ -53,7 +50,6 @@ class ErrorCode(StrEnum):
     MEETING_PERSONA_LANGUAGE_MISMATCH = "meeting.persona_language_mismatch"
     MEETING_MEMORY_REQUIRES_RECALL_OR_INGEST = "meeting.memory_requires_recall_or_ingest"
     MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY = "meeting.memory_not_allowed_brief_only"
-    MEETING_TOOL_PERMISSION_MISSING = "meeting.tool_permission_missing"
     MEETING_AUDIO_REQUIRES_WORKER = "meeting.audio_requires_worker"
     MEETING_BRIEF_UNREADABLE = "meeting.brief_unreadable"
     MEETING_BRIEF_SCOPE_MISMATCH = "meeting.brief_scope_mismatch"
@@ -326,15 +322,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.CHAT_FAILED: ErrorSpec("chat failed: {reason}"),
-    ErrorCode.MEET_CHAT_TOO_LONG: ErrorSpec(
-        "meet chat message must be {limit} characters or fewer", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEET_CHAT_RATE_LIMITED: ErrorSpec(
-        "meet chat allows {limit} messages per minute", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEET_CHAT_EVIDENCE_REJECTED: ErrorSpec(
-        "meet chat message must not contain memory evidence text", ExitCode.INPUT_REJECTED
-    ),
     ErrorCode.MEETING_LINK_INVALID: ErrorSpec(
         "link must be an https://meet.google.com/ meeting URL", ExitCode.INPUT_REJECTED
     ),
@@ -383,10 +370,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.MEETING_MEMORY_NOT_ALLOWED_BRIEF_ONLY: ErrorSpec(
         "--memory is not allowed with a brief_only meeting brief", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEETING_TOOL_PERMISSION_MISSING: ErrorSpec(
-        "persona tool {tool} requires the {permission} brief permission",
-        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.MEETING_AUDIO_REQUIRES_WORKER: ErrorSpec(
         "--audio requires the Linux audio worker; use " + Command.COMPOSE_WORKER_SESSIONS,

@@ -14,7 +14,7 @@ from typing import Any, cast
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool, tool
 
-from evals._shared import sanitized_role
+from evals._shared import REPLAY_EVIDENCE, sanitized_role
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
@@ -177,6 +177,7 @@ async def replay(
                     finalized=True,
                     participant_id="unknown",
                     speaker_evidence_id=None,
+                    evidence_needs=REPLAY_EVIDENCE,
                 )
 
                 def _note_tool_start(calls: list[None] = calls) -> None:

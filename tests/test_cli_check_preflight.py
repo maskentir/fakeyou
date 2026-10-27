@@ -20,7 +20,6 @@ from fakeyou.config.settings import (
     Settings,
 )
 from fakeyou.conversation.middleware import (
-    ChannelToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.conversation.session import SessionResult
@@ -433,7 +432,6 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
 
     assert [type(item) for item in created["middleware"]] == [
         ModelFallbackMiddleware,
-        ChannelToolsMiddleware,
         SpeakerAttributionMiddleware,
     ]
 

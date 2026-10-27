@@ -20,7 +20,6 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import DEFAULTS, Settings
 from fakeyou.conversation.middleware import (
-    ChannelToolsMiddleware,
     SpeakerAttributionMiddleware,
 )
 from fakeyou.memory.persona import (
@@ -45,11 +44,16 @@ from tests._cli_support import (
     write_persona,
     write_record,
 )
-from tests._conversation_fakes import ToolCallingFakeModel, recall_call
+from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged, recall_call
 from tests._error_support import message_pattern
 from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 from tests._runtime_fakes import SessionRun
+
+
+def judge_needs_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", evidence=("memory",)))
+    monkeypatch.setattr(assembly, "build_turn_judge", lambda *_args, **_kwargs: judge)
 
 
 def recall_then_reply(reply: str) -> ToolCallingFakeModel:
@@ -223,7 +227,6 @@ async def test_join_persona_without_memory_uses_profile_prompt_without_tools(
     assert created["agent_calls"] == 2
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -234,6 +237,7 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     join: Callable[..., Any], settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     fact = "Orchid beta launch is planned for 14 October 2026"
     graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
@@ -265,7 +269,6 @@ async def test_join_persona_memory_exposes_only_profile_scoped_recall(
     assert [tool.name for tool in created["tools"]] == ["recall_meeting_context"]
     assert [type(item) for item in created["middleware"]] == [
         ToolErrorMiddleware,
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -316,6 +319,7 @@ async def test_join_recall_failure_is_returned_as_unknown_without_failing_conver
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     graphiti = make_graphiti(search_error=RuntimeError("neo4j went away"))
     model = recall_then_reply("I don't know yet, I'll check with Rani.")
 
@@ -426,7 +430,6 @@ async def test_join_ingest_only_persona_defers_memory_without_recall_tool(
 
     assert created["tools"] == []
     assert [type(item) for item in created["middleware"]] == [
-        ChannelToolsMiddleware,
         PerceptionContextMiddleware,
         SpeakerAttributionMiddleware,
     ]
@@ -458,6 +461,7 @@ async def test_join_hung_recall_times_out_as_unknown_and_keeps_listening(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     settings.memory.recall.strategy = "tool"
+    judge_needs_memory(monkeypatch)
     graphiti = make_graphiti(search_gate=asyncio.Event())
     model = recall_then_reply("I don't know yet, I'll check with Rani.")
     settings.memory.recall.timeout_seconds = 0.01
