@@ -76,6 +76,8 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
             spoken["evidence_needs"] = list(event.evidence_needs)
         if event.reaction_emoji is not None:
             spoken["reaction_emoji"] = event.reaction_emoji
+        if event.action_only:
+            spoken["action_only"] = True
         if event.turn_planned:
             spoken["turn_planned"] = True
         if event.attention is not None:

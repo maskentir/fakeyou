@@ -58,6 +58,9 @@ class MeetActionDispatcher:
         self._chat_sent: list[float] = []
         self._journal = journal
         self.on_chat_sent: Callable[[str, str], None] | None = None
+        self.on_action_settled: Callable[[MeetActionKind, str, str, LedgerResult], None] | None = (
+            None
+        )
         self.on_leave: Callable[[], None] | None = None
         self._signals = DEFAULT_MEET_ACTION_SIGNALS
         self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
@@ -227,7 +230,10 @@ class MeetActionDispatcher:
     ) -> None:
         if outcome is None:
             self._reject(kind, action_id, "stale_cancelled")
-        elif kind == "send_chat" and outcome.succeeded and self.on_chat_sent is not None:
+            return
+        if self.on_action_settled is not None:
+            self.on_action_settled(kind, action_id, text, outcome)
+        if kind == "send_chat" and outcome.succeeded and self.on_chat_sent is not None:
             self.on_chat_sent(action_id, text)
         elif kind == "leave" and outcome.succeeded:
             self._left = True

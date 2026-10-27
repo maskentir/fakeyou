@@ -46,6 +46,8 @@ POLICY_FIELDS = {
     "meet_action",
     "evidence_needs",
     "reaction_emoji",
+    "action_only",
+    "logistics_check",
 }
 
 

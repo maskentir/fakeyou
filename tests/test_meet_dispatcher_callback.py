@@ -23,7 +23,11 @@ async def test_a_successful_chat_send_is_reported_back(
     dispatcher = MeetActionDispatcher(
         tmp_path / "record.jsonl", meeting_id="m1", enabled=True, chat_per_minute=3
     )
+    settled: list[tuple[str, str, str, str]] = []
     dispatcher.on_chat_sent = lambda action_id, text: sent.append((action_id, text))
+    dispatcher.on_action_settled = lambda kind, action_id, text, outcome: settled.append(
+        (kind, action_id, text, outcome.outcome)
+    )
     dispatcher.bind_page(
         cast(Page, object()),
         sleep=asyncio.sleep,
@@ -35,6 +39,7 @@ async def test_a_successful_chat_send_is_reported_back(
     await dispatcher.drain()
 
     assert sent == [("a1", "hello room")]
+    assert settled == [("send_chat", "a1", "hello room", "succeeded")]
 
 
 async def test_a_successful_leave_is_reported_back(

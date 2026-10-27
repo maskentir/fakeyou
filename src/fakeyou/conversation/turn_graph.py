@@ -358,6 +358,12 @@ def _turn_current(runtime: TurnRuntime, generation: int, floor_generation: int) 
     return runtime.floor is None or runtime.floor.admits(floor_generation)
 
 
+def _admission_current(runtime: TurnRuntime, generation: int) -> bool:
+    if _closed(runtime):
+        return False
+    return runtime.admitted is None or runtime.admitted.count == generation
+
+
 def _drop_outcome(floor: SpeechFloor) -> tuple[str, str]:
     if floor.last_reason == "close":
         return "closed", "close"
@@ -790,18 +796,18 @@ def _with_leave_pending(event: TranscriptEvent) -> TranscriptEvent:
 
 async def _reply_batch(
     runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...]
-) -> tuple[TranscriptEvent, ...]:
+) -> tuple[tuple[TranscriptEvent, ...], TurnActionOutcome | None]:
     final = batch[-1]
     if (
         runtime.meet_action_executor is not None
         and final.turn_planned
         and final.meet_action == "leave"
     ):
-        return (*batch[:-1], _with_leave_pending(final))
+        return (*batch[:-1], _with_leave_pending(final)), None
     outcome = await _execute_planned_action(runtime, final)
     if outcome is None:
-        return batch
-    return (*batch[:-1], _with_action_outcome(final, outcome))
+        return batch, None
+    return (*batch[:-1], _with_action_outcome(final, outcome)), outcome
 
 
 async def _run_turn(
@@ -817,10 +823,16 @@ async def _run_turn(
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
     try:
-        reply_batch = await _reply_batch(runtime, batch)
+        reply_batch, action_outcome = await _reply_batch(runtime, batch)
     except BaseException:
         await _settle_turn(runtime, final, completed=False)
         raise
+    if action_outcome is not None and action_outcome.succeeded and final.action_only:
+        completed = _admission_current(runtime, generation)
+        await _settle_turn(runtime, final, completed=completed)
+        if completed:
+            _move_phase(runtime, "waiting", final.id)
+        return
     whole = _turn_whole(runtime, reply_batch, hook)
     streamed = whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
@@ -860,7 +872,7 @@ async def _run_turn(
         runtime,
         final,
         completed=bool(output.get("completed") or output.get("silent"))
-        and _turn_current(runtime, generation, floor_generation),
+        and _admission_current(runtime, generation),
     )
     if cue_state.played and not output.get("completed"):
         runtime.journal.record(
@@ -994,6 +1006,7 @@ async def _plan_chat_event(runtime: TurnRuntime, event: TranscriptEvent) -> Tran
         meet_action=judgement.meet_action,
         evidence_needs=judgement.evidence,
         reaction_emoji=judgement.reaction_emoji,
+        action_only=judgement.action_only,
         turn_planned=True,
     )
 
@@ -1009,7 +1022,12 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
     event = await _plan_chat_event(runtime, event)
     hook = tool_start_hook(runtime, generation, floor_generation, event.id)
     try:
-        reply_event = (await _reply_batch(runtime, (event,)))[-1]
+        reply_batch, action_outcome = await _reply_batch(runtime, (event,))
+        reply_event = reply_batch[-1]
+        if action_outcome is not None and action_outcome.succeeded and event.action_only:
+            await _settle_turn(runtime, event, completed=True)
+            _move_phase(runtime, "waiting", event.id)
+            return
         reply = await _respond_within(
             factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
         )
@@ -1107,6 +1125,7 @@ async def _admit_final(
             meet_action=verdict.meet_action if final.meet_action == "none" else final.meet_action,
             evidence_needs=tuple(dict.fromkeys((*final.evidence_needs, *verdict.evidence_needs))),
             reaction_emoji=final.reaction_emoji or verdict.reaction_emoji,
+            action_only=final.action_only or verdict.action_only,
             turn_planned=final.turn_planned or state.get("decision_source") == "judge",
         )
     queue = runtime.queue if runtime.queue is not None else PendingFinals()

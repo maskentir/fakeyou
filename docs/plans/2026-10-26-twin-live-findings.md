@@ -286,3 +286,34 @@ Spec: `docs/plans/2026-10-26-twin-sophistication-design.md`. What live proved, n
   generic filler ("not quite sure what you mean") while the reaction
   itself sent fine. Speech accompanying a queued action can still
   contradict the action; worth a later pass on action-turn reply shaping.
+
+## Addendum: bmn-1 D9 round
+
+- The mechanical stamped reaction worked on the first attempt: judge emitted
+  `reaction_emoji=thinking`, the turn graph used action id `turn-...`, and
+  Meet observed it effective. The spoken sentence after it was still generic
+  uncertainty, so successful action-only turns now skip the reply model
+  entirely; failures and compound requests still get an outcome-aware reply.
+- Planned leave spoke a farewell but did not leave. The settler treated the
+  turn as stale because the speech floor generation advances after delivered
+  speech. Turn settlement now keys completion to admission currency, matching
+  the delivered-speech phase transition.
+- Roster questions were routed to a participant camera tool and answered with
+  invented names from persona context. The participant evidence class now
+  means only a specific person's camera or appearance; attendance and count
+  are roster state in the meeting view, not camera evidence.
+- A speech-requested chat send settled effectively, but took 14.4s end to end.
+  Chat actuation latency remains a residual risk.
+
+## Addendum: bmn-2 corrected D9 round
+
+- The stamped confused reaction executed mechanically (`turn-...`) and was
+  observed effective in 4.8s. With `action_only`, that turn itself produced
+  no spoken filler.
+- The next roster turn still denied the reaction and said the twin was the
+  only listed participant. Settled own actions now enter the perception
+  timeline as `own_action` signals so later turns can see them; roster
+  attendance remains incomplete when Meet's sync only lists the guest.
+- Planned leave now works in sequence: farewell playback finished, the
+  turn settler executed leave, Meet observed it effective in 1.7s, and the
+  session ended `stopped_by_owner` with exit 0.

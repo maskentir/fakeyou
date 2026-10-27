@@ -28,6 +28,14 @@ def judgement(**changes: object) -> TurnJudgement:
     return TurnJudgement.model_validate(values | changes)
 
 
+def test_a_room_check_needs_a_name_or_the_sole_human_participant() -> None:
+    check = judgement(logistics_check=True, confidence=1.0)
+
+    assert decision_of(check, THRESHOLDS).reason_code == "judge_room_check"
+    assert decision_of(check, THRESHOLDS, named=True).decision == "speak"
+    assert decision_of(check, THRESHOLDS, sole_human_participant=True).decision == "speak"
+
+
 def test_a_confident_reply_is_spoken() -> None:
     decision = decision_of(judgement(), THRESHOLDS)
 

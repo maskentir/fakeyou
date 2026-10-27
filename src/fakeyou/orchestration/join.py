@@ -37,6 +37,7 @@ from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
+from fakeyou.meet.meet_action_ledger import LedgerResult, MeetActionKind
 from fakeyou.memory.ingestion import meeting_windows
 from fakeyou.memory.persona import speech_keywords
 from fakeyou.observability.diagnostics import Diagnostics
@@ -222,6 +223,27 @@ def _own_chat_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[str, str]
     return sink
 
 
+def _own_action_sink(
+    prepared: PreparedJoin, run: _JoinRun
+) -> Callable[[MeetActionKind, str, str, LedgerResult], None] | None:
+    perception = run.perception
+    if perception is None:
+        return None
+    timeline = perception.timeline
+    profile = prepared.profile
+    name = str(profile.display_name) if profile is not None else "You"
+    you = ParticipantRef(ref="you", participant_id="twin", name=name)
+
+    def sink(kind: MeetActionKind, action_id: str, text: str, outcome: LedgerResult) -> None:
+        del action_id
+        detail = (
+            f"{kind} {text} {outcome.outcome}" if kind == "react" else f"{kind} {outcome.outcome}"
+        )
+        timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
+
+    return sink
+
+
 def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
@@ -253,6 +275,7 @@ def _build_join_layers(
     )
     if run.meet_dispatcher is not None:
         run.meet_dispatcher.on_chat_sent = _own_chat_sink(prepared, run)
+        run.meet_dispatcher.on_action_settled = _own_action_sink(prepared, run)
     return registry
 
 

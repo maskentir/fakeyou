@@ -9,6 +9,7 @@ from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudgin
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
+    SpeechFloor,
     TurnActionOutcome,
     TurnInput,
     TurnRuntime,
@@ -148,6 +149,7 @@ async def test_a_turn_settles_only_after_its_speech_is_delivered() -> None:
         turn_input(),
         context=replace(
             runtime(speaker, judge=ScriptedJudge(lambda _window: judged("reply"))),
+            floor=SpeechFloor(),
             settle_turn=settle,
         ),
     )
@@ -174,6 +176,32 @@ async def test_a_stamped_meeting_action_runs_mechanically_before_the_reply() -> 
 
     assert executed == [("react", "\U0001f914", ())]
     assert speaker.utterances == [TWIN_REPLY]
+
+
+async def test_a_successful_action_only_turn_needs_no_spoken_reply() -> None:
+    speaker = FakeSpeaker()
+    executed: list[str] = []
+
+    async def execute(event: TranscriptEvent) -> TurnActionOutcome:
+        executed.append(event.meet_action)
+        return TurnActionOutcome(succeeded=True, detail="reaction sent", state="observed_done")
+
+    judge = ScriptedJudge(
+        lambda _window: judged(
+            "reply",
+            meet_action="react",
+            reaction_emoji="\U0001f914",
+            action_only=True,
+        )
+    )
+
+    await build_turn_graph().ainvoke(
+        turn_input(),
+        context=replace(runtime(speaker, judge=judge), meet_action_executor=execute),
+    )
+
+    assert executed == ["react"]
+    assert speaker.utterances == []
 
 
 async def test_a_chat_turn_gets_the_same_typed_plan_as_speech() -> None:

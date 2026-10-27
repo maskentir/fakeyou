@@ -187,7 +187,16 @@ async def judge_cases(
                 )
                 continue
             named = case_names_twin(case, fixture.twin_names)
-            answered = decision_of(judgement, thresholds, named=named).decision != "silent"
+            participants = case.human_participants or fixture.human_participants
+            answered = (
+                decision_of(
+                    judgement,
+                    thresholds,
+                    named=named,
+                    sole_human_participant=len(participants) == 1,
+                ).decision
+                != "silent"
+            )
             latency_ms = (time.monotonic() - started) * 1000
             report.outcomes.append(CaseOutcome(case, run, judgement, answered, latency_ms))
     return report
