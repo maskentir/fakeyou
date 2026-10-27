@@ -405,7 +405,9 @@ async def test_a_reconnect_that_never_finds_a_quiet_room_runs_anyway() -> None:
     assert session.reconnect_state() == "idle"
 
 
-async def test_a_reconnect_queued_in_the_lobby_runs_once_admitted(journal: RecordingJournal) -> None:
+async def test_a_reconnect_queued_in_the_lobby_runs_once_admitted(
+    journal: RecordingJournal,
+) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     gate = asyncio.Event()

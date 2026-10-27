@@ -938,12 +938,27 @@ async def _run_turn(
         return
     if await answer_state(runtime, final, planned, generation):
         return
-    if planned.plan.output == "chat":
-        await _deliver_chat(runtime, final, planned, generation, outcome)
-        return
-    reply_event = for_reply(final, planned.plan, outcome)
-    if judged is None:
-        reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
+    try:
+        if planned.plan.output == "chat":
+            await _deliver_chat(runtime, final, planned, generation, outcome)
+            return
+        reply_event = for_reply(final, planned.plan, outcome)
+        if judged is None:
+            reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
+        await _speak_reply(runtime, speech, batch, reply_event, (scope, generation))
+    finally:
+        await _leave(runtime, planned)
+
+
+async def _speak_reply(
+    runtime: TurnRuntime,
+    speech: SpeechGraph,
+    batch: tuple[TranscriptEvent, ...],
+    reply_event: TranscriptEvent,
+    turn: tuple[TurnScope | None, int],
+) -> None:
+    final = batch[-1]
+    scope, generation = turn
     floor_generation = _floor_generation(runtime)
     generations = (generation, floor_generation)
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
@@ -988,8 +1003,6 @@ async def _run_turn(
         )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
-    if output.get("completed") and _admission_current(runtime, generation):
-        await _leave(runtime, planned)
 
 
 def _start_cue(runtime: TurnRuntime, turn: CueTurn) -> asyncio.Task[None] | None:
@@ -1158,8 +1171,6 @@ async def _deliver_chat(
             state=sent.state,
             chars=len(text),
         )
-    if sent is not None and not sent.not_done:
-        await _leave(runtime, planned)
     _move_phase(runtime, "listening" if text else "waiting", event.id)
 
 
@@ -1172,7 +1183,10 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
         return
     if await answer_state(runtime, event, planned, generation):
         return
-    await _deliver_chat(runtime, event, planned, generation, outcome)
+    try:
+        await _deliver_chat(runtime, event, planned, generation, outcome)
+    finally:
+        await _leave(runtime, planned)
 
 
 async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: DeferredTurn) -> bool:

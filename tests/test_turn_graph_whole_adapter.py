@@ -19,6 +19,7 @@ from fakeyou.conversation.turn_graph import (
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import DeferredOptions, ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.intent import Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Channel
@@ -245,3 +246,35 @@ def test_graph_drains_every_pending_final_into_one_respond_call() -> None:
     assert "if runtime.admitted is not None and runtime.admitted.count != generation:" in (
         GRAPH_SOURCE
     )
+
+
+class RecordingCommands:
+    def __init__(self) -> None:
+        self.kinds: list[str] = []
+
+    async def run(
+        self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
+    ) -> CommandOutcome:
+        del actor
+        self.kinds.append(spec.kind)
+        return CommandOutcome(f"{plan_id}-{ordinal}", spec.kind, "effect_unobserved")
+
+
+async def test_a_permitted_leave_happens_even_when_the_farewell_is_cut_off() -> None:
+    def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+        del reading, channel
+        plan = TurnPlan(f"plan-{event.id}", "speech_then_leave", "speech", leave=True)
+        return PlannedTurn(plan, actor="dev-ayu")
+
+    def newer_final_takes_the_floor(hook: Callable[[], None]) -> None:
+        del hook
+        harness.lifecycle.floor.advance()
+
+    harness = Harness(FakeReplier(reply="Bye everyone.", on_call=newer_final_takes_the_floor))
+    commands = RecordingCommands()
+    harness.lifecycle.configure_deferred(DeferredOptions(planning=planning, commands=commands))
+
+    await harness.say("f1", "twin, you can leave now")
+
+    assert "Bye everyone." not in harness.session.spoken
+    assert commands.kinds == ["leave"]
