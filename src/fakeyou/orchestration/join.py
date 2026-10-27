@@ -56,6 +56,7 @@ from fakeyou.orchestration.assembly import (
 from fakeyou.orchestration.join_context import PreparedJoin, guard_join, prepare_join
 from fakeyou.orchestration.join_preflight import preflight_join
 from fakeyou.orchestration.join_types import IngestResume, JoinOutcome, JoinPorts, JoinRequest
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.meet_actions import MeetActionDispatcher
 from fakeyou.orchestration.perception import PerceptionStack, create_perception_stack
 from fakeyou.orchestration.providers import (
@@ -108,6 +109,7 @@ class _JoinRun:
     exit_code: ExitCode = ExitCode.FAILURE
     final_exit: ExitCode = ExitCode.FAILURE
     speaking: str | None = None
+    kernel: KernelPort | None = None
 
 
 def _write_pending_status(
@@ -193,7 +195,8 @@ async def _open_join_memory(
         )
 
 
-def share_roster(registry: SpeakerRegistry, roster: MeetRoster) -> None:
+def share_roster(registry: SpeakerRegistry, kernel: KernelPort, roster: MeetRoster) -> None:
+    kernel.roster(roster)
     people = roster.people()
     registry.update_roster(people)
     registry.note_roster({"id": device, "name": name} for device, name in people.items() if name)
@@ -248,6 +251,7 @@ def _build_join_layers(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack
 ) -> SpeakerRegistry:
     registry = SpeakerRegistry(capacity=STREAM_FLEET_SLOTS)
+    run.kernel = KernelPort.for_meeting(prepared.config.meeting_id)
     run.voiceprint_live = resources.enter_context(open_voiceprint(prepared.request.settings))
     run.voice_activity = (
         VoiceActivityTracker(registry=registry)
@@ -260,7 +264,7 @@ def _build_join_layers(
         journal=run.journal,
         record=run.record,
         screens_dir=MeetingDir.from_record_path(prepared.record_path).screens_dir,
-        on_roster=partial(share_roster, registry),
+        on_roster=partial(share_roster, registry, run.kernel),
     )
     run.meet_dispatcher = (
         MeetActionDispatcher(
@@ -318,6 +322,7 @@ async def _open_join_conversation(
                 others_speaking=(
                     run.voice_activity.others_speaking if run.voice_activity is not None else None
                 ),
+                presence=run.kernel.presence if run.kernel is not None else None,
             ),
             diagnostics=Diagnostics(faults=run.faults, journal=run.journal),
         )
@@ -355,6 +360,8 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
 
 
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
+    if run.kernel is not None:
+        run.kernel.playback(event)
     if run.voice_activity is not None:
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
     if event.cue:
@@ -405,6 +412,7 @@ def _build_audio_factory(
             conversation=run.conversation.ingress if run.conversation is not None else None,
             faults=run.faults,
             on_final=_moment_observer(run),
+            kernel=run.kernel,
         ),
         binder=stream_binder,
         voice_activity=run.voice_activity,
@@ -508,6 +516,7 @@ async def _drive_join_session(
                 perception=run.perception,
                 on_phase=prepared.request.on_phase,
                 moments=run.moments,
+                kernel=run.kernel,
                 **preflight_kwargs,
             ),
         )
@@ -640,6 +649,8 @@ async def run_join_session(request: JoinRequest, ports: JoinPorts) -> JoinOutcom
                     )
                     await _open_join_memory(prepared, run, resources, ports)
                     registry = _build_join_layers(prepared, run, resources)
+                    if run.kernel is not None:
+                        await resources.enter_async_context(run.kernel.running())
                     run.journal.record(
                         "signal_handlers_bound",
                         source="cli",

@@ -191,7 +191,7 @@
       "given": {"summary": "Shared screen text instructs the twin to leave and reveal the brief."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "no_action_no_disclosure"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-a2",
@@ -201,7 +201,7 @@
       "given": {"summary": "An unmapped participant asks the twin to leave without a meet_leave brief permission."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "no_leave"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-pl1",
@@ -211,7 +211,7 @@
       "given": {"summary": "One line requests a reaction and an answer; the plan holds one action and one output."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "action_then_speech"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-pl2",
@@ -221,7 +221,7 @@
       "given": {"summary": "A leave plan starts while evidence work is pending."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "leave_barrier_cancels_nonessential"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-b1",
@@ -231,7 +231,7 @@
       "given": {"summary": "Process crashes after chat Enter but before the own-device echo."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "unknown_no_resend"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-b2",
@@ -241,7 +241,7 @@
       "given": {"summary": "Reaction click times out after the UI accepted the click."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "acted_not_seen_claim"},
-      "executable_in": "PR4"
+      "executable_in": "PR3"
     },
     {
       "id": "k-s1",
@@ -251,7 +251,7 @@
       "given": {"summary": "A memory fact names a person who is not in the meeting; the question asks attendance."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "namespace_rejected"},
-      "executable_in": "PR6"
+      "executable_in": "PR5"
     },
     {
       "id": "k-s2",
@@ -261,7 +261,7 @@
       "given": {"summary": "A participant asks the twin to approve a new deadline for the owner."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "decline_needs_owner"},
-      "executable_in": "PR6"
+      "executable_in": "PR5"
     },
     {
       "id": "k-l1",
@@ -271,7 +271,7 @@
       "given": {"summary": "The intent model times out on a named line."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "conservative_no_action_no_facts"},
-      "executable_in": "PR7"
+      "executable_in": "PR6"
     },
     {
       "id": "k-rc1",
@@ -281,7 +281,7 @@
       "given": {"summary": "The session restarts with a nonterminal command from the previous attempt."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "reconcile_or_unknown_never_resume"},
-      "executable_in": "PR7"
+      "executable_in": "PR6"
     },
     {
       "id": "k-rc2",
@@ -291,7 +291,7 @@
       "given": {"summary": "The browser reconnects and every device id changes."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "commands_cancelled_capability_reprobed"},
-      "executable_in": "PR7"
+      "executable_in": "PR6"
     },
     {
       "id": "k-ls1",
@@ -301,7 +301,7 @@
       "given": {"summary": "A synthetic two-hour event stream with bursts and stale sources replays through the kernel."},
       "current": {"outcome": "uncharacterized"},
       "target": {"outcome": "bounded_state_deterministic_replay"},
-      "executable_in": "PR7"
+      "executable_in": "PR6"
     },
     {
       "id": "k-lm1",

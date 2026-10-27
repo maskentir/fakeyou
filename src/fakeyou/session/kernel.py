@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from fakeyou.session.contracts import (
-    CallStateObserved,
     OwnerControlObserved,
     ParticipantCountObserved,
     SessionEvent,
@@ -20,7 +19,7 @@ StateListener = Callable[[SessionState, SessionEvent], None]
 
 
 def is_control(event: SessionEvent) -> bool:
-    return isinstance(event.observation, OwnerControlObserved | CallStateObserved)
+    return isinstance(event.observation, OwnerControlObserved)
 
 
 def is_ephemeral(event: SessionEvent) -> bool:

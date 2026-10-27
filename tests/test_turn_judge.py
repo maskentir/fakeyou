@@ -14,6 +14,7 @@ from fakeyou.conversation.turn_judge import (
     WindowSource,
 )
 from fakeyou.persistence.record import MeetingRecord
+from fakeyou.session.identity import Participant, PresenceFact, PresenceStatus
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
 from tests._conversation_support import event, voiced_event
 
@@ -147,7 +148,25 @@ async def test_the_model_judge_reads_its_structured_output() -> None:
     assert sent["latest"] == {"speaker": "ayu", "text": "Rani, beta?"}
 
 
-async def test_the_judge_payload_names_a_sole_human_participant() -> None:
+def claimed(*names: str, status: PresenceStatus = "complete") -> PresenceFact:
+    return PresenceFact(
+        status=status,
+        confirmed_min=len(names),
+        plausible_max=len(names) if status == "complete" else None,
+        unresolved=0,
+        shared_endpoints=0,
+        drift=False,
+        twin_identified=True,
+        participants=tuple(
+            Participant(
+                f"dev-{name}", name, host=False, voices=(), enrolled=(), claim_conflict=False
+            )
+            for name in names
+        ),
+    )
+
+
+async def test_the_judge_payload_carries_presence_certainty() -> None:
     payload: dict[str, object] = {
         "heard": "can you see my screen?",
         "finished": True,
@@ -169,22 +188,28 @@ async def test_the_judge_payload_names_a_sole_human_participant() -> None:
         JudgeWindow(
             earlier=(JudgeLine(speaker="ayu", text="morning"),),
             latest=JudgeLine(speaker="ayu", text="can you see my screen?"),
-            human_participants=("ayu",),
+            presence=claimed("ayu"),
         )
     )
     sent = json.loads(model.seen[-1][-1].text)
     assert sent["human_speakers"] == ["ayu"]
-    assert sent["human_participants"] == ["ayu"]
-    assert sent["sole_human_participant"] is True
+    assert sent["participants"] == [{"ref": "p1", "shown_as": "ayu", "name_is": "claimed"}]
+    assert sent["presence"] == {
+        "status": "complete",
+        "confirmed_min": 1,
+        "plausible_max": 1,
+        "unresolved": 0,
+    }
+    assert sent["sole_human_responder"] is True
 
     await judge.judge(
         JudgeWindow(
             earlier=(JudgeLine(speaker="ayu", text="morning"),),
             latest=JudgeLine(speaker="budi", text="can everyone see my screen?"),
-            human_participants=("ayu", "budi"),
+            presence=claimed("ayu", status="incomplete"),
         )
     )
     sent = json.loads(model.seen[-1][-1].text)
     assert sent["human_speakers"] == ["ayu", "budi"]
-    assert sent["human_participants"] == ["ayu", "budi"]
-    assert sent["sole_human_participant"] is False
+    assert sent["presence"]["plausible_max"] is None
+    assert sent["sole_human_responder"] is False

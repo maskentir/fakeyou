@@ -46,6 +46,7 @@ from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
+from fakeyou.session.identity import PresenceFact
 
 MeetingReplier = ConversationResponder | StreamingConversationResponder
 
@@ -60,7 +61,7 @@ class TurnInteraction:
     barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
-    human_participants: Callable[[], Sequence[str]] | None = None
+    presence: Callable[[], PresenceFact] | None = None
     judge: TurnJudge | None = None
     history: MeetingHistory = NoHistory()
     judge_thresholds: JudgeThresholds = JudgeThresholds(
@@ -190,7 +191,7 @@ def _judging(interaction: TurnInteraction) -> TurnJudging | None:
             interaction.history,
             interaction.judge_window_lines,
             twin_names=tuple(dict.fromkeys((*interaction.wake_phrases, *interaction.twin_names))),
-            participants=interaction.human_participants,
+            presence=interaction.presence,
         ),
         thresholds=interaction.judge_thresholds,
     )

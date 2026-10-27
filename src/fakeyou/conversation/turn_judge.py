@@ -13,6 +13,7 @@ from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
 from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
+from fakeyou.session.identity import PresenceFact
 
 JudgeAction = Literal["reply", "clarify", "stay_silent"]
 MeetAction = Literal["none", "raise_hand", "lower_hand", "react", "mute", "unmute", "leave"]
@@ -55,15 +56,17 @@ _JUDGE_RULES = (
     "topic, is not by itself addressing. someone_else when it is meant for another person; "
     "everyone when it is put to the whole room, including room checks such as whether a "
     "screen is visible, a voice audible, or the meeting should start. A room check is "
-    "everyone even immediately after the twin spoke, unless sole_human_participant is "
+    "everyone even immediately after the twin spoke, unless sole_human_responder is "
     "true, in which case that sole participant's logistics check is for the twin; "
     "unclear otherwise.\n"
     "action: reply when the twin should answer now; clarify when the line is meant for the "
     "twin but too unclear to answer; stay_silent otherwise, including talk between other "
     "people, backchannels, a line that is not finished, and any question put to everyone "
-    "while sole_human_participant is false, even one the twin could answer. When "
-    "sole_human_participant is true, a logistics check from that participant is for "
-    "the twin.\n"
+    "while sole_human_responder is false, even one the twin could answer. When "
+    "sole_human_responder is true, a logistics check from that participant is for "
+    "the twin. participants are display names each endpoint claims, not verified "
+    "identities; presence says how certain the attendance is, and an incomplete or "
+    "stale presence means more people may be listening.\n"
     "meet_action: when the speaker asks the twin itself to perform one meeting action "
     "(raise or lower its hand, send a reaction, mute or unmute itself, leave the call), "
     "name it; otherwise none. Talking about an action, or asking someone else to do it, "
@@ -133,7 +136,11 @@ class JudgeWindow:
     latest: JudgeLine
     twin_speaking: bool = False
     names_twin: bool = False
-    human_participants: tuple[str, ...] = ()
+    presence: PresenceFact | None = None
+
+    @property
+    def sole_human_responder(self) -> bool:
+        return self.presence is not None and self.presence.sole_human_responder
 
     @property
     def key(self) -> tuple[object, ...]:
@@ -142,7 +149,7 @@ class JudgeWindow:
             _normalized(self.latest.text),
             self.twin_speaking,
             self.names_twin,
-            self.human_participants,
+            self.presence,
         )
 
 
@@ -178,15 +185,13 @@ class WindowSource:
     history: MeetingHistory
     window_lines: int
     twin_names: tuple[str, ...] = ()
-    participants: Callable[[], Sequence[str]] | None = None
+    presence: Callable[[], PresenceFact] | None = None
 
     def _names_twin(self, text: str) -> bool:
         return any(mentions_whole_phrase(text, name) for name in self.twin_names)
 
-    def _human_participants(self) -> tuple[str, ...]:
-        if self.participants is None:
-            return ()
-        return tuple(dict.fromkeys(name for name in self.participants() if name))
+    def _presence(self) -> PresenceFact | None:
+        return self.presence() if self.presence is not None else None
 
     def for_final(self, event: TranscriptEvent, *, twin_speaking: bool) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=event.id)[-self.window_lines :]
@@ -196,7 +201,7 @@ class WindowSource:
             latest,
             twin_speaking,
             names_twin=self._names_twin(event.text),
-            human_participants=self._human_participants(),
+            presence=self._presence(),
         )
 
     def for_interim(self, text: str, *, twin_speaking: bool) -> JudgeWindow:
@@ -206,7 +211,7 @@ class WindowSource:
             JudgeLine(SPEAKING_NOW, text),
             twin_speaking,
             names_twin=self._names_twin(text),
-            human_participants=self._human_participants(),
+            presence=self._presence(),
         )
 
 
@@ -220,6 +225,26 @@ def _human_speakers(window: JudgeWindow) -> list[str]:
     return sorted(speakers)
 
 
+def _presence_payload(presence: PresenceFact | None) -> dict[str, object]:
+    if presence is None:
+        return {"status": "unknown", "confirmed_min": 0, "plausible_max": None, "unresolved": 0}
+    return {
+        "status": presence.status,
+        "confirmed_min": presence.confirmed_min,
+        "plausible_max": presence.plausible_max,
+        "unresolved": presence.unresolved,
+    }
+
+
+def _participants_payload(presence: PresenceFact | None) -> list[dict[str, str]]:
+    if presence is None:
+        return []
+    return [
+        {"ref": f"p{index}", "shown_as": participant.display_claim, "name_is": "claimed"}
+        for index, participant in enumerate(presence.participants, start=1)
+    ]
+
+
 def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
     humans = _human_speakers(window)
     return json.dumps(
@@ -227,8 +252,9 @@ def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
             "twin_names": list(twin_names),
             "twin_is_speaking": window.twin_speaking,
             "human_speakers": humans,
-            "human_participants": list(window.human_participants),
-            "sole_human_participant": len(window.human_participants) == 1,
+            "participants": _participants_payload(window.presence),
+            "presence": _presence_payload(window.presence),
+            "sole_human_responder": window.sole_human_responder,
             "earlier": [
                 {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
                 for line in window.earlier

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +15,16 @@ from fakeyou.conversation.participation_graph import JudgeThresholds, decision_o
 from fakeyou.conversation.turn_judge import TurnJudgement
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
+from fakeyou.session.contracts import (
+    CallStateObserved,
+    Endpoint,
+    Observation,
+    RosterObserved,
+    SessionEvent,
+    TranscriptObserved,
+)
+from fakeyou.session.identity import PresenceFact, presence
+from fakeyou.session.world import SessionState, reduce
 
 FIXTURE = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "kernel-scenarios.json"
 AREAS = frozenset(
@@ -31,6 +42,7 @@ AREAS = frozenset(
     }
 )
 THRESHOLDS = JudgeThresholds(reply=0.6, clarify=0.5)
+NOW = datetime(2026, 10, 27, tzinfo=UTC)
 
 Classification = Literal["preserve", "intentional_change", "known_bug_not_parity"]
 Kind = Literal["participation", "roster", "contribution_gate", "catalog"]
@@ -103,33 +115,107 @@ def test_catalog_scenarios_name_the_pr_that_makes_them_executable() -> None:
             assert scenario.target.get("outcome"), scenario.id
 
 
+def expected_outcome(scenario: Scenario) -> object:
+    source = scenario.current if scenario.classification == "preserve" else scenario.target
+    return source["outcome"]
+
+
 @pytest.mark.parametrize("scenario", executable("participation"), ids=lambda item: item.id)
-def test_participation_characterization(scenario: Scenario) -> None:
+def test_participation_reaches_the_kernel_outcome(scenario: Scenario) -> None:
     given = scenario.given
     judgement = TurnJudgement.model_validate(given["judgement"])
+    presence_complete = bool(given.get("target_presence_complete", True))
     decision = decision_of(
         judgement,
         THRESHOLDS,
         named=bool(given.get("named", False)),
-        sole_human_participant=bool(given.get("sole_human_participant", False)),
+        sole_human_responder=bool(given.get("sole_human_participant", False)) and presence_complete,
     )
 
-    assert decision.decision == scenario.current["decision"]
-    assert decision.reason_code == scenario.current["reason_code"]
-    assert decision.meet_action == scenario.current.get("meet_action", "none")
-    assert scenario.current["outcome"] == decision.decision
+    assert decision.decision == expected_outcome(scenario)
+    if scenario.classification == "preserve":
+        assert decision.reason_code == scenario.current["reason_code"]
+        assert decision.meet_action == scenario.current.get("meet_action", "none")
+
+
+def _batches(scenario: Scenario) -> list[list[MeetUser]]:
+    batches = scenario.given["user_batches"]
+    assert isinstance(batches, list)
+    return [[MeetUser.model_validate(user) for user in batch] for batch in batches]
 
 
 @pytest.mark.parametrize("scenario", executable("roster"), ids=lambda item: item.id)
-def test_roster_characterization(scenario: Scenario) -> None:
+def test_the_protocol_roster_adapter_keeps_its_baseline(scenario: Scenario) -> None:
     roster = MeetRoster()
-    batches = scenario.given["user_batches"]
-    assert isinstance(batches, list)
-    for batch in batches:
-        assert isinstance(batch, list)
-        roster.apply_users([MeetUser.model_validate(user) for user in batch])
+    for batch in _batches(scenario):
+        roster.apply_users(batch)
 
     assert roster.people() == scenario.current["people"]
+
+
+def _kernel_state(scenario: Scenario) -> SessionState:
+    observations: list[Observation] = [CallStateObserved(state="in_call", browser_epoch=1)]
+    for index, batch in enumerate(_batches(scenario)):
+        endpoints = tuple(
+            Endpoint(
+                device_id=user.device_id,
+                display_name=user.name,
+                present=user.present,
+                current_user=user.current_user,
+            )
+            for user in batch
+        )
+        observations.append(RosterObserved(endpoints=endpoints, synced=index == 0))
+    if scenario.given.get("target_unmapped_voice_track_active"):
+        observations.append(
+            TranscriptObserved(transcript_id="t1", text="hello", final=True, track_id="voice-x")
+        )
+    state = SessionState()
+    for index, observation in enumerate(observations):
+        state = reduce(
+            state,
+            SessionEvent(
+                event_id=f"e{index}",
+                session_id="corpus",
+                attempt_id="corpus-1",
+                source="meet_protocol",
+                received_at=NOW,
+                observation=observation,
+            ),
+        )
+    return state
+
+
+def _count_matches(fact: PresenceFact, count: object) -> bool:
+    assert isinstance(count, dict)
+    return (fact.confirmed_min, fact.plausible_max, fact.complete) == (
+        count["min"],
+        count["max"],
+        count["complete"],
+    )
+
+
+@pytest.mark.parametrize("scenario", executable("roster"), ids=lambda item: item.id)
+def test_the_kernel_presence_reaches_the_target(scenario: Scenario) -> None:
+    state = _kernel_state(scenario)
+    fact = presence(state)
+    devices = [user.device_id for user in _batches(scenario)[0] if not user.current_user]
+    outcomes = {
+        "exact": lambda: _count_matches(fact, scenario.target["count"]),
+        "unknown_range": lambda: _count_matches(fact, scenario.target["count"]),
+        "still_present": lambda: all(
+            state.world.endpoints[device].presence == "present" for device in devices
+        ),
+        "two_endpoints_claim_conflict": lambda: (
+            len(fact.participants) == 2
+            and all(participant.claim_conflict for participant in fact.participants)
+        ),
+        "left": lambda: all(
+            state.world.endpoints[device].presence == "absent" for device in devices
+        ),
+    }
+
+    assert outcomes[str(scenario.target["outcome"])]()
 
 
 def _string_map(value: object) -> dict[str, str]:

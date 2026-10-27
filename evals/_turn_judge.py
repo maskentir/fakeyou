@@ -9,6 +9,7 @@ from fakeyou.conversation.participation_graph import JudgeThresholds, decision_o
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudge, TurnJudgement
 from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.observability.faults import capture_error
+from fakeyou.session.identity import Participant, PresenceFact
 
 FIXTURE = Path(__file__).parent / "fixtures" / "turn-judge.json"
 
@@ -30,7 +31,7 @@ class JudgeCase(BaseModel):
     latest: FixtureLine
     answer: bool
     finished: bool
-    human_participants: tuple[str, ...] | None = None
+    participants: tuple[str, ...] | None = None
 
 
 class JudgeFixture(BaseModel):
@@ -38,7 +39,7 @@ class JudgeFixture(BaseModel):
 
     version: int
     twin_names: tuple[str, ...]
-    human_participants: tuple[str, ...] = ()
+    participants: tuple[str, ...] = ()
     cases: tuple[JudgeCase, ...]
 
 
@@ -50,10 +51,28 @@ def case_names_twin(case: JudgeCase, twin_names: tuple[str, ...]) -> bool:
     return any(mentions_whole_phrase(case.latest.text, name) for name in twin_names)
 
 
+def claimed_presence(names: tuple[str, ...]) -> PresenceFact:
+    return PresenceFact(
+        status="complete",
+        confirmed_min=len(names),
+        plausible_max=len(names),
+        unresolved=0,
+        shared_endpoints=0,
+        drift=False,
+        twin_identified=True,
+        participants=tuple(
+            Participant(
+                f"dev-{index}", name, host=False, voices=(), enrolled=(), claim_conflict=False
+            )
+            for index, name in enumerate(names)
+        ),
+    )
+
+
 def case_window(
     case: JudgeCase,
     twin_names: tuple[str, ...] = (),
-    human_participants: tuple[str, ...] = (),
+    participants: tuple[str, ...] = (),
 ) -> JudgeWindow:
     return JudgeWindow(
         earlier=tuple(
@@ -62,7 +81,7 @@ def case_window(
         ),
         latest=JudgeLine(speaker=case.latest.speaker, text=case.latest.text),
         names_twin=case_names_twin(case, twin_names),
-        human_participants=case.human_participants or human_participants,
+        presence=claimed_presence(case.participants or participants),
     )
 
 
@@ -171,7 +190,7 @@ async def judge_cases(
             judgement, error = await capture_error(
                 partial(
                     judge.judge,
-                    case_window(case, fixture.twin_names, fixture.human_participants),
+                    case_window(case, fixture.twin_names, fixture.participants),
                 )
             )
             if judgement is None:
@@ -187,13 +206,13 @@ async def judge_cases(
                 )
                 continue
             named = case_names_twin(case, fixture.twin_names)
-            participants = case.human_participants or fixture.human_participants
+            participants = case.participants or fixture.participants
             answered = (
                 decision_of(
                     judgement,
                     thresholds,
                     named=named,
-                    sole_human_participant=len(participants) == 1,
+                    sole_human_responder=len(participants) == 1,
                 ).decision
                 != "silent"
             )

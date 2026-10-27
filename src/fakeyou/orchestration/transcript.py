@@ -39,6 +39,7 @@ from fakeyou.observability.faults import (
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.assembly import VoiceprintLive
 from fakeyou.orchestration.early_turns import EarlyTurns
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.persistence.record import MeetingRecord
 
 
@@ -143,6 +144,7 @@ class TranscriptSinks:
     conversation: TurnIngress | None = None
     faults: FaultReporter | None = None
     on_final: Callable[[TranscriptEvent], Awaitable[None]] | None = None
+    kernel: KernelPort | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +219,8 @@ class TranscriptDrain:
             await self._mixed_stream(update)
 
     async def on_interim(self, update: TranscriptUpdate) -> None:
+        if self._sinks.kernel is not None:
+            self._sinks.kernel.interim(update.text)
         winner = self._settle([self._ingress_event("interim", update.text)]).winner
         conversation = self._sinks.conversation
         if winner is not None and conversation is not None:
@@ -248,6 +252,19 @@ class TranscriptDrain:
 
     def _registry(self) -> SpeakerRegistry | None:
         return self._scoring.registry if self._scoring is not None else None
+
+    def _observe(self, event: TranscriptEvent, extra: Mapping[str, Any] | None) -> None:
+        kernel = self._sinks.kernel
+        if kernel is None:
+            return
+        speaker_uuid = (extra or {}).get("speaker_uuid")
+        registry = self._registry()
+        row = (
+            registry.row(speaker_uuid)
+            if registry is not None and isinstance(speaker_uuid, str) and speaker_uuid
+            else None
+        )
+        kernel.transcript(event, row)
 
     async def _score_turn(
         self, speaker_uuid: Any, stream_id: str, device: str | None, *, finalized: bool
@@ -334,11 +351,13 @@ class TranscriptDrain:
                 )
             if emitted_max is None or transcript_stamp(emitted_max) < transcript_stamp(ordered):
                 self._emitted_max = ordered
+            extra = self._extras.pop(ordered.id, None)
+            self._observe(ordered, extra)
             await _emit_transcript(
                 ordered,
                 journal=self._sinks.journal,
                 record=self._sinks.record,
-                extra=self._extras.pop(ordered.id, None),
+                extra=extra,
             )
             emitted.append(ordered)
         self._pending[:] = [event for event in self._pending if event.id not in self._handled]
@@ -382,11 +401,13 @@ class TranscriptDrain:
     async def _mixed_stream(self, update: TranscriptUpdate) -> None:
         event, attribution = self._attributed(update)
         speaker_uuid = attribution.speaker_uuid if attribution is not None else None
+        extra = attribution.journal_fields() if attribution is not None else None
+        self._observe(event, extra)
         await _emit_transcript(
             event,
             journal=self._sinks.journal,
             record=self._sinks.record,
-            extra=attribution.journal_fields() if attribution is not None else None,
+            extra=extra,
         )
         early = self._early
         if early is None or not update.final or not await early.settle(event):

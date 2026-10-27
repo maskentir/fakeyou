@@ -62,6 +62,7 @@ class EndpointState:
 @dataclass(frozen=True, slots=True)
 class TrackState:
     track_id: str
+    device_id: str | None
     stream_id: str | None
     enrolled_person: str | None
 
@@ -82,7 +83,7 @@ class WorldState:
     tracks: Mapping[str, TrackState] = field(default_factory=dict)
     heard: Mapping[Ref, int] = field(default_factory=dict)
     roster_synced: bool = False
-    dom_count: int | None = None
+    dom_remote: int | None = None
     screen: ScreenState | None = None
     call_state: CallState | None = None
     browser_epoch: int = 0
@@ -194,6 +195,9 @@ def _voice_track(state: SessionState, observation: VoiceTrackObserved) -> Sessio
     known = state.world.tracks.get(observation.track_id)
     track = TrackState(
         track_id=observation.track_id,
+        device_id=observation.device_id
+        if observation.device_id is not None
+        else (known.device_id if known is not None else None),
         stream_id=observation.stream_id
         if observation.stream_id is not None
         else (known.stream_id if known is not None else None),
@@ -213,6 +217,7 @@ def _heard(world: WorldState, seq: int, observation: TranscriptObserved) -> Worl
         known = tracks.get(observation.track_id)
         tracks[observation.track_id] = TrackState(
             track_id=observation.track_id,
+            device_id=known.device_id if known is not None else None,
             stream_id=observation.stream_id
             if observation.stream_id is not None
             else (known.stream_id if known is not None else None),
@@ -242,8 +247,10 @@ def _transcript(
     updated = replace(
         dialogue,
         lines=_append(dialogue.lines, line, limits.dialogue_lines),
-        interims={key: text for key, text in dialogue.interims.items() if key != ref},
-        floor_holder=None if dialogue.floor_holder == ref else dialogue.floor_holder,
+        interims={
+            key: text for key, text in dialogue.interims.items() if key not in (ref, UNKNOWN)
+        },
+        floor_holder=None if dialogue.floor_holder in (ref, UNKNOWN) else dialogue.floor_holder,
     )
     domains = ("dialogue", "floor", "presence") if newly_heard else ("dialogue", "floor")
     return replace(
@@ -291,7 +298,8 @@ def _call_state(state: SessionState, observation: CallStateObserved) -> SessionS
     if observation.browser_epoch > world.browser_epoch:
         world = WorldState(
             tracks={
-                track_id: replace(track, stream_id=None) for track_id, track in world.tracks.items()
+                track_id: replace(track, device_id=None, stream_id=None)
+                for track_id, track in world.tracks.items()
             },
             heard={ref: seq for ref, seq in world.heard.items() if ref.kind == "track"},
             screen=world.screen,
@@ -353,7 +361,7 @@ def _owner_control(state: SessionState, observation: OwnerControlObserved) -> Se
 
 
 def _participant_count(state: SessionState, observation: ParticipantCountObserved) -> SessionState:
-    world = replace(state.world, dom_count=observation.count)
+    world = replace(state.world, dom_remote=observation.remote)
     return _changed(state, replace(state, world=world), "presence")
 
 

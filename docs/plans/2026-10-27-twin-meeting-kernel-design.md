@@ -730,14 +730,19 @@ executable, bukan dibiarkan memakai outcome lama.
 Gate: property tests untuk determinisme, duplicate, bound, revision monoton,
 terminal barrier, dan late event.
 
-### PR 2: Kernel sebagai sumber world dan identity
+### PR 2: Kernel sebagai sumber world dan identity (selesai)
 
-- Adapter STT, sensors, speaker registry, watchdog, playback, dan owner
-  control mengirim observation ke kernel per session attempt.
+- `orchestration.kernel_port` menerjemahkan roster/audio source, transcript
+  dan voice track registry, chat, call state per browser epoch, DOM count,
+  protocol health, dan playback menjadi observation kernel per session
+  attempt.
 - `session.identity` membangun evidence edges dan `PresenceFact`; judge
-  window membaca certainty/range dari kernel.
-- Dihapus: `sole_human_participant` dari daftar nama, roster kedua di
-  kernel lama, dan penulisan state keputusan langsung ke timeline.
+  window membaca participants sebagai claim, presence certainty/range, dan
+  `sole_human_responder` dari kernel.
+- Control lane mailbox hanya untuk owner control; call state tidak boleh
+  menyalip roster yang diterima lebih dulu.
+- Dihapus: `sole_human_participant` dan `human_participants` dari daftar
+  nama timeline.
 
 Gate: skenario sync parsial, shared mic, multi-device, duplicate display
 name, overlap, stale source, dan epoch baru tidak pernah menghasilkan exact
@@ -764,7 +769,7 @@ untuk `unknown`.
 - Typed evidence queries, `FactSet`, dan deterministic renderer untuk
   roster, presenter, screen title, mic/hand, action status.
 - Dihapus: evidence tools pada reply agent, `EvidenceRoutingMiddleware`,
-  dan synthetic `observe_meeting` view.
+  synthetic `observe_meeting` view, dan timeline sebagai sumber keputusan.
 
 Gate: pertanyaan state tidak memanggil free-form composer; fact stale atau
 incomplete menghasilkan unknown atau range.

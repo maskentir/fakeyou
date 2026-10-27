@@ -33,7 +33,7 @@ ids = st.sampled_from(["a", "b", "c", "d"])
 endpoints = st.builds(Endpoint, device_id=ids, display_name=ids, present=st.booleans())
 observations = st.one_of(
     st.builds(RosterObserved, endpoints=st.tuples(endpoints, endpoints), synced=st.booleans()),
-    st.builds(ParticipantCountObserved, count=st.integers(0, 5)),
+    st.builds(ParticipantCountObserved, remote=st.integers(0, 5)),
     st.builds(AudioStreamObserved, device_id=ids, stream_id=ids),
     st.builds(VoiceTrackObserved, track_id=ids, stream_id=st.none() | ids),
     st.builds(
@@ -262,15 +262,15 @@ def test_owner_pause_and_resume_move_the_agenda() -> None:
 
 def test_an_event_behind_its_source_sequence_is_counted_late() -> None:
     session = kernel()
-    session.accept(event("e1", ParticipantCountObserved(count=2), source_seq=5))
-    state = session.accept(event("e2", ParticipantCountObserved(count=3), source_seq=4))
+    session.accept(event("e1", ParticipantCountObserved(remote=2), source_seq=5))
+    state = session.accept(event("e2", ParticipantCountObserved(remote=3), source_seq=4))
 
     assert state.health.late_events == 1
-    assert state.world.dom_count == 3
+    assert state.world.dom_remote == 3
 
 
 def test_an_event_from_another_attempt_is_refused() -> None:
-    other = event("e1", ParticipantCountObserved(count=1)).model_copy(update={"attempt_id": "x"})
+    other = event("e1", ParticipantCountObserved(remote=1)).model_copy(update={"attempt_id": "x"})
 
     with pytest.raises(ValueError, match="another session attempt"):
         kernel().accept(other)

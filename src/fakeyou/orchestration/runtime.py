@@ -96,6 +96,7 @@ from fakeyou.observability.provider_faults import (
     classify_exception,
     trim_detail,
 )
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.lifecycle import (
     CheckpointDegradation,
     DegradingCheckpointer,
@@ -233,6 +234,7 @@ class MeetingWorker:
     on_phase: Callable[[str], None] | None = None
     moments: MomentDetector | None = None
     meet_dispatcher: MeetActionDispatcher | None = None
+    kernel: KernelPort | None = None
     detail: str = ""
     base: LifecycleState | None = None
     working: LifecycleState | None = None
@@ -710,6 +712,14 @@ class MeetingWorker:
             self._on_chat_line(event.line)
 
     def _on_chat_line(self, line: ChatLine) -> None:
+        if self.kernel is not None:
+            self.kernel.chat(
+                message_id=line.ref,
+                device_id=line.sender.participant_id,
+                text=line.text,
+                own=line.own,
+                backlog=line.backlog,
+            )
         conversation = self.conversation
         if conversation is None or line.own or line.backlog:
             return
@@ -849,6 +859,9 @@ class MeetingWorker:
         )
         perception = self.perception
         sensors = perception.sensors if perception is not None else None
+        if self.kernel is not None:
+            self.kernel.dom_remote(dom)
+            self.kernel.protocol_health(available=self._protocol_available())
         was_drifting = self.presence.drifting
         reading = self.presence.observe(
             now,
@@ -941,6 +954,11 @@ class MeetingWorker:
 
     async def apply_observation(self, checked: WatchdogCheck) -> str | None:
         observation = checked.observation
+        if self.kernel is not None and observation.state != "unknown":
+            self.kernel.call_state(
+                observation.state,
+                new_epoch=observation.state == "in_call" and self.disconnected_from is not None,
+            )
         if observation.state in ("removed", "ended"):
             kind: LifecycleEventKind = (
                 "removed" if observation.state == "removed" else "meeting_ended"
@@ -1069,6 +1087,7 @@ class SessionWiring:
     perception: PerceptionStack | None = None
     on_phase: Callable[[str], None] | None = None
     moments: MomentDetector | None = None
+    kernel: KernelPort | None = None
 
 
 _PreflightFactory = Callable[[], Coroutine[Any, Any, list[ProbeResult]]]
@@ -1252,6 +1271,7 @@ async def _launch_session_browser(
         perception=hooks.perception,
         on_phase=hooks.on_phase,
         moments=hooks.moments,
+        kernel=hooks.kernel,
         meet_dispatcher=hooks.meet_dispatcher,
     )
     context = RuntimeContext(browser=page, audio=audio, session=worker)

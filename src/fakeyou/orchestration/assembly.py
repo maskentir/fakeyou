@@ -82,6 +82,7 @@ from fakeyou.perception.context import (
     create_perception_middleware,
 )
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.session.identity import PresenceFact
 
 EVIDENCE_TOOLS = REGISTRY_EVIDENCE_TOOLS
 
@@ -227,6 +228,7 @@ class TurnBehavior:
     meet_dispatcher: MeetActionDispatcher | None = None
     chat: ChatChannel | None = None
     others_speaking: Callable[[], bool] | None = None
+    presence: Callable[[], PresenceFact] | None = None
 
 
 def build_turn_judge(settings: Settings, twin_names: Sequence[str]) -> TurnJudge | None:
@@ -372,21 +374,6 @@ class _ConversationBuilder:
         if event.turn_planned and event.meet_action == "leave" and not dispatcher.left:
             await dispatcher.settle("leave", action_id=f"turn-{event.id}")
 
-    def _human_participants(self) -> tuple[str, ...]:
-        perception = self._agent.perception
-        if perception is None:
-            return ()
-        own = {
-            name.casefold() for name in (*self._behavior.twin_names, *self._behavior.wake_phrases)
-        }
-        return tuple(
-            dict.fromkeys(
-                person.name
-                for person in perception.timeline.snapshot().participants
-                if person.name and person.name.casefold() not in own
-            )
-        )
-
     def chat_channel(self) -> ChatChannel | None:
         if self._behavior.chat is not None:
             return self._behavior.chat
@@ -471,7 +458,7 @@ class _ConversationBuilder:
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
-                human_participants=self._human_participants,
+                presence=self._behavior.presence,
                 judge=build_turn_judge(self._settings, names),
                 history=self._agent.history,
                 judge_thresholds=JudgeThresholds(

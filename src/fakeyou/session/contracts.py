@@ -20,7 +20,7 @@ Source = Literal[
 ]
 PrivacyClass = Literal["room", "owner_only", "internal", "ephemeral"]
 SourceStatus = Literal["healthy", "stale", "down"]
-CallState = Literal["in_call", "left", "removed", "ended"]
+CallState = Literal["lobby", "in_call", "left", "removed", "ended"]
 PlaybackPhase = Literal["started", "finished", "interrupted", "dropped", "failed"]
 OwnerCommand = Literal["stop_playback", "leave", "pause", "resume"]
 NonEmpty = Annotated[str, Field(min_length=1)]
@@ -47,7 +47,7 @@ class RosterObserved(Contract):
 
 class ParticipantCountObserved(Contract):
     kind: Literal["participant_count"] = "participant_count"
-    count: NonNegativeInt
+    remote: NonNegativeInt
 
 
 class AudioStreamObserved(Contract):
@@ -60,6 +60,7 @@ class AudioStreamObserved(Contract):
 class VoiceTrackObserved(Contract):
     kind: Literal["voice_track"] = "voice_track"
     track_id: NonEmpty
+    device_id: str | None = None
     stream_id: str | None = None
     enrolled_person: str | None = None
 
