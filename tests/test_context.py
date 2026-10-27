@@ -8,6 +8,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import (
+    MEETING_EVIDENCE,
     OBSERVE_MEETING,
     PERCEPTION_GUIDANCE,
     PerceptionContext,
@@ -130,6 +131,25 @@ async def test_a_pending_screen_sends_no_image_to_the_model() -> None:
     trigger = next(message for message in messages if isinstance(message, HumanMessage))
     assert trigger.content == "When is beta?"
     assert journal.events("meeting_view_emitted")[0]["image_attached"] is False
+
+
+async def test_the_agent_relays_gathered_evidence_without_looking_again() -> None:
+    timeline = shown_timeline(TIMELINE)
+    agent, model = _agent(_context(timeline), [AIMessage(content="Beta is in March.")])
+    gathered = {"screen": {"code": "ok", "answer": "Beta is 17 March 2027."}}
+    trigger = HumanMessage(
+        content="When is beta?",
+        id="t1",
+        additional_kwargs={"meeting_event": {"evidence_needs": ["screen"], "evidence": gathered}},
+    )
+
+    await agent.ainvoke({"messages": [trigger]}, THREAD)
+
+    [messages] = _calls(model)
+    evidence = messages[-1]
+    assert isinstance(evidence, ToolMessage)
+    assert evidence.name == MEETING_EVIDENCE
+    assert json.loads(evidence.text) == gathered
 
 
 async def test_messages_without_a_meeting_trigger_pass_through() -> None:

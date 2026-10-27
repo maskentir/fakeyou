@@ -17,6 +17,7 @@ from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
 from fakeyou.conversation.turn_graph import (
     CommandPort,
+    EvidencePort,
     Responder,
     SentenceLimits,
     StateSpeech,
@@ -75,6 +76,7 @@ class TurnInteraction:
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
     state_speech: StateSpeech | None = None
+    evidence: EvidencePort | None = None
     control: ReplyControl | None = None
 
 
@@ -178,6 +180,7 @@ def _deferred_options(
         planning=interaction.planning,
         commands=interaction.commands,
         state_speech=interaction.state_speech,
+        evidence=interaction.evidence,
         others_speaking=interaction.others_speaking,
     )
 

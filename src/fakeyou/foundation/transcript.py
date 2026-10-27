@@ -1,7 +1,7 @@
 import hashlib
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -50,6 +50,7 @@ class TranscriptEvent:
     voice_clusters: tuple[str, ...] = ()
     attention: AttentionContext | None = None
     evidence_needs: tuple[str, ...] = ()
+    evidence: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

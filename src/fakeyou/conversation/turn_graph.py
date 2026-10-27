@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Hashable,
@@ -10,7 +11,7 @@ from collections.abc import (
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -236,6 +237,7 @@ class TurnPlanning(Protocol):
 
 
 StateSpeech = Callable[[StateQuestion, str | None], str | None]
+EvidencePort = Callable[[str, tuple[str, ...]], Awaitable[Mapping[str, object]]]
 
 
 class CommandPort(Protocol):
@@ -299,6 +301,7 @@ class TurnRuntime:
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
     state_speech: StateSpeech | None = None
+    evidence: EvidencePort | None = None
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
     cue: ThinkingCue | None = None
     others_speaking: Callable[[], bool] | None = None
@@ -742,7 +745,7 @@ def _finish_turn(
 
 _NO_GRANT = Grant(frozenset())
 MAX_PENDING_PLANS = 32
-UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = get_args(EvidenceNeed)
+UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = ("chat_history", "memory")
 
 
 def reading_of(verdict: ParticipationDecision) -> Reading:
@@ -818,6 +821,14 @@ def for_reply(
     notes = plan_notes(plan, outcome)
     text = f"{event.text}\n[System: {' '.join(notes)}]" if notes else event.text
     return replace(event, text=text, evidence_needs=plan.evidence)
+
+
+async def with_evidence(
+    runtime: TurnRuntime, question: str, event: TranscriptEvent
+) -> TranscriptEvent:
+    if runtime.evidence is None or not event.evidence_needs:
+        return event
+    return replace(event, evidence=await runtime.evidence(question, event.evidence_needs))
 
 
 async def _run_action(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
@@ -933,22 +944,13 @@ async def _run_turn(
     reply_event = for_reply(final, planned.plan, outcome)
     if judged is None:
         reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
-    reply_batch = (*batch[:-1], reply_event)
     floor_generation = _floor_generation(runtime)
     generations = (generation, floor_generation)
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
-    whole = _turn_whole(runtime, reply_batch, hook)
-    streamed = whole is None
+    streamed = runtime.whole_turn is None and runtime.whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
-    context = replace(
-        _speech_context(runtime, sink, scope, generations, final.id),
-        responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
-        whole=whole,
-        sentences=runtime.sentences,
-        cue_state=cue_state,
-    )
     cue = _start_cue(
         runtime,
         CueTurn(
@@ -959,6 +961,14 @@ async def _run_turn(
         ),
     )
     try:
+        reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
+        context = replace(
+            _speech_context(runtime, sink, scope, generations, final.id),
+            responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
+            whole=_turn_whole(runtime, reply_batch, hook),
+            sentences=runtime.sentences,
+            cue_state=cue_state,
+        )
         output = await speech.ainvoke(
             SpeechInput(
                 transcript=final.text,
@@ -1125,7 +1135,7 @@ async def _deliver_chat(
         return
     floor_generation = _floor_generation(runtime)
     hook = tool_start_hook(runtime, generation, floor_generation, event.id)
-    reply_event = for_reply(event, planned.plan, outcome)
+    reply_event = await with_evidence(runtime, event.text, for_reply(event, planned.plan, outcome))
     reply = await _respond_within(
         factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
     )

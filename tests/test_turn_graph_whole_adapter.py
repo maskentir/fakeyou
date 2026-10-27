@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -10,14 +10,18 @@ from fakeyou.conversation import meeting_turns, turn_graph
 from fakeyou.conversation.model_responder import ReplierWholeResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
+    PlannedTurn,
     SentenceLimits,
     WholeResponder,
     build_turn_graph,
     tool_start_hook,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
+from fakeyou.conversation.turn_lifecycle import DeferredOptions, ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.session.intent import Reading
+from fakeyou.session.planner import TurnPlan
+from fakeyou.session.policy import Channel
 from tests._model_responder import ModelResponder
 
 MODEL_NODE = {"langgraph_node": "model"}
@@ -208,6 +212,29 @@ async def test_single_final_is_answered_alone() -> None:
     await harness.say("f1", "twin, only one")
 
     assert harness.replier.calls == [("f1",)]
+
+
+async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply() -> None:
+    asked: list[tuple[str, tuple[str, ...]]] = []
+    gathered = {"screen": {"code": "ok", "answer": "A launch timeline."}}
+
+    async def evidence(question: str, needs: tuple[str, ...]) -> Mapping[str, object]:
+        asked.append((question, needs))
+        return gathered
+
+    def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+        del reading, channel
+        return PlannedTurn(
+            TurnPlan(f"plan-{event.id}", "evidence_then_speech", "speech", ("screen", "memory"))
+        )
+
+    harness = Harness(FakeReplier())
+    harness.lifecycle.configure_deferred(DeferredOptions(planning=planning, evidence=evidence))
+
+    await harness.say("f1", "twin, what is on the slide")
+
+    assert asked == [("twin, what is on the slide", ("screen", "memory"))]
+    assert harness.replier.events[0][-1].evidence == gathered
 
 
 def test_graph_drains_every_pending_final_into_one_respond_call() -> None:

@@ -38,14 +38,14 @@ def read_timeline() -> MeetingTimeline:
 
 
 async def test_nothing_is_looked_at_unless_the_plan_named_it() -> None:
-    evidence = await gather_evidence(context(read_timeline(), "unused"), trigger("When is beta?"))
+    evidence = await gather_evidence(context(read_timeline(), "unused"), "When is beta?", ())
 
     assert evidence == {}
 
 
 async def test_a_planned_screen_look_answers_the_spoken_question() -> None:
     evidence = await gather_evidence(
-        context(read_timeline(), "Beta is 17 March 2027."), trigger("When is beta?", "screen")
+        context(read_timeline(), "Beta is 17 March 2027."), "When is beta?", ("screen",)
     )
 
     assert evidence == {
@@ -59,8 +59,8 @@ async def test_a_participant_look_needs_a_named_participant() -> None:
     timeline.camera_frames.put("device-budi", slide_jpeg("Mockup"))
     seeing = context(timeline, "A paper mockup.")
 
-    named = await gather_evidence(seeing, trigger("What is Budi holding?", "participant"))
-    unnamed = await gather_evidence(seeing, trigger("What is he holding?", "participant"))
+    named = await gather_evidence(seeing, "What is Budi holding?", ("participant",))
+    unnamed = await gather_evidence(seeing, "What is he holding?", ("participant",))
 
     assert named["participant"]["code"] == "ok"
     assert unnamed == {"participant": {"code": "unknown_participant", "participant": ""}}
@@ -68,7 +68,7 @@ async def test_a_participant_look_needs_a_named_participant() -> None:
 
 async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> None:
     evidence = await gather_evidence(
-        context(read_timeline()), trigger("What did they say?", "chat_history", "memory", "bogus")
+        context(read_timeline()), "What did they say?", ("chat_history", "memory", "bogus")
     )
 
     assert evidence == {"chat_history": {"code": "ok", "lines": []}}

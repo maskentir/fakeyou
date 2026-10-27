@@ -1,5 +1,5 @@
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, override
 from uuid import uuid4
@@ -138,12 +138,10 @@ class PerceptionContext:
         return _look_result("ok", answer=answer, **subject)
 
 
-def _planned_needs(trigger: HumanMessage) -> tuple[str, ...]:
+def _gathered(trigger: HumanMessage) -> dict[str, Any]:
     event = meeting_event_of(trigger)
-    needs = event.get("evidence_needs") if event is not None else None
-    if not isinstance(needs, list):
-        return ()
-    return tuple(need for need in needs if need in LOOK_NEEDS)
+    evidence = event.get("evidence") if event is not None else None
+    return evidence if isinstance(evidence, dict) else {}
 
 
 def _mentioned(snapshot: TimelineSnapshot, text: str) -> str | None:
@@ -157,10 +155,13 @@ def _mentioned(snapshot: TimelineSnapshot, text: str) -> str | None:
     )
 
 
-async def gather_evidence(context: PerceptionContext, trigger: HumanMessage) -> dict[str, Any]:
-    question = trigger.text
+async def gather_evidence(
+    context: PerceptionContext, question: str, needs: Sequence[str]
+) -> dict[str, Any]:
     results: dict[str, Any] = {}
-    for need in _planned_needs(trigger):
+    for need in needs:
+        if need not in LOOK_NEEDS:
+            continue
         if need == "screen":
             raw = await context.look_at_screen("current", question)
         elif need == "participant":
@@ -174,6 +175,23 @@ async def gather_evidence(context: PerceptionContext, trigger: HumanMessage) -> 
             raw = context.backlog_chat()
         results[need] = json.loads(raw)
     return results
+
+
+class MeetingEvidence:
+    def __init__(self, context: PerceptionContext, *, journal: Journal | None = None) -> None:
+        self._context = context
+        self._journal = journal or Journal("", echo=False)
+
+    async def __call__(self, question: str, needs: tuple[str, ...]) -> dict[str, Any]:
+        evidence = await gather_evidence(self._context, question, needs)
+        if evidence:
+            self._journal.record(
+                "meeting_evidence_emitted",
+                source="perception",
+                needs=sorted(evidence),
+                codes=[str(result.get("code")) for result in evidence.values()],
+            )
+        return evidence
 
 
 class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -208,16 +226,10 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
             chars=len(appended[-1].text),
             image_attached=False,
         )
-        evidence = await gather_evidence(self._context, trigger[-1])
+        evidence = _gathered(trigger[-1])
         if evidence:
             content = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
             appended.extend(_synthetic(MEETING_EVIDENCE, content, "meeting_evidence"))
-            self._journal.record(
-                "meeting_evidence_emitted",
-                source="perception",
-                needs=sorted(evidence),
-                codes=[str(result.get("code")) for result in evidence.values()],
-            )
         trigger_id = trigger[-1].id
         if self._on_observed is not None and trigger_id:
             for message in appended:
