@@ -41,9 +41,9 @@ from fakeyou.session.commands import (
 
 MEET_CHAT_MAX_CHARS = 500
 CHAT_WINDOW_SECONDS = 60.0
-ECHO_TIMEOUT_SECONDS = 6.0
-ECHO_POLL_SECONDS = 0.25
-TWIN_DEVICE = "twin"
+ECHO_TIMEOUT_SECONDS = 10.0
+ECHO_POLL_SECONDS = 0.5
+SETTLE_ON_CLOSE_SECONDS = 15.0
 
 
 @dataclass(slots=True)
@@ -79,6 +79,7 @@ class CommandRunner:
         self._page_lease = asyncio.Lock()
         self._closed = False
         self._left = False
+        self._inflight: set[asyncio.Task[CommandRecord]] = set()
         self.on_settled: Callable[[CommandRecord], None] | None = None
         self.on_left: Callable[[], None] | None = None
 
@@ -106,8 +107,16 @@ class CommandRunner:
     ) -> None:
         self._binding = _Binding(page, sleep, monotonic, stop)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self._closed = True
+        if not self._inflight:
+            return
+        try:
+            async with asyncio.timeout(SETTLE_ON_CLOSE_SECONDS):
+                await asyncio.gather(*self._inflight, return_exceptions=True)
+        except TimeoutError:
+            for task in self._inflight:
+                task.cancel()
 
     def recover(self) -> tuple[CommandRecord, ...]:
         closed = self._ledger.recover(self._kernel.attempt_id)
@@ -144,8 +153,14 @@ class CommandRunner:
                 chars=len(spec.text) if spec.kind == "send_chat" else None,
                 plan_id=plan_id,
             )
+        task = asyncio.create_task(self._leased(record))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        return _outcome(await asyncio.shield(task))
+
+    async def _leased(self, record: CommandRecord) -> CommandRecord:
         async with self._page_lease:
-            return _outcome(await self._drive(record))
+            return await self._drive(record)
 
     async def _drive(self, record: CommandRecord) -> CommandRecord:
         refusal = self._refusal(record.spec)
@@ -217,15 +232,6 @@ class CommandRunner:
         if record.kind == "send_chat":
             echoed = await self._echoed(record.text, binding)
             state: CommandState = "effect_observed" if echoed else "unknown"
-            if echoed:
-                self._kernel.chat(
-                    message_id=record.command_id,
-                    device_id=TWIN_DEVICE,
-                    text=record.text,
-                    own=True,
-                    backlog=False,
-                )
-                self._kernel.drain()
             return self._finish(record, state, "dom_echo" if echoed else "no_echo")
         finished = self._finish(record, "effect_unobserved", "acted")
         if record.kind == "leave":

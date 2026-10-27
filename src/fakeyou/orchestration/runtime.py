@@ -1257,7 +1257,7 @@ async def _launch_session_browser(
         await _run_lifecycle(lifecycle, context)
     finally:
         if hooks.commands is not None:
-            hooks.commands.close()
+            await hooks.commands.close()
     return worker.detail or "session ended"
 
 

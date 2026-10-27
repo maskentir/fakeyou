@@ -163,6 +163,7 @@ async def test_a_chat_is_confirmed_by_its_dom_echo(
 
     assert state == "effect_observed"
     assert meet.calls == ["send_chat"]
+    assert kernel.state.dialogue.lines == ()
 
 
 async def test_a_chat_without_an_echo_is_unknown_and_never_resent(
@@ -298,23 +299,26 @@ async def test_a_restart_closes_a_dispatched_command_as_unknown(
     assert runner_for(tmp_path, restarted).recover() == ()
 
 
-@pytest.mark.usefixtures("meet")
-async def test_a_confirmed_chat_is_recorded_as_own_history(
-    tmp_path: Path, kernel: KernelPort
+async def test_a_command_past_its_boundary_settles_even_when_its_turn_is_cancelled(
+    tmp_path: Path, kernel: KernelPort, meet: FakeMeet, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runner = CommandRunner(
-        tmp_path / "meeting-9" / "record.jsonl",
-        meeting_id="meeting-9",
-        kernel=kernel,
-        chat_per_minute=5,
-    )
-    clock = Clock()
-    runner.bind_page(
-        cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
-    )
+    clicked, release = asyncio.Event(), asyncio.Event()
 
-    await runner.run(
-        CommandSpec("send_chat", "Deck is up."), plan_id="p1", ordinal=0, actor="dev-ayu"
-    )
+    async def slow_leave(*_args: object) -> MeetActionResult:
+        clicked.set()
+        await release.wait()
+        return await meet.leave_call()
 
-    assert [line.text for line in kernel.state.dialogue.lines] == ["Deck is up."]
+    monkeypatch.setattr(runner_module, "leave_call", slow_leave)
+    runner = runner_for(tmp_path, kernel)
+    turn = asyncio.create_task(run(runner, CommandSpec("leave")))
+    await clicked.wait()
+
+    turn.cancel()
+    release.set()
+    await runner.close()
+
+    assert turn.cancelled()
+    assert runner.left is True
+    [record] = CommandLedger(record_path(tmp_path), "meeting-9").records()
+    assert record.state == "effect_unobserved"
