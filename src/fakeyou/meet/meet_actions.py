@@ -1,4 +1,5 @@
 import asyncio
+import html
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -23,8 +24,6 @@ _XPATH_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _XPATH_LOWER = "abcdefghijklmnopqrstuvwxyz"
 _CHAT_FIELD_ATTEMPTS = NAME_FIELD_ATTEMPTS
 _PANEL_TIMEOUT_MS = 10000
-_ECHO_TIMEOUT_SECONDS = 10.0
-_ECHO_POLL_SECONDS = 1.0
 _ECHO_READ_TIMEOUT_SECONDS = 2.0
 _SETTLE_SECONDS = 3.0
 _SETTLE_POLL_SECONDS = 0.5
@@ -461,33 +460,6 @@ async def lower_hand(
     )
 
 
-async def _await_own_echo(
-    page: Page,
-    text: str,
-    signals: MeetActionSignals,
-    sleep: Callable[[float], Awaitable[None]],
-    monotonic: Callable[[], float],
-) -> bool:
-    echo_item = _echo_item_selector(signals)
-    deadline = monotonic() + _ECHO_TIMEOUT_SECONDS
-    while True:
-        try:
-            async with asyncio.timeout(_ECHO_READ_TIMEOUT_SECONDS):
-                content = await page.content()
-        except TimeoutError:
-            content = ""
-        if text in content:
-            try:
-                found = await page.locator(echo_item).count()
-            except PlaywrightError:
-                found = 0
-            if found > 0:
-                return True
-        if monotonic() >= deadline:
-            return False
-        await sleep(_ECHO_POLL_SECONDS)
-
-
 async def send_chat(
     page: Page,
     text: str,
@@ -540,14 +512,7 @@ async def send_chat(
             outcome="failed",
             detail=f"typing the chat message failed: {type(error).__name__} (chars={chars})",
         )
-    if await _await_own_echo(page, text, signals, sleep, monotonic):
-        return MeetActionResult(
-            outcome="succeeded", detail=f"own chat echo observed (chars={chars})"
-        )
-    return MeetActionResult(
-        outcome="failed",
-        detail=f"own chat echo not observed within {_ECHO_TIMEOUT_SECONDS} seconds (chars={chars})",
-    )
+    return MeetActionResult(outcome="succeeded", detail=f"chat sent (chars={chars})")
 
 
 async def _readback_visible(page: Page, selector: str) -> bool:
@@ -569,14 +534,14 @@ async def observe_hand_lowered(
     return await _readback_visible(page, _button_prefix_selector(signals.raise_hand))
 
 
-async def observe_chat_echoed(
+async def count_chat_echoes(
     page: Page, text: str, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
-) -> bool:
+) -> int | None:
     try:
         async with asyncio.timeout(_ECHO_READ_TIMEOUT_SECONDS):
             content = await page.content()
     except TimeoutError:
-        return False
-    if text not in content:
-        return False
-    return await _readback_visible(page, _echo_item_selector(signals))
+        return None
+    if not await _readback_visible(page, _echo_item_selector(signals)):
+        return 0
+    return content.count(html.escape(text, quote=False))

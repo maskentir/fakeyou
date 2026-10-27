@@ -63,6 +63,7 @@ class TurnPlan:
     leave: bool = False
     clarify: bool = False
     state_question: StateQuestion | None = None
+    language: str | None = None
     refusals: tuple[Refusal, ...] = ()
     silence_reason: str | None = None
 
@@ -118,6 +119,10 @@ def plan_turn(authorization: Authorization, *, channel: Channel, plan_id: str) -
         case Compound():
             plan = _compound(plan_id, intent, channel)
     return replace(plan, refusals=authorization.refusals)
+
+
+def with_language(plan: TurnPlan, language: str | None) -> TurnPlan:
+    return replace(plan, language=language)
 
 
 def advance(state: PlanState, to: PlanState) -> PlanState:

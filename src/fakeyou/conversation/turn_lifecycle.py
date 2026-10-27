@@ -22,6 +22,7 @@ from fakeyou.conversation.turn_graph import (
     BargeLatch,
     CommandPort,
     ConversationPhase,
+    EvidencePort,
     PlannedTurn,
     Responder,
     SentenceLimits,
@@ -90,6 +91,7 @@ class DeferredOptions:
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
     state_speech: StateSpeech | None = None
+    evidence: EvidencePort | None = None
     others_speaking: Callable[[], bool] | None = None
 
 
@@ -329,6 +331,7 @@ class TurnLifecycle:
             planning=self._deferred_options.planning,
             commands=self._deferred_options.commands,
             state_speech=self._deferred_options.state_speech,
+            evidence=self._deferred_options.evidence,
             plans=self._plans,
             cue=self._cue,
             others_speaking=self._deferred_options.others_speaking,

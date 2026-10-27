@@ -292,6 +292,6 @@ def test_verification_strength_follows_the_effect() -> None:
         "mute": "readback",
         "unmute": "readback",
         "react": "acted_only",
-        "send_chat": "protocol_echo",
+        "send_chat": "dom_echo",
         "leave": "acted_only",
     }

@@ -72,7 +72,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
-from fakeyou.perception.percepts import ParticipantRef
+from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.persistence.brief import MeetingContext, context_path
@@ -84,7 +84,7 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.persistence.record import MeetingRecord, ResumeEntry, load_meeting_record
+from fakeyou.persistence.record import ChatFields, MeetingRecord, ResumeEntry, load_meeting_record
 
 
 @dataclass(slots=True)
@@ -206,6 +206,32 @@ def share_roster(registry: SpeakerRegistry, kernel: KernelPort, roster: MeetRost
     registry.note_audio_sources(roster.audio_sources())
 
 
+def _note_own_chat(run: _JoinRun, you: ParticipantRef, record: CommandRecord) -> None:
+    message_id = f"twin-{record.command_id}"
+    if run.perception is not None:
+        run.perception.timeline.add_chat(
+            IncomingChat(
+                message_id=message_id,
+                sender=you,
+                text=record.text,
+                sent_at=datetime.now(UTC),
+                own=True,
+            )
+        )
+        return
+    run.record.add_chat(
+        ChatFields(
+            ref=message_id,
+            message_id=message_id,
+            sender_id=you.participant_id,
+            sender=you.name,
+            text=record.text,
+            sent_at=datetime.now(UTC),
+            own=True,
+        )
+    )
+
+
 def _own_action_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[CommandRecord], None]:
     perception = run.perception
     profile = prepared.profile
@@ -213,7 +239,11 @@ def _own_action_sink(prepared: PreparedJoin, run: _JoinRun) -> Callable[[Command
     you = ParticipantRef(ref="you", participant_id="twin", name=name)
 
     def sink(record: CommandRecord) -> None:
-        if perception is None or record.kind == "send_chat":
+        if record.kind == "send_chat":
+            if record.state == "effect_observed":
+                _note_own_chat(run, you, record)
+            return
+        if perception is None:
             return
         detail = f"{record.kind} {record.text} {record.state}".replace("  ", " ")
         perception.timeline.add_signal("own_action", you, datetime.now(UTC), detail=detail)
@@ -549,6 +579,7 @@ def _finalize_join_record(prepared: PreparedJoin, run: _JoinRun, result: Session
         phase=result.phase,
         terminal_reason=result.terminal_reason,
         exit_code=run.exit_code,
+        detail=result.detail or None,
     )
     try:
         run.record.close()

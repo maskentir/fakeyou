@@ -12,6 +12,7 @@ from fakeyou.meet.meet_actions import (
     DEFAULT_MEET_ACTION_SIGNALS,
     MeetActionResult,
     MeetActionSignals,
+    count_chat_echoes,
     leave_call,
     lower_hand,
     mute_microphone,
@@ -37,12 +38,12 @@ from fakeyou.session.commands import (
     CommandState,
     command_id,
 )
-from fakeyou.session.world import TWIN
 
 MEET_CHAT_MAX_CHARS = 500
 CHAT_WINDOW_SECONDS = 60.0
-ECHO_TIMEOUT_SECONDS = 6.0
-ECHO_POLL_SECONDS = 0.25
+ECHO_TIMEOUT_SECONDS = 10.0
+ECHO_POLL_SECONDS = 0.5
+SETTLE_ON_CLOSE_SECONDS = 15.0
 
 
 @dataclass(slots=True)
@@ -78,6 +79,7 @@ class CommandRunner:
         self._page_lease = asyncio.Lock()
         self._closed = False
         self._left = False
+        self._inflight: set[asyncio.Task[CommandRecord]] = set()
         self.on_settled: Callable[[CommandRecord], None] | None = None
         self.on_left: Callable[[], None] | None = None
 
@@ -105,8 +107,16 @@ class CommandRunner:
     ) -> None:
         self._binding = _Binding(page, sleep, monotonic, stop)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         self._closed = True
+        if not self._inflight:
+            return
+        try:
+            async with asyncio.timeout(SETTLE_ON_CLOSE_SECONDS):
+                await asyncio.gather(*self._inflight, return_exceptions=True)
+        except TimeoutError:
+            for task in self._inflight:
+                task.cancel()
 
     def recover(self) -> tuple[CommandRecord, ...]:
         closed = self._ledger.recover(self._kernel.attempt_id)
@@ -143,8 +153,14 @@ class CommandRunner:
                 chars=len(spec.text) if spec.kind == "send_chat" else None,
                 plan_id=plan_id,
             )
+        task = asyncio.create_task(self._leased(record))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        return _outcome(await asyncio.shield(task))
+
+    async def _leased(self, record: CommandRecord) -> CommandRecord:
         async with self._page_lease:
-            return _outcome(await self._drive(record))
+            return await self._drive(record)
 
     async def _drive(self, record: CommandRecord) -> CommandRecord:
         refusal = self._refusal(record.spec)
@@ -206,7 +222,7 @@ class CommandRunner:
         return self._finish(record, "failed_after_boundary", "target_state_not_reached")
 
     async def _once(self, record: CommandRecord, binding: _Binding) -> CommandRecord:
-        since = self._kernel.state.seq
+        before = await self._echo_count(record, binding)
         record = self._boundary(record)
         result, error = await capture_error(partial(self._act, record.spec, binding))
         if error is not None:
@@ -215,9 +231,9 @@ class CommandRunner:
         if not result.succeeded:
             return self._finish(record, "failed_after_boundary", result.detail)
         if record.kind == "send_chat":
-            echoed = await self._echoed(record.text, since, binding)
+            echoed = before is not None and await self._echoed(record.text, before, binding)
             state: CommandState = "effect_observed" if echoed else "unknown"
-            return self._finish(record, state, "protocol_echo" if echoed else "no_echo")
+            return self._finish(record, state, "dom_echo" if echoed else "no_echo")
         finished = self._finish(record, "effect_unobserved", "acted")
         if record.kind == "leave":
             self._left = True
@@ -233,16 +249,22 @@ class CommandRunner:
             )
         return moved
 
-    async def _echoed(self, text: str, since: int, binding: _Binding) -> bool:
+    async def _echo_count(self, record: CommandRecord, binding: _Binding) -> int | None:
+        if record.kind != "send_chat":
+            return None
+        count, error = await capture_error(
+            partial(count_chat_echoes, binding.page, record.text, self._signals)
+        )
+        return None if error is not None else count
+
+    async def _echoed(self, text: str, before: int, binding: _Binding) -> bool:
         deadline = binding.monotonic() + self.echo_timeout_seconds
-        wanted = " ".join(text.split())
         while True:
-            for line in reversed(self._kernel.state.dialogue.lines):
-                if line.seq <= since:
-                    break
-                if line.speaker == TWIN and line.channel == "chat":
-                    if " ".join(line.text.split()) == wanted:
-                        return True
+            count, error = await capture_error(
+                partial(count_chat_echoes, binding.page, text, self._signals)
+            )
+            if error is None and count is not None and count > before:
+                return True
             if binding.monotonic() >= deadline or binding.stop.is_set():
                 return False
             await binding.sleep(ECHO_POLL_SECONDS)

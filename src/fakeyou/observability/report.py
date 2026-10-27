@@ -430,7 +430,9 @@ def _in_call_seconds(state: _ReportState) -> float | None:
 def _apply_session_event(state: _ReportState, row: dict[str, Any], _at: datetime | None) -> None:
     event = row.get("event")
     if event == "session_finished":
-        state.result = {key: row.get(key) for key in ("phase", "terminal_reason", "exit_code")}
+        state.result = {
+            key: row.get(key) for key in ("phase", "terminal_reason", "exit_code", "detail")
+        }
     elif event == "policy_decided":
         state.policy_actions[str(row.get("action"))] += 1
         state.policy_reasons[str(row.get("reason"))] += 1

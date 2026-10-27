@@ -89,9 +89,13 @@ _JUDGE_RULES = (
     "state_question: when the latest line asks only about meeting state the system can read "
     "directly, name it: attendance for who is here, participant_count for how many people "
     "are here, presenter for who is presenting, screen_title for what is being shared by "
-    "name, own_action_status for whether the twin's own earlier meeting action or chat "
-    "message went through; otherwise none. A question about what shared content says or "
-    "means is not a state question; use evidence screen for it.\n"
+    "name, own_action_status for whether the twin itself did, has done or is doing one of its "
+    "own meeting actions, such as whether it raised or lowered its hand, reacted, muted or "
+    "unmuted, or sent a chat message, including questions like 'did you raise your hand?'; "
+    "otherwise none. A question about what shared content says or means is not a state "
+    "question; use evidence screen for it.\n"
+    "language: the language of the latest line, id for Indonesian words and en for English "
+    "words.\n"
     "reaction_emoji: when meet_action is react, the closest of Meet's reaction glyphs; "
     "otherwise null.\n"
     "confidence: how sure you are about action, from 0 to 1."
@@ -124,6 +128,9 @@ class TurnJudgement(BaseModel):
     evidence: tuple[EvidenceNeed, ...] = Field(
         default=(),
         description="Evidence required before the twin can answer the latest line.",
+    )
+    language: Literal["id", "en"] | None = Field(
+        default=None, description="The language of the latest line."
     )
     state_question: StateQuestionField = Field(
         default="none",

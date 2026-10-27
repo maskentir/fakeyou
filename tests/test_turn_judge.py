@@ -213,3 +213,31 @@ async def test_the_judge_payload_carries_presence_certainty() -> None:
     assert sent["human_speakers"] == ["ayu", "budi"]
     assert sent["presence"]["plausible_max"] is None
     assert sent["sole_human_responder"] is False
+
+
+async def test_the_judge_reports_own_action_questions_and_language() -> None:
+    payload = {
+        "heard": "Rani, did you raise your hand earlier?",
+        "finished": True,
+        "backchannel": False,
+        "addressee": "twin",
+        "action": "reply",
+        "confidence": 0.9,
+        "state_question": "own_action_status",
+        "language": "id",
+    }
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="", tool_calls=[{"name": "TurnJudgement", "args": payload, "id": "j"}]
+            )
+        ]
+    )
+    judge = ModelTurnJudge(model, twin_names=("Rani",), timeout_seconds=1.0)
+
+    result = await judge.judge(
+        JudgeWindow(earlier=(), latest=JudgeLine("ayu", "Rani, did you raise your hand earlier?"))
+    )
+
+    assert result.state_question == "own_action_status"
+    assert result.language == "id"

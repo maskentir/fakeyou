@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -7,12 +6,12 @@ import pytest
 from deepeval.evaluate import assert_test
 from deepeval.metrics import GEval
 from deepeval.metrics.base_metric import BaseMetric
-from deepeval.models import OpenAIModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from evals._judge import grades_itself, judge_config
 from evals._replay import session_memory
 from evals._trust import case_storage
 from fakeyou.config.settings import Settings
@@ -33,7 +32,6 @@ PERSONA_FIXTURE = json.loads(
 )
 LIVE_SCENARIOS: dict[str, dict[str, str]] = PERSONA_FIXTURE["scenarios"]
 RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
-JUDGE_MODEL = "gpt-4.1-mini"
 
 
 def participant_asks(text: str) -> HumanMessage:
@@ -119,9 +117,11 @@ KNOWN_MODEL_LIMITATIONS = {
 )
 async def test_live_persona_quality(scenario: str) -> None:
     settings = Settings()
-    api_key = os.environ.get("EVAL_JUDGE_API_KEY", "")
-    if not api_key.strip():
+    judge = judge_config()
+    if judge is None:
         pytest.skip("set EVAL_JUDGE_API_KEY to run the live persona judge")
+    if grades_itself(judge, settings):
+        pytest.fail(f"the judge {judge.model} is the reply model under test")
     model = create_chat_model(settings)
     live = LIVE_SCENARIOS[scenario]
     question, criteria = live["question"], live["criteria"]
@@ -140,7 +140,7 @@ async def test_live_persona_quality(scenario: str) -> None:
             SingleTurnParams.ACTUAL_OUTPUT,
             SingleTurnParams.CONTEXT,
         ],
-        model=OpenAIModel(model=JUDGE_MODEL, api_key=api_key, temperature=0),
+        model=judge.deepeval(),
         threshold=0.7,
         async_mode=False,
     )

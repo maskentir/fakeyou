@@ -70,6 +70,7 @@ from fakeyou.orchestration.providers import (
     create_turn_judge_model,
 )
 from fakeyou.perception.context import (
+    MeetingEvidence,
     PerceptionContext,
     create_perception_middleware,
 )
@@ -355,9 +356,15 @@ class _ConversationBuilder:
             actor=actor.device_id or actor.kind,
         )
 
-    def _state_speech(self, question: StateQuestion) -> str | None:
+    def _meeting_evidence(self) -> MeetingEvidence | None:
+        perception = self._agent.perception
+        if perception is None:
+            return None
+        return MeetingEvidence(perception, journal=self._diagnostics.journal)
+
+    def _state_speech(self, question: StateQuestion, language: str | None) -> str | None:
         kernel = self._behavior.kernel
-        locale = locale_of(self._settings.speech.language)
+        locale = locale_of(language or self._settings.speech.language)
         if kernel is None or locale is None:
             return None
         commands = self._behavior.commands
@@ -458,6 +465,7 @@ class _ConversationBuilder:
                 planning=self._plan,
                 commands=self._behavior.commands,
                 state_speech=self._state_speech,
+                evidence=self._meeting_evidence(),
             ),
             timing=TurnTiming(
                 response_timeout_seconds=conversation_settings.response_timeout_seconds,

@@ -59,6 +59,7 @@ class Reading:
     requests_chat: bool = False
     evidence: tuple[str, ...] = ()
     state_question: str = "none"
+    language: str | None = None
 
 
 def _state(value: str) -> StateQuestion | None:

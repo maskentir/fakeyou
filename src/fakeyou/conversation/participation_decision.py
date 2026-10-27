@@ -24,6 +24,7 @@ class ParticipationDecision(BaseModel):
     reaction_emoji: str | None = None
     action_only: bool = False
     state_question: str = "none"
+    language: str | None = None
 
 
 def to_participation_action(decision: ParticipationDecision) -> ParticipationAction:

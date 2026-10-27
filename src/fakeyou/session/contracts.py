@@ -86,7 +86,6 @@ class ChatObserved(Contract):
 
 class ScreenObserved(Contract):
     kind: Literal["screen"] = "screen"
-    presenter_device_id: str | None = None
     title: str | None = None
     reading_ref: str | None = None
     meeting_content: bool = True

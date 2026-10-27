@@ -89,6 +89,7 @@ def test_report_summarizes_ingestion_faults_tools_and_result() -> None:
         "phase": "ended",
         "terminal_reason": "stopped_by_owner",
         "exit_code": 0,
+        "detail": None,
     }
 
 

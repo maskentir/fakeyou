@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.audio.audio import (
+    RECONNECT_QUIET_WAIT_SECONDS,
     STT_ROTATION_LEAD_SECONDS,
     MeetingAudioError,
     MeetingAudioSession,
@@ -375,31 +376,38 @@ async def test_stt_ready_reports_duck_typed_session() -> None:
     assert await stt_ready(_ReadySTT(ready), timeout_seconds=0.1) is True
 
 
-async def test_stale_queued_reconnect_deadline_fails_without_admit() -> None:
+async def test_a_reconnect_that_never_finds_a_quiet_room_runs_anyway() -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     activity.mark_ready()
+    activity.observe_speech(active=True)
     gate = asyncio.Event()
     runner_task: asyncio.Task[None] = asyncio.create_task(_wait_gate(gate))
-    stt = _SocketSTT(socket_dead=True)
+    stt = FakeReconnectableSTT()
     session = MeetingAudioSession(
         build_run(_Playback(), runner_task),
         capture=SessionCapture(stt=stt, activity=activity),
         runtime=SessionRuntime(now=lambda: clock[0]),
     )
     try:
-        session.request_stt_reconnect("native_request")
-        clock[0] += 130.0
-        with pytest.raises(MeetingAudioError, match="STT reconnect deadline exceeded"):
-            await session.maintenance_tick(is_busy=False)
+        session.request_stt_reconnect("keyword_change")
+        clock[0] += RECONNECT_QUIET_WAIT_SECONDS - 1.0
+        await session.maintenance_tick(is_busy=True)
+        assert session.reconnect_state() == "queued"
+        clock[0] += 2.0
+        await session.maintenance_tick(is_busy=True)
+        await settle_reconnect(session)
+        session.raise_if_failed()
     finally:
         gate.set()
         await runner_task
-    assert stt.calls == 0
-    assert session.reconnect_state() == "exhausted"
+    assert stt.calls == 1
+    assert session.reconnect_state() == "idle"
 
 
-async def test_admit_resets_stale_queued_reconnect_epoch(journal: RecordingJournal) -> None:
+async def test_a_reconnect_queued_in_the_lobby_runs_once_admitted(
+    journal: RecordingJournal,
+) -> None:
     clock = [1000.0]
     activity = CaptureActivity(now=lambda: clock[0])
     gate = asyncio.Event()

@@ -191,7 +191,7 @@ async def test_model_and_tool_events_carry_their_transcript(journal: RecordingJo
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
 
     first = await responder.respond([memory_event("t1")], lambda: None)
-    second = await responder.respond([event("t2", "What time?")], lambda: None)
+    second = await responder.respond([event("t2", "Is it ten?")], lambda: None)
     assert first.text == "The demo is on Friday."
     assert second.text == "Tuesday at ten."
 

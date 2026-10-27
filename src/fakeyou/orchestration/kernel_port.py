@@ -9,6 +9,7 @@ from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudge, TurnJudgemen
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRow
 from fakeyou.observability.journal import Journal
+from fakeyou.perception.percepts import ScreenSegment
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.contracts import (
     AudioStreamObserved,
@@ -23,6 +24,7 @@ from fakeyou.session.contracts import (
     PlaybackObserved,
     PlaybackPhase,
     RosterObserved,
+    ScreenObserved,
     SessionEvent,
     Source,
     SourceHealthObserved,
@@ -223,6 +225,17 @@ class KernelPort:
                 message_id=message_id, device_id=device_id, text=text, own=own, backlog=backlog
             ),
             event_id=f"chat:{message_id}",
+        )
+
+    def screen(self, segment: ScreenSegment) -> None:
+        reading = segment.reading
+        self.observe(
+            "vision",
+            ScreenObserved(
+                title=reading.title if reading is not None else None,
+                reading_ref=segment.ref,
+                meeting_content=reading.is_meeting_content if reading is not None else True,
+            ),
         )
 
     def call_state(self, state: CallState, *, new_epoch: bool = False) -> None:

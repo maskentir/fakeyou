@@ -3,7 +3,7 @@ from typing import Literal
 
 from fakeyou.session.commands import CommandKind, CommandOutcome, CommandState
 from fakeyou.session.identity import presence
-from fakeyou.session.world import SessionState
+from fakeyou.session.world import SessionState, presenter_device
 
 StateQuestion = Literal[
     "attendance", "participant_count", "presenter", "screen_title", "own_action_status"
@@ -144,15 +144,20 @@ def _count(state: SessionState) -> Fact:
     )
 
 
+def _sharing_unknown(state: SessionState) -> bool:
+    return (
+        state.health.sources.get("meet_protocol") in ("stale", "down")
+        or not state.world.roster_synced
+    )
+
+
 def _presenter(state: SessionState) -> Fact:
-    if state.health.sources.get("meet_protocol") in ("stale", "down"):
-        return _fact(state, Unknown("presenter", "stale_source"), domain="presence")
-    screen = state.world.screen
-    device = screen.presenter_device_id if screen is not None else None
-    endpoint = state.world.endpoints.get(device) if device is not None else None
+    if _sharing_unknown(state):
+        return _fact(state, Unknown("presenter", "stale_source"), domain="screen")
+    device = presenter_device(state.world)
     if device is None:
         return _fact(state, Presenter(None, presenting=False), domain="screen")
-    name = endpoint.display_name if endpoint is not None and endpoint.display_name else None
+    name = state.world.endpoints[device].display_name or None
     return _fact(
         state,
         Presenter(name, presenting=True),
@@ -162,12 +167,15 @@ def _presenter(state: SessionState) -> Fact:
 
 
 def _screen_title(state: SessionState) -> Fact:
-    screen = state.world.screen
-    if screen is None or screen.presenter_device_id is None:
+    if _sharing_unknown(state):
+        return _fact(state, Unknown("screen_title", "stale_source"), domain="screen")
+    if presenter_device(state.world) is None:
         return _fact(state, ScreenTitle(None, sharing=False), domain="screen")
+    screen = state.world.screen
+    title = screen.title if screen is not None and screen.meeting_content else None
     return _fact(
         state,
-        ScreenTitle(screen.title, sharing=True),
+        ScreenTitle(title, sharing=True),
         domain="screen",
         origin=("meeting_live", "screen_read"),
     )

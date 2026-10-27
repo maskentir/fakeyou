@@ -662,7 +662,8 @@
         },
         {
           "say": "Jam berapa mulainya?",
-          "contract_reply": "Mulainya pukul sepuluh."
+          "contract_reply": "Mulainya pukul sepuluh.",
+          "contract_cites": ["edge-0"]
         }
       ],
       "memory": {

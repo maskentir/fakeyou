@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import hashlib
 import json
-import os
 import statistics
 import time
 from collections.abc import Callable, Iterator
@@ -19,6 +18,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 
 import fakeyou.memory.memory as memory_module
+from evals._judge import judge_config
 from evals._shared import (
     REPLAY_EVIDENCE,
     ArtifactMeta,
@@ -53,7 +53,6 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "trust-scenarios.json"
 TRUST_RUNS = 3
 USEFULNESS_THRESHOLD = 0.9
 MIN_USEFUL_PAIRS = 79
-JUDGE_MODEL = "gpt-4.1-mini"
 EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
@@ -432,7 +431,7 @@ class EvalDelayedModel(ToolCallingFakeModel):
 
 
 def judge_available() -> bool:
-    return bool(os.environ.get("EVAL_JUDGE_API_KEY", "").strip())
+    return judge_config() is not None
 
 
 def write_trust_artifacts(directory: Path, *, score: TrustScore, meta: ArtifactMeta) -> None:
@@ -467,7 +466,7 @@ def write_trust_artifacts(directory: Path, *, score: TrustScore, meta: ArtifactM
         },
         "judge": {
             "available": judge_available(),
-            "model": JUDGE_MODEL,
+            "model": judge.model if (judge := judge_config()) is not None else None,
             "note": "Independent meaning review is recorded in reviews.json, never self-assessed.",
         },
         "review": {

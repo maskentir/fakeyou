@@ -18,7 +18,7 @@ def chat(command_id: str = "c1") -> CommandRecord:
         plan_id="p1",
         actor="dev-ayu",
         browser_epoch=1,
-        verification="protocol_echo",
+        verification="dom_echo",
         text="Deck is up.",
     )
 

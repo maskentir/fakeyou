@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Hashable,
@@ -10,7 +11,7 @@ from collections.abc import (
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Literal, NotRequired, Protocol, TypedDict, get_args
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -60,7 +61,7 @@ from fakeyou.perception.scrub import scrub_internal_refs
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
-from fakeyou.session.planner import TurnPlan, plan_turn
+from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
 
 
@@ -235,7 +236,8 @@ class TurnPlanning(Protocol):
     ) -> PlannedTurn: ...
 
 
-StateSpeech = Callable[[StateQuestion], str | None]
+StateSpeech = Callable[[StateQuestion, str | None], str | None]
+EvidencePort = Callable[[str, tuple[str, ...]], Awaitable[Mapping[str, object]]]
 
 
 class CommandPort(Protocol):
@@ -299,6 +301,7 @@ class TurnRuntime:
     planning: TurnPlanning | None = None
     commands: CommandPort | None = None
     state_speech: StateSpeech | None = None
+    evidence: EvidencePort | None = None
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
     cue: ThinkingCue | None = None
     others_speaking: Callable[[], bool] | None = None
@@ -742,7 +745,7 @@ def _finish_turn(
 
 _NO_GRANT = Grant(frozenset())
 MAX_PENDING_PLANS = 32
-UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = get_args(EvidenceNeed)
+UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = ("chat_history", "memory")
 
 
 def reading_of(verdict: ParticipationDecision) -> Reading:
@@ -755,6 +758,7 @@ def reading_of(verdict: ParticipationDecision) -> Reading:
         requests_chat=verdict.requests_chat,
         evidence=verdict.evidence_needs,
         state_question=verdict.state_question,
+        language=verdict.language,
     )
 
 
@@ -762,17 +766,19 @@ def plan_for(
     runtime: TurnRuntime, event: TranscriptEvent, reading: Reading, channel: Channel
 ) -> PlannedTurn:
     if runtime.planning is not None:
-        return runtime.planning(event, reading, channel)
+        planned = runtime.planning(event, reading, channel)
+        return replace(planned, plan=with_language(planned.plan, reading.language))
     authorization = authorize(
         intent_of(reading), actor=UNATTRIBUTED, channel=channel, grant=_NO_GRANT
     )
-    return PlannedTurn(plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}"))
+    plan = plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}")
+    return PlannedTurn(with_language(plan, reading.language))
 
 
 _OUTCOME_NOTES: dict[str, str] = {
-    "effect_observed": "{kind} is done and the meeting confirmed it.",
+    "effect_observed": "{kind} is done; say so plainly, the way a participant would.",
     "effect_unobserved": (
-        "{kind} was clicked but the meeting did not confirm it; do not say anyone saw it."
+        "{kind} was done but you could not see it take effect; do not say anyone saw it."
     ),
     "unknown": "It is not known whether {kind} happened; say you are not sure it went through.",
 }
@@ -797,6 +803,11 @@ def plan_notes(plan: TurnPlan, outcome: CommandOutcome | None) -> tuple[str, ...
         kind = outcome.kind.replace("_", " ")
         template = _OUTCOME_NOTES.get(outcome.state, "{kind} did not happen.")
         notes.append(template.format(kind=kind[0].upper() + kind[1:]))
+    if plan.output == "chat":
+        notes.append(
+            "Your reply is posted in the meeting chat exactly as you write it: write only the "
+            "message, and if the participant dictated the words, write exactly those words."
+        )
     if plan.leave:
         notes.append("You will leave the call right after this reply.")
     if plan.clarify and not plan.refusals:
@@ -810,6 +821,14 @@ def for_reply(
     notes = plan_notes(plan, outcome)
     text = f"{event.text}\n[System: {' '.join(notes)}]" if notes else event.text
     return replace(event, text=text, evidence_needs=plan.evidence)
+
+
+async def with_evidence(
+    runtime: TurnRuntime, question: str, event: TranscriptEvent
+) -> TranscriptEvent:
+    if runtime.evidence is None or not event.evidence_needs:
+        return event
+    return replace(event, evidence=await runtime.evidence(question, event.evidence_needs))
 
 
 async def _run_action(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
@@ -870,7 +889,7 @@ async def answer_state(
     question = planned.plan.state_question
     if question is None or runtime.state_speech is None:
         return False
-    text = runtime.state_speech(question)
+    text = runtime.state_speech(question, planned.plan.language)
     if text is None:
         return False
     runtime.journal.record(
@@ -925,22 +944,35 @@ async def _run_turn(
     reply_event = for_reply(final, planned.plan, outcome)
     if judged is None:
         reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
-    reply_batch = (*batch[:-1], reply_event)
+    farewell = Farewell()
+    try:
+        await _speak_reply(runtime, speech, batch, reply_event, (scope, generation, farewell))
+    finally:
+        if farewell.started:
+            await _leave(runtime, planned)
+
+
+@dataclass(slots=True)
+class Farewell:
+    started: bool = False
+
+
+async def _speak_reply(
+    runtime: TurnRuntime,
+    speech: SpeechGraph,
+    batch: tuple[TranscriptEvent, ...],
+    reply_event: TranscriptEvent,
+    turn: tuple[TurnScope | None, int, Farewell],
+) -> None:
+    final = batch[-1]
+    scope, generation, farewell = turn
     floor_generation = _floor_generation(runtime)
     generations = (generation, floor_generation)
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
-    whole = _turn_whole(runtime, reply_batch, hook)
-    streamed = whole is None
+    streamed = runtime.whole_turn is None and runtime.whole is None
     sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
-    context = replace(
-        _speech_context(runtime, sink, scope, generations, final.id),
-        responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
-        whole=whole,
-        sentences=runtime.sentences,
-        cue_state=cue_state,
-    )
     cue = _start_cue(
         runtime,
         CueTurn(
@@ -951,6 +983,14 @@ async def _run_turn(
         ),
     )
     try:
+        reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
+        context = replace(
+            _speech_context(runtime, sink, scope, generations, final.id),
+            responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
+            whole=_turn_whole(runtime, reply_batch, hook),
+            sentences=runtime.sentences,
+            cue_state=cue_state,
+        )
         output = await speech.ainvoke(
             SpeechInput(
                 transcript=final.text,
@@ -960,6 +1000,7 @@ async def _run_turn(
             context=context,
         )
     finally:
+        farewell.started = sink.started
         await _settle_cue(cue)
     if cue_state.played and not output.get("completed"):
         runtime.journal.record(
@@ -970,8 +1011,6 @@ async def _run_turn(
         )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
-    if output.get("completed") and _admission_current(runtime, generation):
-        await _leave(runtime, planned)
 
 
 def _start_cue(runtime: TurnRuntime, turn: CueTurn) -> asyncio.Task[None] | None:
@@ -1098,6 +1137,7 @@ async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading
         action_only=judgement.action_only,
         evidence=judgement.evidence,
         state_question=judgement.state_question,
+        language=judgement.language,
     )
 
 
@@ -1116,7 +1156,7 @@ async def _deliver_chat(
         return
     floor_generation = _floor_generation(runtime)
     hook = tool_start_hook(runtime, generation, floor_generation, event.id)
-    reply_event = for_reply(event, planned.plan, outcome)
+    reply_event = await with_evidence(runtime, event.text, for_reply(event, planned.plan, outcome))
     reply = await _respond_within(
         factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
     )
