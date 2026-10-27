@@ -10,8 +10,8 @@ import fakeyou.meet.meet_actions as meet_actions_module
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet_actions import (
     MeetActionSignals,
+    count_chat_echoes,
     lower_hand,
-    observe_chat_echoed,
     observe_hand_lowered,
     observe_hand_raised,
     raise_hand,
@@ -223,7 +223,7 @@ async def test_chat_echo_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(page, "content", content)
     started = time.monotonic()
 
-    assert await observe_chat_echoed(page, CHAT_TEXT) is False
+    assert await count_chat_echoes(page, CHAT_TEXT) is None
     assert time.monotonic() - started < 2.0
 
 
@@ -232,8 +232,9 @@ async def test_chat_echo_matches_text_the_page_escaped() -> None:
         IN_CALL + '<div>Q&amp;A at 3 &lt;now&gt;<button aria-label="Pin message"></button></div>'
     )
 
-    assert await observe_chat_echoed(meet_page([echoed]), "Q&A at 3 <now>") is True
-    assert await observe_chat_echoed(meet_page([TEXT_WITHOUT_PIN]), "Q&A at 3") is False
+    assert await count_chat_echoes(meet_page([echoed]), "Q&A at 3 <now>") == 1
+    no_chat = meet_page([TEXT_WITHOUT_PIN], visible={ECHO_ITEM_XPATH: False})
+    assert await count_chat_echoes(no_chat, CHAT_TEXT) == 0
 
 
 _RAISED_HAND_PAGE = '<button aria-label="Lower hand"></button>'
@@ -276,8 +277,8 @@ async def test_hand_lowered_readback_sees_raise_control() -> None:
 @pytest.mark.browser
 async def test_chat_readback_needs_text_and_echo_item() -> None:
     async def check(page: Page) -> None:
-        assert await observe_chat_echoed(page, "hello everyone") is True
-        assert await observe_chat_echoed(page, "not sent yet") is False
+        assert await count_chat_echoes(page, "hello everyone") == 1
+        assert await count_chat_echoes(page, "not sent yet") == 0
 
     await _with_static_page(_CHAT_ECHO_PAGE, check)
 

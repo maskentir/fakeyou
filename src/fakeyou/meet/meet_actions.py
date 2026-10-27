@@ -534,14 +534,14 @@ async def observe_hand_lowered(
     return await _readback_visible(page, _button_prefix_selector(signals.raise_hand))
 
 
-async def observe_chat_echoed(
+async def count_chat_echoes(
     page: Page, text: str, signals: MeetActionSignals = DEFAULT_MEET_ACTION_SIGNALS
-) -> bool:
+) -> int | None:
     try:
         async with asyncio.timeout(_ECHO_READ_TIMEOUT_SECONDS):
             content = await page.content()
     except TimeoutError:
-        return False
-    if html.escape(text, quote=False) not in content:
-        return False
-    return await _readback_visible(page, _echo_item_selector(signals))
+        return None
+    if not await _readback_visible(page, _echo_item_selector(signals)):
+        return 0
+    return content.count(html.escape(text, quote=False))

@@ -12,10 +12,10 @@ from fakeyou.meet.meet_actions import (
     DEFAULT_MEET_ACTION_SIGNALS,
     MeetActionResult,
     MeetActionSignals,
+    count_chat_echoes,
     leave_call,
     lower_hand,
     mute_microphone,
-    observe_chat_echoed,
     observe_hand_lowered,
     observe_hand_raised,
     observe_muted,
@@ -222,6 +222,7 @@ class CommandRunner:
         return self._finish(record, "failed_after_boundary", "target_state_not_reached")
 
     async def _once(self, record: CommandRecord, binding: _Binding) -> CommandRecord:
+        before = await self._echo_count(record, binding)
         record = self._boundary(record)
         result, error = await capture_error(partial(self._act, record.spec, binding))
         if error is not None:
@@ -230,7 +231,7 @@ class CommandRunner:
         if not result.succeeded:
             return self._finish(record, "failed_after_boundary", result.detail)
         if record.kind == "send_chat":
-            echoed = await self._echoed(record.text, binding)
+            echoed = before is not None and await self._echoed(record.text, before, binding)
             state: CommandState = "effect_observed" if echoed else "unknown"
             return self._finish(record, state, "dom_echo" if echoed else "no_echo")
         finished = self._finish(record, "effect_unobserved", "acted")
@@ -248,13 +249,21 @@ class CommandRunner:
             )
         return moved
 
-    async def _echoed(self, text: str, binding: _Binding) -> bool:
+    async def _echo_count(self, record: CommandRecord, binding: _Binding) -> int | None:
+        if record.kind != "send_chat":
+            return None
+        count, error = await capture_error(
+            partial(count_chat_echoes, binding.page, record.text, self._signals)
+        )
+        return None if error is not None else count
+
+    async def _echoed(self, text: str, before: int, binding: _Binding) -> bool:
         deadline = binding.monotonic() + self.echo_timeout_seconds
         while True:
-            echoed, error = await capture_error(
-                partial(observe_chat_echoed, binding.page, text, self._signals)
+            count, error = await capture_error(
+                partial(count_chat_echoes, binding.page, text, self._signals)
             )
-            if echoed and error is None:
+            if error is None and count is not None and count > before:
                 return True
             if binding.monotonic() >= deadline or binding.stop.is_set():
                 return False

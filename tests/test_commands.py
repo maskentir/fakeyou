@@ -21,6 +21,7 @@ class FakeMeet:
         self.calls: list[str] = []
         self.hand = False
         self.sent: list[str] = []
+        self.shown: list[str] = []
         self.reach_hand = True
         self.echo = True
         self.raise_on: set[str] = set()
@@ -42,8 +43,8 @@ class FakeMeet:
         self.sent.append(text)
         return DONE
 
-    async def observe_chat_echoed(self, _page: object, text: str, *_args: object) -> bool:
-        return self.echo and text in self.sent
+    async def count_chat_echoes(self, _page: object, text: str, *_args: object) -> int:
+        return self.shown.count(text) + (self.sent.count(text) if self.echo else 0)
 
     async def send_reaction(self, *_args: object) -> MeetActionResult:
         self.calls.append("react")
@@ -91,7 +92,7 @@ def meet(kernel: KernelPort, monkeypatch: pytest.MonkeyPatch) -> FakeMeet:
         "send_chat",
         "send_reaction",
         "leave_call",
-        "observe_chat_echoed",
+        "count_chat_echoes",
     )
     for name in names:
         monkeypatch.setattr(runner_module, name, getattr(fake, name))
@@ -178,6 +179,17 @@ async def test_a_chat_without_an_echo_is_unknown_and_never_resent(
 
     assert (first, second) == ("unknown", "unknown")
     assert meet.calls == ["send_chat"]
+
+
+async def test_text_already_in_the_chat_does_not_confirm_a_new_post(
+    tmp_path: Path, kernel: KernelPort, meet: FakeMeet
+) -> None:
+    meet.echo = False
+    meet.shown.append("ok")
+
+    state = await run(runner_for(tmp_path, kernel), CommandSpec("send_chat", "ok"))
+
+    assert state == "unknown"
 
 
 async def test_a_crash_after_enter_is_unknown_and_never_resent(
