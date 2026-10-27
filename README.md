@@ -247,6 +247,12 @@ or docstrings in source, no Indonesian in source files, every test file named af
 the module it covers, every error code constructed somewhere, `print` confined to
 the output module, and no bare integer exit codes.
 
+Live evals that grade replies with a judge model need their own judge: set
+`EVAL_JUDGE_API_KEY`, `EVAL_JUDGE_PROVIDER` (`openai` or `gemini`), and optionally
+`EVAL_JUDGE_MODEL` and `EVAL_JUDGE_BASE_URL` for an OpenAI-compatible endpoint. The judge
+never borrows the reply model's key, and the persona eval fails when the judge is the
+reply model it is grading.
+
 ## Verified live
 
 Measured against real Google Meet sessions, not fixtures:
