@@ -1,7 +1,8 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AIMessageChunk
 
@@ -260,21 +261,44 @@ class RecordingCommands:
         return CommandOutcome(f"{plan_id}-{ordinal}", spec.kind, "effect_unobserved")
 
 
-async def test_a_permitted_leave_happens_even_when_the_farewell_is_cut_off() -> None:
-    def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
-        del reading, channel
-        plan = TurnPlan(f"plan-{event.id}", "speech_then_leave", "speech", leave=True)
-        return PlannedTurn(plan, actor="dev-ayu")
+def leave_planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+    del reading, channel
+    plan = TurnPlan(f"plan-{event.id}", "speech_then_leave", "speech", leave=True)
+    return PlannedTurn(plan, actor="dev-ayu")
 
+
+async def test_a_permitted_leave_happens_even_when_the_farewell_is_cut_off() -> None:
+    harness = Harness(FakeReplier(reply="Bye everyone."))
+    commands = RecordingCommands()
+    harness.lifecycle.configure_deferred(
+        DeferredOptions(planning=leave_planning, commands=commands)
+    )
+
+    async def cut_off(text: str, **_: Any) -> None:
+        harness.session.spoken.append(text)
+        raise asyncio.CancelledError
+
+    cast(Any, harness.session).speak = cut_off
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await harness.say("f1", "twin, you can leave now")
+
+    assert harness.session.spoken[0] == "Bye everyone."
+    assert commands.kinds == ["leave"]
+
+
+async def test_a_leave_waits_when_a_newer_line_takes_the_floor_before_the_farewell() -> None:
     def newer_final_takes_the_floor(hook: Callable[[], None]) -> None:
         del hook
         harness.lifecycle.floor.advance()
 
     harness = Harness(FakeReplier(reply="Bye everyone.", on_call=newer_final_takes_the_floor))
     commands = RecordingCommands()
-    harness.lifecycle.configure_deferred(DeferredOptions(planning=planning, commands=commands))
+    harness.lifecycle.configure_deferred(
+        DeferredOptions(planning=leave_planning, commands=commands)
+    )
 
     await harness.say("f1", "twin, you can leave now")
 
     assert "Bye everyone." not in harness.session.spoken
-    assert commands.kinds == ["leave"]
+    assert commands.kinds == []
