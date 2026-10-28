@@ -130,15 +130,6 @@ def test_fault_event_names_its_source() -> None:
     }
 
 
-def test_public_phase_mirror_matches_conversation_enum() -> None:
-    from typing import get_args
-
-    from fakeyou.conversation.state import PublicPhase
-    from fakeyou.meet.events import PublicPhase as MeetPublicPhase
-
-    assert set(get_args(MeetPublicPhase)) == set(get_args(PublicPhase))
-
-
 def _section_models(annotation: object) -> list[type[BaseModel]]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return [annotation]

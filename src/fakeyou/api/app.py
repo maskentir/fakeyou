@@ -19,6 +19,7 @@ from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.sessions import router as sessions_router
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import SessionStatusStore
 from fakeyou.transport.streams import StreamTransport
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ _FRAMEWORK_CODES: dict[int, ErrorCode] = {
 class ApiDeps:
     transport: Callable[[], object] | None = None
     snapshot_store: Callable[[], object] | None = None
+    session_status: Callable[[], object] | None = None
     now_iso: Callable[[], str] | None = None
     memory_service: Callable[[], object] | None = None
     debrief_service: Callable[[], object] | None = None
@@ -101,6 +103,9 @@ async def _release_stream_transport(app: FastAPI) -> AsyncIterator[None]:
         transport = cast(StreamTransport | None, app.state.stream_transport)
         if transport is not None:
             await transport.aclose()
+        status = cast(SessionStatusStore | None, app.state.session_status)
+        if status is not None:
+            status.close()
 
 
 def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
@@ -109,6 +114,7 @@ def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.deps = resolved_deps
     app.state.stream_transport = None
+    app.state.session_status = None
     app.state.token_store = TokenStore.from_settings(settings)
     app.state.rate_limiter = RateLimiter(settings.api.rate_limit_per_minute)
 

@@ -24,6 +24,7 @@ from fakeyou.cli.client import (
 from fakeyou.cli.diagnostics import check_api
 from fakeyou.cli.sessions import SessionOptions, session_body
 from fakeyou.config.settings import Settings
+from tests._session_status_fakes import MemorySessionStatus
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -277,11 +278,13 @@ class _Commands:
 async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: Settings) -> None:
     settings.api.owner_token = SecretStr("owner-secret")
     commands = _Commands()
+    session_status = MemorySessionStatus()
     app = create_app(
         settings,
         ApiDeps(
             transport=lambda: commands,
             snapshot_store=lambda: SessionStore(settings.paths.record_dir),
+            session_status=lambda: session_status,
         ),
     )
     body = session_body(
@@ -304,10 +307,11 @@ async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: S
         listed = await client.list_sessions()
         status = await client.get_session("contract-1")
 
-    assert (created["phase"], joined["phase"], stopped["phase"]) == (
+    assert (created["phase"], joined["phase"], stopped["phase"]) == ("created",) * 3
+    assert (created["desired_state"], joined["desired_state"], stopped["desired_state"]) == (
         "created",
-        "joining",
-        "joining",
+        "joined",
+        "stopped",
     )
     assert [session["meeting_id"] for session in listed] == ["contract-1"]
     assert status["meeting_id"] == "contract-1"

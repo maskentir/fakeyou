@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -18,8 +18,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.conversation.state import PublicPhase
-from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
 from fakeyou.memory.ingest_service import IngestPorts, IngestRequest
 from fakeyou.memory.ingest_status import IngestSummary
@@ -52,8 +51,10 @@ from fakeyou.worker.ingestion import (
     IngestionConsumer,
     IngestionDeps,
 )
+from tests._session_status_fakes import MemorySessionStatus
 
 AT = "2026-10-16T09:00:00+00:00"
+STATUS_AT = datetime(2026, 10, 28, 10, 0, tzinfo=UTC)
 LINK = "https://meet.google.com/abc-defg-hij"
 MARKER_REPLY_KEY = "marker-reply-731"
 PERSONA_DATA = {
@@ -287,6 +288,7 @@ class SessionDouble:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.crash = False
+        self.live_phases: list[PublicPhase] = []
 
     async def run(self, config: SessionConfig, wiring: SessionWiring) -> SessionResult:
         if wiring.stop is not None:
@@ -299,6 +301,9 @@ class SessionDouble:
         if self.crash:
             self.crash = False
             raise OSError("session crashed")
+        if wiring.on_phase is not None:
+            for phase in self.live_phases:
+                wiring.on_phase(phase)
         return self.outcome
 
 
@@ -324,6 +329,7 @@ class Harness:
         self.discovery = self.transport
         self.session_store = SessionStore(settings.paths.record_dir)
         self.store: SnapshotReader = cast(SnapshotReader, self.session_store)
+        self.status = MemorySessionStatus()
         self.double = SessionDouble()
         self.ports = JoinPorts(
             run_session=self.double.run,
@@ -339,6 +345,7 @@ class Harness:
                 settings=settings,
                 transport=self.transport,
                 store=self.session_store,
+                status=self.status,
                 ports=self.ports,
                 shutdown=asyncio.Event(),
                 worker_id=worker_id,
@@ -371,10 +378,15 @@ class Harness:
             at=AT,
         )
         self.session_store.save_new(snapshot)
+        self.status.create(meeting_id, "owner-1", STATUS_AT)
+
+    def phase(self, meeting_id: str) -> str | None:
+        status = self.status.get(meeting_id)
+        return None if status is None else status.phase
 
     async def enqueue(self, meeting_id: str, kind: str) -> None:
         if kind == "join":
-            self.session_store.set_phase(meeting_id, phase="joining", terminal_reason=None)
+            self.status.desire(meeting_id, "joined", STATUS_AT)
         await self.transport.publish_command(
             meeting_id, encode_command(kind, meeting_id=meeting_id, at=AT)
         )
@@ -432,7 +444,7 @@ async def test_one_join_runs_one_session_and_acks_after_phase_persisted(harness:
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
     assert harness.runs == [("m-1", False)]
     assert [kind for kind, _ in harness.acks] == ["join"]
-    assert harness.store.load("m-1").phase == "ended"
+    assert harness.phase("m-1") == "ended"
     assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
 
 
@@ -445,7 +457,7 @@ async def test_a_join_that_fails_before_the_session_starts_settles_as_failed(
     monkeypatch.setattr("fakeyou.worker.consumer.run_join_session", fail_before_binding)
     await harness.enqueue("m-1", "join")
     assert await harness.consumer.run_once(harness.discovery) is None
-    assert harness.store.load("m-1").phase == "failed"
+    assert harness.phase("m-1") == "failed"
     assert harness.events[-1] == {
         "v": "1",
         "type": "session_ended",
@@ -472,7 +484,7 @@ async def test_stop_command_sets_the_session_stop_event(harness: Harness) -> Non
     await harness.enqueue("m-1", "stop")
     await harness.consumer.poll_commands()
     assert harness.stop_event.is_set()
-    assert harness.store.load("m-1").phase == "leaving"
+    assert harness.phase("m-1") == "leaving"
 
 
 async def test_resume_command_continues_the_same_meeting_after_a_crash(harness: Harness) -> None:
@@ -483,7 +495,7 @@ async def test_resume_command_continues_the_same_meeting_after_a_crash(harness: 
     assert await harness.consumer.run_once(harness.discovery) == "m-1"
     assert harness.runs == [("m-1", False), ("m-1", True)]
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
-    assert harness.store.load("m-1").phase == "ended"
+    assert harness.phase("m-1") == "ended"
     assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
 
 
@@ -1059,3 +1071,50 @@ async def test_no_debrief_is_queued_without_a_record(harness: Harness) -> None:
 
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
     assert harness.client.streams.get(DEBRIEF_STREAM, []) == []
+
+
+async def test_the_terminal_reason_survives_a_live_phase_that_already_ended(
+    harness: Harness,
+) -> None:
+    harness.double.live_phases = ["active", "leaving", "ended"]
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once(harness.discovery) == "m-1"
+
+    await harness.finish_session(phase="ended", terminal_reason="left_by_participant")
+
+    status = harness.status.get("m-1")
+    assert status is not None
+    assert (status.phase, status.terminal_reason, status.detail) == (
+        "ended",
+        "left_by_participant",
+        "harness",
+    )
+    assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
+
+
+async def test_a_stop_before_the_twin_joined_ends_the_session(harness: Harness) -> None:
+    harness.seed("m-2")
+    harness.status.desire("m-2", "stopped", STATUS_AT)
+    await harness.enqueue("m-2", "stop")
+
+    assert await harness.consumer.run_once(harness.discovery) is None
+
+    status = harness.status.get("m-2")
+    assert status is not None
+    assert (status.phase, status.terminal_reason) == ("ended", "stopped_by_owner")
+    assert [kind for kind, _ in harness.acks] == ["stop"]
+    assert harness.runs == []
+
+
+async def test_an_unreadable_status_leaves_the_join_for_later(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreachable(_meeting_id: str) -> None:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+
+    monkeypatch.setattr(harness.status, "get", unreachable)
+    await harness.enqueue("m-1", "join")
+
+    assert await harness.consumer.run_once(harness.discovery) is None
+    assert harness.acks == []
+    assert harness.runs == []

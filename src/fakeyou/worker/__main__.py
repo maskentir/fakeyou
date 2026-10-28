@@ -9,6 +9,7 @@ from typing import Protocol, cast
 
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.session_status import create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
 from fakeyou.orchestration.providers import open_persona_memory
@@ -38,6 +39,14 @@ def _session_store(record_dir: Path) -> JobStore:
     return cast(JobStore, module.SessionStore(record_dir))
 
 
+def verify_session_schema(settings: Settings) -> None:
+    status = create_session_status(settings)
+    try:
+        status.require_current()
+    finally:
+        status.close()
+
+
 async def run_consumers(*consumers: LongRunning) -> None:
     async with asyncio.TaskGroup() as group:
         for consumer in consumers:
@@ -57,6 +66,8 @@ async def serve(role: str) -> None:
         open_checkpointer=open_checkpointer,
     )
     await verify_boot_dependencies(settings, ports)
+    if role == SESSIONS_ROLE:
+        await asyncio.to_thread(verify_session_schema, settings)
     transport = StreamTransport.from_settings(settings)
     shutdown = asyncio.Event()
     store = _session_store(settings.paths.record_dir)
@@ -95,6 +106,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
+                    status=create_session_status(shared.settings),
                     ports=shared.ports,
                     shutdown=shared.shutdown,
                     worker_id=shared.worker_id,

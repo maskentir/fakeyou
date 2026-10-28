@@ -200,7 +200,7 @@ async def test_postgres_checkpointer_isolates_threads_and_reopens(
 
 
 def test_preparing_is_a_mapped_phase_name_and_never_a_public_one() -> None:
-    from fakeyou.meet.events import PublicPhase
+    from fakeyou.foundation.taxonomy import PublicPhase
     from fakeyou.orchestration.lifecycle import _TRANSITIONS
 
     produced = {transition.phase for transition in _TRANSITIONS.values()}

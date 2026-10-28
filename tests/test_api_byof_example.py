@@ -12,6 +12,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.observability.journal import journal_path
 from tests.test_api_events import ApiEventsHarness, SeededTransport
+from tests.test_api_sessions import STATUS_AT
 
 EXAMPLE_PATH = Path(__file__).resolve().parent.parent / "examples" / "byof-client" / "client.py"
 LINK = "https://meet.google.com/abc-defg-hij"
@@ -77,7 +78,9 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
                 ),
             ],
         )
-        harness.store.set_phase(meeting_id, phase="ended", terminal_reason="stopped_by_owner")
+        harness.status.record_phase(
+            meeting_id, "ended", STATUS_AT, terminal_reason="stopped_by_owner"
+        )
         path = journal_path(harness.settings.paths.journal_dir, SessionId(meeting_id))
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(

@@ -208,32 +208,49 @@ Gate: untuk setiap ucapan di sesi uji, report menampilkan rantai lengkap
 dari final sampai playback tanpa heuristik waktu; report menghitung ulang
 baseline dari journal oue-1 sampai oue-4.
 
-### A1: Satu sumber status sesi dan lease
+### A1a: Satu sumber status sesi
 
-- Tabel Postgres `meeting_sessions`: `meeting_id`, `desired_state`
-  (`joined`, `stopped`), `phase`, `attempt_id`, `browser_epoch`,
-  `lease_owner`, `lease_expires_at`, `terminal_reason`, `detail`,
-  `updated_at`.
-- Lease pindah ke baris ini: diambil dan diperpanjang dengan update
-  bersyarat (`lease_owner` dan `lease_expires_at`). Lease Redis dihapus.
-- API hanya menulis `desired_state`. Pemegang lease satu-satunya penulis
-  `phase`, `terminal_reason`, dan `detail`.
-- Lifecycle sesi menjadi state machine enum in-process. Dihapus: LangGraph
-  lifecycle beserta checkpoint Postgres dan `DegradingCheckpointer`
-  (`orchestration/lifecycle.py`, 742 baris), `session.json` sebagai status,
-  dan `set_phase` di API. Browser dan PulseAudio tidak bisa di-resume dari
-  checkpoint, jadi durable workflow di sana tidak membeli apa-apa.
-- Journal dan event API adalah projection dari transisi tabel.
+- Tabel Postgres `meeting_sessions` (migrasi `0002`): `meeting_id`,
+  `owner_id`, `desired_state` (`created`, `joined`, `stopped`), `phase`,
+  `terminal_reason`, `detail`, `attempt_id`, `created_at`, `updated_at`.
+- API hanya membuat baris dan menulis `desired_state`. Worker satu-satunya
+  penulis `phase`, `terminal_reason`, dan `detail`, lewat `StatusWriter`
+  yang menulis berurutan di thread agar loop real-time tidak pernah
+  menunggu database.
+- Phase terminal hanya ditulis oleh hasil akhir sesi yang membawa alasan;
+  phase live yang terminal diabaikan, dan baris terminal tidak dapat
+  ditimpa. Ini menutup bug `terminal_reason` hilang (51 dari 54 sesi).
+- `session.json` tinggal snapshot config, tanpa status. `set_phase`
+  dihapus. `PublicPhase` dan `TERMINAL_PHASES` satu sumber di
+  `foundation/taxonomy`.
 
-Gate: tidak ada kode yang menulis status sesi selain pemegang lease; API
-`GET /sessions` membaca tabel; sesi uji menghasilkan `terminal_reason` yang
-sama di tabel, journal, dan report.
+Gate: tidak ada kode yang menulis phase selain worker; view API dan SSE
+membaca tabel; hasil akhir sesi menyimpan alasan dan detail walau phase
+live sudah `ended`.
+
+### A1b: Lifecycle tanpa LangGraph
+
+- Lifecycle sesi menjadi state machine enum in-process (`apply_transition`
+  tetap). Dihapus: graph LangGraph lifecycle, checkpoint Postgres dan
+  `DegradingCheckpointer`, `LifecycleThread`, `initialize_lifecycle`,
+  `resume_lifecycle`, dan `RetryPolicy` LangGraph untuk join. Browser dan
+  PulseAudio tidak bisa di-resume dari checkpoint, jadi durable workflow di
+  sana tidak membeli apa-apa.
+- Resume membaca baris `meeting_sessions`; forget menghapus baris itu
+  sebagai ganti thread checkpoint. Checkpoint tetap hanya untuk chat API
+  owner.
+
+Gate: tidak ada import LangGraph di lifecycle sesi; resume dan forget lulus
+tanpa checkpoint lifecycle.
 
 ### A2: Reconciler dan recovery
 
-- Worker mengklaim baris `meeting_sessions` yang `desired_state=joined`,
-  belum terminal, dan lease-nya kosong atau kedaluwarsa. Join command di
-  Redis stream dihapus; tabel adalah antrean kerja.
+- Lease pindah ke baris `meeting_sessions` (`lease_owner`,
+  `lease_expires_at`), diambil dan diperpanjang dengan update bersyarat.
+  Lease Redis dihapus.
+- Worker mengklaim baris yang `desired_state=joined`, belum terminal, dan
+  lease-nya kosong atau kedaluwarsa. Join command di Redis stream dihapus;
+  tabel adalah antrean kerja.
 - Lease yang gagal diperbarui menghentikan sesi lokal segera. Dua worker
   tidak pernah berada di meeting yang sama.
 - Crash browser, page close, atau watchdog timeout di worker yang sama:
@@ -560,11 +577,11 @@ sendiri. Design C dan D boleh ditulis lebih awal; implementasinya menunggu
 gate A.
 
 1. A0 rantai causation dan metrik.
-2. A1 satu sumber status sesi dan lease.
+2. A1a satu sumber status sesi, lalu A1b lifecycle tanpa LangGraph.
 3. A4 status call dari protocol.
 4. A3 join dan lobby (butuh A4).
 5. A5 kebijakan dialog.
-6. A2 reconciler dan recovery (butuh A1).
+6. A2 lease Postgres, reconciler, dan recovery (butuh A1a, A1b).
 7. Live validation A: tiga sesi multi-human 30 menit, satu dengan kill
    Chromium, satu dengan restart worker.
 8. V0 replay harness.

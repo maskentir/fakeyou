@@ -9,8 +9,8 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.conversation.state import TERMINAL_PHASES
 from fakeyou.db.engine import configured_url
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.memory.persona import (
     PersonaProfile,
     load_operator_persona,

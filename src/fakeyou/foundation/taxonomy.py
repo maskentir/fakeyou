@@ -59,6 +59,10 @@ EventVerb = Literal[
     "transitioned",
     "verified",
 ]
+PublicPhase = Literal[
+    "created", "joining", "lobby", "admitted", "active", "leaving", "ended", "failed"
+]
+TERMINAL_PHASES: frozenset[PublicPhase] = frozenset({"ended", "failed"})
 TerminalReason = Literal[
     "infra_failure",
     "browser_failure",

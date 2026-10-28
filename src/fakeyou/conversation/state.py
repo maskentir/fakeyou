@@ -1,10 +1,7 @@
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import TypedDict
 
-PublicPhase = Literal[
-    "created", "joining", "lobby", "admitted", "active", "leaving", "ended", "failed"
-]
-TERMINAL_PHASES = frozenset({"ended", "failed"})
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase
 
 
 class ExternalEffect(TypedDict):

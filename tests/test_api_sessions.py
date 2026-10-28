@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -13,7 +14,9 @@ from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.transport.schemas import command_stream
+from tests._session_status_fakes import MemorySessionStatus
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 BASE_URL = "http://testserver"
@@ -44,6 +47,7 @@ def _session_payload() -> dict[str, Any]:
 
 
 SESSION_PAYLOAD: dict[str, Any] = _session_payload()
+STATUS_AT = datetime(2026, 10, 28, 10, 0, tzinfo=UTC)
 
 
 class RecordingTransport:
@@ -64,11 +68,13 @@ class ApiHarness:
         self.settings = settings
         self.transport = RecordingTransport()
         self.store = SessionStore(settings.paths.record_dir)
+        self.status = MemorySessionStatus()
         self.app = create_app(
             settings,
             ApiDeps(
                 transport=lambda: self.transport,
                 snapshot_store=lambda: self.store,
+                session_status=lambda: self.status,
                 now_iso=lambda: AT,
             ),
         )
@@ -111,15 +117,16 @@ class ApiHarness:
     async def create_terminal_session(
         self,
         *,
-        phase: str = "ended",
-        terminal_reason: str = "stopped_by_owner",
+        phase: PublicPhase = "ended",
+        terminal_reason: TerminalReason = "stopped_by_owner",
         meeting_id: str | None = None,
     ) -> str:
         session_id = meeting_id if meeting_id is not None else uuid4().hex
         payload = {**SESSION_PAYLOAD, "meeting_id": session_id}
         create = SessionCreate.model_validate(payload)
         self.store.save_new(build_snapshot(create, meeting_id=session_id, at=AT))
-        self.store.set_phase(session_id, phase=phase, terminal_reason=terminal_reason)
+        self.status.create(session_id, create.owner_id, STATUS_AT)
+        self.status.record_phase(session_id, phase, STATUS_AT, terminal_reason=terminal_reason)
         return session_id
 
     async def aclose(self) -> None:
@@ -145,6 +152,7 @@ def _seed_foreign_session(api: ApiHarness, meeting_id: str) -> None:
         }
     )
     api.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
+    api.status.create(meeting_id, "other_owner", STATUS_AT)
 
 
 def _property_names(node: object) -> set[str]:
@@ -261,11 +269,13 @@ async def test_session_responses_carry_no_paths_or_settings(api: ApiHarness) -> 
     assert set(body) == {
         "meeting_id",
         "phase",
+        "desired_state",
         "snapshot_sha256",
         "owner_id",
         "twin_id",
         "created_at",
         "terminal_reason",
+        "detail",
     }
     assert "path" not in created.text
     assert "container" not in created.text
@@ -309,3 +319,71 @@ async def test_openapi_covers_the_six_session_operations_without_path_fields(
     assert expected <= operations
     fields = _property_names(document)
     assert not [name for name in fields if name.endswith("_path") or name.startswith("container_")]
+
+
+async def test_the_api_records_what_the_owner_wants_and_never_the_phase(api: ApiHarness) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+
+    joined = (await api.post(f"/v1/sessions/{meeting_id}/join")).json()
+    stopped = (await api.post(f"/v1/sessions/{meeting_id}/stop")).json()
+
+    assert (joined["desired_state"], joined["phase"]) == ("joined", "created")
+    assert (stopped["desired_state"], stopped["phase"]) == ("stopped", "created")
+
+
+async def test_a_finished_session_shows_why_it_ended(api: ApiHarness) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+    api.status.record_phase(
+        meeting_id,
+        "ended",
+        STATUS_AT,
+        terminal_reason="left_by_participant",
+        detail="twin left the call on request",
+    )
+
+    body = (await api.get(f"/v1/sessions/{meeting_id}")).json()
+
+    assert (body["phase"], body["terminal_reason"], body["detail"]) == (
+        "ended",
+        "left_by_participant",
+        "twin left the call on request",
+    )
+
+
+async def test_an_owner_can_join_again_after_stopping_before_the_twin_joined(
+    api: ApiHarness,
+) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+
+    await api.post(f"/v1/sessions/{meeting_id}/stop")
+    joined = await api.post(f"/v1/sessions/{meeting_id}/join")
+    again = await api.post(f"/v1/sessions/{meeting_id}/join")
+
+    assert joined.status_code == 202
+    assert joined.json()["desired_state"] == "joined"
+    assert again.status_code == 409
+
+
+async def test_a_stopped_session_can_still_be_resumed_to_finish(api: ApiHarness) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+    await api.post(f"/v1/sessions/{meeting_id}/join")
+    await api.post(f"/v1/sessions/{meeting_id}/stop")
+
+    resumed = await api.post(f"/v1/sessions/{meeting_id}/resume")
+
+    assert resumed.status_code == 202
+    assert api.transport.commands[-1][1] == "resume"
+
+
+async def test_a_session_whose_snapshot_cannot_be_written_leaves_no_status(
+    api: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full_disk(_snapshot: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(api.store, "save_new", full_disk)
+
+    with pytest.raises(OSError, match="disk full"):
+        await api.post("/v1/sessions", json={**SESSION_PAYLOAD, "meeting_id": "m-disk"})
+
+    assert api.status.get("m-disk") is None
