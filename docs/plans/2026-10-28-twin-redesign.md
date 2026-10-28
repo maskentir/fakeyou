@@ -204,7 +204,7 @@ dipakai sebagai gate.
 | Barge-in → suara twin turun | p50 2,95 s dari onset VAD, dipasangkan per waktu karena journal lama tidak membawa turn yang dipotong | live-oue-4 | ya | ≤ 0,3 s |
 | Barge-in ditolak | 44 | live-oue-4 | ya | diukur ulang setelah B3 |
 | Early commit | 2 dari 30 turn | live-oue-4 | ya | diganti B2 |
-| Jeda antar kalimat twin | 0,78-0,80 s, terpecah jadi 0,50 s tail playback dan 0,29 s first chunk TTS | live-oue-4 | ya, dihitung manual dari journal | ≤ 0,15 s |
+| Jeda antar kalimat twin | 0,78-0,80 s, terpecah jadi 0,50 s tail playback dan 0,29 s first chunk TTS; `sentence_gap_ms` cuma mengukur komponen 0,50 s | live-oue-4 | ya, dihitung manual dari journal | ≤ 0,15 s |
 | Final terikat ke speaker | 0 dari 236 | live-oue-4 | ya | ≥ 90% |
 | Sesi `browser_failure` tanpa rejoin | 16 dari 54 | semua sesi | ya | 0 |
 | `session.json` beda dengan journal | 51 dari 54 (oue-4: `null`) | semua sesi | sebagian | tidak ada salinan kedua |
@@ -425,22 +425,24 @@ resume tanpa artefak.
 Alasan pemisahan, diukur dari journal `live-oue-4` (satu sesi, jadi indikasi
 bukan bukti):
 
-- Ada 9 jawaban multi-kalimat. Dari 6 yang sintesis kalimat pertamanya
-  selesai tercatat, 4 punya jeda 2,7–4,3 s antara sintesis kalimat pertama
-  selesai dan kalimat kedua keluar dari LLM. Dua sisanya lebih cepat:
-  kalimat kedua keluar sebelum sintesis kalimat pertama selesai, jadi LLM
-  sudah mendahului di sana. Jadi jeda tidak datang dari satu tempat saja.
+- Ada 9 jawaban multi-kalimat yang kalimatnya benar-benar keluar. Empat
+  transcript lain punya kalimat kedua yang di-drop, jadi menurut niat ada 13.
+  Dari 9 itu, 6 punya sintesis kalimat pertama selesai tercatat, dan 4 di
+  antaranya punya jeda 2,7–4,3 s antara sintesis kalimat pertama selesai
+  dan kalimat kedua keluar dari LLM. Dua sisanya lebih cepat: kalimat kedua
+  keluar sebelum sintesis kalimat pertama selesai, jadi LLM sudah mendahului
+  di sana. Jadi jeda tidak datang dari satu tempat saja.
 - Jeda yang audible terukur di 3 kasus: 0,78–0,80 s antara
   `playback_finished` kalimat pertama dan PCM pertama kalimat berikutnya.
   Rinciannya 0,50 s tail menganggur di `PlaybackEngine._run`
   (`tail_seconds`) dan 0,29 s first chunk TTS.
 - Penyebabnya di pipeline kita, bukan di protokol TTS, dan ada tiga. `_deliver`
   menarik chunk LLM berikutnya hanya setelah `sink.say` selesai, dan `say`
-  baru selesai setelah playback kalimat itu selesai, jadi kalimat berikutnya
-  tidak pernah siap lebih awal. Audio klip ditarik malas: request TTS baru
-  jalan saat klip mulai diputar, jadi first chunk TTS selalu ada di jalur
-  kritis. `tail_seconds` 0,5 s menahan worker playback selama 0,5 s tiap
-  klip, dan queue justru paling sering kosong tepat saat itu.
+  baru selesai setelah playback kalimat itu selesai (atau di-drop), jadi
+  kalimat berikutnya tidak pernah siap lebih awal. Audio klip ditarik malas:
+  request TTS baru jalan saat klip mulai diputar, jadi first chunk TTS selalu
+  ada di jalur kritis. `tail_seconds` 0,5 s menahan worker playback selama
+  0,5 s tiap klip, dan queue justru paling sering kosong tepat saat itu.
 
 Karena itu B5a netral provider: memperbaiki tiga hal itu tanpa ganti
 protokol. First chunk TTS p50 519 ms untuk 24 sintesis yang punya
@@ -449,10 +451,12 @@ gate 150 ms mustahil tercapai.
 
 Batas bukti: semua angka di atas dari satu sesi dan dihitung manual dari
 journal, bukan dari report. `sentence_gap_ms` di `observability/baseline.py`
-sudah bisa menghitung jeda ini, tapi oue-4 masih lebih tua dari A0, jadi
-event playback di journal itu belum membawa `transcript_id` dan
-`sentence_index`. B5a lewat satu sesi live baru untuk mengukurnya dengan
-alat, bukan dengan tangan.
+sudah mengukur sisi playback, yaitu `playback_finished` ke
+`playback_started`, jadi yang terukur baru komponen 0,50 s dan bukan jeda
+audible 0,78–0,80 s yang utuh. Event playback di oue-4 belum membawa
+`transcript_id` dan `sentence_index` karena sesi itu jalan sebelum A0, jadi
+metrik ini nol di journal lama. B5a lewat satu sesi live baru untuk
+mengukurnya dengan alat, bukan dengan tangan.
 
 ### B5b: Kontrak sesi streaming netral dan adapter provider
 
