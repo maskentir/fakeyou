@@ -36,7 +36,7 @@ from fakeyou.conversation.turn_events import (
     apply_arbitration,
     arbitrate,
 )
-from fakeyou.conversation.turn_graph import TurnInput
+from fakeyou.conversation.turn_graph import ActiveSpeech, TurnInput, record_barge_in
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -631,3 +631,15 @@ async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None
     await asyncio.wait_for(turns.lifecycle.drained(), 2)
     assert audio.spoken == []
     await turns.lifecycle.close()
+
+
+async def test_a_barge_in_names_the_turn_it_interrupted() -> None:
+    journal = RecordingJournal()
+    speaking = asyncio.create_task(asyncio.sleep(0))
+    active = ActiveSpeech(task=speaking, generation=1, started=0.0, transcript_id="t3")
+
+    record_barge_in(journal, "interim", 4, decided_by="judge", interrupted=active)
+    await speaking
+
+    [row] = journal.events("barge_in_detected")
+    assert row["interrupted_transcript_id"] == "t3"

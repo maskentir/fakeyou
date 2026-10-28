@@ -151,22 +151,26 @@ Alur satu turn:
 
 ## Baseline
 
-Angka dari journal dan record di `main` sebelum plan ini. Kolom "cek"
+Angka dari journal dan record di `main` sebelum plan ini, dihitung ulang
+oleh `observability/baseline.py` (A0). Audit awal menyebut VAD stop →
+final 2,64 s; hitungan ulang dengan pasangan VAD stop terakhir sebelum final
+memberi 1,30 s. Kolom "cek"
 menandai angka yang sudah dihitung ulang langsung dari journal; angka lain
 berasal dari audit dan dihitung ulang otomatis oleh report A0 sebelum
 dipakai sebagai gate.
 
 | Metrik | Baseline | Sumber | Cek | Target |
 | --- | --- | --- | --- | --- |
-| VAD stop → transcript final | median 2,64 s | live-oue-4 | belum | commit lokal p50 ≤ 0,5 s |
-| Final → audio pertama | median 2,57 s, ekor 13-22 s | live-oue-4 | belum | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
-| Orang selesai → twin bersuara | sekitar 5 s | gabungan | belum | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
-| Barge-in → suara twin turun | 2,2-2,9 s | live-oue-4 | belum | ≤ 0,3 s |
+| VAD stop → transcript final | p50 1,30 s, p95 3,0 s | live-oue-4 | ya | commit lokal p50 ≤ 0,5 s |
+| Final → PCM pertama | p50 2,08 s, p95 8,2 s | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
+| Final → audio pertama | tidak terukur: playback belum membawa `transcript_id` | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
+| Orang selesai → twin bersuara | sekitar 3,4 s (1,30 + 2,08) | gabungan | ya | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
+| Barge-in → suara twin turun | p50 2,95 s dari onset VAD, dipasangkan per waktu karena journal lama tidak membawa turn yang dipotong | live-oue-4 | ya | ≤ 0,3 s |
 | Barge-in ditolak | 44 | live-oue-4 | ya | diukur ulang setelah B3 |
 | Early commit | 2 dari 30 turn | live-oue-4 | ya | diganti B2 |
 | Jeda antar kalimat twin | 0,78-0,80 s | live-oue-4 | belum | ≤ 0,15 s |
 | Final terikat ke speaker | 0 dari 236 | live-oue-4 | ya | ≥ 90% |
-| Sesi `browser_failure` tanpa rejoin | 16 dari 55 | semua sesi | belum | 0 |
+| Sesi `browser_failure` tanpa rejoin | 16 dari 54 | semua sesi | ya | 0 |
 | `session.json` beda dengan journal | 51 dari 54 (oue-4: `null`) | semua sesi | sebagian | tidak ada salinan kedua |
 | Kontribusi terucap | 0 dari 34 plan | semua journal | ya | ≥ 1 per 20 menit pada skenario relevan |
 | Penolakan `invented_number` | 5 | live-oue-4 | ya | 0 untuk angka yang terlihat di layar |
@@ -180,16 +184,25 @@ dipakai sebagai gate.
 
 Dikerjakan pertama karena semua track lain divalidasi lewat journal.
 
-- Setiap observasi kernel membawa `event_id`. Setiap keputusan (judge, plan,
-  reply, command, sentence, playback) membawa `causation_id` ke event yang
-  memicunya dan `correlation_id` turn.
-- Setiap panggilan model mencatat digest input: model, hash prompt, hash
-  window, jumlah token, dan id fakta yang dipakai. Teks prompt tidak
-  disimpan, kecuali flag debug owner.
-- `playback_started`, `agent_finished`, dan `session_finished` selalu
-  membawa `transcript_id` dan `detail`.
-- `report.py` membaca rantai ini, bukan merekonstruksi dari lima timeline,
-  dan menghitung semua metrik di tabel baseline.
+- Kunci turn adalah `transcript_id` final pemicunya. Setiap event di
+  rantai turn membawanya: `policy_decided`, `plan_selected`,
+  `agent_started`/`agent_finished`, `model_route_selected`,
+  `reply_plan_observed`, `answer_sentence_emitted`, `synthesis_*`, dan
+  `playback_*`. Event per kalimat juga membawa `sentence_index`; action
+  membawa `plan_id`; barge-in membawa `interrupted_transcript_id`.
+- Setiap panggilan model sesi (reply, strong, fallback, judge, perception)
+  dicatat oleh callback LangChain sebagai `model_input_recorded`: slot,
+  model, digest system prompt, digest window, jumlah pesan dan karakter, dan
+  `transcript_id`/`request_id` dari metadata bila ada. Teks prompt tidak
+  disimpan. Panggilan judge belum punya kunci turn karena dinilai pada
+  interim; digest system-nya cukup untuk membedakan judge, moment, dan
+  grounding.
+- `session_finished` membawa `detail`.
+- `observability/baseline.py` menghitung metrik tabel baseline per sesi dan
+  disertakan di report. Pasangan berbasis waktu hanya dipakai untuk VAD,
+  yang memang tidak punya id.
+- Thinking cue belum membawa kunci turn; B6 menggantinya dengan opener yang
+  dibuat oleh turn.
 
 Gate: untuk setiap ucapan di sesi uji, report menampilkan rantai lengkap
 dari final sampai playback tanpa heuristik waktu; report menghitung ulang

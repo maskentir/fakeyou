@@ -61,6 +61,8 @@ from fakeyou.memory.persona import (
 )
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
+from fakeyou.observability.journal import Journal
+from fakeyou.observability.model_inputs import journal_model_inputs
 from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import (
@@ -233,9 +235,11 @@ class TurnBehavior:
     presence: Callable[[], PresenceFact] | None = None
 
 
-def build_turn_judge(settings: Settings, twin_names: Sequence[str]) -> TurnJudge | None:
+def build_turn_judge(
+    settings: Settings, twin_names: Sequence[str], journal: Journal | None = None
+) -> TurnJudge | None:
     return ModelTurnJudge(
-        create_turn_judge_model(settings),
+        journal_model_inputs(create_turn_judge_model(settings), journal, "judge"),
         twin_names=twin_names,
         timeout_seconds=settings.turn_judge.timeout_seconds,
     )
@@ -252,9 +256,11 @@ def build_source_registry(
     )
 
 
-def build_grounding_verifier(settings: Settings) -> GroundingVerifier:
+def build_grounding_verifier(
+    settings: Settings, journal: Journal | None = None
+) -> GroundingVerifier:
     return ModelGroundingVerifier(
-        create_turn_judge_model(settings),
+        journal_model_inputs(create_turn_judge_model(settings), journal, "judge"),
         timeout_seconds=settings.turn_judge.timeout_seconds,
     )
 
@@ -298,14 +304,20 @@ class _ConversationBuilder:
     def add_routing(self) -> None:
         strong = create_strong_chat_model(self._settings)
         if strong is not None:
+            journal = self._diagnostics.journal
             self._middleware.append(
-                EvidenceRoutingMiddleware(strong, journal=self._diagnostics.journal)
+                EvidenceRoutingMiddleware(
+                    journal_model_inputs(strong, journal, "strong"), journal=journal
+                )
             )
 
     def add_fallback(self) -> None:
         fallback = create_fallback_chat_model(self._settings)
         if fallback is not None:
-            self._middleware.append(ModelFallbackMiddleware(fallback))
+            journal = self._diagnostics.journal
+            self._middleware.append(
+                ModelFallbackMiddleware(journal_model_inputs(fallback, journal, "fallback"))
+            )
 
     def add_memory(self) -> None:
         profile = self._agent.profile
@@ -396,7 +408,7 @@ class _ConversationBuilder:
             self._behavior.kernel.memory_outcome(outcome)
 
     def _judge(self, names: Sequence[str]) -> TurnJudge | None:
-        judge = build_turn_judge(self._settings, names)
+        judge = build_turn_judge(self._settings, names, self._diagnostics.journal)
         kernel = self._behavior.kernel
         if judge is None or kernel is None:
             return judge
@@ -497,7 +509,7 @@ async def open_conversation(
 ) -> AsyncIterator[MeetingTurns]:
     builder = _ConversationBuilder(settings, agent, behavior, diagnostics)
     builder.build_persona()
-    model = create_chat_model(settings)
+    model = journal_model_inputs(create_chat_model(settings), diagnostics.journal, "reply")
     async with TeardownStack(faults=diagnostics.faults) as resources:
         builder.add_memory()
         builder.add_perception()
@@ -507,7 +519,9 @@ async def open_conversation(
         responder = builder.build_responder(
             builder.build_agent(model),
             builder.build_contributor(model) if config.attention_enabled else None,
-            build_grounding_verifier(settings) if config.attention_enabled else None,
+            build_grounding_verifier(settings, diagnostics.journal)
+            if config.attention_enabled
+            else None,
         )
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled

@@ -167,11 +167,18 @@ async def interrupt_speech(floor: SpeechFloor | None, generation: int) -> int:
 
 
 def record_barge_in(
-    journal: JournalSink, trigger: BargeTrigger, words: int, *, decided_by: str | None = None
+    journal: JournalSink,
+    trigger: BargeTrigger,
+    words: int,
+    *,
+    decided_by: str | None = None,
+    interrupted: ActiveSpeech | None = None,
 ) -> None:
     fields: dict[str, Any] = {"trigger": trigger, "words": words}
     if decided_by is not None:
         fields["decided_by"] = decided_by
+    if interrupted is not None and interrupted.transcript_id is not None:
+        fields["interrupted_transcript_id"] = interrupted.transcript_id
     journal.record("barge_in_detected", source="agent", **fields)
 
 
@@ -403,13 +410,16 @@ def tool_start_hook(
 
 async def take_floor_for_final(runtime: TurnRuntime, transcript_text: str) -> None:
     floor = runtime.floor
+    interrupted = floor.active if floor is not None else None
     if floor is not None:
         await cancel_speech(floor, runtime.journal, reason="new_final")
     if not _bound(runtime):
         return
     speaker = runtime.speaker
     if runtime.barge_in and speaker.is_speaking:
-        record_barge_in(runtime.journal, "final", len(transcript_text.split()))
+        record_barge_in(
+            runtime.journal, "final", len(transcript_text.split()), interrupted=interrupted
+        )
     if (runtime.barge_in and speaker.is_speaking) or (_busy(runtime) and not speaker.is_speaking):
         await speaker.stop_playback()
 
@@ -584,7 +594,7 @@ class TurnDropped(Exception):
     pass
 
 
-class _TurnSink:
+class TurnSink:
     def __init__(
         self,
         runtime: TurnRuntime,
@@ -601,6 +611,7 @@ class _TurnSink:
         self._streamed = streamed
         self._stop_mark = 0 if runtime.barge is None else runtime.barge.stream_stops
         self._spoken = 0
+        self._offered = 0
         self._started = False
 
     @property
@@ -609,29 +620,27 @@ class _TurnSink:
 
     async def say(self, sentence: str, language: str) -> None:
         runtime = self._runtime
+        sentence_index = self._offered
+        self._offered += 1
         sentence = scrub_internal_refs(sentence)
         if not sentence:
             return
         self._started = True
-        index = self._spoken
         if self._streamed:
-            self._check_live(index)
-        if index == 0:
+            self._check_live(sentence_index)
+        if self._spoken == 0:
             _move_phase(runtime, "queued", self._transcript_id)
         _raise_if_failed(runtime)
         if runtime.barge is not None:
             runtime.barge.rearm()
         if runtime.note_spoken is not None:
             runtime.note_spoken(sentence)
-        if self._streamed:
-            await runtime.speaker.speak(
-                sentence,
-                sentence_index=index,
-                transcript_id=self._transcript_id,
-                language=language,
-            )
-        else:
-            await runtime.speaker.speak(sentence, language=language)
+        await runtime.speaker.speak(
+            sentence,
+            sentence_index=sentence_index,
+            transcript_id=self._transcript_id,
+            language=language,
+        )
         self._spoken += 1
 
     def _check_live(self, index: int) -> None:
@@ -971,7 +980,7 @@ async def _speak_reply(
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
     streamed = runtime.whole_turn is None and runtime.whole is None
-    sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
+    sink = TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
     cue = _start_cue(
         runtime,
@@ -1027,7 +1036,7 @@ async def _settle_cue(task: asyncio.Task[None] | None) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
-def _cue_blocker(runtime: TurnRuntime, sink: _TurnSink, generations: tuple[int, int]) -> str | None:
+def _cue_blocker(runtime: TurnRuntime, sink: TurnSink, generations: tuple[int, int]) -> str | None:
     generation, floor_generation = generations
     if sink.started:
         return "answered"
@@ -1077,7 +1086,9 @@ async def recover_turn(
     if not recovery.should_apologize:
         return
     speaker = runtime.speaker
-    _, speech_error = await capture_error(lambda: speaker.speak(recovery.failed_line))
+    _, speech_error = await capture_error(
+        lambda: speaker.speak(recovery.failed_line, transcript_id=transcript_id)
+    )
     if speech_error is not None:
         _fail(runtime, speech_error)
 

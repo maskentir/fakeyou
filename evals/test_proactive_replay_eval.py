@@ -86,7 +86,7 @@ async def test_the_replay_runs_detector_to_speech_offline(
     monkeypatch.setattr(
         assembly, "build_turn_judge", lambda *_args: ScriptedJudge(lambda _w: judged("stay_silent"))
     )
-    monkeypatch.setattr(assembly, "build_grounding_verifier", lambda _settings: _Verifier())
+    monkeypatch.setattr(assembly, "build_grounding_verifier", lambda *_args: _Verifier())
     fixture = load_proactive_fixture()
     profile = proactive_profile(fixture)
     detector = MomentDetector(

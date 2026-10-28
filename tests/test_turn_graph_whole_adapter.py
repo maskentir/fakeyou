@@ -302,3 +302,21 @@ async def test_a_leave_waits_when_a_newer_line_takes_the_floor_before_the_farewe
 
     assert "Bye everyone." not in harness.session.spoken
     assert commands.kinds == []
+
+
+async def test_sentences_keep_the_planner_index_when_one_is_scrubbed_away() -> None:
+    harness = Harness(FakeReplier())
+    runtime = harness.lifecycle.runtime
+    assert runtime is not None
+    sink = turn_graph.TurnSink(runtime, None, "t9", (0, 0), streamed=False)
+    spoken: list[tuple[str, int | None]] = []
+
+    async def speak(text: str, *, sentence_index: int | None = None, **_: Any) -> None:
+        spoken.append((text, sentence_index))
+
+    cast(Any, harness.session).speak = speak
+
+    for sentence in ("First.", "person#2", "Third."):
+        await sink.say(sentence, "en")
+
+    assert spoken == [("First.", 0), ("Third.", 2)]

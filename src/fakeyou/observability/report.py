@@ -1,5 +1,4 @@
 import math
-import statistics
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -11,6 +10,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.jsonl import read_jsonl
 from fakeyou.foundation.numbers import finite_float, real_number
 from fakeyou.foundation.timeparse import parse_iso_datetime
+from fakeyou.observability.baseline import baseline_metrics, summarize
 from fakeyou.observability.journal import JOURNAL_BACKUP_COUNT, journal_path
 
 LATENCY_STAGES = (
@@ -93,20 +93,6 @@ def _read_journal_counted(path: Path) -> tuple[list[dict[str, Any]], int]:
         rows.extend(read.rows)
         corrupt += read.skipped
     return rows, corrupt
-
-
-def summarize(values: list[float]) -> dict[str, float | int | None]:
-    if not values:
-        return {"count": 0, "p50": None, "p95": None, "max": None}
-    p95 = (
-        statistics.quantiles(values, n=20, method="inclusive")[18] if len(values) > 1 else values[0]
-    )
-    return {
-        "count": len(values),
-        "p50": round(statistics.median(values), 3),
-        "p95": round(p95, 3),
-        "max": round(max(values), 3),
-    }
 
 
 @dataclass(slots=True)
@@ -711,7 +697,8 @@ def build_session_report(rows: list[dict[str, Any]], *, corrupt_lines: int = 0) 
             handler(state, row, at)
     _close_pending(state)
     turn_reports = [_turn_report(turn, state.excluded) for turn in state.turns.values()]
-    return _assemble_report(state, turn_reports, corrupt_lines=corrupt_lines)
+    report = _assemble_report(state, turn_reports, corrupt_lines=corrupt_lines)
+    return {**report, "baseline": baseline_metrics(rows)}
 
 
 def _startup_report(milestones: dict[str, dict[str, Any]]) -> dict[str, Any]:

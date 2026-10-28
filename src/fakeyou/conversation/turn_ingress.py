@@ -263,7 +263,9 @@ class TurnIngress:
             return
         if not latch.interrupted:
             latch.interrupted = True
-            record_barge_in(lifecycle.journal, "interim", words, decided_by=decided_by)
+            record_barge_in(
+                lifecycle.journal, "interim", words, decided_by=decided_by, interrupted=active
+            )
             if session.is_speaking:
                 await session.stop_playback()
                 latch.stream_stops += 1
@@ -368,7 +370,7 @@ class TurnIngress:
         active = lifecycle.floor.active
         if not session.is_speaking and (active is None or active.task.done()):
             return
-        record_barge_in(lifecycle.journal, "final", len(text.split()))
+        record_barge_in(lifecycle.journal, "final", len(text.split()), interrupted=active)
         if session.is_speaking:
             await session.stop_playback()
         await cancel_speech(lifecycle.floor, lifecycle.journal, reason="final")

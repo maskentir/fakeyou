@@ -53,7 +53,12 @@ class TurnScope:
 
 
 def record_agent_started(journal: JournalSink, scope: TurnScope) -> None:
-    journal.record("agent_started", source="agent", request_id=scope.request_id)
+    journal.record(
+        "agent_started",
+        source="agent",
+        request_id=scope.request_id,
+        transcript_id=scope.transcript_id,
+    )
 
 
 def record_agent_finished(journal: JournalSink, scope: TurnScope) -> None:
@@ -61,6 +66,7 @@ def record_agent_finished(journal: JournalSink, scope: TurnScope) -> None:
         "agent_finished",
         source="agent",
         request_id=scope.request_id,
+        transcript_id=scope.transcript_id,
         duration_ms=scope.duration_ms(),
     )
 
