@@ -162,10 +162,10 @@ dipakai sebagai gate.
 | Metrik | Baseline | Sumber | Cek | Target |
 | --- | --- | --- | --- | --- |
 | VAD stop → transcript final | p50 1,30 s, p95 3,0 s | live-oue-4 | ya | commit lokal p50 ≤ 0,5 s |
-| Final → PCM pertama | p50 2,17 s, p95 8,2 s | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
+| Final → PCM pertama | p50 2,08 s, p95 8,2 s | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
 | Final → audio pertama | tidak terukur: playback belum membawa `transcript_id` | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
-| Orang selesai → twin bersuara | sekitar 3,5 s (1,30 + 2,17) | gabungan | ya | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
-| Barge-in → suara twin turun | p50 2,95 s dari onset VAD | live-oue-4 | ya | ≤ 0,3 s |
+| Orang selesai → twin bersuara | sekitar 3,4 s (1,30 + 2,08) | gabungan | ya | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
+| Barge-in → suara twin turun | p50 2,95 s dari onset VAD, dipasangkan per waktu karena journal lama tidak membawa turn yang dipotong | live-oue-4 | ya | ≤ 0,3 s |
 | Barge-in ditolak | 44 | live-oue-4 | ya | diukur ulang setelah B3 |
 | Early commit | 2 dari 30 turn | live-oue-4 | ya | diganti B2 |
 | Jeda antar kalimat twin | 0,78-0,80 s | live-oue-4 | belum | ≤ 0,15 s |
