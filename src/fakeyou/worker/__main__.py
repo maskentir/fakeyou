@@ -9,6 +9,7 @@ from typing import Protocol, cast
 
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import open_checkpointer
+from fakeyou.db.session_status import create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
 from fakeyou.orchestration.providers import open_persona_memory
@@ -95,6 +96,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
+                    status=create_session_status(shared.settings),
                     ports=shared.ports,
                     shutdown=shared.shutdown,
                     worker_id=shared.worker_id,

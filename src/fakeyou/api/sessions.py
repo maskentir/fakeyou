@@ -18,12 +18,13 @@ from fakeyou.api.schemas import (
     SessionView,
     build_snapshot,
 )
+from fakeyou.api.status import read_status, status_call, status_now
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import DesiredState, SessionStatus
 from fakeyou.foundation.digest import canonical_json_digest
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import encode_command
@@ -54,8 +55,6 @@ def _encode(snapshot: SessionSnapshot) -> bytes:
 def _payload_digest(snapshot: SessionSnapshot) -> str:
     payload = snapshot.model_dump(mode="json")
     payload.pop("snapshot_sha256")
-    payload.pop("phase")
-    payload.pop("terminal_reason")
     return canonical_json_digest(payload)
 
 
@@ -100,21 +99,6 @@ class SessionStore:
                 snapshots.append(snapshot)
         return sorted(snapshots, key=lambda snapshot: (snapshot.created_at, snapshot.meeting_id))
 
-    def set_phase(
-        self, meeting_id: str, *, phase: str, terminal_reason: str | None
-    ) -> SessionSnapshot:
-        path = self._session_path(meeting_id)
-        current = self.load(meeting_id)
-        if current is None:
-            raise FakeYouError(ErrorCode.API_NOT_FOUND)
-        if _payload_digest(current) != current.snapshot_sha256:
-            raise ValueError("session snapshot payload does not match its digest")
-        updated = SessionSnapshot.model_validate(
-            {**current.model_dump(), "phase": phase, "terminal_reason": terminal_reason}
-        )
-        write_atomically(path, _encode(updated))
-        return updated
-
 
 def _settings(request: Request) -> Settings:
     return cast(Settings, request.app.state.settings)
@@ -151,23 +135,34 @@ def _owner_id(principal: Principal) -> str:
     return principal.owner_id
 
 
-def _owned_snapshot(request: Request, meeting_id: str, principal: Principal) -> SessionSnapshot:
+async def _owned_session(
+    request: Request, meeting_id: str, principal: Principal
+) -> tuple[SessionSnapshot, SessionStatus]:
     snapshot = _snapshot_store(request).load(meeting_id)
-    if snapshot is None or snapshot.owner_id != _owner_id(principal):
+    status = await read_status(request, meeting_id)
+    if snapshot is None or status is None or status.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
-    return snapshot
+    return snapshot, status
 
 
-def _view(snapshot: SessionSnapshot) -> SessionView:
+def _view(snapshot: SessionSnapshot, status: SessionStatus) -> SessionView:
     return SessionView(
         meeting_id=snapshot.meeting_id,
-        phase=snapshot.phase,
+        phase=status.phase,
+        desired_state=status.desired_state,
         snapshot_sha256=snapshot.snapshot_sha256,
         owner_id=snapshot.owner_id,
         twin_id=snapshot.twin_id,
         created_at=snapshot.created_at,
-        terminal_reason=snapshot.terminal_reason,
+        terminal_reason=status.terminal_reason,
+        detail=status.detail,
     )
+
+
+def _refuse_existing(status: SessionStatus | None, meeting_id: str) -> FakeYouError:
+    if status is not None and status.terminal:
+        return FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
+    return FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id)
 
 
 def _verify_identity(create: SessionCreate, owner_id: str) -> None:
@@ -204,16 +199,18 @@ async def start_session(
     snapshot = build_snapshot(
         payload, meeting_id=meeting_id, at=_now(request), keys_supplied=bool(overrides)
     )
-    store = _snapshot_store(request)
+    owner_id = _owner_id(principal)
+    status = await status_call(
+        request, lambda store: store.create(meeting_id, owner_id, status_now())
+    )
+    if status is None:
+        raise _refuse_existing(await read_status(request, meeting_id), meeting_id)
     try:
-        store.save_new(snapshot)
+        _snapshot_store(request).save_new(snapshot)
     except FileExistsError:
-        existing = store.load(meeting_id)
-        if existing is not None and existing.phase in TERMINAL_PHASES:
-            raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id) from None
-        raise FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id) from None
+        raise _refuse_existing(None, meeting_id) from None
     await stage_overrides(_command_transport(request), meeting_id, request.headers)
-    return _view(snapshot)
+    return _view(snapshot, status)
 
 
 @router.post("/{meeting_id}/join", status_code=202, response_model=SessionView)
@@ -222,16 +219,14 @@ async def join_session(
     principal: _Owner,
     request: Request,
 ) -> SessionView:
-    snapshot = _owned_snapshot(request, meeting_id, principal)
-    if snapshot.phase in TERMINAL_PHASES:
-        raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
-    if snapshot.phase != "created":
-        raise FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id)
-    updated = _snapshot_store(request).set_phase(meeting_id, phase="joining", terminal_reason=None)
+    snapshot, status = await _owned_session(request, meeting_id, principal)
+    if status.terminal or status.desired_state != "created":
+        raise _refuse_existing(status, meeting_id)
+    wanted = await _desire(request, meeting_id, "joined")
     await _command_transport(request).publish_command(
         meeting_id, encode_command("join", meeting_id=meeting_id, at=_now(request))
     )
-    return _view(updated)
+    return _view(snapshot, wanted)
 
 
 @router.post("/{meeting_id}/stop", status_code=202, response_model=SessionView)
@@ -241,14 +236,15 @@ async def stop_session(
     request: Request,
     response: Response,
 ) -> SessionView:
-    snapshot = _owned_snapshot(request, meeting_id, principal)
-    if snapshot.phase in TERMINAL_PHASES:
+    snapshot, status = await _owned_session(request, meeting_id, principal)
+    if status.terminal:
         response.status_code = 200
-        return _view(snapshot)
+        return _view(snapshot, status)
+    wanted = await _desire(request, meeting_id, "stopped")
     await _command_transport(request).publish_command(
         meeting_id, encode_command("stop", meeting_id=meeting_id, at=_now(request))
     )
-    return _view(snapshot)
+    return _view(snapshot, wanted)
 
 
 @router.post("/{meeting_id}/resume", status_code=202, response_model=SessionView)
@@ -257,15 +253,15 @@ async def resume_session(
     principal: _Owner,
     request: Request,
 ) -> SessionView:
-    snapshot = _owned_snapshot(request, meeting_id, principal)
-    if snapshot.phase in TERMINAL_PHASES:
+    snapshot, status = await _owned_session(request, meeting_id, principal)
+    if status.terminal:
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
-    if snapshot.phase == "created":
+    if status.desired_state != "joined":
         raise FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id)
     await _command_transport(request).publish_command(
         meeting_id, encode_command("resume", meeting_id=meeting_id, at=_now(request))
     )
-    return _view(snapshot)
+    return _view(snapshot, status)
 
 
 @router.get("/{meeting_id}", response_model=SessionView)
@@ -274,7 +270,7 @@ async def read_session(
     principal: _Owner,
     request: Request,
 ) -> SessionView:
-    return _view(_owned_snapshot(request, meeting_id, principal))
+    return _view(*await _owned_session(request, meeting_id, principal))
 
 
 @router.get("", response_model=list[SessionView])
@@ -283,4 +279,18 @@ async def list_sessions(
     request: Request,
 ) -> list[SessionView]:
     owner_id = _owner_id(principal)
-    return [_view(snapshot) for snapshot in _snapshot_store(request).list_for(owner_id)]
+    statuses = await status_call(request, lambda store: store.list_for(owner_id))
+    store = _snapshot_store(request)
+    views: list[SessionView] = []
+    for status in statuses:
+        snapshot = store.load(status.meeting_id)
+        if snapshot is not None:
+            views.append(_view(snapshot, status))
+    return views
+
+
+async def _desire(request: Request, meeting_id: str, state: DesiredState) -> SessionStatus:
+    wanted = await status_call(request, lambda store: store.desire(meeting_id, state, status_now()))
+    if wanted is None:
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    return wanted

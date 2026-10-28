@@ -12,16 +12,16 @@ from fastapi.responses import StreamingResponse
 
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.errors import error_response
-from fakeyou.api.sessions import SessionStore, now_iso
+from fakeyou.api.sessions import now_iso
+from fakeyou.api.status import read_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES
+from fakeyou.db.session_status import SessionStatus
 from fakeyou.transport.schemas import validate_event
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
-    from fakeyou.api.schemas import SessionSnapshot
 
 _CURSOR_PATTERN = re.compile(r"\d+(?:-\d+)?")
 _CURSOR_START = "0-0"
@@ -42,13 +42,6 @@ def _settings(request: Request) -> Settings:
 
 def _deps(request: Request) -> ApiDeps:
     return cast("ApiDeps", request.app.state.deps)
-
-
-def _snapshot_store(request: Request) -> SessionStore:
-    factory = _deps(request).snapshot_store
-    if factory is not None:
-        return cast(SessionStore, factory())
-    return SessionStore(_settings(request).paths.record_dir)
 
 
 def _event_transport(request: Request) -> EventTransport:
@@ -76,11 +69,11 @@ def _owner_id(principal: Principal) -> str:
     return principal.owner_id
 
 
-def _owned_snapshot(request: Request, meeting_id: str, principal: Principal) -> SessionSnapshot:
-    snapshot = _snapshot_store(request).load(meeting_id)
-    if snapshot is None or snapshot.owner_id != _owner_id(principal):
+async def _owned_status(request: Request, meeting_id: str, principal: Principal) -> SessionStatus:
+    status = await read_status(request, meeting_id)
+    if status is None or status.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
-    return snapshot
+    return status
 
 
 def _stream_id_key(entry_id: str) -> tuple[int, int]:
@@ -102,22 +95,24 @@ def _fault_fields(meeting_id: str, *, at: str, reason: str) -> dict[str, str]:
     return {"v": "1", "type": "fault", "at": at, "meeting_id": meeting_id, "reason": reason}
 
 
-def _terminal_fields(snapshot: SessionSnapshot, *, at: str) -> dict[str, str]:
+def _terminal_fields(status: SessionStatus, *, at: str) -> dict[str, str]:
     fields = {
         "v": "1",
         "type": "session_ended",
         "at": at,
-        "meeting_id": snapshot.meeting_id,
-        "phase": snapshot.phase,
+        "meeting_id": status.meeting_id,
+        "phase": status.phase,
     }
-    if snapshot.terminal_reason is not None:
-        fields["terminal_reason"] = snapshot.terminal_reason
+    if status.terminal_reason is not None:
+        fields["terminal_reason"] = status.terminal_reason
+    if status.detail is not None:
+        fields["detail"] = status.detail
     return fields
 
 
 async def _session_events(
     request: Request,
-    snapshot: SessionSnapshot,
+    status: SessionStatus,
     transport: EventTransport,
     *,
     after: str,
@@ -125,22 +120,20 @@ async def _session_events(
 ) -> AsyncIterator[str]:
     keepalive_seconds = _keepalive_seconds(request)
     poll_seconds = min(keepalive_seconds, _POLL_SECONDS)
-    terminal = snapshot.phase in TERMINAL_PHASES
+    terminal = status.terminal
     cursor = after
     last_sent = time.monotonic()
     while True:
         if await request.is_disconnected():
             return
-        entries = await transport.read_events(
-            snapshot.meeting_id, after=cursor, count=_REPLAY_COUNT
-        )
+        entries = await transport.read_events(status.meeting_id, after=cursor, count=_REPLAY_COUNT)
         if entries:
             for entry_id, fields in entries:
                 try:
-                    validated = validate_event(fields, meeting_id=snapshot.meeting_id)
+                    validated = validate_event(fields, meeting_id=status.meeting_id)
                 except ValueError as error:
                     yield _event_frame(
-                        entry_id, _fault_fields(snapshot.meeting_id, at=at, reason=str(error))
+                        entry_id, _fault_fields(status.meeting_id, at=at, reason=str(error))
                     )
                     return
                 cursor = entry_id
@@ -150,7 +143,7 @@ async def _session_events(
             last_sent = time.monotonic()
             continue
         if terminal:
-            yield _event_frame(None, _terminal_fields(snapshot, at=at))
+            yield _event_frame(None, _terminal_fields(status, at=at))
             return
         await asyncio.sleep(poll_seconds)
         if time.monotonic() - last_sent >= keepalive_seconds:
@@ -169,7 +162,7 @@ async def stream_session_events(
     principal: _Owner,
     request: Request,
 ) -> Response:
-    snapshot = _owned_snapshot(request, meeting_id, principal)
+    status = await _owned_status(request, meeting_id, principal)
     cursor = request.headers.get("last-event-id")
     if cursor is not None and not _valid_cursor(cursor):
         raise FakeYouError(
@@ -189,9 +182,7 @@ async def stream_session_events(
                 details={"reason": "cursor_expired"},
             )
     return StreamingResponse(
-        _session_events(
-            request, snapshot, _event_transport(request), after=after, at=_now(request)
-        ),
+        _session_events(request, status, _event_transport(request), after=after, at=_now(request)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )

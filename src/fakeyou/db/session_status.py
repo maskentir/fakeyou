@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, cast
@@ -7,7 +9,11 @@ from typing import Literal, Protocol, cast
 from sqlalchemy import Engine, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
+from sqlalchemy.exc import DisconnectionError, OperationalError
 
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import Settings
+from fakeyou.db.engine import configured_url, create_engine_for_url, require_url
 from fakeyou.db.tables import meeting_sessions
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 
@@ -53,6 +59,14 @@ class SessionStatusRepository(Protocol):
     ) -> SessionStatus | None: ...
 
 
+@contextmanager
+def _reachable() -> Iterator[None]:
+    try:
+        yield
+    except (OperationalError, DisconnectionError) as error:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
+
+
 def _status(row: RowMapping) -> SessionStatus:
     return SessionStatus(
         meeting_id=row["meeting_id"],
@@ -71,6 +85,9 @@ class SessionStatusStore:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    def close(self) -> None:
+        self._engine.dispose()
+
     def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
         statement = (
             insert(meeting_sessions)
@@ -85,13 +102,13 @@ class SessionStatusStore:
             .on_conflict_do_nothing(index_elements=[meeting_sessions.c.meeting_id])
             .returning(meeting_sessions)
         )
-        with self._engine.begin() as connection:
+        with _reachable(), self._engine.begin() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _status(row)
 
     def get(self, meeting_id: str) -> SessionStatus | None:
         statement = select(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
-        with self._engine.connect() as connection:
+        with _reachable(), self._engine.connect() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _status(row)
 
@@ -101,7 +118,7 @@ class SessionStatusStore:
             .where(meeting_sessions.c.owner_id == owner_id)
             .order_by(meeting_sessions.c.created_at, meeting_sessions.c.meeting_id)
         )
-        with self._engine.connect() as connection:
+        with _reachable(), self._engine.connect() as connection:
             rows = connection.execute(statement).mappings().all()
         return [_status(row) for row in rows]
 
@@ -112,7 +129,7 @@ class SessionStatusStore:
             .values(desired_state=state, updated_at=at)
             .returning(meeting_sessions)
         )
-        with self._engine.begin() as connection:
+        with _reachable(), self._engine.begin() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _status(row)
 
@@ -134,6 +151,17 @@ class SessionStatusStore:
             .values(phase=phase, terminal_reason=terminal_reason, detail=detail, updated_at=at)
             .returning(meeting_sessions)
         )
-        with self._engine.begin() as connection:
+        with _reachable(), self._engine.begin() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _status(row)
+
+
+def create_session_status(settings: Settings) -> SessionStatusStore:
+    database = settings.database
+    return SessionStatusStore(
+        create_engine_for_url(
+            require_url(configured_url(settings)),
+            connect_timeout_seconds=database.connect_timeout_seconds,
+            statement_timeout_seconds=database.statement_timeout_seconds,
+        )
+    )

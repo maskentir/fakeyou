@@ -13,7 +13,8 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES
+from fakeyou.db.session_status import SessionStatusRepository
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
@@ -39,6 +40,7 @@ from fakeyou.worker.documents import (
     write_session_persona,
 )
 from fakeyou.worker.keys import apply_role_overrides
+from fakeyou.worker.status_writer import StatusWriter
 
 WORKER_GROUP = "workers"
 logger = logging.getLogger(__name__)
@@ -101,17 +103,9 @@ class Snapshot(Protocol):
     @property
     def barge_in(self) -> bool: ...
 
-    @property
-    def phase(self) -> str: ...
-
-    @property
-    def terminal_reason(self) -> str | None: ...
-
 
 class SnapshotStore(Protocol):
     def load(self, meeting_id: str) -> Snapshot | None: ...
-
-    def set_phase(self, meeting_id: str, *, phase: str, terminal_reason: str | None) -> object: ...
 
 
 class Discovery(Protocol):
@@ -123,6 +117,7 @@ class WorkerDeps:
     settings: Settings
     transport: StreamTransport
     store: SnapshotStore
+    status: SessionStatusRepository
     ports: JoinPorts
     shutdown: asyncio.Event
     worker_id: str
@@ -184,6 +179,8 @@ class WorkerConsumer:
         self._settings = deps.settings
         self._transport = deps.transport
         self._store = deps.store
+        self._status = deps.status
+        self._writer: StatusWriter | None = None
         self._ports = deps.ports
         self._worker_id = deps.worker_id
         self._lease_ms = max(1, int(deps.settings.transport.redis.lease_seconds * 1000))
@@ -301,11 +298,14 @@ class WorkerConsumer:
 
     async def _start_join(self, meeting_id: str, entry_id: str, *, resume: bool) -> bool:
         snapshot = self._store.load(meeting_id)
-        if snapshot is None or snapshot.phase in TERMINAL_PHASES:
+        status = await asyncio.to_thread(self._status.get, meeting_id)
+        if snapshot is None or status is None or status.terminal:
             await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
             return False
-        if snapshot.phase != "joining":
-            self._store.set_phase(meeting_id, phase="joining", terminal_reason=None)
+        writer = StatusWriter(self._status, meeting_id)
+        writer.phase = status.phase
+        self._writer = writer
+        await writer.write("joining")
         overrides = await self._session_overrides(meeting_id)
         session_settings = apply_role_overrides(self._settings, overrides)
         self._active = meeting_id
@@ -365,6 +365,9 @@ class WorkerConsumer:
         finally:
             renewal.cancel()
             self._forget(meeting_id)
+            writer, self._writer = self._writer, None
+            if writer is not None:
+                await writer.close()
 
     async def _settle_failed(self, meeting_id: str, error: Exception) -> None:
         detail = str(error)
@@ -385,7 +388,7 @@ class WorkerConsumer:
             error_type=type(error).__name__,
             detail=detail,
         )
-        await self._apply_phase(meeting_id, "failed", "infra_failure")
+        await self._apply_phase(meeting_id, "failed", "infra_failure", detail)
         await self._publish(
             meeting_id,
             "session_ended",
@@ -396,7 +399,9 @@ class WorkerConsumer:
 
     async def _settle(self, meeting_id: str, outcome: JoinOutcome) -> None:
         session = outcome.session
-        await self._apply_phase(meeting_id, session.phase, session.terminal_reason)
+        await self._apply_phase(
+            meeting_id, session.phase, session.terminal_reason, session.detail or None
+        )
         if session.phase not in TERMINAL_PHASES:
             return
         await self._publish(
@@ -442,14 +447,23 @@ class WorkerConsumer:
             stop.set()
         await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
 
-    def _record_live_phase(self, meeting_id: str, phase: str) -> None:
-        self._store.set_phase(meeting_id, phase=phase, terminal_reason=None)
+    def _record_live_phase(self, meeting_id: str, phase: PublicPhase) -> None:
+        writer = self._writer
+        if writer is not None and self._active == meeting_id and phase not in TERMINAL_PHASES:
+            writer.note(phase)
 
-    async def _apply_phase(self, meeting_id: str, phase: str, terminal_reason: str | None) -> bool:
-        snapshot = self._store.load(meeting_id)
-        if snapshot is None or snapshot.phase == phase:
+    async def _apply_phase(
+        self,
+        meeting_id: str,
+        phase: PublicPhase,
+        terminal_reason: TerminalReason | None,
+        detail: str | None = None,
+    ) -> bool:
+        writer = self._writer
+        if writer is None:
             return False
-        self._store.set_phase(meeting_id, phase=phase, terminal_reason=terminal_reason)
+        if not await writer.write(phase, terminal_reason=terminal_reason, detail=detail):
+            return False
         await self._publish(
             meeting_id, "phase_changed", {"phase": phase, "terminal_reason": terminal_reason}
         )

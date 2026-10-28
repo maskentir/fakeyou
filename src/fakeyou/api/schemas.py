@@ -14,7 +14,9 @@ from pydantic import (
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionIdField
 from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
+from fakeyou.db.session_status import DesiredState
 from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.brief import (
     BriefItem,
@@ -136,8 +138,6 @@ class SessionSnapshot(BaseModel):
     barge_in: bool = False
     participant_policy_enabled: bool = False
     keys_supplied: bool = False
-    phase: str = "created"
-    terminal_reason: str | None = None
     created_at: str
     snapshot_sha256: str
 
@@ -159,12 +159,14 @@ class SessionView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     meeting_id: str
-    phase: str = "created"
+    phase: PublicPhase
+    desired_state: DesiredState
     snapshot_sha256: str
     owner_id: str
     twin_id: str
     created_at: str
-    terminal_reason: str | None = None
+    terminal_reason: TerminalReason | None = None
+    detail: str | None = None
 
 
 class JobView(BaseModel):

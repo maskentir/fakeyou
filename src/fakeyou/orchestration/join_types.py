@@ -12,6 +12,7 @@ from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
+from fakeyou.foundation.taxonomy import PublicPhase
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration.runtime import SessionWiring
 
@@ -35,7 +36,7 @@ class JoinRequest:
     barge_in: bool = False
     brief_path: Path | None = None
     resume: bool = False
-    on_phase: Callable[[str], None] | None = None
+    on_phase: Callable[[PublicPhase], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

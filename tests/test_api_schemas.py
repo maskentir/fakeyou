@@ -43,7 +43,6 @@ def test_session_create_accepts_inline_documents(session_payload: dict[str, Any]
     snapshot = build_snapshot(create, meeting_id="brief-demo-1003", at=AT)
     assert snapshot.brief is not None
     assert snapshot.brief.meeting_id == "brief-demo-1003"
-    assert snapshot.phase == "created"
     assert build_snapshot(create, meeting_id="brief-demo-1003", at=AT) == snapshot
 
 

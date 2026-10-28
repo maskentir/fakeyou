@@ -202,7 +202,7 @@ class MeetingWorker:
     perception: PerceptionStack | None = None
     perception_drain: PerceptionDrain | None = None
     perception_sync_watched: bool = False
-    on_phase: Callable[[str], None] | None = None
+    on_phase: Callable[[PublicPhase], None] | None = None
     moments: MomentDetector | None = None
     commands: CommandRunner | None = None
     kernel: KernelPort | None = None
@@ -1067,7 +1067,7 @@ class SessionWiring:
     voice_activity: VoiceActivityTracker | None = None
     commands: CommandRunner | None = None
     perception: PerceptionStack | None = None
-    on_phase: Callable[[str], None] | None = None
+    on_phase: Callable[[PublicPhase], None] | None = None
     moments: MomentDetector | None = None
     kernel: KernelPort | None = None
 

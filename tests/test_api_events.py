@@ -13,12 +13,15 @@ from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
+from tests._session_status_fakes import MemorySessionStatus
 from tests.test_api_sessions import (
     ADMIN_TOKEN,
     AT,
     BASE_URL,
     OWNER_TOKEN,
     SESSION_PAYLOAD,
+    STATUS_AT,
     ApiHarness,
     RecordingTransport,
 )
@@ -210,11 +213,13 @@ class ApiEventsHarness(ApiHarness):
         self.seeded = SeededTransport()
         self.transport = self.seeded
         self.store = SessionStore(settings.paths.record_dir)
+        self.status = MemorySessionStatus()
         self.app = create_app(
             settings,
             ApiDeps(
                 transport=lambda: self.seeded,
                 snapshot_store=lambda: self.store,
+                session_status=lambda: self.status,
                 now_iso=lambda: AT,
                 event_keepalive_seconds=keepalive_seconds,
             ),
@@ -230,14 +235,15 @@ class ApiEventsHarness(ApiHarness):
         meeting_id: str,
         entries: list[tuple[str, str, dict[str, str]]],
         *,
-        phase: str = "created",
-        terminal_reason: str | None = None,
+        phase: PublicPhase = "created",
+        terminal_reason: TerminalReason | None = None,
     ) -> None:
         if self.store.load(meeting_id) is None:
             create = SessionCreate.model_validate({**SESSION_PAYLOAD, "meeting_id": meeting_id})
             self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
+            self.status.create(meeting_id, create.owner_id, STATUS_AT)
         if phase != "created" or terminal_reason is not None:
-            self.store.set_phase(meeting_id, phase=phase, terminal_reason=terminal_reason)
+            self.status.record_phase(meeting_id, phase, STATUS_AT, terminal_reason=terminal_reason)
         self.seeded.seed_events(meeting_id, entries)
 
     def seed_raw_events(self, meeting_id: str, entries: list[tuple[str, dict[str, str]]]) -> None:
