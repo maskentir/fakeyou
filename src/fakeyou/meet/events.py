@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal, Protocol, get_args
+from typing import Protocol, get_args
 
-from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.meet.meet import (
     CallObservation,
@@ -12,10 +12,6 @@ from fakeyou.meet.meet import (
     LeaveResult,
 )
 
-PublicPhase = Literal[
-    "created", "joining", "lobby", "admitted", "active", "leaving", "ended", "failed"
-]
-TERMINAL_PUBLIC_PHASES: frozenset[str] = frozenset({"ended", "failed"})
 EVENT_VERSION = 1
 
 _JOIN_PHASES: Mapping[str, PublicPhase] = {
@@ -83,7 +79,7 @@ def phase_changed_event(
         raise ValueError(f"phase value {phase!r} is outside the public enum")
     event: dict[str, object] = _base("phase_changed", meeting_id, at)
     event["phase"] = phase
-    if phase in TERMINAL_PUBLIC_PHASES:
+    if phase in TERMINAL_PHASES:
         if terminal_reason is None:
             raise ValueError(f"terminal phase {phase!r} requires terminal_reason")
         if terminal_reason not in get_args(TerminalReason):

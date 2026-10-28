@@ -18,8 +18,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.conversation.state import PublicPhase
-from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
 from fakeyou.memory.ingest_service import IngestPorts, IngestRequest
 from fakeyou.memory.ingest_status import IngestSummary

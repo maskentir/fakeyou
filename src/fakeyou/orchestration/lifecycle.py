@@ -19,11 +19,9 @@ from langgraph.types import Command, RetryPolicy
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.state import (
-    TERMINAL_PHASES,
     ExternalEffect,
     LifecycleState,
     MissingRuntimeHandle,
-    PublicPhase,
     RuntimeContext,
     validate_phase_reason,
 )
@@ -32,7 +30,7 @@ from fakeyou.db.checkpoint import (
     find_unserializable,
     is_checkpoint_error,
 )
-from fakeyou.foundation.taxonomy import FaultKind, TerminalReason
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, FaultKind, PublicPhase, TerminalReason
 from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.observability.faults import Fault, FaultReporter
 from fakeyou.observability.journal import Journal

@@ -17,14 +17,13 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.state import (
     LifecycleState,
     MissingRuntimeHandle,
-    PublicPhase,
     RuntimeContext,
     assert_checkpointable,
     validate_phase_reason,
 )
 from fakeyou.conversation.turn_graph import ConversationPhase
 from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.foundation.taxonomy import MeetingPhase
+from fakeyou.foundation.taxonomy import MeetingPhase, PublicPhase
 from fakeyou.meet.meet import JoinResult, JoinStatus
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.orchestration.lifecycle import (

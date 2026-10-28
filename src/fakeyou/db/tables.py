@@ -33,6 +33,20 @@ voiceprints = Table(
     Column("owner_name", Text, nullable=False),
 )
 
+meeting_sessions = Table(
+    "meeting_sessions",
+    metadata,
+    Column("meeting_id", Text, primary_key=True),
+    Column("owner_id", Text, nullable=False, index=True),
+    Column("desired_state", Text, nullable=False),
+    Column("phase", Text, nullable=False),
+    Column("terminal_reason", Text, nullable=True),
+    Column("detail", Text, nullable=True),
+    Column("attempt_id", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
 
 def include_name(
     name: str | None,

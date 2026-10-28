@@ -23,6 +23,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import encode_command
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
 
 SESSION_FILE_NAME = "session.json"
-TERMINAL_PHASES = frozenset({"ended", "failed"})
 
 
 def now_iso() -> str:

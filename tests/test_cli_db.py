@@ -14,7 +14,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.db.schema import head_revision
-from fakeyou.db.tables import voiceprints
+from fakeyou.db.tables import metadata
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def unversioned_database_url(blank_database_url: str) -> str:
         blank_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
     )
     try:
-        voiceprints.create(engine)
+        metadata.create_all(engine)
     finally:
         engine.dispose()
     return blank_database_url
@@ -70,7 +70,7 @@ def test_db_status_reports_the_head_on_a_migrated_database(
     }
 
 
-def test_db_stamp_adopts_a_matching_voiceprints_table_and_prints_head(
+def test_db_stamp_adopts_matching_tables_and_prints_head(
     settings: Settings, unversioned_database_url: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings.database.url = SecretStr(unversioned_database_url)

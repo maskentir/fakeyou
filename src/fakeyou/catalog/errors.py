@@ -258,7 +258,7 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "and run `" + Command.DB_STAMP + "` to adopt it"
     ),
     ErrorCode.DATABASE_STAMP_REFUSED: ErrorSpec(
-        "voiceprints does not match the baseline migration: {differences}; "
+        "the database schema does not match the migrations: {differences}; "
         "refusing to record it as applied"
     ),
     ErrorCode.CONFIG_SECRET_MISSING: ErrorSpec(

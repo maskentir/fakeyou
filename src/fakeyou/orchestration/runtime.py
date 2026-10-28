@@ -35,12 +35,7 @@ from fakeyou.conversation.session import (
     SupportsAdmission,
     SupportsMaintenance,
 )
-from fakeyou.conversation.state import (
-    TERMINAL_PHASES,
-    LifecycleState,
-    PublicPhase,
-    RuntimeContext,
-)
+from fakeyou.conversation.state import LifecycleState, RuntimeContext
 from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.engine import require_url
 from fakeyou.foundation.invariants import (
@@ -48,7 +43,7 @@ from fakeyou.foundation.invariants import (
     LEAVE_BUDGET_SECONDS,
     MEETING_SINK_NAME,
 )
-from fakeyou.foundation.taxonomy import TerminalReason
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, attention_line
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (

@@ -21,9 +21,10 @@ from fakeyou.db.schema import (
     status,
     upgrade,
 )
-from fakeyou.db.tables import voiceprints
+from fakeyou.db.tables import metadata, voiceprints
 
 BASELINE = MIGRATIONS_DIR / "versions" / "0001_voiceprints.py"
+LATEST = sorted((MIGRATIONS_DIR / "versions").glob("[0-9]*.py"))[-1]
 BASELINE_COLUMNS = [
     "person_id",
     "embedding",
@@ -59,14 +60,14 @@ def add_drift_column(engine: Engine) -> None:
         connection.execute(text("ALTER TABLE voiceprints ADD COLUMN drift TEXT"))
 
 
-def test_head_revision_is_the_revision_declared_by_the_baseline_migration() -> None:
-    spec = importlib.util.spec_from_file_location("baseline_migration", BASELINE)
+def test_head_revision_is_the_revision_declared_by_the_latest_migration() -> None:
+    spec = importlib.util.spec_from_file_location("latest_migration", LATEST)
     assert spec is not None
     assert spec.loader is not None
-    baseline = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(baseline)
+    latest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(latest)
 
-    assert head_revision() == baseline.revision
+    assert head_revision() == latest.revision
 
 
 def test_head_revision_rejects_branching_heads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,8 +136,8 @@ def test_upgrade_refuses_a_voiceprints_table_without_migration_history(
     assert not inspect(blank_engine).has_table("alembic_version")
 
 
-def test_stamp_adopts_a_matching_unversioned_table(blank_engine: Engine) -> None:
-    voiceprints.create(blank_engine)
+def test_stamp_adopts_matching_unversioned_tables(blank_engine: Engine) -> None:
+    metadata.create_all(blank_engine)
 
     stamp(blank_engine)
     upgrade(blank_engine)
@@ -148,7 +149,7 @@ def test_stamp_refuses_a_table_with_drift_and_records_nothing(blank_engine: Engi
     voiceprints.create(blank_engine)
     add_drift_column(blank_engine)
 
-    with pytest.raises(FakeYouError, match="does not match the baseline migration") as error:
+    with pytest.raises(FakeYouError, match="does not match the migrations") as error:
         stamp(blank_engine)
 
     assert error.value.code is ErrorCode.DATABASE_STAMP_REFUSED
@@ -207,7 +208,7 @@ def test_baseline_downgrade_refuses_to_drop_biometric_data(migrated_engine: Engi
             command.downgrade(config, "base")
 
     assert inspect(migrated_engine).has_table("voiceprints")
-    assert status(migrated_engine).current == head_revision()
+    assert status(migrated_engine).current == "0001"
 
 
 def test_upgrade_waits_while_another_session_holds_the_schema_lock(

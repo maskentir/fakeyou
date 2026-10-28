@@ -11,10 +11,10 @@ from fakeyou.catalog.exit_codes import TERMINAL_EXIT_CODES, ExitCode
 from fakeyou.cli.client import ApiClient, ClientSettings, api_failure, owner_client
 from fakeyou.cli.output import emit_json
 from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 
 WORKER_STOP_POLL_SECONDS = 2.0
 WORKER_STOP_LIMIT_SECONDS = 60.0
-TERMINAL_PHASES = frozenset({"ended", "failed"})
 
 
 @dataclass(frozen=True, slots=True)

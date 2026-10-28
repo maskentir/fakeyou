@@ -13,6 +13,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
@@ -41,7 +42,6 @@ from fakeyou.worker.keys import apply_role_overrides
 
 WORKER_GROUP = "workers"
 logger = logging.getLogger(__name__)
-TERMINAL_PHASES = frozenset({"ended", "failed"})
 _PAUSE_SECONDS = 0.5
 _READ_BLOCK_MS = 1000
 

@@ -12,10 +12,11 @@ from fastapi.responses import StreamingResponse
 
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.errors import error_response
-from fakeyou.api.sessions import TERMINAL_PHASES, SessionStore, now_iso
+from fakeyou.api.sessions import SessionStore, now_iso
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.transport.schemas import validate_event
 
 if TYPE_CHECKING:
