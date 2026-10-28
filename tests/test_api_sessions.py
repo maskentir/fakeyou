@@ -348,3 +348,42 @@ async def test_a_finished_session_shows_why_it_ended(api: ApiHarness) -> None:
         "left_by_participant",
         "twin left the call on request",
     )
+
+
+async def test_an_owner_can_join_again_after_stopping_before_the_twin_joined(
+    api: ApiHarness,
+) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+
+    await api.post(f"/v1/sessions/{meeting_id}/stop")
+    joined = await api.post(f"/v1/sessions/{meeting_id}/join")
+    again = await api.post(f"/v1/sessions/{meeting_id}/join")
+
+    assert joined.status_code == 202
+    assert joined.json()["desired_state"] == "joined"
+    assert again.status_code == 409
+
+
+async def test_a_stopped_session_can_still_be_resumed_to_finish(api: ApiHarness) -> None:
+    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
+    await api.post(f"/v1/sessions/{meeting_id}/join")
+    await api.post(f"/v1/sessions/{meeting_id}/stop")
+
+    resumed = await api.post(f"/v1/sessions/{meeting_id}/resume")
+
+    assert resumed.status_code == 202
+    assert api.transport.commands[-1][1] == "resume"
+
+
+async def test_a_session_whose_snapshot_cannot_be_written_leaves_no_status(
+    api: ApiHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full_disk(_snapshot: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(api.store, "save_new", full_disk)
+
+    with pytest.raises(OSError, match="disk full"):
+        await api.post("/v1/sessions", json={**SESSION_PAYLOAD, "meeting_id": "m-disk"})
+
+    assert api.status.get("m-disk") is None

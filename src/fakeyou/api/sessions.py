@@ -207,8 +207,11 @@ async def start_session(
         raise _refuse_existing(await read_status(request, meeting_id), meeting_id)
     try:
         _snapshot_store(request).save_new(snapshot)
-    except FileExistsError:
-        raise _refuse_existing(None, meeting_id) from None
+    except OSError as error:
+        await status_call(request, lambda store: store.discard(meeting_id))
+        if isinstance(error, FileExistsError):
+            raise _refuse_existing(None, meeting_id) from None
+        raise
     await stage_overrides(_command_transport(request), meeting_id, request.headers)
     return _view(snapshot, status)
 
@@ -220,7 +223,7 @@ async def join_session(
     request: Request,
 ) -> SessionView:
     snapshot, status = await _owned_session(request, meeting_id, principal)
-    if status.terminal or status.desired_state != "created":
+    if status.terminal or status.desired_state == "joined":
         raise _refuse_existing(status, meeting_id)
     wanted = await _desire(request, meeting_id, "joined")
     await _command_transport(request).publish_command(
@@ -240,7 +243,11 @@ async def stop_session(
     if status.terminal:
         response.status_code = 200
         return _view(snapshot, status)
-    wanted = await _desire(request, meeting_id, "stopped")
+    wanted = (
+        status
+        if status.desired_state == "stopped"
+        else await _desire(request, meeting_id, "stopped")
+    )
     await _command_transport(request).publish_command(
         meeting_id, encode_command("stop", meeting_id=meeting_id, at=_now(request))
     )
@@ -256,7 +263,7 @@ async def resume_session(
     snapshot, status = await _owned_session(request, meeting_id, principal)
     if status.terminal:
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
-    if status.desired_state != "joined":
+    if status.desired_state == "created":
         raise FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id)
     await _command_transport(request).publish_command(
         meeting_id, encode_command("resume", meeting_id=meeting_id, at=_now(request))
@@ -292,5 +299,5 @@ async def list_sessions(
 async def _desire(request: Request, meeting_id: str, state: DesiredState) -> SessionStatus:
     wanted = await status_call(request, lambda store: store.desire(meeting_id, state, status_now()))
     if wanted is None:
-        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+        raise _refuse_existing(await read_status(request, meeting_id), meeting_id)
     return wanted

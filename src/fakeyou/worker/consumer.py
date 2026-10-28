@@ -285,6 +285,8 @@ class WorkerConsumer:
             return await self._start_join(meeting_id, entry_id, resume=False)
         if kind == "resume":
             return await self._start_join(meeting_id, entry_id, resume=True)
+        if kind == "stop":
+            await self._close_unjoined(meeting_id, entry_id)
         return False
 
     async def _session_overrides(self, meeting_id: str) -> dict[str, SecretStr]:
@@ -298,9 +300,17 @@ class WorkerConsumer:
 
     async def _start_join(self, meeting_id: str, entry_id: str, *, resume: bool) -> bool:
         snapshot = self._store.load(meeting_id)
-        status = await asyncio.to_thread(self._status.get, meeting_id)
+        status, error = await capture_error(
+            partial(asyncio.to_thread, self._status.get, meeting_id)
+        )
+        if error is not None:
+            logger.warning("status of meeting %s is unreadable: %s", meeting_id, error)
+            return False
         if snapshot is None or status is None or status.terminal:
             await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
+            return False
+        if status.desired_state == "stopped":
+            await self._close_unjoined(meeting_id, entry_id)
             return False
         writer = StatusWriter(self._status, meeting_id)
         writer.phase = status.phase
@@ -325,6 +335,17 @@ class WorkerConsumer:
         self._active = None
         self._session_task = None
         return False
+
+    async def _close_unjoined(self, meeting_id: str, entry_id: str) -> None:
+        writer = StatusWriter(self._status, meeting_id)
+        await writer.write(
+            "ended", terminal_reason="stopped_by_owner", detail="stopped before the twin joined"
+        )
+        await writer.close()
+        await self._publish(
+            meeting_id, "session_ended", {"phase": "ended", "terminal_reason": "stopped_by_owner"}
+        )
+        await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
 
     async def _await_binding(self, task: asyncio.Task[None]) -> bool:
         waiter = asyncio.create_task(self._bound.wait())

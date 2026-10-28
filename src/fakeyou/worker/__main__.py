@@ -39,6 +39,14 @@ def _session_store(record_dir: Path) -> JobStore:
     return cast(JobStore, module.SessionStore(record_dir))
 
 
+def verify_session_schema(settings: Settings) -> None:
+    status = create_session_status(settings)
+    try:
+        status.require_current()
+    finally:
+        status.close()
+
+
 async def run_consumers(*consumers: LongRunning) -> None:
     async with asyncio.TaskGroup() as group:
         for consumer in consumers:
@@ -58,6 +66,8 @@ async def serve(role: str) -> None:
         open_checkpointer=open_checkpointer,
     )
     await verify_boot_dependencies(settings, ports)
+    if role == SESSIONS_ROLE:
+        await asyncio.to_thread(verify_session_schema, settings)
     transport = StreamTransport.from_settings(settings)
     shutdown = asyncio.Event()
     store = _session_store(settings.paths.record_dir)

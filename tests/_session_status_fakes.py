@@ -35,7 +35,7 @@ class MemorySessionStatus:
 
     def desire(self, meeting_id: str, state: DesiredState, at: datetime) -> SessionStatus | None:
         current = self.rows.get(meeting_id)
-        if current is None:
+        if current is None or current.desired_state == state or current.phase in TERMINAL_PHASES:
             return None
         updated = replace(current, desired_state=state, updated_at=at)
         self.rows[meeting_id] = updated
@@ -58,3 +58,6 @@ class MemorySessionStatus:
         )
         self.rows[meeting_id] = updated
         return updated
+
+    def discard(self, meeting_id: str) -> None:
+        self.rows.pop(meeting_id, None)

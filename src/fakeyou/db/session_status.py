@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, cast
 
-from sqlalchemy import Engine, select, update
+from sqlalchemy import Engine, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DisconnectionError, OperationalError
@@ -14,6 +14,7 @@ from sqlalchemy.exc import DisconnectionError, OperationalError
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.db.engine import configured_url, create_engine_for_url, require_url
+from fakeyou.db.schema import require_current
 from fakeyou.db.tables import meeting_sessions
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 
@@ -58,6 +59,8 @@ class SessionStatusRepository(Protocol):
         detail: str | None = None,
     ) -> SessionStatus | None: ...
 
+    def discard(self, meeting_id: str) -> None: ...
+
 
 @contextmanager
 def _reachable() -> Iterator[None]:
@@ -87,6 +90,10 @@ class SessionStatusStore:
 
     def close(self) -> None:
         self._engine.dispose()
+
+    def require_current(self) -> None:
+        with _reachable():
+            require_current(self._engine)
 
     def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
         statement = (
@@ -125,7 +132,11 @@ class SessionStatusStore:
     def desire(self, meeting_id: str, state: DesiredState, at: datetime) -> SessionStatus | None:
         statement = (
             update(meeting_sessions)
-            .where(meeting_sessions.c.meeting_id == meeting_id)
+            .where(
+                meeting_sessions.c.meeting_id == meeting_id,
+                meeting_sessions.c.desired_state != state,
+                meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
+            )
             .values(desired_state=state, updated_at=at)
             .returning(meeting_sessions)
         )
@@ -154,6 +165,11 @@ class SessionStatusStore:
         with _reachable(), self._engine.begin() as connection:
             row = connection.execute(statement).mappings().first()
         return None if row is None else _status(row)
+
+    def discard(self, meeting_id: str) -> None:
+        statement = delete(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
+        with _reachable(), self._engine.begin() as connection:
+            connection.execute(statement)
 
 
 def create_session_status(settings: Settings) -> SessionStatusStore:

@@ -1090,3 +1090,31 @@ async def test_the_terminal_reason_survives_a_live_phase_that_already_ended(
         "harness",
     )
     assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
+
+
+async def test_a_stop_before_the_twin_joined_ends_the_session(harness: Harness) -> None:
+    harness.seed("m-2")
+    harness.status.desire("m-2", "stopped", STATUS_AT)
+    await harness.enqueue("m-2", "stop")
+
+    assert await harness.consumer.run_once(harness.discovery) is None
+
+    status = harness.status.get("m-2")
+    assert status is not None
+    assert (status.phase, status.terminal_reason) == ("ended", "stopped_by_owner")
+    assert [kind for kind, _ in harness.acks] == ["stop"]
+    assert harness.runs == []
+
+
+async def test_an_unreadable_status_leaves_the_join_for_later(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreachable(_meeting_id: str) -> None:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
+
+    monkeypatch.setattr(harness.status, "get", unreachable)
+    await harness.enqueue("m-1", "join")
+
+    assert await harness.consumer.run_once(harness.discovery) is None
+    assert harness.acks == []
+    assert harness.runs == []

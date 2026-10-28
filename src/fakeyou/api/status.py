@@ -18,7 +18,9 @@ def session_status(request: Request) -> SessionStatusRepository:
     if factory is not None:
         return cast(SessionStatusRepository, factory())
     if state.session_status is None:
-        state.session_status = create_session_status(cast(Settings, state.settings))
+        store = create_session_status(cast(Settings, state.settings))
+        store.require_current()
+        state.session_status = store
     return cast(SessionStatusRepository, state.session_status)
 
 

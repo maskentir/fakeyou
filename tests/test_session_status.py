@@ -63,3 +63,26 @@ def test_desired_state_is_written_without_touching_the_phase(migrated_engine: En
     assert wanted is not None
     assert (wanted.desired_state, wanted.phase) == ("joined", "lobby")
     assert store.desire("missing", "stopped", LATER) is None
+
+
+def test_desire_changes_only_a_different_live_wish(migrated_engine: Engine) -> None:
+    store = SessionStatusStore(migrated_engine)
+    store.create("m1", "owner-1", NOW)
+
+    first = store.desire("m1", "joined", LATER)
+    second = store.desire("m1", "joined", LATER)
+    store.record_phase("m1", "ended", LATER, terminal_reason="ended_by_host")
+
+    assert first is not None
+    assert second is None
+    assert store.desire("m1", "stopped", LATER) is None
+
+
+def test_a_discarded_session_is_gone(migrated_engine: Engine) -> None:
+    store = SessionStatusStore(migrated_engine)
+    store.create("m1", "owner-1", NOW)
+
+    store.discard("m1")
+
+    assert store.get("m1") is None
+    assert store.create("m1", "owner-1", LATER) is not None
