@@ -8,6 +8,10 @@ Revisi 2026-10-27: breaking change diizinkan dan tidak ada backward
 compatibility. Kernel menggantikan engine lama langsung; tidak ada mode
 `legacy`/`shadow`, tidak ada expand-contract record, dan setiap PR
 menghapus jalur lama yang ia gantikan.
+Revisi 2026-10-28: empat keputusan (reconnect oleh supervisor, timeline
+sebagai pemicu proactive, memory hanya untuk turn yang membutuhkan, dan
+rewrite floor/lanes yang sempit) dikoreksi oleh
+`2026-10-28-twin-redesign.md`.
 
 ## Verdict
 
