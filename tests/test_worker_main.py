@@ -10,6 +10,7 @@ from fakeyou.worker.consumer import WorkerConsumer
 from fakeyou.worker.debrief import DebriefConsumer
 from fakeyou.worker.ingestion import IngestionConsumer
 from fakeyou.worker.reembed import ReembedConsumer
+from tests._session_status_fakes import MemorySessionStatus
 
 
 class _ClosableTransport:
@@ -29,6 +30,9 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
     monkeypatch.setattr(worker_main, "run_consumers", capture)
     monkeypatch.setattr(worker_main, "verify_boot_dependencies", boot_ok)
     monkeypatch.setattr(worker_main, "verify_session_schema", lambda _settings: None)
+    monkeypatch.setattr(
+        worker_main, "create_session_status", lambda _settings: MemorySessionStatus()
+    )
     monkeypatch.setattr(StreamTransport, "from_settings", lambda _settings: _ClosableTransport())
     await asyncio.wait_for(worker_main.serve(role), timeout=10)
     return started
