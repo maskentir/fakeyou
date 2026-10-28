@@ -259,9 +259,11 @@ async def test_agent_events_carry_the_loop_literals_and_request_id() -> None:
 
     started = harness.journal.of("agent_started")
     finished = harness.journal.of("agent_finished")
-    assert [set(fields) for fields in started] == [{"source", "request_id"}]
+    assert [set(fields) for fields in started] == [{"source", "request_id", "transcript_id"}]
     assert started[0]["request_id"] == "f1:1"
-    assert [set(fields) for fields in finished] == [{"source", "request_id", "duration_ms"}]
+    assert [set(fields) for fields in finished] == [
+        {"source", "request_id", "transcript_id", "duration_ms"}
+    ]
     assert finished[0]["request_id"] == "f1:1"
 
 

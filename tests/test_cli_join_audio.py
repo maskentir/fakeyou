@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 import fakeyou.orchestration.assembly as assembly
-from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.audio.playback import PlaybackEvent, Utterance
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
@@ -308,7 +308,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         handler(PlaybackEvent("playback_started", "Hmm…", "", cue=True))
         handler(PlaybackEvent("playback_finished", "Hmm…", "", cue=True))
-        handler(PlaybackEvent("playback_started", "hello", ""))
+        handler(PlaybackEvent("playback_started", "hello", "", utterance=Utterance("t7", 0)))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
         handler(PlaybackEvent("playback_finished", "hello?  ", ""))
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
@@ -332,6 +332,11 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         ("playback_dropped", False, "interrupted"),
         ("playback_finished", True, None),
     ]
+    assert [
+        (row.get("transcript_id"), row.get("sentence_index"))
+        for row in rows
+        if row.get("event") == "playback_started"
+    ] == [("t7", 0)]
     cues = [
         (row["event"], row["cue_text"])
         for row in rows

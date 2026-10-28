@@ -167,11 +167,18 @@ async def interrupt_speech(floor: SpeechFloor | None, generation: int) -> int:
 
 
 def record_barge_in(
-    journal: JournalSink, trigger: BargeTrigger, words: int, *, decided_by: str | None = None
+    journal: JournalSink,
+    trigger: BargeTrigger,
+    words: int,
+    *,
+    decided_by: str | None = None,
+    interrupted: ActiveSpeech | None = None,
 ) -> None:
     fields: dict[str, Any] = {"trigger": trigger, "words": words}
     if decided_by is not None:
         fields["decided_by"] = decided_by
+    if interrupted is not None and interrupted.transcript_id is not None:
+        fields["interrupted_transcript_id"] = interrupted.transcript_id
     journal.record("barge_in_detected", source="agent", **fields)
 
 
@@ -403,13 +410,16 @@ def tool_start_hook(
 
 async def take_floor_for_final(runtime: TurnRuntime, transcript_text: str) -> None:
     floor = runtime.floor
+    interrupted = floor.active if floor is not None else None
     if floor is not None:
         await cancel_speech(floor, runtime.journal, reason="new_final")
     if not _bound(runtime):
         return
     speaker = runtime.speaker
     if runtime.barge_in and speaker.is_speaking:
-        record_barge_in(runtime.journal, "final", len(transcript_text.split()))
+        record_barge_in(
+            runtime.journal, "final", len(transcript_text.split()), interrupted=interrupted
+        )
     if (runtime.barge_in and speaker.is_speaking) or (_busy(runtime) and not speaker.is_speaking):
         await speaker.stop_playback()
 
@@ -623,15 +633,12 @@ class _TurnSink:
             runtime.barge.rearm()
         if runtime.note_spoken is not None:
             runtime.note_spoken(sentence)
-        if self._streamed:
-            await runtime.speaker.speak(
-                sentence,
-                sentence_index=index,
-                transcript_id=self._transcript_id,
-                language=language,
-            )
-        else:
-            await runtime.speaker.speak(sentence, language=language)
+        await runtime.speaker.speak(
+            sentence,
+            sentence_index=index,
+            transcript_id=self._transcript_id,
+            language=language,
+        )
         self._spoken += 1
 
     def _check_live(self, index: int) -> None:

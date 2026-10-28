@@ -204,9 +204,11 @@ class EvidenceRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
 
     def route(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
         trigger = self._strong_trigger(request)
+        _, latest = current_trigger(request.messages)
         self._journal.record(
             "model_route_selected",
             source="agent",
+            transcript_id=latest[-1].id if latest else None,
             route="strong" if trigger is not None else "small",
             trigger=trigger or "none",
         )
