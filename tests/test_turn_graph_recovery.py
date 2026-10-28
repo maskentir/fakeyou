@@ -42,10 +42,12 @@ TURN_FAILED_EN: str = json.loads(read_package_text("spoken_lines.json"))["turn_f
 class FakeSession:
     def __init__(self) -> None:
         self.spoken: list[str] = []
+        self.turns: list[str | None] = []
         self.is_speaking = False
 
-    async def speak(self, text: str, **_: Any) -> None:
+    async def speak(self, text: str, *, transcript_id: str | None = None, **_: Any) -> None:
         self.spoken.append(text)
+        self.turns.append(transcript_id)
 
     async def stop_playback(self) -> None:
         return None
@@ -228,6 +230,7 @@ async def test_responder_error_counts_one_failure_and_records_a_fault() -> None:
     assert harness.lifecycle.recovery.consecutive_failures == 1
     assert [fault.source for fault in faults.summaries()] == ["agent"]
     assert harness.session.spoken == [TURN_FAILED_EN]
+    assert harness.session.turns == ["f1"]
     assert harness.lifecycle.phase == "waiting"
 
 

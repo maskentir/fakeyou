@@ -39,45 +39,52 @@ def _timed(rows: Iterable[Row]) -> list[tuple[datetime, Row]]:
     return [(at, row) for row in rows if (at := _at(row)) is not None]
 
 
-def _vad_stop_to_final(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
-    stopped: datetime | None = None
-    gaps: list[float] = []
+def _aliases(rows: Iterable[Row]) -> dict[str, str]:
+    return {
+        str(row["early_transcript_id"]): str(row["transcript_id"])
+        for row in rows
+        if row.get("event") == "early_turn_verified"
+        and row.get("early_transcript_id")
+        and row.get("transcript_id")
+    }
+
+
+def _keyed(
+    timed: Sequence[tuple[datetime, Row]], aliases: dict[str, str]
+) -> list[tuple[datetime, Row]]:
+    keyed: list[tuple[datetime, Row]] = []
     for at, row in timed:
-        event = row.get("event")
+        transcript_id = row.get("transcript_id")
+        if isinstance(transcript_id, str) and transcript_id in aliases:
+            row = {**row, "transcript_id": aliases[transcript_id]}
+        keyed.append((at, row))
+    return keyed
+
+
+def _first_by_turn(timed: Sequence[tuple[datetime, Row]], event: str) -> dict[str, datetime]:
+    first: dict[str, datetime] = {}
+    for at, row in timed:
+        transcript_id = row.get("transcript_id")
+        if row.get("event") == event and isinstance(transcript_id, str):
+            first.setdefault(transcript_id, at)
+    return first
+
+
+def _turn_gaps(start: dict[str, datetime], end: dict[str, datetime]) -> list[float]:
+    return [_ms(start[key], at) for key, at in end.items() if key in start]
+
+
+def _vad_stop_before_final(timed: Sequence[tuple[datetime, Row]]) -> dict[str, datetime]:
+    stopped: datetime | None = None
+    stops: dict[str, datetime] = {}
+    for at, row in timed:
+        event, transcript_id = row.get("event"), row.get("transcript_id")
         if event == "speech_stopped":
             stopped = at
-        elif event == "transcript_finalized" and stopped is not None:
-            gaps.append(_ms(stopped, at))
+        elif event == "transcript_finalized" and isinstance(transcript_id, str) and stopped:
+            stops.setdefault(transcript_id, stopped)
             stopped = None
-    return gaps
-
-
-def _final_to_first_audio(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
-    finals: dict[str, datetime] = {}
-    gaps: list[float] = []
-    for at, row in timed:
-        transcript_id = row.get("transcript_id")
-        if not isinstance(transcript_id, str):
-            continue
-        if row.get("event") == "transcript_finalized":
-            finals.setdefault(transcript_id, at)
-        elif row.get("event") == "playback_started" and transcript_id in finals:
-            gaps.append(_ms(finals.pop(transcript_id), at))
-    return gaps
-
-
-def _final_to_first_pcm(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
-    finals: dict[str, datetime] = {}
-    gaps: list[float] = []
-    for at, row in timed:
-        transcript_id = row.get("transcript_id")
-        if not isinstance(transcript_id, str):
-            continue
-        if row.get("event") == "transcript_finalized":
-            finals.setdefault(transcript_id, at)
-        elif row.get("event") == "synthesis_pcm_emitted" and transcript_id in finals:
-            gaps.append(_ms(finals.pop(transcript_id), at))
-    return gaps
+    return stops
 
 
 def _sentence_gaps(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
@@ -96,17 +103,22 @@ def _sentence_gaps(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
 
 def _barge_in_to_silence(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
     onset: datetime | None = None
-    barged: datetime | None = None
+    barged: dict[str, datetime] = {}
     gaps: list[float] = []
     for at, row in timed:
-        event = row.get("event")
+        event, transcript_id = row.get("event"), row.get("transcript_id")
+        interrupted = row.get("interrupted_transcript_id")
         if event == "speech_started":
             onset = at
-        elif event == "barge_in_detected":
-            barged = onset or at
-        elif event == "playback_dropped" and row.get("detail") == "interrupted" and barged:
-            gaps.append(_ms(barged, at))
-            barged = None
+        elif event == "barge_in_detected" and isinstance(interrupted, str):
+            barged.setdefault(interrupted, onset or at)
+        elif (
+            event == "playback_dropped"
+            and row.get("detail") == "interrupted"
+            and isinstance(transcript_id, str)
+            and transcript_id in barged
+        ):
+            gaps.append(_ms(barged.pop(transcript_id), at))
     return gaps
 
 
@@ -119,7 +131,16 @@ def _share(numerator: int, denominator: int) -> dict[str, Any]:
 
 
 def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
-    timed = _timed(rows)
+    timed = _keyed(_timed(rows), _aliases(rows))
+    finals_at = _first_by_turn(timed, "transcript_finalized")
+    audio_at = _first_by_turn(timed, "playback_started")
+    stops_at = _vad_stop_before_final(timed)
+    contributed = {
+        str(row.get("transcript_id"))
+        for _, row in timed
+        if row.get("event") == "reply_plan_observed"
+        and row.get("contribution") not in (None, "none")
+    }
     events = Counter(str(row.get("event")) for row in rows)
     finals = [row for row in rows if row.get("event") == "transcript_finalized"]
     plans = [row for row in rows if row.get("event") == "reply_plan_observed"]
@@ -128,15 +149,16 @@ def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
     )
     finished = next((row for row in reversed(rows) if row.get("event") == "session_finished"), None)
     return {
-        "vad_stop_to_final_ms": summarize(_vad_stop_to_final(timed)),
-        "final_to_first_pcm_ms": summarize(_final_to_first_pcm(timed)),
-        "final_to_first_audio_ms": summarize(_final_to_first_audio(timed)),
+        "vad_stop_to_final_ms": summarize(_turn_gaps(stops_at, finals_at)),
+        "final_to_first_pcm_ms": summarize(
+            _turn_gaps(finals_at, _first_by_turn(timed, "synthesis_pcm_emitted"))
+        ),
+        "final_to_first_audio_ms": summarize(_turn_gaps(finals_at, audio_at)),
+        "vad_stop_to_first_audio_ms": summarize(_turn_gaps(stops_at, audio_at)),
         "barge_in_to_silence_ms": summarize(_barge_in_to_silence(timed)),
         "sentence_gap_ms": summarize(_sentence_gaps(timed)),
         "speaker_bound": _share(sum(1 for row in finals if row.get("speaker_bound")), len(finals)),
-        "contributions": _share(
-            sum(1 for row in plans if row.get("contribution") not in (None, "none")), len(plans)
-        ),
+        "contributions_spoken": _share(len(contributed & audio_at.keys()), len(plans)),
         "speech_rejected": dict(rejected),
         "barge_in_rejected": events["barge_in_rejected"],
         "early_turn_started": events["early_turn_started"],

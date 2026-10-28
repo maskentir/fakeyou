@@ -594,7 +594,7 @@ class TurnDropped(Exception):
     pass
 
 
-class _TurnSink:
+class TurnSink:
     def __init__(
         self,
         runtime: TurnRuntime,
@@ -611,6 +611,7 @@ class _TurnSink:
         self._streamed = streamed
         self._stop_mark = 0 if runtime.barge is None else runtime.barge.stream_stops
         self._spoken = 0
+        self._offered = 0
         self._started = False
 
     @property
@@ -619,14 +620,15 @@ class _TurnSink:
 
     async def say(self, sentence: str, language: str) -> None:
         runtime = self._runtime
+        sentence_index = self._offered
+        self._offered += 1
         sentence = scrub_internal_refs(sentence)
         if not sentence:
             return
         self._started = True
-        index = self._spoken
         if self._streamed:
-            self._check_live(index)
-        if index == 0:
+            self._check_live(sentence_index)
+        if self._spoken == 0:
             _move_phase(runtime, "queued", self._transcript_id)
         _raise_if_failed(runtime)
         if runtime.barge is not None:
@@ -635,7 +637,7 @@ class _TurnSink:
             runtime.note_spoken(sentence)
         await runtime.speaker.speak(
             sentence,
-            sentence_index=index,
+            sentence_index=sentence_index,
             transcript_id=self._transcript_id,
             language=language,
         )
@@ -978,7 +980,7 @@ async def _speak_reply(
     hook = tool_start_hook(runtime, generation, floor_generation, final.id)
     request_id = turn_request_id(final.id, generation)
     streamed = runtime.whole_turn is None and runtime.whole is None
-    sink = _TurnSink(runtime, scope, final.id, generations, streamed=streamed)
+    sink = TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
     cue = _start_cue(
         runtime,
@@ -1034,7 +1036,7 @@ async def _settle_cue(task: asyncio.Task[None] | None) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
-def _cue_blocker(runtime: TurnRuntime, sink: _TurnSink, generations: tuple[int, int]) -> str | None:
+def _cue_blocker(runtime: TurnRuntime, sink: TurnSink, generations: tuple[int, int]) -> str | None:
     generation, floor_generation = generations
     if sink.started:
         return "answered"
@@ -1084,7 +1086,9 @@ async def recover_turn(
     if not recovery.should_apologize:
         return
     speaker = runtime.speaker
-    _, speech_error = await capture_error(lambda: speaker.speak(recovery.failed_line))
+    _, speech_error = await capture_error(
+        lambda: speaker.speak(recovery.failed_line, transcript_id=transcript_id)
+    )
     if speech_error is not None:
         _fail(runtime, speech_error)
 

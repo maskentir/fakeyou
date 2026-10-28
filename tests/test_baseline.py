@@ -15,7 +15,8 @@ TURN = [
     row(2.0, "speech_stopped"),
     row(3.2, "transcript_finalized", transcript_id="t1", speaker_bound=True),
     row(3.3, "transcript_finalized", transcript_id="t0", speaker_bound=False),
-    row(4.0, "reply_plan_observed", transcript_id="t1", contribution="none"),
+    row(4.0, "reply_plan_observed", transcript_id="t1", contribution="fact"),
+    row(4.1, "reply_plan_observed", transcript_id="t0", contribution="question"),
     row(4.4, "synthesis_pcm_emitted", transcript_id="t1", sentence_index=0),
     row(4.5, "playback_started", transcript_id="t1", sentence_index=0),
     row(6.0, "playback_finished", transcript_id="t1", sentence_index=0),
@@ -35,6 +36,7 @@ def test_turn_latencies_follow_the_turn_keys() -> None:
     assert metrics["vad_stop_to_final_ms"]["p50"] == 1200.0
     assert metrics["final_to_first_pcm_ms"]["p50"] == 1200.0
     assert metrics["final_to_first_audio_ms"]["p50"] == 1300.0
+    assert metrics["vad_stop_to_first_audio_ms"]["p50"] == 2500.0
     assert metrics["sentence_gap_ms"]["p50"] == 100.0
     assert metrics["barge_in_to_silence_ms"]["p50"] == 1800.0
 
@@ -43,7 +45,7 @@ def test_counts_cover_identity_contribution_and_the_session_end() -> None:
     metrics = baseline_metrics(TURN)
 
     assert metrics["speaker_bound"] == {"count": 1, "of": 2, "ratio": 0.5}
-    assert metrics["contributions"] == {"count": 0, "of": 1, "ratio": 0.0}
+    assert metrics["contributions_spoken"] == {"count": 1, "of": 2, "ratio": 0.5}
     assert metrics["speech_rejected"] == {"invented_number": 1}
     assert metrics["memory_prefetches"] == 1
     assert (metrics["terminal_reason"], metrics["terminal_detail"]) == (
@@ -59,3 +61,30 @@ def test_audio_without_a_turn_key_is_not_paired_by_time() -> None:
     ]
 
     assert baseline_metrics(rows)["final_to_first_audio_ms"]["count"] == 0
+
+
+def test_an_early_turn_is_measured_against_the_final_it_was_verified_by() -> None:
+    rows = [
+        row(0.0, "speech_stopped"),
+        row(0.4, "playback_started", transcript_id="early-1", sentence_index=0),
+        row(1.0, "transcript_finalized", transcript_id="t1"),
+        row(1.1, "early_turn_verified", transcript_id="t1", early_transcript_id="early-1"),
+    ]
+
+    metrics = baseline_metrics(rows)
+
+    assert metrics["final_to_first_audio_ms"]["p50"] == -600.0
+    assert metrics["vad_stop_to_first_audio_ms"]["p50"] == 400.0
+
+
+def test_a_barge_in_pairs_only_with_the_drop_of_the_turn_it_interrupted() -> None:
+    rows = [
+        row(0.0, "speech_started"),
+        row(1.0, "barge_in_detected", trigger="final"),
+        row(2.0, "barge_in_detected", trigger="interim", interrupted_transcript_id="t2"),
+        row(9.0, "playback_dropped", transcript_id="t1", detail="interrupted"),
+        row(9.5, "playback_dropped", transcript_id="t2", detail="interrupted"),
+    ]
+
+    assert baseline_metrics(rows)["barge_in_to_silence_ms"]["max"] == 9500.0
+    assert baseline_metrics(rows)["barge_in_to_silence_ms"]["count"] == 1
