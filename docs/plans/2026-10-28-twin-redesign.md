@@ -106,9 +106,9 @@ bila tidak ada yang cocok, dan alasannya dicatat.
 | deepeval 4.2 | GEval | C2/C3 | judge offline owner-plausible, bukan runtime |
 | Smart Turn v3.2 (Pipecat) | model ONNX akhir giliran berbasis prosodi, 23 bahasa termasuk Indonesia | B2 | vendor model, jalankan dengan `onnxruntime` yang sudah ada |
 | Silero VAD v5 | sudah dipakai (port dari Pipecat) | B3 | tetap |
-| Cartesia / ElevenLabs websocket | context, `continue`, flush, timestamp | B5 | pakai; `cancel` Cartesia tidak menghentikan audio yang sedang dibuat, jadi stop tetap membuang buffer lokal |
-| `pasimple` atau `pacat` panjang | writer PulseAudio berumur panjang dengan flush | B5 | diputuskan lewat spike; `pasimple` 0.0.3 jarang dirawat |
-| Pipecat / LiveKit Agents | framework voice penuh | B1-B6 | tidak diadopsi penuh: turn controller mereka bertabrakan dengan kernel dan judge; LiveKit bagian terbaiknya cloud atau berlisensi khusus. Source Pipecat dipakai sebagai rancangan acuan |
+| Cartesia / ElevenLabs websocket | context, `continue`, flush, timestamp | B5b | pakai; `cancel` Cartesia tidak menghentikan audio yang sedang dibuat, jadi stop tetap membuang buffer lokal |
+| `pasimple` atau `pacat` panjang | writer PulseAudio berumur panjang dengan flush | B5a | diputuskan lewat spike; `pasimple` 0.0.3 jarang dirawat |
+| Pipecat / LiveKit Agents | framework voice penuh | B1-B6 | tidak dipakai sebagai dependency: turn controller mereka bertabrakan dengan kernel dan judge; LiveKit bagian terbaiknya cloud atau berlisensi khusus. Yang diambil hanya model Smart Turn yang di-vendor, dan source Pipecat sebagai rancangan acuan |
 | RapidOCR 3.10, imagehash | OCR ONNX, hash persepsi | B7 | spike dulu; kunci sama/scroll/baru dari hash teks OCR |
 | google-api-python-client | `events.list` + `syncToken` | D1 | pakai polling; push `watch` belum (butuh HTTPS publik, channel kedaluwarsa, tidak 100% andal) |
 | kubernetes client | Job: `backoffLimit: 0`, `activeDeadlineSeconds`, `ttlSecondsAfterFinished` | D2 | pakai; kopf/CRD tidak, karena tabel sesi sudah desired state |
@@ -405,28 +405,52 @@ Gate B dan C butuh replay yang tidak bergantung pada sesi live.
 Gate: replay oue-4 dengan komponen sekarang mereproduksi metrik baseline
 dalam toleransi 10%.
 
-### B5: TTS dan playback streaming
+### B5a: Lookahead sintesis dan writer audio berumur panjang
 
 Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush.
 
-- Satu websocket TTS persisten per sesi dengan context continuation, satu
-  writer audio berumur panjang dengan buffer lookahead, dan stop berarti
-  flush buffer.
-- LLM stream ditarik terus-menerus, bukan menunggu kalimat sebelumnya
-  selesai diputar.
-- Dihapus: request `/tts/bytes` per kalimat, proses `paplay` dan toggle
+- LLM stream ditarik terus-menerus, bukan menunggu kalimat sebelumnya selesai
+  diputar. Kalimat berikutnya disintesis sambil kalimat sekarang diputar.
+- Satu writer audio berumur panjang dengan buffer lookahead, dipilih lewat
+  spike antara `pasimple` (`pa_simple_flush`) dan `pacat` berumur panjang.
+  Stop berarti flush buffer lokal.
+- Dihapus: request `/tts/bytes` per kalimat, proses `paplay`, dan toggle
   mute per klip.
 
 Gate: jeda antar kalimat ≤ 150 ms; stop sampai sunyi ≤ 100 ms; pause dan
 resume tanpa artefak.
 
-Revisi riset: Cartesia websocket dengan satu context per turn,
-`continue: true` per potongan, `max_buffer_delay_ms: 0` karena kita
-membagi kalimat sendiri, dan `add_timestamps`. `cancel` tidak menghentikan
-audio yang sudah dibuat, jadi stop membuang buffer lokal. Writer keluaran
-dipilih lewat spike antara `pasimple` (`pa_simple_flush`) dan `pacat`
-berumur panjang. Source Pipecat (`base_output.py`,
-`services/cartesia/tts.py`) dipakai sebagai acuan.
+Alasan pemisahan: diukur di oue-4, first chunk TTS per kalimat p50 482 ms,
+tapi di 3 dari 6 jawaban multi-kalimat kalimat kedua baru keluar dari LLM
+2,7–4,3 detik setelah sintesis kalimat pertama selesai, karena stream LLM
+baru ditarik setelah kalimat sebelumnya selesai diputar. Penyumbang jeda
+terbesar adalah pipeline kita sendiri, bukan protokol TTS. Karena itu B5a
+netral provider dan memperbaiki jeda tanpa ganti protokol.
+
+### B5b: Kontrak sesi streaming netral dan adapter provider
+
+- Kontrak netral: buka turn → kirim potongan teks → selesai atau batal →
+  keluar chunk audio, plus timing kata kalau provider punya.
+- Adapter websocket: Cartesia (satu context per turn, `continue: true` per
+  potongan, `max_buffer_delay_ms: 0` karena kita membagi kalimat sendiri,
+  `add_timestamps`) dan ElevenLabs (multi-context websocket, fitur setara).
+- Adapter HTTP: OpenAI dan MiniMax, request per kalimat dengan lookahead,
+  tanpa timing kata. Kualitas turun sedikit, tapi tetap jalan.
+- Fallback lintas provider tetap ada, jadi provider bisa diganti di tengah
+  sesi tanpa kehilangan turn.
+
+Gate: timing kata masuk journal, jadi saat twin dipotong kita tahu kata
+terakhir yang benar-benar kedengeran; prosodi nyambung antar kalimat; satu
+provider mati di tengah turn dan sesi pindah ke provider lain.
+
+Yang benar-benar didapat dari websocket, dan bukan dari HTTP: prosodi
+nyambung antar kalimat (kalimat kedua melanjutkan intonasi pertama, bukan
+reset), timing kata per kata, dan overhead per kalimat lebih kecil karena
+tidak membuat request baru tiap kalimat. Ketiganya nilai tambah, bukan
+alasan utama. Cartesia hanya implementasi pertama karena itu provider yang
+kita pakai sekarang; desainnya terikat ke kontrak netral di atas, bukan ke
+Cartesia. Source Pipecat (`base_output.py`, `services/cartesia/tts.py`)
+dipakai sebagai acuan.
 
 ### B1: Floor actor
 
@@ -749,25 +773,26 @@ gate A.
 7. Live validation A: tiga sesi multi-human 30 menit, satu dengan kill
    Chromium, satu dengan restart worker.
 8. V0 replay harness.
-9. B5 TTS dan playback streaming.
-10. B1 floor actor.
-11. B3 barge-in dari suara (butuh B5, B1).
-12. B2 commit giliran lokal (butuh B1).
-13. B4 identitas dari stream.
-14. B6 turn paralel.
-15. B7 perception layar.
-16. Live validation B: metrik latency dan barge-in di tabel baseline.
-17. C1 owner model.
-18. C2 dan C3 kontribusi dan gate per klaim.
-19. C4 prompt peran (butuh C2 dan C3).
-20. C5 memory listener.
-21. C6 proactive dari kernel (butuh C1, C5, B1).
-22. C7 belajar dari debrief (butuh C1).
-23. Live validation C: skenario kontribusi dan review owner.
-24. D3 config.
-25. D1 calendar (butuh A2).
-26. D2 pod per sesi.
-27. D4 worker job di Postgres.
+9. B5a lookahead sintesis dan writer audio berumur panjang.
+10. B5b kontrak sesi streaming netral dan adapter provider.
+11. B1 floor actor.
+12. B3 barge-in dari suara (butuh B5a, B1).
+13. B2 commit giliran lokal (butuh B1).
+14. B4 identitas dari stream.
+15. B6 turn paralel.
+16. B7 perception layar.
+17. Live validation B: metrik latency dan barge-in di tabel baseline.
+18. C1 owner model.
+19. C2 dan C3 kontribusi dan gate per klaim.
+20. C4 prompt peran (butuh C2 dan C3).
+21. C5 memory listener.
+22. C6 proactive dari kernel (butuh C1, C5, B1).
+23. C7 belajar dari debrief (butuh C1).
+24. Live validation C: skenario kontribusi dan review owner.
+25. D3 config.
+26. D1 calendar (butuh A2).
+27. D2 pod per sesi.
+28. D4 worker job di Postgres.
 
 Setiap PR: tes regresi untuk perilaku yang diganti, gate penuh, review
 independen atas diff, squash merge setelah CI hijau.
