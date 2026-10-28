@@ -44,6 +44,7 @@ from fakeyou.memory.persona import speech_keywords
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
+from fakeyou.observability.model_inputs import journal_model_inputs
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.orchestration.assembly import (
     AgentWiring,
@@ -346,7 +347,7 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
     detector = MomentDetector(
         registry=build_source_registry(prepared.profile, prepared.brief),
         judge=ModelMomentJudge(
-            create_turn_judge_model(settings),
+            journal_model_inputs(create_turn_judge_model(settings), run.journal, "judge"),
             timeout_seconds=settings.turn_judge.timeout_seconds,
         ),
         embed=embed_texts if embedder is not None else None,
@@ -374,11 +375,14 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
             cue_text=event.text,
         )
         return
+    utterance = event.utterance
     run.journal.record(
         event.kind,
         source="playback",
         ends_with_question=event.text.rstrip().endswith("?"),
         detail=event.detail,
+        transcript_id=utterance.transcript_id,
+        sentence_index=utterance.sentence_index,
     )
     if event.kind == "playback_started":
         run.speaking = event.text

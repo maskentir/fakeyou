@@ -315,6 +315,15 @@ REPLY_STREAM_ATTEMPTS = 2
 DEFAULT_STREAM_TRACE = StreamTrace()
 
 
+def _correlated(config: RunnableConfig, trace: StreamTrace) -> RunnableConfig:
+    keys = {"transcript_id": trace.transcript_id, "request_id": trace.request_id}
+    metadata = {
+        **config.get("metadata", {}),
+        **{key: value for key, value in keys.items() if value},
+    }
+    return {**config, "metadata": metadata}
+
+
 def _with_callback(config: RunnableConfig, callback: AsyncCallbackHandler) -> RunnableConfig:
     callbacks = config.get("callbacks")
     if isinstance(callbacks, BaseCallbackManager):
@@ -334,7 +343,8 @@ async def invoke_reply(
     activity = _ToolActivity(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     try:
         result = await agent.ainvoke(
-            {"messages": list(messages)}, config=_with_callback(config, activity)
+            {"messages": list(messages)},
+            config=_with_callback(_correlated(config, trace), activity),
         )
     except Exception as error:
         fault = classify_exception("agent", error)
@@ -520,7 +530,7 @@ async def stream_sentences(
             planner = _reply_planner(max_sentences, trace)
             stream: AsyncIterator[Any] = agent.astream(
                 {"messages": list(messages)},
-                config=_with_callback(config, phase),
+                config=_with_callback(_correlated(config, trace), phase),
                 stream_mode="messages",
             )
             try:

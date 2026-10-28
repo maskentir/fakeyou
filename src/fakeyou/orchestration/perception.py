@@ -7,6 +7,7 @@ from pathlib import Path
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.observability.journal import Journal
+from fakeyou.observability.model_inputs import journal_model_inputs
 from fakeyou.orchestration.providers import create_perception_chat_model
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import PerceptionContext
@@ -127,7 +128,7 @@ def create_perception_interpreter(
 ) -> PerceptionInterpreter | None:
     perception = settings.perception
     try:
-        model = create_perception_chat_model(settings)
+        model = journal_model_inputs(create_perception_chat_model(settings), journal, "perception")
     except FakeYouError as error:
         journal.record(
             "perception_interpreter_disabled",
