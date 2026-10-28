@@ -100,13 +100,13 @@ bila tidak ada yang cocok, dan alasannya dicatat.
 | OpenTelemetry SDK | span lintas proses | D2 | ditambahkan saat api, worker, dan pod terpisah, untuk latency lintas proses |
 | Playwright 1.63 | locator role/aria, `wait_for`, `aria_snapshot()` | A3, A4, A5 | pakai. `add_locator_handler` tidak cocok: hanya jalan saat ada action atau assertion. `page.on("websocket")` tidak melihat RTCDataChannel, jadi bridge RTC tetap |
 | Pydantic 2.13 | `TypeAdapter.validate_json(..., experimental_allow_partial="trailing-strings")` | C2/C3 | pakai untuk klaim parsial yang tervalidasi |
-| Graphiti 0.30 | `entity_types`/`edge_types`, `SearchFilters(edge_types=...)`, recipe `EDGE_HYBRID_SEARCH_RRF`, `center_node_uuid` | C5, C6, C7 | pakai. Tidak sebagai owner model: ekstraksi LLM mengubah kata dan dapat menginvalidasi edge, tanpa versi atau approval |
+| Graphiti 0.30 | `entity_types`/`edge_types`, `SearchFilters(edge_types=...)`, recipe `EDGE_HYBRID_SEARCH_RRF`, `center_node_uuid` | C1, C5, C6, C7 | pakai. Tidak sebagai owner model: ekstraksi LLM mengubah kata dan dapat menginvalidasi edge, tanpa versi atau approval |
 | LangGraph `PostgresStore`, LangMem | store key-value, memori otomatis | C1, C5 | tidak: tanpa versi, approval, disclosure; LangMem menulis memori sendiri |
 | langchain-core | `InMemoryRateLimiter` | C5 | pakai untuk batas laju recall |
 | deepeval 4.2 | GEval | C2/C3 | judge offline owner-plausible, bukan runtime |
 | Smart Turn v3.2 (Pipecat) | model ONNX akhir giliran berbasis prosodi, 23 bahasa termasuk Indonesia | B2 | vendor model, jalankan dengan `onnxruntime` yang sudah ada |
 | Silero VAD v5 | sudah dipakai (port dari Pipecat) | B3 | tetap |
-| Cartesia / ElevenLabs websocket | context, `continue`, flush, timestamp | B5b | pakai; `cancel` Cartesia tidak menghentikan audio yang sedang dibuat, jadi stop tetap membuang buffer lokal |
+| Cartesia / ElevenLabs websocket | context, `continue`, flush, timestamp | B5b | pakai; `cancel` Cartesia membatalkan seluruh context, jadi stop membuang buffer lokal |
 | `pasimple` atau `pacat` panjang | writer PulseAudio berumur panjang dengan flush | B5a | diputuskan lewat spike; `pasimple` 0.0.3 jarang dirawat |
 | Pipecat / LiveKit Agents | framework voice penuh | B1-B6 | tidak dipakai sebagai dependency: turn controller mereka bertabrakan dengan kernel dan judge; LiveKit bagian terbaiknya cloud atau berlisensi khusus. Yang diambil hanya model Smart Turn yang di-vendor, dan source Pipecat sebagai rancangan acuan |
 | RapidOCR 3.10, imagehash | OCR ONNX, hash persepsi | B7 | spike dulu; kunci sama/scroll/baru dari hash teks OCR |
@@ -199,12 +199,12 @@ dipakai sebagai gate.
 | --- | --- | --- | --- | --- |
 | VAD stop → transcript final | p50 1,30 s, p95 3,0 s | live-oue-4 | ya | commit lokal p50 ≤ 0,5 s |
 | Final → PCM pertama | p50 2,08 s, p95 8,2 s | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
-| Final → audio pertama | tidak terukur: playback belum membawa `transcript_id` | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
+| Final → audio pertama | tidak terukur: journal oue-4 lebih tua dari A0, jadi event playback di sana belum membawa `transcript_id`; kodenya sudah membawa sejak A0 | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
 | Orang selesai → twin bersuara | sekitar 3,4 s (1,30 + 2,08) | gabungan | ya | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
 | Barge-in → suara twin turun | p50 2,95 s dari onset VAD, dipasangkan per waktu karena journal lama tidak membawa turn yang dipotong | live-oue-4 | ya | ≤ 0,3 s |
 | Barge-in ditolak | 44 | live-oue-4 | ya | diukur ulang setelah B3 |
 | Early commit | 2 dari 30 turn | live-oue-4 | ya | diganti B2 |
-| Jeda antar kalimat twin | 0,78-0,80 s | live-oue-4 | belum | ≤ 0,15 s |
+| Jeda antar kalimat twin | 0,78-0,80 s, terpecah jadi 0,50 s tail playback dan 0,29 s first chunk TTS | live-oue-4 | ya, dihitung manual dari journal | ≤ 0,15 s |
 | Final terikat ke speaker | 0 dari 236 | live-oue-4 | ya | ≥ 90% |
 | Sesi `browser_failure` tanpa rejoin | 16 dari 54 | semua sesi | ya | 0 |
 | `session.json` beda dengan journal | 51 dari 54 (oue-4: `null`) | semua sesi | sebagian | tidak ada salinan kedua |
@@ -407,41 +407,78 @@ dalam toleransi 10%.
 
 ### B5a: Lookahead sintesis dan writer audio berumur panjang
 
-Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush.
+Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush. B5a tidak
+mengganti protokol TTS, jadi transport TTS yang ada tetap dipakai selama
+B5a.
 
 - LLM stream ditarik terus-menerus, bukan menunggu kalimat sebelumnya selesai
   diputar. Kalimat berikutnya disintesis sambil kalimat sekarang diputar.
 - Satu writer audio berumur panjang dengan buffer lookahead, dipilih lewat
   spike antara `pasimple` (`pa_simple_flush`) dan `pacat` berumur panjang.
   Stop berarti flush buffer lokal.
-- Dihapus: request `/tts/bytes` per kalimat, proses `paplay`, dan toggle
-  mute per klip.
+- Dihapus: proses `paplay` per klip dan toggle mute per klip. Request TTS
+  per kalimat tetap ada di B5a; penggantinya datang di B5b.
 
 Gate: jeda antar kalimat ≤ 150 ms; stop sampai sunyi ≤ 100 ms; pause dan
 resume tanpa artefak.
 
-Alasan pemisahan: diukur di oue-4, first chunk TTS per kalimat p50 482 ms,
-tapi di 3 dari 6 jawaban multi-kalimat kalimat kedua baru keluar dari LLM
-2,7–4,3 detik setelah sintesis kalimat pertama selesai, karena stream LLM
-baru ditarik setelah kalimat sebelumnya selesai diputar. Penyumbang jeda
-terbesar adalah pipeline kita sendiri, bukan protokol TTS. Karena itu B5a
-netral provider dan memperbaiki jeda tanpa ganti protokol.
+Alasan pemisahan, diukur dari journal `live-oue-4` (satu sesi, jadi indikasi
+bukan bukti):
+
+- Ada 9 jawaban multi-kalimat. Dari 6 yang sintesis kalimat pertamanya
+  selesai tercatat, 4 punya jeda 2,7–4,3 s antara sintesis kalimat pertama
+  selesai dan kalimat kedua keluar dari LLM. Dua sisanya lebih cepat:
+  kalimat kedua keluar sebelum sintesis kalimat pertama selesai, jadi LLM
+  sudah mendahului di sana. Jadi jeda tidak datang dari satu tempat saja.
+- Jeda yang audible terukur di 3 kasus: 0,78–0,80 s antara
+  `playback_finished` kalimat pertama dan PCM pertama kalimat berikutnya.
+  Rinciannya 0,50 s tail menganggur di `PlaybackEngine._run`
+  (`tail_seconds`) dan 0,29 s first chunk TTS.
+- Penyebabnya di pipeline kita, bukan di protokol TTS, dan ada tiga. `_deliver`
+  menarik chunk LLM berikutnya hanya setelah `sink.say` selesai, dan `say`
+  baru selesai setelah playback kalimat itu selesai, jadi kalimat berikutnya
+  tidak pernah siap lebih awal. Audio klip ditarik malas: request TTS baru
+  jalan saat klip mulai diputar, jadi first chunk TTS selalu ada di jalur
+  kritis. `tail_seconds` 0,5 s menahan worker playback selama 0,5 s tiap
+  klip, dan queue justru paling sering kosong tepat saat itu.
+
+Karena itu B5a netral provider: memperbaiki tiga hal itu tanpa ganti
+protokol. First chunk TTS p50 519 ms untuk 24 sintesis yang punya
+`transcript_id`, jadi selama sintesis belum mulai sebelum giliran playback,
+gate 150 ms mustahil tercapai.
+
+Batas bukti: semua angka di atas dari satu sesi dan dihitung manual dari
+journal, bukan dari report. `sentence_gap_ms` di `observability/baseline.py`
+sudah bisa menghitung jeda ini, tapi oue-4 masih lebih tua dari A0, jadi
+event playback di journal itu belum membawa `transcript_id` dan
+`sentence_index`. B5a lewat satu sesi live baru untuk mengukurnya dengan
+alat, bukan dengan tangan.
 
 ### B5b: Kontrak sesi streaming netral dan adapter provider
 
-- Kontrak netral: buka turn → kirim potongan teks → selesai atau batal →
-  keluar chunk audio, plus timing kata kalau provider punya.
-- Adapter websocket: Cartesia (satu context per turn, `continue: true` per
-  potongan, `max_buffer_delay_ms: 0` karena kita membagi kalimat sendiri,
-  `add_timestamps`) dan ElevenLabs (multi-context websocket, fitur setara).
+- Kontrak netral, menggantikan `SpeechSynthesizer` di `speech/contract.py`
+  yang sekarang per kalimat: buka turn → kirim potongan teks → selesai atau
+  batal → keluar chunk audio, plus timing kata kalau provider punya.
+- Adapter websocket: Cartesia (satu context per turn, `continue: true` untuk
+  potongan tambahan dan `continue: false` untuk potongan terakhir supaya
+  context ditutup, `max_buffer_delay_ms: 0` karena kita membagi kalimat
+  sendiri, `add_timestamps`) dan ElevenLabs (multi-context websocket, fitur
+  setara).
 - Adapter HTTP: OpenAI dan MiniMax, request per kalimat dengan lookahead,
   tanpa timing kata. Kualitas turun sedikit, tapi tetap jalan.
-- Fallback lintas provider tetap ada, jadi provider bisa diganti di tengah
-  sesi tanpa kehilangan turn.
+- Request TTS per kalimat yang dipakai di B5a dihapus, jadi adapter websocket
+  dan HTTP jadi satu jalur.
 
 Gate: timing kata masuk journal, jadi saat twin dipotong kita tahu kata
 terakhir yang benar-benar kedengeran; prosodi nyambung antar kalimat; satu
 provider mati di tengah turn dan sesi pindah ke provider lain.
+
+Soal fallback: `speech/fallback.py` sekarang menaikkan error begitu primary
+menghasilkan satu chunk pun, jadi provider mati setelah audio mulai tidak
+bisa dipindah. B5b mengubahnya: pertukaran provider di tengah turn tetap
+boleh, dan turn yang sudah menghasilkan audio tidak hilang karena itu.
+Fallback ini belum ada sekarang, jadi ini pekerjaan baru, bukan sifat yang
+dipelihara.
 
 Yang benar-benar didapat dari websocket, dan bukan dari HTTP: prosodi
 nyambung antar kalimat (kalimat kedua melanjutkan intonasi pertama, bukan
@@ -503,9 +540,10 @@ Gate: replay V0 oue-4 menunjukkan commit p50 ≤ 0,5 s setelah VAD stop
 dengan false commit ≤ 5%.
 
 Revisi riset: model Smart Turn v3.2 (BSD-2, ONNX int8 sekitar 8 MB, 23
-bahasa termasuk Indonesia, 10-100 ms di CPU) di-vendor seperti Silero dan
-dijalankan dengan `onnxruntime` yang sudah ada, setelah Silero melaporkan
-stop. Sinyal prosodi ini digabung dengan judge interim.
+bahasa termasuk Indonesia, inferensi di bawah 100 ms di CPU menurut
+dokumentasi Pipecat) di-vendor seperti Silero dan dijalankan dengan
+`onnxruntime` yang sudah ada, setelah Silero melaporkan stop. Sinyal prosodi
+ini digabung dengan judge interim.
 
 ### B4: Identitas dari stream
 
@@ -553,9 +591,10 @@ menjadi 0.
 Gate: replay share spreadsheet oue-4 menghasilkan ≤ 5 read LLM; layar
 terbaca ≤ 3 s setelah settle.
 
-Revisi riset: spike RapidOCR 3.10 (model PP-OCRv6 multi yang mencakup
-Indonesia) melawan Tesseract 5.5 pada frame oue-4; kunci dedup adalah hash
-teks OCR, `imagehash` hanya sebagai sinyal kasar.
+Revisi riset: spike RapidOCR 3.10 (model PP-OCRv6 multi; cakupan bahasa
+Latin termasuk Indonesia belum terkonfirmasi dari dokumentasi resmi, jadi
+dicek saat spike) melawan Tesseract 5.5 pada frame oue-4; kunci dedup
+adalah hash teks OCR, `imagehash` hanya sebagai sinyal kasar.
 
 ## Track C: otak
 
