@@ -6,11 +6,9 @@ from dataclasses import dataclass
 from typing import Any, cast, override
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
-from langchain_core.language_models import LanguageModelInput
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import RunnableConfig
 from pydantic import PrivateAttr
 
 from fakeyou.conversation.turn_judge import JudgeAction, JudgeWindow, TurnJudgement
@@ -169,6 +167,11 @@ class RecordedModel(BaseChatModel):
         return "recorded-replay-model"
 
     @override
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "RecordedModel":
+        del tools, kwargs
+        return self
+
+    @override
     def _generate(
         self,
         messages: list[BaseMessage],
@@ -190,36 +193,11 @@ class RecordedModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        del messages, stop, run_manager
-        scripted = self._script(_transcript_id(kwargs))
+        del stop, run_manager, kwargs
+        scripted = self._script(self._transcript_id(messages))
         await asyncio.sleep((scripted.duration_ms or 0.0) / 1000)
         text = scripted.head + "".join(piece for _, piece in scripted.pieces) + scripted.tail
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
-
-    @override
-    async def ainvoke(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        *,
-        stop: list[str] | None = None,
-        **kwargs: Any,
-    ) -> AIMessage:
-        kwargs["transcript_id"] = _config_transcript_id(config)
-        return await super().ainvoke(input, config, stop=stop, **kwargs)
-
-    @override
-    async def astream(
-        self,
-        input: LanguageModelInput,
-        config: RunnableConfig | None = None,
-        *,
-        stop: list[str] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[AIMessageChunk]:
-        kwargs["transcript_id"] = _config_transcript_id(config)
-        async for chunk in super().astream(input, config, stop=stop, **kwargs):
-            yield chunk
 
     @override
     async def _astream(
@@ -229,8 +207,8 @@ class RecordedModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        del messages, stop, run_manager
-        scripted = self._script(_transcript_id(kwargs))
+        del stop, run_manager, kwargs
+        scripted = self._script(self._transcript_id(messages))
         yield _chunk(scripted.head)
         elapsed = 0.0
         for offset_ms, piece in scripted.pieces:
@@ -240,6 +218,15 @@ class RecordedModel(BaseChatModel):
         yield _chunk(scripted.tail)
         if scripted.duration_ms is not None:
             await asyncio.sleep(max(0.0, scripted.duration_ms - elapsed) / 1000)
+
+    def _transcript_id(self, messages: Sequence[BaseMessage]) -> str | None:
+        for message in reversed(list(messages)):
+            identifier = getattr(message, "id", None)
+            if isinstance(identifier, str) and (
+                identifier in self._replies or identifier in self._plans
+            ):
+                return identifier
+        return None
 
     def _script(self, transcript_id: str | None) -> ScriptedReply:
         reply = self._replies.get(transcript_id) if transcript_id else None
@@ -281,14 +268,3 @@ def _head(plan: RecordedPlan) -> str:
 
 def _chunk(text: str) -> ChatGenerationChunk:
     return ChatGenerationChunk(message=AIMessageChunk(content=text))
-
-
-def _transcript_id(kwargs: Mapping[str, Any]) -> str | None:
-    value = kwargs.get("transcript_id")
-    return value if isinstance(value, str) else None
-
-
-def _config_transcript_id(config: RunnableConfig | None) -> str | None:
-    metadata = (config or {}).get("metadata") or {}
-    value = metadata.get("transcript_id")
-    return value if isinstance(value, str) else None

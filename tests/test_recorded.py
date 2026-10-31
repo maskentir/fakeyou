@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import HumanMessage
 
+from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.reply_planner import ReplyPlanner
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow
 from fakeyou.replay.fixture import (
@@ -172,8 +173,7 @@ def test_the_model_streams_the_recorded_sentences_at_the_recorded_offsets() -> N
         model = RecordedModel(replies(), plans())
         marks: list[tuple[float, str]] = []
         async for chunk in model.astream(
-            [HumanMessage("can you see my screen")],
-            config={"metadata": {"transcript_id": "t1"}},
+            [HumanMessage("can you see my screen", id="t1")],
         ):
             marks.append((loop.time(), chunk.text))
         return marks
@@ -191,8 +191,7 @@ def test_the_model_writes_a_plan_the_planner_reads() -> None:
         model = RecordedModel(replies(), plans())
         pieces: list[str] = []
         async for chunk in model.astream(
-            [HumanMessage("can you see my screen")],
-            config={"metadata": {"transcript_id": "t1"}},
+            [HumanMessage("can you see my screen", id="t1")],
         ):
             pieces.append(chunk.text)
         return pieces
@@ -217,9 +216,7 @@ def test_the_model_says_nothing_for_a_turn_without_a_recorded_reply() -> None:
     async def main() -> str:
         model = RecordedModel(replies(), plans())
         pieces = []
-        async for chunk in model.astream(
-            [HumanMessage("hello")], config={"metadata": {"transcript_id": "t9"}}
-        ):
+        async for chunk in model.astream([HumanMessage("hello", id="t9")]):
             pieces.append(chunk.text)
         return "".join(pieces)
 
@@ -299,6 +296,41 @@ RUNTIME = Path(".runtime/audio")
 
 
 @pytest.mark.skipif(not (RUNTIME / "journals/live-oue-4.jsonl").exists(), reason="no oue-4 data")
+def test_the_real_agent_replays_a_recorded_reply_at_its_recorded_offset() -> None:
+    fixture = load_fixture(
+        RUNTIME / "journals/live-oue-4.jsonl", RUNTIME / "meetings/live-oue-4/record.jsonl"
+    )
+    transcript_id, reply = next(
+        (key, value)
+        for key, value in fixture.replies.items()
+        if len(value.sentences) == 1 and value.sentences[0].text is not None
+    )
+    agent = create_meeting_agent(
+        RecordedModel(fixture.replies, fixture.plans), tools=(), persona="You are a twin."
+    )
+
+    async def main() -> list[tuple[float, str]]:
+        loop = asyncio.get_running_loop()
+        marks: list[tuple[float, str]] = []
+        async for message, metadata in agent.astream(
+            {"messages": [{"role": "user", "content": "can you see", "id": transcript_id}]},
+            stream_mode="messages",
+        ):
+            if isinstance(metadata, dict) and metadata.get("langgraph_node") == "model":
+                marks.append((loop.time(), str(getattr(message, "text", ""))))
+        return marks
+
+    marks = run_virtual(main)
+    sentence = reply.sentences[0]
+
+    assert sentence.text is not None
+    assert marks[1][0] == pytest.approx(sentence.offset_ms / 1000)
+    assert sentence.text in marks[1][1]
+    assert reply.duration_ms is not None
+    assert marks[-1][0] == pytest.approx(reply.duration_ms / 1000)
+
+
+@pytest.mark.skipif(not (RUNTIME / "journals/live-oue-4.jsonl").exists(), reason="no oue-4 data")
 def test_the_oue_4_session_replays_its_recorded_latencies() -> None:
     fixture = load_fixture(
         RUNTIME / "journals/live-oue-4.jsonl", RUNTIME / "meetings/live-oue-4/record.jsonl"
@@ -313,9 +345,7 @@ def test_the_oue_4_session_replays_its_recorded_latencies() -> None:
         loop = asyncio.get_running_loop()
         model = RecordedModel(fixture.replies, fixture.plans)
         marks: list[tuple[float, str]] = []
-        async for chunk in model.astream(
-            [HumanMessage("hello")], config={"metadata": {"transcript_id": transcript_id}}
-        ):
+        async for chunk in model.astream([HumanMessage("hello", id=transcript_id)]):
             marks.append((loop.time(), chunk.text))
         return marks
 
