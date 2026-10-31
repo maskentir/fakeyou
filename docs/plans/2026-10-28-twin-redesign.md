@@ -1,6 +1,8 @@
 # Twin Redesign
 
-Status: draft revisi 1, menunggu review owner.
+Status: berjalan. A0 (#46) dan A1a (#47) selesai. Revisi 2 (2026-10-28):
+setiap langkah diperiksa ulang terhadap library yang terpasang; lihat
+"Riset library".
 Tanggal: 2026-10-28.
 Dasar: audit design empat subsistem (voice real-time, otak, perception dan
 kontrol Meet, orkestrasi dan platform) setelah PR #44, diverifikasi terhadap
@@ -78,6 +80,40 @@ Twin harus dapat:
 - Capture per-stream (`StreamFleetSession`, 4 slot) dan rotasi sesi STT
   sebelum batas 60 menit.
 - Debrief yang wajib menyertakan kutipan bukti, provenance Graphiti.
+
+## Riset library
+
+Revisi 1 ditulis dari audit kode tanpa memeriksa apa yang sudah disediakan
+library. Revisi 2 memeriksa source versi terpasang dan dokumentasi resmi.
+Aturannya: fitur library dipakai bila menjawab kebutuhan; kode sendiri hanya
+bila tidak ada yang cocok, dan alasannya dicatat.
+
+| Library | Fitur | Dipakai di | Keputusan |
+| --- | --- | --- | --- |
+| SQLAlchemy 2.1 + psycopg 3 | engine async `postgresql+psycopg_async`, `with_for_update(skip_locked=True)`, `RETURNING` | A1a-r, A2 | pakai; hapus `asyncio.to_thread` |
+| tenacity 9.1 | `AsyncRetrying`, `wait_exponential`, `before_sleep_log` | A1a-r | pakai untuk retry tulis status |
+| FastAPI / Starlette | lifespan state, `Depends`, `dependency_overrides` | A1a-r | pakai; hapus singleton `app.state` dan factory `ApiDeps.session_status` |
+| redis-py 6.4 | `xautoclaim` | A1a-r | pakai; ganti `xpending_range` + `xclaim` |
+| LangGraph 1.2 | checkpoint, durability `sync/async/exit`, `RetryPolicy`, `RunControl` | A1b, B1 | tidak untuk sesi meeting: resume hanya menjalankan ulang node dan tidak memulihkan browser, audio, atau admission; drain hanya di batas step. Tetap untuk debrief (`@entrypoint`/`@task`) dan composer |
+| langchain middleware | `wrap_model_call` + `context_schema`, `ModelRetryMiddleware`, `ModelFallbackMiddleware` | B6 | tier model dari context plan; satu lapis retry |
+| LangSmith 0.14 | `Client(hide_inputs=callable)`, mode `otel` | A0 | belum; dipakai bila ada backend trace. Journal tetap sumber, karena VAD, STT, TTS, dan playback bukan run LangChain |
+| OpenTelemetry SDK | span lintas proses | D2 | ditambahkan saat api, worker, dan pod terpisah, untuk latency lintas proses |
+| Playwright 1.63 | locator role/aria, `wait_for`, `aria_snapshot()` | A3, A4, A5 | pakai. `add_locator_handler` tidak cocok: hanya jalan saat ada action atau assertion. `page.on("websocket")` tidak melihat RTCDataChannel, jadi bridge RTC tetap |
+| Pydantic 2.13 | `TypeAdapter.validate_json(..., experimental_allow_partial="trailing-strings")` | C2/C3 | pakai untuk klaim parsial yang tervalidasi |
+| Graphiti 0.30 | `entity_types`/`edge_types`, `SearchFilters(edge_types=...)`, recipe `EDGE_HYBRID_SEARCH_RRF`, `center_node_uuid` | C1, C5, C6, C7 | pakai. Tidak sebagai owner model: ekstraksi LLM mengubah kata dan dapat menginvalidasi edge, tanpa versi atau approval |
+| LangGraph `PostgresStore`, LangMem | store key-value, memori otomatis | C1, C5 | tidak: tanpa versi, approval, disclosure; LangMem menulis memori sendiri |
+| langchain-core | `InMemoryRateLimiter` | C5 | pakai untuk batas laju recall |
+| deepeval 4.2 | GEval | C2/C3 | judge offline owner-plausible, bukan runtime |
+| Smart Turn v3.2 (Pipecat) | model ONNX akhir giliran berbasis prosodi, 23 bahasa termasuk Indonesia | B2 | vendor model, jalankan dengan `onnxruntime` yang sudah ada |
+| Silero VAD v5 | sudah dipakai (port dari Pipecat) | B3 | tetap |
+| Cartesia / ElevenLabs websocket | context, `continue`, flush, timestamp | B5b | pakai; `cancel` Cartesia membatalkan seluruh context, jadi stop membuang buffer lokal |
+| `pasimple` atau `pacat` panjang | writer PulseAudio berumur panjang dengan flush | B5a | diputuskan lewat spike; `pasimple` 0.0.3 jarang dirawat |
+| Pipecat / LiveKit Agents | framework voice penuh | B1-B6 | tidak dipakai sebagai dependency: turn controller mereka bertabrakan dengan kernel dan judge; LiveKit bagian terbaiknya cloud atau berlisensi khusus. Yang diambil hanya model Smart Turn yang di-vendor, dan source Pipecat sebagai rancangan acuan |
+| RapidOCR 3.10, imagehash | OCR ONNX, hash persepsi | B7 | spike dulu; kunci sama/scroll/baru dari hash teks OCR |
+| google-api-python-client | `events.list` + `syncToken` | D1 | pakai polling; push `watch` belum (butuh HTTPS publik, channel kedaluwarsa, tidak 100% andal) |
+| kubernetes client | Job: `backoffLimit: 0`, `activeDeadlineSeconds`, `ttlSecondsAfterFinished` | D2 | pakai; kopf/CRD tidak, karena tabel sesi sudah desired state |
+| pydantic-settings 2.15 | sub-model, `model_copy(update=...)`, `secrets_dir` | D3 | pakai; hapus salinan field |
+| procrastinate | antrean job Postgres dengan retry, lock, stalled job | D4 | pakai untuk worker job; tidak untuk A2 karena membuat tabel status kedua |
 
 ## Koreksi terhadap plan kernel
 
@@ -163,12 +199,12 @@ dipakai sebagai gate.
 | --- | --- | --- | --- | --- |
 | VAD stop → transcript final | p50 1,30 s, p95 3,0 s | live-oue-4 | ya | commit lokal p50 ≤ 0,5 s |
 | Final → PCM pertama | p50 2,08 s, p95 8,2 s | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
-| Final → audio pertama | tidak terukur: playback belum membawa `transcript_id` | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
+| Final → audio pertama | tidak terukur: journal oue-4 lebih tua dari A0, jadi event playback di sana belum membawa `transcript_id`; kodenya sudah membawa sejak A0 | live-oue-4 | ya | p50 ≤ 1,0 s, p90 ≤ 2,0 s |
 | Orang selesai → twin bersuara | sekitar 3,4 s (1,30 + 2,08) | gabungan | ya | p50 ≤ 1,5 s, p90 ≤ 2,5 s |
 | Barge-in → suara twin turun | p50 2,95 s dari onset VAD, dipasangkan per waktu karena journal lama tidak membawa turn yang dipotong | live-oue-4 | ya | ≤ 0,3 s |
 | Barge-in ditolak | 44 | live-oue-4 | ya | diukur ulang setelah B3 |
 | Early commit | 2 dari 30 turn | live-oue-4 | ya | diganti B2 |
-| Jeda antar kalimat twin | 0,78-0,80 s | live-oue-4 | belum | ≤ 0,15 s |
+| Jeda antar kalimat twin | 0,78-0,80 s, terpecah jadi 0,50 s tail playback dan 0,29 s first chunk TTS; `sentence_gap_ms` cuma mengukur komponen 0,50 s | live-oue-4 | ya, dihitung manual dari journal | ≤ 0,15 s |
 | Final terikat ke speaker | 0 dari 236 | live-oue-4 | ya | ≥ 90% |
 | Sesi `browser_failure` tanpa rejoin | 16 dari 54 | semua sesi | ya | 0 |
 | `session.json` beda dengan journal | 51 dari 54 (oue-4: `null`) | semua sesi | sebagian | tidak ada salinan kedua |
@@ -208,6 +244,11 @@ Gate: untuk setiap ucapan di sesi uji, report menampilkan rantai lengkap
 dari final sampai playback tanpa heuristik waktu; report menghitung ulang
 baseline dari journal oue-1 sampai oue-4.
 
+Revisi riset: journal tetap sumber kebenaran. `model_input_recorded` juga
+mencatat `parent_run_id` agar panggilan model terhubung tanpa kunci sendiri.
+Bila backend trace dipasang, digest dipindah ke `Client(hide_inputs=...)`
+LangSmith dengan ekspor OTel, dan callback sendiri dihapus.
+
 ### A1a: Satu sumber status sesi
 
 - Tabel Postgres `meeting_sessions` (migrasi `0002`): `meeting_id`,
@@ -227,6 +268,21 @@ baseline dari journal oue-1 sampai oue-4.
 Gate: tidak ada kode yang menulis phase selain worker; view API dan SSE
 membaca tabel; hasil akhir sesi menyimpan alasan dan detail walau phase
 live sudah `ended`.
+
+### A1a-r: Koreksi A1a dari riset
+
+- Repository status async dengan `create_async_engine`
+  (`postgresql+psycopg_async`); `asyncio.to_thread` di API dan worker
+  dihapus. Pemeriksaan skema lewat `connection.run_sync(require_current)`.
+- Antrean berurutan `StatusWriter` tetap (tidak ada library untuk itu);
+  loop retry diganti `tenacity.AsyncRetrying`.
+- API: engine dibuat di lifespan Starlette, repository di-inject dengan
+  `Depends`, test memakai `dependency_overrides`. Dihapus: singleton lazy di
+  `app.state` dan `ApiDeps.session_status`.
+- `StreamTransport.claim_stale` memakai `xautoclaim`.
+
+Gate: tidak ada `asyncio.to_thread` untuk status; test API memakai
+`dependency_overrides`.
 
 ### A1b: Lifecycle tanpa LangGraph
 
@@ -276,6 +332,14 @@ dan Redis restart; setiap kasus berakhir dengan sesi yang kembali di meeting
 atau status terminal yang jujur. Live: kill Chromium di tengah meeting dan
 twin kembali dalam 60 detik.
 
+Revisi riset: klaim baris dalam satu statement `UPDATE ... WHERE
+meeting_id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING`, dengan
+jam database (`now()`), bukan jam worker. `attempt_id` menjadi fencing
+token: perpanjangan lease dan `record_phase` difilter `lease_owner` dan
+`attempt_id`, sehingga worker lama tidak dapat menimpa setelah diambil alih.
+Advisory lock tidak dipakai (terikat satu koneksi). Bangun reconciler
+dengan polling 2-5 s; LISTEN/NOTIFY psycopg opsional.
+
 ### A3: Join dan lobby
 
 - Knock sekali. Hanya kegagalan sebelum knock (navigasi, nama, tombol join)
@@ -286,6 +350,10 @@ twin kembali dalam 60 detik.
 - Dihapus: `timeout` di `JOIN_RETRYABLE_STATUSES`.
 
 Gate: tes lobby dengan admit di menit ke-6 berhasil tanpa knock ulang.
+
+Revisi riset: polling `page.content()` di `_await_admission` dan
+`leave_meeting` diganti `asyncio.wait` atas sinyal protocol dan
+`get_by_role(...).wait_for(state="visible"|"detached", timeout=...)`.
 
 ### A4: Status call dari protocol
 
@@ -299,6 +367,12 @@ Gate: tes lobby dengan admit di menit ke-6 berhasil tanpa knock ulang.
 Gate: chat "the sprint has ended" dengan panel chat terbuka tidak mengubah
 status call.
 
+Revisi riset: hook RTCDataChannel (`assets/rtc_bridge.js`) tetap, karena
+event websocket Playwright dan CDP tidak melihat data channel. Echo chat
+sendiri dibaca dari field chat protocol bila tersedia, atau locator di dalam
+daftar chat (`get_by_text(..., exact=True)`), bukan hitungan teks di seluruh
+HTML.
+
 ### A5: Kebijakan dialog menurut struktur
 
 - Dialog dengan satu tombol acknowledge atau close, atau yang tertutup
@@ -309,6 +383,13 @@ status call.
 
 Gate: fixture skin tone picker, notice sign-in, dan countdown free-plan
 tidak mengakhiri sesi.
+
+Revisi riset: struktur dibaca dengan `locator.aria_snapshot()` dan hitungan
+role (`button`, `textbox`, `combobox`); fingerprint dialog adalah hash
+snapshot itu. Penutupan dengan `press("Escape")` lalu
+`wait_for(state="hidden")`. `add_locator_handler` tidak dipakai karena hanya
+berjalan sebelum action atau assertion, dan click cloakbrowser tidak lewat
+jalurnya.
 
 ## Track B: ritme bicara manusia
 
@@ -324,20 +405,93 @@ Gate B dan C butuh replay yang tidak bergantung pada sesi live.
 Gate: replay oue-4 dengan komponen sekarang mereproduksi metrik baseline
 dalam toleransi 10%.
 
-### B5: TTS dan playback streaming
+### B5a: Lookahead sintesis dan writer audio berumur panjang
 
-Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush.
+Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush. B5a tidak
+mengganti protokol TTS, jadi transport TTS yang ada tetap dipakai selama
+B5a.
 
-- Satu websocket TTS persisten per sesi dengan context continuation, satu
-  writer audio berumur panjang dengan buffer lookahead, dan stop berarti
-  flush buffer.
-- LLM stream ditarik terus-menerus, bukan menunggu kalimat sebelumnya
-  selesai diputar.
-- Dihapus: request `/tts/bytes` per kalimat, proses `paplay` dan toggle
-  mute per klip.
+- LLM stream ditarik terus-menerus, bukan menunggu kalimat sebelumnya selesai
+  diputar. Kalimat berikutnya disintesis sambil kalimat sekarang diputar.
+- Satu writer audio berumur panjang dengan buffer lookahead, dipilih lewat
+  spike antara `pasimple` (`pa_simple_flush`) dan `pacat` berumur panjang.
+  Stop berarti flush buffer lokal.
+- Dihapus: proses `paplay` per klip dan toggle mute per klip. Request TTS
+  per kalimat tetap ada di B5a; penggantinya datang di B5b.
 
 Gate: jeda antar kalimat ≤ 150 ms; stop sampai sunyi ≤ 100 ms; pause dan
 resume tanpa artefak.
+
+Alasan pemisahan, diukur dari journal `live-oue-4` (satu sesi, jadi indikasi
+bukan bukti):
+
+- Ada 9 jawaban multi-kalimat yang kalimatnya benar-benar keluar. Empat
+  transcript lain punya kalimat kedua yang di-drop, jadi menurut niat ada 13.
+  Dari 9 itu, 6 punya sintesis kalimat pertama selesai tercatat, dan 4 di
+  antaranya punya jeda 2,7–4,3 s antara sintesis kalimat pertama selesai
+  dan kalimat kedua keluar dari LLM. Dua sisanya lebih cepat: kalimat kedua
+  keluar sebelum sintesis kalimat pertama selesai, jadi LLM sudah mendahului
+  di sana. Jadi jeda tidak datang dari satu tempat saja.
+- Jeda yang audible terukur di 3 kasus: 0,78–0,80 s antara
+  `playback_finished` kalimat pertama dan PCM pertama kalimat berikutnya.
+  Rinciannya 0,50 s tail menganggur di `PlaybackEngine._run`
+  (`tail_seconds`) dan 0,29 s first chunk TTS.
+- Penyebabnya di pipeline kita, bukan di protokol TTS, dan ada tiga. `_deliver`
+  menarik chunk LLM berikutnya hanya setelah `sink.say` selesai, dan `say`
+  baru selesai setelah playback kalimat itu selesai (atau di-drop), jadi
+  kalimat berikutnya tidak pernah siap lebih awal. Audio klip ditarik malas:
+  request TTS baru jalan saat klip mulai diputar, jadi first chunk TTS selalu
+  ada di jalur kritis. `tail_seconds` 0,5 s menahan worker playback selama
+  0,5 s tiap klip, dan queue justru paling sering kosong tepat saat itu.
+
+Karena itu B5a netral provider: memperbaiki tiga hal itu tanpa ganti
+protokol. First chunk TTS p50 519 ms untuk 24 sintesis yang punya
+`transcript_id`, jadi selama sintesis belum mulai sebelum giliran playback,
+gate 150 ms mustahil tercapai.
+
+Batas bukti: semua angka di atas dari satu sesi dan dihitung manual dari
+journal, bukan dari report. `sentence_gap_ms` di `observability/baseline.py`
+sudah mengukur sisi playback, yaitu `playback_finished` ke
+`playback_started`, jadi yang terukur baru komponen 0,50 s dan bukan jeda
+audible 0,78–0,80 s yang utuh. Event playback di oue-4 belum membawa
+`transcript_id` dan `sentence_index` karena sesi itu jalan sebelum A0, jadi
+metrik ini nol di journal lama. B5a lewat satu sesi live baru untuk
+mengukurnya dengan alat, bukan dengan tangan.
+
+### B5b: Kontrak sesi streaming netral dan adapter provider
+
+- Kontrak netral, menggantikan `SpeechSynthesizer` di `speech/contract.py`
+  yang sekarang per kalimat: buka turn → kirim potongan teks → selesai atau
+  batal → keluar chunk audio, plus timing kata kalau provider punya.
+- Adapter websocket: Cartesia (satu context per turn, `continue: true` untuk
+  potongan tambahan dan `continue: false` untuk potongan terakhir supaya
+  context ditutup, `max_buffer_delay_ms: 0` karena kita membagi kalimat
+  sendiri, `add_timestamps`) dan ElevenLabs (multi-context websocket, fitur
+  setara).
+- Adapter HTTP: OpenAI dan MiniMax, request per kalimat dengan lookahead,
+  tanpa timing kata. Kualitas turun sedikit, tapi tetap jalan.
+- Request TTS per kalimat yang dipakai di B5a dihapus, jadi adapter websocket
+  dan HTTP jadi satu jalur.
+
+Gate: timing kata masuk journal, jadi saat twin dipotong kita tahu kata
+terakhir yang benar-benar kedengeran; prosodi nyambung antar kalimat; satu
+provider mati di tengah turn dan sesi pindah ke provider lain.
+
+Soal fallback: `speech/fallback.py` sekarang menaikkan error begitu primary
+menghasilkan satu chunk pun, jadi provider mati setelah audio mulai tidak
+bisa dipindah. B5b mengubahnya: pertukaran provider di tengah turn tetap
+boleh, dan turn yang sudah menghasilkan audio tidak hilang karena itu.
+Fallback ini belum ada sekarang, jadi ini pekerjaan baru, bukan sifat yang
+dipelihara.
+
+Yang benar-benar didapat dari websocket, dan bukan dari HTTP: prosodi
+nyambung antar kalimat (kalimat kedua melanjutkan intonasi pertama, bukan
+reset), timing kata per kata, dan overhead per kalimat lebih kecil karena
+tidak membuat request baru tiap kalimat. Ketiganya nilai tambah, bukan
+alasan utama. Cartesia hanya implementasi pertama karena itu provider yang
+kita pakai sekarang; desainnya terikat ke kontrak netral di atas, bukan ke
+Cartesia. Source Pipecat (`base_output.py`, `services/cartesia/tts.py`)
+dipakai sebagai acuan.
 
 ### B1: Floor actor
 
@@ -357,6 +511,12 @@ resume tanpa artefak.
 Gate: satu modul pemilik state turn; tes property untuk urutan event acak
 tidak pernah menghasilkan dua playback aktif atau playback setelah barge-in
 yang di-yield; replay V0 tidak memburuk.
+
+Revisi riset: actor tetap milik kita. Pipecat dan LiveKit Agents tidak
+diadopsi penuh karena turn controller mereka bertabrakan dengan kernel dan
+judge, dan bagian terbaik LiveKit berada di cloud atau berlisensi khusus.
+LangGraph keluar dari loop ini karena hanya bisa berhenti di batas step;
+composer tetap `create_agent` dengan `stream_mode="messages"`.
 
 ### B3: Barge-in dari suara
 
@@ -382,6 +542,12 @@ backchannel tidak menghentikan twin.
 
 Gate: replay V0 oue-4 menunjukkan commit p50 ≤ 0,5 s setelah VAD stop
 dengan false commit ≤ 5%.
+
+Revisi riset: model Smart Turn v3.2 (BSD-2, ONNX int8 sekitar 8 MB, 23
+bahasa termasuk Indonesia, inferensi di bawah 100 ms di CPU menurut
+dokumentasi Pipecat) di-vendor seperti Silero dan dijalankan dengan
+`onnxruntime` yang sudah ada, setelah Silero melaporkan stop. Sinyal prosodi
+ini digabung dengan judge interim.
 
 ### B4: Identitas dari stream
 
@@ -411,6 +577,12 @@ deafness saat rotasi; biaya STT per menit dilaporkan.
 Gate: final → audio pertama p50 ≤ 1,0 s; turn action-then-speech tidak
 diam lebih dari 1,5 s.
 
+Revisi riset: tier model dibawa lewat `create_agent(context_schema=...)` dan
+dibaca di `@wrap_model_call`, menggantikan `EvidenceRoutingMiddleware`.
+Retry menjadi satu lapis: `ModelRetryMiddleware`; loop
+`REPLY_STREAM_ATTEMPTS` dihapus dan `max_retries` SDK di jalur reply
+menjadi 0.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan
@@ -422,6 +594,11 @@ diam lebih dari 1,5 s.
 
 Gate: replay share spreadsheet oue-4 menghasilkan ≤ 5 read LLM; layar
 terbaca ≤ 3 s setelah settle.
+
+Revisi riset: spike RapidOCR 3.10 (model PP-OCRv6 multi; cakupan bahasa
+Latin termasuk Indonesia belum terkonfirmasi dari dokumentasi resmi, jadi
+dicek saat spike) melawan Tesseract 5.5 pada frame oue-4; kunci dedup
+adalah hash teks OCR, `imagehash` hanya sebagai sinyal kasar.
 
 ## Track C: otak
 
@@ -443,6 +620,13 @@ terbaca ≤ 3 s setelah settle.
 
 Gate: owner dapat menambah posisi dan melihatnya dipakai di replay; prompt
 tidak berisi item yang disclosure-nya `owner_only`.
+
+Revisi riset: tetap tabel Postgres berversi. Graphiti tidak menjadi store
+owner model karena ekstraksi LLM mengubah kata dan dapat menginvalidasi
+edge tanpa approval; `PostgresStore` dan LangMem tidak punya versi,
+approval, atau disclosure. C1 menyerap rantai `FakeyouOwnerNote`
+(`memory/owner_notes.py`) agar tidak ada store ketiga. Item yang di-approve
+ditulis juga sebagai episode Graphiti agar terambil recall.
 
 ### C2 dan C3: Kontribusi berbasis klaim dan gate per klaim
 
@@ -477,6 +661,15 @@ Gate: kasus "baca baris 42" di layar lolos; spreadsheet orang lain sebagai
 skenario dengan posisi owner menghasilkan kontribusi terucap yang dinilai
 judge independen owner-plausible ≥ 80%; nol klaim tanpa basis.
 
+Revisi riset: `SpeechPlan` menjadi `response_format` Pydantic lewat
+`ProviderStrategy` yang sudah dipakai, dengan `claims` sebelum `text` di
+schema. Klaim parsial divalidasi dengan
+`TypeAdapter(SpeechPlan).validate_json(..., experimental_allow_partial=
+"trailing-strings")`, menggantikan koersi manual `_act_of`. Gate per klaim
+tetap milik kita: library guardrail (NeMo, Guardrails AI, HHEM) menilai
+dukungan secara probabilistik dan tidak memeriksa ref, disclosure, atau
+`speaks_as`. Judge owner-plausible memakai deepeval secara offline.
+
 ### C4: Prompt peran yang pendek
 
 Setelah C2 dan C3, karena prosa hanya boleh dihapus setelah struktur yang
@@ -510,6 +703,12 @@ Gate: replay oue-4 menghasilkan recall untuk "update kemarin" sebelum
 pertanyaan selesai; jalur reply tidak menunggu memory; biaya recall per jam
 dilaporkan.
 
+Revisi riset: `search_` Graphiti dengan recipe bawaan
+`EDGE_HYBRID_SEARCH_RRF` (tanpa reranker LLM di listener) dan
+`center_node_uuid` pada node owner dan peserta yang hadir. Batas laju dengan
+`InMemoryRateLimiter`. Jendela bergulir dan pemicu pergantian topik tetap
+milik kita.
+
 ### C6: Proactive dari kernel
 
 - Kandidat dibangun kernel dari objective dan pertanyaan brief, pertanyaan
@@ -524,6 +723,11 @@ dilaporkan.
 Gate: replay oue-4 menyampaikan kontribusi proactive yang relevan saat
 diskusi tentang tim owner; tidak ada proactive saat orang bicara.
 
+Revisi riset: ingestion memberi `entity_types`/`edge_types` Graphiti
+(`Commitment`, `Decision`, `OpenQuestion`), sehingga kandidat dari meeting
+lalu diambil dengan `SearchFilters(edge_types=...)`. Deteksi live tetap di
+kernel karena ingestion berjalan setelah meeting.
+
 ### C7: Belajar dari debrief
 
 - Debrief menghasilkan proposal owner model (posisi baru, koreksi, aturan)
@@ -532,6 +736,10 @@ diskusi tentang tim owner; tidak ada proactive saat orang bicara.
 
 Gate: proposal yang di-approve dipakai di meeting berikutnya; proposal yang
 ditolak tidak pernah dipakai.
+
+Revisi riset: bukti proposal diambil dengan `SearchFilters` dan
+`get_nodes_and_edges_by_episode`. Approval, versi, dan replay per versi
+tetap workflow Postgres kita. `build_communities` tidak dipakai.
 
 ## Track D: always-on
 
@@ -544,6 +752,9 @@ ditolak tidak pernah dipakai.
   lewat A2. API manual tetap menjadi sumber desired state lain.
 
 Gate: meeting di calendar di-join tanpa perintah manual.
+
+Revisi riset: `google-api-python-client` dengan `events.list` dan
+`syncToken`, polling 1-2 menit, resync penuh saat 410.
 
 ### D2: Satu pod per sesi
 
@@ -559,6 +770,11 @@ Gate: dua meeting bersamaan berjalan di dua pod tanpa saling mengganggu
 audio; pengambilalihan setelah pod dibunuh memakai record terakhir yang
 terunggah.
 
+Revisi riset: client `kubernetes` resmi membuat Job dengan
+`backoffLimit: 0` (retry milik A2), `activeDeadlineSeconds`, dan
+`ttlSecondsAfterFinished`. OpenTelemetry ditambahkan di sini untuk latency
+lintas proses; konteks trace dibawa lewat field Job dan event.
+
 ### D3: Config yang menyusut
 
 - `Settings` sub-model dioper langsung ke komponen. Kebijakan per meeting
@@ -569,6 +785,20 @@ terunggah.
 Gate: jumlah field settings dan key `.env.example` turun; tidak ada field
 yang disalin tangan antar lapisan.
 
+Revisi riset: sub-model `Settings` dioper langsung, override per meeting
+dengan `model_copy(update=...)`, secret Kubernetes lewat `secrets_dir`.
+
+### D4: Worker job di Postgres
+
+- Worker debrief, ingestion, dan reembed memakai procrastinate (retry dengan
+  backoff, lock, deteksi job macet, task periodik) di Postgres yang sudah
+  ada.
+- Dihapus: antrean job Redis buatan sendiri (`pending_deliveries`,
+  `claim_entry`, `touch_entry`, dead-letter).
+
+Gate: job yang workernya dimatikan diambil ulang; Redis hanya membawa event
+dan secret sekali pakai.
+
 ## Urutan PR
 
 Urutan mengikuti ketergantungan: A membuat sesi bisa divalidasi, B membuat
@@ -577,7 +807,8 @@ sendiri. Design C dan D boleh ditulis lebih awal; implementasinya menunggu
 gate A.
 
 1. A0 rantai causation dan metrik.
-2. A1a satu sumber status sesi, lalu A1b lifecycle tanpa LangGraph.
+2. A1a satu sumber status sesi (selesai), A1a-r koreksi dari riset, lalu A1b
+   lifecycle tanpa LangGraph.
 3. A4 status call dari protocol.
 4. A3 join dan lobby (butuh A4).
 5. A5 kebijakan dialog.
@@ -585,24 +816,26 @@ gate A.
 7. Live validation A: tiga sesi multi-human 30 menit, satu dengan kill
    Chromium, satu dengan restart worker.
 8. V0 replay harness.
-9. B5 TTS dan playback streaming.
-10. B1 floor actor.
-11. B3 barge-in dari suara (butuh B5, B1).
-12. B2 commit giliran lokal (butuh B1).
-13. B4 identitas dari stream.
-14. B6 turn paralel.
-15. B7 perception layar.
-16. Live validation B: metrik latency dan barge-in di tabel baseline.
-17. C1 owner model.
-18. C2 dan C3 kontribusi dan gate per klaim.
-19. C4 prompt peran (butuh C2 dan C3).
-20. C5 memory listener.
-21. C6 proactive dari kernel (butuh C1, C5, B1).
-22. C7 belajar dari debrief (butuh C1).
-23. Live validation C: skenario kontribusi dan review owner.
-24. D3 config.
-25. D1 calendar (butuh A2).
-26. D2 pod per sesi.
+9. B5a lookahead sintesis dan writer audio berumur panjang.
+10. B5b kontrak sesi streaming netral dan adapter provider.
+11. B1 floor actor.
+12. B3 barge-in dari suara (butuh B5a, B1).
+13. B2 commit giliran lokal (butuh B1).
+14. B4 identitas dari stream.
+15. B6 turn paralel.
+16. B7 perception layar.
+17. Live validation B: metrik latency dan barge-in di tabel baseline.
+18. C1 owner model.
+19. C2 dan C3 kontribusi dan gate per klaim.
+20. C4 prompt peran (butuh C2 dan C3).
+21. C5 memory listener.
+22. C6 proactive dari kernel (butuh C1, C5, B1).
+23. C7 belajar dari debrief (butuh C1).
+24. Live validation C: skenario kontribusi dan review owner.
+25. D3 config.
+26. D1 calendar (butuh A2).
+27. D2 pod per sesi.
+28. D4 worker job di Postgres.
 
 Setiap PR: tes regresi untuk perilaku yang diganti, gate penuh, review
 independen atas diff, squash merge setelah CI hijau.
