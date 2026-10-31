@@ -315,6 +315,7 @@ class WorkerConsumer:
         request = replace(
             join_request_for(snapshot, session_settings, resume=status.phase != "created"),
             on_phase=partial(self._record_live_phase, meeting_id),
+            attempt_id=claim.attempt_id,
         )
         task = asyncio.create_task(self._run_session(claim, request))
         self._session_task = task

@@ -424,6 +424,26 @@ menunggu `BLOCKED_REJOIN_SECONDS` (30 detik) lalu mengetuk lagi, dalam jatah
 rejoin yang sama. Join pertama yang diblokir tetap terminal. Event
 `browser_rejoined` mencatat `waited_ms`.
 
+Implementasi A2c (2026-10-31): satu identitas attempt dari klaim sampai
+data. `attempt_id` yang diberikan klaim Postgres (fencing token lease dan
+`record_phase`) dibawa `JoinRequest` ke `MeetingRecord`, kernel, recovery
+ledger command, `ResumeEntry`, dan event `session_resumed`; sebelumnya join
+membuat uuid kedua sehingga data attempt tidak bisa dikaitkan dengan baris
+yang memegang lease. `fakeyou join` tanpa worker tetap membuat uuid sendiri.
+
+Revisi: kernel attempt baru tidak di-rehydrate dari `record.jsonl`.
+Riwayat percakapan agent sudah dibaca dari `record.jsonl` (sejak
+2026-10-24), outcome command attempt lama ditutup `unknown` oleh
+`CommandRunner.recover`, plan hidup di memori attempt sehingga attempt baru
+mulai tanpa plan terbuka, dan world diobservasi ulang dari Meet. Dialog
+kernel dipakai untuk atribusi speaker baris live (`KernelPort.actor`) dan
+untuk menghitung suara yang belum cocok dengan world
+(`session/identity.py`), yang menentukan mode identitas termasuk
+`identity_degraded`. Baris attempt lama membawa device browser lama yang
+tidak dikenal world hasil observasi ulang, jadi memutarnya ulang justru
+menaikkan hitungan itu dan bisa membuat attempt baru jatuh ke
+`identity_degraded`.
+
 ### A3: Join dan lobby
 
 - Knock sekali. Hanya kegagalan sebelum knock (navigasi, nama, tombol join)

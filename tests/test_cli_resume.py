@@ -125,6 +125,8 @@ async def test_join_resume_writes_markers_and_rejoins(
     )
     assert entries[-1].kind == "resume"
     assert entries[-1].attempt == 2
+    assert entries[-1].attempt_id == session_run["kernel"].attempt_id
+    assert f'"attempt_id":"{entries[-1].attempt_id}"' in journal_rows.replace(" ", "")
 
 
 @pytest.mark.asyncio

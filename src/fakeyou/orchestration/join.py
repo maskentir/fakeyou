@@ -1,7 +1,6 @@
 import asyncio
 import shlex
 import time
-import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
 from dataclasses import dataclass
@@ -155,12 +154,17 @@ def _open_join_resources(
     faults = FaultReporter(journal=journal)
     ingest_requested, ingestion_outcome, record_error = _write_pending_status(prepared, faults)
     record = MeetingRecord(
-        prepared.record_path, faults=faults, journal=journal, attempt_id=uuid.uuid4().hex
+        prepared.record_path, faults=faults, journal=journal, attempt_id=prepared.request.attempt_id
     )
     resources.callback(record.close)
     if resuming:
         attempt = _resume_attempt(prepared.record_path)
-        journal.record("session_resumed", source="cli", attempt=attempt)
+        journal.record(
+            "session_resumed",
+            source="cli",
+            attempt=attempt,
+            attempt_id=prepared.request.attempt_id,
+        )
         record.add_resume(attempt=attempt)
     if prepared.meeting_context is not None:
         journal.record(
