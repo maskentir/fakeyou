@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -172,6 +173,10 @@ class FakePage(Page):
 
     @override
     def on(self, event: Any, f: Any) -> None:
+        if inspect.ismethod(f):
+            setattr(f.__self__, f"_pw_impl_instance_{f.__name__}", f)
+        else:
+            f._pw_impl_instance_ = f
         self.listeners.setdefault(str(event), []).append(f)
 
     @override

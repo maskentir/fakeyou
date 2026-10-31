@@ -1298,9 +1298,13 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
         detail = "owner stopped browser startup"
         lifecycle.send("owner_stopped", "owner_action")
         return detail
-    drive.loss = _BrowserLoss(lifecycle)
-    page.on("crash", drive.loss.mark)
-    page.on("close", drive.loss.mark)
+    loss = drive.loss = _BrowserLoss(lifecycle)
+
+    def lost(*_: object) -> None:
+        loss.mark()
+
+    page.on("crash", lost)
+    page.on("close", lost)
     if hooks.commands is not None and config.meet_actions_enabled:
         hooks.commands.bind_page(
             page, sleep=hooks.sleep, monotonic=hooks.monotonic, stop=stop_event
@@ -1338,13 +1342,13 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
         )
     finally:
         if page.is_closed():
-            drive.loss.mark()
-        page.remove_listener("crash", drive.loss.mark)
-        page.remove_listener("close", drive.loss.mark)
+            loss.mark()
+        page.remove_listener("crash", lost)
+        page.remove_listener("close", lost)
         drive.greeting = worker.initial_speech
         if hooks.commands is not None:
             await hooks.commands.release_page()
-        if drive.loss.rejoinable:
+        if loss.rejoinable:
             await worker.detach_media()
         else:
             await worker.end_media()
