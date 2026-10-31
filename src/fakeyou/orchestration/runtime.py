@@ -455,6 +455,7 @@ class MeetingWorker:
         if left.status == "left":
             self._send("leave_sent", self.origin_attribution or "policy", left.detail)
         else:
+            self.record("leave_failed", source="runtime", detail=left.detail)
             self._send("leave_failed", "system_fault", left.detail)
         keeps_origin = self.origin_kind in ("audio_failed", "conversation_failed")
         self.detail = origin_detail if keeps_origin else left.detail
