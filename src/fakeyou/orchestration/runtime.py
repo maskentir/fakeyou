@@ -78,7 +78,11 @@ from fakeyou.observability.provider_faults import (
     classify_exception,
     trim_detail,
 )
-from fakeyou.orchestration.call_state import DrainClock, merge_call_state, protocol_call_state
+from fakeyou.orchestration.call_state import (
+    DRAIN_STALE_SECONDS,
+    merge_call_state,
+    protocol_call_state,
+)
 from fakeyou.orchestration.commands import CommandRunner
 from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.lifecycle import (
@@ -208,7 +212,6 @@ class MeetingWorker:
     admission: JoinResult | None = None
     join_started: float | None = None
     presence: AloneClock = field(init=False)
-    drain_clock: DrainClock = field(init=False, default_factory=DrainClock)
     attention: AttentionPrefilter = field(init=False)
     attention_screen: str | None = field(init=False, default=None)
     attention_chat: str | None = field(init=False, default=None)
@@ -867,7 +870,7 @@ class MeetingWorker:
     def protocol_call_state(self) -> CallObservation | None:
         perception = self.perception
         sensors = perception.sensors if perception is not None else None
-        if sensors is None or not self.drain_clock.fresh(sensors.drains, self.monotonic()):
+        if sensors is None or not sensors.drained_within(DRAIN_STALE_SECONDS):
             return None
         return protocol_call_state(sensors.roster.own_user(), sensors.peer_states)
 

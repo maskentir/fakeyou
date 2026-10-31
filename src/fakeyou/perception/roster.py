@@ -46,6 +46,7 @@ class MeetRoster:
         self._users: dict[str, MeetUser] = {}
         self._outputs: dict[tuple[str, OutputKind], DeviceOutput] = {}
         self._synced = False
+        self._own_updates: list[str] = []
 
     def mark_synced(self) -> None:
         self._synced = True
@@ -75,10 +76,8 @@ class MeetRoster:
         return frozenset(device for device, user in self._users.items() if user.current_user)
 
     def own_user(self) -> MeetUser | None:
-        return next(
-            (user for user in self._users.values() if user.current_user and not user.is_screen),
-            None,
-        )
+        own = [self._users[device_id] for device_id in reversed(self._own_updates)]
+        return next((user for user in own if user.present), own[0] if own else None)
 
     def users(self) -> tuple[MeetUser, ...]:
         return tuple(self._users.values())
@@ -167,6 +166,10 @@ class MeetRoster:
                 }
             )
         self._users[user.device_id] = merged
+        if merged.current_user and not merged.is_screen:
+            if merged.device_id in self._own_updates:
+                self._own_updates.remove(merged.device_id)
+            self._own_updates.append(merged.device_id)
         if self._is_own(merged.device_id):
             return []
         was_present = before is not None and before.present

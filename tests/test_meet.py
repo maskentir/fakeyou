@@ -10,6 +10,7 @@ import fakeyou.meet.meet as meet_module
 from fakeyou.meet.meet import (
     GuestJoinRequest,
     JoinPolling,
+    call_markers,
     click_when_ready,
     disable_meeting_camera,
     enable_meeting_microphone,
@@ -912,3 +913,27 @@ async def test_leave_meeting_when_already_out_with_stale_button_is_left() -> Non
     )
 
     assert result.status == "left"
+
+
+@pytest.mark.parametrize(
+    ("content", "headings", "buttons"),
+    [
+        ('<img role="button"><div>Join now</div>', "", frozenset()),
+        (
+            '<div role="heading"><div>You</div> have been removed</div>',
+            "you have been removed",
+            frozenset(),
+        ),
+        (
+            '<button aria-label="Leave call"><i>call_end</i></button>'
+            "<button><span>Ask</span> <span>to join</span></button>",
+            "",
+            frozenset({"leave call", "call_end", "ask to join"}),
+        ),
+        ("<h1>The call <b>has ended", "the call has ended", frozenset()),
+    ],
+)
+def test_call_markers_read_only_headings_and_buttons(
+    content: str, headings: str, buttons: frozenset[str]
+) -> None:
+    assert call_markers(content) == (headings, buttons)

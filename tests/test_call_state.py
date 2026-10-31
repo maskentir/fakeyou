@@ -1,12 +1,7 @@
 import pytest
 
 from fakeyou.meet.meet import CallObservation, CallState
-from fakeyou.orchestration.call_state import (
-    DRAIN_STALE_SECONDS,
-    DrainClock,
-    merge_call_state,
-    protocol_call_state,
-)
+from fakeyou.orchestration.call_state import merge_call_state, protocol_call_state
 from fakeyou.perception.meet_protocol import MeetUser
 
 TWIN = "devices/twin"
@@ -25,7 +20,6 @@ def observed(state: CallState) -> CallObservation:
 @pytest.mark.parametrize(
     ("status", "peers", "expected"),
     [
-        (1, [], "in_call"),
         (1, ["closed", "connected"], "in_call"),
         (7, ["connected"], "removed"),
         (6, ["connected"], "ended"),
@@ -42,8 +36,9 @@ def test_the_own_device_status_decides_the_call_state(
     assert observation.state == "in_call" or str(status) in observation.detail
 
 
-def test_a_present_device_with_every_peer_closed_is_left_to_the_page() -> None:
-    assert protocol_call_state(own(1), ["closed", "failed"]) is None
+@pytest.mark.parametrize("peers", [[], ["new"], ["closed", "failed"], ["connecting"]])
+def test_a_present_device_without_a_connected_peer_is_left_to_the_page(peers: list[str]) -> None:
+    assert protocol_call_state(own(1), peers) is None
 
 
 def test_an_unknown_own_device_is_left_to_the_page() -> None:
@@ -58,7 +53,8 @@ def test_an_unknown_own_device_is_left_to_the_page() -> None:
         ("in_call", "ended", "in_call"),
         ("ended", "removed", "removed"),
         ("ended", "left", "left"),
-        ("ended", "in_call", "ended"),
+        ("ended", "in_call", "unknown"),
+        ("ended", "lobby", "ended"),
         ("removed", "unknown", "removed"),
         ("ended", None, "ended"),
     ],
@@ -71,13 +67,3 @@ def test_the_protocol_wins_and_the_page_only_names_the_way_out(
     )
 
     assert merged.state == expected
-
-
-def test_the_protocol_goes_stale_when_the_drain_stops_moving() -> None:
-    clock = DrainClock()
-
-    assert clock.fresh(0, 0.0) is False
-    assert clock.fresh(1, 1.0) is True
-    assert clock.fresh(1, 1.0 + DRAIN_STALE_SECONDS) is True
-    assert clock.fresh(1, 1.1 + DRAIN_STALE_SECONDS) is False
-    assert clock.fresh(2, 10.0) is True

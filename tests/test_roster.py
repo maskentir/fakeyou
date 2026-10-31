@@ -185,3 +185,16 @@ def test_a_screen_share_is_never_the_own_user() -> None:
     )
 
     assert roster.own_user() is None
+
+
+def test_a_rejoin_reads_the_device_that_is_in_the_meeting() -> None:
+    roster = MeetRoster()
+    old = "devices/twin-old"
+    roster.apply_users([MeetUser(device_id=old, name="Rani", present=True, current_user=True)])
+    roster.apply_users([MeetUser(device_id=TWIN, name="Rani", present=True, current_user=True)])
+    roster.apply_users([MeetUser(device_id=old, name="", present=False, status=6)])
+
+    own = roster.own_user()
+
+    assert own is not None
+    assert own.device_id == TWIN

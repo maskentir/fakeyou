@@ -19,7 +19,7 @@ from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import DrainBatch
 from tests._fakes_common import FakeClock
-from tests._meet_browser_fakes import ENDED, REMOVED, FakePage, meet_page
+from tests._meet_browser_fakes import ENDED, IN_CALL, REMOVED, FakePage, meet_page
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import mining_payload, session_config
 
@@ -344,6 +344,7 @@ async def _protocol_worker(
     )
     assert stack is not None
     worker.perception = stack
+    stack.sensors.monotonic = clock.monotonic
     stack.sensors.roster.apply_users(
         [
             MeetUser(
@@ -391,8 +392,10 @@ async def test_an_own_device_out_of_the_meeting_takes_its_reason_from_the_end_sc
 
     named = await worker.observe_call(meet_page([ENDED]), DEFAULT_MEET_SIGNALS)
     unnamed = await worker.observe_call(meet_page(["<div>blank</div>"]), DEFAULT_MEET_SIGNALS)
+    lingering = await worker.observe_call(meet_page([IN_CALL]), DEFAULT_MEET_SIGNALS)
 
     assert named.state == "ended"
+    assert lingering.state == "unknown"
     assert (unnamed.state, unnamed.detail) == (
         "ended",
         "own device is out of the meeting (status 6)",

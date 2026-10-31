@@ -366,7 +366,7 @@ async def test_own_status_and_peer_states_are_journaled_when_they_change() -> No
         )
     )
 
-    assert sensed.drains == 3
+    assert sensed.drained_at is not None
     assert [row["states"] for row in journal.events("perception_peer_state_observed")] == [
         ["connecting"],
         ["closed"],

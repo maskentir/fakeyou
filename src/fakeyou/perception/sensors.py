@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, override
@@ -102,6 +103,7 @@ class PerceptionSensors:
         clock: Clock = _utc_now,
     ) -> None:
         self.timeline = timeline
+        self.monotonic: Callable[[], float] = time.monotonic
         self.roster = MeetRoster()
         self.roster_listener: Callable[[MeetRoster], None] | None = None
         self._settings = settings
@@ -111,14 +113,14 @@ class PerceptionSensors:
         self.rejected_messages = 0
         self.heartbeats = 0
         self.frames_seen = 0
-        self.drains = 0
+        self.drained_at: float | None = None
         self.peer_states: tuple[str, ...] = ()
         self._own_status: int | None = None
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
 
     async def accept_batch(self, batch: DrainBatch) -> None:
-        self.drains += 1
+        self.drained_at = self.monotonic()
         self._observe_peers(tuple(batch.peers))
         for message in batch.messages:
             if message.channel == COLLECTIONS_CHANNEL:
@@ -152,6 +154,9 @@ class PerceptionSensors:
         self._apply_changes(self.roster.apply_users(users), self._clock())
         self._observe_own_status()
         self._share_roster()
+
+    def drained_within(self, seconds: float) -> bool:
+        return self.drained_at is not None and self.monotonic() - self.drained_at <= seconds
 
     def assignments(self) -> list[StreamAssignment]:
         settings = self._settings
