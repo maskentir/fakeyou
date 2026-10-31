@@ -299,6 +299,7 @@ class FakeClient:
 class SessionDouble:
     def __init__(self) -> None:
         self.runs: list[tuple[str, bool]] = []
+        self.attempts: list[str | None] = []
         self.stop_event: asyncio.Event = asyncio.Event()
         self.outcome = SessionResult(
             phase="ended", terminal_reason="stopped_by_owner", detail="harness"
@@ -312,6 +313,7 @@ class SessionDouble:
         if wiring.stop is not None:
             self.stop_event = wiring.stop
         self.runs.append((str(config.meeting_id), bool(config.resume)))
+        self.attempts.append(wiring.kernel.attempt_id if wiring.kernel is not None else None)
         self.started.set()
         await self.release.wait()
         self.started.clear()
@@ -517,6 +519,24 @@ async def test_a_crashed_session_is_claimed_again_and_resumed(harness: Harness) 
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
     assert await harness.phase("m-1") == "ended"
     assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
+
+
+async def test_each_claim_runs_its_session_under_the_claimed_attempt(harness: Harness) -> None:
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+    first = harness.status.rows["m-1"].attempt_id
+    await harness.crash_session()
+    harness.status.expired.add("m-1")
+    assert await harness.other_consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+    second = harness.status.rows["m-1"].attempt_id
+
+    assert first is not None
+    assert second is not None
+    assert first != second
+    assert harness.double.attempts == [first, second]
+    await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
 
 
 async def test_join_request_for_writes_persona_and_brief_server_side(settings: Settings) -> None:

@@ -1,7 +1,8 @@
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 from graphiti_core import Graphiti
 
@@ -35,6 +36,7 @@ class JoinRequest:
     brief_path: Path | None = None
     resume: bool = False
     on_phase: Callable[[PublicPhase], None] | None = None
+    attempt_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass(frozen=True, slots=True)
