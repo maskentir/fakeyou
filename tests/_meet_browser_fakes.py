@@ -167,6 +167,7 @@ class FakePage(Page):
         self.waited: list[str] = []
         self.evaluate_calls: list[str] = []
         self.listeners: dict[str, list[Any]] = {}
+        self.page_closed = False
         self._keyboard: Any = FakeKeyboard(self)
 
     @override
@@ -178,6 +179,26 @@ class FakePage(Page):
         handlers = self.listeners.get(str(event), [])
         if f in handlers:
             handlers.remove(f)
+
+    @override
+    def is_closed(self) -> bool:
+        return self.page_closed
+
+    def emit(self, event: str) -> None:
+        for handler in list(self.listeners.get(event, [])):
+            handler(self)
+
+    def crash(self) -> None:
+        self.page_closed = True
+        self.emit("close")
+
+    def crash_renderer(self) -> None:
+        self.emit("crash")
+
+    def shut(self) -> None:
+        if not self.page_closed:
+            self.page_closed = True
+            self.emit("close")
 
     @property
     @override
@@ -294,6 +315,7 @@ class FakePageSession:
         try:
             yield self.page
         finally:
+            self.page.shut()
             self.closed += 1
 
 

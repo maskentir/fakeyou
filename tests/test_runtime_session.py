@@ -18,6 +18,8 @@ from fakeyou.orchestration.runtime import (
     run_meeting_session,
     session_resources,
 )
+from tests._audio_fakes import FakeAudio
+from tests._conversation_fakes import FakeConversation
 from tests._error_support import message_pattern
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import (
@@ -193,13 +195,14 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
 
     assert result.phase == "ended"
     assert result.terminal_reason == "browser_failure"
+    assert result.detail == "browser session failed (RuntimeError)"
     assert "secret-token" not in result.detail
     rows = [json.loads(line) for line in events]
     details = [row for row in rows if row["event"] == "browser_error_recorded"]
-    assert len(details) == REJOIN_LIMIT + 1
+    assert len(details) == 1
     assert details[0]["error"] == "boom secret-token"
     assert details[0]["error_type"] == "RuntimeError"
-    assert len([row for row in rows if row["event"] == "browser_rejoined"]) == REJOIN_LIMIT
+    assert not [row for row in rows if row["event"] == "browser_rejoined"]
 
 
 async def test_run_meeting_session_records_bounded_traceback_on_browser_failure() -> None:
@@ -224,12 +227,10 @@ async def test_run_meeting_session_records_bounded_traceback_on_browser_failure(
 
     assert result.phase == "ended"
     rows = [json.loads(line) for line in events]
-    details = [row for row in rows if row["event"] == "browser_error_recorded"]
-    assert len(details) == REJOIN_LIMIT + 1
-    for detail in details:
-        assert "RuntimeError" in detail["traceback"]
-        assert "failing_open" in detail["traceback"]
-        assert len(detail["traceback"]) <= 2000
+    [detail] = [row for row in rows if row["event"] == "browser_error_recorded"]
+    assert "RuntimeError" in detail["traceback"]
+    assert "failing_open" in detail["traceback"]
+    assert len(detail["traceback"]) <= 2000
 
 
 async def test_run_meeting_session_records_bounded_traceback_on_conversation_failure() -> None:
@@ -497,7 +498,7 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert result.phase == "ended"
     assert result.terminal_reason == expected
     assert detail in result.detail
-    assert browser.closed >= 1
+    assert browser.closed == 1
 
 
 async def test_run_meeting_session_journals_why_the_join_failed() -> None:
@@ -613,62 +614,166 @@ async def test_run_meeting_session_fails_fast_when_the_page_itself_errors_twice(
     assert len(journal.events("watchdog_failed")) == 2
 
 
-async def test_a_crashed_browser_joins_again_before_the_session_ends() -> None:
-    events: list[str] = []
-    journal = Journal("meeting-1", emit=events.append, echo=False)
-    clock = FakeClock()
-    opened = 0
+def crashing_page(*, renderer: bool = False) -> FakePage:
+    from playwright.async_api import Error as PlaywrightError
+
+    lost = PlaywrightError("Target crashed" if renderer else "Target closed")
+
+    def lose(reads: int) -> None:
+        if reads == 3:
+            page.crash_renderer() if renderer else page.crash()
+
+    page = meet_page([IN_CALL, IN_CALL, *[lost] * 8], on_content=lose)
+    return page
+
+
+def page_sequence(*pages: FakePage, events: list[str] | None = None) -> tuple[list[FakePage], Any]:
+    opened: list[FakePage] = []
+    queue = list(pages)
 
     @asynccontextmanager
     async def open_page(**kwargs: Any) -> AsyncIterator[FakePage]:
-        nonlocal opened
         del kwargs
-        opened += 1
-        if opened == 1:
-            raise RuntimeError("the browser died")
-        yield meet_page([IN_CALL, IN_CALL, ENDED])
+        page = queue.pop(0) if len(queue) > 1 else queue[0]
+        opened.append(page)
+        try:
+            yield page
+        finally:
+            page.shut()
+            if events is not None:
+                events.append("browser_closed")
+
+    return opened, open_page
+
+
+@pytest.mark.parametrize("lost", ["browser", "renderer"])
+async def test_a_browser_that_crashes_in_the_call_joins_again(lost: str) -> None:
+    events: list[str] = []
+    journal = Journal("meeting-1", emit=events.append, echo=False)
+    clock = FakeClock()
+    opened, open_page = page_sequence(
+        crashing_page(renderer=lost == "renderer"), meet_page([IN_CALL, IN_CALL, ENDED])
+    )
 
     result = await run_meeting_session(
         session_config(),
         SessionWiring(
-            open_page=open_page,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
+            open_page=open_page, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
         ),
     )
 
     rows = [json.loads(line) for line in events]
     rejoined = [row for row in rows if row["event"] == "browser_rejoined"]
-    assert len(rejoined) == 1
-    assert rejoined[0]["attempt"] == 1
-    assert result.phase == "ended"
-    assert result.terminal_reason == "ended_by_host"
-    assert opened == 2
+    assert [row["attempt"] for row in rejoined] == [1]
+    assert (result.phase, result.terminal_reason) == ("ended", "ended_by_host")
+    assert len(opened) == 2
 
 
 async def test_a_browser_that_keeps_crashing_gives_up_after_three_rejoins() -> None:
     events: list[str] = []
     journal = Journal("meeting-1", emit=events.append, echo=False)
     clock = FakeClock()
-
-    @asynccontextmanager
-    async def open_page(**kwargs: Any) -> AsyncIterator[FakePage]:
-        del kwargs
-        raise RuntimeError("the browser died")
-        yield
+    pages = [crashing_page() for _ in range(REJOIN_LIMIT + 1)]
+    opened, open_page = page_sequence(*pages)
 
     result = await run_meeting_session(
         session_config(),
         SessionWiring(
-            open_page=open_page,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
+            open_page=open_page, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
         ),
     )
 
     rows = [json.loads(line) for line in events]
     assert len([row for row in rows if row["event"] == "browser_rejoined"]) == REJOIN_LIMIT
     assert (result.phase, result.terminal_reason) == ("ended", "browser_failure")
-    assert "RuntimeError" in result.detail
+    assert result.detail
+    assert len(opened) == REJOIN_LIMIT + 1
+
+
+async def test_an_error_on_a_live_page_ends_the_session_without_joining_again() -> None:
+    clock = FakeClock()
+    opened, open_page = page_sequence(
+        meet_page([IN_CALL, IN_CALL, RuntimeError("cdp gone")]),
+        meet_page([IN_CALL, IN_CALL, ENDED]),
+    )
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(open_page=open_page, sleep=clock.sleep, monotonic=clock.monotonic),
+    )
+
+    assert result.terminal_reason == "browser_failure"
+    assert len(opened) == 1
+
+
+async def test_a_browser_that_fails_to_launch_does_not_join_again() -> None:
+    events: list[str] = []
+    journal = Journal("meeting-1", emit=events.append, echo=False)
+    launches = 0
+
+    @asynccontextmanager
+    async def open_page(**kwargs: Any) -> AsyncIterator[FakePage]:
+        nonlocal launches
+        del kwargs
+        launches += 1
+        raise RuntimeError("profile is locked")
+        yield
+
+    result = await run_meeting_session(
+        session_config(), SessionWiring(open_page=open_page, journal=journal)
+    )
+
+    rows = [json.loads(line) for line in events]
+    assert result.terminal_reason == "browser_failure"
+    assert not [row for row in rows if row["event"] == "browser_rejoined"]
+    assert launches == 1
+
+
+async def test_a_rejoin_keeps_the_session_audio_and_pauses_the_conversation_between_calls() -> None:
+    events: list[str] = []
+    conversation = FakeConversation(events)
+    clock = FakeClock()
+    _, open_page = page_sequence(
+        crashing_page(), meet_page([IN_CALL, IN_CALL, ENDED]), events=events
+    )
+
+    @asynccontextmanager
+    async def open_audio(**kwargs: Any) -> AsyncIterator[Any]:
+        del kwargs
+        events.append("audio_opened")
+        audio = FakeAudio(events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=open_page,
+            open_audio=open_audio,
+            conversation=conversation,
+            initial_speech="Hello",
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        ),
+    )
+
+    assert result.terminal_reason == "ended_by_host"
+    lifecycle = [
+        event
+        for event in events
+        if event.startswith(("audio_", "conversation_", "browser_", "speak:"))
+    ]
+    assert lifecycle == [
+        "audio_opened",
+        "speak:Hello",
+        "conversation_bound",
+        "conversation_paused",
+        "browser_closed",
+        "conversation_bound",
+        "conversation_resumed",
+        "conversation_closed",
+        "audio_stopped",
+        "browser_closed",
+    ]

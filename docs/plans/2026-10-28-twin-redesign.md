@@ -368,13 +368,32 @@ untuk event SSE, override key, dan job ingestion/debrief/reembed. A2b
 (rejoin browser di attempt yang sama) dan A2c (rehydrate kernel dari
 `record.jsonl`) menyusul.
 
-Implementasi A2b (2026-10-31): crash browser di dalam call membuka epoch
-browser baru dan join lagi, maksimal tiga kali per sepuluh menit
-(`REJOIN_LIMIT`, `REJOIN_WINDOW_SECONDS`); tiap rejoin mencatat event
-`browser_rejoined`. Crash saat leaving tetap terminal, dan crash yang terjadi
-setelah jatah habis mengakhiri sesi sebagai `browser_failure` dengan detail
-crash terakhir. Siklus hidup sesi di-reset ke `created` tiap rejoin, jadi
-phase, reason, dan detail terminal ikut hilang.
+Implementasi A2b-1 (2026-10-31): sesi dan epoch browser punya kepemilikan
+terpisah. Sesi (sekali per meeting) memegang preflight, audio meeting
+(device Pulse, STT, playback; tidak bergantung pada proses browser),
+conversation, dan `CommandRunner`; saat sesi berakhir conversation ditutup
+sebelum audio berhenti. Epoch (diulang tiap rejoin) memegang page, worker,
+dan binding page ke command runner (`release_page`, bukan `close`).
+
+Crash dideteksi secara struktural: event `crash`/`close` dari page, atau
+`page.is_closed()` saat exception keluar dari lifecycle, dicatat beserta
+phase saat itu sebelum teardown epoch menutup page. Rejoin hanya terjadi
+bila browser hilang sebelum `leaving`/`ended` dan sesi berakhir
+`browser_failure`. Page yang error tapi masih hidup, dan browser yang gagal
+diluncurkan, tetap terminal. Maksimal tiga rejoin per sepuluh menit
+(`REJOIN_LIMIT`, `REJOIN_WINDOW_SECONDS`); tiap rejoin mencatat
+`browser_rejoined`, dan jatah yang habis mengakhiri sesi dengan detail crash
+terakhir.
+
+Di batas epoch: crash hanya melepas media (conversation `pause`, playback
+berhenti); terminal lain mengakhiri media (conversation ditutup, audio
+berhenti) sebelum leave dan sebelum browser ditutup. Epoch berikutnya
+mem-bind audio yang sama lalu `resume` setelah admitted.
+
+A2b-2 menyusul: reset perception per epoch (roster masih menyimpan device
+browser lama sehingga bisa terbaca admitted), naikkan `browser_epoch` di
+kernel saat rejoin, lepas listener timeline/roster per epoch, buang slot
+capture lama, dan backoff antar rejoin.
 
 ### A3: Join dan lobby
 

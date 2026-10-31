@@ -334,3 +334,35 @@ async def test_a_command_past_its_boundary_settles_even_when_its_turn_is_cancell
     assert runner.left is True
     [record] = CommandLedger(record_path(tmp_path), "meeting-9").records()
     assert record.state == "effect_unobserved"
+
+
+async def test_a_released_page_blocks_commands_until_the_next_browser_binds(
+    tmp_path: Path, kernel: KernelPort, meet: FakeMeet
+) -> None:
+    runner = runner_for(tmp_path, kernel)
+    await runner.release_page()
+
+    assert runner.available is False
+    assert await run(runner, CommandSpec("raise_hand"), "p1") == "cancelled_before_boundary"
+
+    clock = Clock()
+    runner.bind_page(
+        cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
+    )
+
+    assert runner.available is True
+    assert await run(runner, CommandSpec("raise_hand"), "p2") == "effect_observed"
+    assert meet.calls
+
+
+async def test_a_closed_runner_stays_closed_after_a_new_page(
+    tmp_path: Path, kernel: KernelPort
+) -> None:
+    runner = runner_for(tmp_path, kernel)
+    await runner.close()
+    clock = Clock()
+    runner.bind_page(
+        cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
+    )
+
+    assert runner.available is False

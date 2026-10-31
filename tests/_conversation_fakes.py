@@ -80,6 +80,7 @@ class FakeConversation:
         self.events = events
         self.fail = fail
         self.bound: MeetingAudio | None = None
+        self.paused = False
         self.closed = False
         self.chat: list[str] = []
         self.attention: list[str] = []
@@ -98,6 +99,8 @@ class FakeConversation:
         return True
 
     def bind(self, session: MeetingAudio) -> None:
+        if self.closed:
+            raise ConversationError("meeting conversation is closed")
         self.bound = session
         self.events.append("conversation_bound")
 
@@ -111,10 +114,14 @@ class FakeConversation:
             raise ConversationError("conversation failed")
 
     async def pause(self) -> None:
-        self.events.append("conversation_paused")
+        if not self.paused:
+            self.paused = True
+            self.events.append("conversation_paused")
 
     def resume(self) -> None:
-        self.events.append("conversation_resumed")
+        if self.paused:
+            self.paused = False
+            self.events.append("conversation_resumed")
 
 
 class FakeResponder:

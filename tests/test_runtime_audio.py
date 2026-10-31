@@ -84,7 +84,7 @@ async def test_owner_stop_during_audio_startup_never_joins(session: SimpleNamesp
         session.config, runtime.SessionWiring(open_audio=open_audio, **session.kwargs)
     )
     assert result.terminal_reason == "stopped_by_owner"
-    assert session.events == ["audio_start_cancelled", "browser_closed"]
+    assert session.events == ["audio_start_cancelled"]
 
 
 @pytest.mark.parametrize("failure_at", ["startup", "monitor", "microphone"])
@@ -119,7 +119,7 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
     if failure_at == "startup":
         assert result.terminal_reason == "infra_failure"
         assert "admitted" not in session.events
-        assert session.events[-1] == "browser_closed"
+        assert "browser_closed" not in session.events
         return
     assert result.terminal_reason == "audio_failure"
     assert session.events[-2:] == ["leave", "browser_closed"]

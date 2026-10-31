@@ -228,7 +228,6 @@ class LifecycleDriver(Protocol):
 class SessionLifecycle:
     def __init__(self, initial: LifecycleState) -> None:
         self.state = initial
-        self.last_event: LifecycleEventKind | None = None
 
     @property
     def phase(self) -> PublicPhase:
@@ -242,14 +241,10 @@ class SessionLifecycle:
         self.state = cast(LifecycleState, {**self.state, **update})
 
     def send(self, kind: LifecycleEventKind, attribution: LifecycleAttribution) -> None:
-        update = apply_transition(self.state, kind, attribution)
-        if update:
-            self.last_event = kind
-        self.apply(update)
+        self.apply(apply_transition(self.state, kind, attribution))
 
     def reset(self, initial: LifecycleState) -> None:
         self.state = initial
-        self.last_event = None
 
     def finalize(self) -> None:
         if self.terminal:
