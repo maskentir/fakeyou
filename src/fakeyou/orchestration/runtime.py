@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, cast
 
 from playwright.async_api import Error as PlaywrightError
@@ -162,6 +163,8 @@ _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
 OBSERVATION_GRACE_SECONDS = 60.0
 REJOIN_LIMIT = 3
 REJOIN_WINDOW_SECONDS = 600.0
+REJOIN_DELAY_SECONDS = 2.0
+REJOIN_DELAY_CAP_SECONDS = 8.0
 REJOIN = "the browser crashed and the twin joins again"
 DOM_PRESENCE_FRESH_SECONDS = 30.0
 NOTICE_DISMISS_SECONDS = 5.0
@@ -210,6 +213,8 @@ class MeetingWorker:
     working: LifecycleState | None = None
     admitted_at: float | None = None
     disconnected_from: PublicPhase | None = None
+    fresh_browser: bool = False
+    browser_lost: Callable[[], bool] = field(default=lambda: False)
     origin_kind: LifecycleEventKind | None = None
     origin_attribution: LifecycleAttribution | None = None
     admission: JoinResult | None = None
@@ -220,6 +225,8 @@ class MeetingWorker:
     attention_screen: str | None = field(init=False, default=None)
     attention_chat: str | None = field(init=False, default=None)
     _events_watched: bool = False
+    _shared_roster_listener: Callable[[MeetRoster], None] | None = None
+    _roster_watched: bool = False
 
     def __post_init__(self) -> None:
         self.presence = AloneClock(leave_after_seconds=self.config.alone_leave_seconds)
@@ -729,8 +736,10 @@ class MeetingWorker:
         perception = self.perception
         if perception is None:
             return
+        if self._roster_watched:
+            return
         sensors = perception.sensors
-        shared = sensors.roster_listener
+        shared = self._shared_roster_listener = sensors.roster_listener
 
         def listener(roster: MeetRoster) -> None:
             if shared is not None:
@@ -738,6 +747,7 @@ class MeetingWorker:
             self.bias_transcriber(roster)
 
         sensors.roster_listener = listener
+        self._roster_watched = True
 
     def bias_transcriber(self, roster: MeetRoster) -> None:
         audio = self.audio
@@ -777,11 +787,18 @@ class MeetingWorker:
                 frames=drain.sensors.frames_seen,
                 rejected=drain.sensors.rejected_messages,
             )
-        if self.perception is not None:
-            if self.perception_sync_watched:
-                self.page.remove_listener("response", self.perception.sensors.on_response)
-                self.perception_sync_watched = False
-            await close_safely(self.perception.close, source="browser", faults=self.faults)
+        perception = self.perception
+        if perception is None:
+            return
+        if self.perception_sync_watched:
+            self.page.remove_listener("response", perception.sensors.on_response)
+            self.perception_sync_watched = False
+        if self._events_watched:
+            perception.timeline.unsubscribe(self._on_timeline_event)
+            self._events_watched = False
+        if self._roster_watched:
+            perception.sensors.roster_listener = self._shared_roster_listener
+            self._roster_watched = False
 
     async def _start_guarded(self, starter: Callable[[], Awaitable[None]], operation: str) -> None:
         try:
@@ -971,10 +988,11 @@ class MeetingWorker:
     async def apply_observation(self, checked: WatchdogCheck) -> str | None:
         observation = checked.observation
         if self.kernel is not None and observation.state != "unknown":
-            self.kernel.call_state(
-                observation.state,
-                new_epoch=observation.state == "in_call" and self.disconnected_from is not None,
-            )
+            returning = self.disconnected_from is not None or self.fresh_browser
+            joined = observation.state == "in_call"
+            self.kernel.call_state(observation.state, new_epoch=joined and returning)
+            if joined:
+                self.fresh_browser = False
         if observation.state in ("removed", "ended"):
             kind: LifecycleEventKind = (
                 "removed" if observation.state == "removed" else "meeting_ended"
@@ -1028,6 +1046,8 @@ class MeetingWorker:
             finished = await self._poll_stop(deadline)
             if finished is not None:
                 return finished
+            if self.browser_lost():
+                return await self.finish("browser_failed", "system_fault", "the browser was lost")
             await self._service_conversation()
             await self.offer_attention()
             remote, finished = await self.check_presence(scan)
@@ -1298,6 +1318,8 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
         detail = "owner stopped browser startup"
         lifecycle.send("owner_stopped", "owner_action")
         return detail
+    if hooks.perception is not None:
+        hooks.perception.sensors.begin_epoch()
     loss = drive.loss = _BrowserLoss(lifecycle)
 
     def lost(*_: object) -> None:
@@ -1328,6 +1350,8 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
         moments=hooks.moments,
         kernel=hooks.kernel,
         commands=hooks.commands,
+        fresh_browser=bool(drive.rejoins),
+        browser_lost=lambda: loss.phase is not None,
     )
     try:
         await run_lifecycle(
@@ -1447,12 +1471,27 @@ async def drive_session(
         if not _may_rejoin(drive.rejoins, hooks.monotonic()):
             return drive.detail
         lifecycle.reset(initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id))
+        if hooks.kernel is not None:
+            hooks.kernel.call_state("lobby")
+        pause = _pause(hooks.sleep, rejoin_delay(len(drive.rejoins)))
+        await _guarded(drive, partial(until_stopped, pause, stop_event))
+        if stop_event.is_set():
+            lifecycle.send("owner_stopped", "owner_action")
+            return "owner stopped the rejoin"
         journal.record(
             "browser_rejoined",
             source="runtime",
             attempt=len(drive.rejoins),
             detail="the browser crashed and the twin joins again",
         )
+
+
+def rejoin_delay(attempt: int) -> float:
+    return min(REJOIN_DELAY_CAP_SECONDS, REJOIN_DELAY_SECONDS * 2.0 ** (attempt - 1))
+
+
+async def _pause(sleep: Callable[[float], Awaitable[None]], seconds: float) -> None:
+    await sleep(seconds)
 
 
 def _may_rejoin(rejoins: list[float], now: float) -> bool:
@@ -1464,6 +1503,8 @@ def _may_rejoin(rejoins: list[float], now: float) -> bool:
 async def _start_session(drive: _Drive, session: TeardownStack) -> str | None:
     if drive.hooks.commands is not None:
         session.push_async_callback(drive.hooks.commands.close)
+    if drive.hooks.perception is not None:
+        session.push_async_callback(drive.hooks.perception.close)
     ended = await _prepare_session(drive.config, drive.hooks, drive.stop_event, drive.lifecycle)
     if ended is not None:
         return ended

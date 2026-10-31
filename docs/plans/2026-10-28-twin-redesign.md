@@ -390,10 +390,27 @@ berhenti); terminal lain mengakhiri media (conversation ditutup, audio
 berhenti) sebelum leave dan sebelum browser ditutup. Epoch berikutnya
 mem-bind audio yang sama lalu `resume` setelah admitted.
 
-A2b-2 menyusul: reset perception per epoch (roster masih menyimpan device
-browser lama sehingga bisa terbaca admitted), naikkan `browser_epoch` di
-kernel saat rejoin, lepas listener timeline/roster per epoch, buang slot
-capture lama, dan backoff antar rejoin.
+Probe live a2b-probe-4 (2026-10-31, meeting vwi-zxyx-oyr): Chromium di-kill
+di tengah call, sesi mencatat `browser_rejoined` lalu berakhir normal
+(`alone_limit_reached`). Dua temuan: rejoin butuh 45 detik (watchdog baru
+gagal 19 detik setelah kill, lalu menunggu protocol basi), dan roster
+masih menganggap device browser lama sebagai twin sehingga `join_finished
+admitted` tercatat saat twin masih di ruang tunggu.
+
+Implementasi A2b-2 (2026-10-31): tiap epoch memulai sensor perception baru
+(`PerceptionSensors.begin_epoch`). Device milik browser lama dipensiunkan:
+tetap dianggap milik twin sehingga tidak terhitung sebagai peserta, tetapi
+tidak lagi dipakai untuk status admisi. Snapshot sync pertama dari browser
+baru merekonsiliasi roster, jadi orang yang keluar selama browser mati
+tercatat `left`. Waktu sync, drain, heartbeat, dan peer di-reset; waktu
+admisi pertama tetap dipakai sebagai batas backlog chat. `PerceptionStack`
+ditutup sekali di akhir sesi; worker hanya melepas listener response,
+timeline, dan roster miliknya. Loop monitor mengakhiri epoch begitu browser
+hilang (event `close` atau `crash`). Saat rejoin kernel menerima `lobby`, dan
+observasi `in_call` pertama dari browser baru membuka `browser_epoch` baru.
+Rejoin menunggu 2, 4, lalu 8 detik (`rejoin_delay`); stop owner saat menunggu
+mengakhiri sesi sebagai `stopped_by_owner`. Slot capture per-stream dari
+browser lama belum dibuang (hanya memicu resync drain).
 
 ### A3: Join dan lobby
 

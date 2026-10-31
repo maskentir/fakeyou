@@ -198,3 +198,47 @@ def test_a_rejoin_reads_the_device_that_is_in_the_meeting() -> None:
 
     assert own is not None
     assert own.device_id == TWIN
+
+
+def test_a_retired_browser_device_never_reads_as_the_twin_again() -> None:
+    roster = MeetRoster()
+    ghost = "devices/twin-dead-browser"
+    roster.apply_users([MeetUser(device_id=ghost, name="Rani", present=True, current_user=True)])
+
+    roster.begin_epoch()
+    roster.apply_users([MeetUser(device_id=TWIN, name="Rani", present=False, status=3)])
+    roster.apply_users([MeetUser(device_id=TWIN, name="", present=False, current_user=True)])
+    roster.apply_users([MeetUser(device_id=ghost, name="", present=True)])
+
+    own = roster.own_user()
+    assert own is not None
+    assert (own.device_id, own.present) == (TWIN, False)
+    assert ghost not in roster.people()
+
+
+def test_retiring_before_the_new_device_is_seen_leaves_no_own_user() -> None:
+    roster = roster_with_people()
+
+    roster.begin_epoch()
+
+    assert roster.own_user() is None
+    assert set(roster.people()) == {AYU, BUDI}
+
+
+def test_the_first_snapshot_of_a_new_browser_drops_people_who_left_meanwhile() -> None:
+    roster = roster_with_people()
+    roster.begin_epoch()
+
+    changes = roster.apply_snapshot([user(AYU, "Ayu")])
+
+    assert set(roster.people()) == {AYU}
+    assert changes == [RosterChange("left", BUDI, "Budi")]
+    assert roster.apply_snapshot([user(AYU, "Ayu")]) == []
+
+
+def test_a_snapshot_without_a_new_browser_never_drops_anyone() -> None:
+    roster = roster_with_people()
+
+    roster.apply_snapshot([user(AYU, "Ayu")])
+
+    assert set(roster.people()) == {AYU, BUDI}

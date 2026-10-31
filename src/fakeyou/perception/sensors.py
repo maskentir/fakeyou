@@ -153,7 +153,7 @@ class PerceptionSensors:
         self.roster.mark_synced()
         self.synced_at = self.monotonic()
         self.heartbeats += 1
-        self._apply_changes(self.roster.apply_users(users), self._clock())
+        self._apply_changes(self.roster.apply_snapshot(users), self._clock())
         self._observe_own_status()
         self._share_roster()
 
@@ -242,6 +242,14 @@ class PerceptionSensors:
                 self.timeline.add_signal(change.kind, person, at)
             if change.kind == "left":
                 self.timeline.leave(change.device_id)
+
+    def begin_epoch(self) -> None:
+        self.roster.begin_epoch()
+        self.drained_at = None
+        self.synced_at = None
+        self.heartbeats = 0
+        self.peer_states = ()
+        self._own_status = None
 
     def mark_admitted(self, at: datetime) -> None:
         if self._admitted_at is None:

@@ -130,6 +130,10 @@ class MeetingTimeline:
     def subscribe(self, subscriber: TimelineSubscriber) -> None:
         self._subscribers.append(subscriber)
 
+    def unsubscribe(self, subscriber: TimelineSubscriber) -> None:
+        if subscriber in self._subscribers:
+            self._subscribers.remove(subscriber)
+
     def snapshot(self) -> TimelineSnapshot:
         state = self._state
         return TimelineSnapshot(

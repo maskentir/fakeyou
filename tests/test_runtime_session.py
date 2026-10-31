@@ -15,6 +15,7 @@ from fakeyou.orchestration.runtime import (
     OBSERVATION_GRACE_SECONDS,
     REJOIN_LIMIT,
     SessionWiring,
+    rejoin_delay,
     run_meeting_session,
     session_resources,
 )
@@ -667,6 +668,9 @@ async def test_a_browser_that_crashes_in_the_call_joins_again(lost: str) -> None
     assert [row["attempt"] for row in rejoined] == [1]
     assert (result.phase, result.terminal_reason) == ("ended", "ended_by_host")
     assert len(opened) == 2
+    assert rejoin_delay(1) in clock.sleeps
+    if lost == "browser":
+        assert not [row for row in rows if row["event"] == "ui_observation_expired"]
 
 
 async def test_a_browser_that_keeps_crashing_gives_up_after_three_rejoins() -> None:
@@ -688,6 +692,29 @@ async def test_a_browser_that_keeps_crashing_gives_up_after_three_rejoins() -> N
     assert (result.phase, result.terminal_reason) == ("ended", "browser_failure")
     assert result.detail
     assert len(opened) == REJOIN_LIMIT + 1
+    delays = [rejoin_delay(attempt) for attempt in range(1, REJOIN_LIMIT + 1)]
+    assert [seconds for seconds in clock.sleeps if seconds in delays] == delays
+    assert delays == sorted(set(delays))
+
+
+async def test_an_owner_stop_while_waiting_to_rejoin_ends_the_session() -> None:
+    clock = FakeClock()
+    stop = asyncio.Event()
+    opened, open_page = page_sequence(crashing_page(), meet_page([IN_CALL, IN_CALL, ENDED]))
+
+    async def sleep(seconds: float) -> None:
+        if seconds == rejoin_delay(1):
+            stop.set()
+            await asyncio.Event().wait()
+        await clock.sleep(seconds)
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(open_page=open_page, stop=stop, sleep=sleep, monotonic=clock.monotonic),
+    )
+
+    assert (result.phase, result.terminal_reason) == ("ended", "stopped_by_owner")
+    assert len(opened) == 1
 
 
 async def test_an_error_on_a_live_page_ends_the_session_without_joining_again() -> None:
@@ -777,3 +804,45 @@ async def test_a_rejoin_keeps_the_session_audio_and_pauses_the_conversation_betw
         "audio_stopped",
         "browser_closed",
     ]
+
+
+async def test_a_rejoin_gives_the_new_browser_fresh_perception_and_a_kernel_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fakeyou.config.settings import PerceptionSettings, Settings
+    from fakeyou.orchestration.kernel_port import KernelPort
+    from fakeyou.orchestration.perception import create_perception_stack
+
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
+    stack = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    assert stack is not None
+    epochs: list[None] = []
+    begin = stack.sensors.begin_epoch
+
+    def counted() -> None:
+        epochs.append(None)
+        begin()
+
+    monkeypatch.setattr(stack.sensors, "begin_epoch", counted)
+    kernel = KernelPort.for_meeting("meeting-1")
+    clock = FakeClock()
+    _, open_page = page_sequence(crashing_page(), meet_page([IN_CALL, IN_CALL, ENDED]))
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=open_page,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            perception=stack,
+            kernel=kernel,
+        ),
+    )
+    kernel.drain()
+
+    assert result.terminal_reason == "ended_by_host"
+    assert len(epochs) == 2
+    assert kernel.state.world.browser_epoch == 2
