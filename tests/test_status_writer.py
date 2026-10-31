@@ -17,7 +17,7 @@ class RecordingStatus(MemorySessionStatus):
         self.written: list[str] = []
 
     @override
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -27,14 +27,14 @@ class RecordingStatus(MemorySessionStatus):
         detail: str | None = None,
     ) -> SessionStatus | None:
         self.written.append(phase)
-        return super().record_phase(
+        return await super().record_phase(
             meeting_id, phase, at, terminal_reason=terminal_reason, detail=detail
         )
 
 
 class UnreachableStatus(MemorySessionStatus):
     @override
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -48,7 +48,7 @@ class UnreachableStatus(MemorySessionStatus):
 
 async def test_phases_are_written_in_the_order_they_happened() -> None:
     status = RecordingStatus()
-    status.create("m1", "owner-1", AT)
+    await status.create("m1", "owner-1", AT)
     writer = StatusWriter(status, "m1")
 
     for phase in LIVE:
@@ -57,7 +57,7 @@ async def test_phases_are_written_in_the_order_they_happened() -> None:
     await writer.close()
 
     assert status.written == [*LIVE, "ended"]
-    final = status.get("m1")
+    final = await status.get("m1")
     assert final is not None
     assert (final.terminal_reason, final.detail) == ("stopped_by_owner", "owner stop")
 
@@ -84,7 +84,7 @@ class FlakyStatus(MemorySessionStatus):
         self.error = error
 
     @override
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -96,33 +96,46 @@ class FlakyStatus(MemorySessionStatus):
         if self.failures:
             self.failures -= 1
             raise self.error
-        return super().record_phase(
+        return await super().record_phase(
             meeting_id, phase, at, terminal_reason=terminal_reason, detail=detail
         )
 
 
 async def test_an_unexpected_error_does_not_stop_later_writes() -> None:
     status = FlakyStatus(1, RuntimeError("relation does not exist"))
-    status.create("m1", "owner-1", AT)
+    await status.create("m1", "owner-1", AT)
     writer = StatusWriter(status, "m1", retry_seconds=())
 
     await writer.write("lobby")
     await writer.write("active")
     await writer.close()
 
-    final = status.get("m1")
+    final = await status.get("m1")
     assert final is not None
     assert final.phase == "active"
 
 
 async def test_a_terminal_write_is_retried_until_it_lands() -> None:
     status = FlakyStatus(2, FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
-    status.create("m1", "owner-1", AT)
+    await status.create("m1", "owner-1", AT)
     writer = StatusWriter(status, "m1", retry_seconds=(0.0, 0.0, 0.0))
 
     await writer.write("ended", terminal_reason="ended_by_host", detail="host ended the call")
     await writer.close()
 
-    final = status.get("m1")
+    final = await status.get("m1")
     assert final is not None
     assert (final.phase, final.terminal_reason) == ("ended", "ended_by_host")
+
+
+async def test_a_live_write_is_not_retried() -> None:
+    status = FlakyStatus(1, RuntimeError("relation does not exist"))
+    await status.create("m1", "owner-1", AT)
+    writer = StatusWriter(status, "m1", retry_seconds=(0.0, 0.0, 0.0))
+
+    await writer.write("lobby")
+    await writer.close()
+
+    final = await status.get("m1")
+    assert final is not None
+    assert final.phase == "created"

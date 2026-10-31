@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
@@ -219,11 +220,11 @@ class ApiEventsHarness(ApiHarness):
             ApiDeps(
                 transport=lambda: self.seeded,
                 snapshot_store=lambda: self.store,
-                session_status=lambda: self.status,
                 now_iso=lambda: AT,
                 event_keepalive_seconds=keepalive_seconds,
             ),
         )
+        self.app.dependency_overrides[session_status] = lambda: self.status
         self.client = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=self.app), base_url=BASE_URL
         )
@@ -241,9 +242,11 @@ class ApiEventsHarness(ApiHarness):
         if self.store.load(meeting_id) is None:
             create = SessionCreate.model_validate({**SESSION_PAYLOAD, "meeting_id": meeting_id})
             self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
-            self.status.create(meeting_id, create.owner_id, STATUS_AT)
+            await self.status.create(meeting_id, create.owner_id, STATUS_AT)
         if phase != "created" or terminal_reason is not None:
-            self.status.record_phase(meeting_id, phase, STATUS_AT, terminal_reason=terminal_reason)
+            await self.status.record_phase(
+                meeting_id, phase, STATUS_AT, terminal_reason=terminal_reason
+            )
         self.seeded.seed_events(meeting_id, entries)
 
     def seed_raw_events(self, meeting_id: str, entries: list[tuple[str, dict[str, str]]]) -> None:

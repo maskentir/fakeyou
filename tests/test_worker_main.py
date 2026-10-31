@@ -29,7 +29,11 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
 
     monkeypatch.setattr(worker_main, "run_consumers", capture)
     monkeypatch.setattr(worker_main, "verify_boot_dependencies", boot_ok)
-    monkeypatch.setattr(worker_main, "verify_session_schema", lambda _settings: None)
+
+    async def schema_is_current(_settings: Settings) -> None:
+        return None
+
+    monkeypatch.setattr(worker_main, "verify_session_schema", schema_is_current)
     monkeypatch.setattr(
         worker_main, "create_session_status", lambda _settings: MemorySessionStatus()
     )

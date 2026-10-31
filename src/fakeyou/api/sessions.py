@@ -18,12 +18,12 @@ from fakeyou.api.schemas import (
     SessionView,
     build_snapshot,
 )
-from fakeyou.api.status import read_status, status_call, status_now
+from fakeyou.api.status import session_status, status_now
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
-from fakeyou.db.session_status import DesiredState, SessionStatus
+from fakeyou.db.session_status import DesiredState, SessionStatus, SessionStatusRepository
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
@@ -136,10 +136,13 @@ def _owner_id(principal: Principal) -> str:
 
 
 async def _owned_session(
-    request: Request, meeting_id: str, principal: Principal
+    repository: SessionStatusRepository,
+    request: Request,
+    meeting_id: str,
+    principal: Principal,
 ) -> tuple[SessionSnapshot, SessionStatus]:
     snapshot = _snapshot_store(request).load(meeting_id)
-    status = await read_status(request, meeting_id)
+    status = await repository.get(meeting_id)
     if snapshot is None or status is None or status.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
     return snapshot, status
@@ -181,6 +184,7 @@ def _verify_identity(create: SessionCreate, owner_id: str) -> None:
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
 _Owner = Annotated[Principal, Depends(require_owner)]
+_Repository = Annotated[SessionStatusRepository, Depends(session_status)]
 
 
 @router.post("", status_code=201, response_model=SessionView)
@@ -188,6 +192,7 @@ async def start_session(
     payload: SessionCreate,
     principal: _Owner,
     request: Request,
+    repository: _Repository,
 ) -> SessionView:
     _verify_identity(payload, _owner_id(principal))
     meeting_id = (
@@ -200,15 +205,13 @@ async def start_session(
         payload, meeting_id=meeting_id, at=_now(request), keys_supplied=bool(overrides)
     )
     owner_id = _owner_id(principal)
-    status = await status_call(
-        request, lambda store: store.create(meeting_id, owner_id, status_now())
-    )
+    status = await repository.create(meeting_id, owner_id, status_now())
     if status is None:
-        raise _refuse_existing(await read_status(request, meeting_id), meeting_id)
+        raise _refuse_existing(await repository.get(meeting_id), meeting_id)
     try:
         _snapshot_store(request).save_new(snapshot)
     except OSError as error:
-        await status_call(request, lambda store: store.discard(meeting_id))
+        await repository.discard(meeting_id)
         if isinstance(error, FileExistsError):
             raise _refuse_existing(None, meeting_id) from None
         raise
@@ -221,11 +224,12 @@ async def join_session(
     meeting_id: str,
     principal: _Owner,
     request: Request,
+    repository: _Repository,
 ) -> SessionView:
-    snapshot, status = await _owned_session(request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
     if status.terminal or status.desired_state == "joined":
         raise _refuse_existing(status, meeting_id)
-    wanted = await _desire(request, meeting_id, "joined")
+    wanted = await _desire(repository, meeting_id, "joined")
     await _command_transport(request).publish_command(
         meeting_id, encode_command("join", meeting_id=meeting_id, at=_now(request))
     )
@@ -238,15 +242,16 @@ async def stop_session(
     principal: _Owner,
     request: Request,
     response: Response,
+    repository: _Repository,
 ) -> SessionView:
-    snapshot, status = await _owned_session(request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
     if status.terminal:
         response.status_code = 200
         return _view(snapshot, status)
     wanted = (
         status
         if status.desired_state == "stopped"
-        else await _desire(request, meeting_id, "stopped")
+        else await _desire(repository, meeting_id, "stopped")
     )
     await _command_transport(request).publish_command(
         meeting_id, encode_command("stop", meeting_id=meeting_id, at=_now(request))
@@ -259,8 +264,9 @@ async def resume_session(
     meeting_id: str,
     principal: _Owner,
     request: Request,
+    repository: _Repository,
 ) -> SessionView:
-    snapshot, status = await _owned_session(request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
     if status.terminal:
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
     if status.desired_state == "created":
@@ -276,17 +282,19 @@ async def read_session(
     meeting_id: str,
     principal: _Owner,
     request: Request,
+    repository: _Repository,
 ) -> SessionView:
-    return _view(*await _owned_session(request, meeting_id, principal))
+    return _view(*await _owned_session(repository, request, meeting_id, principal))
 
 
 @router.get("", response_model=list[SessionView])
 async def list_sessions(
     principal: _Owner,
     request: Request,
+    repository: _Repository,
 ) -> list[SessionView]:
     owner_id = _owner_id(principal)
-    statuses = await status_call(request, lambda store: store.list_for(owner_id))
+    statuses = await repository.list_for(owner_id)
     store = _snapshot_store(request)
     views: list[SessionView] = []
     for status in statuses:
@@ -296,8 +304,10 @@ async def list_sessions(
     return views
 
 
-async def _desire(request: Request, meeting_id: str, state: DesiredState) -> SessionStatus:
-    wanted = await status_call(request, lambda store: store.desire(meeting_id, state, status_now()))
+async def _desire(
+    repository: SessionStatusRepository, meeting_id: str, state: DesiredState
+) -> SessionStatus:
+    wanted = await repository.desire(meeting_id, state, status_now())
     if wanted is None:
-        raise _refuse_existing(await read_status(request, meeting_id), meeting_id)
+        raise _refuse_existing(await repository.get(meeting_id), meeting_id)
     return wanted

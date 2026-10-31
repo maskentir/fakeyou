@@ -13,11 +13,11 @@ from fastapi.responses import StreamingResponse
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.errors import error_response
 from fakeyou.api.sessions import now_iso
-from fakeyou.api.status import read_status
+from fakeyou.api.status import session_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
-from fakeyou.db.session_status import SessionStatus
+from fakeyou.db.session_status import SessionStatus, SessionStatusRepository
 from fakeyou.transport.schemas import validate_event
 
 if TYPE_CHECKING:
@@ -69,8 +69,10 @@ def _owner_id(principal: Principal) -> str:
     return principal.owner_id
 
 
-async def _owned_status(request: Request, meeting_id: str, principal: Principal) -> SessionStatus:
-    status = await read_status(request, meeting_id)
+async def _owned_status(
+    repository: SessionStatusRepository, meeting_id: str, principal: Principal
+) -> SessionStatus:
+    status = await repository.get(meeting_id)
     if status is None or status.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
     return status
@@ -161,8 +163,9 @@ async def stream_session_events(
     meeting_id: str,
     principal: _Owner,
     request: Request,
+    repository: Annotated[SessionStatusRepository, Depends(session_status)],
 ) -> Response:
-    status = await _owned_status(request, meeting_id, principal)
+    status = await _owned_status(repository, meeting_id, principal)
     cursor = request.headers.get("last-event-id")
     if cursor is not None and not _valid_cursor(cursor):
         raise FakeYouError(

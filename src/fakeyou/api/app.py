@@ -19,7 +19,7 @@ from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.sessions import router as sessions_router
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
-from fakeyou.db.session_status import SessionStatusStore
+from fakeyou.db.session_status import create_session_status
 from fakeyou.transport.streams import StreamTransport
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,6 @@ _FRAMEWORK_CODES: dict[int, ErrorCode] = {
 class ApiDeps:
     transport: Callable[[], object] | None = None
     snapshot_store: Callable[[], object] | None = None
-    session_status: Callable[[], object] | None = None
     now_iso: Callable[[], str] | None = None
     memory_service: Callable[[], object] | None = None
     debrief_service: Callable[[], object] | None = None
@@ -96,20 +95,21 @@ def _install_error_handlers(app: FastAPI) -> None:
 
 
 @asynccontextmanager
-async def _release_stream_transport(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = cast(Settings, app.state.settings)
+    store = create_session_status(settings)
+    app.state.session_status = store
     try:
         yield
     finally:
         transport = cast(StreamTransport | None, app.state.stream_transport)
         if transport is not None:
             await transport.aclose()
-        status = cast(SessionStatusStore | None, app.state.session_status)
-        if status is not None:
-            status.close()
+        await store.close()
 
 
 def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
-    app = FastAPI(openapi_url="/openapi.json", lifespan=_release_stream_transport)
+    app = FastAPI(openapi_url="/openapi.json", lifespan=_lifespan)
     resolved_deps = deps if deps is not None else ApiDeps()
     app.state.settings = settings
     app.state.deps = resolved_deps

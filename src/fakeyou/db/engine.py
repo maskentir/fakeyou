@@ -5,12 +5,14 @@ from contextlib import contextmanager
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.exc import DisconnectionError, OperationalError
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 
 POSTGRES_SCHEME = "postgresql://"
 DRIVER_PREFIX = "postgresql+psycopg://"
+ASYNC_DRIVER_PREFIX = "postgresql+psycopg_async://"
 
 
 def configured_url(settings: Settings) -> str | None:
@@ -46,6 +48,19 @@ def create_engine_for_url(
 ) -> Engine:
     return create_engine(
         DRIVER_PREFIX + url.removeprefix(POSTGRES_SCHEME),
+        pool_pre_ping=True,
+        connect_args=engine_connect_args(
+            connect_timeout_seconds=connect_timeout_seconds,
+            statement_timeout_seconds=statement_timeout_seconds,
+        ),
+    )
+
+
+def create_async_engine_for_url(
+    url: str, *, connect_timeout_seconds: float, statement_timeout_seconds: float
+) -> AsyncEngine:
+    return create_async_engine(
+        ASYNC_DRIVER_PREFIX + url.removeprefix(POSTGRES_SCHEME),
         pool_pre_ping=True,
         connect_args=engine_connect_args(
             connect_timeout_seconds=connect_timeout_seconds,

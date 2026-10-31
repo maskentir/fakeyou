@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import session_status
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.client import (
@@ -278,15 +279,15 @@ class _Commands:
 async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: Settings) -> None:
     settings.api.owner_token = SecretStr("owner-secret")
     commands = _Commands()
-    session_status = MemorySessionStatus()
+    repository = MemorySessionStatus()
     app = create_app(
         settings,
         ApiDeps(
             transport=lambda: commands,
             snapshot_store=lambda: SessionStore(settings.paths.record_dir),
-            session_status=lambda: session_status,
         ),
     )
+    app.dependency_overrides[session_status] = lambda: repository
     body = session_body(
         SessionOptions(
             link="https://meet.google.com/abc-defg-hij",

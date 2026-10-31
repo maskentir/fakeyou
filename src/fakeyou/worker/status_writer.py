@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 
+from tenacity import AsyncRetrying, RetryCallState, stop_after_attempt
+from tenacity.wait import wait_chain, wait_fixed
+
 from fakeyou.db.session_status import SessionStatusRepository
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
-from fakeyou.observability.faults import capture_error
 
 logger = logging.getLogger(__name__)
 
@@ -74,27 +76,28 @@ class StatusWriter:
                 self._queue.task_done()
 
     async def _persist(self, write: PhaseWrite) -> None:
-        retries = self._retry_seconds if write.phase in TERMINAL_PHASES else ()
-        for delay in (*retries, None):
-            _, error = await capture_error(partial(self._record, write))
-            if error is None:
-                return
-            logger.warning(
-                "status write %s for meeting %s failed: %s",
-                write.phase,
-                self._meeting_id,
-                type(error).__name__,
-            )
-            if delay is None:
-                return
-            await asyncio.sleep(delay)
+        attempts = len(self._retry_seconds) + 1 if write.phase in TERMINAL_PHASES else 1
+        retrying = AsyncRetrying(
+            stop=stop_after_attempt(attempts),
+            wait=wait_chain(*map(wait_fixed, self._retry_seconds or (0.0,))),
+            after=partial(self._log_failure, write.phase),
+            retry_error_callback=lambda _state: None,
+        )
+        async for attempt in retrying:
+            with attempt:
+                await self._status.record_phase(
+                    self._meeting_id,
+                    write.phase,
+                    write.at,
+                    terminal_reason=write.terminal_reason,
+                    detail=write.detail,
+                )
 
-    async def _record(self, write: PhaseWrite) -> None:
-        await asyncio.to_thread(
-            self._status.record_phase,
+    def _log_failure(self, phase: PublicPhase, state: RetryCallState) -> None:
+        error = state.outcome.exception() if state.outcome is not None else None
+        logger.warning(
+            "status write %s for meeting %s failed: %s",
+            phase,
             self._meeting_id,
-            write.phase,
-            write.at,
-            terminal_reason=write.terminal_reason,
-            detail=write.detail,
+            type(error).__name__,
         )

@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
-from redis.typing import EncodableT, FieldT, StreamIdT
+from redis.typing import EncodableT, FieldT
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.config.settings import Settings, require_secret
@@ -118,14 +118,10 @@ class StreamTransport:
     async def claim_stale(
         self, stream: str, group: str, consumer: str, *, min_idle_ms: int
     ) -> list[tuple[str, dict[str, str]]]:
-        pending = await self._client.xpending_range(
-            stream, group, "-", "+", _CLAIM_BATCH, idle=min_idle_ms
+        _next_id, claimed, *_deleted = await self._client.xautoclaim(
+            stream, group, consumer, min_idle_ms, count=_CLAIM_BATCH
         )
-        entry_ids: list[StreamIdT] = [str(entry["message_id"]) for entry in pending]
-        if not entry_ids:
-            return []
-        claimed = await self._client.xclaim(stream, group, consumer, min_idle_ms, entry_ids)
-        return _entry_pairs(claimed)
+        return _entry_pairs(entry for entry in claimed if entry[0] is not None)
 
     async def pending_deliveries(
         self, stream: str, group: str, *, min_idle_ms: int

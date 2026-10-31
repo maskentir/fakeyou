@@ -107,6 +107,19 @@ class RecordingClient:
             for entry_id, _fields in entries[: int(count)]
         ]
 
+    async def xautoclaim(
+        self,
+        name: str,
+        groupname: str,
+        consumername: str,
+        min_idle_time: int,
+        *,
+        count: int,
+    ) -> list[object]:
+        self.calls.append(("xautoclaim", name, groupname, consumername, min_idle_time, count))
+        entries = self.pending.get((name, groupname), [])
+        return ["0-0", [*entries[:count], (None, None)], []]
+
     async def xclaim(
         self,
         name: str,
@@ -249,10 +262,7 @@ async def test_claim_stale_reclaims_pending_entries_without_ack() -> None:
     client.pending[(stream, "workers")] = [entry]
     claimed = await transport.claim_stale(stream, "workers", "worker-b", min_idle_ms=0)
     assert claimed == [entry]
-    assert client.calls == [
-        ("xpending_range", stream, "workers", "-", "+", 100, 0),
-        ("xclaim", stream, "workers", "worker-b", 0, ["2-0"]),
-    ]
+    assert client.calls == [("xautoclaim", stream, "workers", "worker-b", 0, 100)]
 
 
 async def test_pending_deliveries_report_the_redis_delivery_count() -> None:
