@@ -161,7 +161,7 @@ async def test_known_error_dialogs_are_dismissed_before_the_microphone_is_enable
         del args
         return ("Camera not found",)
 
-    monkeypatch.setattr(runtime, "dismiss_known_errors", dismiss)
+    monkeypatch.setattr(runtime, "dismiss_notices", dismiss)
 
     await runtime.run_meeting_session(
         session.config,
@@ -184,7 +184,7 @@ async def test_a_failed_dialog_dismissal_is_recorded_without_failing_session(
         del args
         raise TimeoutError
 
-    monkeypatch.setattr(runtime, "dismiss_known_errors", dismiss)
+    monkeypatch.setattr(runtime, "dismiss_notices", dismiss)
     reporter = FaultReporter(journal=journal)
 
     result = await runtime.run_meeting_session(

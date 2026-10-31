@@ -299,6 +299,17 @@ Gate: tidak ada `asyncio.to_thread` untuk status; test API memakai
 Gate: tidak ada import LangGraph di lifecycle sesi; resume dan forget lulus
 tanpa checkpoint lifecycle.
 
+Implementasi A5 (2026-10-31): dialog dibaca lewat `aria_snapshot()`; hash
+snapshot menjadi fingerprint, dan baris role dihitung (`button`, dan role input:
+textbox, combobox, checkbox, radio, switch, slider, spinbutton, searchbox,
+listbox). Dialog tanpa input selalu dicoba ditutup dengan Escape; bila tidak
+tertutup dan hanya punya satu tombol, tombol itu diklik (lewat xpath karena
+klik CloakBrowser tidak menerima locator berantai). Dialog lain dicatat
+`modal_observed` tanpa eskalasi. Dialog dengan input baru dieskalasi ke owner
+jika status call bukan `in_call` atau `unknown`. Dialog dicari ulang menurut
+fingerprint sebelum setiap aksi, karena indeks bergeser setelah satu dialog
+ditutup.
+
 ### A2: Reconciler dan recovery
 
 - Lease pindah ke baris `meeting_sessions` (`lease_owner`,
