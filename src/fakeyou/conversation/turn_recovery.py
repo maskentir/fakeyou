@@ -1,7 +1,6 @@
 import asyncio
 import json
 import math
-import time
 import traceback
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from pathlib import Path
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import JournalSink
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import classify_exception
@@ -134,7 +134,7 @@ class TurnRecovery:
         faults: FaultReporter | None,
         language: str | Callable[[], str],
         is_closed: Callable[[], bool],
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._journal = journal
         self._faults = faults

@@ -1,9 +1,9 @@
 import math
-import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 
@@ -99,7 +99,7 @@ class DeferredTurns:
 
 
 class QuietFloor:
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, *, clock: Callable[[], float] = monotonic) -> None:
         self._clock = clock
         self._last_activity = -math.inf
 
