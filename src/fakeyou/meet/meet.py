@@ -280,6 +280,15 @@ async def _enter_twin_name(
     return None
 
 
+async def _knock_landed(page: Page) -> bool:
+    try:
+        async with asyncio.timeout(CALL_STATE_TIMEOUT_SECONDS):
+            content = await page.content()
+    except (PlaywrightError, TimeoutError):
+        return False
+    return _is_waiting(content)
+
+
 async def _click_join(
     page: Page,
     signals: MeetSignals,
@@ -302,7 +311,7 @@ async def _click_join(
                 label,
                 sleep,
             )
-            if failure is not None:
+            if failure is not None and not await _knock_landed(page):
                 return failure
             return None
         if monotonic() >= deadline:
@@ -439,6 +448,18 @@ async def request_guest_join(
         )
 
 
+def _unreadable_outcome(
+    content: JoinResult, unreadable: int, request: GuestJoinRequest, *, expired: bool
+) -> JoinResult | None:
+    if content.status == "aborted" or unreadable >= LOBBY_READ_FAILURE_LIMIT:
+        return content
+    if expired:
+        return JoinResult(
+            status="timeout", detail=f"no admission within {request.lobby_timeout_seconds} seconds"
+        )
+    return None
+
+
 async def _await_admission(
     page: Page,
     request: GuestJoinRequest,
@@ -456,8 +477,11 @@ async def _await_admission(
         )
         if isinstance(content, JoinResult):
             unreadable += 1
-            if content.status == "aborted" or unreadable >= LOBBY_READ_FAILURE_LIMIT:
-                return content
+            ended = _unreadable_outcome(
+                content, unreadable, request, expired=polling.monotonic() >= deadline
+            )
+            if ended is not None:
+                return ended
             await polling.sleep(request.poll_interval_seconds)
             continue
         unreadable = 0

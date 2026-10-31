@@ -876,8 +876,12 @@ class MeetingWorker:
         return protocol_call_state(sensors.roster.own_user(), sensors.peer_states)
 
     def protocol_admitted(self) -> bool:
-        observation = self.protocol_call_state()
-        return observation is not None and observation.state == "in_call"
+        perception = self.perception
+        sensors = perception.sensors if perception is not None else None
+        if sensors is None or not sensors.synced_within(DRAIN_STALE_SECONDS):
+            return False
+        own = sensors.roster.own_user()
+        return own is not None and own.present
 
     async def observe_call(self, page: Page, signals: MeetSignals) -> CallObservation:
         protocol = self.protocol_call_state()

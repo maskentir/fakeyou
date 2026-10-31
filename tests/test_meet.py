@@ -427,7 +427,7 @@ async def test_request_guest_join_fails_when_typing_returns_error() -> None:
 
 
 async def test_request_guest_join_fails_when_click_returns_error() -> None:
-    page = meet_page([], click_failures={ASK_SELECTOR})
+    page = meet_page([LOBBY], click_failures={ASK_SELECTOR})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -436,8 +436,35 @@ async def test_request_guest_join_fails_when_click_returns_error() -> None:
         polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
-    assert result.status == "failed"
+    assert (result.status, result.knocked) == ("failed", False)
     assert "clicking" in result.detail
+
+
+async def test_a_knock_that_landed_despite_a_click_error_keeps_waiting() -> None:
+    page = meet_page([WAITING, WAITING, IN_CALL], click_failures={ASK_SELECTOR})
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic)
+    )
+
+    assert (result.status, result.knocked) == ("admitted", True)
+
+
+async def test_an_unreadable_lobby_at_the_deadline_times_out() -> None:
+    page = meet_page([WAITING, PlaywrightError("blip")])
+    clock = FakeClock()
+
+    async def sleep(seconds: float) -> None:
+        clock.now += seconds
+
+    result = await request_guest_join(
+        page,
+        _request(lobby_timeout_seconds=2.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("timeout", True)
 
 
 async def test_request_guest_join_retries_transient_name_click() -> None:
