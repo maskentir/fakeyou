@@ -165,6 +165,7 @@ REJOIN_LIMIT = 3
 REJOIN_WINDOW_SECONDS = 600.0
 REJOIN_DELAY_SECONDS = 2.0
 REJOIN_DELAY_CAP_SECONDS = 8.0
+BLOCKED_REJOIN_SECONDS = 30.0
 REJOIN = "the browser crashed and the twin joins again"
 DOM_PRESENCE_FRESH_SECONDS = 30.0
 NOTICE_DISMISS_SECONDS = 5.0
@@ -1305,6 +1306,11 @@ class _Drive:
             and self.lifecycle.state["terminal_reason"] == "browser_failure"
         )
 
+    @property
+    def blocked_rejoin(self) -> bool:
+        blocked = self.lifecycle.state["terminal_reason"] == "blocked_by_platform"
+        return blocked and bool(self.rejoins)
+
 
 async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
     config, hooks, stop_event, lifecycle = (
@@ -1372,7 +1378,7 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
         drive.greeting = worker.initial_speech
         if hooks.commands is not None:
             await hooks.commands.release_page()
-        if loss.rejoinable:
+        if loss.rejoinable or drive.blocked_rejoin:
             await worker.detach_media()
         else:
             await worker.end_media()
@@ -1470,11 +1476,12 @@ async def drive_session(
             return detail
         if not _may_rejoin(drive.rejoins, hooks.monotonic()):
             return drive.detail
+        blocked = drive.blocked_rejoin
         lifecycle.reset(initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id))
         if hooks.kernel is not None:
             hooks.kernel.call_state("lobby")
-        pause = _pause(hooks.sleep, rejoin_delay(len(drive.rejoins)))
-        await _guarded(drive, partial(until_stopped, pause, stop_event))
+        delay = BLOCKED_REJOIN_SECONDS if blocked else rejoin_delay(len(drive.rejoins))
+        await _guarded(drive, partial(until_stopped, _pause(hooks.sleep, delay), stop_event))
         if stop_event.is_set():
             lifecycle.send("owner_stopped", "owner_action")
             return "owner stopped the rejoin"
@@ -1482,7 +1489,12 @@ async def drive_session(
             "browser_rejoined",
             source="runtime",
             attempt=len(drive.rejoins),
-            detail="the browser crashed and the twin joins again",
+            waited_ms=round(delay * 1000),
+            detail=(
+                "Meet blocked the rejoin and the twin knocks again"
+                if blocked
+                else "the browser crashed and the twin joins again"
+            ),
         )
 
 
@@ -1552,7 +1564,7 @@ async def _drive_once(drive: _Drive) -> str:
     outcome, error = await _guarded(drive, attempt)
     detail = await _settle_failure(drive, error) if error is not None else outcome
     assert detail is not None
-    if drive.crashed:
+    if drive.crashed or drive.blocked_rejoin:
         drive.rejoins.append(drive.hooks.monotonic())
         drive.detail = detail
         return REJOIN

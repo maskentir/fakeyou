@@ -62,7 +62,8 @@ class MeetRoster:
     def apply_snapshot(self, users: Iterable[MeetUser]) -> list[RosterChange]:
         listed = list(users)
         changes = self.apply_users(listed)
-        if not self._awaiting_snapshot:
+        own = self.own_user()
+        if not self._awaiting_snapshot or own is None or not own.present:
             return changes
         self._awaiting_snapshot = False
         seen = {user.device_id for user in listed}
