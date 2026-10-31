@@ -413,31 +413,6 @@ async def test_conversation_never_binds_and_closes_after_denial(
     assert session.events == ["conversation_closed", "audio_stopped", "browser_closed"]
 
 
-async def test_conversation_closes_if_checkpoint_setup_fails(session: SimpleNamespace) -> None:
-    def broken_saver() -> NoReturn:
-        raise RuntimeError("checkpoint unavailable")
-
-    @asynccontextmanager
-    async def open_audio() -> AsyncIterator[FakeAudio]:
-        pytest.fail("audio must not start before the checkpoint")
-        yield
-
-    conversation = FakeConversation(session.events)
-    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
-        await runtime.run_meeting_session(
-            session.config,
-            runtime.SessionWiring(
-                open_audio=open_audio,
-                conversation=conversation,
-                saver_factory=broken_saver,
-                open_page=session.kwargs["open_page"],
-                stop=session.stop,
-            ),
-        )
-
-    assert session.events == ["conversation_closed"]
-
-
 async def test_conversation_closes_before_audio_on_unexpected_monitor_error(
     open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
     session: SimpleNamespace,

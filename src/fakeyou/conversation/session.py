@@ -103,13 +103,6 @@ class SessionConfig:
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
     alone_leave_seconds: PositiveSeconds = DEFAULTS.meeting.alone_leave_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
-    database_url: str | None = field(default=None, repr=False)
-    database_connect_timeout_seconds: PositiveSeconds = DEFAULTS.database.connect_timeout_seconds
-    database_statement_timeout_seconds: PositiveSeconds = (
-        DEFAULTS.database.statement_timeout_seconds
-    )
-    database_keepalive_idle_seconds: PositiveSeconds = DEFAULTS.database.keepalive_idle_seconds
-    lifecycle_send_timeout_seconds: PositiveSeconds = DEFAULTS.database.send_timeout_seconds
     drain_max_consecutive_failures: Annotated[int, Field(ge=1)] = (
         DEFAULTS.audio.drain_max_consecutive_failures
     )

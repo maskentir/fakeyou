@@ -10,6 +10,7 @@ CONFLICT_CODES: frozenset[str] = frozenset(
     {
         "meeting.unfinished_session",
         "meeting.already_ended",
+        "memory.forget_session_live",
         *(code.value for code in NOTE_CONFLICT_CODES),
     }
 )

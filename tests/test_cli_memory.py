@@ -22,7 +22,6 @@ from fakeyou.memory.ingestion import EpisodeNameError, MeetingScope, ingest_corr
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.lifecycle import meeting_thread_id
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
     read_status,
@@ -378,34 +377,6 @@ async def test_ingest_episode_name_error_keeps_hint_on_stderr(
 
     assert exit.value.code == ExitCode.FAILURE
     assert "--keep-record" in capsys.readouterr().err
-
-
-@pytest.mark.asyncio
-async def test_forget_meeting_files_threads_database_timeouts_to_the_checkpointer(
-    settings: Settings, postgres_checkpoints: dict[str, Any]
-) -> None:
-    from urllib.parse import parse_qsl, urlsplit
-
-    from fakeyou.memory.forget import forget_meeting_files
-
-    settings.database.connect_timeout_seconds = 7.0
-    settings.database.statement_timeout_seconds = 9.0
-    settings.database.keepalive_idle_seconds = 11.0
-    profile = PersonaProfile(
-        owner_id=settings.identity.owner_id,
-        twin_id=settings.identity.twin_id,
-        display_name="Settings Twin",
-        role="Project coordinator",
-        allowed_tools=frozenset(),
-    )
-
-    await forget_meeting_files(settings, profile, SessionId("meeting-forget"), meeting_thread_id)
-
-    (conninfo,) = postgres_checkpoints
-    params = dict(parse_qsl(urlsplit(conninfo).query))
-    assert params["connect_timeout"] == "7"
-    assert "statement_timeout=9000" in params["options"]
-    assert params["keepalives_idle"] == "11"
 
 
 def test_finish_ingest_reports_corrupt_status(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ from fakeyou.perception.roster import MeetRoster
 from tests._audio_fakes import FakeAudio
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, FakePageSession, meet_page
-from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import mining_payload, run_session, session_config
 
 
@@ -29,7 +29,6 @@ async def test_run_meeting_session_collects_participant_evidence(tmp_path: Path)
         session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
         SessionWiring(
             open_page=browser.open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -58,7 +57,7 @@ async def test_run_meeting_session_skips_observer_when_flag_off(tmp_path: Path) 
     browser = FakePageSession(page)
 
     result = await run_session(
-        session_config(participant_evidence_path=evidence), browser, FakeSaverSession(), FakeClock()
+        session_config(participant_evidence_path=evidence), browser, FakeClock()
     )
 
     assert result.phase == "ended"

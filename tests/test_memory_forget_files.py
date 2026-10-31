@@ -1,4 +1,5 @@
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -7,9 +8,9 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.memory.forget import ForgetStageResult, forget_meeting_files
 from fakeyou.memory.persona import PersonaProfile
-from fakeyou.orchestration.lifecycle import meeting_thread_id
 from fakeyou.persistence.layout import meeting_profile_dir
 from fakeyou.persistence.record import meeting_record_path
+from tests._session_status_fakes import MemorySessionStatus
 
 MEETING = SessionId("meeting-forget")
 
@@ -36,7 +37,7 @@ async def test_forget_meeting_removes_the_meeting_browser_profile(settings: Sett
     (profile_dir / "Default").mkdir(parents=True)
     (profile_dir / "Default" / "Cookies").write_text("session", encoding="utf-8")
 
-    await forget_meeting_files(settings, profile, MEETING, meeting_thread_id)
+    await forget_meeting_files(settings, profile, MEETING, MemorySessionStatus())
 
     assert not profile_dir.exists()
 
@@ -52,7 +53,9 @@ async def test_forget_meeting_reports_a_failed_record_stage_without_raising(
 
     monkeypatch.setattr(shutil, "rmtree", busy)
 
-    outcome = await forget_meeting_files(settings, _profile(settings), MEETING, meeting_thread_id)
+    outcome = await forget_meeting_files(
+        settings, _profile(settings), MEETING, MemorySessionStatus()
+    )
 
     record = _stage(outcome.stages, "record")
     assert (record.status, record.detail) == ("failed", "PermissionError")
@@ -66,7 +69,9 @@ async def test_forget_meeting_reports_a_record_that_survives_removal_as_failed(
     _record_dir(settings).mkdir(parents=True)
     monkeypatch.setattr(shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    outcome = await forget_meeting_files(settings, _profile(settings), MEETING, meeting_thread_id)
+    outcome = await forget_meeting_files(
+        settings, _profile(settings), MEETING, MemorySessionStatus()
+    )
 
     record = _stage(outcome.stages, "record")
     assert (record.status, record.detail) == ("failed", "still_present")
@@ -96,21 +101,21 @@ async def test_forget_files_reports_each_stage_and_reruns_idempotently(
         real_rmtree(str(path))
 
     monkeypatch.setattr(shutil, "rmtree", flaky_rmtree)
-    first = await forget_meeting_files(settings, profile, MEETING, meeting_thread_id)
+    first = await forget_meeting_files(settings, profile, MEETING, MemorySessionStatus())
     monkeypatch.setattr(shutil, "rmtree", real_rmtree)
-    second = await forget_meeting_files(settings, profile, MEETING, meeting_thread_id)
+    second = await forget_meeting_files(settings, profile, MEETING, MemorySessionStatus())
 
     assert [stage.stage for stage in first.stages] == [
         "record",
         "journal",
         "browser_profile",
-        "checkpoint",
+        "status",
     ]
     assert {stage.stage: stage.status for stage in first.stages} == {
         "record": "removed",
         "journal": "absent",
         "browser_profile": "failed",
-        "checkpoint": "absent",
+        "status": "absent",
     }
     assert first.files.record_removed is True
     assert {stage.stage: stage.status for stage in second.stages}["browser_profile"] == "removed"
@@ -133,7 +138,9 @@ async def test_forget_files_removes_every_journal_it_can_and_counts_them(
 
     monkeypatch.setattr(Path, "unlink", flaky_unlink)
 
-    outcome = await forget_meeting_files(settings, _profile(settings), MEETING, meeting_thread_id)
+    outcome = await forget_meeting_files(
+        settings, _profile(settings), MEETING, MemorySessionStatus()
+    )
 
     journal = _stage(outcome.stages, "journal")
     assert (journal.status, journal.detail) == ("failed", "PermissionError")
@@ -141,3 +148,14 @@ async def test_forget_files_removes_every_journal_it_can_and_counts_them(
     assert [path.name for path in settings.paths.journal_dir.iterdir()] == [
         "meeting-forget.jsonl.1"
     ]
+
+
+async def test_forget_files_deletes_the_session_status_row(settings: Settings) -> None:
+    status = MemorySessionStatus()
+    await status.create(MEETING, "owner-1", datetime(2026, 10, 31, tzinfo=UTC))
+
+    outcome = await forget_meeting_files(settings, _profile(settings), MEETING, status)
+
+    assert _stage(outcome.stages, "status").status == "removed"
+    assert outcome.files.status_removed is True
+    assert await status.get(MEETING) is None

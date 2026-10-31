@@ -7,12 +7,9 @@ from playwright.async_api import Page
 
 from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
-from fakeyou.orchestration.lifecycle import build_lifecycle_graph
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
-from tests._fakes_common import DATABASE_URL
 
 MEETING_PAGE = """<!doctype html><html><body>
 <input placeholder="Your name"><button id="join">Ask to join</button>
@@ -27,7 +24,7 @@ document.querySelector('#join').onclick = () => {
 
 
 @pytest.mark.browser
-async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state() -> None:
+async def test_worker_joins_and_leaves_a_real_browser_fixture() -> None:
     pages: list[Page] = []
 
     @asynccontextmanager
@@ -46,7 +43,6 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
         meeting_id=SessionId("fixture-meeting"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Fixture Twin",
-        database_url=DATABASE_URL,
         warmup_browser=False,
         headless=True,
         session_duration_seconds=0.2,
@@ -58,15 +54,6 @@ async def test_worker_joins_and_leaves_real_browser_fixture_with_durable_state()
     assert result.phase == "ended"
     assert result.terminal_reason == "duration_limit_reached"
     assert pages[0].is_closed()
-    async with open_checkpointer(DATABASE_URL) as saver:
-        state = await build_lifecycle_graph(saver).aget_state(
-            {"configurable": {"thread_id": "fixture-twin:fixture-meeting"}}
-        )
-    assert state.values["external_effects"] == [
-        {"effect": "join_requested"},
-        {"effect": "leave_requested"},
-    ]
-    assert state.values["phase"] == "ended"
 
 
 @pytest.mark.browser

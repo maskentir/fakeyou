@@ -351,7 +351,6 @@ class Harness:
         self.ports = JoinPorts(
             run_session=self.double.run,
             open_memory=unused_memory,
-            open_checkpointer=unused_checkpointer,
         )
         self.consumer = self.member(settings, "worker-a")
         self.other_consumer = self.member(settings, "worker-b")
@@ -1025,7 +1024,6 @@ async def test_worker_refuses_to_boot_when_memory_is_unreachable(settings: Setti
     ports = JoinPorts(
         run_session=run_meeting_session,
         open_memory=unreachable,
-        open_checkpointer=unused_checkpointer,
     )
 
     with pytest.raises(FakeYouError, match="memory unavailable") as caught:

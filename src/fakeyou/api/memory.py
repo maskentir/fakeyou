@@ -23,10 +23,12 @@ from fakeyou.api.schemas import (
     SessionSnapshot,
 )
 from fakeyou.api.sessions import SessionStore, now_iso
+from fakeyou.api.status import session_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId, parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import SessionStatusRepository
 from fakeyou.memory.forget import (
     ForgetRequest,
     ForgetSummary,
@@ -42,7 +44,6 @@ from fakeyou.memory.owner_note_service import (
 )
 from fakeyou.memory.owner_notes import NoteConflictError, OwnerNoteResult
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
-from fakeyou.orchestration.lifecycle import meeting_thread_id
 from fakeyou.orchestration.providers import open_persona_memory
 from fakeyou.persistence.ingestion_status import IngestionState, read_status
 from fakeyou.persistence.layout import MeetingDir
@@ -77,11 +78,10 @@ async def forget_meeting_for(
     *,
     meeting_id: SessionId,
     keep_record: bool,
+    status: SessionStatusRepository,
 ) -> ForgetSummary:
     return await run_forget(
-        ForgetRequest(meeting_id, None, keep_record),
-        access=access,
-        lifecycle_thread_id=meeting_thread_id,
+        ForgetRequest(meeting_id, None, keep_record), access=access, status=status
     )
 
 
@@ -347,25 +347,29 @@ async def forget_meeting(
     payload: ForgetMeeting,
     principal: _Owner,
     request: Request,
+    repository: Annotated[SessionStatusRepository, Depends(session_status)],
 ) -> ForgetView:
-    _owned_snapshot(request, meeting_id, principal)
     snapshot = _owned_snapshot(request, meeting_id, principal)
+    status = await repository.get(meeting_id)
+    if status is not None and not status.terminal:
+        raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id=meeting_id)
     summary = await _memory_service(request).forget_meeting(
         _meeting_access(request, snapshot, principal),
         meeting_id=parse_session_id(meeting_id, field="meeting_id"),
         keep_record=payload.keep_record,
+        status=repository,
     )
     files = summary.files or ForgottenFiles(
         record_removed=False,
         journal_files_removed=0,
-        lifecycle_thread_removed=False,
+        status_removed=False,
         browser_profile_removed=False,
     )
     return ForgetView(
         removed_episodes=summary.removed_episodes,
         record_removed=files.record_removed,
         journal_files_removed=files.journal_files_removed,
-        lifecycle_thread_removed=files.lifecycle_thread_removed,
+        status_removed=files.status_removed,
         browser_profile_removed=files.browser_profile_removed,
         stages=tuple(
             ForgetStageView(stage=stage.stage, status=stage.status, detail=stage.detail)

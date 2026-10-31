@@ -18,7 +18,7 @@ from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests._audio_support import NullSTT, ScriptedSpeech
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import IN_CALL, FakePageSession, HangingPage, meet_page
-from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 from tests._voice_support import batch, tracker_at
 
 
@@ -90,7 +90,6 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
         SessionWiring(
             stop=stop,
             open_page=FakePageSession(page).open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,

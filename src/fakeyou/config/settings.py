@@ -142,7 +142,6 @@ class DatabaseSettings(Section):
     url: SecretStr | None = None
     connect_timeout_seconds: PositiveSeconds = 5.0
     statement_timeout_seconds: PositiveSeconds = 30.0
-    send_timeout_seconds: PositiveSeconds = 5.0
     keepalive_idle_seconds: PositiveSeconds = 30.0
 
 

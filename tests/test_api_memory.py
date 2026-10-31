@@ -19,7 +19,13 @@ from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, write_status
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import INGESTION_STREAM, REEMBED_STREAM
-from tests.test_api_sessions import AT, SESSION_PAYLOAD, ApiHarness, RecordingTransport
+from tests.test_api_sessions import (
+    AT,
+    SESSION_PAYLOAD,
+    STATUS_AT,
+    ApiHarness,
+    RecordingTransport,
+)
 
 NOTE_ID = UUID("5b7a3c1e-2f4d-4a6b-8c9d-0e1f2a3b4c5d")
 TARGET = UUID("9c8b7a6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d")
@@ -424,7 +430,7 @@ async def test_forget_meeting_returns_the_c9_summary_with_its_stages(api: Memory
         "record",
         "journal",
         "browser_profile",
-        "checkpoint",
+        "status",
     ]
     assert body["stages"][0]["status"] == "failed"
     assert [stage["status"] for stage in body["stages"][1:]] == [
@@ -433,6 +439,22 @@ async def test_forget_meeting_returns_the_c9_summary_with_its_stages(api: Memory
         "absent",
         "absent",
     ]
+
+
+@pytest.mark.parametrize("keep_record", [False, True])
+async def test_forget_refuses_a_meeting_that_is_still_running(
+    api: MemoryHarness, *, keep_record: bool
+) -> None:
+    api.seed_twin("m-1")
+    await api.status.create("m-1", "demo_owner", STATUS_AT)
+    await api.status.record_phase("m-1", "active", STATUS_AT)
+
+    response = await api.post("/v1/sessions/m-1/forget", json={"keep_record": keep_record})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "memory.forget_session_live"
+    assert await api.status.get("m-1") is not None
+    assert api.store.load("m-1") is not None
 
 
 async def test_forget_meeting_outside_the_principal_is_not_found(api: MemoryHarness) -> None:

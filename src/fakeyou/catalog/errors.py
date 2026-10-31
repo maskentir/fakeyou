@@ -63,9 +63,6 @@ class ErrorCode(StrEnum):
     MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT = "meeting.has_conversation_without_context"
     MEETING_UNFINISHED_SESSION = "meeting.unfinished_session"
     MEETING_ALREADY_ENDED = "meeting.already_ended"
-    MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE = "meeting.lifecycle_checkpoint_uncheckable"
-    MEETING_CHECKPOINT_IDENTITY_MISMATCH = "meeting.checkpoint_identity_mismatch"
-    MEETING_CANNOT_RESUME_PHASE = "meeting.cannot_resume_phase"
     BROWSER_PROFILE_IN_USE = "browser.profile_in_use"
     RECORD_LOCKED = "record.locked"
     RECORD_LOCK_CORRUPT = "record.lock_corrupt"
@@ -85,6 +82,7 @@ class ErrorCode(StrEnum):
     MEMORY_KEEP_RECORD_REQUIRES_MEETING = "memory.keep_record_requires_meeting"
     MEMORY_FORGET_INCOMPLETE = "memory.forget_incomplete"
     MEMORY_FORGET_FILES_INCOMPLETE = "memory.forget_files_incomplete"
+    MEMORY_FORGET_SESSION_LIVE = "memory.forget_session_live"
     NOTE_CORRECTION_TARGET_INACTIVE = "note.correction_target_inactive"
     NOTE_NOT_PENDING = "note.not_pending"
     NOTE_CORRECTION_CONCURRENT = "note.correction_concurrent"
@@ -416,15 +414,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEETING_ALREADY_ENDED: ErrorSpec(
         "meeting {meeting_id} already ended; use a new meeting ID", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE: ErrorSpec(
-        "lifecycle checkpoint cannot be checked: {reason}"
-    ),
-    ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH: ErrorSpec(
-        "checkpoint identity does not match the requested session", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEETING_CANNOT_RESUME_PHASE: ErrorSpec(
-        "cannot resume meeting {meeting_id} in phase {phase}", ExitCode.INPUT_REJECTED
-    ),
     ErrorCode.BROWSER_PROFILE_IN_USE: ErrorSpec("browser profile is in use: {reason}"),
     ErrorCode.RECORD_LOCKED: ErrorSpec("meeting record is locked: {path}"),
     ErrorCode.RECORD_LOCK_CORRUPT: ErrorSpec(
@@ -471,6 +460,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
     ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE: ErrorSpec(
         "meeting file {path} could not be removed during forget: {reason}"
+    ),
+    ErrorCode.MEMORY_FORGET_SESSION_LIVE: ErrorSpec(
+        "meeting {meeting_id} is still running; stop it before forgetting it",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
     ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),

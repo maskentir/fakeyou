@@ -128,45 +128,6 @@ async def test_join_resume_writes_markers_and_rejoins(
 
 
 @pytest.mark.asyncio
-async def test_join_resume_detects_a_live_checkpoint_without_journal(
-    settings: Settings, join: Any, session_run: Any
-) -> None:
-    from fakeyou.db.checkpoint import open_checkpointer
-    from fakeyou.db.engine import configured_url, require_url
-    from fakeyou.observability.journal import journal_path
-    from fakeyou.orchestration.lifecycle import (
-        LifecycleThread,
-        build_lifecycle_graph,
-        initial_lifecycle_state,
-        initialize_lifecycle,
-        meeting_thread_id,
-    )
-    from fakeyou.persistence.record import load_meeting_record, meeting_record_path
-
-    async with open_checkpointer(require_url(configured_url(settings))) as saver:
-        first = LifecycleThread(
-            build_lifecycle_graph(saver),
-            meeting_thread_id("settings-twin", "meeting-9"),
-            initial_lifecycle_state("settings-owner", "settings-twin", "meeting-9"),
-        )
-        await initialize_lifecycle(first, resume=False)
-        await first.send("prepared", "owner_action")
-        await first.send("join_requested", "owner_action")
-
-    await join(LINK, meeting_id="meeting-9", resume=True)
-
-    assert session_run["config"].meeting_id == "meeting-9"
-    journal_rows = journal_path(settings.paths.journal_dir, SessionId("meeting-9")).read_text(
-        encoding="utf-8"
-    )
-    assert '"event":"session_resumed"' in journal_rows.replace(" ", "")
-    entries = load_meeting_record(
-        meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
-    )
-    assert entries[-1].kind == "resume"
-
-
-@pytest.mark.asyncio
 async def test_join_resume_refuses_a_finished_meeting(
     settings: Settings, join: Any, session_run: Any
 ) -> None:

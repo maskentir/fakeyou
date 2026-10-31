@@ -1,32 +1,19 @@
 import asyncio
 import json
-import time
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, NoReturn, override
+from typing import Any, NoReturn
 
 import pytest
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import ChannelVersions, Checkpoint, CheckpointMetadata
-from langgraph.checkpoint.memory import InMemorySaver
-from psycopg import OperationalError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.meet.meet import CallObservation
-from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.lifecycle import (
-    LifecycleThread,
-    build_lifecycle_graph,
-    initial_lifecycle_state,
-    initialize_lifecycle,
-)
 from fakeyou.orchestration.runtime import (
     OBSERVATION_GRACE_SECONDS,
     SessionWiring,
-    drive_session,
     run_meeting_session,
     session_resources,
 )
@@ -47,7 +34,7 @@ from tests._meet_browser_fakes import (
     FakePageSession,
     meet_page,
 )
-from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import pin_join_jitter, run_session, session_config
 
 
@@ -56,58 +43,12 @@ def instant_join_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     pin_join_jitter(monkeypatch)
 
 
-class _BlockingTerminalSaver(InMemorySaver):
-    def __init__(self) -> None:
-        super().__init__()
-        self.terminal_started = asyncio.Event()
-        self.release_terminal = asyncio.Event()
-        self.terminal_persisted = asyncio.Event()
-        self.terminal_cancelled = asyncio.Event()
-        self._blocked = False
-
-    def factory(self) -> AbstractAsyncContextManager["_BlockingTerminalSaver"]:
-        saver = self
-
-        @asynccontextmanager
-        async def _session() -> AsyncIterator[_BlockingTerminalSaver]:
-            yield saver
-
-        return _session()
-
-    @override
-    async def aput(
-        self,
-        config: RunnableConfig,
-        checkpoint: Checkpoint,
-        metadata: CheckpointMetadata,
-        new_versions: ChannelVersions,
-    ) -> RunnableConfig:
-        values = checkpoint.get("channel_values", {})
-        if (
-            not self._blocked
-            and values.get("phase") == "ended"
-            and values.get("terminal_reason") == "stopped_by_owner"
-        ):
-            self._blocked = True
-            self.terminal_started.set()
-            try:
-                await self.release_terminal.wait()
-            except asyncio.CancelledError:
-                self.terminal_cancelled.set()
-                raise
-        result = await super().aput(config, checkpoint, metadata, new_versions)
-        if self._blocked and values.get("phase") == "ended":
-            self.terminal_persisted.set()
-        return result
-
-
 async def test_run_meeting_session_aborts_join_when_stop_requested() -> None:
     browser = FakePageSession(meet_page([]))
-    saver = FakeSaverSession()
     stop = asyncio.Event()
     stop.set()
 
-    result = await run_session(session_config(headless=True), browser, saver, FakeClock(), stop)
+    result = await run_session(session_config(headless=True), browser, FakeClock(), stop)
 
     assert result.phase == "ended"
     assert result.terminal_reason == "stopped_by_owner"
@@ -123,7 +64,7 @@ async def test_run_meeting_session_stops_and_leaves_after_admission() -> None:
     )
     browser = FakePageSession(page)
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock(), stop)
+    result = await run_session(session_config(), browser, FakeClock(), stop)
 
     assert result.phase == "ended"
     assert result.terminal_reason == "stopped_by_owner"
@@ -135,7 +76,6 @@ async def test_run_meeting_session_enforces_duration_limit() -> None:
     result = await run_session(
         session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
         browser,
-        FakeSaverSession(),
         FakeClock(),
     )
 
@@ -155,7 +95,7 @@ async def test_run_meeting_session_logs_slow_monitor_poll(
     page = meet_page([IN_CALL, IN_CALL, ENDED], on_content=advance_on_monitor_poll)
     browser = FakePageSession(page)
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), clock)
+    result = await run_session(session_config(), browser, clock)
 
     assert result.terminal_reason == "ended_by_host"
     polls = [
@@ -173,7 +113,7 @@ async def test_run_meeting_session_skips_monitor_poll_log_when_fast(
 ) -> None:
     browser = FakePageSession(meet_page([IN_CALL, IN_CALL, ENDED]))
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock())
+    result = await run_session(session_config(), browser, FakeClock())
 
     assert result.terminal_reason == "ended_by_host"
     assert "monitor_polled" not in capsys.readouterr().out
@@ -182,7 +122,7 @@ async def test_run_meeting_session_skips_monitor_poll_log_when_fast(
 async def test_run_meeting_session_recovers_from_transient_lobby() -> None:
     browser = FakePageSession(meet_page([IN_CALL, LOBBY, IN_CALL, REMOVED]))
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock())
+    result = await run_session(session_config(), browser, FakeClock())
 
     assert result.phase == "ended"
     assert result.terminal_reason == "removed_by_host"
@@ -195,7 +135,6 @@ async def test_run_meeting_session_enforces_duration_limit_while_disconnected() 
     result = await run_session(
         session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
         browser,
-        FakeSaverSession(),
         FakeClock(),
     )
 
@@ -214,7 +153,7 @@ async def test_run_meeting_session_maps_leave_failure_to_browser_failure() -> No
     browser = FakePageSession(page)
 
     result = await run_session(
-        session_config(leave_timeout_seconds=3.0), browser, FakeSaverSession(), FakeClock(), stop
+        session_config(leave_timeout_seconds=3.0), browser, FakeClock(), stop
     )
 
     assert result.phase == "ended"
@@ -224,7 +163,7 @@ async def test_run_meeting_session_maps_leave_failure_to_browser_failure() -> No
 async def test_run_meeting_session_maps_observation_crash_to_browser_failure() -> None:
     browser = FakePageSession(meet_page([IN_CALL, RuntimeError("boom")]))
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock())
+    result = await run_session(session_config(), browser, FakeClock())
 
     assert result.phase == "ended"
     assert result.terminal_reason == "browser_failure"
@@ -244,7 +183,6 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
         session_config(),
         SessionWiring(
             open_page=failing_open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -276,7 +214,6 @@ async def test_run_meeting_session_records_bounded_traceback_on_browser_failure(
         session_config(),
         SessionWiring(
             open_page=failing_open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -305,7 +242,6 @@ async def test_run_meeting_session_records_bounded_traceback_on_conversation_fai
         session_config(),
         SessionWiring(
             open_page=failing_open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -338,7 +274,6 @@ async def test_run_meeting_session_reraises_catalog_errors_unmangled() -> None:
             session_config(),
             SessionWiring(
                 open_page=failing_open,
-                saver_factory=FakeSaverSession().factory,
                 sleep=clock.sleep,
                 monotonic=clock.monotonic,
             ),
@@ -352,70 +287,28 @@ async def test_run_meeting_session_tolerates_single_observation_blip() -> None:
 
     browser = FakePageSession(meet_page([IN_CALL, PlaywrightError("boom"), IN_CALL, ENDED]))
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock())
+    result = await run_session(session_config(), browser, FakeClock())
 
     assert result.phase == "ended"
     assert result.terminal_reason == "ended_by_host"
 
 
-async def test_run_meeting_session_returns_ended_result_without_reopening_browser() -> None:
-    saver = FakeSaverSession()
-    first = FakePageSession(meet_page([DENIED], evaluates=[NO_CAPTCHA]))
-
-    result = await run_session(session_config(), first, saver, FakeClock())
-
-    assert result.terminal_reason == "blocked_by_platform"
-    second = FakePageSession(meet_page([LOBBY]))
-    again = await run_session(session_config(), second, saver, FakeClock())
-
-    assert again.phase == "ended"
-    assert again.terminal_reason == "blocked_by_platform"
-    assert second.opened == 0
-
-
-async def test_run_meeting_session_rejects_resume_of_interrupted_session() -> None:
-    saver = FakeSaverSession()
-    graph = build_lifecycle_graph(checkpointer=saver.saver)
-    await graph.aupdate_state(
-        {"configurable": {"thread_id": "twin-1:meeting-1"}},
-        {**initial_lifecycle_state("owner-1", "twin-1", "meeting-1"), "phase": "lobby"},
-        as_node="join",
-    )
-    browser = FakePageSession(meet_page([LOBBY]))
-
-    with pytest.raises(FakeYouError, match="cannot resume") as caught:
-        await run_session(session_config(), browser, saver, FakeClock())
-
-    assert caught.value.code is ErrorCode.MEETING_CANNOT_RESUME_PHASE
-    assert browser.opened == 0
-
-
-async def test_browser_startup_failure_is_persisted_as_terminal() -> None:
-    saver = FakeSaverSession()
-
+async def test_browser_startup_failure_ends_the_session() -> None:
     @asynccontextmanager
     async def fail_open(**kwargs: Any) -> AsyncIterator[Any]:
         del kwargs
         raise RuntimeError("browser launch failed")
         yield
 
-    result = await run_meeting_session(
-        session_config(), SessionWiring(open_page=fail_open, saver_factory=saver.factory)
-    )
+    result = await run_meeting_session(session_config(), SessionWiring(open_page=fail_open))
 
-    assert result.terminal_reason == "browser_failure"
-    state = await build_lifecycle_graph(saver.saver).aget_state(
-        {"configurable": {"thread_id": "twin-1:meeting-1"}}
-    )
-    assert state.values["phase"] == "ended"
-    assert state.values["external_effects"] == []
+    assert (result.phase, result.terminal_reason) == ("ended", "browser_failure")
 
 
 async def test_stop_arriving_with_browser_startup_does_not_request_join() -> None:
     stop = asyncio.Event()
     page = meet_page()
     browser = FakePageSession(page)
-    saver = FakeSaverSession()
 
     @asynccontextmanager
     async def open_then_stop(**kwargs: Any) -> AsyncIterator[FakePage]:
@@ -425,7 +318,7 @@ async def test_stop_arriving_with_browser_startup_does_not_request_join() -> Non
 
     result = await run_meeting_session(
         session_config(),
-        SessionWiring(stop=stop, open_page=open_then_stop, saver_factory=saver.factory),
+        SessionWiring(stop=stop, open_page=open_then_stop),
     )
 
     assert result.terminal_reason == "stopped_by_owner"
@@ -442,23 +335,10 @@ async def test_leave_crash_is_persisted_and_browser_closed() -> None:
     )
     browser = FakePageSession(page)
 
-    result = await run_session(session_config(), browser, FakeSaverSession(), FakeClock(), stop)
+    result = await run_session(session_config(), browser, FakeClock(), stop)
 
     assert result.terminal_reason == "browser_failure"
     assert browser.closed == 1
-
-
-async def test_session_rejects_checkpoint_owned_by_another_owner() -> None:
-    saver = FakeSaverSession()
-    first = FakePageSession(meet_page([DENIED], evaluates=[NO_CAPTCHA]))
-    await run_session(session_config(), first, saver, FakeClock())
-    other = FakePageSession(meet_page())
-
-    with pytest.raises(FakeYouError, match="identity") as caught:
-        await run_session(session_config(owner_id="other-owner"), other, saver, FakeClock())
-
-    assert caught.value.code is ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH
-    assert other.opened == 0
 
 
 async def test_stop_cancels_pending_navigation_and_closes_browser(
@@ -481,9 +361,7 @@ async def test_stop_cancels_pending_navigation_and_closes_browser(
     monkeypatch.setattr(page, "goto", slow_navigation)
     browser = FakePageSession(page)
     async with asyncio.TaskGroup() as tasks:
-        running = tasks.create_task(
-            run_session(session_config(), browser, FakeSaverSession(), FakeClock(), stop)
-        )
+        running = tasks.create_task(run_session(session_config(), browser, FakeClock(), stop))
         await asyncio.wait_for(navigation_started.wait(), timeout=1)
         stop.set()
         result = await asyncio.wait_for(running, timeout=1)
@@ -494,94 +372,12 @@ async def test_stop_cancels_pending_navigation_and_closes_browser(
     assert browser.closed == 1
 
 
-async def test_repeated_cancellation_preserves_terminal_checkpoint() -> None:
-    admitted = asyncio.Event()
-    page = meet_page(
-        [IN_CALL, IN_CALL, "left"],
-        on_content=lambda reads: admitted.set() if reads == 2 else None,
-    )
-    browser = FakePageSession(page)
-    saver = _BlockingTerminalSaver()
-
-    async def paced_sleep(seconds: float) -> None:
-        await asyncio.sleep(min(seconds, 0.01))
-
-    running = asyncio.create_task(
-        run_meeting_session(
-            session_config(monitor_interval_seconds=0.01),
-            SessionWiring(
-                open_page=browser.open,
-                saver_factory=saver.factory,
-                sleep=paced_sleep,
-                monotonic=time.monotonic,
-            ),
-        )
-    )
-    try:
-        await asyncio.wait_for(admitted.wait(), timeout=1)
-        running.cancel()
-        await asyncio.wait_for(saver.terminal_started.wait(), timeout=1)
-        assert not running.done()
-        running.cancel()
-        await asyncio.sleep(0)
-        saver.release_terminal.set()
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(running, timeout=1)
-        await asyncio.wait_for(saver.terminal_persisted.wait(), timeout=1)
-        assert not saver.terminal_cancelled.is_set()
-    finally:
-        saver.release_terminal.set()
-        if not running.done():
-            running.cancel()
-        await asyncio.gather(running, return_exceptions=True)
-
-    state = await build_lifecycle_graph(saver).aget_state(
-        {"configurable": {"thread_id": "twin-1:meeting-1"}}
-    )
-    assert state.values["phase"] == "ended"
-    assert state.values["terminal_reason"] == "stopped_by_owner"
-    assert browser.closed == 1
-
-
-async def test_drive_session_cancel_preserved_when_cancel_record_send_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def cancelled(*args: Any, **kwargs: Any) -> NoReturn:
-        del args
-        del kwargs
-        raise asyncio.CancelledError
-
-    async def failing_send(*args: Any, **kwargs: Any) -> NoReturn:
-        del args
-        del kwargs
-        raise ValueError("poison head")
-
-    monkeypatch.setattr("fakeyou.orchestration.runtime.startup_session", cancelled)
-    lifecycle = LifecycleThread(
-        build_lifecycle_graph(InMemorySaver()),
-        "twin-1:meeting-1",
-        initial_lifecycle_state("owner-1", "twin-1", "meeting-1"),
-    )
-    await initialize_lifecycle(lifecycle, resume=False)
-    monkeypatch.setattr(LifecycleThread, "send", failing_send)
-    journal = Journal("meeting-1", emit=lambda _line: None, echo=False)
-    with pytest.raises(asyncio.CancelledError):
-        await drive_session(
-            session_config(),
-            SessionWiring(journal=journal),
-            asyncio.Event(),
-            TeardownStack(),
-            lifecycle,
-        )
-
-
-async def test_cancellation_during_leave_preserves_cancellation_and_terminal_checkpoint(
+async def test_cancellation_during_leave_propagates_and_closes_the_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stop = asyncio.Event()
     leaving = asyncio.Event()
     page = meet_page()
-    saver = FakeSaverSession()
 
     async def content() -> str:
         if not stop.is_set():
@@ -593,7 +389,7 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
 
     monkeypatch.setattr(page, "content", content)
     browser = FakePageSession(page)
-    running = asyncio.create_task(run_session(session_config(), browser, saver, FakeClock(), stop))
+    running = asyncio.create_task(run_session(session_config(), browser, FakeClock(), stop))
     try:
         await asyncio.wait_for(leaving.wait(), timeout=1)
         running.cancel()
@@ -604,11 +400,6 @@ async def test_cancellation_during_leave_preserves_cancellation_and_terminal_che
             running.cancel()
             await asyncio.gather(running, return_exceptions=True)
 
-    saved = await build_lifecycle_graph(saver.saver).aget_state(
-        {"configurable": {"thread_id": "twin-1:meeting-1"}}
-    )
-    assert saved.values["phase"] == "ended"
-    assert saved.values["terminal_reason"] == "stopped_by_owner"
     assert page.clicked.count(LEAVE_SELECTOR) == 1
     assert browser.closed == 1
 
@@ -653,14 +444,12 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
     browser = FakePageSession(
         meet_page([IN_CALL, IN_CALL, ENDED], on_content=advance_on_monitor_poll)
     )
-    saver = FakeSaverSession()
     path = tmp_path / "events.jsonl"
     journal = Journal("journal-meeting", file=JournalFile(path), echo=False)
     await run_meeting_session(
         session_config(),
         SessionWiring(
             open_page=browser.open,
-            saver_factory=saver.factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -700,9 +489,7 @@ async def test_run_meeting_session_reports_terminal_outcome(
 ) -> None:
     contents, evaluates, counts, overrides, expected, detail = case
     browser = FakePageSession(meet_page(contents, evaluates=evaluates, counts=counts))
-    result = await run_session(
-        session_config(**overrides), browser, FakeSaverSession(), FakeClock()
-    )
+    result = await run_session(session_config(**overrides), browser, FakeClock())
     assert result.phase == "ended"
     assert result.terminal_reason == expected
     assert detail in result.detail
@@ -717,7 +504,6 @@ async def test_lobby_timeout_retries_twice_before_terminal(journal: RecordingJou
         config,
         SessionWiring(
             open_page=browser.open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -745,7 +531,6 @@ async def test_run_meeting_session_journals_why_the_join_failed() -> None:
         session_config(),
         SessionWiring(
             open_page=browser.open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -771,77 +556,6 @@ async def test_session_resources_drain_callbacks_without_raising() -> None:
         resources.push_async_callback(succeed)
 
     assert ran == ["succeed", "fail"]
-
-
-class _FailingWritesSaver(InMemorySaver):
-    def __init__(self, failing_phases: set[str]) -> None:
-        super().__init__()
-        self.failing = set(failing_phases)
-        self.written: list[str] = []
-
-    @override
-    async def aput(
-        self,
-        config: RunnableConfig,
-        checkpoint: Checkpoint,
-        metadata: CheckpointMetadata,
-        new_versions: ChannelVersions,
-    ) -> RunnableConfig:
-        phase = str(checkpoint["channel_values"].get("phase"))
-        if phase in self.failing:
-            self.failing.discard(phase)
-            raise OperationalError("connection reset by peer")
-        result = await super().aput(config, checkpoint, metadata, new_versions)
-        self.written.append(phase)
-        return result
-
-
-async def _duration_session(
-    failing: set[str],
-) -> tuple[SessionResult, RecordingJournal, _FailingWritesSaver]:
-    clock = FakeClock()
-    journal = RecordingJournal("meeting-1")
-    saver = _FailingWritesSaver(failing)
-    browser = FakePageSession(meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL, IN_CALL, ENDED]))
-
-    @asynccontextmanager
-    async def factory() -> AsyncIterator[InMemorySaver]:
-        yield saver
-
-    result = await run_meeting_session(
-        session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
-        SessionWiring(
-            open_page=browser.open,
-            saver_factory=factory,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
-        ),
-    )
-    return result, journal, saver
-
-
-async def test_checkpoint_failures_while_admitted_and_active_degrade_and_replay_in_order() -> None:
-    clean_result, _clean_journal, clean = await _duration_session(set())
-    degraded_result, journal, degraded = await _duration_session({"active", "leaving"})
-
-    assert clean_result.phase == "ended"
-    assert clean_result.terminal_reason == "duration_limit_reached"
-    queued = journal.events("lifecycle_persist_queued")
-    assert len(queued) == 2
-    assert all(row["error_type"] == "OperationalError" for row in queued)
-    assert degraded_result.phase == clean_result.phase
-    assert degraded_result.terminal_reason == clean_result.terminal_reason
-    assert degraded.written == clean.written
-    final_clean = await clean.aget_tuple({"configurable": {"thread_id": "twin-1:meeting-1"}})
-    final_degraded = await degraded.aget_tuple({"configurable": {"thread_id": "twin-1:meeting-1"}})
-    assert final_clean is not None
-    assert final_degraded is not None
-    for key in ("phase", "terminal_reason", "external_effects"):
-        assert (
-            final_degraded.checkpoint["channel_values"][key]
-            == (final_clean.checkpoint["channel_values"][key])
-        )
 
 
 def _script_observations(
@@ -870,7 +584,6 @@ async def _observed_run(journal: RecordingJournal) -> SessionResult:
         session_config(),
         SessionWiring(
             open_page=FakePageSession(meet_page([IN_CALL])).open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,

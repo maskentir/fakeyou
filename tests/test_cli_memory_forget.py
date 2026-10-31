@@ -3,6 +3,7 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -17,12 +18,9 @@ from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import configured_url, require_url
 from fakeyou.memory.forget import ForgetRequest, require_complete, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
-from fakeyou.orchestration.lifecycle import meeting_thread_id
 from fakeyou.persistence.brief import context_path, read_meeting_context, write_meeting_context
 from fakeyou.persistence.ingestion_status import record_lock
 from fakeyou.persistence.lease import LockPurpose
@@ -34,25 +32,26 @@ from tests._cli_support import (
     fake_persona_memory,
     meeting_brief,
     meeting_context_file,
-    thread_exists,
     write_persona,
 )
 from tests._error_support import message_pattern
 from tests._memory_fakes import make_graphiti
+from tests._session_status_fakes import MemorySessionStatus
+
+STATUS_AT = datetime(2026, 10, 31, tzinfo=UTC)
 
 
 async def forget_in_process(
+    request: ForgetRequest,
     *,
     identity: OperatorIdentity,
-    meeting_id: SessionId | None,
-    episode_uuid: str | None,
     settings: Settings,
-    keep_record: bool = False,
+    status: MemorySessionStatus | None = None,
 ) -> None:
     summary = await run_forget(
-        ForgetRequest(meeting_id, episode_uuid, keep_record),
+        request,
         access=OperatorAccess(identity, settings, lambda: providers.open_persona_memory(settings)),
-        lifecycle_thread_id=meeting_thread_id,
+        status=status or MemorySessionStatus(),
     )
     document: dict[str, Any] = {"removed_episodes": summary.removed_episodes}
     if summary.files is not None:
@@ -78,9 +77,8 @@ async def test_memory_forget_meeting_uses_persona_group(
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
 
     await forget_in_process(
+        ForgetRequest(SessionId("meeting-9"), None),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        meeting_id=SessionId("meeting-9"),
-        episode_uuid=None,
         settings=settings,
     )
 
@@ -92,14 +90,14 @@ async def test_memory_forget_meeting_uses_persona_group(
         "removed_episodes": 3,
         "record_removed": False,
         "journal_files_removed": 0,
-        "lifecycle_thread_removed": False,
+        "status_removed": False,
         "browser_profile_removed": False,
     }
 
 
 async def forget_meeting_with_local_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, settings: Settings, keep_record: bool
-) -> tuple[Settings, str]:
+) -> tuple[Settings, MemorySessionStatus]:
     profile = PersonaProfile.model_validate(PERSONA_DATA)
     record_path = meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
     record_path.parent.mkdir(parents=True)
@@ -110,24 +108,9 @@ async def forget_meeting_with_local_files(
     settings.paths.journal_dir.mkdir()
     for name in ("meeting-9.jsonl", "meeting-9.jsonl.1", "meeting-10.jsonl"):
         (settings.paths.journal_dir / name).write_text("{}\n")
-    from fakeyou.orchestration.lifecycle import (
-        LifecycleThread,
-        build_lifecycle_graph,
-        initial_lifecycle_state,
-        initialize_lifecycle,
-        meeting_thread_id,
-    )
-
-    thread_id = meeting_thread_id(profile.twin_id, "meeting-9")
-
-    async with open_checkpointer(require_url(configured_url(settings))) as saver:
-        for meeting in ("meeting-9", "meeting-10"):
-            lifecycle = LifecycleThread(
-                build_lifecycle_graph(saver),
-                meeting_thread_id(profile.twin_id, meeting),
-                initial_lifecycle_state(profile.owner_id, profile.twin_id, meeting),
-            )
-            await initialize_lifecycle(lifecycle, resume=False)
+    status = MemorySessionStatus()
+    for meeting in ("meeting-9", "meeting-10"):
+        await status.create(meeting, profile.owner_id, STATUS_AT)
     fake_persona_memory(monkeypatch, make_graphiti())
 
     async def forget(_memory: Any, **_kwargs: Any) -> int:
@@ -135,22 +118,21 @@ async def forget_meeting_with_local_files(
 
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
     await forget_in_process(
+        ForgetRequest(SessionId("meeting-9"), None, keep_record),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        meeting_id=SessionId("meeting-9"),
-        episode_uuid=None,
         settings=settings,
-        keep_record=keep_record,
+        status=status,
     )
-    return settings, thread_id
+    return settings, status
 
 
-async def test_memory_forget_meeting_removes_record_journal_and_thread(
+async def test_memory_forget_meeting_removes_record_journal_and_status(
     settings: Settings,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings, thread_id = await forget_meeting_with_local_files(
+    settings, status = await forget_meeting_with_local_files(
         tmp_path, monkeypatch, keep_record=False, settings=settings
     )
 
@@ -158,16 +140,15 @@ async def test_memory_forget_meeting_removes_record_journal_and_thread(
         "removed_episodes": 2,
         "record_removed": True,
         "journal_files_removed": 2,
-        "lifecycle_thread_removed": True,
+        "status_removed": True,
         "browser_profile_removed": False,
     }
     assert not (settings.paths.record_dir / "meeting-9").exists()
     assert sorted(path.name for path in settings.paths.journal_dir.iterdir()) == [
         "meeting-10.jsonl"
     ]
-    assert not await thread_exists(settings, thread_id)
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
-    assert await thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-10"))
+    assert await status.get("meeting-9") is None
+    assert await status.get("meeting-10") is not None
 
 
 async def test_memory_forget_meeting_keep_record_only_removes_episodes(
@@ -176,14 +157,14 @@ async def test_memory_forget_meeting_keep_record_only_removes_episodes(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    settings, thread_id = await forget_meeting_with_local_files(
+    settings, status = await forget_meeting_with_local_files(
         tmp_path, monkeypatch, keep_record=True, settings=settings
     )
 
     assert json.loads(capsys.readouterr().out) == {"removed_episodes": 2}
     assert meeting_record_path(settings.paths.record_dir, SessionId("meeting-9")).exists()
     assert (settings.paths.journal_dir / "meeting-9.jsonl").exists()
-    assert await thread_exists(settings, thread_id)
+    assert await status.get("meeting-9") is not None
     for artifact in ("debrief.json", "debrief.md", "debrief-attempt.json"):
         assert (
             meeting_record_path(settings.paths.record_dir, SessionId("meeting-9"))
@@ -223,9 +204,8 @@ async def test_memory_forget_episode_uses_persona_group(
     monkeypatch.setattr(forget_service, "forget_episode", forget)
 
     await forget_in_process(
+        ForgetRequest(None, "episode-7"),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        meeting_id=None,
-        episode_uuid="episode-7",
         settings=settings,
     )
 
@@ -248,9 +228,8 @@ async def test_memory_forget_validates_before_opening_memory(
 
     with pytest.raises(FakeYouError, match="exactly one") as caught:
         await forget_in_process(
+            ForgetRequest(None if meeting_id is None else SessionId(meeting_id), episode_uuid),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            meeting_id=None if meeting_id is None else SessionId(meeting_id),
-            episode_uuid=episode_uuid,
             settings=settings,
         )
     assert caught.value.code is ErrorCode.MEMORY_FORGET_TARGET_REQUIRED
@@ -284,28 +263,11 @@ async def test_memory_forget_keep_record_requires_a_meeting(
 ) -> None:
     with pytest.raises(FakeYouError, match="--keep-record") as caught:
         await forget_in_process(
+            ForgetRequest(None, "episode-7", keep_record=True),
             identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            meeting_id=None,
-            episode_uuid="episode-7",
             settings=settings,
-            keep_record=True,
         )
     assert caught.value.code is ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING
-
-
-async def test_memory_forget_should_delete_lifecycle_and_preserve_other_meetings(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fakeyou.orchestration.lifecycle import meeting_thread_id
-
-    settings, thread_id = await forget_meeting_with_local_files(
-        tmp_path, monkeypatch, keep_record=False, settings=settings
-    )
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
-
-    assert not await thread_exists(settings, thread_id)
-    assert not await thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-9"))
-    assert await thread_exists(settings, meeting_thread_id(profile.twin_id, "meeting-10"))
 
 
 @pytest.mark.parametrize("lock_purpose", ["meeting", "ingestion", "debrief"])
@@ -333,11 +295,9 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     with record_lock(record_path, purpose=lock_purpose):
         with pytest.raises(FakeYouError, match="locked") as caught:
             await forget_in_process(
+                ForgetRequest(SessionId("meeting-9"), None, keep_record),
                 identity=OperatorIdentity(write_persona(tmp_path), None, None),
-                meeting_id=SessionId("meeting-9"),
-                episode_uuid=None,
                 settings=settings,
-                keep_record=keep_record,
             )
     assert caught.value.code is ErrorCode.RECORD_LOCKED
     assert opened == []
@@ -382,7 +342,7 @@ async def test_run_forget_refuses_an_ambiguous_target_before_opening_memory(
         await run_forget(
             ForgetRequest(None, None),
             access=access,
-            lifecycle_thread_id=meeting_thread_id,
+            status=MemorySessionStatus(),
         )
     assert caught.value.code is ErrorCode.MEMORY_FORGET_TARGET_REQUIRED
     assert opened == []
@@ -416,15 +376,15 @@ async def test_second_run_forget_over_the_same_meeting_is_complete(
     access = _forget_access(settings, tmp_path)
     request = ForgetRequest(SessionId("meeting-9"), None)
 
-    first = await run_forget(request, access=access, lifecycle_thread_id=meeting_thread_id)
-    second = await run_forget(request, access=access, lifecycle_thread_id=meeting_thread_id)
+    first = await run_forget(request, access=access, status=MemorySessionStatus())
+    second = await run_forget(request, access=access, status=MemorySessionStatus())
 
     assert [stage.stage for stage in first.stages] == [
         "graph",
         "record",
         "journal",
         "browser_profile",
-        "checkpoint",
+        "status",
     ]
     assert (first.removed_episodes, first.complete) == (2, True)
     assert {stage.stage: stage.status for stage in first.stages}["record"] == "removed"
@@ -434,7 +394,7 @@ async def test_second_run_forget_over_the_same_meeting_is_complete(
         "record": "absent",
         "journal": "absent",
         "browser_profile": "absent",
-        "checkpoint": "absent",
+        "status": "absent",
     }
 
 
@@ -453,7 +413,7 @@ async def test_failed_graph_stage_still_runs_the_file_stages(
     summary = await run_forget(
         ForgetRequest(SessionId("meeting-9"), None),
         access=_forget_access(settings, tmp_path),
-        lifecycle_thread_id=meeting_thread_id,
+        status=MemorySessionStatus(),
     )
 
     stages = {stage.stage: stage for stage in summary.stages}
@@ -475,7 +435,7 @@ async def test_keep_record_reports_the_file_stages_as_kept(
     summary = await run_forget(
         ForgetRequest(SessionId("meeting-9"), None, keep_record=True),
         access=_forget_access(settings, tmp_path),
-        lifecycle_thread_id=meeting_thread_id,
+        status=MemorySessionStatus(),
     )
 
     assert summary.files is None
@@ -485,7 +445,7 @@ async def test_keep_record_reports_the_file_stages_as_kept(
         "record": "kept",
         "journal": "kept",
         "browser_profile": "kept",
-        "checkpoint": "kept",
+        "status": "kept",
     }
 
 
@@ -500,7 +460,7 @@ async def test_forget_of_an_absent_episode_is_an_idempotent_summary(
     summary = await run_forget(
         ForgetRequest(None, "episode-7"),
         access=_forget_access(settings, tmp_path),
-        lifecycle_thread_id=meeting_thread_id,
+        status=MemorySessionStatus(),
     )
 
     assert (summary.removed_episodes, summary.complete) == (0, True)
@@ -517,7 +477,7 @@ async def test_require_complete_turns_a_failed_stage_into_the_named_error(
     summary = await run_forget(
         ForgetRequest(SessionId("meeting-9"), None, keep_record=True),
         access=_forget_access(settings, tmp_path),
-        lifecycle_thread_id=meeting_thread_id,
+        status=MemorySessionStatus(),
     )
 
     with pytest.raises(
@@ -540,7 +500,7 @@ async def test_require_complete_returns_a_complete_summary(
     summary = await run_forget(
         ForgetRequest(SessionId("meeting-9"), None),
         access=_forget_access(settings, tmp_path),
-        lifecycle_thread_id=meeting_thread_id,
+        status=MemorySessionStatus(),
     )
 
     assert require_complete(summary) is summary

@@ -184,7 +184,7 @@ def test_env_example_documents_every_compose_only_key() -> None:
 
 
 def test_settings_leaf_count_matches_the_frozen_map() -> None:
-    assert len(_setting_env_keys(Settings)) == 190
+    assert len(_setting_env_keys(Settings)) == 189
 
 
 class _MigrationMap(NamedTuple):
@@ -193,7 +193,7 @@ class _MigrationMap(NamedTuple):
     new_keys: tuple[str, ...]
 
 
-EXPECTED_SETTINGS_COUNTS = {"keep": 190}
+EXPECTED_SETTINGS_COUNTS = {"keep": 189}
 EXPECTED_COMPOSE_COUNTS = {"keep": 13, "delete": 5}
 EXPECTED_NEW_COUNT = 0
 
