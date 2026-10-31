@@ -580,6 +580,63 @@ fixture; fake rekaman dan pacer; injeksi model di `open_conversation`;
 harness, CLI `fakeyou replay`, dan pembanding; run gate oue-4 dengan uji
 sensitivitas (latensi LLM ×0,5 harus menggeser `final_to_first_pcm`).
 
+Implementasi V0.6 (2026-11-01): `fakeyou replay --meeting-id ID` memutar
+ulang sesi dari journal dan record dengan event loop waktu virtual dan
+`using_clock(loop.time)`, lalu membandingkannya dengan `baseline_metrics`
+journal asli (exit `EVAL_GATE_FAILED` bila gagal). Input diputar di tiga lane
+seperti produksi (audio: tepi VAD yang juga dijurnal sebagai
+`speech_started`/`speech_stopped`; speech: interim lalu final lewat
+`TranscriptDrain`; meeting: chat dan atensi layar), jadi pemrosesan final
+tidak menunda tepi VAD. Nama twin, wake phrase, dan barge-in dibaca dari
+`session.json`. Judge memutar verdict pada waktu absolut `final + delay`,
+termasuk ketika dipanggil lebih awal oleh prefetch interim yang teksnya sama
+dengan final; interim yang masih sepotong dinilai belum selesai. Model memakai
+id pesan manusia terakhir (id transcript) dan diam untuk turn tanpa balasan
+terekam. TTS lewat `journaled_stream` asli dengan PCM bersuara: kalimat
+terekam memakai `first_chunk_ms`, `duration_ms`, dan `bytes_out` rekaman;
+cue dan kalimat tanpa rekaman diukur dari laju bicara sesi (16 karakter per
+detik di oue-4); kegagalan provider terekam diulang. Pacer menampung chunk
+seketika seperti pipa `paplay` lalu menunggu sampai audio selesai, sehingga
+`duration_ms` sintesis replay sama dengan rekaman. Dua run menghasilkan
+journal yang sama. Chat milik twin sendiri dan backlog tidak diputar, sama
+seperti `MeetingWorker`. Verdict, balasan, dan sintesis early turn dipetakan ke
+final yang memverifikasinya lewat `early_turn_verified`. Fault TTS terekam
+dipakai sekali per kemunculan, jadi retry timeout di `PlaybackEngine` berjalan
+seperti di produksi. Atensi (layar dan momen) belum diputar ulang:
+`attention_enabled` replay selalu mati.
+
+Aturan gate: p50 dan jumlah turn sebuah latensi di-gate hanya bila sesi asli
+punya datanya; p95 dilaporkan. `speaker_bound.of` harus sama persis karena
+setiap final adalah input; `speaker_bound.count` dilaporkan karena replay
+tidak mengikat speaker. Gate hanya bisa lolos bila sesi asli punya latensi
+balasan yang terukur (`comparable`), supaya sesi tanpa balasan tidak lolos
+tanpa menguji apa pun. Hitungan yang bergantung pada teks interim
+(`barge_in_rejected`, `early_turn_started`), model vision (`screen_*`),
+memory, atau balasan rekaman (`contributions_spoken`) dilaporkan beserta
+alasannya, tidak di-gate.
+
+Hasil oue-4 di V0.6: `vad_stop_to_final` identik (p50 1300.728 ms, n=211),
+semua sintesis yang terekam sama sampai 1 ms, dan jumlah turn
+`final_to_first_pcm` dalam toleransi (19 vs 21), tetapi p50-nya belum lolos
+(2374 vs 2081 ms). Breakdown per transcript
+menunjukkan sisa selisih berasal dari jalur yang belum diputar ulang, yang
+menjadi pekerjaan V0.7: turn dengan dua request LLM (kalimat pertama ditolak
+speech gate lalu route ke model strong; 031759 dan 7ae725), Meet action
+sebelum balasan (86a05c, 4.1 detik), state answer yang butuh kernel (248e69
+dan e8a41b), dan early commit yang belum terjadi di replay (be7853 dan
+21cd4a): interim disintesis dari teks final, dan id early event memakai jam
+dinding di `TranscriptDrain._early_event`, sehingga balasan kedua turn itu
+baru mulai setelah final. Selisih `policy_decided` ke
+`request_started` (median sekitar 30 ms di asli, 0 di replay) adalah waktu
+CPU yang tidak dihitung waktu virtual.
+
+Batas yang harus diingat saat membaca gate: judge mengembalikan verdict pada
+waktu absolut rekaman, jadi regresi yang menunda pemanggilan judge kurang
+dari delay rekaman tidak terlihat; `vad_stop_to_final` sama karena kedua
+ujungnya input, dan hanya menangkap lane speech yang terblokir. Uji
+sensitivitas (latensi LLM ×0,5 harus menggeser `final_to_first_pcm`) dibuat
+di V0.7.
+
 ### B5a: Lookahead sintesis dan writer audio berumur panjang
 
 Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush. B5a tidak

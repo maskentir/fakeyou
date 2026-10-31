@@ -124,6 +124,12 @@ class SynthesisTiming:
 
 
 @dataclass(frozen=True, slots=True)
+class SynthesisFault:
+    duration_ms: float
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class RecordedPlan:
     language: str
     intent: str
@@ -144,6 +150,7 @@ class ReplayFixture:
     replies: Mapping[str, ReplyTiming]
     syntheses: Mapping[tuple[str, int], SynthesisTiming]
     synthesized: Mapping[tuple[str, int], int]
+    synthesis_faults: Mapping[tuple[str, int], tuple[SynthesisFault, ...]]
     plans: Mapping[str, RecordedPlan]
     rows: tuple[dict[str, Any], ...] = field(repr=False)
 
@@ -156,6 +163,8 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
     timed = [_Row.model_validate(row) for row in rows]
     if not timed:
         raise ValueError("the journal has no rows to replay")
+    recorded = rows
+    rows = _verified(rows)
     started_at = min(row.at for row in timed)
     meeting_id = str(rows[0].get("meeting_id", ""))
 
@@ -206,9 +215,26 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
         replies=_replies(rows, entries, synthesized),
         syntheses=_syntheses(rows),
         synthesized=synthesized,
+        synthesis_faults=_synthesis_faults(rows),
         plans=_plans(rows),
-        rows=tuple(rows),
+        rows=tuple(recorded),
     )
+
+
+def _verified(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    aliases = {
+        str(row["early_transcript_id"]): str(row["transcript_id"])
+        for row in rows
+        if row.get("event") == "early_turn_verified"
+        and row.get("early_transcript_id")
+        and row.get("transcript_id")
+    }
+    return [
+        {**row, "transcript_id": aliases[row["transcript_id"]]}
+        if row.get("transcript_id") in aliases
+        else row
+        for row in rows
+    ]
 
 
 def _verdicts(
@@ -325,7 +351,7 @@ def _syntheses(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], Synthesi
                 emitted[str(row.get("request_id"))] = float(first)
     timings: dict[tuple[str, int], SynthesisTiming] = {}
     for request_id, opening in started.items():
-        if opening.transcript_id is None or opening.sentence_index is None:
+        if opening.transcript_id is None:
             continue
         closing = finished.get(request_id)
         first_chunk = closing.first_chunk_ms if closing is not None else None
@@ -333,7 +359,7 @@ def _syntheses(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], Synthesi
             first_chunk = emitted.get(request_id)
         if first_chunk is None:
             continue
-        timings[(opening.transcript_id, opening.sentence_index)] = SynthesisTiming(
+        timings[(opening.transcript_id, opening.sentence_index or 0)] = SynthesisTiming(
             first_chunk,
             closing.duration_ms if closing is not None else None,
             closing.bytes_out if closing is not None else None,
@@ -342,15 +368,31 @@ def _syntheses(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], Synthesi
     return timings
 
 
+def _synthesis_faults(
+    rows: Iterable[dict[str, Any]],
+) -> dict[tuple[str, int], tuple[SynthesisFault, ...]]:
+    faults: dict[tuple[str, int], tuple[SynthesisFault, ...]] = {}
+    for row in rows:
+        if row.get("event") != "synthesis_failed" or row.get("error") != "ProviderFault":
+            continue
+        synthesis = _Synthesis.model_validate(row)
+        if synthesis.transcript_id is None:
+            continue
+        key = (synthesis.transcript_id, synthesis.sentence_index or 0)
+        fault = SynthesisFault(synthesis.duration_ms or 0.0, str(row.get("kind") or "unknown"))
+        faults[key] = (*faults.get(key, ()), fault)
+    return faults
+
+
 def _synthesized(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], int]:
     chars: dict[tuple[str, int], int] = {}
     for row in rows:
         if row.get("event") != "synthesis_started":
             continue
         synthesis = _Synthesis.model_validate(row)
-        if synthesis.transcript_id is None or synthesis.sentence_index is None:
+        if synthesis.transcript_id is None:
             continue
-        chars.setdefault((synthesis.transcript_id, synthesis.sentence_index), synthesis.chars)
+        chars.setdefault((synthesis.transcript_id, synthesis.sentence_index or 0), synthesis.chars)
     return chars
 
 

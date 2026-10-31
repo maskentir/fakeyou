@@ -10,6 +10,7 @@ import typer
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.audio import audio_purge_expired, perception_purge_expired
 from fakeyou.cli.brief import default_brief_path, prepare_brief
 from fakeyou.cli.calibrate import calibrate_eval, calibrate_lock
@@ -30,7 +31,8 @@ from fakeyou.cli.memory import (
     reembed_memory,
     twin_id_for,
 )
-from fakeyou.cli.output import emit_error
+from fakeyou.cli.output import emit_error, emit_json
+from fakeyou.cli.replay import replay_meeting, replay_report
 from fakeyou.cli.sessions import (
     SessionOptions,
     resume_session,
@@ -319,6 +321,31 @@ def report_command(
             settings=client_settings_from_env(),
         )
     )
+
+
+@app.command(
+    "replay", help="Replay a recorded meeting offline and compare it with the recorded metrics"
+)
+@_guard_interrupts
+def replay_command(
+    *,
+    meeting_id: Annotated[str, typer.Option("--meeting-id")],
+    journal_dir: Annotated[Path | None, typer.Option("--journal-dir")] = None,
+    record_dir: Annotated[Path | None, typer.Option("--record-dir")] = None,
+    out: Annotated[Path | None, typer.Option("--out")] = None,
+) -> None:
+    settings = _load_settings()
+    parsed = parse_session_id(meeting_id, field="--meeting-id")
+    result = replay_meeting(
+        parsed,
+        settings=settings,
+        journal_dir=journal_dir or settings.paths.journal_dir,
+        record_dir=record_dir or settings.paths.record_dir,
+        out=out,
+    )
+    emit_json(replay_report(str(parsed), result))
+    if not result.comparison.passed:
+        raise typer.Exit(ExitCode.EVAL_GATE_FAILED)
 
 
 @app.command(

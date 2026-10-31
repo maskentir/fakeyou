@@ -92,6 +92,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_OWNERSHIP_UNVERIFIABLE = "debrief.ownership_unverifiable"
     DEBRIEF_SCOPE_MISMATCH = "debrief.scope_mismatch"
     DEBRIEF_RECORD_MISSING = "debrief.record_missing"
+    REPLAY_SESSION_MISSING = "replay.session_missing"
     DEBRIEF_PUBLICATION_RECOVERY = "debrief.publication_recovery"
     DEBRIEF_CACHED_SCOPE_MISMATCH = "debrief.cached_scope_mismatch"
     DEBRIEF_SOURCES_CHANGED = "debrief.sources_changed"
@@ -481,6 +482,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.DEBRIEF_RECORD_MISSING: ErrorSpec(
         "no meeting record is available for debrief", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.REPLAY_SESSION_MISSING: ErrorSpec(
+        "no recorded journal and meeting record to replay for {meeting_id}",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.DEBRIEF_PUBLICATION_RECOVERY: ErrorSpec(
         "canonical debrief requires publication recovery"
