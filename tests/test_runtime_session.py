@@ -144,7 +144,7 @@ async def test_run_meeting_session_enforces_duration_limit_while_disconnected() 
     assert LEAVE_SELECTOR not in page.clicked
 
 
-async def test_run_meeting_session_maps_leave_failure_to_browser_failure() -> None:
+async def test_a_failed_leave_keeps_the_owner_stop_as_the_reason() -> None:
     stop = asyncio.Event()
     page = meet_page(
         [IN_CALL, IN_CALL, IN_CALL, IN_CALL, IN_CALL],
@@ -157,7 +157,8 @@ async def test_run_meeting_session_maps_leave_failure_to_browser_failure() -> No
     )
 
     assert result.phase == "ended"
-    assert result.terminal_reason == "browser_failure"
+    assert result.terminal_reason == "stopped_by_owner"
+    assert browser.closed == 1
 
 
 async def test_run_meeting_session_maps_observation_crash_to_browser_failure() -> None:

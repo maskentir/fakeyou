@@ -32,6 +32,7 @@ LifecycleEventKind = Literal[
     "removed",
     "meeting_ended",
     "leave_sent",
+    "leave_failed",
     "cancelled",
 ]
 
@@ -85,6 +86,7 @@ def _edges() -> dict[tuple[PublicPhase, str], _Transition]:
     add(_LIVE, "connection_lost", _Transition("joining"))
     add(("admitted",), "activated", _Transition("active"))
     add(("leaving",), "leave_sent", _Transition("ended", reason="left_by_owner"))
+    add(("leaving",), "leave_failed", _Transition("ended", reason="browser_failure"))
     add(("leaving",), "owner_stopped", _Transition("leaving"))
     add(("leaving",), "browser_failed", _Transition("ended", reason="browser_failure"))
     add(("leaving",), "audio_failed", _Transition("ended", reason="audio_failure"))
@@ -119,8 +121,8 @@ def _terminal_phase(reason: str | None) -> PublicPhase:
 def _resolve_reason(
     state: LifecycleState, phase: PublicPhase, kind: str, transition: _Transition
 ) -> TerminalReason | None:
-    if phase == "leaving" and kind == "leave_sent":
-        return cast(TerminalReason | None, state["terminal_reason"]) or "left_by_owner"
+    if phase == "leaving" and kind in ("leave_sent", "leave_failed"):
+        return cast(TerminalReason | None, state["terminal_reason"]) or transition.reason
     if (
         phase == "leaving"
         and kind == "browser_failed"
