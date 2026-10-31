@@ -1,6 +1,6 @@
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, cast
 
@@ -97,15 +97,18 @@ def _install_error_handlers(app: FastAPI) -> None:
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = cast(Settings, app.state.settings)
-    store = create_session_status(settings)
-    app.state.session_status = store
-    try:
+    async with AsyncExitStack() as exits:
+        store = create_session_status(settings)
+        exits.push_async_callback(store.close)
+        exits.push_async_callback(_close_stream_transport, app)
+        app.state.session_status = store
         yield
-    finally:
-        transport = cast(StreamTransport | None, app.state.stream_transport)
-        if transport is not None:
-            await transport.aclose()
-        await store.close()
+
+
+async def _close_stream_transport(app: FastAPI) -> None:
+    transport = cast(StreamTransport | None, app.state.stream_transport)
+    if transport is not None:
+        await transport.aclose()
 
 
 def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:

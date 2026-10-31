@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import importlib
 import os
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -70,22 +71,20 @@ async def serve(role: str) -> None:
         await verify_session_schema(settings)
     transport = StreamTransport.from_settings(settings)
     shutdown = asyncio.Event()
-    store = _session_store(settings.paths.record_dir)
-    worker_id = f"worker-{os.getpid()}"
-    shared = _Shared(
-        settings=settings,
-        transport=transport,
-        store=store,
-        ports=ports,
-        shutdown=shutdown,
-        worker_id=worker_id,
-    )
-    consumers = _role_consumers(role, shared)
-    try:
+    async with AsyncExitStack() as exits:
+        exits.push_async_callback(transport.aclose)
+        shared = _Shared(
+            settings=settings,
+            transport=transport,
+            store=_session_store(settings.paths.record_dir),
+            ports=ports,
+            shutdown=shutdown,
+            worker_id=f"worker-{os.getpid()}",
+            exits=exits,
+        )
+        consumers = _role_consumers(role, shared)
         with stop_signal_handlers(shutdown):
             await run_consumers(*consumers)
-    finally:
-        await transport.aclose()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,17 +95,20 @@ class _Shared:
     ports: JoinPorts
     shutdown: asyncio.Event
     worker_id: str
+    exits: AsyncExitStack
 
 
 def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
     if role == SESSIONS_ROLE:
+        status = create_session_status(shared.settings)
+        shared.exits.push_async_callback(status.close)
         return [
             WorkerConsumer(
                 WorkerDeps(
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
-                    status=create_session_status(shared.settings),
+                    status=status,
                     ports=shared.ports,
                     shutdown=shared.shutdown,
                     worker_id=shared.worker_id,
