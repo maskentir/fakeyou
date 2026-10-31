@@ -1,13 +1,11 @@
 import shutil
 import subprocess
 import time
-from contextlib import suppress
 from typing import get_args
 from uuid import uuid4
 
 import pytest
 
-from fakeyou.catalog.errors import FakeYouError
 from fakeyou.foundation.taxonomy import MeetingPhase
 
 GRACEFUL_CHILD = (
@@ -138,65 +136,6 @@ def test_worker_image_ships_the_parec_capture() -> None:
         text=True,
     )
     assert "parec-capture-ok" in probe.stdout, probe.stdout + probe.stderr
-
-
-@pytest.mark.container
-async def test_postgres_checkpointer_isolates_threads_and_reopens(
-    migrated_database_url: str,
-) -> None:
-    from fakeyou.db.checkpoint import open_checkpointer
-    from fakeyou.orchestration.lifecycle import (
-        LifecycleThread,
-        build_lifecycle_graph,
-        initial_lifecycle_state,
-        initialize_lifecycle,
-        meeting_thread_id,
-    )
-
-    dsn = migrated_database_url
-    threads = [meeting_thread_id("pg-probe-twin", f"pg-probe-{name}") for name in ("a", "b")]
-    try:
-        async with open_checkpointer(dsn) as saver:
-            first = LifecycleThread(
-                build_lifecycle_graph(saver),
-                threads[0],
-                initial_lifecycle_state("pg-probe-owner", "pg-probe-twin", "pg-probe-a"),
-            )
-            await initialize_lifecycle(first, resume=False)
-            await first.send("prepared", "owner_action")
-            await first.send("join_requested", "owner_action")
-            second = LifecycleThread(
-                build_lifecycle_graph(saver),
-                threads[1],
-                initial_lifecycle_state("pg-probe-owner", "pg-probe-twin", "pg-probe-b"),
-            )
-            await initialize_lifecycle(second, resume=False)
-            stored = [
-                await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
-                for thread_id in threads
-            ]
-            assert stored[0] is not None
-            assert stored[1] is not None
-            assert stored[0].checkpoint["channel_values"]["phase"] == "lobby"
-            assert stored[1].checkpoint["channel_values"]["phase"] == "created"
-        async with open_checkpointer(dsn) as saver:
-            reopened = [
-                await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
-                for thread_id in threads
-            ]
-            assert reopened[0] is not None
-            assert reopened[1] is not None
-            assert reopened[0].checkpoint["channel_values"]["phase"] == "lobby"
-            assert reopened[1].checkpoint["channel_values"]["phase"] == "created"
-            assert (
-                reopened[0].checkpoint["channel_values"]["phase"]
-                != reopened[1].checkpoint["channel_values"]["phase"]
-            )
-    finally:
-        with suppress(FakeYouError):
-            async with open_checkpointer(dsn) as saver:
-                for thread_id in threads:
-                    await saver.adelete_thread(thread_id)
 
 
 def test_preparing_is_a_mapped_phase_name_and_never_a_public_one() -> None:

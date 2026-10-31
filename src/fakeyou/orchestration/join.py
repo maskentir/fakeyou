@@ -649,7 +649,7 @@ async def run_join_session(request: JoinRequest, ports: JoinPorts) -> JoinOutcom
             if request.profile_dir:
                 guards.enter_context(profile_lock(Path(request.profile_dir)))
             with record_lock(prepared.record_path, purpose="meeting"):
-                resuming, context_reused = await guard_join(prepared, ports)
+                resuming, context_reused = await guard_join(prepared)
                 async with AsyncExitStack() as resources:
                     run = _open_join_resources(
                         prepared, resources, resuming=resuming, context_reused=context_reused

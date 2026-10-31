@@ -9,18 +9,14 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.db.engine import configured_url
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES
 from fakeyou.memory.persona import (
     PersonaProfile,
     load_operator_persona,
     meeting_tool_names,
     persona_digest,
 )
-from fakeyou.observability.provider_faults import trim_detail
 from fakeyou.observability.report import describe_session
-from fakeyou.orchestration.join_types import JoinPorts, JoinRequest
-from fakeyou.orchestration.lifecycle import meeting_thread_id
+from fakeyou.orchestration.join_types import JoinRequest
 from fakeyou.persistence.brief import (
     MeetingBrief,
     MeetingContext,
@@ -105,11 +101,6 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         license_key=settings.browser.license_key.get_secret_value()
         if settings.browser.license_key
         else None,
-        database_url=configured_url(settings),
-        database_connect_timeout_seconds=settings.database.connect_timeout_seconds,
-        database_statement_timeout_seconds=settings.database.statement_timeout_seconds,
-        database_keepalive_idle_seconds=settings.database.keepalive_idle_seconds,
-        lifecycle_send_timeout_seconds=settings.database.send_timeout_seconds,
         drain_max_consecutive_failures=settings.audio.drain_max_consecutive_failures,
         drain_failure_journal_every=settings.audio.drain_failure_journal_every,
         participant_evidence_max_bytes=settings.conversation.participant_evidence_max_bytes,
@@ -183,7 +174,7 @@ def prepare_session_paths(config: SessionConfig, settings: Settings) -> tuple[Se
     return config, record_path
 
 
-async def guard_join(prepared: PreparedJoin, ports: JoinPorts) -> tuple[bool, bool]:
+async def guard_join(prepared: PreparedJoin) -> tuple[bool, bool]:
     request = prepared.request
     session_state = describe_session(request.settings.paths.journal_dir, prepared.config.meeting_id)
     if session_state == "unfinished" and not request.resume:
@@ -192,9 +183,7 @@ async def guard_join(prepared: PreparedJoin, ports: JoinPorts) -> tuple[bool, bo
         )
     if session_state == "finished" and request.resume:
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=prepared.config.meeting_id)
-    resuming = request.resume and (
-        session_state == "unfinished" or await _has_live_thread(prepared.config, ports)
-    )
+    resuming = request.resume and session_state == "unfinished"
     context_reused = await _settle_meeting_context(
         prepared.record_path, prepared.config, prepared.meeting_context
     )
@@ -232,30 +221,3 @@ async def _settle_meeting_context(
 
 def _has_entries(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
-
-
-async def _has_live_thread(config: SessionConfig, ports: JoinPorts) -> bool:
-    if config.database_url is None:
-        return False
-    try:
-        async with ports.open_checkpointer(
-            config.database_url,
-            connect_timeout_seconds=config.database_connect_timeout_seconds,
-            statement_timeout_seconds=config.database_statement_timeout_seconds,
-            keepalive_idle_seconds=config.database_keepalive_idle_seconds,
-        ) as saver:
-            saved = await saver.aget_tuple(
-                {
-                    "configurable": {
-                        "thread_id": meeting_thread_id(config.twin_id, config.meeting_id)
-                    }
-                }
-            )
-    except FakeYouError as error:
-        reason = trim_detail(f"{type(error).__name__}: {error}") or type(error).__name__
-        raise FakeYouError(
-            ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE, reason=reason
-        ) from None
-    if saved is None:
-        return False
-    return saved.checkpoint["channel_values"].get("phase") not in TERMINAL_PHASES

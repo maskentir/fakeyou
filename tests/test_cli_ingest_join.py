@@ -1,15 +1,12 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
 
-import tests._join_runner as cli_join
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
@@ -20,14 +17,12 @@ from tests._cli_support import (
     MEET_LINK,
     PERSONA_DATA,
     fake_persona_memory,
-    forbid_resources,
     join_persona_conversation,
     printed_join_summary,
     write_brief,
     write_persona,
 )
 from tests._conversation_fakes import ToolCallingFakeModel
-from tests._error_support import message_pattern
 from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
 
@@ -149,30 +144,6 @@ async def test_join_resume_reuses_history_without_replaying_answers(
         "Again.",
     ]
     assert [entry.kind for entry in entries].count("resume") == 1
-
-
-async def test_join_resume_refuses_an_unreachable_lifecycle_checkpoint(
-    join: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    @asynccontextmanager
-    async def unreachable(url: Any, **_kwargs: Any) -> AsyncIterator[Any]:
-        del url
-        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
-        yield
-
-    monkeypatch.setattr(cli_join, "open_checkpointer", unreachable)
-    forbid_resources(monkeypatch)
-
-    with pytest.raises(
-        FakeYouError, match=message_pattern(ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE)
-    ) as caught:
-        await join(MEET_LINK, resume=True)
-    assert caught.value.code is ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE
-    assert str(caught.value) == (
-        "lifecycle checkpoint cannot be checked: FakeYouError: "
-        "PostgreSQL is unreachable; check FAKEYOU_DATABASE__URL and that the postgres "
-        "service is up."
-    )
 
 
 async def test_join_leaves_pending_status_with_hash_and_no_auto_ingest(

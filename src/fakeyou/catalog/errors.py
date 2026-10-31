@@ -63,9 +63,6 @@ class ErrorCode(StrEnum):
     MEETING_HAS_CONVERSATION_WITHOUT_CONTEXT = "meeting.has_conversation_without_context"
     MEETING_UNFINISHED_SESSION = "meeting.unfinished_session"
     MEETING_ALREADY_ENDED = "meeting.already_ended"
-    MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE = "meeting.lifecycle_checkpoint_uncheckable"
-    MEETING_CHECKPOINT_IDENTITY_MISMATCH = "meeting.checkpoint_identity_mismatch"
-    MEETING_CANNOT_RESUME_PHASE = "meeting.cannot_resume_phase"
     BROWSER_PROFILE_IN_USE = "browser.profile_in_use"
     RECORD_LOCKED = "record.locked"
     RECORD_LOCK_CORRUPT = "record.lock_corrupt"
@@ -415,15 +412,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.MEETING_ALREADY_ENDED: ErrorSpec(
         "meeting {meeting_id} already ended; use a new meeting ID", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEETING_LIFECYCLE_CHECKPOINT_UNCHECKABLE: ErrorSpec(
-        "lifecycle checkpoint cannot be checked: {reason}"
-    ),
-    ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH: ErrorSpec(
-        "checkpoint identity does not match the requested session", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEETING_CANNOT_RESUME_PHASE: ErrorSpec(
-        "cannot resume meeting {meeting_id} in phase {phase}", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.BROWSER_PROFILE_IN_USE: ErrorSpec("browser profile is in use: {reason}"),
     ErrorCode.RECORD_LOCKED: ErrorSpec("meeting record is locked: {path}"),

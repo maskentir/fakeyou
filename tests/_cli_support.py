@@ -26,8 +26,6 @@ from fakeyou.config.settings import (
 )
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionResult
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import configured_url, require_url
 from fakeyou.foundation.invariants import (
     AGENT_SINK_NAME,
     MEETING_MONITOR_SOURCE_NAME,
@@ -285,11 +283,6 @@ def fake_persona_memory(monkeypatch: pytest.MonkeyPatch, memory: object) -> list
     monkeypatch.setattr(cli_join, "open_persona_memory", open_memory)
     monkeypatch.setattr(providers, "open_persona_memory", open_memory)
     return opened
-
-
-async def thread_exists(settings: Settings, thread_id: str) -> bool:
-    async with open_checkpointer(require_url(configured_url(settings))) as saver:
-        return await saver.aget_tuple({"configurable": {"thread_id": thread_id}}) is not None
 
 
 def write_record(settings: Settings, meeting_id: str) -> None:

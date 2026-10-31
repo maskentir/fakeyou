@@ -1,39 +1,14 @@
-import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal, NamedTuple, Protocol, TypedDict, cast, get_args, override
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict, cast, get_args
 
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import (
-    BaseCheckpointSaver,
-    ChannelVersions,
-    Checkpoint,
-    CheckpointMetadata,
-    CheckpointTuple,
-)
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.runtime import Runtime
-from langgraph.types import Command, RetryPolicy
+from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt
+from tenacity.wait import wait_exponential_jitter
 
-from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.state import (
-    ExternalEffect,
-    LifecycleState,
-    MissingRuntimeHandle,
-    RuntimeContext,
-    validate_phase_reason,
-)
-from fakeyou.db.checkpoint import (
-    CHECKPOINT_WRITE_ERRORS,
-    find_unserializable,
-    is_checkpoint_error,
-)
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES, FaultKind, PublicPhase, TerminalReason
+from fakeyou.conversation.state import ExternalEffect, LifecycleState, validate_phase_reason
+from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.meet.meet import JoinResult, JoinStatus
-from fakeyou.observability.faults import Fault, FaultReporter
-from fakeyou.observability.journal import Journal
 
 LifecycleAttribution = Literal["host_action", "system_fault", "owner_action", "policy"]
 LifecycleEventKind = Literal[
@@ -126,17 +101,11 @@ class LifecycleUpdate(TypedDict, total=False):
     external_effects: list[ExternalEffect]
 
 
-def meeting_thread_id(twin_id: str, meeting_id: str) -> str:
-    return f"{twin_id}:{meeting_id}"
-
-
 def initial_lifecycle_state(owner_id: str, twin_id: str, meeting_id: str) -> LifecycleState:
-    thread_id = meeting_thread_id(twin_id, meeting_id)
     return {
         "owner_id": owner_id,
         "twin_id": twin_id,
         "meeting_id": meeting_id,
-        "thread_id": thread_id,
         "phase": "created",
         "terminal_reason": None,
         "external_effects": [],
@@ -222,22 +191,11 @@ class JoinStep(NamedTuple):
     update: LifecycleUpdate
 
 
-def join_retry_policy(*, max_attempts: int, base_seconds: float, cap_seconds: float) -> RetryPolicy:
-    return RetryPolicy(
-        initial_interval=base_seconds,
-        backoff_factor=JOIN_BACKOFF_FACTOR,
-        max_interval=cap_seconds,
-        max_attempts=max_attempts,
-        jitter=True,
-        retry_on=JoinRetryRequested,
-    )
-
-
-DEFAULT_JOIN_RETRY = join_retry_policy(
-    max_attempts=DEFAULTS.meeting.join_max_attempts,
-    base_seconds=DEFAULTS.meeting.join_retry_base_seconds,
-    cap_seconds=DEFAULTS.meeting.join_retry_cap_seconds,
-)
+@dataclass(frozen=True, slots=True)
+class JoinRetry:
+    max_attempts: int = DEFAULTS.meeting.join_max_attempts
+    base_seconds: float = DEFAULTS.meeting.join_retry_base_seconds
+    cap_seconds: float = DEFAULTS.meeting.join_retry_cap_seconds
 
 
 def _join_outcome(status: JoinStatus, *, retrying: bool) -> JoinAttemptOutcome:
@@ -250,14 +208,12 @@ def _join_outcome(status: JoinStatus, *, retrying: bool) -> JoinAttemptOutcome:
     return "failed"
 
 
-class Joiner(Protocol):
+class LifecycleDriver(Protocol):
     def record(self, event: str, **fields: Any) -> None: ...
 
-    async def join(self, state: LifecycleState, attempt: JoinAttempt) -> JoinStep: ...
-
-
-class LifecycleDriver(Joiner, Protocol):
     async def prepare(self, state: LifecycleState) -> LifecycleUpdate: ...
+
+    async def join(self, state: LifecycleState, attempt: JoinAttempt) -> JoinStep: ...
 
     async def await_admission(self, state: LifecycleState) -> LifecycleUpdate: ...
 
@@ -268,6 +224,31 @@ class LifecycleDriver(Joiner, Protocol):
     async def leave(self, state: LifecycleState) -> LifecycleUpdate: ...
 
 
+class SessionLifecycle:
+    def __init__(self, initial: LifecycleState) -> None:
+        self.state = initial
+
+    @property
+    def phase(self) -> PublicPhase:
+        return self.state["phase"]
+
+    @property
+    def terminal(self) -> bool:
+        return self.phase in TERMINAL_PHASES
+
+    def apply(self, update: LifecycleUpdate) -> None:
+        self.state = cast(LifecycleState, {**self.state, **update})
+
+    def send(self, kind: LifecycleEventKind, attribution: LifecycleAttribution) -> None:
+        self.apply(apply_transition(self.state, kind, attribution))
+
+    def finalize(self) -> None:
+        if self.terminal:
+            return
+        reason = self.state["terminal_reason"] or "infra_failure"
+        self.apply({"phase": _terminal_phase(reason), "terminal_reason": reason})
+
+
 _SUCCESSORS: dict[str, str] = {
     "prepare": "join",
     "join": "await_admission",
@@ -276,465 +257,68 @@ _SUCCESSORS: dict[str, str] = {
     "monitor": "leave",
     "leave": "finalize",
 }
-_NODE_NAMES = (*_SUCCESSORS, "finalize", "fail")
 
 
-def _route(state: LifecycleState, node: str) -> str:
+def _route(state: LifecycleState, step: str) -> str:
     if state["phase"] in TERMINAL_PHASES:
         return "finalize"
     if state["phase"] == "leaving":
-        return "finalize" if node == "leave" else "leave"
-    return _SUCCESSORS[node]
+        return "finalize" if step == "leave" else "leave"
+    return _SUCCESSORS[step]
 
 
-def _advance(node: str, state: LifecycleState, update: LifecycleUpdate) -> Command[Any]:
-    merged = cast(LifecycleState, {**state, **update})
-    return Command(update=update, goto=_route(merged, node))
-
-
-_Step = Callable[[LifecycleDriver, LifecycleState], Awaitable[LifecycleUpdate]]
-
-
-def _require_driver(
-    runtime: Runtime[RuntimeContext | None], *, needs_browser: bool
-) -> LifecycleDriver:
-    context = runtime.context if runtime.context is not None else RuntimeContext()
-    driver = cast(LifecycleDriver, context.require("session"))
-    if needs_browser:
-        context.require("browser")
-    return driver
-
-
-def _missing_handle(error: MissingRuntimeHandle) -> Command[Any]:
-    return Command(update={"terminal_reason": f"runtime_handle_missing:{error.name}"}, goto="fail")
-
-
-def _step_node(
-    node: str, step: _Step, *, needs_browser: bool
-) -> Callable[..., Awaitable[Command[Any]]]:
-    async def run(
-        state: LifecycleState, *, runtime: Runtime[RuntimeContext | None]
-    ) -> Command[Any]:
-        try:
-            driver = _require_driver(runtime, needs_browser=needs_browser)
-        except MissingRuntimeHandle as error:
-            return _missing_handle(error)
-        return _advance(node, state, await step(driver, state))
-
-    return run
-
-
-def _join_node(
-    policy: RetryPolicy, joiner: Joiner | None
-) -> Callable[..., Awaitable[Command[Any]]]:
-    async def run(
-        state: LifecycleState, *, runtime: Runtime[RuntimeContext | None]
-    ) -> Command[Any]:
-        try:
-            driver = _require_driver(runtime, needs_browser=True)
-        except MissingRuntimeHandle as error:
-            return _missing_handle(error)
-        active = joiner if joiner is not None else driver
-        info = runtime.execution_info
-        number = info.node_attempt if info is not None else 1
-        attempt = JoinAttempt(number=number, last=number >= policy.max_attempts)
-        step = await active.join(state, attempt)
-        retrying = attempt.retries(step.result.status)
-        active.record(
-            "join_attempt_finished",
-            source="runtime",
-            attempt=number,
-            outcome=_join_outcome(step.result.status, retrying=retrying),
-            status=step.result.status,
-            detail=step.result.detail,
-        )
-        if retrying:
-            raise JoinRetryRequested(step.result)
-        return _advance("join", state, step.update)
-
-    return run
-
-
-async def _finalize(state: LifecycleState) -> LifecycleUpdate:
-    if state["phase"] in TERMINAL_PHASES:
-        return {}
-    reason = state["terminal_reason"] or "infra_failure"
-    return {"phase": _terminal_phase(reason), "terminal_reason": reason}
-
-
-async def _fail(state: LifecycleState) -> LifecycleUpdate:
-    reason = state["terminal_reason"] or "infra_failure"
-    return {"phase": _terminal_phase(reason), "terminal_reason": reason}
-
-
-def build_lifecycle_graph(
-    checkpointer: BaseCheckpointSaver[Any],
-    *,
-    join_retry: RetryPolicy = DEFAULT_JOIN_RETRY,
-    joiner: Joiner | None = None,
-) -> CompiledStateGraph[Any, Any, Any, Any]:
-    builder: StateGraph[LifecycleState, RuntimeContext, LifecycleState, LifecycleState] = (
-        StateGraph(LifecycleState, context_schema=RuntimeContext)
-    )
-    builder.add_node(
-        "prepare",
-        _step_node("prepare", lambda driver, state: driver.prepare(state), needs_browser=False),
-    )
-    builder.add_node("join", _join_node(join_retry, joiner), retry_policy=join_retry)
-    builder.add_node(
-        "await_admission",
-        _step_node(
-            "await_admission",
-            lambda driver, state: driver.await_admission(state),
-            needs_browser=True,
+async def _join(
+    driver: LifecycleDriver,
+    state: LifecycleState,
+    retry: JoinRetry,
+    sleep: Callable[[float], Awaitable[None]],
+) -> LifecycleUpdate:
+    retrying = AsyncRetrying(
+        stop=stop_after_attempt(retry.max_attempts),
+        wait=wait_exponential_jitter(
+            initial=retry.base_seconds, max=retry.cap_seconds, exp_base=JOIN_BACKOFF_FACTOR
         ),
+        retry=retry_if_exception_type(JoinRetryRequested),
+        sleep=sleep,
+        reraise=True,
     )
-    builder.add_node(
-        "activate",
-        _step_node("activate", lambda driver, state: driver.activate(state), needs_browser=True),
-    )
-    builder.add_node(
-        "monitor",
-        _step_node("monitor", lambda driver, state: driver.monitor(state), needs_browser=True),
-    )
-    builder.add_node(
-        "leave", _step_node("leave", lambda driver, state: driver.leave(state), needs_browser=True)
-    )
-    builder.add_node("finalize", _finalize)
-    builder.add_node("fail", _fail)
-    builder.add_edge(START, "prepare")
-    builder.add_edge("finalize", END)
-    builder.add_edge("fail", END)
-    return builder.compile(checkpointer=checkpointer)
-
-
-_RESUME_TARGETS: dict[PublicPhase, str] = {
-    "created": "prepare",
-    "joining": "join",
-    "lobby": "await_admission",
-    "admitted": "activate",
-    "active": "monitor",
-    "leaving": "leave",
-}
-
-
-def _thread_config(thread_id: str) -> RunnableConfig:
-    return {"configurable": {"thread_id": thread_id}}
-
-
-async def resume_lifecycle(
-    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, context: RuntimeContext
-) -> LifecycleState:
-    config = _thread_config(thread_id)
-    saved = await graph.aget_state(config)
-    if not saved.values:
-        raise ValueError(f"no lifecycle checkpoint for thread {thread_id!r}")
-    phase = saved.values["phase"]
-    if phase in TERMINAL_PHASES:
-        raise ValueError(f"cannot resume lifecycle in phase {phase!r}")
-    target = _RESUME_TARGETS[phase]
-    command: Command[Any] = Command(goto=target)
-    resumed: object = await graph.ainvoke(command, config, context=context)
-    return cast(LifecycleState, resumed)
-
-
-@dataclass(frozen=True, slots=True)
-class CheckpointDegradation:
-    send_timeout_seconds: float = DEFAULTS.database.send_timeout_seconds
-    faults: FaultReporter | None = None
-    journal: Journal | None = None
-
-
-_DEGRADABLE_PHASES: tuple[PublicPhase, ...] = ("admitted", "active")
-_EVENT_LABEL = "lifecycle_event"
-
-
-def _checkpoint_config(config: RunnableConfig, checkpoint: Checkpoint) -> RunnableConfig:
-    configurable = dict(config.get("configurable") or {})
-    configurable["checkpoint_id"] = checkpoint["id"]
-    return {"configurable": configurable}
-
-
-class _QueuedPut(NamedTuple):
-    config: RunnableConfig
-    checkpoint: Checkpoint
-    metadata: CheckpointMetadata
-    new_versions: ChannelVersions
-
-
-_PutQueue = list[_QueuedPut]
-
-
-class DegradingCheckpointer(BaseCheckpointSaver[Any]):
-    def __init__(self, inner: BaseCheckpointSaver[Any], policy: CheckpointDegradation) -> None:
-        super().__init__(serde=inner.serde)
-        self._inner = inner
-        self._policy = policy
-        self._queued: dict[str, _PutQueue] = {}
-
-    @override
-    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        return self._inner.get_tuple(config)
-
-    @override
-    def list(
-        self,
-        config: RunnableConfig | None,
-        *,
-        filter: dict[str, Any] | None = None,
-        before: RunnableConfig | None = None,
-        limit: int | None = None,
-    ) -> Iterator[CheckpointTuple]:
-        return self._inner.list(config, filter=filter, before=before, limit=limit)
-
-    @override
-    def put(
-        self,
-        config: RunnableConfig,
-        checkpoint: Checkpoint,
-        metadata: CheckpointMetadata,
-        new_versions: ChannelVersions,
-    ) -> RunnableConfig:
-        return self._inner.put(config, checkpoint, metadata, new_versions)
-
-    @override
-    def put_writes(
-        self,
-        config: RunnableConfig,
-        writes: Sequence[tuple[str, Any]],
-        task_id: str,
-        task_path: str = "",
-    ) -> None:
-        self._inner.put_writes(config, writes, task_id, task_path)
-
-    @override
-    def delete_thread(self, thread_id: str) -> None:
-        self._queued.pop(thread_id, None)
-        self._inner.delete_thread(thread_id)
-
-    @override
-    def get_next_version(self, current: Any, channel: None) -> Any:
-        return self._inner.get_next_version(current, channel)
-
-    @override
-    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        queued = self._queued.get(_thread_of(config))
-        if queued:
-            latest = queued[-1]
-            return CheckpointTuple(config, latest.checkpoint, latest.metadata)
-        return await self._inner.aget_tuple(config)
-
-    @override
-    async def alist(
-        self,
-        config: RunnableConfig | None,
-        *,
-        filter: dict[str, Any] | None = None,
-        before: RunnableConfig | None = None,
-        limit: int | None = None,
-    ) -> AsyncIterator[CheckpointTuple]:
-        async for item in self._inner.alist(config, filter=filter, before=before, limit=limit):
-            yield item
-
-    @override
-    async def aput(
-        self,
-        config: RunnableConfig,
-        checkpoint: Checkpoint,
-        metadata: CheckpointMetadata,
-        new_versions: ChannelVersions,
-    ) -> RunnableConfig:
-        thread = _thread_of(config)
-        current = _QueuedPut(config, checkpoint, metadata, new_versions)
-        queue: _PutQueue = [*self._queued.get(thread, []), current]
-        parent = await self._durable_parent(config) if len(queue) > 1 else None
-        written: RunnableConfig = _checkpoint_config(config, checkpoint)
-        while queue:
-            item = queue[0]
-            target = item.config if parent is None else _with_parent(item.config, parent)
-            try:
-                async with asyncio.timeout(self._policy.send_timeout_seconds):
-                    written = await self._inner.aput(
-                        target, item.checkpoint, item.metadata, item.new_versions
-                    )
-            except Exception as error:
-                if not is_checkpoint_error(error):
-                    raise
-                if not await self._landed(item):
-                    phase = await self._phase_before(thread)
-                    if phase not in _DEGRADABLE_PHASES:
-                        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
-                    self._queued[thread] = queue
-                    self._record_degraded(item.config, error)
-                    return _checkpoint_config(config, checkpoint)
-                written = _checkpoint_config(item.config, item.checkpoint)
-            queue.pop(0)
-            parent = item.checkpoint["id"]
-        self._queued.pop(thread, None)
-        return written
-
-    async def _durable_parent(self, config: RunnableConfig) -> str | None:
-        durable = await self._read_durable(config)
-        return durable.checkpoint["id"] if durable is not None else None
-
-    async def _landed(self, item: _QueuedPut) -> bool:
-        durable = await self._read_durable(item.config)
-        return durable is not None and durable.checkpoint["id"] == item.checkpoint["id"]
-
-    async def _phase_before(self, thread: str) -> PublicPhase | None:
-        previous = self._queued.get(thread)
-        if previous:
-            checkpoint: Checkpoint | None = previous[-1].checkpoint
-        else:
-            durable = await self._read_durable({"configurable": {"thread_id": thread}})
-            checkpoint = durable.checkpoint if durable is not None else None
-        if checkpoint is None:
-            return None
-        return cast(PublicPhase, checkpoint["channel_values"].get("phase"))
-
-    async def _read_durable(self, config: RunnableConfig) -> CheckpointTuple | None:
-        try:
-            return await self._inner.aget_tuple(_latest_config(config))
-        except Exception as error:
-            if not is_checkpoint_error(error):
-                raise
-            raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
-
-    def _record_degraded(self, config: RunnableConfig, error: Exception) -> None:
-        detail = f"lifecycle persist queued: {type(error).__name__}"
-        kind: FaultKind = "timeout" if isinstance(error, TimeoutError) else "unavailable"
-        label = (config.get("configurable") or {}).get(_EVENT_LABEL, "checkpoint")
-        if self._policy.faults is not None:
-            self._policy.faults.record(Fault(source="runtime", kind=kind, detail=detail))
-        if self._policy.journal is not None:
-            self._policy.journal.record(
-                "lifecycle_persist_queued",
+    async for attempt in retrying:
+        with attempt:
+            number = attempt.retry_state.attempt_number
+            join_attempt = JoinAttempt(number=number, last=number >= retry.max_attempts)
+            step = await driver.join(state, join_attempt)
+            again = join_attempt.retries(step.result.status)
+            driver.record(
+                "join_attempt_finished",
                 source="runtime",
-                kind=label,
-                error_type=type(error).__name__,
-                detail=detail,
+                attempt=number,
+                outcome=_join_outcome(step.result.status, retrying=again),
+                status=step.result.status,
+                detail=step.result.detail,
             )
-
-    @override
-    async def aput_writes(
-        self,
-        config: RunnableConfig,
-        writes: Sequence[tuple[str, Any]],
-        task_id: str,
-        task_path: str = "",
-    ) -> None:
-        if self._queued.get(_thread_of(config)):
-            return
-        try:
-            async with asyncio.timeout(self._policy.send_timeout_seconds):
-                await self._inner.aput_writes(config, writes, task_id, task_path)
-        except CHECKPOINT_WRITE_ERRORS as error:
-            self._record_write_failure(config, writes, error, task_id, task_path)
-
-    def _record_write_failure(
-        self,
-        config: RunnableConfig,
-        writes: Sequence[tuple[str, Any]],
-        error: Exception,
-        task_id: str,
-        task_path: str,
-    ) -> None:
-        culprit: str | None = None
-        serde = getattr(self._inner, "serde", None)
-        if serde is not None:
-            for channel, value in writes:
-                found = find_unserializable(value, serde, path=f"write[{channel!r}]")
-                if found is not None:
-                    culprit = found
-                    break
-        if is_checkpoint_error(error):
-            kind: FaultKind = "timeout" if isinstance(error, TimeoutError) else "unavailable"
-            detail = f"checkpoint write skipped: {type(error).__name__}"
-        else:
-            kind = "unknown"
-            detail = f"internal:{type(error).__name__}"
-        if self._policy.faults is not None:
-            self._policy.faults.record(Fault(source="runtime", kind=kind, detail=detail))
-        if self._policy.journal is None:
-            return
-        self._policy.journal.record(
-            "checkpoint_write_failed",
-            source="runtime",
-            thread_id=_thread_of(config),
-            task_id=task_id,
-            task_path=task_path,
-            channels=[channel for channel, _ in writes],
-            error_type=type(error).__name__,
-            error_detail=str(error)[:200],
-            culprit=culprit,
-        )
-
-    @override
-    async def adelete_thread(self, thread_id: str) -> None:
-        self._queued.pop(thread_id, None)
-        await self._inner.adelete_thread(thread_id)
+            if again:
+                raise JoinRetryRequested(step.result)
+            return step.update
+    raise AssertionError("join retry ended without an outcome")
 
 
-def _with_parent(config: RunnableConfig, parent: str | None) -> RunnableConfig:
-    configurable = {
-        "checkpoint_ns": "",
-        **(config.get("configurable") or {}),
-        "checkpoint_id": parent,
+async def run_lifecycle(
+    lifecycle: SessionLifecycle,
+    driver: LifecycleDriver,
+    *,
+    retry: JoinRetry,
+    sleep: Callable[[float], Awaitable[None]],
+) -> None:
+    steps: dict[str, Callable[[LifecycleState], Awaitable[LifecycleUpdate]]] = {
+        "prepare": driver.prepare,
+        "join": lambda state: _join(driver, state, retry, sleep),
+        "await_admission": driver.await_admission,
+        "activate": driver.activate,
+        "monitor": driver.monitor,
+        "leave": driver.leave,
     }
-    return {"configurable": configurable}
-
-
-def _latest_config(config: RunnableConfig) -> RunnableConfig:
-    configurable = {
-        key: value
-        for key, value in (config.get("configurable") or {}).items()
-        if key in ("thread_id", "checkpoint_ns")
-    }
-    return {"configurable": configurable}
-
-
-def _thread_of(config: RunnableConfig) -> str:
-    return str((config.get("configurable") or {})["thread_id"])
-
-
-@dataclass(frozen=True, slots=True)
-class LifecycleThread:
-    graph: CompiledStateGraph[Any, Any, Any, Any]
-    thread_id: str
-    initial: LifecycleState
-
-    @property
-    def config(self) -> RunnableConfig:
-        return _thread_config(self.thread_id)
-
-    async def read(self) -> LifecycleState:
-        saved = await self.graph.aget_state(self.config)
-        return cast(LifecycleState, saved.values)
-
-    async def send(self, kind: LifecycleEventKind, attribution: LifecycleAttribution) -> None:
-        state = await self.read()
-        update = apply_transition(state, kind, attribution)
-        if update:
-            labelled: RunnableConfig = {
-                "configurable": {"thread_id": self.thread_id, _EVENT_LABEL: kind}
-            }
-            await self.graph.aupdate_state(labelled, update, as_node="finalize")
-
-
-async def initialize_lifecycle(thread: LifecycleThread, *, resume: bool) -> LifecycleState:
-    initial = thread.initial
-    saved = await thread.read()
-    if not saved:
-        await thread.graph.aupdate_state(thread.config, initial, as_node="finalize")
-        return initial
-    for field in ("owner_id", "twin_id", "meeting_id"):
-        if saved[field] != initial[field]:
-            raise FakeYouError(ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH)
-    phase = saved["phase"]
-    if phase not in TERMINAL_PHASES and phase != "created" and not resume:
-        raise FakeYouError(
-            ErrorCode.MEETING_CANNOT_RESUME_PHASE,
-            meeting_id=saved["meeting_id"],
-            phase=phase,
-        )
-    return saved
+    step = "prepare"
+    while step != "finalize":
+        lifecycle.apply(await steps[step](lifecycle.state))
+        step = _route(lifecycle.state, step)
+    lifecycle.finalize()

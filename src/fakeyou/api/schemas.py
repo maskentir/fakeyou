@@ -234,7 +234,7 @@ class ForgetView(BaseModel):
     removed_episodes: int
     record_removed: bool
     journal_files_removed: int
-    lifecycle_thread_removed: bool
+    status_removed: bool
     browser_profile_removed: bool
     stages: tuple[ForgetStageView, ...]
     complete: bool

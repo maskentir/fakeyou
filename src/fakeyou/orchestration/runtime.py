@@ -1,13 +1,11 @@
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from functools import partial
 from typing import Any, cast
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
@@ -35,15 +33,13 @@ from fakeyou.conversation.session import (
     SupportsAdmission,
     SupportsMaintenance,
 )
-from fakeyou.conversation.state import LifecycleState, RuntimeContext
-from fakeyou.db.checkpoint import open_checkpointer
-from fakeyou.db.engine import require_url
+from fakeyou.conversation.state import LifecycleState
 from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
     LEAVE_BUDGET_SECONDS,
     MEETING_SINK_NAME,
 )
-from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
+from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, attention_line
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
@@ -73,7 +69,6 @@ from fakeyou.observability.faults import (
     FaultReporter,
     bounded_traceback,
     capture_error,
-    guard_consumer,
     until_stopped,
 )
 from fakeyou.observability.journal import Journal
@@ -85,21 +80,16 @@ from fakeyou.observability.provider_faults import (
 from fakeyou.orchestration.commands import CommandRunner
 from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.lifecycle import (
-    CheckpointDegradation,
-    DegradingCheckpointer,
     JoinAttempt,
+    JoinRetry,
     JoinStep,
     LifecycleAttribution,
     LifecycleEventKind,
-    LifecycleThread,
     LifecycleUpdate,
+    SessionLifecycle,
     apply_transition,
-    build_lifecycle_graph,
     initial_lifecycle_state,
-    initialize_lifecycle,
-    join_retry_policy,
-    meeting_thread_id,
-    resume_lifecycle,
+    run_lifecycle,
 )
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
@@ -1053,7 +1043,6 @@ class SessionWiring:
     stop: asyncio.Event | None = None
     signals: MeetSignals = DEFAULT_MEET_SIGNALS
     open_page: Callable[..., AbstractAsyncContextManager[Page]] = open_direct_page
-    saver_factory: Callable[[], AbstractAsyncContextManager[BaseCheckpointSaver[Any]]] | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     monotonic: Callable[[], float] = time.monotonic
     open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]] | None = None
@@ -1119,7 +1108,7 @@ async def _collect_preflight_probes(
 
 
 async def _report_preflight_failure(
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
     faults: FaultReporter | None,
     probes: list[ProbeResult],
 ) -> str:
@@ -1127,12 +1116,12 @@ async def _report_preflight_failure(
     detail = f"preflight_unreachable: {failed_hosts or 'probe failed'}"
     if faults is not None:
         faults.record(ProviderFault("preflight", "unavailable", retryable=True))
-    await lifecycle.send("infra_failed", "system_fault")
+    lifecycle.send("infra_failed", "system_fault")
     return detail
 
 
 async def _run_preflight_phase(
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
     stop_event: asyncio.Event,
     faults: FaultReporter | None,
     preflight: _PreflightFactory | None,
@@ -1142,7 +1131,7 @@ async def _run_preflight_phase(
         return None
     probes = await _collect_preflight_probes(preflight, budget, stop_event, faults)
     if probes is None or stop_event.is_set():
-        await lifecycle.send("owner_stopped", "owner_action")
+        lifecycle.send("owner_stopped", "owner_action")
         return "Owner stopped preflight"
     if not probes or not all(probe.ok for probe in probes):
         return await _report_preflight_failure(lifecycle, faults, probes)
@@ -1186,27 +1175,19 @@ async def _open_session_audio(
     resources: TeardownStack,
     open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]],
     stop_event: asyncio.Event,
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
 ) -> tuple[MeetingAudio | None, str | None]:
     try:
         audio = await until_stopped(resources.enter_async_context(open_audio()), stop_event)
     except MeetingAudioError as error:
         detail = f"meeting audio could not start: {_failure_detail(error)}"
-        await lifecycle.send("infra_failed", "system_fault")
+        lifecycle.send("infra_failed", "system_fault")
         return None, detail
     if audio is None:
         detail = "owner stopped audio startup"
-        await lifecycle.send("owner_stopped", "owner_action")
+        lifecycle.send("owner_stopped", "owner_action")
         return None, detail
     return audio, None
-
-
-async def _run_lifecycle(lifecycle: LifecycleThread, context: RuntimeContext) -> None:
-    state = await lifecycle.read()
-    if state["phase"] == "created":
-        await lifecycle.graph.ainvoke(lifecycle.initial, lifecycle.config, context=context)
-        return
-    await resume_lifecycle(lifecycle.graph, lifecycle.thread_id, context)
 
 
 async def _launch_session_browser(
@@ -1214,14 +1195,14 @@ async def _launch_session_browser(
     hooks: SessionWiring,
     stop_event: asyncio.Event,
     resources: TeardownStack,
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
 ) -> str:
     page = await _open_session_page(
         resources, config, hooks.open_page, hooks.open_audio, stop_event
     )
     if page is None:
         detail = "owner stopped browser startup"
-        await lifecycle.send("owner_stopped", "owner_action")
+        lifecycle.send("owner_stopped", "owner_action")
         return detail
     if hooks.commands is not None and config.meet_actions_enabled:
         hooks.commands.bind_page(
@@ -1256,17 +1237,21 @@ async def _launch_session_browser(
         kernel=hooks.kernel,
         commands=hooks.commands,
     )
-    context = RuntimeContext(browser=page, audio=audio, session=worker)
     try:
-        await _run_lifecycle(lifecycle, context)
+        await run_lifecycle(
+            lifecycle,
+            worker,
+            retry=JoinRetry(
+                max_attempts=config.join_max_attempts,
+                base_seconds=config.join_retry_base_seconds,
+                cap_seconds=config.join_retry_cap_seconds,
+            ),
+            sleep=hooks.sleep,
+        )
     finally:
         if hooks.commands is not None:
             await hooks.commands.close()
     return worker.detail or "session ended"
-
-
-async def _is_terminal(lifecycle: LifecycleThread) -> bool:
-    return (await lifecycle.read())["phase"] in TERMINAL_PHASES
 
 
 async def startup_session(
@@ -1274,11 +1259,11 @@ async def startup_session(
     hooks: SessionWiring,
     stop_event: asyncio.Event,
     resources: TeardownStack,
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
 ) -> str:
     if stop_event.is_set():
         detail = "owner requested stop before startup"
-        await lifecycle.send("owner_stopped", "owner_action")
+        lifecycle.send("owner_stopped", "owner_action")
         return detail
     budget = (
         hooks.preflight_budget_seconds
@@ -1289,13 +1274,13 @@ async def startup_session(
     ended_detail = await _run_preflight_phase(
         lifecycle, stop_event, hooks.faults, preflight, budget
     )
-    if ended_detail is None and not await _is_terminal(lifecycle):
+    if ended_detail is None and not lifecycle.terminal:
         return await _launch_session_browser(config, hooks, stop_event, resources, lifecycle)
     return ended_detail or "session already ended"
 
 
 async def _record_session_failure(
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
     journal: Journal,
     kind: LifecycleEventKind,
     error: Exception,
@@ -1308,12 +1293,12 @@ async def _record_session_failure(
         error=str(error),
         error_type=type(error).__name__,
     )
-    await lifecycle.send(kind, "system_fault")
+    lifecycle.send(kind, "system_fault")
     return detail
 
 
 async def _record_conversation_failure(
-    lifecycle: LifecycleThread, journal: Journal, error: ConversationError
+    lifecycle: SessionLifecycle, journal: Journal, error: ConversationError
 ) -> str:
     detail = f"conversation failed ({type(error).__name__})"
     journal.record(
@@ -1323,12 +1308,12 @@ async def _record_conversation_failure(
         error_type=type(error).__name__,
         traceback=bounded_traceback(error),
     )
-    await lifecycle.send("conversation_failed", "system_fault")
+    lifecycle.send("conversation_failed", "system_fault")
     return detail
 
 
 async def _record_browser_failure(
-    lifecycle: LifecycleThread, journal: Journal, error: Exception
+    lifecycle: SessionLifecycle, journal: Journal, error: Exception
 ) -> str:
     detail = f"browser session failed ({type(error).__name__})"
     journal.record(
@@ -1338,15 +1323,8 @@ async def _record_browser_failure(
         error_type=type(error).__name__,
         traceback=bounded_traceback(error),
     )
-    await lifecycle.send("browser_failed", "system_fault")
+    lifecycle.send("browser_failed", "system_fault")
     return detail
-
-
-async def _record_cancellation(record: Awaitable[None]) -> None:
-    write = asyncio.ensure_future(record)
-    while not write.done():
-        with suppress(asyncio.CancelledError):
-            await asyncio.shield(write)
 
 
 async def drive_session(
@@ -1354,10 +1332,10 @@ async def drive_session(
     hooks: SessionWiring,
     stop_event: asyncio.Event,
     resources: TeardownStack,
-    lifecycle: LifecycleThread,
+    lifecycle: SessionLifecycle,
 ) -> str:
     journal = _resolve_journal(hooks, config)
-    if await _is_terminal(lifecycle):
+    if lifecycle.terminal:
         return "session already ended"
 
     async def attempt() -> str:
@@ -1366,19 +1344,12 @@ async def drive_session(
     try:
         outcome, error = await capture_error(attempt)
     except asyncio.CancelledError:
-        await _record_cancellation(
-            guard_consumer(
-                partial(lifecycle.send, "cancelled", "owner_action"),
-                sink=ConsumerSink(faults=hooks.faults, journal=journal),
-                source="runtime",
-                detail="cancel_lifecycle",
-            )
-        )
+        lifecycle.send("cancelled", "owner_action")
         raise
     if error is not None:
         if isinstance(error, FakeYouError):
             raise error
-        if stop_event.is_set() and (await lifecycle.read())["phase"] not in (
+        if stop_event.is_set() and lifecycle.phase not in (
             "leaving",
             "ended",
         ):
@@ -1389,7 +1360,7 @@ async def drive_session(
                 error_type=type(error).__name__,
                 detail="during owner-requested teardown",
             )
-            await lifecycle.send("owner_stopped", "owner_action")
+            lifecycle.send("owner_stopped", "owner_action")
             return "owner requested stop"
         if isinstance(error, ConversationError):
             return await _record_conversation_failure(lifecycle, journal, error)
@@ -1407,38 +1378,11 @@ async def run_meeting_session(
     async with session_resources(hooks.faults) as resources:
         if hooks.conversation is not None:
             resources.push_async_callback(hooks.conversation.close)
-        saver = await resources.enter_async_context(
-            hooks.saver_factory()
-            if hooks.saver_factory is not None
-            else open_checkpointer(
-                require_url(config.database_url),
-                connect_timeout_seconds=config.database_connect_timeout_seconds,
-                statement_timeout_seconds=config.database_statement_timeout_seconds,
-                keepalive_idle_seconds=config.database_keepalive_idle_seconds,
-            )
+        lifecycle = SessionLifecycle(
+            initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id)
         )
-        lifecycle = LifecycleThread(
-            build_lifecycle_graph(
-                DegradingCheckpointer(
-                    saver,
-                    CheckpointDegradation(
-                        send_timeout_seconds=config.lifecycle_send_timeout_seconds,
-                        faults=hooks.faults,
-                        journal=_resolve_journal(hooks, config),
-                    ),
-                ),
-                join_retry=join_retry_policy(
-                    max_attempts=config.join_max_attempts,
-                    base_seconds=config.join_retry_base_seconds,
-                    cap_seconds=config.join_retry_cap_seconds,
-                ),
-            ),
-            meeting_thread_id(config.twin_id, config.meeting_id),
-            initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id),
-        )
-        await initialize_lifecycle(lifecycle, resume=config.resume)
         detail = await drive_session(config, hooks, stop_event, resources, lifecycle)
-        final = await lifecycle.read()
+        final = lifecycle.state
     return _terminal_result(
         final["phase"],
         cast(TerminalReason | None, final["terminal_reason"]),

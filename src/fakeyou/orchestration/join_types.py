@@ -2,10 +2,8 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from graphiti_core import Graphiti
-from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
@@ -43,7 +41,6 @@ class JoinRequest:
 class JoinPorts:
     run_session: Callable[[SessionConfig, SessionWiring], Awaitable[SessionResult]]
     open_memory: Callable[[Settings], AbstractAsyncContextManager[Graphiti]]
-    open_checkpointer: Callable[..., AbstractAsyncContextManager[BaseCheckpointSaver[Any]]]
 
 
 @dataclass(frozen=True, slots=True)

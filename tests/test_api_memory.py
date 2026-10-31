@@ -424,7 +424,7 @@ async def test_forget_meeting_returns_the_c9_summary_with_its_stages(api: Memory
         "record",
         "journal",
         "browser_profile",
-        "checkpoint",
+        "status",
     ]
     assert body["stages"][0]["status"] == "failed"
     assert [stage["status"] for stage in body["stages"][1:]] == [

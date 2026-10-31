@@ -15,7 +15,6 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.persistence.ingestion_status import record_lock
 from tests._error_support import message_pattern
-from tests._fakes_common import DATABASE_URL
 from tests._runtime_fakes import SessionRun
 
 
@@ -205,7 +204,6 @@ async def test_join_without_audio_still_wires_faults_and_journal(
         "https://meet.google.com/abc-defg-hij",
     )
 
-    assert captured["config"].database_url == DATABASE_URL
     assert isinstance(captured["faults"], FaultReporter)
     assert isinstance(captured["journal"], Journal)
     assert captured["preflight_hosts"] is None

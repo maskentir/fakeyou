@@ -208,9 +208,7 @@ async def test_run_join_session_reports_the_outcome_through_its_ports(settings: 
             audio_enabled=False,
             meeting_id="meeting-port",
         ),
-        JoinPorts(
-            run_session=run, open_memory=unused_memory, open_checkpointer=unused_checkpointer
-        ),
+        JoinPorts(run_session=run, open_memory=unused_memory),
     )
 
     assert outcome.exit_code is ExitCode.SUCCESS

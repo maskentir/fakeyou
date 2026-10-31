@@ -11,7 +11,7 @@ from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, LOBBY, FakePageSession, meet_page
-from tests._persistence_fakes import FakeSaverSession, RecordingJournal
+from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import INSTANT_JOIN_RETRY, pin_join_jitter, session_config
 
 
@@ -166,7 +166,6 @@ async def test_worker_join_retries_timeout_then_admits() -> None:
         config,
         SessionWiring(
             open_page=browser.open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,
@@ -194,7 +193,6 @@ async def test_session_join_attempts_follow_the_configured_maximum() -> None:
         ),
         SessionWiring(
             open_page=browser.open,
-            saver_factory=FakeSaverSession().factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
             journal=journal,

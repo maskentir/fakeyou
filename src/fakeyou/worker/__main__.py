@@ -9,7 +9,6 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from fakeyou.config.settings import Settings
-from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.db.session_status import create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
@@ -64,7 +63,6 @@ async def serve(role: str) -> None:
     ports = JoinPorts(
         run_session=run_meeting_session,
         open_memory=open_persona_memory,
-        open_checkpointer=open_checkpointer,
     )
     await verify_boot_dependencies(settings, ports)
     if role == SESSIONS_ROLE:

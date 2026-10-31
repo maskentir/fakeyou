@@ -367,7 +367,6 @@ class WorkerConsumer:
         ports = JoinPorts(
             run_session=self._session_port,
             open_memory=self._ports.open_memory,
-            open_checkpointer=self._ports.open_checkpointer,
         )
         outcome, error = await capture_error(partial(run_join_session, request, ports))
         try:

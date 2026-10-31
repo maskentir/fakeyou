@@ -148,8 +148,6 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.MEETING_BRIEF_SCOPE_MISMATCH,
         ErrorCode.MEETING_BRIEF_TOO_LARGE,
         ErrorCode.MEETING_BRIEF_UNREADABLE,
-        ErrorCode.MEETING_CANNOT_RESUME_PHASE,
-        ErrorCode.MEETING_CHECKPOINT_IDENTITY_MISMATCH,
         ErrorCode.MEETING_CONTEXT_DIFFERS,
         ErrorCode.MEETING_CONTEXT_TOO_LARGE,
         ErrorCode.MEETING_CONTEXT_UNREADABLE,

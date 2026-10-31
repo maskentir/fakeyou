@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 
 import fakeyou.orchestration.runtime as runtime
 from fakeyou.config.identifiers import SessionId
@@ -16,7 +15,6 @@ from fakeyou.orchestration.lifecycle import initial_lifecycle_state
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import FakePage, FakePageSession, meet_page
-from tests._persistence_fakes import FakeSaverSession
 
 INSTANT_JOIN_RETRY: dict[str, Any] = {
     "join_retry_base_seconds": 0.001,
@@ -25,9 +23,7 @@ INSTANT_JOIN_RETRY: dict[str, Any] = {
 
 
 def pin_join_jitter(monkeypatch: pytest.MonkeyPatch, jitter: float = 0.0) -> None:
-    monkeypatch.setattr(
-        "langgraph.pregel._retry.random", SimpleNamespace(uniform=lambda _low, _high: jitter)
-    )
+    monkeypatch.setattr("tenacity.wait.random", SimpleNamespace(uniform=lambda _low, _high: jitter))
 
 
 def session_config(**overrides: Any) -> SessionConfig:
@@ -46,7 +42,6 @@ def session_config(**overrides: Any) -> SessionConfig:
 async def run_session(
     config: SessionConfig,
     browser: FakePageSession,
-    saver: FakeSaverSession,
     clock: FakeClock,
     stop: asyncio.Event | None = None,
 ) -> SessionResult:
@@ -55,7 +50,6 @@ async def run_session(
         SessionWiring(
             stop=stop,
             open_page=browser.open,
-            saver_factory=saver.factory,
             sleep=clock.sleep,
             monotonic=clock.monotonic,
         ),
@@ -86,10 +80,6 @@ def audio_session(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         del kwargs
         yield meet_page([])
         events.append("browser_closed")
-
-    @asynccontextmanager
-    async def saver() -> AsyncIterator[InMemorySaver]:
-        yield InMemorySaver()
 
     async def join(*args: Any) -> JoinResult:
         del args
@@ -132,5 +122,5 @@ def audio_session(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         events=events,
         stop=stop,
         config=config,
-        kwargs={"open_page": page, "saver_factory": saver, "stop": stop},
+        kwargs={"open_page": page, "stop": stop},
     )

@@ -4,7 +4,6 @@ from pathlib import Path
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
 from fakeyou.config.settings import Settings
-from fakeyou.db.checkpoint import open_checkpointer
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration.join import resume_command, run_join_session
 from fakeyou.orchestration.join_types import JoinOutcome, JoinPorts, JoinRequest
@@ -57,7 +56,6 @@ def _join_ports() -> JoinPorts:
     return JoinPorts(
         run_session=run_meeting_session,
         open_memory=open_persona_memory,
-        open_checkpointer=open_checkpointer,
     )
 
 

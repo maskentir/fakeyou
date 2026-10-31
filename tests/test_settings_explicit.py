@@ -193,16 +193,13 @@ def test_database_timeouts_default_and_read_env(monkeypatch: pytest.MonkeyPatch)
     database = Settings(**env_file_opt(None)).database
     assert database.connect_timeout_seconds == 5.0
     assert database.statement_timeout_seconds == 30.0
-    assert database.send_timeout_seconds == 5.0
     assert database.keepalive_idle_seconds == 30.0
     monkeypatch.setenv("FAKEYOU_DATABASE__CONNECT_TIMEOUT_SECONDS", "2.0")
     monkeypatch.setenv("FAKEYOU_DATABASE__STATEMENT_TIMEOUT_SECONDS", "9.0")
-    monkeypatch.setenv("FAKEYOU_DATABASE__SEND_TIMEOUT_SECONDS", "3.0")
     monkeypatch.setenv("FAKEYOU_DATABASE__KEEPALIVE_IDLE_SECONDS", "11.0")
     database = Settings(**env_file_opt(None)).database
     assert database.connect_timeout_seconds == 2.0
     assert database.statement_timeout_seconds == 9.0
-    assert database.send_timeout_seconds == 3.0
     assert database.keepalive_idle_seconds == 11.0
 
 
