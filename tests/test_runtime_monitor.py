@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -12,12 +13,15 @@ from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
 from fakeyou.meet.watchdog import WatchdogCheck
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.orchestration.call_state import DRAIN_STALE_SECONDS
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.perception import create_perception_stack
 from fakeyou.orchestration.runtime import MeetingWorker, MonitorScan
 from fakeyou.perception.meet_protocol import MeetUser
+from fakeyou.perception.percepts import IncomingChat
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import DrainBatch
+from tests._conversation_fakes import FakeConversation
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, REMOVED, FakePage, meet_page
 from tests._meet_protocol_fakes import sync_body, user_info
@@ -432,3 +436,79 @@ async def test_lobby_admission_comes_from_a_fresh_sync_without_the_drain(
     stale = worker.protocol_admitted()
 
     assert (waiting, admitted, stale) == (False, True, False)
+
+
+async def test_each_browser_epoch_releases_its_perception_listeners(
+    journal: RecordingJournal,
+) -> None:
+    stack = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    assert stack is not None
+    shared: list[MeetRoster] = []
+    stack.sensors.roster_listener = shared.append
+    conversation = FakeConversation([])
+    for _ in range(2):
+        worker = _bare_worker()
+        worker.journal = journal
+        worker.perception = stack
+        worker.conversation = conversation
+        worker.watch_roster_keywords()
+        worker.watch_meeting_events()
+        await worker.close_perception()
+
+    assert stack.sensors.roster_listener == shared.append
+    sender = stack.timeline.participant("device-budi", "Budi")
+    stack.timeline.add_chat(
+        IncomingChat(message_id="m1", sender=sender, text="hello", sent_at=datetime.now(UTC))
+    )
+    assert conversation.chat == []
+
+
+async def test_a_new_browser_starts_its_own_sensor_epoch(journal: RecordingJournal) -> None:
+    stack = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    assert stack is not None
+    sensors = stack.sensors
+    sensors.accept_sync(sync_body([user_info(TWIN_DEVICE, "Twin", status=1, current=True)]))
+    assert sensors.synced_at is not None
+    assert sensors.roster.own_user() is not None
+
+    heartbeats_before = sensors.heartbeats
+
+    sensors.begin_epoch()
+
+    assert heartbeats_before > 0
+    assert sensors.synced_at is None
+    assert sensors.drained_at is None
+    assert sensors.heartbeats == 0
+    assert sensors.peer_states == ()
+    assert sensors.roster.own_user() is None
+    assert not sensors.synced_within(DRAIN_STALE_SECONDS)
+
+
+async def test_the_first_call_state_of_a_new_browser_opens_a_kernel_epoch() -> None:
+    kernel = KernelPort.for_meeting("meeting-1")
+    worker = _bare_worker()
+    worker.kernel = kernel
+    await _observe(worker, "in_call")
+    kernel.drain()
+    first = kernel.state.world.browser_epoch
+    rejoined = _bare_worker()
+    rejoined.kernel = kernel
+    rejoined.fresh_browser = True
+
+    await _observe(rejoined, "in_call")
+    await _observe(rejoined, "in_call")
+    kernel.drain()
+
+    assert kernel.state.world.browser_epoch == first + 1
+    assert rejoined.fresh_browser is False
+
+
+async def _observe(worker: MeetingWorker, state: str) -> str | None:
+    observation = CallObservation(cast(Any, state), state)
+    return await worker.apply_observation(
+        WatchdogCheck(observation=observation, events=(), next_check_seconds=5.0)
+    )

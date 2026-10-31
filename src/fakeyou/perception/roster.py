@@ -47,9 +47,29 @@ class MeetRoster:
         self._outputs: dict[tuple[str, OutputKind], DeviceOutput] = {}
         self._synced = False
         self._own_updates: list[str] = []
+        self._retired: set[str] = set()
+        self._awaiting_snapshot = False
 
     def mark_synced(self) -> None:
         self._synced = True
+
+    def begin_epoch(self) -> None:
+        self._retired.update(self._own_updates)
+        self._own_updates.clear()
+        self._synced = False
+        self._awaiting_snapshot = True
+
+    def apply_snapshot(self, users: Iterable[MeetUser]) -> list[RosterChange]:
+        listed = list(users)
+        changes = self.apply_users(listed)
+        if not self._awaiting_snapshot:
+            return changes
+        self._awaiting_snapshot = False
+        seen = {user.device_id for user in listed}
+        for device_id, user in tuple(self._users.items()):
+            if user.present and device_id not in seen and not self._is_own(device_id):
+                changes += self._upsert(user.model_copy(update={"present": False}))
+        return changes
 
     def state(self) -> MeetingState:
         people = self.people()
@@ -166,7 +186,7 @@ class MeetRoster:
                 }
             )
         self._users[user.device_id] = merged
-        if merged.current_user and not merged.is_screen:
+        if merged.current_user and not merged.is_screen and merged.device_id not in self._retired:
             if merged.device_id in self._own_updates:
                 self._own_updates.remove(merged.device_id)
             self._own_updates.append(merged.device_id)
