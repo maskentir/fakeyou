@@ -243,16 +243,20 @@ class ScriptedReply:
 class RecordedModel(BaseChatModel):
     _replies: Mapping[str, ReplyTiming] = PrivateAttr(default_factory=dict)
     _plans: Mapping[str, RecordedPlan] = PrivateAttr(default_factory=dict)
+    _latency_scale: float = PrivateAttr(default=1.0)
 
     def __init__(
         self,
         replies: Mapping[str, ReplyTiming],
         plans: Mapping[str, RecordedPlan],
+        *,
+        latency_scale: float = 1.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._replies = replies
         self._plans = plans
+        self._latency_scale = latency_scale
 
     @property
     @override
@@ -339,8 +343,11 @@ class RecordedModel(BaseChatModel):
             piece = json.dumps(text)[1:-1]
             if index + 1 < len(sentences):
                 piece += " "
-            pieces.append((sentence.offset_ms, piece))
-        return ScriptedReply(_head(plan), tuple(pieces), '"}', reply.duration_ms)
+            pieces.append((sentence.offset_ms * self._latency_scale, piece))
+        duration_ms = (
+            reply.duration_ms * self._latency_scale if reply.duration_ms is not None else None
+        )
+        return ScriptedReply(_head(plan), tuple(pieces), '"}', duration_ms)
 
 
 def _head(plan: RecordedPlan) -> str:

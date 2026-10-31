@@ -93,6 +93,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_SCOPE_MISMATCH = "debrief.scope_mismatch"
     DEBRIEF_RECORD_MISSING = "debrief.record_missing"
     REPLAY_SESSION_MISSING = "replay.session_missing"
+    REPLAY_SCALE_INVALID = "replay.scale_invalid"
     DEBRIEF_PUBLICATION_RECOVERY = "debrief.publication_recovery"
     DEBRIEF_CACHED_SCOPE_MISMATCH = "debrief.cached_scope_mismatch"
     DEBRIEF_SOURCES_CHANGED = "debrief.sources_changed"
@@ -485,6 +486,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.REPLAY_SESSION_MISSING: ErrorSpec(
         "no recorded journal and meeting record to replay for {meeting_id}",
+        ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.REPLAY_SCALE_INVALID: ErrorSpec(
+        "--reply-latency-scale must be a finite number of at least 0, got {value}",
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.DEBRIEF_PUBLICATION_RECOVERY: ErrorSpec(

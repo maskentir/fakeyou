@@ -25,23 +25,28 @@ from fakeyou.orchestration.assembly import (
     TurnBehavior,
     open_conversation,
 )
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.orchestration.transcript import (
     DrainOptions,
     TranscriptDrain,
     TranscriptSinks,
     build_transcript_callback,
 )
+from fakeyou.perception.percepts import MEETING_CONTENT
 from fakeyou.persistence.record import ChatEntry, MeetingRecord, ScreenEntry, TranscriptEntry
 from fakeyou.replay.compare import Comparison, compare_journals
 from fakeyou.replay.fixture import ReplayFixture
 from fakeyou.replay.pacer import create_pacer_backend
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
+from fakeyou.session.contracts import ScreenObserved
+from fakeyou.session.kernel import SessionKernel
 
 LANES = {
     "vad": "audio",
     "interim": "speech",
     "final": "speech",
     "chat": "meeting",
+    "screen": "meeting",
     "attention": "meeting",
 }
 
@@ -61,14 +66,6 @@ class RecordedBehavior:
     wake_phrases: tuple[str, ...] = ()
     barge_in: bool = False
     participant_policy_enabled: bool = False
-
-    def turn_behavior(self) -> TurnBehavior:
-        return TurnBehavior(
-            on_transition=lambda *_args: None,
-            wake_phrases=self.wake_phrases,
-            twin_names=self.twin_names,
-            barge_in=self.barge_in,
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +156,9 @@ def schedule(fixture: ReplayFixture, *, attention: bool = False) -> tuple[Replay
             if percept.entry.own or percept.entry.backlog:
                 continue
             items.append(ReplayInput(percept.offset, "chat", entry=percept.entry))
-        elif attention:
+            continue
+        items.append(ReplayInput(percept.offset, "screen", entry=percept.entry))
+        if attention:
             items.append(ReplayInput(percept.offset, "attention", entry=percept.entry))
     return tuple(sorted(items, key=lambda item: item.offset))
 
@@ -180,25 +179,29 @@ def _interims(
     return items
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayOptions:
+    record_path: Path
+    behavior: RecordedBehavior = field(default_factory=RecordedBehavior)
+    reply_latency_scale: float = 1.0
+
+
 async def replay_session(
     fixture: ReplayFixture,
     settings: Settings,
     config: SessionConfig,
-    *,
-    behavior: RecordedBehavior | None = None,
-    record_path: Path,
+    options: ReplayOptions,
 ) -> ReplayResult:
     loop = asyncio.get_running_loop()
     with using_clock(loop.time):
-        return await _replay(fixture, settings, config, behavior, record_path)
+        return await _replay(fixture, settings, config, options)
 
 
 async def _replay(
     fixture: ReplayFixture,
     settings: Settings,
     config: SessionConfig,
-    behavior: RecordedBehavior | None,
-    record_path: Path,
+    options: ReplayOptions,
 ) -> ReplayResult:
     loop = asyncio.get_running_loop()
     rows: list[dict[str, Any]] = []
@@ -213,31 +216,52 @@ async def _replay(
         now=wall_clock,
         echo=False,
     )
-    record = MeetingRecord(record_path, journal=journal, now=wall_clock)
+    record = MeetingRecord(options.record_path, journal=journal, now=wall_clock)
+    kernel = KernelPort(
+        SessionKernel(session_id=fixture.meeting_id, attempt_id=f"replay-{fixture.meeting_id}"),
+        clock=wall_clock,
+        journal=journal,
+    )
+    behavior = options.behavior
     engine = PlaybackEngine(
         RecordedSynthesizer(fixture.syntheses, faults=fixture.synthesis_faults, journal=journal),
         create_pacer_backend(),
-        on_event=_playback_journal(journal, record),
+        on_event=_playback_journal(journal, record, kernel),
         diagnostics=Diagnostics(journal=journal),
     )
     audio: MeetingAudio = EngineAudio(engine)
     wiring = ModelWiring(
-        reply=lambda: RecordedModel(fixture.replies, fixture.plans),
+        reply=lambda: RecordedModel(
+            fixture.replies, fixture.plans, latency_scale=options.reply_latency_scale
+        ),
         judge=lambda _names: RecordedJudge(fixture.verdicts, fixture.finals, origin=loop.time()),
     )
     try:
-        async with open_conversation(
-            settings,
-            config,
-            agent=AgentWiring(history=record),
-            behavior=(behavior or RecordedBehavior()).turn_behavior(),
-            diagnostics=Diagnostics(journal=journal),
-            models=wiring,
-        ) as turns:
+        async with (
+            kernel.running(),
+            open_conversation(
+                settings,
+                config,
+                agent=AgentWiring(history=record),
+                behavior=TurnBehavior(
+                    on_transition=lambda *_args: None,
+                    wake_phrases=behavior.wake_phrases,
+                    twin_names=behavior.twin_names,
+                    barge_in=behavior.barge_in,
+                    kernel=kernel,
+                    presence=kernel.presence,
+                ),
+                diagnostics=Diagnostics(journal=journal),
+                models=wiring,
+            ) as turns,
+        ):
+            kernel.call_state("in_call")
             turns.bind(audio)
             turns.resume()
             drain = build_transcript_callback(
-                sinks=TranscriptSinks(journal=journal, record=record, conversation=turns.ingress),
+                sinks=TranscriptSinks(
+                    journal=journal, record=record, conversation=turns.ingress, kernel=kernel
+                ),
                 binder=SlotBinder(),
                 voice_activity=None,
                 options=DrainOptions(
@@ -251,7 +275,7 @@ async def _replay(
             )
             try:
                 inputs = schedule(fixture, attention=config.attention_enabled)
-                await _feed(inputs, drain, turns, journal)
+                await _feed(inputs, _Sinks(drain, turns, journal, kernel))
                 await turns.lifecycle.wait_idle()
             finally:
                 await drain.close()
@@ -261,10 +285,13 @@ async def _replay(
     return ReplayResult(tuple(rows), compare_journals(list(fixture.rows), rows))
 
 
-def _playback_journal(journal: Journal, record: MeetingRecord) -> Callable[[PlaybackEvent], None]:
+def _playback_journal(
+    journal: Journal, record: MeetingRecord, kernel: KernelPort
+) -> Callable[[PlaybackEvent], None]:
     speaking = _Speaking()
 
     def observe(event: PlaybackEvent) -> None:
+        kernel.playback(event)
         if event.cue:
             journal.record(
                 event.kind.replace("playback_", "thinking_cue_"),
@@ -296,48 +323,45 @@ def _playback_journal(journal: Journal, record: MeetingRecord) -> Callable[[Play
     return observe
 
 
-async def _feed(
-    inputs: tuple[ReplayInput, ...],
-    drain: TranscriptDrain,
-    turns: MeetingTurns,
-    journal: Journal,
-) -> None:
+@dataclass(frozen=True, slots=True)
+class _Sinks:
+    drain: TranscriptDrain
+    turns: MeetingTurns
+    journal: Journal
+    kernel: KernelPort
+
+
+async def _feed(inputs: tuple[ReplayInput, ...], sinks: _Sinks) -> None:
     origin = asyncio.get_running_loop().time()
     lanes = {
         lane: [item for item in inputs if LANES[item.kind] == lane] for lane in set(LANES.values())
     }
     async with asyncio.TaskGroup() as group:
         for items in lanes.values():
-            group.create_task(_play_lane(items, origin, drain, turns, journal))
+            group.create_task(_play_lane(items, origin, sinks))
 
 
-async def _play_lane(
-    items: list[ReplayInput],
-    origin: float,
-    drain: TranscriptDrain,
-    turns: MeetingTurns,
-    journal: Journal,
-) -> None:
+async def _play_lane(items: list[ReplayInput], origin: float, sinks: _Sinks) -> None:
     loop = asyncio.get_running_loop()
     for item in items:
         delay = origin + item.offset - loop.time()
         if delay > 0:
             await asyncio.sleep(delay)
-        await _deliver(item, drain, turns, journal)
+        await _deliver(item, sinks)
 
 
-async def _deliver(
-    item: ReplayInput, drain: TranscriptDrain, turns: MeetingTurns, journal: Journal
-) -> None:
+async def _deliver(item: ReplayInput, sinks: _Sinks) -> None:
     entry = item.entry
     match item.kind:
         case "vad":
-            journal.record("speech_started" if item.active else "speech_stopped", source="audio")
-            await drain.on_vad(active=item.active)
+            sinks.journal.record(
+                "speech_started" if item.active else "speech_stopped", source="audio"
+            )
+            await sinks.drain.on_vad(active=item.active)
         case "interim":
-            await drain.on_interim(TranscriptUpdate(text=item.text, final=False))
+            await sinks.drain.on_interim(TranscriptUpdate(text=item.text, final=False))
         case "final" if isinstance(entry, TranscriptEntry):
-            await drain(
+            await sinks.drain(
                 TranscriptUpdate(
                     text=entry.text,
                     final=True,
@@ -346,9 +370,25 @@ async def _deliver(
                 )
             )
         case "chat" if isinstance(entry, ChatEntry):
-            turns.receive_chat(_chat_event(entry))
+            sinks.kernel.chat(
+                message_id=entry.ref,
+                device_id=entry.sender_id,
+                text=entry.text,
+                own=entry.own,
+                backlog=entry.backlog,
+            )
+            sinks.turns.receive_chat(_chat_event(entry))
+        case "screen" if isinstance(entry, ScreenEntry):
+            sinks.kernel.observe(
+                "vision",
+                ScreenObserved(
+                    title=entry.title,
+                    reading_ref=entry.ref,
+                    meeting_content=entry.content in MEETING_CONTENT,
+                ),
+            )
         case "attention" if isinstance(entry, ScreenEntry):
-            turns.receive_attention(_attention_event(entry), channel="voice")
+            sinks.turns.receive_attention(_attention_event(entry), channel="voice")
         case _:
             pass
 

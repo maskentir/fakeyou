@@ -8,15 +8,18 @@ import pytest
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
-from fakeyou.persistence.record import ChatEntry
+from fakeyou.conversation.state_speech import render
+from fakeyou.persistence.record import ChatEntry, TwinSpeechEntry, load_meeting_record
 from fakeyou.replay.fixture import ReplayFixture, build_fixture, load_fixture
 from fakeyou.replay.harness import (
     RecordedBehavior,
+    ReplayOptions,
     ReplayResult,
     recorded_behavior,
     replay_session,
     schedule,
 )
+from fakeyou.session.facts import Unknown
 from tests._replay_support import START, recorded_conversation, run_virtual
 
 RUNTIME = Path(".runtime/audio")
@@ -42,8 +45,10 @@ def replayed(fixture: ReplayFixture, settings: Settings, tmp_path: Path) -> Repl
             fixture,
             settings,
             config(settings),
-            behavior=RecordedBehavior(twin_names=("Harun",), wake_phrases=("Harun",)),
-            record_path=tmp_path / "record.jsonl",
+            ReplayOptions(
+                tmp_path / "record.jsonl",
+                RecordedBehavior(twin_names=("Harun",), wake_phrases=("Harun",)),
+            ),
         )
     )
 
@@ -148,8 +153,7 @@ def test_the_oue_4_session_replays_its_inputs_and_syntheses_exactly(
             fixture,
             settings,
             config(settings),
-            behavior=behavior,
-            record_path=tmp_path / "record.jsonl",
+            ReplayOptions(tmp_path / "record.jsonl", behavior),
         )
     )
 
@@ -187,3 +191,70 @@ def test_the_twins_own_chat_is_not_heard_as_a_message() -> None:
     items = schedule(build_fixture(rows, [*entries, own]))
 
     assert not [item for item in items if item.kind == "chat"]
+
+
+def test_a_slower_reply_model_moves_the_first_audio_by_the_scaled_latency(
+    settings: Settings, tmp_path: Path
+) -> None:
+    def first_pcm(scale: float) -> float:
+        result = run_virtual(
+            lambda: replay_session(
+                conversation(),
+                settings,
+                config(settings),
+                ReplayOptions(
+                    tmp_path / f"record-{scale}.jsonl",
+                    RecordedBehavior(twin_names=("Harun",), wake_phrases=("Harun",)),
+                    reply_latency_scale=scale,
+                ),
+            )
+        )
+        [pcm] = [
+            entry for entry in events(result, "synthesis_pcm_emitted") if entry.get("transcript_id")
+        ]
+        return offset(pcm)
+
+    assert first_pcm(1.0) - first_pcm(0.5) == pytest.approx(0.4)
+
+
+def test_a_recorded_state_question_is_answered_from_the_kernel_without_the_model(
+    settings: Settings, tmp_path: Path
+) -> None:
+    rows, entries = recorded_conversation()
+    asking = [
+        {**entry, "state_question": "participant_count"}
+        if entry["event"] == "policy_decided"
+        else entry
+        for entry in rows
+        if entry["event"] not in ("request_started", "answer_sentence_emitted", "request_finished")
+    ]
+
+    result = replayed(build_fixture(asking, entries), settings, tmp_path)
+
+    [selected] = events(result, "state_answer_selected")
+    assert selected["question"] == "participant_count"
+    assert not events(result, "request_started")
+    spoken = [
+        entry.text
+        for entry in load_meeting_record(tmp_path / "record.jsonl")
+        if isinstance(entry, TwinSpeechEntry)
+    ]
+    assert spoken == [render(Unknown("participant_count", "stale_source"), "id")]
+
+
+@pytest.mark.skipif(not (RUNTIME / "journals/live-oue-4.jsonl").exists(), reason="no oue-4 data")
+def test_the_oue_4_gate_passes_and_fails_when_the_reply_model_halves_its_latency(
+    settings: Settings, tmp_path: Path
+) -> None:
+    fixture = load_fixture(
+        RUNTIME / "journals/live-oue-4.jsonl", RUNTIME / "meetings/live-oue-4/record.jsonl"
+    )
+    behavior = recorded_behavior(RUNTIME / "meetings/live-oue-4/session.json")
+
+    def gate(scale: float) -> bool:
+        options = ReplayOptions(tmp_path / f"record-{scale}.jsonl", behavior, scale)
+        result = run_virtual(lambda: replay_session(fixture, settings, config(settings), options))
+        return result.comparison.passed
+
+    assert gate(1.0)
+    assert not gate(0.5)

@@ -637,6 +637,36 @@ ujungnya input, dan hanya menangkap lane speech yang terblokir. Uji
 sensitivitas (latensi LLM ×0,5 harus menggeser `final_to_first_pcm`) dibuat
 di V0.7.
 
+Implementasi V0.7 (2026-11-01): replay memasang `KernelPort` dengan jam
+virtual dan memberinya apa yang terekam: transcript dan interim, call state
+`in_call`, playback twin, chat, dan screen. State question terekam dijawab dari
+kernel tanpa model, seperti di sesi asli. Roster dan hitungan DOM tidak
+pernah di-journal, jadi kernel replay tidak tahu siapa yang hadir: jawaban
+`participant_count`, `attendance`, dan `presenter` menjadi "belum tahu"
+(oue-4 asli: "ada 2 orang"), presence selalu kosong, dan `screen_title`
+selalu "tidak sedang berbagi" karena presenter tidak dikenal. Timing tetap
+dekat karena sintesis tanpa rekaman diukur dari karakter per detik sesi,
+tapi kata-katanya berbeda. Gate yang menilai isi jawaban state butuh roster
+di journal lebih dulu.
+`--reply-latency-scale` mengalikan latensi model balasan rekaman untuk uji
+sensitivitas.
+
+Hasil gate oue-4: `final_to_first_pcm` p50 2049 vs 2081 ms (−1.5%), n 21 vs
+21, `vad_stop_to_final` identik, `speaker_bound.of` 236 vs 236: lolos. Uji
+sensitivitas: latensi model ×0,5 memberi p50 1433 ms dan ×1,5 memberi 3168
+ms, keduanya gagal gate, jadi gate bereaksi pada perubahan latensi yang
+nyata. Per turn, replay lebih cepat 30-120 ms dari asli (waktu CPU antara
+keputusan dan request tidak dihitung waktu virtual).
+
+Yang masih berbeda dari sesi asli dan hanya terlihat di p95: turn dengan
+request LLM kedua setelah speech gate menolak kalimat pertama (031759 dan
+7ae725 lebih cepat di replay), Meet action sebelum balasan (86a05c dijawab
+sebagai state answer karena replay tidak punya command runner), dan early
+commit (41555e diucapkan 9,4 detik sebelum final di asli, 2,5 detik setelah
+final di replay). Ketiganya di atas median oue-4. Bila sesi pasca-A0 membuat
+salah satunya menggeser p50, replay Meet action, request kedua, atau early
+commit harus ditambahkan sebelum gate itu dipercaya.
+
 ### B5a: Lookahead sintesis dan writer audio berumur panjang
 
 Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush. B5a tidak

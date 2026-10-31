@@ -1,7 +1,7 @@
 import asyncio
 import json
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -11,22 +11,34 @@ from fakeyou.conversation.session import SessionConfig
 from fakeyou.observability.journal import journal_path
 from fakeyou.persistence.record import meeting_record_path
 from fakeyou.replay.fixture import load_fixture
-from fakeyou.replay.harness import RecordedBehavior, ReplayResult, recorded_behavior, replay_session
+from fakeyou.replay.harness import (
+    RecordedBehavior,
+    ReplayOptions,
+    ReplayResult,
+    recorded_behavior,
+    replay_session,
+)
 from fakeyou.replay.virtual_time import VirtualTimeLoop
 
 SESSION_FILE_NAME = "session.json"
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaySource:
+    journal_dir: Path
+    record_dir: Path
 
 
 def replay_meeting(
     meeting_id: SessionId,
     *,
     settings: Settings,
-    journal_dir: Path,
-    record_dir: Path,
+    source: ReplaySource,
     out: Path | None = None,
+    reply_latency_scale: float = 1.0,
 ) -> ReplayResult:
-    record = meeting_record_path(record_dir, meeting_id)
-    journal = journal_path(journal_dir, meeting_id)
+    record = meeting_record_path(source.record_dir, meeting_id)
+    journal = journal_path(source.journal_dir, meeting_id)
     if not (journal.exists() and record.exists()):
         raise FakeYouError(ErrorCode.REPLAY_SESSION_MISSING, meeting_id=meeting_id)
     fixture = load_fixture(journal, record)
@@ -42,13 +54,11 @@ def replay_meeting(
         per_stream_enabled=settings.conversation.per_stream_enabled,
     )
     with tempfile.TemporaryDirectory() as scratch:
-        replay_record = Path(scratch) / "record.jsonl"
+        options = ReplayOptions(
+            Path(scratch) / "record.jsonl", behavior, reply_latency_scale=reply_latency_scale
+        )
         with asyncio.Runner(loop_factory=VirtualTimeLoop) as runner:
-            result = runner.run(
-                replay_session(
-                    fixture, settings, config, behavior=behavior, record_path=replay_record
-                )
-            )
+            result = runner.run(replay_session(fixture, settings, config, options))
     if out is not None:
         out.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in result.rows),

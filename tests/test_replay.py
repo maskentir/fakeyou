@@ -110,3 +110,55 @@ def test_a_replay_that_misses_the_gate_exits_as_a_failed_eval_gate(
     report = json.loads(capsys.readouterr().out)
     assert code == ExitCode.EVAL_GATE_FAILED
     assert report["passed"] is False
+
+
+def test_halving_the_recorded_reply_latency_misses_the_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    journal_dir, record_dir = recorded_meeting(tmp_path)
+
+    code = run(
+        [
+            "--meeting-id",
+            str(MEETING),
+            "--journal-dir",
+            str(journal_dir),
+            "--record-dir",
+            str(record_dir),
+            "--reply-latency-scale",
+            "0.5",
+        ],
+        monkeypatch,
+        settings,
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == ExitCode.EVAL_GATE_FAILED
+    assert report["passed"] is False
+
+
+@pytest.mark.parametrize("scale", ["-1", "nan", "inf"])
+def test_a_reply_latency_scale_that_is_not_a_finite_non_negative_number_is_rejected(
+    scale: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    journal_dir, record_dir = recorded_meeting(tmp_path)
+
+    code = run(
+        [
+            "--meeting-id",
+            str(MEETING),
+            "--journal-dir",
+            str(journal_dir),
+            "--record-dir",
+            str(record_dir),
+            "--reply-latency-scale",
+            scale,
+        ],
+        monkeypatch,
+        settings,
+    )
+
+    assert code == 2
