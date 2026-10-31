@@ -74,6 +74,12 @@ class MeetRoster:
     def own_device_ids(self) -> frozenset[str]:
         return frozenset(device for device, user in self._users.items() if user.current_user)
 
+    def own_user(self) -> MeetUser | None:
+        return next(
+            (user for user in self._users.values() if user.current_user and not user.is_screen),
+            None,
+        )
+
     def users(self) -> tuple[MeetUser, ...]:
         return tuple(self._users.values())
 
@@ -153,8 +159,13 @@ class MeetRoster:
     def _upsert(self, user: MeetUser) -> list[RosterChange]:
         before = self._users.get(user.device_id)
         merged = user
-        if before is not None and not user.name:
-            merged = user.model_copy(update={"name": before.name})
+        if before is not None:
+            merged = user.model_copy(
+                update={
+                    "name": user.name or before.name,
+                    "current_user": user.current_user or before.current_user,
+                }
+            )
         self._users[user.device_id] = merged
         if self._is_own(merged.device_id):
             return []

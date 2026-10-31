@@ -351,3 +351,26 @@ async def test_the_backlog_window_runs_from_admission_not_sensor_creation() -> N
     lines = {line.message_id: line for line in timeline.snapshot().chat}
     assert lines["m1"].backlog is True
     assert lines["m2"].backlog is False
+
+
+async def test_own_status_and_peer_states_are_journaled_when_they_change() -> None:
+    sensed, _, journal = sensors()
+
+    await sensed.accept_batch(DrainBatch(peers=["connecting"]))
+    await sensed.accept_batch(DrainBatch(peers=["connecting"]))
+    sensed.accept_sync(sync_body([user_info(TWIN, "Rani", current=True), user_info(AYU, "Ayu")]))
+    await sensed.accept_batch(
+        DrainBatch(
+            peers=["closed"],
+            messages=[message(collection_payload(users=[user_info(TWIN, "", status=7)]))],
+        )
+    )
+
+    assert sensed.drains == 3
+    assert [row["states"] for row in journal.events("perception_peer_state_observed")] == [
+        ["connecting"],
+        ["closed"],
+    ]
+    assert [
+        (row["status"], row["present"]) for row in journal.events("perception_own_status_observed")
+    ] == [(1, True), (7, False)]

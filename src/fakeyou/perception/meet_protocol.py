@@ -14,6 +14,7 @@ COLLECTIONS_CHANNEL = "collections"
 SYNC_COLLECTIONS_PATH = "MeetingSpaceService/SyncMeetingSpaceCollections"
 MAX_INFLATED_BYTES = 4 * 1024 * 1024
 STATUS_IN_MEETING = 1
+STATUS_REMOVED = 7
 MILLISECOND_EPOCH_FLOOR = 100_000_000_000
 MICROSECOND_EPOCH_FLOOR = 100_000_000_000_000
 OUTPUT_KINDS: dict[int, "OutputKind"] = {1: "audio", 2: "video"}
@@ -113,6 +114,7 @@ class MeetUser(ProtocolPart):
     device_id: str
     name: str
     present: bool
+    status: int = 0
     parent_device_id: str | None = None
     current_user: bool = False
     host: bool = False
@@ -169,6 +171,7 @@ def _user(info: Any) -> MeetUser | None:
         device_id=info.device_id,
         name=info.display_name or info.full_name,
         present=info.status == STATUS_IN_MEETING,
+        status=info.status,
         parent_device_id=info.parent_device_id or None,
         current_user=bool(info.current_user),
         host=bool(info.host),

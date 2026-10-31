@@ -3,7 +3,8 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal
+from html.parser import HTMLParser
+from typing import Literal, override
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from cloakbrowser.human.actionability import ActionabilityError
@@ -77,6 +78,7 @@ class MeetSignals:
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
+_HEADING_TAGS = frozenset({"h1", "h2", "h3"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +445,47 @@ async def _await_admission(
         await polling.sleep(request.poll_interval_seconds)
 
 
+class _CallMarkers(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.headings: list[str] = []
+        self.buttons: set[str] = set()
+        self._open: list[tuple[str, str]] = []
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name: value or "" for name, value in attrs}
+        role = values.get("role", "")
+        if tag in _HEADING_TAGS or role == "heading":
+            self._open.append((tag, "heading"))
+        elif tag == "button" or role == "button":
+            if values.get("aria-label"):
+                self.buttons.add(values["aria-label"].strip().lower())
+            self._open.append((tag, "button"))
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        if self._open and self._open[-1][0] == tag:
+            self._open.pop()
+
+    @override
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if not text or not self._open:
+            return
+        if self._open[-1][1] == "heading":
+            self.headings.append(text.lower())
+        else:
+            self.buttons.add(text.lower())
+
+
+def call_markers(content: str) -> tuple[str, frozenset[str]]:
+    parser = _CallMarkers()
+    parser.feed(content)
+    parser.close()
+    return " ".join(parser.headings), frozenset(parser.buttons)
+
+
 async def observe_call_state(
     page: Page,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
@@ -452,18 +495,17 @@ async def observe_call_state(
             content = await page.content()
     except TimeoutError:
         return CallObservation(state="unknown", detail="call state could not be read in time")
-    if signals.removed in content:
+    headings, buttons = call_markers(content)
+    if signals.removed in headings:
         return CallObservation(state="removed", detail="guest was removed from the call")
-    if signals.ended in content:
+    if signals.ended in headings:
         return CallObservation(state="ended", detail="the call has ended")
-    if signals.left in content:
+    if signals.left in headings:
         return CallObservation(state="left", detail="the guest already left the call")
-    if _is_waiting(content):
-        return CallObservation(state="lobby", detail="waiting for admission")
-    if _is_in_call(content, signals):
-        return CallObservation(state="in_call", detail="call controls are visible")
-    if signals.ask_to_join in content or signals.join_now in content:
+    if signals.ask_to_join.lower() in buttons or signals.join_now.lower() in buttons:
         return CallObservation(state="lobby", detail="lobby controls are visible")
+    if signals.leave_call.lower() in buttons:
+        return CallObservation(state="in_call", detail="call controls are visible")
     return CallObservation(state="unknown", detail="no recognized call marker on the page")
 
 

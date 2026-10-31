@@ -75,6 +75,7 @@ class DrainBatch(DrainPart):
     frames: list[DrainedFrame] = []
     tracks: list[str] = []
     sampling: list[str] = []
+    peers: list[str] = []
     dropped_messages: int = 0
     dropped_frames: int = 0
 
@@ -110,10 +111,15 @@ class PerceptionSensors:
         self.rejected_messages = 0
         self.heartbeats = 0
         self.frames_seen = 0
+        self.drains = 0
+        self.peer_states: tuple[str, ...] = ()
+        self._own_status: int | None = None
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
 
     async def accept_batch(self, batch: DrainBatch) -> None:
+        self.drains += 1
+        self._observe_peers(tuple(batch.peers))
         for message in batch.messages:
             if message.channel == COLLECTIONS_CHANNEL:
                 self._accept_collection(message)
@@ -144,6 +150,7 @@ class PerceptionSensors:
         self.roster.mark_synced()
         self.heartbeats += 1
         self._apply_changes(self.roster.apply_users(users), self._clock())
+        self._observe_own_status()
         self._share_roster()
 
     def assignments(self) -> list[StreamAssignment]:
@@ -168,12 +175,33 @@ class PerceptionSensors:
         changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
         self._apply_changes(changes, at)
+        self._observe_own_status()
         if update.users or update.outputs:
             self.heartbeats += 1
             self._share_roster()
         if self._settings.chat:
             for chat in update.chat:
                 self._accept_chat(chat, at)
+
+    def _observe_peers(self, states: tuple[str, ...]) -> None:
+        if states == self.peer_states:
+            return
+        self.peer_states = states
+        self._journal.record(
+            "perception_peer_state_observed", source="perception", states=list(states)
+        )
+
+    def _observe_own_status(self) -> None:
+        own = self.roster.own_user()
+        if own is None or own.status == self._own_status:
+            return
+        self._own_status = own.status
+        self._journal.record(
+            "perception_own_status_observed",
+            source="perception",
+            status=own.status,
+            present=own.present,
+        )
 
     def _share_roster(self) -> None:
         if self.roster_listener is not None:

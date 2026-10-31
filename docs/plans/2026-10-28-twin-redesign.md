@@ -373,6 +373,18 @@ sendiri dibaca dari field chat protocol bila tersedia, atau locator di dalam
 daftar chat (`get_by_text(..., exact=True)`), bukan hitungan teks di seluruh
 HTML.
 
+Revisi implementasi (2026-10-31): protocol hanya pasti soal di dalam atau di
+luar call. Status device sendiri `1` berarti di meeting; arti kode lain belum
+terbukti (Attendee menebak `6` keluar, `7` di-remove). Karena itu protocol
+memutuskan in/out (status device sendiri, ditambah `connectionState` semua
+peer RTC), sedangkan alasan keluar (`removed`, `ended`, `left`) diambil dari
+heading layar akhir. Kode status mentah dan state peer di-journal
+(`perception_own_status_observed`, `perception_peer_state_observed`) untuk
+probe live sebelum merge. Fallback DOM membaca heading dan label tombol dari
+satu snapshot yang diparse, tidak pernah teks bebas, sehingga deteksi
+waiting room lewat teks div dibuang dari monitor; alur join tetap memakai
+deteksinya sendiri sampai A3.
+
 ### A5: Kebijakan dialog menurut struktur
 
 - Dialog dengan satu tombol acknowledge atau close, atau yang tertutup

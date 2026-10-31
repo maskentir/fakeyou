@@ -536,6 +536,16 @@ async def test_click_when_ready_reports_error_type_name_only() -> None:
     assert "secret-token" not in (failure or "")
 
 
+CHAT_PANEL = (
+    '<div role="list" aria-label="Chat messages">'
+    "<div>the sprint has ended</div>"
+    "<div>you've been removed from the call, just kidding</div>"
+    "<div>I left the meeting notes in the doc</div>"
+    "<div>Asking to be let in for the review</div>"
+    "</div>"
+)
+
+
 @pytest.mark.parametrize(
     ("content", "expected"),
     [
@@ -543,7 +553,8 @@ async def test_click_when_ready_reports_error_type_name_only() -> None:
         (REMOVED, "removed"),
         (ENDED, "ended"),
         (LOBBY, "lobby"),
-        (LEAVE_AND_WAITING, "lobby"),
+        (LEAVE_AND_WAITING, "in_call"),
+        (IN_CALL + CHAT_PANEL, "in_call"),
         (IN_CALL + REMOVED, "removed"),
         (IN_CALL + ENDED, "ended"),
         ("blank page without markers", "unknown"),
