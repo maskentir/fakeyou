@@ -113,6 +113,7 @@ class MeetUser(ProtocolPart):
     device_id: str
     name: str
     present: bool
+    status: int = 0
     parent_device_id: str | None = None
     current_user: bool = False
     host: bool = False
@@ -169,6 +170,7 @@ def _user(info: Any) -> MeetUser | None:
         device_id=info.device_id,
         name=info.display_name or info.full_name,
         present=info.status == STATUS_IN_MEETING,
+        status=info.status,
         parent_device_id=info.parent_device_id or None,
         current_user=bool(info.current_user),
         host=bool(info.host),

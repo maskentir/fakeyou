@@ -295,6 +295,16 @@
     return { taken, used };
   }
 
+  function peerStates() {
+    return bridge.peers.map((peer) => {
+      try {
+        return String(peer.connectionState || "new");
+      } catch {
+        return "unknown";
+      }
+    });
+  }
+
   function drain() {
     const sizedMessages = takeWithin(messages, MAX_DRAIN_BYTES, (item) => item.b64.length);
     const sizedFrames = takeWithin(
@@ -308,6 +318,7 @@
       tracks: [...videoTracks.keys()],
       sampling: [...samplers.keys()],
       channels: channels.slice(),
+      peers: peerStates(),
       dropped_messages: droppedMessages,
       dropped_frames: droppedFrames,
     };

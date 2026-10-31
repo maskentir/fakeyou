@@ -108,3 +108,22 @@ async def test_the_eye_sees_a_shared_screen_through_the_meet_protocol() -> None:
     assert len(back.screens) == 2
     assert back.current_screen is not None
     assert len(back.current_screen.visits) == 2
+
+
+@pytest.mark.browser
+async def test_the_drain_reports_real_peer_connection_states() -> None:
+    sensors = PerceptionSensors(
+        MeetingTimeline(), PerceptionSettings(enabled=True), joined_at=datetime.now(UTC)
+    )
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
+        await page.add_init_script(load_perception_script())
+        await page.goto("about:blank")
+        await page.evaluate("() => { window.probePeer = new RTCPeerConnection(); }")
+        drain = PerceptionDrain(page, sensors)
+        await drain.drain_once()
+        opened = sensors.peer_states
+        await page.evaluate("() => window.probePeer.close()")
+        await drain.drain_once()
+
+    assert opened == ("new",)
+    assert sensors.peer_states == ("closed",)

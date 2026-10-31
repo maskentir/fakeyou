@@ -165,3 +165,36 @@ def test_meeting_state_reports_people_presenter_and_cameras() -> None:
     assert state.presenter == "Ayu"
     assert state.cameras_on == frozenset({AYU})
     assert state.synced
+
+
+def test_the_own_device_stays_known_when_a_delta_omits_the_marker() -> None:
+    roster = roster_with_people()
+
+    roster.apply_users([MeetUser(device_id=TWIN, name="", present=False, status=7)])
+
+    own = roster.own_user()
+    assert own is not None
+    assert (own.device_id, own.name, own.present, own.status) == (TWIN, "Rani Twin", False, 7)
+    assert TWIN in roster.own_device_ids
+
+
+def test_a_screen_share_is_never_the_own_user() -> None:
+    roster = MeetRoster()
+    roster.apply_users(
+        [MeetUser(device_id=SCREEN, name="", present=True, current_user=True, parent_device_id=AYU)]
+    )
+
+    assert roster.own_user() is None
+
+
+def test_a_rejoin_reads_the_device_that_is_in_the_meeting() -> None:
+    roster = MeetRoster()
+    old = "devices/twin-old"
+    roster.apply_users([MeetUser(device_id=old, name="Rani", present=True, current_user=True)])
+    roster.apply_users([MeetUser(device_id=TWIN, name="Rani", present=True, current_user=True)])
+    roster.apply_users([MeetUser(device_id=old, name="", present=False, status=6)])
+
+    own = roster.own_user()
+
+    assert own is not None
+    assert own.device_id == TWIN

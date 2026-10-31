@@ -373,6 +373,27 @@ sendiri dibaca dari field chat protocol bila tersedia, atau locator di dalam
 daftar chat (`get_by_text(..., exact=True)`), bukan hitungan teks di seluruh
 HTML.
 
+Revisi implementasi (2026-10-31): protocol hanya pasti soal di dalam atau di
+luar call. Status device sendiri `1` berarti di meeting; arti kode lain belum
+terbukti (Attendee menebak `6` keluar, `7` di-remove). Karena itu protocol
+memutuskan in/out (status device sendiri, ditambah `connectionState` semua
+peer RTC), sedangkan alasan keluar (`removed`, `ended`, `left`) diambil dari
+heading layar akhir. Kode status mentah dan state peer di-journal
+(`perception_own_status_observed`, `perception_peer_state_observed`) untuk
+probe live sebelum merge.
+
+Hasil probe live 2026-10-31 (meeting a4-probe-1, a4-probe-2, a4-probe-4):
+status device sendiri `3` saat menunggu di lobby, `1` setelah di-admit, dan
+`7` baik saat host me-remove maupun saat host mengakhiri meeting untuk semua;
+semua peer RTC menjadi `closed` di kedua kasus. Jadi `7` berarti dikeluarkan
+oleh host, bukan khusus removed; alasannya hanya dari heading layar akhir:
+"You've been removed from the meeting" dan "Your host ended the meeting for
+everyone". Probe pertama berakhir `removed_by_host`, probe terakhir
+`ended_by_host`. Status `3` dipakai A3 untuk admission. Fallback DOM membaca heading dan label tombol dari
+satu snapshot yang diparse, tidak pernah teks bebas, sehingga deteksi
+waiting room lewat teks div dibuang dari monitor; alur join tetap memakai
+deteksinya sendiri sampai A3.
+
 ### A5: Kebijakan dialog menurut struktur
 
 - Dialog dengan satu tombol acknowledge atau close, atau yang tertutup

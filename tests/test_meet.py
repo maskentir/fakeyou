@@ -10,6 +10,7 @@ import fakeyou.meet.meet as meet_module
 from fakeyou.meet.meet import (
     GuestJoinRequest,
     JoinPolling,
+    call_markers,
     click_when_ready,
     disable_meeting_camera,
     enable_meeting_microphone,
@@ -536,6 +537,16 @@ async def test_click_when_ready_reports_error_type_name_only() -> None:
     assert "secret-token" not in (failure or "")
 
 
+CHAT_PANEL = (
+    '<div role="list" aria-label="Chat messages">'
+    "<div>the sprint has ended</div>"
+    "<div>you've been removed from the call, just kidding</div>"
+    "<div>I left the meeting notes in the doc</div>"
+    "<div>Asking to be let in for the review</div>"
+    "</div>"
+)
+
+
 @pytest.mark.parametrize(
     ("content", "expected"),
     [
@@ -543,7 +554,10 @@ async def test_click_when_ready_reports_error_type_name_only() -> None:
         (REMOVED, "removed"),
         (ENDED, "ended"),
         (LOBBY, "lobby"),
-        (LEAVE_AND_WAITING, "lobby"),
+        (LEAVE_AND_WAITING, "in_call"),
+        (IN_CALL + CHAT_PANEL, "in_call"),
+        ("<h1>Your host ended the meeting for everyone</h1>", "ended"),
+        ("<h1>The call ended because everyone left</h1>", "ended"),
         (IN_CALL + REMOVED, "removed"),
         (IN_CALL + ENDED, "ended"),
         ("blank page without markers", "unknown"),
@@ -901,3 +915,27 @@ async def test_leave_meeting_when_already_out_with_stale_button_is_left() -> Non
     )
 
     assert result.status == "left"
+
+
+@pytest.mark.parametrize(
+    ("content", "headings", "buttons"),
+    [
+        ('<img role="button"><div>Join now</div>', "", frozenset()),
+        (
+            '<div role="heading"><div>You</div> have been removed</div>',
+            "you have been removed",
+            frozenset(),
+        ),
+        (
+            '<button aria-label="Leave call"><i>call_end</i></button>'
+            "<button><span>Ask</span> <span>to join</span></button>",
+            "",
+            frozenset({"leave call", "call_end", "ask to join"}),
+        ),
+        ("<h1>The call <b>has ended", "the call has ended", frozenset()),
+    ],
+)
+def test_call_markers_read_only_headings_and_buttons(
+    content: str, headings: str, buttons: frozenset[str]
+) -> None:
+    assert call_markers(content) == (headings, buttons)

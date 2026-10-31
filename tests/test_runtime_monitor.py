@@ -11,12 +11,15 @@ from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, CallObservation, JoinResult
 from fakeyou.meet.participant_observer import ParticipantEvidenceWriter
 from fakeyou.meet.watchdog import WatchdogCheck
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.orchestration.call_state import DRAIN_STALE_SECONDS
 from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.perception import create_perception_stack
 from fakeyou.orchestration.runtime import MeetingWorker, MonitorScan
+from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
+from fakeyou.perception.sensors import DrainBatch
 from tests._fakes_common import FakeClock
-from tests._meet_browser_fakes import FakePage, meet_page
+from tests._meet_browser_fakes import ENDED, IN_CALL, REMOVED, FakePage, meet_page
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import mining_payload, session_config
 
@@ -323,3 +326,82 @@ async def test_a_failing_dom_does_not_end_a_session_whose_protocol_is_healthy(
 
     assert ended == []
     assert journal.events("ui_observation_expired")
+
+
+CHAT_THAT_SOUNDS_FINAL = (
+    '<button aria-label="Leave call"></button>'
+    '<div role="list"><div>the sprint has ended</div></div>'
+)
+
+
+async def _protocol_worker(
+    journal: RecordingJournal, clock: FakeClock, *, status: int, peer: str
+) -> MeetingWorker:
+    worker = _bare_worker()
+    worker.monotonic = clock.monotonic
+    worker.journal = journal
+    stack = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    assert stack is not None
+    worker.perception = stack
+    stack.sensors.monotonic = clock.monotonic
+    stack.sensors.roster.apply_users(
+        [
+            MeetUser(
+                device_id="devices/twin",
+                name="Rani",
+                present=status == 1,
+                status=status,
+                current_user=True,
+            )
+        ]
+    )
+    await stack.sensors.accept_batch(DrainBatch(peers=[peer]))
+    return worker
+
+
+async def test_a_fresh_protocol_says_in_call_without_reading_the_page(
+    journal: RecordingJournal,
+) -> None:
+    worker = await _protocol_worker(journal, FakeClock(), status=1, peer="connected")
+
+    observation = await worker.observe_call(meet_page([]), DEFAULT_MEET_SIGNALS)
+
+    assert (observation.state, observation.detail) == ("in_call", "own device is in the meeting")
+
+
+async def test_a_stale_protocol_falls_back_to_the_scoped_page_probe(
+    journal: RecordingJournal,
+) -> None:
+    clock = FakeClock()
+    worker = await _protocol_worker(journal, clock, status=1, peer="connected")
+    assert worker.protocol_call_state() is not None
+    clock.now += DRAIN_STALE_SECONDS + 1
+
+    chat = await worker.observe_call(meet_page([CHAT_THAT_SOUNDS_FINAL]), DEFAULT_MEET_SIGNALS)
+    removed = await worker.observe_call(meet_page([REMOVED]), DEFAULT_MEET_SIGNALS)
+
+    assert chat.state == "in_call"
+    assert removed.state == "removed"
+
+
+async def test_an_own_device_out_of_the_meeting_takes_its_reason_from_the_end_screen(
+    journal: RecordingJournal,
+) -> None:
+    worker = await _protocol_worker(journal, FakeClock(), status=6, peer="closed")
+
+    named = await worker.observe_call(meet_page([ENDED]), DEFAULT_MEET_SIGNALS)
+    unnamed = await worker.observe_call(meet_page(["<div>blank</div>"]), DEFAULT_MEET_SIGNALS)
+    lingering = await worker.observe_call(meet_page([IN_CALL]), DEFAULT_MEET_SIGNALS)
+
+    assert named.state == "ended"
+    assert lingering.state == "unknown"
+    assert [row["headings"] for row in journal.events("call_end_screen_observed")] == [
+        "the call has ended",
+        None,
+    ]
+    assert (unnamed.state, unnamed.detail) == (
+        "ended",
+        "own device is out of the meeting (status 6)",
+    )

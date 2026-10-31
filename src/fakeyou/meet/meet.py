@@ -3,7 +3,8 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal
+from html.parser import HTMLParser
+from typing import Literal, override
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from cloakbrowser.human.actionability import ActionabilityError
@@ -71,12 +72,30 @@ class MeetSignals:
     leave_call: str = "Leave call"
     denied: str = "can't join this"
     removed: str = "been removed"
-    ended: str = "has ended"
+    ended: str = "ended"
     left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone and camera"
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
+_HEADING_TAGS = frozenset({"h1", "h2", "h3"})
+_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +118,7 @@ class JoinResult:
 class CallObservation:
     state: CallState
     detail: str
+    headings: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,6 +463,70 @@ async def _await_admission(
         await polling.sleep(request.poll_interval_seconds)
 
 
+class _CallMarkers(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.headings: list[str] = []
+        self.buttons: set[str] = set()
+        self._open: list[tuple[str, str | None, list[str]]] = []
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name: value or "" for name, value in attrs}
+        role = values.get("role", "")
+        marker: str | None = None
+        if tag in _HEADING_TAGS or role == "heading":
+            marker = "heading"
+        elif tag == "button" or role == "button":
+            marker = "button"
+            if values.get("aria-label"):
+                self.buttons.add(values["aria-label"].strip().lower())
+        if tag not in _VOID_TAGS:
+            self._open.append((tag, marker, []))
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self._open) - 1, -1, -1):
+            if self._open[index][0] == tag:
+                for _tag, marker, texts in reversed(self._open[index:]):
+                    self._settle(marker, texts)
+                del self._open[index:]
+                return
+
+    @override
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if not text:
+            return
+        for _tag, marker, texts in reversed(self._open):
+            if marker is not None:
+                texts.append(text)
+                return
+
+    @override
+    def close(self) -> None:
+        super().close()
+        for _tag, marker, texts in reversed(self._open):
+            self._settle(marker, texts)
+        self._open.clear()
+
+    def _settle(self, marker: str | None, texts: list[str]) -> None:
+        text = " ".join(texts).lower()
+        if not text:
+            return
+        if marker == "heading":
+            self.headings.append(text)
+        elif marker == "button":
+            self.buttons.add(text)
+
+
+def call_markers(content: str) -> tuple[str, frozenset[str]]:
+    parser = _CallMarkers()
+    parser.feed(content)
+    parser.close()
+    return " ".join(parser.headings), frozenset(parser.buttons)
+
+
 async def observe_call_state(
     page: Page,
     signals: MeetSignals = DEFAULT_MEET_SIGNALS,
@@ -452,19 +536,21 @@ async def observe_call_state(
             content = await page.content()
     except TimeoutError:
         return CallObservation(state="unknown", detail="call state could not be read in time")
-    if signals.removed in content:
-        return CallObservation(state="removed", detail="guest was removed from the call")
-    if signals.ended in content:
-        return CallObservation(state="ended", detail="the call has ended")
-    if signals.left in content:
-        return CallObservation(state="left", detail="the guest already left the call")
-    if _is_waiting(content):
-        return CallObservation(state="lobby", detail="waiting for admission")
-    if _is_in_call(content, signals):
-        return CallObservation(state="in_call", detail="call controls are visible")
-    if signals.ask_to_join in content or signals.join_now in content:
-        return CallObservation(state="lobby", detail="lobby controls are visible")
-    return CallObservation(state="unknown", detail="no recognized call marker on the page")
+    headings, buttons = call_markers(content)
+    if signals.removed in headings:
+        state: CallState = "removed"
+        detail = "guest was removed from the call"
+    elif signals.ended in headings:
+        state, detail = "ended", "the call has ended"
+    elif signals.left in headings:
+        state, detail = "left", "the guest already left the call"
+    elif signals.leave_call.lower() in buttons:
+        state, detail = "in_call", "call controls are visible"
+    elif signals.ask_to_join.lower() in buttons or signals.join_now.lower() in buttons:
+        state, detail = "lobby", "lobby controls are visible"
+    else:
+        state, detail = "unknown", "no recognized call marker on the page"
+    return CallObservation(state=state, detail=detail, headings=headings)
 
 
 async def enable_meeting_microphone(

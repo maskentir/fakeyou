@@ -44,6 +44,7 @@ from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, att
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
     DEFAULT_MEET_SIGNALS,
+    CallObservation,
     GuestJoinRequest,
     JoinPolling,
     JoinResult,
@@ -76,6 +77,11 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
     trim_detail,
+)
+from fakeyou.orchestration.call_state import (
+    DRAIN_STALE_SECONDS,
+    merge_call_state,
+    protocol_call_state,
 )
 from fakeyou.orchestration.commands import CommandRunner
 from fakeyou.orchestration.kernel_port import KernelPort
@@ -206,6 +212,7 @@ class MeetingWorker:
     admission: JoinResult | None = None
     join_started: float | None = None
     presence: AloneClock = field(init=False)
+    end_screen: str | None = None
     attention: AttentionPrefilter = field(init=False)
     attention_screen: str | None = field(init=False, default=None)
     attention_chat: str | None = field(init=False, default=None)
@@ -861,6 +868,29 @@ class MeetingWorker:
         if poll_seconds >= 1.0 and self.journal is not None:
             self.journal.record("monitor_polled", source="runtime", duration_ms=poll_seconds * 1000)
 
+    def protocol_call_state(self) -> CallObservation | None:
+        perception = self.perception
+        sensors = perception.sensors if perception is not None else None
+        if sensors is None or not sensors.drained_within(DRAIN_STALE_SECONDS):
+            return None
+        return protocol_call_state(sensors.roster.own_user(), sensors.peer_states)
+
+    async def observe_call(self, page: Page, signals: MeetSignals) -> CallObservation:
+        protocol = self.protocol_call_state()
+        if protocol is not None and protocol.state == "in_call":
+            return protocol
+        dom = await observe_call_state(page, signals)
+        if protocol is not None and dom.headings != self.end_screen:
+            self.end_screen = dom.headings
+            self.record(
+                "call_end_screen_observed",
+                source="browser",
+                headings=dom.headings,
+                page_state=dom.state,
+                detail=protocol.detail,
+            )
+        return merge_call_state(protocol, dom)
+
     def _protocol_available(self) -> bool:
         perception = self.perception
         sensors = perception.sensors if perception is not None else None
@@ -973,7 +1003,7 @@ class MeetingWorker:
     async def _monitor_loop(self, admitted_at: float) -> str:
         deadline = admitted_at + self.config.session_duration_seconds
         watchdog = UIWatchdog(
-            self.page, signals=self.signals, observe=observe_call_state, monotonic=self.monotonic
+            self.page, signals=self.signals, observe=self.observe_call, monotonic=self.monotonic
         )
         scan = MonitorScan(
             next_scan=admitted_at,
