@@ -12,6 +12,7 @@ from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.runtime import (
+    BLOCKED_REJOIN_SECONDS,
     OBSERVATION_GRACE_SECONDS,
     REJOIN_LIMIT,
     SessionWiring,
@@ -846,3 +847,62 @@ async def test_a_rejoin_gives_the_new_browser_fresh_perception_and_a_kernel_epoc
     assert result.terminal_reason == "ended_by_host"
     assert len(epochs) == 2
     assert kernel.state.world.browser_epoch == 2
+
+
+def blocked_page() -> FakePage:
+    return meet_page([DENIED], evaluates=[NO_CAPTCHA])
+
+
+async def test_a_rejoin_that_meet_blocks_knocks_again_after_a_longer_wait() -> None:
+    events: list[str] = []
+    rows: list[str] = []
+    journal = Journal("meeting-1", emit=rows.append, echo=False)
+    conversation = FakeConversation(events)
+    clock = FakeClock()
+    opened, open_page = page_sequence(
+        crashing_page(), blocked_page(), meet_page([IN_CALL, IN_CALL, ENDED])
+    )
+
+    @asynccontextmanager
+    async def open_audio(**kwargs: Any) -> AsyncIterator[Any]:
+        del kwargs
+        audio = FakeAudio(events)
+        try:
+            yield audio
+        finally:
+            await audio.stop()
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=open_page,
+            open_audio=open_audio,
+            conversation=conversation,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    rejoined = [row for row in map(json.loads, rows) if row["event"] == "browser_rejoined"]
+    assert (result.phase, result.terminal_reason) == ("ended", "ended_by_host")
+    assert len(opened) == 3
+    assert [row["waited_ms"] for row in rejoined] == [
+        round(rejoin_delay(1) * 1000),
+        round(BLOCKED_REJOIN_SECONDS * 1000),
+    ]
+    assert events.count("conversation_closed") == 1
+    assert events.count("conversation_bound") == 2
+
+
+async def test_a_rejoin_that_stays_blocked_ends_when_the_budget_runs_out() -> None:
+    clock = FakeClock()
+    opened, open_page = page_sequence(crashing_page(), *[blocked_page() for _ in range(5)])
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(open_page=open_page, sleep=clock.sleep, monotonic=clock.monotonic),
+    )
+
+    assert (result.phase, result.terminal_reason) == ("ended", "blocked_by_platform")
+    assert len(opened) == REJOIN_LIMIT + 1

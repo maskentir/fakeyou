@@ -412,6 +412,16 @@ Rejoin menunggu 2, 4, lalu 8 detik (`rejoin_delay`); stop owner saat menunggu
 mengakhiri sesi sebagai `stopped_by_owner`. Slot capture per-stream dari
 browser lama belum dibuang (hanya memicu resync drain).
 
+Probe live a2b-probe-7 (2026-10-31, meeting cam-vwqv-dmr, audio dan
+conversation aktif): kill Chromium sampai `browser_rejoined` hanya 4 detik,
+dan balasan yang sedang disusun dibuang karena conversation di-pause. Namun
+Meet menolak ketukan browser baru dua detik kemudian (`blocked_by_platform`)
+dan sesi berakhir. Sejak itu `blocked_by_platform` yang terjadi saat rejoin
+ikut dihitung sebagai rejoin: media tetap dilepas (bukan diakhiri), twin
+menunggu `BLOCKED_REJOIN_SECONDS` (30 detik) lalu mengetuk lagi, dalam jatah
+rejoin yang sama. Join pertama yang diblokir tetap terminal. Event
+`browser_rejoined` mencatat `waited_ms`.
+
 ### A3: Join dan lobby
 
 - Knock sekali. Hanya kegagalan sebelum knock (navigasi, nama, tombol join)
