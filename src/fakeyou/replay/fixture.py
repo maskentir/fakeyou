@@ -54,11 +54,24 @@ class _Sentence(_Row):
 
 
 class _Synthesis(_Row):
+    request_id: str = ""
     transcript_id: str | None = None
     sentence_index: int | None = None
     first_chunk_ms: float | None = None
     duration_ms: float | None = None
     bytes_out: int = 0
+    chars: int = 0
+
+
+class _Plan(_Row):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    transcript_id: str
+    language: str = "en"
+    intent: str = "answer"
+    contribution: str = "none"
+    structured: bool = True
+    replaced: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +105,7 @@ class ReplySentence:
     offset_ms: float
     index: int
     chars: int
+    text: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +118,19 @@ class ReplyTiming:
 @dataclass(frozen=True, slots=True)
 class SynthesisTiming:
     first_chunk_ms: float
-    duration_ms: float
-    bytes_out: int
+    duration_ms: float | None = None
+    bytes_out: int | None = None
+    chars: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedPlan:
+    language: str
+    intent: str
+    contribution: str
+    cites: tuple[str, ...]
+    structured: bool
+    replaced: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +143,8 @@ class ReplayFixture:
     verdicts: Mapping[str, JudgeVerdict]
     replies: Mapping[str, ReplyTiming]
     syntheses: Mapping[tuple[str, int], SynthesisTiming]
+    synthesized: Mapping[tuple[str, int], int]
+    plans: Mapping[str, RecordedPlan]
     rows: tuple[dict[str, Any], ...] = field(repr=False)
 
 
@@ -168,6 +195,7 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
         for entry in entries
         if isinstance(entry, ChatEntry | ScreenEntry)
     ]
+    synthesized = _synthesized(rows)
     return ReplayFixture(
         meeting_id=meeting_id,
         started_at=started_at,
@@ -175,8 +203,10 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
         finals=tuple(finals),
         percepts=tuple(sorted(percepts, key=lambda percept: percept.offset)),
         verdicts=_verdicts(rows, finals_at),
-        replies=_replies(rows, entries),
+        replies=_replies(rows, entries, synthesized),
         syntheses=_syntheses(rows),
+        synthesized=synthesized,
+        plans=_plans(rows),
         rows=tuple(rows),
     )
 
@@ -198,8 +228,41 @@ def _verdicts(
 
 
 def _replies(
-    rows: Iterable[dict[str, Any]], entries: Iterable[RecordEntry]
+    rows: Iterable[dict[str, Any]],
+    entries: Iterable[RecordEntry],
+    synthesized: Mapping[tuple[str, int], int],
 ) -> dict[str, ReplyTiming]:
+    started, durations, sentences = _reply_requests(rows)
+    spoken = _spoken_texts(entries)
+    replies: dict[str, ReplyTiming] = {}
+    for transcript_id, parts in sentences.items():
+        ordered = sorted(parts, key=lambda part: part.index)
+        wanted = {
+            part.index: synthesized.get((transcript_id, part.index), part.chars) for part in ordered
+        }
+        texts = _align(spoken.get(transcript_id, ()), wanted)
+        reachable = [part for part in ordered if (transcript_id, part.index) in synthesized]
+        if not reachable:
+            reachable = [part for part in ordered if part.index in texts]
+        replies[transcript_id] = ReplyTiming(
+            durations.get(transcript_id),
+            tuple(
+                ReplySentence(part.offset_ms, part.index, part.chars, texts.get(part.index))
+                for part in reachable
+            ),
+            tuple(spoken.get(transcript_id, ())),
+        )
+    for transcript_id in started:
+        replies.setdefault(
+            transcript_id,
+            ReplyTiming(durations.get(transcript_id), (), tuple(spoken.get(transcript_id, ()))),
+        )
+    return replies
+
+
+def _reply_requests(
+    rows: Iterable[dict[str, Any]],
+) -> tuple[dict[str, datetime], dict[str, float], dict[str, list[ReplySentence]]]:
     started: dict[str, datetime] = {}
     durations: dict[str, float] = {}
     sentences: defaultdict[str, list[ReplySentence]] = defaultdict(list)
@@ -221,34 +284,91 @@ def _replies(
                 sentences[sentence.transcript_id].append(
                     ReplySentence(elapsed, sentence.sentence_index, sentence.chars)
                 )
+    return started, durations, dict(sentences)
+
+
+def _spoken_texts(entries: Iterable[RecordEntry]) -> dict[str, list[str]]:
     spoken: defaultdict[str, list[str]] = defaultdict(list)
     for entry in entries:
         if isinstance(entry, TwinSpeechEntry) and entry.causation_id is not None:
             spoken[entry.causation_id].append(entry.text)
-    return {
-        transcript_id: ReplyTiming(
-            durations.get(transcript_id),
-            tuple(sentences.get(transcript_id, ())),
-            tuple(spoken.get(transcript_id, ())),
-        )
-        for transcript_id in started
-    }
+    return dict(spoken)
+
+
+def _align(texts: Sequence[str], wanted: Mapping[int, int]) -> dict[int, str]:
+    aligned: dict[int, str] = {}
+    used: set[int] = set()
+    for index in sorted(wanted):
+        for position, text in enumerate(texts):
+            if position not in used and len(text) == wanted[index]:
+                aligned[index] = text
+                used.add(position)
+                break
+    return aligned
 
 
 def _syntheses(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], SynthesisTiming]:
-    timings: dict[tuple[str, int], SynthesisTiming] = {}
+    started: dict[str, _Synthesis] = {}
+    finished: dict[str, _Synthesis] = {}
+    emitted: dict[str, float] = {}
     for row in rows:
-        if row.get("event") != "synthesis_finished":
+        event = row.get("event")
+        if event == "synthesis_started":
+            synthesis = _Synthesis.model_validate(row)
+            started[synthesis.request_id] = synthesis
+        elif event == "synthesis_finished":
+            synthesis = _Synthesis.model_validate(row)
+            finished[synthesis.request_id] = synthesis
+        elif event == "synthesis_pcm_emitted":
+            first = row.get("first_chunk_ms")
+            if isinstance(first, int | float):
+                emitted[str(row.get("request_id"))] = float(first)
+    timings: dict[tuple[str, int], SynthesisTiming] = {}
+    for request_id, opening in started.items():
+        if opening.transcript_id is None or opening.sentence_index is None:
             continue
-        synthesis = _Synthesis.model_validate(row)
-        if (
-            synthesis.transcript_id is None
-            or synthesis.sentence_index is None
-            or synthesis.first_chunk_ms is None
-            or synthesis.duration_ms is None
-        ):
+        closing = finished.get(request_id)
+        first_chunk = closing.first_chunk_ms if closing is not None else None
+        if first_chunk is None:
+            first_chunk = emitted.get(request_id)
+        if first_chunk is None:
             continue
-        timings[(synthesis.transcript_id, synthesis.sentence_index)] = SynthesisTiming(
-            synthesis.first_chunk_ms, synthesis.duration_ms, synthesis.bytes_out
+        timings[(opening.transcript_id, opening.sentence_index)] = SynthesisTiming(
+            first_chunk,
+            closing.duration_ms if closing is not None else None,
+            closing.bytes_out if closing is not None else None,
+            (closing.chars if closing is not None else 0) or opening.chars,
         )
     return timings
+
+
+def _synthesized(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, int], int]:
+    chars: dict[tuple[str, int], int] = {}
+    for row in rows:
+        if row.get("event") != "synthesis_started":
+            continue
+        synthesis = _Synthesis.model_validate(row)
+        if synthesis.transcript_id is None or synthesis.sentence_index is None:
+            continue
+        chars.setdefault((synthesis.transcript_id, synthesis.sentence_index), synthesis.chars)
+    return chars
+
+
+def _plans(rows: Iterable[dict[str, Any]]) -> dict[str, RecordedPlan]:
+    plans: dict[str, RecordedPlan] = {}
+    for row in rows:
+        if row.get("event") != "reply_plan_observed":
+            continue
+        plan = _Plan.model_validate(row)
+        if plan.transcript_id in plans:
+            continue
+        cites = row.get("cites")
+        plans[plan.transcript_id] = RecordedPlan(
+            language=plan.language,
+            intent=plan.intent,
+            contribution=plan.contribution,
+            cites=tuple(cites) if isinstance(cites, list) else (),
+            structured=plan.structured,
+            replaced=plan.replaced,
+        )
+    return plans
