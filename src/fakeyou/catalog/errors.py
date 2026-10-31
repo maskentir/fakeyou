@@ -82,6 +82,7 @@ class ErrorCode(StrEnum):
     MEMORY_KEEP_RECORD_REQUIRES_MEETING = "memory.keep_record_requires_meeting"
     MEMORY_FORGET_INCOMPLETE = "memory.forget_incomplete"
     MEMORY_FORGET_FILES_INCOMPLETE = "memory.forget_files_incomplete"
+    MEMORY_FORGET_SESSION_LIVE = "memory.forget_session_live"
     NOTE_CORRECTION_TARGET_INACTIVE = "note.correction_target_inactive"
     NOTE_NOT_PENDING = "note.not_pending"
     NOTE_CORRECTION_CONCURRENT = "note.correction_concurrent"
@@ -459,6 +460,10 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
     ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE: ErrorSpec(
         "meeting file {path} could not be removed during forget: {reason}"
+    ),
+    ErrorCode.MEMORY_FORGET_SESSION_LIVE: ErrorSpec(
+        "meeting {meeting_id} is still running; stop it before forgetting it",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
     ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),

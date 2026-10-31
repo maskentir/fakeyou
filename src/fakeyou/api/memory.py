@@ -350,6 +350,9 @@ async def forget_meeting(
     repository: Annotated[SessionStatusRepository, Depends(session_status)],
 ) -> ForgetView:
     snapshot = _owned_snapshot(request, meeting_id, principal)
+    status = await repository.get(meeting_id)
+    if status is not None and not status.terminal:
+        raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id=meeting_id)
     summary = await _memory_service(request).forget_meeting(
         _meeting_access(request, snapshot, principal),
         meeting_id=parse_session_id(meeting_id, field="meeting_id"),

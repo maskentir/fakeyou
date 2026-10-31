@@ -167,6 +167,7 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.MEETING_UNFINISHED_SESSION,
         ErrorCode.MEETING_WAKE_PHRASE_REQUIRES_CONVERSE,
         ErrorCode.MEMORY_EPISODE_NOT_UUID,
+        ErrorCode.MEMORY_FORGET_SESSION_LIVE,
         ErrorCode.MEMORY_FORGET_TARGET_REQUIRED,
         ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH,
         ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING,

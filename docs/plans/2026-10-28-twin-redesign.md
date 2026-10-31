@@ -807,8 +807,11 @@ sendiri. Design C dan D boleh ditulis lebih awal; implementasinya menunggu
 gate A.
 
 1. A0 rantai causation dan metrik.
-2. A1a satu sumber status sesi (selesai), A1a-r koreksi dari riset, lalu A1b
-   lifecycle tanpa LangGraph.
+2. A1a satu sumber status sesi (selesai, #47), A1a-r koreksi dari riset
+   (selesai, #49), lalu A1b lifecycle tanpa LangGraph. Catatan A1b: resume
+   adalah join baru dari `created` yang di-gate baris `meeting_sessions`;
+   worker yang di-cancel atau mati tidak menulis status terminal sampai
+   reconciler A2 ada.
 3. A4 status call dari protocol.
 4. A3 join dan lobby (butuh A4).
 5. A5 kebijakan dialog.

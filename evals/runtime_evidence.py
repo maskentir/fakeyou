@@ -189,7 +189,7 @@ def runtime_metadata(settings: Settings) -> dict[str, Any]:
             "generation arbitration",
             "audio",
             "live stop/cancellation",
-            "persistent checkpoint lifecycle",
+            "session status in postgres",
         ],
     }
 
