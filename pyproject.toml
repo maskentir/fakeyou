@@ -143,6 +143,8 @@ raises-require-match-for = [
 "src/fakeyou/observability/journal.py" = ["T201", "BLE001"]
 # D4 typer cut-over: command signatures mirror the CLI surface (framework-imposed).
 "src/fakeyou/cli/main.py" = ["PLR0913"]
+# V0 replay: the conversation is wired with the models it answers on.
+"src/fakeyou/orchestration/assembly.py" = ["PLR0913"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
