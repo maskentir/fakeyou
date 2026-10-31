@@ -238,6 +238,7 @@ layers = [
     "fakeyou.api",
     "fakeyou.cli",
     "fakeyou.worker",
+    "fakeyou.replay",
     "fakeyou.transport",
     "fakeyou.orchestration",
     "fakeyou.memory",
