@@ -11,7 +11,7 @@ from redis.exceptions import ResponseError
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.transport.schemas import INGESTION_STREAM, command_stream, event_stream
+from fakeyou.transport.schemas import INGESTION_STREAM, event_stream
 from fakeyou.transport.streams import PendingDelivery, StreamTransport
 
 AT = "2026-10-16T09:00:00+00:00"
@@ -175,22 +175,16 @@ class RecordingClient:
         self.calls.append(("aclose",))
 
 
-def recording_transport(
-    *, stream_max_len: int = 10000, lease_seconds: float = 30.0
-) -> tuple[StreamTransport, RecordingClient]:
+def recording_transport(*, stream_max_len: int = 10000) -> tuple[StreamTransport, RecordingClient]:
     client = RecordingClient()
-    transport = StreamTransport(
-        cast(Redis, client), stream_max_len=stream_max_len, lease_seconds=lease_seconds
-    )
+    transport = StreamTransport(cast(Redis, client), stream_max_len=stream_max_len)
     return transport, client
 
 
 def fake_transport(
-    *, stream_max_len: int = 10000, lease_seconds: float = 30.0
+    *, stream_max_len: int = 10000
 ) -> tuple[StreamTransport, list[tuple[object, ...]]]:
-    transport, client = recording_transport(
-        stream_max_len=stream_max_len, lease_seconds=lease_seconds
-    )
+    transport, client = recording_transport(stream_max_len=stream_max_len)
     return transport, client.calls
 
 
@@ -223,25 +217,10 @@ async def test_publish_event_validates_and_trims() -> None:
         )
 
 
-async def test_lease_is_atomic_and_owner_checked() -> None:
-    transport, _calls = fake_transport()
-    assert await transport.acquire_lease("m-1", "worker-a") is True
-    assert await transport.acquire_lease("m-1", "worker-b") is False
-    assert await transport.renew_lease("m-1", "worker-b") is False
-    await transport.release_lease("m-1", "worker-b")
-    assert await transport.renew_lease("m-1", "worker-a") is True
-
-
-async def test_publish_command_and_job_trim_approximately() -> None:
+async def test_publish_job_trims_approximately() -> None:
     transport, calls = fake_transport(stream_max_len=7)
-    await transport.publish_command(
-        "m-2", {"v": "1", "type": "stop", "at": AT, "meeting_id": "m-2"}
-    )
     await transport.publish_job(INGESTION_STREAM, {"v": "1", "type": "ingestion_job"})
-    assert calls == [
-        ("xadd", "fakeyou:meeting:m-2:commands", 7, True),
-        ("xadd", "fakeyou:jobs:ingestion", 7, True),
-    ]
+    assert calls == [("xadd", "fakeyou:jobs:ingestion", 7, True)]
 
 
 async def test_ensure_group_swallows_only_busygroup() -> None:
@@ -253,16 +232,6 @@ async def test_ensure_group_swallows_only_busygroup() -> None:
     client.next_error = ResponseError("LOADING Redis is loading the dataset in memory")
     with pytest.raises(ResponseError, match="LOADING"):
         await transport.ensure_group(stream, "workers")
-
-
-async def test_claim_stale_reclaims_pending_entries_without_ack() -> None:
-    transport, client = recording_transport()
-    stream = command_stream("m-3")
-    entry = ("2-0", {"v": "1", "type": "join", "at": AT, "meeting_id": "m-3"})
-    client.pending[(stream, "workers")] = [entry]
-    claimed = await transport.claim_stale(stream, "workers", "worker-b", min_idle_ms=0)
-    assert claimed == [entry]
-    assert client.calls == [("xautoclaim", stream, "workers", "worker-b", 0, 100)]
 
 
 async def test_pending_deliveries_report_the_redis_delivery_count() -> None:
@@ -363,49 +332,10 @@ async def test_aclose_closes_the_underlying_client() -> None:
     assert client.calls == [("aclose",)]
 
 
-async def test_candidate_meetings_lists_only_command_streams() -> None:
-    transport, client = recording_transport()
-    for stream in (
-        command_stream("m-2"),
-        command_stream("m-1"),
-        event_stream("m-1"),
-        INGESTION_STREAM,
-    ):
-        client.streams.setdefault(stream, [])
-    assert await transport.candidate_meetings() == ["m-1", "m-2"]
-    assert client.calls == [("scan", 0, "fakeyou:meeting:*:commands", 100)]
-
-
 def test_from_settings_requires_the_configured_redis_url(settings: Settings) -> None:
     with pytest.raises(FakeYouError, match=ConfigKey.TRANSPORT_REDIS_URL) as caught:
         StreamTransport.from_settings(settings)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
-
-
-@pytest.mark.container
-async def test_container_transport_reclaims_stale_commands_and_clears_pending(
-    settings: Settings, redis_endpoint: str
-) -> None:
-    settings.transport.redis.url = SecretStr(redis_endpoint)
-    settings.transport.redis.stream_max_len = 1000
-    transport = StreamTransport.from_settings(settings)
-    meeting_id = f"e5-{uuid4().hex[:10]}"
-    stream = command_stream(meeting_id)
-    fields = {"v": "1", "type": "join", "at": AT, "meeting_id": meeting_id}
-    try:
-        entry_id = await transport.publish_command(meeting_id, fields)
-        await transport.ensure_group(stream, "workers")
-        delivered = await transport.read_group(stream, "workers", "worker-a", count=1, block_ms=100)
-        assert delivered == [(entry_id, fields)]
-        assert (
-            await transport.read_group(stream, "workers", "worker-b", count=1, block_ms=100) == []
-        )
-        claimed = await transport.claim_stale(stream, "workers", "worker-b", min_idle_ms=0)
-        assert claimed == [(entry_id, fields)]
-        await transport.ack(stream, "workers", entry_id)
-        assert await transport.claim_stale(stream, "workers", "worker-b", min_idle_ms=0) == []
-    finally:
-        await transport.aclose()
 
 
 @pytest.mark.container

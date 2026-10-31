@@ -17,6 +17,7 @@ LockPurpose = Literal["meeting", "ingestion", "forget", "debrief", "diarization"
 LeaseState = Literal["absent", "live", "stale", "corrupt"]
 
 LOCK_STALE_AFTER_SECONDS = 60.0
+_HELD_TOKENS: set[str] = set()
 LEASE_HEARTBEAT_MAX_FAILURES = 3
 
 
@@ -166,6 +167,7 @@ def file_lease(
         written = os.fstat(fd)
         if (current.st_ino, current.st_dev) != (written.st_ino, written.st_dev):
             raise LeaseError(ErrorCode.LEASE_LOCKED, path=path) from None
+    _HELD_TOKENS.add(token)
     stop = threading.Event()
     held: list[bool] = []
 
@@ -177,6 +179,7 @@ def file_lease(
     try:
         yield token
     finally:
+        _HELD_TOKENS.discard(token)
         stop.set()
         heartbeat.join(timeout=5.0)
         owner = lock_owner(path)
@@ -195,6 +198,8 @@ def _lease_payload(owner: dict[str, Any]) -> bytes:
 
 def _owner_recoverable(owner: dict[str, Any], stale_after_seconds: float) -> bool:
     if owner["host"] is None or owner["host"] == socket.gethostname():
+        if owner["pid"] == os.getpid():
+            return owner["token"] not in _HELD_TOKENS
         return not _process_alive(owner["pid"])
     heartbeat: datetime | None = owner["heartbeat"]
     if heartbeat is None:

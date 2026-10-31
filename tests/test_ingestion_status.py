@@ -229,7 +229,7 @@ def test_record_lock_keeps_a_foreign_token_on_release(tmp_path: Path) -> None:
 
     with record_lock(record, purpose="ingestion"):
         lock_path(record).write_text(
-            json.dumps({"pid": os.getpid(), "purpose": "meeting", "token": "foreign"}),
+            json.dumps({"pid": os.getppid(), "purpose": "meeting", "token": "foreign"}),
             encoding="utf-8",
         )
     assert json.loads(lock_path(record).read_text(encoding="utf-8"))["token"] == "foreign"
@@ -248,7 +248,7 @@ def test_record_lock_recovers_only_a_proven_dead_owner(tmp_path: Path) -> None:
     assert not path.exists()
 
     path.write_text(
-        json.dumps({"pid": os.getpid(), "purpose": "meeting", "token": "live"}), encoding="utf-8"
+        json.dumps({"pid": os.getppid(), "purpose": "meeting", "token": "live"}), encoding="utf-8"
     )
     with pytest.raises(RecordLockError, match="locked") as error:
         with record_lock(record, purpose="ingestion"):
@@ -332,7 +332,7 @@ def test_record_lock_refuses_a_live_same_host_owner_even_with_a_stale_heartbeat(
         json.dumps(
             {
                 "host": socket.gethostname(),
-                "pid": os.getpid(),
+                "pid": os.getppid(),
                 "purpose": "meeting",
                 "token": "stale",
                 "heartbeat": datetime(2026, 10, 3, 8, 0, tzinfo=UTC).isoformat(),
@@ -376,7 +376,7 @@ def _hold_while_another_writer_takes_over(record: Path) -> None:
             json.dumps(
                 {
                     "host": socket.gethostname(),
-                    "pid": os.getpid(),
+                    "pid": os.getppid(),
                     "purpose": "ingestion",
                     "token": "foreign",
                     "heartbeat": datetime.now(UTC).isoformat(),
@@ -880,3 +880,25 @@ def test_a_reader_never_sees_the_lease_half_written_by_the_heartbeat(tmp_path: P
 
     assert owners
     assert None not in owners
+
+
+def test_a_lock_left_by_an_earlier_process_with_our_pid_is_recovered(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+    path = lock_path(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"pid": os.getpid(), "purpose": "meeting", "token": "before-restart"}),
+        encoding="utf-8",
+    )
+
+    with record_lock(record, purpose="meeting"):
+        assert json.loads(path.read_text(encoding="utf-8"))["token"] != "before-restart"
+
+
+def test_a_lock_this_process_still_holds_is_never_taken_twice(tmp_path: Path) -> None:
+    record = tmp_path / "meeting-9" / "record.jsonl"
+
+    with record_lock(record, purpose="meeting"):
+        with pytest.raises(RecordLockError, match="locked"):
+            with record_lock(record, purpose="ingestion"):
+                pytest.fail("a held lock must not be taken again")

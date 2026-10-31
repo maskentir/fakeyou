@@ -45,6 +45,9 @@ meeting_sessions = Table(
     Column("attempt_id", Text, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("lease_owner", Text, nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("attempts", Integer, nullable=False, server_default="0"),
 )
 
 

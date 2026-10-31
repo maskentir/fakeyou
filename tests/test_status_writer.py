@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 from typing import override
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.db.session_status import SessionStatus
-from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
+from fakeyou.db.session_status import PhaseUpdate, SessionStatus
+from fakeyou.foundation.taxonomy import PublicPhase
 from fakeyou.worker.status_writer import StatusWriter
 from tests._session_status_fakes import MemorySessionStatus
 
@@ -18,30 +18,16 @@ class RecordingStatus(MemorySessionStatus):
 
     @override
     async def record_phase(
-        self,
-        meeting_id: str,
-        phase: PublicPhase,
-        at: datetime,
-        *,
-        terminal_reason: TerminalReason | None = None,
-        detail: str | None = None,
+        self, meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
     ) -> SessionStatus | None:
-        self.written.append(phase)
-        return await super().record_phase(
-            meeting_id, phase, at, terminal_reason=terminal_reason, detail=detail
-        )
+        self.written.append(change.phase)
+        return await super().record_phase(meeting_id, change, attempt_id=attempt_id)
 
 
 class UnreachableStatus(MemorySessionStatus):
     @override
     async def record_phase(
-        self,
-        meeting_id: str,
-        phase: PublicPhase,
-        at: datetime,
-        *,
-        terminal_reason: TerminalReason | None = None,
-        detail: str | None = None,
+        self, meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
     ) -> SessionStatus | None:
         raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE)
 
@@ -85,20 +71,12 @@ class FlakyStatus(MemorySessionStatus):
 
     @override
     async def record_phase(
-        self,
-        meeting_id: str,
-        phase: PublicPhase,
-        at: datetime,
-        *,
-        terminal_reason: TerminalReason | None = None,
-        detail: str | None = None,
+        self, meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
     ) -> SessionStatus | None:
         if self.failures:
             self.failures -= 1
             raise self.error
-        return await super().record_phase(
-            meeting_id, phase, at, terminal_reason=terminal_reason, detail=detail
-        )
+        return await super().record_phase(meeting_id, change, attempt_id=attempt_id)
 
 
 async def test_an_unexpected_error_does_not_stop_later_writes() -> None:

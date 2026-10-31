@@ -15,8 +15,8 @@ from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
-from fakeyou.transport.schemas import command_stream
 from tests._session_status_fakes import MemorySessionStatus
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
@@ -52,12 +52,7 @@ STATUS_AT = datetime(2026, 10, 28, 10, 0, tzinfo=UTC)
 
 
 class RecordingTransport:
-    def __init__(self) -> None:
-        self.commands: list[tuple[str, str]] = []
-
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
-        self.commands.append((command_stream(meeting_id), str(fields["type"])))
-        return f"{len(self.commands)}-0"
+    pass
 
 
 class ApiHarness:
@@ -128,7 +123,7 @@ class ApiHarness:
         self.store.save_new(build_snapshot(create, meeting_id=session_id, at=AT))
         await self.status.create(session_id, create.owner_id, STATUS_AT)
         await self.status.record_phase(
-            session_id, phase, STATUS_AT, terminal_reason=terminal_reason
+            session_id, PhaseUpdate(phase, STATUS_AT, terminal_reason=terminal_reason)
         )
         return session_id
 
@@ -172,7 +167,7 @@ def _property_names(node: object) -> set[str]:
     return names
 
 
-async def test_create_freezes_snapshot_and_join_publishes_command(api: ApiHarness) -> None:
+async def test_create_freezes_snapshot_and_join_records_the_wish(api: ApiHarness) -> None:
     created = await api.post("/v1/sessions", json=SESSION_PAYLOAD)
     assert created.status_code == 201
     body = created.json()
@@ -184,9 +179,9 @@ async def test_create_freezes_snapshot_and_join_publishes_command(api: ApiHarnes
     assert stored is not None
     assert stored.snapshot_sha256 == body["snapshot_sha256"]
     assert (await api.post(f"/v1/sessions/{body['meeting_id']}/join")).status_code == 202
-    assert api.transport.commands == [
-        ("fakeyou:meeting:" + body["meeting_id"] + ":commands", "join")
-    ]
+    joined = await api.status.get(body["meeting_id"])
+    assert joined is not None
+    assert joined.desired_state == "joined"
 
 
 async def test_create_rejects_principal_and_document_mismatch(api: ApiHarness) -> None:
@@ -194,7 +189,6 @@ async def test_create_rejects_principal_and_document_mismatch(api: ApiHarness) -
     response = await api.post("/v1/sessions", json=wrong_owner)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "persona.identity_mismatch"
-    assert api.transport.commands == []
 
 
 async def test_stop_is_idempotent_after_terminal_and_hidden_cross_owner(api: ApiHarness) -> None:
@@ -217,7 +211,6 @@ async def test_document_identity_mismatches_are_named_catalog_errors(api: ApiHar
     response = await api.post("/v1/sessions", json=broken_brief)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "meeting.brief_scope_mismatch"
-    assert api.transport.commands == []
 
 
 async def test_resume_on_created_session_is_a_conflict(api: ApiHarness) -> None:
@@ -225,7 +218,6 @@ async def test_resume_on_created_session_is_a_conflict(api: ApiHarness) -> None:
     response = await api.post(f"/v1/sessions/{body['meeting_id']}/resume")
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "meeting.unfinished_session"
-    assert api.transport.commands == []
 
 
 async def test_join_twice_and_join_after_terminal_are_named_conflicts(api: ApiHarness) -> None:
@@ -239,17 +231,6 @@ async def test_join_twice_and_join_after_terminal_are_named_conflicts(api: ApiHa
     ended = await api.post(f"/v1/sessions/{terminal_id}/join")
     assert ended.status_code == 409
     assert ended.json()["error"]["code"] == "meeting.already_ended"
-
-
-async def test_resume_and_stop_publish_exactly_their_commands(api: ApiHarness) -> None:
-    meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
-    await api.post(f"/v1/sessions/{meeting_id}/join")
-    resumed = await api.post(f"/v1/sessions/{meeting_id}/resume")
-    stopped = await api.post(f"/v1/sessions/{meeting_id}/stop")
-    assert resumed.status_code == 202
-    assert stopped.status_code == 202
-    stream = command_stream(meeting_id)
-    assert api.transport.commands == [(stream, "join"), (stream, "resume"), (stream, "stop")]
 
 
 async def test_cross_owner_snapshot_is_a_404(api: ApiHarness) -> None:
@@ -338,10 +319,12 @@ async def test_a_finished_session_shows_why_it_ended(api: ApiHarness) -> None:
     meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
     await api.status.record_phase(
         meeting_id,
-        "ended",
-        STATUS_AT,
-        terminal_reason="left_by_participant",
-        detail="twin left the call on request",
+        PhaseUpdate(
+            "ended",
+            STATUS_AT,
+            terminal_reason="left_by_participant",
+            detail="twin left the call on request",
+        ),
     )
 
     body = (await api.get(f"/v1/sessions/{meeting_id}")).json()
@@ -375,7 +358,6 @@ async def test_a_stopped_session_can_still_be_resumed_to_finish(api: ApiHarness)
     resumed = await api.post(f"/v1/sessions/{meeting_id}/resume")
 
     assert resumed.status_code == 202
-    assert api.transport.commands[-1][1] == "resume"
 
 
 async def test_a_session_whose_snapshot_cannot_be_written_leaves_no_status(

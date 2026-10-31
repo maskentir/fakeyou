@@ -94,14 +94,14 @@ async def test_redis_stream_group_holds_unacked_entries_until_claimed(
     from redis.asyncio import Redis
 
     client = Redis.from_url(redis_endpoint, decode_responses=True)
-    stream = "fakeyou:meeting:harness-redis-1:commands"
+    stream = "fakeyou:jobs:harness-redis-1"
     try:
         await client.delete(stream)
         entry_id = await client.xadd(
             stream,
             {
                 "v": "1",
-                "type": "join",
+                "type": "ingestion_job",
                 "at": "2026-10-16T09:00:00+00:00",
                 "meeting_id": "harness-redis-1",
             },
@@ -110,7 +110,7 @@ async def test_redis_stream_group_holds_unacked_entries_until_claimed(
         delivered = await client.xreadgroup("workers", "worker-a", {stream: ">"}, count=1)
 
         assert delivered[0][1][0][0] == entry_id
-        assert delivered[0][1][0][1]["type"] == "join"
+        assert delivered[0][1][0][1]["type"] == "ingestion_job"
         assert set(delivered[0][1][0][1]) == {"v", "type", "at", "meeting_id"}
         pending = await client.xpending(stream, "workers")
         assert pending["pending"] == 1

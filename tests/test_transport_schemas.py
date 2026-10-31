@@ -1,7 +1,6 @@
 import pytest
 
 from fakeyou.transport.schemas import (
-    command_stream,
     encode_ingestion_job,
     event_stream,
     validate_event,
@@ -19,7 +18,6 @@ def test_ingestion_job_fields_match_track_c_parser_contract() -> None:
         "meeting_id": "m-1",
         "kind": "correct",
     }
-    assert command_stream("m-1") == "fakeyou:meeting:m-1:commands"
     assert event_stream("m-1") == "fakeyou:meeting:m-1:events"
 
 

@@ -27,7 +27,6 @@ from fakeyou.db.session_status import DesiredState, SessionStatus, SessionStatus
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.transport.schemas import encode_command
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
@@ -40,8 +39,6 @@ def now_iso() -> str:
 
 
 class CommandTransport(Protocol):
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str: ...
-
     async def store_overrides(
         self, scope: str, overrides: Mapping[str, str], *, ttl_seconds: float
     ) -> None: ...
@@ -215,7 +212,8 @@ async def start_session(
         if isinstance(error, FileExistsError):
             raise _refuse_existing(None, meeting_id) from None
         raise
-    await stage_overrides(_command_transport(request), meeting_id, request.headers)
+    if overrides:
+        await stage_overrides(_command_transport(request), meeting_id, request.headers)
     return _view(snapshot, status)
 
 
@@ -230,9 +228,6 @@ async def join_session(
     if status.terminal or status.desired_state == "joined":
         raise _refuse_existing(status, meeting_id)
     wanted = await _desire(repository, meeting_id, "joined")
-    await _command_transport(request).publish_command(
-        meeting_id, encode_command("join", meeting_id=meeting_id, at=_now(request))
-    )
     return _view(snapshot, wanted)
 
 
@@ -253,9 +248,6 @@ async def stop_session(
         if status.desired_state == "stopped"
         else await _desire(repository, meeting_id, "stopped")
     )
-    await _command_transport(request).publish_command(
-        meeting_id, encode_command("stop", meeting_id=meeting_id, at=_now(request))
-    )
     return _view(snapshot, wanted)
 
 
@@ -271,9 +263,6 @@ async def resume_session(
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
     if status.desired_state == "created":
         raise FakeYouError(ErrorCode.MEETING_UNFINISHED_SESSION, meeting_id=meeting_id)
-    await _command_transport(request).publish_command(
-        meeting_id, encode_command("resume", meeting_id=meeting_id, at=_now(request))
-    )
     return _view(snapshot, status)
 
 

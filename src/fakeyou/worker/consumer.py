@@ -1,11 +1,13 @@
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from typing import Protocol, cast
+from uuid import uuid4
 
 from pydantic import SecretStr
 
@@ -13,7 +15,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.db.session_status import SessionStatusRepository
+from fakeyou.db.session_status import SessionStatus, SessionStatusRepository
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.observability.faults import capture_error
@@ -25,10 +27,10 @@ from fakeyou.orchestration.runtime import SessionWiring
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.ingestion_status import read_status
 from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_profile_dir
+from fakeyou.persistence.lease import LeaseError
 from fakeyou.transport.schemas import (
     DEBRIEF_STREAM,
     INGESTION_STREAM,
-    command_stream,
     encode_debrief_job,
     encode_ingestion_job,
 )
@@ -42,10 +44,13 @@ from fakeyou.worker.documents import (
 from fakeyou.worker.keys import apply_role_overrides
 from fakeyou.worker.status_writer import StatusWriter
 
-WORKER_GROUP = "workers"
 logger = logging.getLogger(__name__)
-_PAUSE_SECONDS = 0.5
-_READ_BLOCK_MS = 1000
+_PAUSE_SECONDS = 1.0
+SESSION_LEASE_SECONDS = 30.0
+LEASE_RENEW_SECONDS = 2.0
+SESSION_MAX_ATTEMPTS = 5
+LEASE_SAFETY_SECONDS = 5.0
+_RETRYABLE: tuple[type[Exception], ...] = (OSError, ValueError, ProviderFault, LeaseError)
 
 
 class Snapshot(Protocol):
@@ -106,10 +111,6 @@ class Snapshot(Protocol):
 
 class SnapshotStore(Protocol):
     def load(self, meeting_id: str) -> Snapshot | None: ...
-
-
-class Discovery(Protocol):
-    async def candidate_meetings(self) -> list[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +174,12 @@ def join_request_for(snapshot: Snapshot, settings: Settings, *, resume: bool) ->
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Claim:
+    meeting_id: str
+    attempt_id: str
+
+
 class WorkerConsumer:
     def __init__(self, deps: WorkerDeps) -> None:
         self._deps = deps
@@ -183,11 +190,12 @@ class WorkerConsumer:
         self._writer: StatusWriter | None = None
         self._ports = deps.ports
         self._worker_id = deps.worker_id
-        self._lease_ms = max(1, int(deps.settings.transport.redis.lease_seconds * 1000))
         self._active: str | None = None
         self._session_task: asyncio.Task[None] | None = None
         self._wiring_stop: asyncio.Event | None = None
         self._stop_requested = False
+        self._stop_seen = False
+        self._lease_lost = False
         self._bound = asyncio.Event()
         self._overrides: dict[str, dict[str, SecretStr]] = {}
 
@@ -206,42 +214,39 @@ class WorkerConsumer:
     async def run_forever(self) -> None:
         try:
             while not self._deps.shutdown.is_set():
-                if self._active is None:
-                    await self.run_once(self._transport)
-                else:
-                    await self.poll_commands()
+                if self._session_task is None:
+                    _claimed, error = await capture_error(self.run_once)
+                    if error is not None:
+                        logger.error("claiming a session failed", exc_info=error)
                 await self._sleep_or_closed(_PAUSE_SECONDS)
         finally:
             await self._shutdown_session()
 
-    async def run_once(self, discovery: Discovery) -> str | None:
-        if self._active is not None:
+    async def run_once(self) -> str | None:
+        if self._session_task is not None:
             return None
-        for meeting_id in await discovery.candidate_meetings():
-            if not await self._transport.acquire_lease(meeting_id, self._worker_id):
-                continue
-            if await self._absorb_command(meeting_id):
-                return meeting_id
-            await self._transport.release_lease(meeting_id, self._worker_id)
-        return None
-
-    async def poll_commands(self) -> None:
-        meeting_id = self._active
-        if meeting_id is None:
-            return
-        stream = command_stream(meeting_id)
-        await self._transport.ensure_group(stream, WORKER_GROUP)
-        entries = await self._transport.read_group(
-            stream, WORKER_GROUP, self._worker_id, count=1, block_ms=_READ_BLOCK_MS
+        attempt_id = uuid4().hex
+        status, error = await capture_error(
+            partial(self._status.claim, self._worker_id, attempt_id, SESSION_LEASE_SECONDS)
         )
-        if not entries:
-            return
-        entry_id, fields = entries[0]
-        kind = str(fields.get("type", ""))
-        if kind == "stop":
-            await self._handle_stop(meeting_id, entry_id)
-        elif kind == "resume" and self._session_task is None:
-            await self._start_join(meeting_id, entry_id, resume=True)
+        if error is not None:
+            logger.warning("claiming a session failed: %s", error)
+            return None
+        if status is None:
+            return None
+        claim = _Claim(status.meeting_id, attempt_id)
+        snapshot = self._store.load(claim.meeting_id)
+        if status.desired_state == "stopped":
+            await self._close(claim, "ended", "stopped_by_owner", "stopped before the twin joined")
+            return None
+        if status.attempts > SESSION_MAX_ATTEMPTS:
+            detail = f"recovery gave up after {status.attempts - 1} attempts"
+            await self._close(claim, "failed", "infra_failure", detail)
+            return None
+        if snapshot is None:
+            await self._close(claim, "failed", "infra_failure", "the session snapshot is missing")
+            return None
+        return await self._start_join(claim, status, snapshot)
 
     async def _shutdown_session(self) -> None:
         task = self._session_task
@@ -260,34 +265,21 @@ class WorkerConsumer:
             return False
         return True
 
-    async def _renew_lease(self, meeting_id: str) -> None:
-        interval = self._settings.transport.redis.lease_seconds / 3
-        while not self._deps.shutdown.is_set():
-            if await self._sleep_or_closed(interval):
+    async def _watch_lease(self, claim: _Claim) -> None:
+        deadline = time.monotonic() + SESSION_LEASE_SECONDS - LEASE_SAFETY_SECONDS
+        while not await self._sleep_or_closed(LEASE_RENEW_SECONDS):
+            sent = time.monotonic()
+            row, error = await capture_error(partial(self._renew, claim))
+            if row is not None:
+                deadline = sent + SESSION_LEASE_SECONDS - LEASE_SAFETY_SECONDS
+                if row.desired_state == "stopped":
+                    await self._request_stop(claim.meeting_id)
+                continue
+            if error is None or time.monotonic() >= deadline:
+                logger.warning("lost the lease on meeting %s", claim.meeting_id)
+                self._lease_lost = True
+                self._stop_local()
                 return
-            if not await self._transport.renew_lease(meeting_id, self._worker_id):
-                return
-
-    async def _absorb_command(self, meeting_id: str) -> bool:
-        stream = command_stream(meeting_id)
-        await self._transport.ensure_group(stream, WORKER_GROUP)
-        stale = await self._transport.claim_stale(
-            stream, WORKER_GROUP, self._worker_id, min_idle_ms=self._lease_ms
-        )
-        entries = stale or await self._transport.read_group(
-            stream, WORKER_GROUP, self._worker_id, count=1, block_ms=_READ_BLOCK_MS
-        )
-        if not entries:
-            return False
-        entry_id, fields = entries[0]
-        kind = str(fields.get("type", ""))
-        if kind == "join":
-            return await self._start_join(meeting_id, entry_id, resume=False)
-        if kind == "resume":
-            return await self._start_join(meeting_id, entry_id, resume=True)
-        if kind == "stop":
-            await self._close_unjoined(meeting_id, entry_id)
-        return False
 
     async def _session_overrides(self, meeting_id: str) -> dict[str, SecretStr]:
         cached = self._overrides.get(meeting_id)
@@ -298,19 +290,17 @@ class WorkerConsumer:
         self._overrides[meeting_id] = redeemed
         return redeemed
 
-    async def _start_join(self, meeting_id: str, entry_id: str, *, resume: bool) -> bool:
-        snapshot = self._store.load(meeting_id)
-        status, error = await capture_error(partial(self._status.get, meeting_id))
-        if error is not None:
-            logger.warning("status of meeting %s is unreadable: %s", meeting_id, error)
-            return False
-        if snapshot is None or status is None or status.terminal:
-            await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
-            return False
-        if status.desired_state == "stopped":
-            await self._close_unjoined(meeting_id, entry_id)
-            return False
-        writer = StatusWriter(self._status, meeting_id)
+    async def _renew(self, claim: _Claim) -> SessionStatus | None:
+        async with asyncio.timeout(LEASE_RENEW_SECONDS):
+            return await self._status.renew(
+                claim.meeting_id, self._worker_id, claim.attempt_id, SESSION_LEASE_SECONDS
+            )
+
+    async def _start_join(
+        self, claim: _Claim, status: SessionStatus, snapshot: Snapshot
+    ) -> str | None:
+        meeting_id = claim.meeting_id
+        writer = StatusWriter(self._status, meeting_id, attempt_id=claim.attempt_id)
         writer.phase = status.phase
         self._writer = writer
         await writer.write("joining")
@@ -319,31 +309,39 @@ class WorkerConsumer:
         self._active = meeting_id
         self._wiring_stop = None
         self._stop_requested = False
+        self._stop_seen = False
+        self._lease_lost = False
         self._bound.clear()
         request = replace(
-            join_request_for(snapshot, session_settings, resume=resume),
+            join_request_for(snapshot, session_settings, resume=status.phase != "created"),
             on_phase=partial(self._record_live_phase, meeting_id),
         )
-        task = asyncio.create_task(self._run_session(meeting_id, request))
+        task = asyncio.create_task(self._run_session(claim, request))
         self._session_task = task
         task.add_done_callback(self._session_done)
         if await self._await_binding(task):
-            await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
-            return True
-        self._active = None
-        self._session_task = None
-        return False
+            return meeting_id
+        return None
 
-    async def _close_unjoined(self, meeting_id: str, entry_id: str) -> None:
-        writer = StatusWriter(self._status, meeting_id)
-        await writer.write(
-            "ended", terminal_reason="stopped_by_owner", detail="stopped before the twin joined"
-        )
+    async def _close(
+        self, claim: _Claim, phase: PublicPhase, reason: TerminalReason, detail: str
+    ) -> None:
+        writer = StatusWriter(self._status, claim.meeting_id, attempt_id=claim.attempt_id)
+        await writer.write(phase, terminal_reason=reason, detail=detail)
         await writer.close()
+        if writer.persisted != phase:
+            return
         await self._publish(
-            meeting_id, "session_ended", {"phase": "ended", "terminal_reason": "stopped_by_owner"}
+            claim.meeting_id, "session_ended", {"phase": phase, "terminal_reason": reason}
         )
-        await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
+        await self._release(claim)
+
+    async def _release(self, claim: _Claim) -> None:
+        _released, error = await capture_error(
+            partial(self._status.release, claim.meeting_id, self._worker_id, claim.attempt_id)
+        )
+        if error is not None:
+            logger.warning("releasing meeting %s failed: %s", claim.meeting_id, error)
 
     async def _await_binding(self, task: asyncio.Task[None]) -> bool:
         waiter = asyncio.create_task(self._bound.wait())
@@ -362,30 +360,35 @@ class WorkerConsumer:
         self._bound.set()
         return await self._ports.run_session(config, wiring)
 
-    async def _run_session(self, meeting_id: str, request: JoinRequest) -> None:
-        renewal = asyncio.create_task(self._renew_lease(meeting_id))
+    async def _run_session(self, claim: _Claim, request: JoinRequest) -> None:
+        meeting_id = claim.meeting_id
+        watcher = asyncio.create_task(self._watch_lease(claim))
         ports = JoinPorts(
             run_session=self._session_port,
             open_memory=self._ports.open_memory,
         )
-        outcome, error = await capture_error(partial(run_join_session, request, ports))
         try:
-            if error is None and outcome is not None:
+            outcome, error = await capture_error(partial(run_join_session, request, ports))
+            if self._lease_lost:
+                logger.warning("meeting %s moved to another worker; skipping settle", meeting_id)
+            elif error is None and outcome is not None:
                 await self._settle(meeting_id, outcome)
+            elif isinstance(error, _RETRYABLE):
+                logger.warning("join for meeting %s will be retried: %s", meeting_id, error)
             elif isinstance(error, FakeYouError):
                 await self._settle_failed(meeting_id, error)
-            elif isinstance(error, (OSError, ValueError, ProviderFault)):
-                self._forget(meeting_id)
-                await self._transport.release_lease(meeting_id, self._worker_id)
             else:
                 logger.error("join for meeting %s failed unexpectedly", meeting_id, exc_info=error)
                 await self._settle_failed(meeting_id, cast(Exception, error))
         finally:
-            renewal.cancel()
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
             self._forget(meeting_id)
             writer, self._writer = self._writer, None
             if writer is not None:
                 await writer.close()
+            if writer is not None and writer.persisted in TERMINAL_PHASES:
+                await self._release(claim)
 
     async def _settle_failed(self, meeting_id: str, error: Exception) -> None:
         detail = str(error)
@@ -412,7 +415,6 @@ class WorkerConsumer:
             "session_ended",
             {"phase": "failed", "terminal_reason": "infra_failure", "detail": detail},
         )
-        await self._transport.release_lease(meeting_id, self._worker_id)
         self._forget(meeting_id)
 
     async def _settle(self, meeting_id: str, outcome: JoinOutcome) -> None:
@@ -430,7 +432,6 @@ class WorkerConsumer:
         await self._queue_pending_ingestion(meeting_id)
         if session.phase == "ended":
             await self._queue_debrief(meeting_id)
-        await self._transport.release_lease(meeting_id, self._worker_id)
         self._forget(meeting_id)
 
     async def _queue_pending_ingestion(self, meeting_id: str) -> None:
@@ -456,14 +457,19 @@ class WorkerConsumer:
             encode_debrief_job(meeting_id=meeting_id, at=_now_iso()),
         )
 
-    async def _handle_stop(self, meeting_id: str, entry_id: str) -> None:
+    async def _request_stop(self, meeting_id: str) -> None:
+        if self._stop_seen:
+            return
+        self._stop_seen = True
         await self._apply_phase(meeting_id, "leaving", None)
+        self._stop_local()
+
+    def _stop_local(self) -> None:
         stop = self._wiring_stop
         if stop is None:
             self._stop_requested = True
         else:
             stop.set()
-        await self._transport.ack(command_stream(meeting_id), WORKER_GROUP, entry_id)
 
     def _record_live_phase(self, meeting_id: str, phase: PublicPhase) -> None:
         writer = self._writer

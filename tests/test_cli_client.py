@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
 import httpx2
 import pytest
@@ -266,24 +266,12 @@ async def test_debrief_gives_up_with_a_named_timeout(monkeypatch: pytest.MonkeyP
     assert caught.value.code == ErrorCode.API_JOB_TIMEOUT
 
 
-class _Commands:
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
-        del meeting_id
-        self.sent.append(str(fields["type"]))
-        return f"{len(self.sent)}-0"
-
-
 async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: Settings) -> None:
     settings.api.owner_token = SecretStr("owner-secret")
-    commands = _Commands()
     repository = MemorySessionStatus()
     app = create_app(
         settings,
         ApiDeps(
-            transport=lambda: commands,
             snapshot_store=lambda: SessionStore(settings.paths.record_dir),
         ),
     )
@@ -316,4 +304,3 @@ async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: S
     )
     assert [session["meeting_id"] for session in listed] == ["contract-1"]
     assert status["meeting_id"] == "contract-1"
-    assert commands.sent == ["join", "stop"]
