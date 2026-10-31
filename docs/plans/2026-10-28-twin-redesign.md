@@ -355,6 +355,14 @@ Revisi riset: polling `page.content()` di `_await_admission` dan
 `leave_meeting` diganti `asyncio.wait` atas sinyal protocol dan
 `get_by_role(...).wait_for(state="visible"|"detached", timeout=...)`.
 
+Implementasi (2026-10-31): `JoinResult.knocked` menandai hasil setelah tombol
+join diklik; retry lifecycle hanya untuk `failed` yang belum knock, jadi
+`timeout` dan kegagalan setelah knock tidak pernah knock ulang. Admission
+dibaca dulu dari protocol (status device sendiri `1` dengan peer `connected`,
+lihat probe A4: `3` = menunggu di lobby); fallback halaman tetap membaca
+lobby karena di sana belum ada panel chat. Baca halaman yang gagal di lobby
+baru dianggap gagal setelah lima kali berturut-turut.
+
 ### A4: Status call dari protocol
 
 - `in_call`, `removed`, `ended`, dan `left` diturunkan dari status device

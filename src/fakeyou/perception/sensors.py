@@ -114,6 +114,7 @@ class PerceptionSensors:
         self.heartbeats = 0
         self.frames_seen = 0
         self.drained_at: float | None = None
+        self.synced_at: float | None = None
         self.peer_states: tuple[str, ...] = ()
         self._own_status: int | None = None
         self._audio_outputs: set[tuple[str, str]] = set()
@@ -150,6 +151,7 @@ class PerceptionSensors:
             screens=sum(user.is_screen for user in users),
         )
         self.roster.mark_synced()
+        self.synced_at = self.monotonic()
         self.heartbeats += 1
         self._apply_changes(self.roster.apply_users(users), self._clock())
         self._observe_own_status()
@@ -157,6 +159,9 @@ class PerceptionSensors:
 
     def drained_within(self, seconds: float) -> bool:
         return self.drained_at is not None and self.monotonic() - self.drained_at <= seconds
+
+    def synced_within(self, seconds: float) -> bool:
+        return self.synced_at is not None and self.monotonic() - self.synced_at <= seconds
 
     def assignments(self) -> list[StreamAssignment]:
         settings = self._settings

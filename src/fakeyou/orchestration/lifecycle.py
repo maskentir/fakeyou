@@ -167,7 +167,6 @@ def apply_transition(
 
 
 JoinAttemptOutcome = Literal["retry", "joined", "failed", "aborted"]
-JOIN_RETRYABLE_STATUSES: frozenset[JoinStatus] = frozenset({"timeout", "failed"})
 JOIN_BACKOFF_FACTOR = 2.0
 
 
@@ -182,8 +181,8 @@ class JoinAttempt:
     number: int
     last: bool
 
-    def retries(self, status: JoinStatus) -> bool:
-        return not self.last and status in JOIN_RETRYABLE_STATUSES
+    def retries(self, result: JoinResult) -> bool:
+        return not self.last and result.status == "failed" and not result.knocked
 
 
 class JoinStep(NamedTuple):
@@ -287,7 +286,7 @@ async def _join(
             number = attempt.retry_state.attempt_number
             join_attempt = JoinAttempt(number=number, last=number >= retry.max_attempts)
             step = await driver.join(state, join_attempt)
-            again = join_attempt.retries(step.result.status)
+            again = join_attempt.retries(step.result)
             driver.record(
                 "join_attempt_finished",
                 source="runtime",

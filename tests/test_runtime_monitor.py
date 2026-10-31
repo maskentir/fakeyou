@@ -20,6 +20,7 @@ from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import DrainBatch
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import ENDED, IN_CALL, REMOVED, FakePage, meet_page
+from tests._meet_protocol_fakes import sync_body, user_info
 from tests._persistence_fakes import RecordingJournal
 from tests._runtime_support import mining_payload, session_config
 
@@ -34,6 +35,9 @@ def _bare_worker(**overrides: Any) -> MeetingWorker:
         clock.sleep,
         clock.monotonic,
     )
+
+
+TWIN_DEVICE = "spaces/s/devices/twin"
 
 
 async def _wait_for_faults(reporter: FaultReporter, count: int = 1) -> None:
@@ -405,3 +409,26 @@ async def test_an_own_device_out_of_the_meeting_takes_its_reason_from_the_end_sc
         "ended",
         "own device is out of the meeting (status 6)",
     )
+
+
+async def test_lobby_admission_comes_from_a_fresh_sync_without_the_drain(
+    journal: RecordingJournal,
+) -> None:
+    clock = FakeClock()
+    worker = _bare_worker()
+    worker.monotonic = clock.monotonic
+    stack = create_perception_stack(
+        Settings(perception=PerceptionSettings(enabled=True)), journal=journal
+    )
+    assert stack is not None
+    worker.perception = stack
+    stack.sensors.monotonic = clock.monotonic
+
+    stack.sensors.accept_sync(sync_body([user_info(TWIN_DEVICE, "Twin", status=3, current=True)]))
+    waiting = worker.protocol_admitted()
+    stack.sensors.accept_sync(sync_body([user_info(TWIN_DEVICE, "Twin", status=1, current=True)]))
+    admitted = worker.protocol_admitted()
+    clock.now += DRAIN_STALE_SECONDS + 1
+    stale = worker.protocol_admitted()
+
+    assert (waiting, admitted, stale) == (False, True, False)

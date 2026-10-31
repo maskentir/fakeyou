@@ -230,6 +230,12 @@ The persona's `ai_disclosure` sets when the twin says it is an AI: `when_asked`
 honestly when asked and never claims to be human; no value lets it deny being an
 AI.
 
+The twin knocks on a meeting once. `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS` is the whole
+wait for admission, and a lobby that runs out ends the session as `lobby_timeout_reached`
+instead of knocking again. `FAKEYOU_MEETING__JOIN_MAX_ATTEMPTS` and the
+`FAKEYOU_MEETING__JOIN_RETRY_*` backoff only cover failures before the knock: opening the
+page, typing the name, finding the join button.
+
 ## Quality gates
 
 The build is the test suite. Nothing merges without it.

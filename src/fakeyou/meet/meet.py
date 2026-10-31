@@ -1,7 +1,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from html.parser import HTMLParser
 from typing import Literal, override
@@ -40,6 +40,7 @@ WAITING_ROOM_MARKERS = (
 _LOCATION_PROBE = "(() => location.href)()"
 PREPARE_TIMEOUT_SECONDS = 120.0
 CALL_STATE_TIMEOUT_SECONDS = 5.0
+LOBBY_READ_FAILURE_LIMIT = 5
 CAPTCHA_PROBE_TIMEOUT_SECONDS = 2.0
 
 _CAPTCHA_PROBE = """(() => {
@@ -112,6 +113,7 @@ class GuestJoinRequest:
 class JoinResult:
     status: JoinStatus
     detail: str
+    knocked: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +280,15 @@ async def _enter_twin_name(
     return None
 
 
+async def _knock_landed(page: Page) -> bool:
+    try:
+        async with asyncio.timeout(CALL_STATE_TIMEOUT_SECONDS):
+            content = await page.content()
+    except (PlaywrightError, TimeoutError):
+        return False
+    return _is_waiting(content)
+
+
 async def _click_join(
     page: Page,
     signals: MeetSignals,
@@ -300,7 +311,7 @@ async def _click_join(
                 label,
                 sleep,
             )
-            if failure is not None:
+            if failure is not None and not await _knock_landed(page):
                 return failure
             return None
         if monotonic() >= deadline:
@@ -313,6 +324,7 @@ class JoinPolling:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     monotonic: Callable[[], float] = time.monotonic
     abort: Callable[[], bool] | None = None
+    admitted: Callable[[], bool] | None = None
 
 
 DEFAULT_JOIN_POLLING = JoinPolling()
@@ -427,12 +439,25 @@ async def request_guest_join(
                 )
             if failure is not None:
                 return JoinResult(status="failed", detail=failure)
-            return await _await_admission(page, request, signals, polling)
+            return replace(await _await_admission(page, request, signals, polling), knocked=True)
     except TimeoutError:
         return JoinResult(
             status="timeout",
             detail=f"no admission within {request.lobby_timeout_seconds} seconds",
+            knocked=True,
         )
+
+
+def _unreadable_outcome(
+    content: JoinResult, unreadable: int, request: GuestJoinRequest, *, expired: bool
+) -> JoinResult | None:
+    if content.status == "aborted" or unreadable >= LOBBY_READ_FAILURE_LIMIT:
+        return content
+    if expired:
+        return JoinResult(
+            status="timeout", detail=f"no admission within {request.lobby_timeout_seconds} seconds"
+        )
+    return None
 
 
 async def _await_admission(
@@ -443,12 +468,23 @@ async def _await_admission(
 ) -> JoinResult:
     deadline = polling.monotonic() + request.lobby_timeout_seconds
     captcha_since: float | None = None
+    unreadable = 0
     while True:
+        if polling.admitted is not None and polling.admitted():
+            return JoinResult(status="admitted", detail="own device was admitted to the meeting")
         content = await _poll_content(
             page, polling.abort, poll_interval_seconds=request.poll_interval_seconds
         )
         if isinstance(content, JoinResult):
-            return content
+            unreadable += 1
+            ended = _unreadable_outcome(
+                content, unreadable, request, expired=polling.monotonic() >= deadline
+            )
+            if ended is not None:
+                return ended
+            await polling.sleep(request.poll_interval_seconds)
+            continue
+        unreadable = 0
         if _is_explicit_denial(content):
             return JoinResult(status="denied", detail="guest request to join was denied")
         if signals.denied in content:

@@ -67,6 +67,7 @@ class ScriptedDriver:
     def __init__(self, failures_before_success: int = 0, *, failure: JoinStatus = "failed") -> None:
         self.failures_before_success = failures_before_success
         self.failure = failure
+        self.knocked = False
         self.seen: list[JoinAttempt] = []
         self.phases: list[PublicPhase] = []
         self.journal = RecordingJournal()
@@ -87,7 +88,8 @@ class ScriptedDriver:
         self.phases.append(state["phase"])
         self.seen.append(attempt)
         status = "admitted" if len(self.seen) > self.failures_before_success else self.failure
-        return scripted_join_step(state, JoinResult(status=status, detail=f"{status} detail"))
+        result = JoinResult(status=status, detail=f"{status} detail", knocked=self.knocked)
+        return scripted_join_step(state, result)
 
     async def await_admission(self, state: LifecycleState) -> LifecycleUpdate:
         self.phases.append(state["phase"])
@@ -387,19 +389,13 @@ async def test_join_retries_transient_errors_then_succeeds(
     assert pinned_join_jitter.draws == [(0, 1), (0, 1)]
 
 
-@pytest.mark.parametrize(
-    ("failure", "reason"),
-    [("failed", "browser_failure"), ("timeout", "lobby_timeout_reached")],
-)
-async def test_join_retry_exhaustion_fails_with_reason(
-    pinned_join_jitter: JitterPin, failure: JoinStatus, reason: str
-) -> None:
-    driver = ScriptedDriver(failures_before_success=99, failure=failure)
+async def test_join_retry_exhaustion_fails_with_reason(pinned_join_jitter: JitterPin) -> None:
+    driver = ScriptedDriver(failures_before_success=99, failure="failed")
 
     lifecycle, _slept = await _run(driver)
 
     assert len(driver.seen) == JOIN_MAX_ATTEMPTS
-    assert (lifecycle.phase, lifecycle.state["terminal_reason"]) == ("ended", reason)
+    assert (lifecycle.phase, lifecycle.state["terminal_reason"]) == ("ended", "browser_failure")
     assert driver.outcomes() == [(1, "retry"), (2, "retry"), (3, "failed")]
     assert len(pinned_join_jitter.draws) == JOIN_MAX_ATTEMPTS - 1
 
@@ -417,7 +413,11 @@ async def test_owner_abort_is_not_retried(pinned_join_jitter: JitterPin) -> None
 
 @pytest.mark.parametrize(
     ("failure", "reason"),
-    [("denied", "denied_by_host"), ("blocked", "blocked_by_platform")],
+    [
+        ("denied", "denied_by_host"),
+        ("blocked", "blocked_by_platform"),
+        ("timeout", "lobby_timeout_reached"),
+    ],
 )
 async def test_domain_join_outcomes_end_on_the_first_attempt(
     pinned_join_jitter: JitterPin, failure: JoinStatus, reason: str
@@ -434,7 +434,7 @@ async def test_domain_join_outcomes_end_on_the_first_attempt(
 
 async def test_join_backoff_never_sleeps_past_the_cap(pinned_join_jitter: JitterPin) -> None:
     pinned_join_jitter.value = PINNED_JITTER
-    driver = ScriptedDriver(failures_before_success=3, failure="timeout")
+    driver = ScriptedDriver(failures_before_success=3, failure="failed")
 
     lifecycle, slept = await _run(
         driver, JoinRetry(max_attempts=4, base_seconds=2.0, cap_seconds=5.0)
@@ -443,3 +443,15 @@ async def test_join_backoff_never_sleeps_past_the_cap(pinned_join_jitter: Jitter
     assert lifecycle.phase == "ended"
     assert driver.outcomes() == [(1, "retry"), (2, "retry"), (3, "retry"), (4, "joined")]
     assert slept == [2.0 + PINNED_JITTER, 4.0 + PINNED_JITTER, 5.0]
+
+
+async def test_a_failure_after_the_knock_is_not_retried(pinned_join_jitter: JitterPin) -> None:
+    driver = ScriptedDriver(failures_before_success=99, failure="failed")
+    driver.knocked = True
+
+    lifecycle, _slept = await _run(driver)
+
+    assert len(driver.seen) == 1
+    assert lifecycle.state["terminal_reason"] == "browser_failure"
+    assert driver.outcomes() == [(1, "failed")]
+    assert pinned_join_jitter.draws == []
