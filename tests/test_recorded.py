@@ -2,6 +2,7 @@ import asyncio
 import time
 import warnings
 from collections.abc import AsyncIterator, Callable, Coroutine
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +12,15 @@ from langchain_core.messages import HumanMessage
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.reply_planner import ReplyPlanner
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.persistence.record import TranscriptEntry
 from fakeyou.replay.fixture import (
     JudgeVerdict,
     RecordedPlan,
     ReplySentence,
     ReplyTiming,
+    SpokenFinal,
+    SynthesisFault,
     SynthesisTiming,
     load_fixture,
 )
@@ -56,7 +61,7 @@ def test_the_synthesizer_holds_the_first_chunk_for_the_recorded_delay() -> None:
     assert marks[-1][0] == pytest.approx(0.9)
 
 
-def test_an_unrecorded_synthesis_falls_back_to_the_session_median() -> None:
+def test_an_unrecorded_synthesis_is_sized_by_the_recorded_speech_rate() -> None:
     timings = {
         ("t1", 0): SynthesisTiming(200.0, 800.0, 4800, 10),
         ("t2", 0): SynthesisTiming(400.0, 1000.0, 4800, 10),
@@ -70,11 +75,26 @@ def test_an_unrecorded_synthesis_falls_back_to_the_session_median() -> None:
     marks = run_virtual(main)
 
     assert marks[0][0] == pytest.approx(0.3)
-    assert sum(size for _, size in marks) == 4800
+    assert sum(size for _, size in marks) == 2400
 
 
-def test_the_judge_answers_with_the_recorded_decision_after_the_recorded_delay() -> None:
-    verdict = JudgeVerdict(
+def test_a_recorded_provider_failure_fails_again() -> None:
+    faults = {("t1", 0): (SynthesisFault(350.0, "unavailable"),)}
+
+    async def main() -> float:
+        loop = asyncio.get_running_loop()
+        stream = RecordedSynthesizer({}, faults=faults).stream(
+            "hello", sentence_index=0, transcript_id="t1"
+        )
+        with pytest.raises(ProviderFault):
+            await drain(stream)
+        return loop.time()
+
+    assert run_virtual(main) == pytest.approx(0.35)
+
+
+def reply_verdict() -> JudgeVerdict:
+    return JudgeVerdict(
         400.0,
         {
             "reason": "judge_reply",
@@ -94,20 +114,70 @@ def test_the_judge_answers_with_the_recorded_decision_after_the_recorded_delay()
         },
     )
 
+
+def spoken(transcript_id: str, text: str, offset: float) -> SpokenFinal:
+    entry = TranscriptEntry(
+        at=datetime(2026, 10, 27, tzinfo=UTC),
+        seq=1,
+        id=transcript_id,
+        spoken_at="2026-10-27T00:00:00+00:00",
+        source="meeting_audio",
+        text=text,
+        participant_id="unknown",
+        speaker_evidence_id=None,
+    )
+    return SpokenFinal(offset, entry, 0, None)
+
+
+def test_the_judge_decides_the_recorded_delay_after_the_final() -> None:
+    finals = (spoken("t1", "can you see my screen", 2.0),)
+
     async def main() -> tuple[float, Any]:
         loop = asyncio.get_running_loop()
-        judgement = await RecordedJudge({"t1": verdict}).judge(
+        await asyncio.sleep(2.0)
+        judgement = await RecordedJudge({"t1": reply_verdict()}, finals).judge(
             JudgeWindow((), JudgeLine("ayu", "can you see my screen"), transcript_id="t1")
         )
         return loop.time(), judgement
 
     elapsed, judgement = run_virtual(main)
 
-    assert elapsed == pytest.approx(0.4)
+    assert elapsed == pytest.approx(2.4)
     assert judgement.action == "reply"
     assert judgement.addressee == "twin"
     assert judgement.confidence == pytest.approx(0.9)
     assert judgement.evidence == ("screen",)
+
+
+def test_an_interim_with_the_final_words_gets_the_final_verdict_on_time() -> None:
+    finals = (spoken("t1", "Can you see my screen?", 2.0),)
+
+    async def main() -> tuple[float, Any]:
+        loop = asyncio.get_running_loop()
+        await asyncio.sleep(1.5)
+        judgement = await RecordedJudge({"t1": reply_verdict()}, finals).judge(
+            JudgeWindow((), JudgeLine("speaking", "can you see my screen"))
+        )
+        return loop.time(), judgement
+
+    elapsed, judgement = run_virtual(main)
+
+    assert elapsed == pytest.approx(2.4)
+    assert judgement.action == "reply"
+
+
+def test_a_partial_interim_is_judged_unfinished() -> None:
+    finals = (spoken("t1", "can you see my screen", 2.0),)
+
+    async def main() -> Any:
+        return await RecordedJudge({"t1": reply_verdict()}, finals).judge(
+            JudgeWindow((), JudgeLine("speaking", "can you"))
+        )
+
+    judgement = run_virtual(main)
+
+    assert judgement.finished is False
+    assert judgement.action == "stay_silent"
 
 
 def test_a_silenced_verdict_replays_as_staying_silent() -> None:
@@ -242,7 +312,7 @@ def test_the_pacer_plays_the_audio_at_the_pcm_rate() -> None:
     assert elapsed == pytest.approx(9600 / BYTES_PER_SECOND)
 
 
-def test_the_pacer_holds_the_clip_for_the_recorded_audio_length() -> None:
+def test_a_chunk_that_arrives_late_leaves_a_gap_before_it_plays() -> None:
     timings = {("t1", 0): SynthesisTiming(300.0, 900.0, 9600, 26)}
 
     async def main() -> float:
@@ -254,7 +324,27 @@ def test_the_pacer_holds_the_clip_for_the_recorded_audio_length() -> None:
 
     elapsed = run_virtual(main)
 
-    assert elapsed == pytest.approx(0.9)
+    assert elapsed == pytest.approx(0.9 + 4800 / BYTES_PER_SECOND)
+
+
+def test_the_pacer_takes_the_audio_faster_than_it_plays_it() -> None:
+    received: list[float] = []
+
+    async def main() -> float:
+        loop = asyncio.get_running_loop()
+
+        async def chunks() -> AsyncIterator[bytes]:
+            for _ in range(10):
+                yield b"\x00" * 4800
+            received.append(loop.time())
+
+        await create_pacer_backend().stream_audio(chunks())
+        return loop.time()
+
+    elapsed = run_virtual(main)
+
+    assert received == [pytest.approx(0.0)]
+    assert elapsed == pytest.approx(48000 / BYTES_PER_SECOND)
 
 
 def test_the_pacer_plays_the_audio_longer_than_the_provider_took() -> None:
@@ -357,3 +447,17 @@ def test_the_oue_4_session_replays_its_recorded_latencies() -> None:
     assert marks[-1][0] == pytest.approx(reply.duration_ms / 1000)
     assert sentence.text is not None
     assert sentence.text in "".join(piece for _, piece in marks)
+
+
+def test_a_recorded_fault_fails_only_the_attempt_it_failed() -> None:
+    faults = {("t1", 0): (SynthesisFault(100.0, "timeout"),)}
+    timings = {("t1", 0): SynthesisTiming(300.0, 900.0, 9600, 26)}
+    synthesizer = RecordedSynthesizer(timings, faults=faults)
+
+    async def main() -> int:
+        with pytest.raises(ProviderFault):
+            await drain(synthesizer.stream("hello", sentence_index=0, transcript_id="t1"))
+        retried = await drain(synthesizer.stream("hello", sentence_index=0, transcript_id="t1"))
+        return sum(size for _, size in retried)
+
+    assert run_virtual(main) == 9600

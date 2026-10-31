@@ -191,3 +191,26 @@ def test_the_oue_4_session_loads_as_a_replay_fixture() -> None:
     assert len(fixture.verdicts) >= 230
     assert sum(1 for reply in fixture.replies.values() if reply.sentences) >= 20
     assert len(fixture.syntheses) >= 15
+
+
+def test_an_early_turn_is_keyed_by_the_final_it_was_verified_as() -> None:
+    rows = [
+        row("transcript_finalized", 2.0, transcript_id="final"),
+        row("policy_decided", 1.8, transcript_id="early", action="reply", reason="judge_reply"),
+        row("early_turn_verified", 2.0, early_transcript_id="early", transcript_id="final"),
+        row(
+            "request_started",
+            1.9,
+            source="llm",
+            operation="chat",
+            request_id="r1",
+            transcript_id="early",
+        ),
+        row("answer_sentence_emitted", 2.5, transcript_id="early", sentence_index=0, chars=3),
+    ]
+
+    fixture = build_fixture(rows, [heard("final", "are you there", 2.0, 1)])
+
+    assert fixture.verdicts["final"].fields["reason"] == "judge_reply"
+    assert "final" in fixture.replies
+    assert fixture.rows[1]["transcript_id"] == "early"

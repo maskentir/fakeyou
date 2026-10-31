@@ -1,21 +1,35 @@
 import asyncio
 import json
 import statistics
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast, override
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import PrivateAttr
 
 from fakeyou.conversation.turn_judge import JudgeAction, JudgeWindow, TurnJudgement
-from fakeyou.replay.fixture import JudgeVerdict, RecordedPlan, ReplyTiming, SynthesisTiming
+from fakeyou.foundation.taxonomy import ProviderFaultKind
+from fakeyou.observability.journal import Journal
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.replay.fixture import (
+    JudgeVerdict,
+    RecordedPlan,
+    ReplyTiming,
+    SpokenFinal,
+    SynthesisFault,
+    SynthesisTiming,
+)
+from fakeyou.replay.pacer import BYTES_PER_SECOND
+from fakeyou.speech.streaming import SpeechTag, journaled_stream
 
 CHUNK_BYTES = 4800
 FILLER = "x"
+RECORDED_PROVIDER = "recorded"
+VOICED_SAMPLE = (1000).to_bytes(2, "little", signed=True)
 
 
 def _median(values: Sequence[float]) -> float:
@@ -25,24 +39,56 @@ def _median(values: Sequence[float]) -> float:
 
 
 def _chunks(total: int) -> tuple[bytes, ...]:
+    total -= total % len(VOICED_SAMPLE)
     if total <= 0:
         return (b"",)
     return tuple(
-        b"\x00" * min(CHUNK_BYTES, total - start) for start in range(0, total, CHUNK_BYTES)
+        VOICED_SAMPLE * (min(CHUNK_BYTES, total - start) // len(VOICED_SAMPLE))
+        for start in range(0, total, CHUNK_BYTES)
     )
 
 
+async def _failing(fault: SynthesisFault) -> AsyncGenerator[bytes]:
+    await asyncio.sleep(fault.duration_ms / 1000)
+    raise ProviderFault("tts", cast(ProviderFaultKind, fault.kind))
+    yield b""
+
+
+def _normalized(text: str) -> str:
+    kept = "".join(char for char in text.casefold() if char.isalnum() or char.isspace())
+    return " ".join(kept.split())
+
+
 class RecordedSynthesizer:
-    def __init__(self, timings: Mapping[tuple[str, int], SynthesisTiming]) -> None:
+    def __init__(
+        self,
+        timings: Mapping[tuple[str, int], SynthesisTiming],
+        *,
+        faults: Mapping[tuple[str, int], tuple[SynthesisFault, ...]] | None = None,
+        journal: Journal | None = None,
+    ) -> None:
         self._timings = timings
+        self._faults = {key: list(recorded) for key, recorded in (faults or {}).items()}
+        self._journal = journal
+        complete = [
+            timing
+            for timing in timings.values()
+            if timing.duration_ms is not None and timing.bytes_out
+        ]
         self._first_chunk_ms = _median([timing.first_chunk_ms for timing in timings.values()])
-        self._duration_ms = _median(
-            [timing.duration_ms for timing in timings.values() if timing.duration_ms is not None]
+        self._chars_per_second = _median(
+            [
+                timing.chars / (timing.bytes_out / BYTES_PER_SECOND)
+                for timing in complete
+                if timing.chars and timing.bytes_out
+            ]
         )
-        self._bytes_out = int(
-            _median(
-                [timing.bytes_out for timing in timings.values() if timing.bytes_out is not None]
-            )
+        self._transfer_ms_per_byte = _median(
+            [
+                ((timing.duration_ms or 0.0) - timing.first_chunk_ms) / timing.bytes_out
+                for timing in complete
+                if timing.bytes_out
+            ]
         )
 
     def stream(
@@ -53,13 +99,20 @@ class RecordedSynthesizer:
         transcript_id: str | None = None,
         language: str | None = None,
     ) -> AsyncIterator[bytes]:
-        del text, language
-        return self._stream(sentence_index, transcript_id)
+        del language
+        tag = SpeechTag(RECORDED_PROVIDER, sentence_index, transcript_id)
+        pending = (
+            self._faults.get((transcript_id, sentence_index or 0))
+            if transcript_id is not None
+            else None
+        )
+        if pending:
+            fault = pending.pop(0)
+            return journaled_stream(self._journal, text, lambda _text: _failing(fault), tag)
+        timing = self._timing(text, sentence_index, transcript_id)
+        return journaled_stream(self._journal, text, lambda _text: self._stream(timing), tag)
 
-    async def _stream(
-        self, sentence_index: int | None, transcript_id: str | None
-    ) -> AsyncIterator[bytes]:
-        timing = self._timing(sentence_index, transcript_id)
+    async def _stream(self, timing: SynthesisTiming) -> AsyncGenerator[bytes]:
         chunks = _chunks(timing.bytes_out or 0)
         loop = asyncio.get_running_loop()
         origin = loop.time()
@@ -72,33 +125,73 @@ class RecordedSynthesizer:
                 await asyncio.sleep(delay)
             yield chunk
 
-    def _timing(self, sentence_index: int | None, transcript_id: str | None) -> SynthesisTiming:
-        recorded = None
-        if transcript_id is not None and sentence_index is not None:
-            recorded = self._timings.get((transcript_id, sentence_index))
-        if recorded is None:
-            return SynthesisTiming(self._first_chunk_ms, self._duration_ms, self._bytes_out)
-        return SynthesisTiming(
-            recorded.first_chunk_ms,
-            recorded.duration_ms if recorded.duration_ms is not None else self._duration_ms,
-            recorded.bytes_out if recorded.bytes_out is not None else self._bytes_out,
-            recorded.chars,
+    def _timing(
+        self, text: str, sentence_index: int | None, transcript_id: str | None
+    ) -> SynthesisTiming:
+        recorded = (
+            self._timings.get((transcript_id, sentence_index or 0))
+            if transcript_id is not None
+            else None
         )
+        first_chunk_ms = recorded.first_chunk_ms if recorded is not None else self._first_chunk_ms
+        if recorded is not None and recorded.bytes_out and recorded.duration_ms is not None:
+            return recorded
+        spoken = len(text) / self._chars_per_second if self._chars_per_second else 0.0
+        bytes_out = round(spoken * BYTES_PER_SECOND)
+        duration_ms = first_chunk_ms + bytes_out * self._transfer_ms_per_byte
+        return SynthesisTiming(first_chunk_ms, duration_ms, bytes_out, len(text))
 
     async def aclose(self) -> None:
         return None
 
 
 class RecordedJudge:
-    def __init__(self, verdicts: Mapping[str, JudgeVerdict]) -> None:
+    def __init__(
+        self,
+        verdicts: Mapping[str, JudgeVerdict],
+        finals: Sequence[SpokenFinal] = (),
+        *,
+        origin: float = 0.0,
+    ) -> None:
         self._verdicts = verdicts
+        self._origin = origin
         self._delay_ms = _median([verdict.delay_ms for verdict in verdicts.values()])
+        self._offsets = {final.entry.id: final.offset for final in finals}
+        self._by_text: dict[str, list[SpokenFinal]] = {}
+        for final in sorted(finals, key=lambda final: final.offset):
+            self._by_text.setdefault(_normalized(final.entry.text), []).append(final)
 
     async def judge(self, window: JudgeWindow) -> TurnJudgement:
-        verdict = self._verdicts.get(window.transcript_id) if window.transcript_id else None
-        delay = verdict.delay_ms if verdict is not None else self._delay_ms
-        await asyncio.sleep(delay / 1000)
+        loop = asyncio.get_running_loop()
+        transcript_id = window.transcript_id or self._resolve(window.latest.text, loop.time())
+        verdict = self._verdicts.get(transcript_id) if transcript_id is not None else None
+        offset = self._offsets.get(transcript_id) if transcript_id is not None else None
+        if verdict is None or offset is None:
+            await asyncio.sleep(self._delay_ms / 1000)
+            return _unfinished(window.latest.text)
+        delay = self._origin + offset + verdict.delay_ms / 1000 - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
         return _judgement(verdict)
+
+    def _resolve(self, text: str, now: float) -> str | None:
+        upcoming = [
+            final
+            for final in self._by_text.get(_normalized(text), ())
+            if self._origin + final.offset >= now
+        ]
+        return upcoming[0].entry.id if upcoming else None
+
+
+def _unfinished(text: str) -> TurnJudgement:
+    return TurnJudgement(
+        heard=text,
+        finished=False,
+        backchannel=False,
+        addressee="unclear",
+        action="stay_silent",
+        confidence=0.0,
+    )
 
 
 def _judgement(verdict: JudgeVerdict | None) -> TurnJudgement:
@@ -220,13 +313,11 @@ class RecordedModel(BaseChatModel):
             await asyncio.sleep(max(0.0, scripted.duration_ms - elapsed) / 1000)
 
     def _transcript_id(self, messages: Sequence[BaseMessage]) -> str | None:
-        for message in reversed(list(messages)):
-            identifier = getattr(message, "id", None)
-            if isinstance(identifier, str) and (
-                identifier in self._replies or identifier in self._plans
-            ):
-                return identifier
-        return None
+        latest = next(
+            (message for message in reversed(messages) if isinstance(message, HumanMessage)), None
+        )
+        identifier = latest.id if latest is not None else None
+        return identifier if isinstance(identifier, str) else None
 
     def _script(self, transcript_id: str | None) -> ScriptedReply:
         reply = self._replies.get(transcript_id) if transcript_id else None

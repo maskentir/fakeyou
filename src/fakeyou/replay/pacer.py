@@ -14,15 +14,12 @@ async def set_muted(*, muted: bool) -> None:
 
 async def pacer_stream(chunks: AsyncIterator[bytes]) -> None:
     loop = asyncio.get_running_loop()
-    started: float | None = None
-    played = 0
+    ends: float | None = None
     async for chunk in chunks:
-        if started is None:
-            started = loop.time()
-        played += len(chunk)
-        delay = started + played / BYTES_PER_SECOND - loop.time()
-        if delay > 0:
-            await asyncio.sleep(delay)
+        now = loop.time()
+        ends = (now if ends is None else max(ends, now)) + len(chunk) / BYTES_PER_SECOND
+    if ends is not None and ends > loop.time():
+        await asyncio.sleep(ends - loop.time())
 
 
 def create_pacer_backend() -> PlaybackBackend:
