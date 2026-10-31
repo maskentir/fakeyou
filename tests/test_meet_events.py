@@ -83,7 +83,7 @@ def test_speech_event_maps_only_started_and_finished() -> None:
     assert finished is not None
     assert finished["type"] == "twin.speech_finished"
     assert speech_event("m-1", PlaybackEvent("playback_dropped"), at=AT) is None
-    assert speech_event("m-1", PlaybackEvent("mute_failed"), at=AT) is None
+    assert speech_event("m-1", PlaybackEvent("playback_failed"), at=AT) is None
 
 
 def test_unknown_playback_kind_fails_loudly() -> None:

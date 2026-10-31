@@ -29,7 +29,6 @@ _PLAYBACK_EVENT_TYPES: Mapping[str, str | None] = {
     "playback_finished": "twin.speech_finished",
     "playback_failed": None,
     "playback_dropped": None,
-    "mute_failed": None,
 }
 
 

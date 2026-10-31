@@ -452,6 +452,7 @@ dependencies = [
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
+    { name = "pasimple" },
     { name = "pillow" },
     { name = "playwright" },
     { name = "protobuf" },
@@ -514,6 +515,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.5,<3" },
     { name = "onnxruntime", specifier = "~=1.24.3" },
     { name = "openai", specifier = "==3.19.2" },
+    { name = "pasimple", specifier = "==0.0.3" },
     { name = "pillow", specifier = ">=13,<14" },
     { name = "playwright", specifier = ">=1.63,<2" },
     { name = "protobuf", specifier = ">=6.33,<7" },
@@ -1736,6 +1738,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7d/fa/3944b40b07da9ce895c0e6303a5ab7d53da063554f534556b134a54d6093/packaging-26.3.tar.gz", hash = "sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79", size = 313412, upload-time = "2026-08-04T18:15:28.737Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl", hash = "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c", size = 129956, upload-time = "2026-08-04T18:15:27.159Z" },
+]
+
+[[package]]
+name = "pasimple"
+version = "0.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/38/a32b5bf920f0b7c652e1c2b0b2b34d1a6b69ea160d2fd13686edfc191ee5/pasimple-0.0.3.tar.gz", hash = "sha256:e39bfb5edff38a40b15814ad28368104b4a3d3157d0a5cd20cb03b572a424636", size = 11354, upload-time = "2024-01-07T20:13:48.624Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/99/5ffadeb3545d3f6f17853368070a13c88b17a62fe883674a0428ea82b3b5/pasimple-0.0.3-py3-none-any.whl", hash = "sha256:95dcc50a691212755067bd1f82b04b9b0f0ae8738f84f8cbe5639d9f39f4ec7d", size = 9332, upload-time = "2024-01-07T20:13:46.56Z" },
 ]
 
 [[package]]

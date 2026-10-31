@@ -720,6 +720,72 @@ audible 0,78–0,80 s yang utuh. Event playback di oue-4 belum membawa
 metrik ini nol di journal lama. B5a lewat satu sesi live baru untuk
 mengukurnya dengan alat, bukan dengan tangan.
 
+Desain B5a (2026-11-01), dari spike di container `worker-sessions` (nada
+440 Hz ke `agent_output`, monitor direkam per 5-10 ms dengan `parec`):
+
+| Writer | Jeda antar klip | Stop sampai sunyi | Resume | Catatan |
+| --- | --- | --- | --- | --- |
+| `pacat` berumur panjang, kill | 0 ms | 11-14 ms | spawn ulang 6-18 ms | pipe 64 KB menahan ~1,3 s audio di luar kendali kita, tidak ada query latensi |
+| `pasimple`, `tlength` 40 ms, `prebuf` 0 | 0 ms | flush 8-40 ms | hilang | saat underrun read index jalan terus, jadi audio sesudah jeda terbuang sepanjang jeda itu |
+| `pasimple`, `tlength` 40 ms, `prebuf` 20 ms | 0 ms | flush 8-9 ms, fade 10 ms lalu drain 56-64 ms | 12-16 ms, utuh | write berjalan real time (1,0 s dalam 0,97 s), latensi buffer ~38 ms |
+
+Pilihan: `pasimple` (MIT, ctypes ke `libpulse-simple` yang sudah ada di
+image) dengan `tlength` 40 ms dan `prebuf` 20 ms. Default `pasimple` tanpa
+`tlength` menerima 1 s audio sekaligus, jadi atribut buffer wajib diset.
+Write yang memblok memberi backpressure dan posisi putar yang diketahui
+(semua yang sudah ditulis pasti terdengar dalam ~40 ms), sesuatu yang tidak
+didapat dari pipe `pacat`. Onset 1,1 s yang sempat terlihat pada `pacat`
+ternyata warm-up `parec`, bukan sifat `pacat`.
+
+Stop dan pause memakai fade-out 10 ms lalu menunggu buffer habis: sunyi
+dalam 56-64 ms (gate ≤ 100 ms) dan lompatan sampel maksimum 920, sama
+dengan langkah alami sinus 440 Hz, jadi tidak ada klik. Karena yang sudah
+ditulis pasti terdengar, resume melanjutkan tepat dari sampel berikutnya
+dengan fade-in 10 ms. Flush hanya dipakai saat writer ditutup.
+
+Bentuknya dua PR:
+
+- B5a-1, writer. Satu `PulseWriter` per sesi (thread lewat
+  `asyncio.to_thread` per chunk 20 ms) menggantikan `paplay` per klip dan
+  `pactl set-sink-mute`. `PlaybackEngine` menulis klip demi klip ke writer
+  yang sama; `playback_finished` berarti sampel terakhir sudah masuk buffer
+  40 ms. `tail_seconds` dihapus: setelah klip terakhir, worker menunggu
+  klip berikutnya selama latensi buffer, dan `is_speaking` baru turun bila
+  tidak ada yang datang. Stop menulis fade 10 ms dari frame berikutnya,
+  menunggu klip aktif paling lama 0,1 s (klip yang masih menunggu sintesis
+  dibatalkan), lalu drain. Event `mute_failed` dan setting
+  `FAKEYOU_AUDIO__PACTL_TIMEOUT_SECONDS` hilang. Replay memakai writer palsu
+  di jam virtual dengan kontrak yang sama. Pause dan resume di tingkat
+  engine sengaja ditunda ke B3: writer sudah terbukti bisa melanjutkan tanpa
+  artefak, tapi arti pause bagi turn (siapa yang melanjutkan, timeout
+  playback dan stream LLM selama pause) adalah keputusan desain barge-in.
+- B5a-1, hasil ukur di container (`fakeyou-meeting-worker:local`, sink
+  `module-null-sink` 24 kHz, `parec` ke file): `PaSimple` connect 2 ms tapi
+  write pertama blocking 1,6-1,8 s, jadi `PulseWriter` mem-prime stream saat
+  dibuat (20 ms sunyi) dan kalimat pertama sesi tidak telat (write pertama
+  37 ms setelah `speak()`). Setelah stream hangat, tiap frame 20 ms blocking
+  ~40 ms (libpulse-simple nunggu buffer 40 ms kosong) tapi audio-nya benar:
+  2000 ms nada 440 Hz terekam 1990 ms di 440 Hz, dan lag sink ngikut engine
+  tanpa nge-drift. Stop saat nada main: `stop()` balik konsisten 65-77 ms,
+  sink sunyi 36-146 ms kemudian (ikut fase timer null sink), jadi gate
+  ≤ 100 ms lolos di sebagian run dan meleset di yang paling lambat.
+  `tlength`/`prebuf` 20/10 dan 10/5 tidak boleh: audio tidak keluar sama
+  sekali. Stop atomik terhadap kalimat yang diantrekan saat itu juga masih
+  jalan (epoch klip), dan cancel dari pemanggil menulis fade 10 ms dari
+  sampel terakhir supaya tidak klik (max lompatan sampel 1151, sama dengan
+  langkah alami sinus 440 Hz).
+- B5a-2, lookahead. `_deliver` menarik stream LLM terus ke antrean pendek
+  lewat task producer, dan tiap kalimat yang datang langsung di-`prepare`
+  (sintesis mulai, chunk ditampung). `TurnSink.say` tetap berurutan dan
+  tetap memeriksa pause, barge-in, dan turn current per kalimat; kalimat
+  yang sudah disiapkan tapi di-drop ditutup sintesisnya. Ini membuat first
+  chunk TTS keluar dari jalur kritis tanpa mengubah semantik drop.
+
+Gate offline lewat replay: `sentence_gap_ms` (dari `playback_finished` ke
+PCM pertama kalimat berikutnya) di oue-4 turun dari 0,78-0,80 s ke ≤ 150
+ms, gate latensi V0.7 tetap lolos. Gate live: satu sesi baru dengan
+`transcript_id` di event playback untuk mengukur jeda dan stop dengan alat.
+
 ### B5b: Kontrak sesi streaming netral dan adapter provider
 
 - Kontrak netral, menggantikan `SpeechSynthesizer` di `speech/contract.py`

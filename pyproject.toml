@@ -43,6 +43,7 @@ dependencies = [
     "protobuf>=6.33,<7",
     "num2words>=0.5.14",
     "tenacity>=9.1",
+    "pasimple==0.0.3",
 ]
 
 [project.optional-dependencies]

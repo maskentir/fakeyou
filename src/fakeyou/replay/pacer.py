@@ -1,26 +1,33 @@
 import asyncio
-from collections.abc import AsyncIterator
 
-from fakeyou.audio.playback import PlaybackBackend
+from fakeyou.audio.pulse_writer import DEFAULT_PULSE_BUFFER
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 
 BYTES_PER_SECOND = PLAYBACK_SAMPLE_RATE * PCM16_SAMPLE_BYTES
 
 
-async def set_muted(*, muted: bool) -> None:
-    del muted
+class PacedWriter:
+    def __init__(self, buffer_seconds: float = DEFAULT_PULSE_BUFFER.target_seconds) -> None:
+        self._buffer_seconds = buffer_seconds
+        self._heard_until = 0.0
 
+    @property
+    def buffer_seconds(self) -> float:
+        return self._buffer_seconds
 
-async def pacer_stream(chunks: AsyncIterator[bytes]) -> None:
-    loop = asyncio.get_running_loop()
-    ends: float | None = None
-    async for chunk in chunks:
-        now = loop.time()
-        ends = (now if ends is None else max(ends, now)) + len(chunk) / BYTES_PER_SECOND
-    if ends is not None and ends > loop.time():
-        await asyncio.sleep(ends - loop.time())
+    async def write(self, pcm: bytes) -> None:
+        now = asyncio.get_running_loop().time()
+        self._heard_until = max(now, self._heard_until) + len(pcm) / BYTES_PER_SECOND
+        await self._sleep_until(self._heard_until - self._buffer_seconds)
 
+    async def drain(self) -> None:
+        await self._sleep_until(self._heard_until)
 
-def create_pacer_backend() -> PlaybackBackend:
-    return PlaybackBackend(set_muted=set_muted, stream_audio=pacer_stream)
+    async def close(self) -> None:
+        return None
+
+    async def _sleep_until(self, moment: float) -> None:
+        delay = moment - asyncio.get_running_loop().time()
+        if delay > 0:
+            await asyncio.sleep(delay)
