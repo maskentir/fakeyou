@@ -225,15 +225,29 @@ def test_retiring_before_the_new_device_is_seen_leaves_no_own_user() -> None:
     assert set(roster.people()) == {AYU, BUDI}
 
 
-def test_the_first_snapshot_of_a_new_browser_drops_people_who_left_meanwhile() -> None:
+def test_the_first_admitted_snapshot_of_a_new_browser_drops_people_who_left_meanwhile() -> None:
     roster = roster_with_people()
     roster.begin_epoch()
+    twin = MeetUser(device_id="devices/twin-new", name="Rani", present=True, current_user=True)
 
-    changes = roster.apply_snapshot([user(AYU, "Ayu")])
+    changes = roster.apply_snapshot([user(AYU, "Ayu"), twin])
 
     assert set(roster.people()) == {AYU}
     assert changes == [RosterChange("left", BUDI, "Budi")]
-    assert roster.apply_snapshot([user(AYU, "Ayu")]) == []
+    assert roster.apply_snapshot([user(AYU, "Ayu"), twin]) == []
+
+
+def test_a_lobby_snapshot_of_a_new_browser_never_drops_anyone() -> None:
+    roster = roster_with_people()
+    roster.begin_epoch()
+    waiting = MeetUser(
+        device_id="devices/twin-new", name="Rani", present=False, status=3, current_user=True
+    )
+
+    changes = roster.apply_snapshot([waiting])
+
+    assert changes == []
+    assert set(roster.people()) == {AYU, BUDI}
 
 
 def test_a_snapshot_without_a_new_browser_never_drops_anyone() -> None:

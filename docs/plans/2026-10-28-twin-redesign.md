@@ -401,8 +401,10 @@ Implementasi A2b-2 (2026-10-31): tiap epoch memulai sensor perception baru
 (`PerceptionSensors.begin_epoch`). Device milik browser lama dipensiunkan:
 tetap dianggap milik twin sehingga tidak terhitung sebagai peserta, tetapi
 tidak lagi dipakai untuk status admisi. Snapshot sync pertama dari browser
-baru merekonsiliasi roster, jadi orang yang keluar selama browser mati
-tercatat `left`. Waktu sync, drain, heartbeat, dan peer di-reset; waktu
+baru yang sudah admitted merekonsiliasi roster, jadi orang yang keluar
+selama browser mati tercatat `left`; snapshot dari ruang tunggu tidak memuat
+peserta rapat dan tidak dipakai (probe a2b-probe-8 sempat mencatat host
+`left` karena itu). Waktu sync, drain, heartbeat, dan peer di-reset; waktu
 admisi pertama tetap dipakai sebagai batas backlog chat. `PerceptionStack`
 ditutup sekali di akhir sesi; worker hanya melepas listener response,
 timeline, dan roster miliknya. Loop monitor mengakhiri epoch begitu browser
