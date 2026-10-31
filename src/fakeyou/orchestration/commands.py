@@ -107,8 +107,8 @@ class CommandRunner:
     ) -> None:
         self._binding = _Binding(page, sleep, monotonic, stop)
 
-    async def close(self) -> None:
-        self._closed = True
+    async def release_page(self) -> None:
+        self._binding = None
         if not self._inflight:
             return
         try:
@@ -117,6 +117,10 @@ class CommandRunner:
         except TimeoutError:
             for task in self._inflight:
                 task.cancel()
+
+    async def close(self) -> None:
+        self._closed = True
+        await self.release_page()
 
     def recover(self) -> tuple[CommandRecord, ...]:
         closed = self._ledger.recover(self._kernel.attempt_id)

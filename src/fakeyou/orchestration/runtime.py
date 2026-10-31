@@ -160,6 +160,9 @@ def _terminal_result(
 _STOPPED_BEFORE_JOIN = "owner stopped before guest join"
 _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
 OBSERVATION_GRACE_SECONDS = 60.0
+REJOIN_LIMIT = 3
+REJOIN_WINDOW_SECONDS = 600.0
+REJOIN = "the browser crashed and the twin joins again"
 DOM_PRESENCE_FRESH_SECONDS = 30.0
 NOTICE_DISMISS_SECONDS = 5.0
 
@@ -392,6 +395,7 @@ class MeetingWorker:
         await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
         if self.initial_speech:
             await until_stopped(audio.speak(self.initial_speech), self.stop)
+            self.initial_speech = None
         if self.stop.is_set():
             await self.close_capture_drain()
             return await self._finish_commit(
@@ -403,6 +407,7 @@ class MeetingWorker:
             except ConversationError as error:
                 await self.disable_conversation(error)
             else:
+                self.conversation.resume()
                 self.record("conversation_bound", source="runtime")
         self._send("activated", "policy", "guest admitted and audio live")
         return self._commit()
@@ -1070,11 +1075,23 @@ class MeetingWorker:
         self._send(kind, attribution, detail)
         await self.close_perception()
         await self.close_participant_observer()
+        if kind == "browser_failed":
+            await self.detach_media()
+        else:
+            await self.end_media()
+        return detail
+
+    async def detach_media(self) -> None:
+        if self.conversation is not None:
+            await close_safely(self.conversation.pause, source="agent", faults=self.faults)
+        if self.audio is not None:
+            await close_safely(self.audio.stop_playback, source="audio", faults=self.faults)
+
+    async def end_media(self) -> None:
         if self.conversation is not None:
             await close_safely(self.conversation.close, source="agent", faults=self.faults)
         if self.audio is not None:
             await close_safely(self.audio.stop, source="audio", faults=self.faults)
-        return detail
 
 
 @dataclass(slots=True)
@@ -1211,51 +1228,83 @@ async def _open_session_page(
 
 
 async def _open_session_audio(
-    resources: TeardownStack,
-    open_audio: Callable[[], AbstractAsyncContextManager[MeetingAudio]],
+    session: TeardownStack,
+    hooks: SessionWiring,
     stop_event: asyncio.Event,
     lifecycle: SessionLifecycle,
+    journal: Journal,
 ) -> tuple[MeetingAudio | None, str | None]:
+    if hooks.open_audio is None:
+        return None, None
     try:
-        audio = await until_stopped(resources.enter_async_context(open_audio()), stop_event)
+        audio = await until_stopped(session.enter_async_context(hooks.open_audio()), stop_event)
     except MeetingAudioError as error:
-        detail = f"meeting audio could not start: {_failure_detail(error)}"
         lifecycle.send("infra_failed", "system_fault")
-        return None, detail
+        return None, f"meeting audio could not start: {_failure_detail(error)}"
     if audio is None:
-        detail = "owner stopped audio startup"
         lifecycle.send("owner_stopped", "owner_action")
-        return None, detail
+        return None, "owner stopped audio startup"
+    if hooks.conversation is not None:
+        session.push_async_callback(hooks.conversation.close)
+    journal.record("audio_opened", source="runtime")
     return audio, None
 
 
-async def _launch_session_browser(
-    config: SessionConfig,
-    hooks: SessionWiring,
-    stop_event: asyncio.Event,
-    resources: TeardownStack,
-    lifecycle: SessionLifecycle,
-) -> str:
-    page = await _open_session_page(
-        resources, config, hooks.open_page, hooks.open_audio, stop_event
+@dataclass(slots=True)
+class _BrowserLoss:
+    lifecycle: SessionLifecycle
+    phase: PublicPhase | None = None
+
+    def mark(self, *_: object) -> None:
+        if self.phase is None:
+            self.phase = self.lifecycle.phase
+
+    @property
+    def rejoinable(self) -> bool:
+        return self.phase is not None and self.phase not in ("leaving", "ended")
+
+
+@dataclass(slots=True)
+class _Drive:
+    config: SessionConfig
+    hooks: SessionWiring
+    stop_event: asyncio.Event
+    lifecycle: SessionLifecycle
+    journal: Journal
+    rejoins: list[float] = field(default_factory=list)
+    audio: MeetingAudio | None = None
+    loss: _BrowserLoss | None = None
+    greeting: str | None = None
+    detail: str = ""
+
+    @property
+    def crashed(self) -> bool:
+        return (
+            self.loss is not None
+            and self.loss.rejoinable
+            and self.lifecycle.state["terminal_reason"] == "browser_failure"
+        )
+
+
+async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
+    config, hooks, stop_event, lifecycle = (
+        drive.config,
+        drive.hooks,
+        drive.stop_event,
+        drive.lifecycle,
     )
+    page = await _open_session_page(epoch, config, hooks.open_page, hooks.open_audio, stop_event)
     if page is None:
         detail = "owner stopped browser startup"
         lifecycle.send("owner_stopped", "owner_action")
         return detail
+    drive.loss = _BrowserLoss(lifecycle)
+    page.on("crash", drive.loss.mark)
+    page.on("close", drive.loss.mark)
     if hooks.commands is not None and config.meet_actions_enabled:
         hooks.commands.bind_page(
             page, sleep=hooks.sleep, monotonic=hooks.monotonic, stop=stop_event
         )
-    journal = _resolve_journal(hooks, config)
-    audio: MeetingAudio | None = None
-    if hooks.open_audio is not None:
-        audio, ended = await _open_session_audio(resources, hooks.open_audio, stop_event, lifecycle)
-        if audio is None:
-            return ended or "meeting audio unavailable"
-        if hooks.conversation is not None:
-            resources.push_async_callback(hooks.conversation.close)
-        journal.record("audio_opened", source="runtime")
     worker = MeetingWorker(
         config,
         page,
@@ -1264,11 +1313,11 @@ async def _launch_session_browser(
         hooks.sleep,
         hooks.monotonic,
         hooks.open_audio,
-        hooks.initial_speech,
+        drive.greeting,
         hooks.conversation,
-        audio=audio,
+        audio=drive.audio,
         faults=hooks.faults,
-        journal=journal,
+        journal=drive.journal,
         voice_activity=hooks.voice_activity,
         perception=hooks.perception,
         on_phase=hooks.on_phase,
@@ -1288,34 +1337,39 @@ async def _launch_session_browser(
             sleep=hooks.sleep,
         )
     finally:
+        if page.is_closed():
+            drive.loss.mark()
+        page.remove_listener("crash", drive.loss.mark)
+        page.remove_listener("close", drive.loss.mark)
+        drive.greeting = worker.initial_speech
         if hooks.commands is not None:
-            await hooks.commands.close()
+            await hooks.commands.release_page()
+        if drive.loss.rejoinable:
+            await worker.detach_media()
+        else:
+            await worker.end_media()
     return worker.detail or "session ended"
 
 
-async def startup_session(
+async def _prepare_session(
     config: SessionConfig,
     hooks: SessionWiring,
     stop_event: asyncio.Event,
-    resources: TeardownStack,
     lifecycle: SessionLifecycle,
-) -> str:
+) -> str | None:
     if stop_event.is_set():
-        detail = "owner requested stop before startup"
         lifecycle.send("owner_stopped", "owner_action")
-        return detail
+        return "owner requested stop before startup"
     budget = (
         hooks.preflight_budget_seconds
         if hooks.preflight_budget_seconds is not None
         else config.preflight_budget_seconds
     )
     preflight = _resolve_preflight(hooks.preflight, hooks.preflight_hosts, budget)
-    ended_detail = await _run_preflight_phase(
-        lifecycle, stop_event, hooks.faults, preflight, budget
-    )
-    if ended_detail is None and not lifecycle.terminal:
-        return await _launch_session_browser(config, hooks, stop_event, resources, lifecycle)
-    return ended_detail or "session already ended"
+    ended = await _run_preflight_phase(lifecycle, stop_event, hooks.faults, preflight, budget)
+    if ended is None and lifecycle.terminal:
+        return "session already ended"
+    return ended
 
 
 async def _record_session_failure(
@@ -1370,42 +1424,94 @@ async def drive_session(
     config: SessionConfig,
     hooks: SessionWiring,
     stop_event: asyncio.Event,
-    resources: TeardownStack,
+    session: TeardownStack,
     lifecycle: SessionLifecycle,
 ) -> str:
     journal = _resolve_journal(hooks, config)
     if lifecycle.terminal:
         return "session already ended"
-
-    async def attempt() -> str:
-        return await startup_session(config, hooks, stop_event, resources, lifecycle)
-
-    try:
-        outcome, error = await capture_error(attempt)
-    except asyncio.CancelledError:
-        lifecycle.send("cancelled", "owner_action")
-        raise
+    drive = _Drive(config, hooks, stop_event, lifecycle, journal, greeting=hooks.initial_speech)
+    ended, error = await _guarded(drive, lambda: _start_session(drive, session))
     if error is not None:
-        if isinstance(error, FakeYouError):
-            raise error
-        if stop_event.is_set() and lifecycle.phase not in (
-            "leaving",
-            "ended",
-        ):
-            journal.record(
-                "browser_error_recorded",
-                source="runtime",
-                error=str(error),
-                error_type=type(error).__name__,
-                detail="during owner-requested teardown",
-            )
-            lifecycle.send("owner_stopped", "owner_action")
-            return "owner requested stop"
-        if isinstance(error, ConversationError):
-            return await _record_conversation_failure(lifecycle, journal, error)
-        return await _record_browser_failure(lifecycle, journal, error)
-    assert outcome is not None
-    return outcome
+        return await _settle_failure(drive, error)
+    if ended is not None:
+        return ended
+    while True:
+        detail = await _drive_once(drive)
+        if detail != REJOIN:
+            return detail
+        if not _may_rejoin(drive.rejoins, hooks.monotonic()):
+            return drive.detail
+        lifecycle.reset(initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id))
+        journal.record(
+            "browser_rejoined",
+            source="runtime",
+            attempt=len(drive.rejoins),
+            detail="the browser crashed and the twin joins again",
+        )
+
+
+def _may_rejoin(rejoins: list[float], now: float) -> bool:
+    while rejoins and now - rejoins[0] > REJOIN_WINDOW_SECONDS:
+        rejoins.pop(0)
+    return len(rejoins) <= REJOIN_LIMIT
+
+
+async def _start_session(drive: _Drive, session: TeardownStack) -> str | None:
+    if drive.hooks.commands is not None:
+        session.push_async_callback(drive.hooks.commands.close)
+    ended = await _prepare_session(drive.config, drive.hooks, drive.stop_event, drive.lifecycle)
+    if ended is not None:
+        return ended
+    drive.audio, ended = await _open_session_audio(
+        session, drive.hooks, drive.stop_event, drive.lifecycle, drive.journal
+    )
+    return ended
+
+
+async def _guarded[T](
+    drive: _Drive, call: Callable[[], Awaitable[T]]
+) -> tuple[T | None, Exception | None]:
+    try:
+        return await capture_error(call)
+    except asyncio.CancelledError:
+        drive.lifecycle.send("cancelled", "owner_action")
+        raise
+
+
+async def _settle_failure(drive: _Drive, error: Exception) -> str:
+    lifecycle, journal = drive.lifecycle, drive.journal
+    if isinstance(error, FakeYouError):
+        raise error
+    if drive.stop_event.is_set() and lifecycle.phase not in ("leaving", "ended"):
+        journal.record(
+            "browser_error_recorded",
+            source="runtime",
+            error=str(error),
+            error_type=type(error).__name__,
+            detail="during owner-requested teardown",
+        )
+        lifecycle.send("owner_stopped", "owner_action")
+        return "owner requested stop"
+    if isinstance(error, ConversationError):
+        return await _record_conversation_failure(lifecycle, journal, error)
+    return await _record_browser_failure(lifecycle, journal, error)
+
+
+async def _drive_once(drive: _Drive) -> str:
+    async def attempt() -> str:
+        async with session_resources(drive.hooks.faults) as epoch:
+            return await _launch_session_browser(drive, epoch)
+
+    drive.loss = None
+    outcome, error = await _guarded(drive, attempt)
+    detail = await _settle_failure(drive, error) if error is not None else outcome
+    assert detail is not None
+    if drive.crashed:
+        drive.rejoins.append(drive.hooks.monotonic())
+        drive.detail = detail
+        return REJOIN
+    return detail
 
 
 async def run_meeting_session(
@@ -1414,13 +1520,11 @@ async def run_meeting_session(
     hooks = wiring if wiring is not None else SessionWiring()
     _validate_session_audio(hooks)
     stop_event = hooks.stop if hooks.stop is not None else asyncio.Event()
-    async with session_resources(hooks.faults) as resources:
-        if hooks.conversation is not None:
-            resources.push_async_callback(hooks.conversation.close)
+    async with session_resources(hooks.faults) as session:
         lifecycle = SessionLifecycle(
             initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id)
         )
-        detail = await drive_session(config, hooks, stop_event, resources, lifecycle)
+        detail = await drive_session(config, hooks, stop_event, session, lifecycle)
         final = lifecycle.state
     return _terminal_result(
         final["phase"],

@@ -243,6 +243,9 @@ class SessionLifecycle:
     def send(self, kind: LifecycleEventKind, attribution: LifecycleAttribution) -> None:
         self.apply(apply_transition(self.state, kind, attribution))
 
+    def reset(self, initial: LifecycleState) -> None:
+        self.state = initial
+
     def finalize(self) -> None:
         if self.terminal:
             return
