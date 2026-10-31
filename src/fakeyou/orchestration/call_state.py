@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from fakeyou.meet.meet import CallObservation
-from fakeyou.perception.meet_protocol import STATUS_REMOVED, MeetUser
+from fakeyou.perception.meet_protocol import MeetUser
 
 DRAIN_STALE_SECONDS = 5.0
 _OUT_OF_CALL = frozenset({"removed", "ended", "left"})
@@ -14,10 +14,6 @@ def protocol_call_state(own: MeetUser | None, peers: Sequence[str]) -> CallObser
         if "connected" in peers:
             return CallObservation(state="in_call", detail="own device is in the meeting")
         return None
-    if own.status == STATUS_REMOVED:
-        return CallObservation(
-            state="removed", detail=f"own device was removed (status {own.status})"
-        )
     return CallObservation(
         state="ended", detail=f"own device is out of the meeting (status {own.status})"
     )

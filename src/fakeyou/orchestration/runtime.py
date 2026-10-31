@@ -212,6 +212,7 @@ class MeetingWorker:
     admission: JoinResult | None = None
     join_started: float | None = None
     presence: AloneClock = field(init=False)
+    end_screen: str | None = None
     attention: AttentionPrefilter = field(init=False)
     attention_screen: str | None = field(init=False, default=None)
     attention_chat: str | None = field(init=False, default=None)
@@ -878,7 +879,17 @@ class MeetingWorker:
         protocol = self.protocol_call_state()
         if protocol is not None and protocol.state == "in_call":
             return protocol
-        return merge_call_state(protocol, await observe_call_state(page, signals))
+        dom = await observe_call_state(page, signals)
+        if protocol is not None and dom.headings != self.end_screen:
+            self.end_screen = dom.headings
+            self.record(
+                "call_end_screen_observed",
+                source="browser",
+                headings=dom.headings,
+                page_state=dom.state,
+                detail=protocol.detail,
+            )
+        return merge_call_state(protocol, dom)
 
     def _protocol_available(self) -> bool:
         perception = self.perception

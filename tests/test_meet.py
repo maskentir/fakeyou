@@ -556,6 +556,8 @@ CHAT_PANEL = (
         (LOBBY, "lobby"),
         (LEAVE_AND_WAITING, "in_call"),
         (IN_CALL + CHAT_PANEL, "in_call"),
+        ("<h1>Your host ended the meeting for everyone</h1>", "ended"),
+        ("<h1>The call ended because everyone left</h1>", "ended"),
         (IN_CALL + REMOVED, "removed"),
         (IN_CALL + ENDED, "ended"),
         ("blank page without markers", "unknown"),

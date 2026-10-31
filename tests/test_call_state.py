@@ -21,7 +21,7 @@ def observed(state: CallState) -> CallObservation:
     ("status", "peers", "expected"),
     [
         (1, ["closed", "connected"], "in_call"),
-        (7, ["connected"], "removed"),
+        (7, ["connected"], "ended"),
         (6, ["connected"], "ended"),
         (6, ["closed"], "ended"),
     ],

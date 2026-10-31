@@ -339,6 +339,7 @@ async def _protocol_worker(
 ) -> MeetingWorker:
     worker = _bare_worker()
     worker.monotonic = clock.monotonic
+    worker.journal = journal
     stack = create_perception_stack(
         Settings(perception=PerceptionSettings(enabled=True)), journal=journal
     )
@@ -396,6 +397,10 @@ async def test_an_own_device_out_of_the_meeting_takes_its_reason_from_the_end_sc
 
     assert named.state == "ended"
     assert lingering.state == "unknown"
+    assert [row["headings"] for row in journal.events("call_end_screen_observed")] == [
+        "the call has ended",
+        None,
+    ]
     assert (unnamed.state, unnamed.detail) == (
         "ended",
         "own device is out of the meeting (status 6)",

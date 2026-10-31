@@ -380,7 +380,16 @@ memutuskan in/out (status device sendiri, ditambah `connectionState` semua
 peer RTC), sedangkan alasan keluar (`removed`, `ended`, `left`) diambil dari
 heading layar akhir. Kode status mentah dan state peer di-journal
 (`perception_own_status_observed`, `perception_peer_state_observed`) untuk
-probe live sebelum merge. Fallback DOM membaca heading dan label tombol dari
+probe live sebelum merge.
+
+Hasil probe live 2026-10-31 (meeting a4-probe-1, a4-probe-2, a4-probe-4):
+status device sendiri `3` saat menunggu di lobby, `1` setelah di-admit, dan
+`7` baik saat host me-remove maupun saat host mengakhiri meeting untuk semua;
+semua peer RTC menjadi `closed` di kedua kasus. Jadi `7` berarti dikeluarkan
+oleh host, bukan khusus removed; alasannya hanya dari heading layar akhir:
+"You've been removed from the meeting" dan "Your host ended the meeting for
+everyone". Probe pertama berakhir `removed_by_host`, probe terakhir
+`ended_by_host`. Status `3` dipakai A3 untuk admission. Fallback DOM membaca heading dan label tombol dari
 satu snapshot yang diparse, tidak pernah teks bebas, sehingga deteksi
 waiting room lewat teks div dibuang dari monitor; alur join tetap memakai
 deteksinya sendiri sampai A3.
