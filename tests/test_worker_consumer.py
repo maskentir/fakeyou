@@ -18,7 +18,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.db.session_status import DesiredState
+from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
 from fakeyou.memory.ingest_service import IngestPorts, IngestRequest
@@ -1203,3 +1203,53 @@ async def test_a_takeover_that_finds_the_record_locked_waits_instead_of_failing(
     assert await harness.phase("m-1") != "failed"
     assert harness.status.leases == {"m-1": "worker-b"}
     assert harness.runs == [("m-1", False)]
+
+
+async def test_an_unwritten_terminal_phase_keeps_the_lease(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+    original = harness.status.record_phase
+
+    async def lose_terminal(
+        meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
+    ) -> SessionStatus | None:
+        if change.phase in ("ended", "failed"):
+            return None
+        return await original(meeting_id, change, attempt_id=attempt_id)
+
+    monkeypatch.setattr(harness.status, "record_phase", lose_terminal)
+    await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
+
+    assert harness.status.leases == {"m-1": "worker-a"}
+
+
+async def test_a_hanging_renewal_gives_the_session_up_before_the_lease_runs_out(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("fakeyou.worker.consumer.SESSION_LEASE_SECONDS", 5.05)
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+
+    async def hang(*_args: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(harness.status, "renew", hang)
+
+    await asyncio.wait_for(harness.stop_event.wait(), timeout=2)
+
+
+async def test_an_active_session_starts_a_fresh_attempt_budget(harness: Harness) -> None:
+    await harness.enqueue("m-1", "join")
+    harness.status.rows["m-1"] = replace(harness.status.rows["m-1"], attempts=4)
+    assert await harness.consumer.run_once() == "m-1"
+    harness.double.live_phases = ["active"]
+
+    await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
+
+    status = await harness.status.get("m-1")
+    assert status is not None
+    assert (status.phase, status.attempts) == ("ended", 0)

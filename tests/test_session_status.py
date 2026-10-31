@@ -186,3 +186,16 @@ async def test_finished_and_unwanted_sessions_are_never_claimed(
     await store.record_phase("done", PhaseUpdate("ended", LATER, terminal_reason="ended_by_host"))
 
     assert await store.claim("worker-a", "attempt-1", 30.0) is None
+
+
+async def test_reaching_active_resets_the_attempt_budget(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = SessionStatusStore(migrated_async_engine)
+    await _wanted(store, "m1")
+    await store.claim("worker-a", "attempt-1", 30.0)
+
+    active = await store.record_phase("m1", PhaseUpdate("active", LATER), attempt_id="attempt-1")
+
+    assert active is not None
+    assert active.attempts == 0

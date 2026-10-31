@@ -30,6 +30,7 @@ class StatusWriter:
         self._queue: asyncio.Queue[PhaseUpdate] = asyncio.Queue()
         self._task = asyncio.create_task(self._drain(), name=f"status-writer-{meeting_id}")
         self.phase: PublicPhase | None = None
+        self.persisted: PublicPhase | None = None
 
     def note(
         self,
@@ -80,9 +81,11 @@ class StatusWriter:
         )
         async for attempt in retrying:
             with attempt:
-                await self._status.record_phase(
+                recorded = await self._status.record_phase(
                     self._meeting_id, write, attempt_id=self._attempt_id
                 )
+                if recorded is not None:
+                    self.persisted = recorded.phase
 
     def _log_failure(self, phase: PublicPhase, state: RetryCallState) -> None:
         error = state.outcome.exception() if state.outcome is not None else None

@@ -180,6 +180,7 @@ class SessionStatusStore:
                 terminal_reason=change.terminal_reason,
                 detail=change.detail,
                 updated_at=change.at,
+                **({"attempts": 0} if change.phase == "active" else {}),
             )
             .returning(meeting_sessions)
         )

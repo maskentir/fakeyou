@@ -49,6 +49,7 @@ _PAUSE_SECONDS = 1.0
 SESSION_LEASE_SECONDS = 30.0
 LEASE_RENEW_SECONDS = 2.0
 SESSION_MAX_ATTEMPTS = 5
+LEASE_SAFETY_SECONDS = 5.0
 _RETRYABLE: tuple[type[Exception], ...] = (OSError, ValueError, ProviderFault, LeaseError)
 
 
@@ -214,7 +215,9 @@ class WorkerConsumer:
         try:
             while not self._deps.shutdown.is_set():
                 if self._session_task is None:
-                    await self.run_once()
+                    _claimed, error = await capture_error(self.run_once)
+                    if error is not None:
+                        logger.error("claiming a session failed", exc_info=error)
                 await self._sleep_or_closed(_PAUSE_SECONDS)
         finally:
             await self._shutdown_session()
@@ -263,24 +266,16 @@ class WorkerConsumer:
         return True
 
     async def _watch_lease(self, claim: _Claim) -> None:
-        deadline = time.monotonic() + SESSION_LEASE_SECONDS
+        deadline = time.monotonic() + SESSION_LEASE_SECONDS - LEASE_SAFETY_SECONDS
         while not await self._sleep_or_closed(LEASE_RENEW_SECONDS):
-            row, error = await capture_error(
-                partial(
-                    self._status.renew,
-                    claim.meeting_id,
-                    self._worker_id,
-                    claim.attempt_id,
-                    SESSION_LEASE_SECONDS,
-                )
-            )
-            now = time.monotonic()
+            sent = time.monotonic()
+            row, error = await capture_error(partial(self._renew, claim))
             if row is not None:
-                deadline = now + SESSION_LEASE_SECONDS
+                deadline = sent + SESSION_LEASE_SECONDS - LEASE_SAFETY_SECONDS
                 if row.desired_state == "stopped":
                     await self._request_stop(claim.meeting_id)
                 continue
-            if error is None or now >= deadline:
+            if error is None or time.monotonic() >= deadline:
                 logger.warning("lost the lease on meeting %s", claim.meeting_id)
                 self._lease_lost = True
                 self._stop_local()
@@ -294,6 +289,12 @@ class WorkerConsumer:
         redeemed = {role: SecretStr(value) for role, value in taken.items()}
         self._overrides[meeting_id] = redeemed
         return redeemed
+
+    async def _renew(self, claim: _Claim) -> SessionStatus | None:
+        async with asyncio.timeout(LEASE_RENEW_SECONDS):
+            return await self._status.renew(
+                claim.meeting_id, self._worker_id, claim.attempt_id, SESSION_LEASE_SECONDS
+            )
 
     async def _start_join(
         self, claim: _Claim, status: SessionStatus, snapshot: Snapshot
@@ -312,7 +313,7 @@ class WorkerConsumer:
         self._lease_lost = False
         self._bound.clear()
         request = replace(
-            join_request_for(snapshot, session_settings, resume=status.attempts > 1),
+            join_request_for(snapshot, session_settings, resume=status.phase != "created"),
             on_phase=partial(self._record_live_phase, meeting_id),
         )
         task = asyncio.create_task(self._run_session(claim, request))
@@ -328,6 +329,8 @@ class WorkerConsumer:
         writer = StatusWriter(self._status, claim.meeting_id, attempt_id=claim.attempt_id)
         await writer.write(phase, terminal_reason=reason, detail=detail)
         await writer.close()
+        if writer.persisted != phase:
+            return
         await self._publish(
             claim.meeting_id, "session_ended", {"phase": phase, "terminal_reason": reason}
         )
@@ -364,22 +367,19 @@ class WorkerConsumer:
             run_session=self._session_port,
             open_memory=self._ports.open_memory,
         )
-        outcome, error = await capture_error(partial(run_join_session, request, ports))
-        settled = False
         try:
+            outcome, error = await capture_error(partial(run_join_session, request, ports))
             if self._lease_lost:
                 logger.warning("meeting %s moved to another worker; skipping settle", meeting_id)
             elif error is None and outcome is not None:
-                settled = await self._settle(meeting_id, outcome)
+                await self._settle(meeting_id, outcome)
             elif isinstance(error, _RETRYABLE):
                 logger.warning("join for meeting %s will be retried: %s", meeting_id, error)
             elif isinstance(error, FakeYouError):
                 await self._settle_failed(meeting_id, error)
-                settled = True
             else:
                 logger.error("join for meeting %s failed unexpectedly", meeting_id, exc_info=error)
                 await self._settle_failed(meeting_id, cast(Exception, error))
-                settled = True
         finally:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
@@ -387,7 +387,7 @@ class WorkerConsumer:
             writer, self._writer = self._writer, None
             if writer is not None:
                 await writer.close()
-            if settled:
+            if writer is not None and writer.persisted in TERMINAL_PHASES:
                 await self._release(claim)
 
     async def _settle_failed(self, meeting_id: str, error: Exception) -> None:
@@ -417,13 +417,13 @@ class WorkerConsumer:
         )
         self._forget(meeting_id)
 
-    async def _settle(self, meeting_id: str, outcome: JoinOutcome) -> bool:
+    async def _settle(self, meeting_id: str, outcome: JoinOutcome) -> None:
         session = outcome.session
         await self._apply_phase(
             meeting_id, session.phase, session.terminal_reason, session.detail or None
         )
         if session.phase not in TERMINAL_PHASES:
-            return False
+            return
         await self._publish(
             meeting_id,
             "session_ended",
@@ -433,7 +433,6 @@ class WorkerConsumer:
         if session.phase == "ended":
             await self._queue_debrief(meeting_id)
         self._forget(meeting_id)
-        return True
 
     async def _queue_pending_ingestion(self, meeting_id: str) -> None:
         status = read_status(
