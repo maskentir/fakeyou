@@ -22,33 +22,30 @@ WatchdogEventKind = Literal[
     "manual_action_cleared",
     "manual_action_expired",
     "modal_dismissed",
+    "modal_observed",
     "watchdog_failed",
 ]
 
 DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
 _PEOPLE_COUNT = re.compile(r"People\s*[-–:]\s*(\d+)\s+participants?", re.IGNORECASE)
 _DIALOG_XPATH = '(//*[@role="dialog" or @role="alertdialog"] | //dialog[@open])'
-
-
-def _dialog_button_xpath(index: int, label: str) -> str:
-    return (
-        f'xpath={_DIALOG_XPATH}[{index + 1}]//*[(self::button or @role="button") and '
-        f'(@aria-label="{label}" or normalize-space(.)="{label}")]'
-    )
-
-
-_HARMLESS_NOTICES = frozenset(
+_SNAPSHOT_ROLE = re.compile(r"^\s*-\s+([a-z]+)")
+_INPUT_ROLES = frozenset(
     {
-        ("this meeting is being recorded got it", "Got it"),
-        ("this meeting is being transcribed got it", "Got it"),
-    }
-)
-_DISMISSABLE_ERRORS = frozenset(
-    {
-        (
-            "close close error camera not found make sure your camera is plugged in",
-            "Close",
-        ),
+        "textbox",
+        "searchbox",
+        "combobox",
+        "listbox",
+        "checkbox",
+        "radio",
+        "switch",
+        "slider",
+        "spinbutton",
+        "tab",
+        "option",
+        "treeitem",
+        "menuitemcheckbox",
+        "menuitemradio",
     }
 )
 
@@ -75,10 +72,12 @@ class _Modal:
     index: int
     text: str
     fingerprint: str
+    buttons: int
+    inputs: int
 
-
-def _known_error_action(folded: str) -> str | None:
-    return next((label for text, label in _DISMISSABLE_ERRORS if text == folded), None)
+    @property
+    def notice(self) -> bool:
+        return self.inputs == 0 and self.buttons <= 1
 
 
 async def _read_modals(page: Page) -> list[_Modal]:
@@ -90,27 +89,72 @@ async def _read_modals(page: Page) -> list[_Modal]:
         if not await dialog.is_visible():
             continue
         raw = await dialog.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
-        if not isinstance(raw, str):
-            raise TypeError("Dialog text must be a string")
-        text = " ".join(raw.split())
-        fingerprint = hashlib.sha256(text.encode()).hexdigest()
+        snapshot = await dialog.aria_snapshot(timeout=2000)
+        if not isinstance(raw, str) or not isinstance(snapshot, str):
+            raise TypeError("Dialog text and structure must be strings")
+        roles = [
+            match.group(1) for match in map(_SNAPSHOT_ROLE.match, snapshot.splitlines()) if match
+        ]
+        fingerprint = hashlib.sha256("\n".join(roles).encode()).hexdigest()
         if fingerprint not in seen:
-            result.append(_Modal(index, text, fingerprint))
+            result.append(
+                _Modal(
+                    index,
+                    " ".join(raw.split()),
+                    fingerprint,
+                    buttons=roles.count("button"),
+                    inputs=sum(role in _INPUT_ROLES for role in roles),
+                )
+            )
             seen.add(fingerprint)
     return result
 
 
-async def dismiss_known_errors(page: Page) -> tuple[str, ...]:
+def _dialog_buttons(index: int) -> str:
+    return (
+        f"xpath={_DIALOG_XPATH}[{index + 1}]//*[(self::button or @role='button') and "
+        "not(ancestor-or-self::*[@aria-hidden='true' or @hidden])]"
+    )
+
+
+async def _click_visible_button(page: Page, index: int) -> None:
+    buttons = page.locator(_dialog_buttons(index))
+    for position in range(await buttons.count()):
+        button = buttons.nth(position)
+        if await button.is_visible():
+            await button.click(timeout=2000)
+            return
+
+
+async def _current(page: Page, fingerprint: str) -> _Modal | None:
+    return next(
+        (item for item in await _read_modals(page) if item.fingerprint == fingerprint), None
+    )
+
+
+async def close_modal(page: Page, modal: _Modal) -> bool:
+    try:
+        current = await _current(page, modal.fingerprint)
+        if current is None:
+            return True
+        target = page.locator(DIALOG_SELECTOR).nth(current.index)
+        await target.press("Escape", timeout=2000)
+        current = await _current(page, modal.fingerprint)
+        if current is None:
+            return True
+        if current.notice and current.buttons == 1:
+            await _click_visible_button(page, current.index)
+            return await _current(page, modal.fingerprint) is None
+    except (PlaywrightError, ActionabilityError, TypeError):
+        return False
+    return False
+
+
+async def dismiss_notices(page: Page) -> tuple[str, ...]:
     dismissed: list[str] = []
     for modal in reversed(await _read_modals(page)):
-        action = _known_error_action(modal.text.casefold())
-        if action is None:
-            continue
-        try:
-            await page.locator(_dialog_button_xpath(modal.index, action)).first.click(timeout=2000)
-        except (PlaywrightError, ActionabilityError):
-            continue
-        dismissed.append(modal.text)
+        if modal.notice and await close_modal(page, modal):
+            dismissed.append(modal.text)
     return tuple(dismissed)
 
 
@@ -175,53 +219,31 @@ class UIWatchdog:
                 )
             )
 
-    def _resolve_action(self, modal: _Modal) -> tuple[str | None, bool]:
-        folded = modal.text.casefold()
-        action = next((label for text, label in _HARMLESS_NOTICES if text == folded), None)
-        if action is not None:
-            return action, True
-        return _known_error_action(folded), False
-
-    async def _try_dismiss(
-        self, modal: _Modal, action: str, *, strict: bool, events: list[WatchdogEvent]
-    ) -> bool:
-        try:
-            target = self._page.locator(DIALOG_SELECTOR).nth(modal.index)
-            current = await target.evaluate("el => el.innerText.slice(0, 4000)", timeout=2000)
-            single_button = await target.get_by_role("button").count() == 1 if strict else True
-            matched = (
-                isinstance(current, str)
-                and " ".join(current.split()) == modal.text
-                and single_button
-            )
-            if matched:
-                await self._page.locator(_dialog_button_xpath(modal.index, action)).first.click(
-                    timeout=2000
-                )
-        except PlaywrightError as error:
-            events.append(WatchdogEvent("watchdog_failed", modal.fingerprint, type(error).__name__))
-            return False
-        else:
-            return matched
-
-    async def _handle_modal(self, modal: _Modal, now: float, events: list[WatchdogEvent]) -> None:
-        if modal.fingerprint in self._handled or self._stable[modal.fingerprint] < 2:
+    async def _handle_modal(
+        self,
+        modal: _Modal,
+        observation: CallObservation,
+        now: float,
+        events: list[WatchdogEvent],
+    ) -> None:
+        fingerprint = modal.fingerprint
+        if self._stable[fingerprint] < 2 or fingerprint in self._manual:
             return
-        if modal.text.casefold().startswith("skin tone"):
-            self._handled.add(modal.fingerprint)
-            return
-        action, strict = self._resolve_action(modal)
-        dismissed = False
-        if action is not None:
-            dismissed = await self._try_dismiss(modal, action, strict=strict, events=events)
-        self._handled.add(modal.fingerprint)
-        if dismissed:
-            events.append(WatchdogEvent("modal_dismissed", modal.fingerprint, modal.text))
-        else:
-            self._manual[modal.fingerprint] = now + self._ttl
+        if modal.inputs and observation.state not in ("in_call", "unknown"):
+            self._manual[fingerprint] = now + self._ttl
             events.append(
-                WatchdogEvent("manual_action_required", modal.fingerprint, modal.text, self._ttl)
+                WatchdogEvent("manual_action_required", fingerprint, modal.text, self._ttl)
             )
+            return
+        if fingerprint in self._handled:
+            return
+        closed = not modal.inputs and await close_modal(self._page, modal)
+        self._handled.add(fingerprint)
+        events.append(
+            WatchdogEvent(
+                "modal_dismissed" if closed else "modal_observed", fingerprint, modal.text
+            )
+        )
 
     async def _check(self) -> WatchdogCheck:
         events: list[WatchdogEvent] = []
@@ -256,7 +278,7 @@ class UIWatchdog:
         self._sweep_cleared(visible, events)
         self._handled.intersection_update(visible)
         for modal in modals:
-            await self._handle_modal(modal, now, events)
+            await self._handle_modal(modal, observation, now, events)
         self._quiet_checks = 0 if modals else self._quiet_checks + 1
         delay = 20.0 if self._quiet_checks >= 3 else 5.0
         count = await read_participant_count(self._page) if observation.state == "in_call" else None
